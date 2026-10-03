@@ -106,6 +106,37 @@ class Servidor(models.Model):
         index_together = (("apelido", "ativo"),)
 
 
+class Afastamento(models.Model):
+    """#768: CheckConstraints whose Q(...) translates to SQL, over the PHYSICAL columns — `limite`
+    is `limite_dias` in the table and `servidor` is `servidor_id`."""
+
+    servidor = models.ForeignKey(Servidor, on_delete=models.CASCADE, null=True)
+    dias = models.IntegerField()
+    limite = models.IntegerField(db_column="limite_dias")
+    tipo = models.CharField(max_length=20)
+    homologado = models.BooleanField(default=False)
+    inicio = models.DateField()
+    fim = models.DateField()
+
+    class Meta:
+        constraints = [
+            # TRANSLATED — `&` between two Q objects, and an F() through `db_column`.
+            models.CheckConstraint(check=Q(dias__gte=0) & Q(dias__lte=F("limite")), name="ck_afast_dias"),
+            # TRANSLATED — Django 5.1's `condition=` spelling; `in` over strings, one with a quote.
+            models.CheckConstraint(
+                condition=Q(tipo__in=["ferias", "licenca", "tratamento d'saude"]) | Q(homologado=False),
+                name="ck_afast_tipo",
+            ),
+            # TRANSLATED — `~`, and an FK field resolved to its `_id` column.
+            models.CheckConstraint(check=~Q(servidor__isnull=True) | Q(homologado=False), name="ck_afast_servidor"),
+            # TRANSLATED — `range` becomes BETWEEN.
+            models.CheckConstraint(check=Q(limite__range=(1, 365)), name="ck_afast_limite"),
+            # STAYS A STUB — two DateFields: SQLite stores dates in more than one representation, so
+            # the comparison would not mean the same thing on both engines.
+            models.CheckConstraint(check=Q(fim__gte=F("inicio")), name="ck_afast_datas"),
+        ]
+
+
 class Venda(models.Model):
     valor = models.IntegerField()
 

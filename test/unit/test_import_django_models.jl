@@ -2,6 +2,10 @@ using Test
 using Logging
 using PormG
 using PormG.Migrations
+import PormG.Models
+# #768's round-trip applies the translated CHECKs to a real SQLite table.
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+import PormG.ConnectionPool: SQLiteConnectionPool, close_pool!
 
 function import_fixture_to_temp(fixture; output_file = "django_models_from_txt_unit.jl", force_replace = true)
     config_key, db_dir_existed = temp_import_config!()
@@ -1343,10 +1347,12 @@ end
         # ...and each rejection says which argument it could not express.
         @test occursin("`condition=` changes what the index means", generated)
         @test occursin("it takes a positional expression", generated)
-        # #742: a CheckConstraint is still not imported — Django's condition is a `Q(...)`, PormG's is
-        # SQL — but the marker now names the PormG type and carries the constraint's name over.
-        @test occursin("CheckConstraint takes its condition as SQL, not Q() — declare it as " *
-                       "Models.CheckConstraint(condition = \"<SQL>\", name = \"chk_cpf_digitos\")", generated)
+        # #742/#768: a `regex` lookup is outside the translated set, so this CheckConstraint stays a
+        # stub — the marker says why, names the PormG type, and carries the constraint's name over.
+        @test occursin("CheckConstraint was not translated to SQL (`cpf__regex` is not a field of this " *
+                       "model with one of the lookups", generated)
+        @test occursin("declare it as Models.CheckConstraint(condition = \"<SQL>\", " *
+                       "name = \"chk_cpf_digitos\")", generated)
 
         # Rejection is PER CONSTRAINT. Three dropped and the fourth kept, on one model — the
         # assertion above proves the survivor, this one proves the other three did not take it with
@@ -1355,6 +1361,264 @@ end
         # `unique_together` groups with the same wording, and a file-wide count would silently
         # stop measuring this model the moment one of those changed.
         @test count("a constraint on 'Servidor' was dropped", generated) == 3
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: CheckConstraint Q(...) → SQL, case by case (#768)
+# The translator is a whitelist: each admitted shape must produce exactly this
+# SQL over the PHYSICAL columns, and each shape outside it must come back as a
+# reason — never as a guessed condition. A mistranslated CHECK is a schema that
+# silently accepts or refuses the wrong rows, so the refusals matter as much.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer translates simple CheckConstraint conditions, and refuses the rest (#768)" begin
+    translate = PormG.Migrations._translate_django_check
+    # The fields as the importer has them when Meta is read: FK keys already carry `_id`.
+    fields = Dict{Symbol, Any}(
+        :dias       => Models.IntegerField(),
+        :limite     => Models.IntegerField(db_column = "limite_dias"),
+        :nota       => Models.FloatField(),
+        :tipo       => Models.CharField(max_length = 20),
+        :homologado => Models.BooleanField(),
+        :user       => Models.IntegerField(null = true),
+        :inicio     => Models.DateField(),
+        :fim        => Models.DateField(),
+        :servidor_id => Models.ForeignKey("Servidor", null = true),
+        :setores    => Models.ManyToManyField("Setor"),
+    )
+    ck(body) = "models.CheckConstraint($(body), name=\"ck\")"
+
+    # Admitted: element → the exact condition. Every column is double-quoted, as Django renders it.
+    translated = [
+        ck("check=Q(dias__gte=0)")                       => "\"dias\" >= 0",
+        ck("check=Q(dias__gt=0, dias__lt=10)")           => "\"dias\" > 0 AND \"dias\" < 10",
+        # `db_column` is what the CHECK names, not the Django field.
+        ck("check=Q(dias__lte=F(\"limite\"))")           => "\"dias\" <= \"limite_dias\"",
+        ck("condition=models.Q(dias__gte=models.F('limite'))") => "\"dias\" >= \"limite_dias\"",
+        ck("check=Q(tipo=\"ferias\")")                   => "\"tipo\" = 'ferias'",
+        # Quotes are doubled, so a value cannot close the literal and add SQL of its own.
+        ck("check=Q(tipo__exact=\"d'arc\")")             => "\"tipo\" = 'd''arc'",
+        ck("check=Q(tipo=\"x') OR (1=1\")")              => "\"tipo\" = 'x'') OR (1=1'",
+        ck("check=Q(tipo=\"a--b\")")                     => "\"tipo\" = 'a--b'",
+        ck("check=Q(tipo__in=(\"a\", \"b\"))")           => "\"tipo\" IN ('a', 'b')",
+        ck("check=Q(dias__in=[1, 2, 3])")                => "\"dias\" IN (1, 2, 3)",
+        ck("check=Q(homologado=True)")                   => "\"homologado\" = TRUE",
+        # The FK's Django name and its `_id` name both resolve to the `_id` column.
+        ck("check=Q(servidor__isnull=False)")            => "\"servidor_id\" IS NOT NULL",
+        ck("check=Q(servidor_id=None)")                  => "\"servidor_id\" IS NULL",
+        ck("check=Q(dias__range=(1, 365))")              => "\"dias\" BETWEEN 1 AND 365",
+        ck("check=Q(nota__gte=-1.5)")                    => "\"nota\" >= -1.5",
+        # A reserved word stays a column: bare `user` is CURRENT_USER on PostgreSQL.
+        ck("check=Q(user__gt=0)")                        => "\"user\" > 0",
+        # Python precedence: `~` binds tighter than `&`, `&` tighter than `|`.
+        ck("check=Q(dias=1) | Q(dias=2) & ~Q(homologado=True)") =>
+            "\"dias\" = 1 OR (\"dias\" = 2 AND NOT (\"homologado\" = TRUE))",
+        ck("check=(Q(dias=1) | Q(dias=2)) & Q(homologado=True)") =>
+            "(\"dias\" = 1 OR \"dias\" = 2) AND \"homologado\" = TRUE",
+        ck("check=Q(Q(dias=1) | Q(dias=2), homologado=False)") =>
+            "(\"dias\" = 1 OR \"dias\" = 2) AND \"homologado\" = FALSE",
+        # A BETWEEN beside another AND is parenthesised, so its own AND cannot be misread.
+        ck("check=Q(dias__range=(0, 10), homologado=True)") =>
+            "(\"dias\" BETWEEN 0 AND 10) AND \"homologado\" = TRUE",
+        # An integral float is the integer Django's `int()` makes of it; an integer column may meet a
+        # float column through F().
+        ck("check=Q(dias=1.0)")                          => "\"dias\" = 1.0",
+        ck("check=Q(dias__lte=F(\"nota\"))")             => "\"dias\" <= \"nota\"",
+        # The trailing comma is what makes a one-element tuple.
+        ck("check=Q(tipo__in=(\"ferias\",))")            => "\"tipo\" IN ('ferias')",
+        # The escapes PormG decodes as Python does.
+        ck("check=Q(tipo='d\\'arc')")                    => "\"tipo\" = 'd''arc'",
+    ]
+    for (element, condition) in translated
+        c = translate(element, fields)
+        @test c isa Models.CheckConstraint
+        c isa Models.CheckConstraint && @test (c.condition, c.name) == (condition, "ck")
+    end
+
+    # Refused: element → a fragment of the reason. Each is a CHECK whose SQL would not mean what
+    # Django's does on both engines, or a shape the grammar does not read at all.
+    refused = [
+        ck("check=Q(tipo__regex=r\"^a\")")             => "`tipo__regex` is not a field of this model",
+        ck("check=Q(servidor__nome=\"x\")")            => "`servidor__nome` is not a field of this model",
+        ck("check=Q(xpto=1)")                          => "field `xpto` matches no imported field",
+        ck("check=Q(setores__isnull=True)")            => "ManyToManyField",
+        ck("check=Q(pk__gt=0)")                        => "`pk` is not resolved",
+        # Collation differs between the engines, so text is never ordered.
+        ck("check=Q(tipo__gt=\"a\")")                  => "ordering comparison",
+        # Dates are not a family: SQLite stores them in more than one representation.
+        ck("check=Q(fim__gte=F(\"inicio\"))")          => "ordering comparison",
+        ck("check=Q(inicio=\"2020-01-01\")")           => "cannot be compared to exactly",
+        ck("check=Q(dias=\"5\")")                      => "cannot be compared to exactly",
+        ck("check=Q(dias__lte=F(\"limite\") + 1)")     => "is not a literal or a plain F() reference",
+        ck("check=Q(dias__gte=0) ^ Q(dias__lte=3)")    => "is not part of a Q() expression",
+        ck("check=Q()")                                => "an empty Q() matches every row",
+        ck("check=Q(dias__isnull=1)")                  => "takes True or False",
+        ck("check=Q(dias__in=[1, None])")              => "holds a None or an F()",
+        ck("check=Q(dias__range=(1, 2, 3))")           => "takes exactly two bounds",
+        ck("check=Q(tipo=\"a\\nb\")")                  => "control character",
+        ck("check=Q(_negated=True)")                   => "is a Q() option",
+        ck("check=Lower(\"tipo\")")                    => "is not a Q() expression",
+        ck("check=Q(dias__gte=0), deferrable=Deferrable.DEFERRED") => "`deferrable=` is not translated",
+        ck("check=Q(dias__gte=0), condition=Q(dias__lte=9)") => "both `check=` and `condition=`",
+        "models.CheckConstraint(Q(dias__gte=0), name=\"ck\")" => "positional argument",
+        "models.CheckConstraint(check=Q(dias__gte=0), name=f\"ck_{x}\")" => "not a string literal",
+        "models.CheckConstraint(check=Q(dias__gte=0), name=\"%(class)s_dias\")" => "%(…)s placeholder",
+        # Django runs `int()` (and `math.ceil` for gte/lt) on a value for an integer field, so a
+        # fractional literal there means a different bound than the one written.
+        ck("check=Q(dias=1.5)")                        => "cannot be compared to exactly",
+        ck("check=Q(dias__gt=-1.5)")                   => "an integer field takes integral literals",
+        ck("check=Q(dias__range=(1.5, 2.5))")          => "integral bounds on an integer field",
+        ck("check=Q(dias__in=[1, 1.5])")               => "mixes a value with a field",
+        # `\x41` is "A" in Python; left undecoded it would compare against the four characters `\x41`.
+        ck("check=Q(tipo='\\x41')")                    => "escape sequence PormG does not decode",
+        ck("check=Q(tipo='\\u00e9')")                  => "escape sequence PormG does not decode",
+        # `("abc")` is the string, which Django's `in` iterates character by character.
+        ck("check=Q(tipo__in=(\"abc\"))")              => "a parenthesised value, not a tuple",
+        # `_1` is a Python NAME — a constant the importer cannot see — not the number 1.
+        ck("check=Q(dias=_1)")                         => "is not a literal or a plain F() reference",
+        # Out of Float64 range: `tryparse` refuses it, so it never becomes the bare word `Inf`.
+        ck("check=Q(nota__lt=1e999)")                  => "is not a number literal",
+        # Pathological nesting is a stub, never a StackOverflowError that aborts the import.
+        ck("check=" * "(" ^ 5000 * "Q(dias=1)" * ")" ^ 5000) => "nested more than",
+        ck("check=" * "~" ^ 5000 * "Q(dias=1)")        => "nested more than",
+    ]
+    # The bound is on NESTING, not size: many siblings at one level are an ordinary condition.
+    wide = translate(ck("check=" * join(fill("~Q(dias=1)", 150), " | ")), fields)
+    @test wide isa Models.CheckConstraint
+    for (element, why) in refused
+        r = translate(element, fields)
+        @test r isa String
+        r isa String && @test occursin(why, r)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: a translated CHECK's violation_error_message is reported, and only if it lands (#768)
+# The message is Python-side only, so the CHECK is imported without it and a marker says so. A CHECK
+# that is then refused — here its name is already a UniqueConstraint's — is reported as dropped and
+# must not also be reported as imported.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer reports a dropped violation_error_message only for a CHECK that lands (#768)" begin
+    source = """
+from django.db import models
+from django.db.models import Q
+
+class Volta(models.Model):
+    numero = models.IntegerField()
+    tempo = models.IntegerField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["numero"], name="volta_numero"),
+            models.CheckConstraint(check=Q(tempo__gt=0), name="volta_tempo",
+                                   violation_error_message="tempo must be positive"),
+            models.CheckConstraint(check=Q(numero__gte=1), name="volta_numero",
+                                   violation_error_message="taken name"),
+        ]
+"""
+    generated, config_key, db_dir_existed = import_django_source(source; output_file = "django_768_violation_unit.jl")
+    try
+        @test occursin("Models.CheckConstraint(condition = \"\\\"tempo\\\" > 0\", name = \"volta_tempo\")", generated)
+        @test occursin("# PormG: CheckConstraint 'volta_tempo' on 'Volta' was imported without its " *
+                       "violation_error_message", generated)
+        # The second CHECK reuses the UniqueConstraint's name: dropped, and never called imported.
+        @test occursin("Duplicate constraint name 'volta_numero'", generated)
+        @test !occursin("CheckConstraint 'volta_numero' on 'Volta' was imported", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer: translated CheckConstraints round-trip and are enforced (#768)
+# Afastamento's four simple CHECKs land in `constraints = [...]` and its date
+# comparison stays a stub. The generated module is loaded, and the conditions it
+# carries are applied to a real SQLite table and asked which rows they admit —
+# the answer comes from the database, not from the strings this file expects.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer round-trips translated CheckConstraints, and the database enforces them (#768)" begin
+    fixture = joinpath(@__DIR__, "fixtures", "django_models_meta_forms.txt")
+    output_file = "django_meta_checks_768_unit.jl"
+    config_key, db_dir_existed, generated_path = import_fixture_to_temp(fixture; output_file = output_file)
+
+    try
+        generated = read(generated_path, String)
+
+        # The four translated CHECKs, in declaration order, as ONE list on the model.
+        @test occursin(
+            "constraints = [" *
+            "Models.CheckConstraint(condition = \"\\\"dias\\\" >= 0 AND \\\"dias\\\" <= \\\"limite_dias\\\"\", name = \"ck_afast_dias\"), " *
+            "Models.CheckConstraint(condition = \"\\\"tipo\\\" IN ('ferias', 'licenca', 'tratamento d''saude') OR \\\"homologado\\\" = FALSE\", name = \"ck_afast_tipo\"), " *
+            "Models.CheckConstraint(condition = \"NOT (\\\"servidor_id\\\" IS NULL) OR \\\"homologado\\\" = FALSE\", name = \"ck_afast_servidor\"), " *
+            "Models.CheckConstraint(condition = \"\\\"limite_dias\\\" BETWEEN 1 AND 365\", name = \"ck_afast_limite\")]",
+            generated,
+        )
+
+        # The date comparison is the one stub on this model, with its reason.
+        @test count("a constraint on 'Afastamento' was dropped", generated) == 1
+        @test occursin("(`fim__gte=` is an ordering comparison, translated over number fields only)", generated)
+
+        # Load the module and read the CHECKs off the live model.
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        afastamento = Core.eval(sandbox, :(django_meta_checks_768_unit.Afastamento))
+        checks = Models.declared_check_constraints(afastamento)
+        @test [c.name for c in checks] == ["ck_afast_dias", "ck_afast_tipo", "ck_afast_servidor", "ck_afast_limite"]
+
+        # Apply them to a table with Afastamento's physical columns. The FK is a plain integer here:
+        # what is under test is the CHECK text, and Servidor's PostgreSQL-only GIN index would stop a
+        # SQLite plan for the whole fixture.
+        table = Models.Model("afastamento";
+            id = Models.IDField(), servidor_id = Models.IntegerField(null = true),
+            dias = Models.IntegerField(), limite = Models.IntegerField(db_column = "limite_dias"),
+            tipo = Models.CharField(max_length = 20), homologado = Models.BooleanField(),
+            constraints = checks)
+        mktempdir() do dir
+            pool = SQLiteConnectionPool(joinpath(dir, "checks_768.sqlite"); pool_size = 1)
+            try
+                schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+                    :afastamento => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => table, :exist => false))
+                settings = PormG.Configuration.Settings(); settings.change_db = true
+                plan = PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema, pool, settings; interactive = false)
+                ordered, _ = PormG.Migrations._order_statements(collect(values(plan)))
+                for sql in ordered, stmt in split(sql, ";")
+                    isempty(strip(stmt)) || PormG.ConnectionPool.fetch(pool, strip(stmt) * ";")
+                end
+
+                # Which CHECK refuses the row? "" when it goes in. Asked of the database, then cleaned
+                # up. The error must NAME the constraint, so an unrelated SQL error cannot pass for a
+                # rejection.
+                function refused_by(servidor, dias, limite, tipo, homologado)
+                    msg = try
+                        PormG.ConnectionPool.fetch(pool,
+                            "INSERT INTO afastamento (servidor_id, dias, limite_dias, tipo, homologado) VALUES (?, ?, ?, ?, ?);",
+                            Any[servidor, dias, limite, tipo, homologado])
+                        ""
+                    catch e
+                        sprint(showerror, e)
+                    end
+                    PormG.ConnectionPool.fetch(pool, "DELETE FROM afastamento;")
+                    return msg
+                end
+                rejects(name, row...) = occursin("CHECK constraint failed: $(name)", refused_by(row...))
+
+                @test refused_by(7, 5, 10, "ferias", true) == ""                 # every CHECK holds
+                @test refused_by(7, 5, 10, "tratamento d'saude", true) == ""     # the doubled quote matched the value
+                @test rejects("ck_afast_dias", 7, -1, 10, "ferias", true)        # dias >= 0
+                @test rejects("ck_afast_dias", 7, 11, 10, "ferias", true)        # dias <= limite_dias (the F())
+                @test rejects("ck_afast_tipo", 7, 5, 10, "outro", true)          # tipo IN (...) OR homologado = FALSE
+                @test refused_by(7, 5, 10, "outro", false) == ""                 # ...the OR's other arm
+                @test rejects("ck_afast_servidor", missing, 5, 10, "ferias", true)  # NOT (servidor_id IS NULL) OR ...
+                @test refused_by(missing, 5, 10, "ferias", false) == ""
+                @test rejects("ck_afast_limite", 7, 0, 0, "ferias", true)        # limite_dias BETWEEN 1 AND 365
+                @test rejects("ck_afast_limite", 7, 5, 366, "ferias", true)
+                @test refused_by(7, 5, 365, "ferias", true) == ""
+            finally
+                close_pool!(pool)
+            end
+        end
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end

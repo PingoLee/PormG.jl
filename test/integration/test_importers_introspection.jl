@@ -1871,6 +1871,86 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# inspectdb include_views: real views become unmanaged, keyless models (#767)
+# The live half of test/unit/test_import_views.jl. A view — and on PostgreSQL a materialized view,
+# here with a UNIQUE index — is read only by `read_live_views`, never by `read_live_schema`, and the
+# importer writes it with `managed = false`, no primary key (none is guessed, not even from the unique
+# index) and the marker. The generated model then reads the view's rows through the ORM.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "inspectdb include_views: real views become unmanaged, keyless models (#767)" begin
+  pool = PormG.config[PORMG_DB_FOLDER].connections
+  is_pg = adapter_name == "PostgreSQL"
+  ddl(sql) = PormG.ConnectionPool.fetch(pool, sql)
+  view, mview = "pormg_it_767_points_v", "pormg_it_767_wins_mv"
+  function drop767!()
+    try; ddl("DROP VIEW IF EXISTS \"$(view)\""); catch; end
+    is_pg && try; ddl("DROP MATERIALIZED VIEW IF EXISTS \"$(mview)\""); catch; end
+  end
+  key = mktempdir()
+  drop767!()
+  try
+    ddl("CREATE VIEW \"$(view)\" AS SELECT \"driverid\", SUM(\"points\") AS \"points\" FROM \"result\" GROUP BY \"driverid\"")
+    if is_pg
+      ddl("CREATE MATERIALIZED VIEW \"$(mview)\" AS SELECT \"driverid\", COUNT(*) AS \"wins\" " *
+          "FROM \"result\" WHERE \"position\" = 1 GROUP BY \"driverid\"")
+      ddl("CREATE UNIQUE INDEX \"$(mview)_driverid\" ON \"$(mview)\" (\"driverid\")")
+    end
+    names = is_pg ? [view, mview] : [view]
+
+    # Only the view reader sees them.
+    @test isempty(PormG.Migrations.read_live_schema(pool; include_table = names))
+    @test sort([t.name for t in PormG.Migrations.read_live_views(pool; include_table = names)]) == sort(names)
+
+    # Import them into a scratch folder registered on the suite's own connection.
+    PormG.config[key] = PormG.Configuration.Settings(connections = pool, db_def_folder = key, change_data = true)
+    if is_pg
+      PormG.Migrations.import_models_from_postgres(key; force_replace = true, include_table = names, include_views = true)
+    else
+      PormG.Migrations.import_models_from_sqlite(key; force_replace = true, include_table = names, include_views = true)
+    end
+    content = read(joinpath(key, "automatic_models.jl"), String)
+    for n in names
+      # The marker line, then the model — captured apart, because the marker itself names
+      # `primary_key = true` as the fix.
+      block = match(Regex("(?m)^# PormG: generated from the view '$(n)'.*\\n(?:# PormG: .*\\n)?($(uppercasefirst(n)) = " *
+                          "Models\\.Model\\(\"$(n)\", managed = false,\\n(?:  .*\\n?)+)"), content)
+      @test block !== nothing
+      block === nothing && continue
+      @test !occursin("primary_key", block.captures[1])
+      @test !occursin("IDField", block.captures[1])
+    end
+    # SUM(points): PostgreSQL types it, SQLite gives a computed view column no type — named by a marker.
+    @test occursin("# PormG: the database reports no type for 'points' of the view '$(view)'", content) == !is_pg
+    if is_pg
+      # The shape docs/src/models.md shows: the fixture's bigint key is a nullable BigIntegerField, and
+      # SUM over a double precision column a nullable float — every view column reads as nullable.
+      @test occursin("Pormg_it_767_points_v = Models.Model(\"pormg_it_767_points_v\", managed = false,\n" *
+                     "  driverid = Models.BigIntegerField(null=true),\n" *
+                     "  points = Models.FloatField(null=true))", content)
+    end
+
+    # The generated module reads the view: Senna's total through it equals the sum of his results.
+    scratch = Module(:IncludeViews767)
+    Base.eval(scratch, :(using PormG))
+    Base.eval(scratch, Meta.parse(content))
+    senna_id = M.Driver.objects.filter("driverref" => "senna").values("driverid").list()[1][:driverid]
+    expected = sum(r[:points] for r in M.Result.objects.filter("driverid" => senna_id).values("points").list())
+    Base.invokelatest() do
+      gen = getfield(scratch, :automatic_models)
+      PormG.Models.set_models(gen, key)
+      points_v = getfield(gen, :Pormg_it_767_points_v)
+      @test !PormG.model_is_managed(points_v)
+      rows = points_v.objects.filter("driverid" => senna_id).values("points").list()
+      @test length(rows) == 1
+      @test parse(Float64, string(rows[1][:points])) ≈ expected
+    end
+  finally
+    delete!(PormG.config, key)
+    drop767!()
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PostgreSQL CheckConstraint: declared, marked, read back, replaced, renamed and adopted (#742)
 # The live half of test/unit/test_check_constraints.jl, where the stand-in has no catalog. A declared
 # CHECK is added as `ADD CONSTRAINT` plus a `COMMENT ON CONSTRAINT` holding PormG's marker, and that

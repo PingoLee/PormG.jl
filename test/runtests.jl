@@ -219,6 +219,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Django Model Importer" include("unit/test_import_django_models.jl")
     @testset "Django Multi-App Project Importer (#346)" include("unit/test_import_django_project.jl")
     @testset "Schema Importers (key resolution)" include("unit/test_importers.jl")
+    @testset "inspectdb include_views (#767)" include("unit/test_import_views.jl")
     @testset "Discard Pending Migration" include("unit/test_discard_pending_migration.jl")
     @testset "makemigrations: no stale pending plan (#727)" include("unit/test_makemigrations_stale_pending.jl")
     @testset "makemigrations: plan against any models file (#736)" include("unit/test_makemigrations_models_file.jl")

@@ -164,6 +164,14 @@ a physical name is escaped rather than validated.
 
 Where no declaration can say it, the generator picks the constructor default and **warns**, naming the table and column, so the choice is never silent: a lengthless `varchar` becomes `CharField()` (250), an unparameterised `numeric` becomes `DecimalField()`, and a type PormG has no field for (`macaddr`, an array, `character(n)`) becomes `TextField`. The first `makemigrations` after such an import plans the declared width or type for that column; see *Adopting a schema PormG did not create* in the [migrations guide](migrations/index.md).
 
+### Generated files: views only on request, unmanaged and keyless
+
+`import_models_from_sqlite` and `import_models_from_postgres` write tables only, unless
+`include_views = true` is passed. Then each view (and, on PostgreSQL, each materialized view) is
+written after the tables as a `managed = false` model with **no primary key**: a view has none, and
+PormG does not guess one. A `# PormG:` marker above each such model says so. See
+[Generating models for existing views](models.md#Generating-models-for-existing-views).
+
 ### Generated files: colliding bindings and names are disambiguated
 
 `inspectdb`-style import (`import_models_from_sqlite` / `import_models_from_postgres` /

@@ -82,8 +82,80 @@ function _plan_inspectdb_bindings!(models_array)::Dict{String, String}
   return binding_by_table
 end
 
+# What `_render_live_models` needs to know about the views beyond their models (#767).
+struct _LiveViews
+  untyped::Dict{String, Vector{String}}   # view ⇒ columns the database gives no type, in column order
+  unreadable::Vector{String}              # "<view>: <error>", for a view that could not be described
+end
+_LiveViews() = _LiveViews(Dict{String, Vector{String}}(), String[])
+
+# #767: what an `inspectdb` entry point writes — the tables, then, opt-in, the views, each
+# `managed = false` (#741) and keyless: PormG reads a view, it never migrates one, and nothing in a
+# view guarantees a key. Views go LAST and through the same binding pass as the tables, so a view
+# whose binding collides with a table's is deduplicated by the same rule (#338/#360) rather than
+# shadowing it.
+function _live_import_models(conn, ignore_table::Vector{String},
+                             include_table::Union{Vector{String}, Nothing}, include_views::Bool)
+  tables = convert_schema_to_models(conn; ignore_table = ignore_table, include_table = include_table)
+  include_views || return tables, _LiveViews()
+  info = _LiveViews()
+  live = read_live_views(conn; ignore_table = ignore_table, include_table = include_table,
+                         unreadable = info.unreadable)
+  views = PormGModel[Models._apply_managed!(model_from_live(v, conn), false) for v in live]
+  for v in live
+    info.untyped[v.name] = String[col for (col, spec) in v.columns
+                                  if spec.type isa CUnsupported && isempty(strip(spec.raw))]
+  end
+  return PormGModel[tables; views], info
+end
+
+# The marker above a model generated from a view (#767): what it is, and the one thing a reader must
+# do before writing through it. The key is never guessed — nothing in a view guarantees one, and a
+# guessed key would hand back duplicate rows as if they were one.
+_view_marker(view::AbstractString)::String =
+  "# PormG: generated from the view '$(_one_line(view))' — managed = false, so migrations never " *
+  "create, alter or drop it. A view has no primary key, so none is declared: reads work, but " *
+  "writes that address rows by key (a filtered delete, bulk_update without match_on) need one — " *
+  "mark a column that is unique in the view primary_key = true."
+
+# SQLite declares no type for a view column computed by an expression (`SUM(points)`, `COUNT(*)`), so
+# it is emitted as TextField — and a filter on it then binds text, which SQLite orders after every
+# number: `points__@gt => 10` returns nothing. The type is not guessed; the reader is told.
+_untyped_view_marker(view::AbstractString, cols::Vector{String})::String =
+  "# PormG: the database reports no type for $(join(("'$(_one_line(c, 60))'" for c in cols), ", ")) " *
+  "of the view '$(_one_line(view))' — SQLite gives none to a computed column — so " *
+  "$(length(cols) == 1 ? "it is" : "they are") emitted as TextField. Declare the real field type " *
+  "by hand: as a TextField, a filter compares the column as text."
+
+# #338: one binding/name registry PER GENERATED FILE, shared across every model rendered into it —
+# seeded with what the file's own boilerplate already imports, so a table literally named "models"
+# collides too. Without this, two tables that render the same binding silently shadow one another.
+# #360: pass 1 first — resolve every binding and rewrite each FK's `.to` to its target's FINAL
+# binding, then render with the bindings pass 1 already decided (one derivation, no drift).
+function _render_live_models(models_array::Vector{PormGModel}, views::_LiveViews)::Vector{Any}
+  binding_by_table = _plan_inspectdb_bindings!(models_array)
+  taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
+  taken_names = Set{String}()
+  Instructions = Any[]
+  for model in models_array
+    table = model_table_name(model)
+    rendered = Models.Model_to_str(model; name_is_physical_table=true, taken_bindings=taken_bindings,
+                                   taken_names=taken_names, binding=binding_by_table[table])
+    if haskey(views.untyped, table)
+      untyped = views.untyped[table]
+      rendered = _view_marker(table) * "\n" *
+                 (isempty(untyped) ? "" : _untyped_view_marker(table, untyped) * "\n") * rendered
+    end
+    push!(Instructions, rendered)
+  end
+  for u in views.unreadable
+    push!(Instructions, "# PormG: a view could not be read, so it is not imported — $(_one_line(u, 300))")
+  end
+  return Instructions
+end
+
 """
-    import_models_from_sqlite(db::String="db"; force_replace::Bool=false, ignore_schema=nothing, include_table=nothing, file::String="automatic_models.jl")
+    import_models_from_sqlite(db::String="db"; force_replace::Bool=false, ignore_schema=nothing, include_table=nothing, include_views::Bool=false, file::String="automatic_models.jl")
 
 Import models from a SQLite database and generate a Julia file with model definitions.
 
@@ -94,6 +166,9 @@ Import models from a SQLite database and generate a Julia file with model defini
   connection's default list: `sqlite_ignore_schema`, less any `unignore_defaults:` entry. A vector
   replaces it. The connection's `ignore_tables:` and `register_ignore_tables!` are added either way.
 - `include_table::Union{Vector{String},Nothing}=nothing`: When set, only these tables are imported.
+- `include_views::Bool=false`: Also write each view as a `managed = false` model, after the tables
+  (#767). A view has no primary key and none is guessed, so the model is keyless and carries a
+  `# PormG:` marker saying so. `include_table` and `ignore_schema` filter views by name too.
 - `file::String="automatic_models.jl"`: The output filename for the generated models.
 
 # Description
@@ -118,6 +193,7 @@ function import_models_from_sqlite(db::String = "db";
                                   force_replace::Bool=false,
                                   ignore_schema::Union{Vector{String}, Nothing} = nothing,
                                   include_table::Union{Vector{String}, Nothing} = nothing,
+                                  include_views::Bool = false,
                                   file::String="automatic_models.jl")
 
   # Resolve the connection from its config key (mirrors import_models_from_postgres):
@@ -142,26 +218,14 @@ function import_models_from_sqlite(db::String = "db";
   # Convert the database schema to models
   # #818: `nothing` is the connection's default list — the built-in one less its `unignore_defaults:`.
   base = something(ignore_schema, _backend_ignore_tables(conn, settings))
-  models_array = convert_schema_to_models(conn, ignore_table=_with_connection_ignores(base, settings), include_table=include_table)
+  models_array, views = _live_import_models(conn, _with_connection_ignores(base, settings), include_table, include_views)
 
   if isempty(models_array)
     @warn("No tables found in the database to import.")
     return nothing
   end
 
-  # Collect all create instructions
-  # #338: one binding/name registry PER GENERATED FILE, shared across every model rendered into it —
-  # seeded with what the file's own boilerplate already imports, so a table literally named "models"
-  # collides too. Without this, two tables that render the same binding silently shadow one another.
-  # #360: pass 1 first — resolve every binding and rewrite each FK's `.to` to its target's FINAL
-  # binding, then render with the bindings pass 1 already decided (one derivation, no drift).
-  binding_by_table = _plan_inspectdb_bindings!(models_array)
-  taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
-  taken_names = Set{String}()
-  Instructions::Vector{Any} = []
-  for model in models_array
-    push!(Instructions, Models.Model_to_str(model; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names, binding=binding_by_table[model_table_name(model)]))
-  end
+  Instructions = _render_live_models(models_array, views)
 
   generate_models_from_db(file, Instructions, settings; path=model_path)
 
@@ -172,7 +236,7 @@ function import_models_from_sqlite(db::String = "db";
 end
 
 """
-    import_models_from_postgres(db::String; force_replace::Bool=false, ignore_table=nothing, file::String="automatic_models.jl")
+    import_models_from_postgres(db::String; force_replace::Bool=false, ignore_table=nothing, include_table=nothing, include_views::Bool=false, file::String="automatic_models.jl")
 
 Import models from a PostgreSQL database and generate a Julia file with model definitions.
 
@@ -182,6 +246,11 @@ Import models from a PostgreSQL database and generate a Julia file with model de
 - `ignore_table::Union{Vector{String},Nothing}=nothing`: Table name prefixes to ignore. `nothing` is the
   connection's default list: `postgres_ignore_table`, less any `unignore_defaults:` entry (#818). A
   vector replaces it. The connection's `ignore_tables:` and `register_ignore_tables!` are added either way.
+- `include_table::Union{Vector{String},Nothing}=nothing`: When set, only these tables are imported.
+- `include_views::Bool=false`: Also write each view and materialized view as a `managed = false`
+  model, after the tables (#767). A view has no primary key and none is guessed, so the model is
+  keyless and carries a `# PormG:` marker saying so. `include_table` and `ignore_table` filter views
+  by name too.
 - `file::String="automatic_models.jl"`: The output filename for the generated models.
 
 # Description
@@ -207,6 +276,7 @@ function import_models_from_postgres(db::String;
   force_replace::Bool=false, 
   ignore_table::Union{Vector{String}, Nothing} = nothing,
   include_table::Union{Vector{String}, Nothing} = nothing,
+  include_views::Bool = false,
   file::String="automatic_models.jl",
   config::Dict{String,PormGSettings} = config)
   
@@ -225,23 +295,14 @@ function import_models_from_postgres(db::String;
   # Convert the database schema to models
   # #818: `nothing` is the connection's default list — the built-in one less its `unignore_defaults:`.
   base = something(ignore_table, _backend_ignore_tables(conn, settings))
-  models_array = convert_schema_to_models(conn, ignore_table=_with_connection_ignores(base, settings), include_table=include_table)
+  models_array, views = _live_import_models(conn, _with_connection_ignores(base, settings), include_table, include_views)
 
   if isempty(models_array)
       @warn("No tables found in the database to import.")
       return nothing
   end
 
-  # Convert each model to string representation
-  # #338: one binding/name registry per generated file — see import_models_from_sqlite for why.
-  # #360: pass 1 first — see import_models_from_sqlite.
-  binding_by_table = _plan_inspectdb_bindings!(models_array)
-  taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
-  taken_names = Set{String}()
-  Instructions::Vector{Any} = []
-  for model in models_array
-      push!(Instructions, Models.Model_to_str(model; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names, binding=binding_by_table[model_table_name(model)]))
-  end
+  Instructions = _render_live_models(models_array, views)
   
   # Generate the models file
   generate_models_from_db(file, Instructions, settings, path=model_path)
@@ -257,6 +318,7 @@ function import_models_from_postgres(;db::PormGPostgres = connection(),
                                   force_replace::Bool=false, 
                                   ignore_table::Union{Vector{String}, Nothing} = nothing,
                                   include_table::Union{Vector{String}, Nothing} = nothing,
+                                  include_views::Bool = false,
                                   file::String="automatic_models.jl")
 
   Configuration._require_folder_backed(settings, "import_models_from_postgres")
@@ -271,23 +333,14 @@ function import_models_from_postgres(;db::PormGPostgres = connection(),
   # Convert the database schema to models
   # #818: `nothing` is the connection's default list — the built-in one less its `unignore_defaults:`.
   base = something(ignore_table, _backend_ignore_tables(db, settings))
-  models_array = convert_schema_to_models(db, ignore_table=_with_connection_ignores(base, settings), include_table=include_table)
+  models_array, views = _live_import_models(db, _with_connection_ignores(base, settings), include_table, include_views)
 
   if isempty(models_array)
       @warn("No tables found in the database to import.")
       return nothing
   end
 
-  # Convert each model to string representation
-  # #338: one binding/name registry per generated file — see import_models_from_sqlite for why.
-  # #360: pass 1 first — see import_models_from_sqlite.
-  binding_by_table = _plan_inspectdb_bindings!(models_array)
-  taken_bindings = Set{String}(GENERATED_MODULE_RESERVED_BINDINGS)
-  taken_names = Set{String}()
-  Instructions::Vector{Any} = []
-  for model in models_array
-      push!(Instructions, Models.Model_to_str(model; name_is_physical_table=true, taken_bindings=taken_bindings, taken_names=taken_names, binding=binding_by_table[model_table_name(model)]))
-  end
+  Instructions = _render_live_models(models_array, views)
   
   # Generate the models file
   generate_models_from_db(file, Instructions, settings, path=model_path)

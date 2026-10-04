@@ -56,6 +56,9 @@ using PormG.Functions: ToChar
 using PormG.Functions: Extract
 # #696 — the `Cast` type-string claims on the functions page.
 using PormG.Functions: Cast
+# #903 — the `Value(ip"…")` SQLite claim on the fields page.
+using PormG.Functions: Value
+import Sockets
 import DataFrames
 # #733 — the repair-op claim reads a history table, so it needs the SQLite driver (idempotent reload).
 include(joinpath(@__DIR__, "..", "load_drivers.jl"))
@@ -1317,6 +1320,27 @@ const DOCERR_CASES = [
         "fields.md + postgres.md + src/models/fields.jl — a CIDRField raises on SQLite when its column is rendered (#28)",
         BackendCapabilityError,
         () -> PormG.Dialect.field_to_column("garage_lan", CIDRField(), DocErrMockSQLite()),
+    ),
+    # #902. `fields.md` → *UUID Fields* names the type a malformed UUID raises in an equality filter —
+    # the half of the paragraph the pattern lookups (which take a fragment) do not change. The
+    # rendering is pinned in `test_uuid_pattern_lookups.jl`.
+    (
+        "fields.md — a malformed UUID in an equality filter raises (#902)",
+        FilterError,
+        () -> let m = Model("docerr_token_902", id = IDField(), token = UUIDField())
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("token" => "550e"); q.list(show_query = :dict)
+        end,
+    ),
+    # #903. `fields.md` → *Querying network fields* and the `Value` docstring name the type a
+    # `Sockets` literal raises on SQLite, which has no network type. The PostgreSQL bind is pinned in
+    # `test_network_address_fields.jl`.
+    (
+        "fields.md + src/querybuilder/functions.jl — Value(ip\"…\") raises on SQLite (#903)",
+        InvalidValueError,
+        () -> let q = DOCERR_STATUS_SL.objects
+            q.values("statusid", "probe" => Value(Sockets.IPv4("10.0.0.1"))); q.list(show_query = :dict)
+        end,
     ),
     # #876. The same *Text Fields* section names the types a `Bool` raises against a text field: on a
     # write, in a filter, and as a `default=`. Every route and both engines are pinned in

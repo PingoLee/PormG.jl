@@ -1108,6 +1108,7 @@ function _infer_parameter_sql_type(value, instruc::SQLInstruction; fallback::Uni
   value isa Dates.Date && return "date"
   value isa Dates.DateTime && return "timestamp"
   value isa Dates.Time && return "time"
+  value isa Sockets.IPAddr && return "inet"   # #903 — bound as its text by `add_parameter!`
   return nothing
 end
 
@@ -2668,24 +2669,48 @@ function _operand_field(v::SQLTypeOper, instruc::SQLInstruction)
   return f === nothing ? (nothing, "") : (f, memo_key(v.column)[2])
 end
 
-# #28: what a network column needs before its predicate renders. A pattern lookup reads the column's
-# printed text (`Dialect._network_pattern_operand`), because PostgreSQL has no `LIKE` for `inet` or
-# `cidr`. Everything else — `=`, `@in`, `@isnull`, the ordering lookups — compares the column itself,
-# natively. PostgreSQL only: SQLite has no such column, and the DDL that would create one is refused
-# (`Dialect._refuse_specialized_sqlite_type`), so there the predicate is left as written.
-function _network_operand!(column::AbstractString, field, operator::AbstractString,
-                           instruc::SQLInstruction)::String
-  instruc.connection isa PormGPostgres && operator in PATTERN_LOOKUP_OPERATORS &&
-    return Dialect._network_pattern_operand(instruc.connection, field, column)
-  return String(column)
+# #28/#903: the kind of column a pattern lookup must read as TEXT, or `nothing` for one it reads as it
+# is. Keyed on the formatter because that is the one piece of evidence a column and a projection alias
+# share: a field carries it, and an alias over one resolves it (`_having_alias_formatter`) — the alias
+# has no field to ask.
+function _pattern_text_kind(formatter)::Union{Symbol,Nothing}
+  (formatter === Models.format_inet_sql || formatter === Models.format_inet_unpacked_sql) && return :inet
+  formatter === Models.format_cidr_sql && return :cidr
+  # #902: a UUID reads as its canonical lowercase hyphenated text — what SQLite stores and what
+  # PostgreSQL prints. Django's PostgreSQL backend reads the same `::text`; its hyphen stripping
+  # (`UUIDTextMixin`) is only for backends that store 32 hex digits, which PormG never does.
+  formatter === Models.format_uuid_sql && return :uuid
+  return nothing
+end
+
+# What such a column needs before its predicate renders. A pattern lookup reads the column's printed
+# text (`Dialect._pattern_text_operand`), because PostgreSQL has no `LIKE` for `inet`, `cidr` or
+# `uuid`. Everything else — `=`, `@in`, `@isnull`, the ordering lookups — compares the column itself,
+# natively. On SQLite a UUID column already holds that text, and a network column cannot exist (the
+# DDL that would create one is refused, `Dialect._refuse_specialized_sqlite_type`), so there the
+# predicate is left as written.
+function _pattern_operand(column::AbstractString, formatter, operator::AbstractString,
+                          instruc::SQLInstruction)::String
+  operator in PATTERN_LOOKUP_OPERATORS || return String(column)
+  kind = _pattern_text_kind(formatter)
+  kind === nothing && return String(column)
+  return Dialect._pattern_text_operand(instruc.connection, Val(kind), column)
 end
 
 # The formatter a filter value goes through. A pattern lookup's value is a FRAGMENT of an address
-# (`"10.20."`, `"::ffff"`), which the field's strict formatter would refuse, so it binds as plain
-# text — Django's `PatternLookup` skips the field's `get_prep_value` for the same reason. Every
-# other field and lookup keeps its own formatter.
-_lookup_formatter(field, operator::AbstractString) =
-  _is_network_field(field) && operator in PATTERN_LOOKUP_OPERATORS ? Models.format_text_sql : field.formatter
+# (`"10.20."`, `"::ffff"`) or of a UUID (`"550e"`), which the column's strict formatter would refuse,
+# so it binds as plain text — Django's `PatternLookup` skips the field's `get_prep_value` for the
+# same reason. Every other column and lookup keeps its own formatter. The `formatter` arm serves a
+# projection alias (#903), whose formatter may be `nothing` — a type the alias ladder cannot name.
+_lookup_formatter(formatter, operator::AbstractString) =
+  operator in PATTERN_LOOKUP_OPERATORS && _pattern_text_kind(formatter) !== nothing ? format_pattern_text_sql : formatter
+
+# A pattern lookup's value on such a column: plain text, except a whole `UUID`, which is matched as
+# the text the column reads as. `format_text_sql` alone refuses a `UUID` (#860, a text column is not
+# a UUID column), and `"token__@contains" => uuid4()` worked on SQLite before #902.
+format_pattern_text_sql(value::UUIDs.UUID) = Models.format_uuid_sql(value)
+format_pattern_text_sql(value) = Models.format_text_sql(value)
+_lookup_formatter(field::PormGField, operator::AbstractString) = _lookup_formatter(field.formatter, operator)
 
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   @pormg_debug false
@@ -2721,11 +2746,12 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     return _render_json_lookup_comparison(v, column, instruc)
   end
   # #28: a network column. Here, once, so the model-field arm, the joined-path arm and a column RHS
-  # all get it.
-  network_field, _ = _operand_field(v, instruc)
-  if network_field !== nothing && _is_network_field(network_field)
-    column = _network_operand!(column, network_field, v.operator, instruc)
-  end
+  # all get it. #903: a `When` condition on a projection alias renders here too, and has no field —
+  # the alias's formatter is what says it projects a network column.
+  operand_field, _ = _operand_field(v, instruc)
+  operand_formatter = operand_field !== nothing ? operand_field.formatter :
+                      alias !== nothing ? _having_alias_formatter(memo_key(:base, alias), instruc) : nothing
+  column = _pattern_operand(column, operand_formatter, v.operator, instruc)
   if isa(v.values, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
     @pormg_debug false
     # #894: a `DurationField` ordered against an `F` interval — another `DurationField`, a timestamp

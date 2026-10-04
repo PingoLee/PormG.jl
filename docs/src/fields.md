@@ -193,6 +193,24 @@ Access_token = Models.Model(
 - `default::Union{String, Nothing} = nothing`: A default UUID string.
 - `unique::Bool = false`: Enforce uniqueness.
 
+**Querying**: equality and `@in` take a whole UUID in any case (`"550E8400-…"` matches
+`"550e8400-…"`); a malformed one raises `FilterError`. The pattern lookups (`@contains`, `@startswith`,
+`@endswith`, their `i`/`n` variants and `@regex`) take a **fragment** and match it against the UUID's
+lowercase, hyphenated text, the form both engines store or print. On PostgreSQL the column is read as
+`CAST(token AS text)`.
+
+```julia
+# Tokens issued from the same prefix, hyphen included.
+Access_token.objects.filter("token__@startswith" => "550e8400-e29b").values("id").list()
+
+# The text is lowercase: an uppercase fragment needs the case-insensitive form.
+Access_token.objects.filter("token__@icontains" => "E29B").values("id").list()
+```
+
+The fragment is matched as written, hyphens included: `"550e8400e29b"` does not match. This is what
+Django does on PostgreSQL; its hyphen-insensitive form is only for databases that store a UUID as 32 hex
+digits, which PormG never does.
+
 ---
 
 ## Network Address Fields
@@ -299,6 +317,18 @@ M.Pit_wall_session.objects.
   PostgreSQL does: `10.0.0.9` comes before `10.0.0.10`.
 - A filter value may be a `Sockets.IPv4` / `Sockets.IPv6` too; a value that is not a valid address
   raises `FilterError`.
+- A **projection alias** over a network column filters the same way. A pattern lookup on
+  `"top_ip" => Max("client_ip")` reads `HOST(MAX(…))`, and the fragment is bound as text.
+- `Value(ip"…")` binds on PostgreSQL as an `inet`, in the text PostgreSQL prints for it
+  (`::ffff:10.0.0.1`). On SQLite it raises `InvalidValueError`.
+
+```julia
+# The highest address each team used, kept only when it is on the 10.20.x.x garage network.
+M.Pit_wall_session.objects.
+  values("team", "top_ip" => Max("client_ip")).
+  filter("top_ip__@startswith" => "10.20.").
+  list()
+```
 
 ---
 

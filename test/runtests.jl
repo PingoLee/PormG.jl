@@ -217,6 +217,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Ignore-Tables Registry" include("unit/test_ignore_tables_registry.jl")
     @testset "New Field Types (UUID, URL, Slug, JSON)" include("unit/test_new_field_types.jl")
     @testset "Network Address Fields (#28)" include("unit/test_network_address_fields.jl")
+    @testset "UUIDField Pattern Lookups (#902)" include("unit/test_uuid_pattern_lookups.jl")
     @testset "Field Kwargs Equivalence (#260)" include("unit/test_field_kwargs_equivalence.jl")
     @testset "Django Model Importer" include("unit/test_import_django_models.jl")
     @testset "Django Multi-App Project Importer (#346)" include("unit/test_import_django_project.jl")

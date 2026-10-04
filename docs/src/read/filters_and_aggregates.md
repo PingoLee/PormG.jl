@@ -216,6 +216,11 @@ All four escape `%` and `_` in the bound value, so user input is matched literal
     wrapper is the `pormg_lower` UDF, which PormG registers per connection; an index over it would only
     be usable by clients that register the same function, so treat the `i` forms as unindexed there.
 
+    A `UUIDField`, `GenericIPAddressField` or `CIDRField` column is wrapped too on PostgreSQL, which has
+    no `LIKE` for those types: every pattern lookup reads the column's printed text
+    (`CAST(col AS text)`, or `HOST(col)` for an `inet`). See [UUID Fields](../fields.md#UUID-Fields) and
+    [Querying network fields](../fields.md#Querying-network-fields).
+
 ### Accent-Insensitive (`@iunaccent_contains`, `@iunaccent_exact`)
 
 **PostgreSQL only.** These lookups match while ignoring both diacritics and case, so an ASCII query finds accented data:

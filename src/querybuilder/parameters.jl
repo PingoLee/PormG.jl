@@ -394,6 +394,15 @@ function add_parameter!(sq::PormGSQLiteParam, value::PormGBytes; contains::Bool=
   return "?"
 end
 
+# #903: a scalar `Sockets.IPAddr` literal — `Value(ip"…")`, a `Value` operand, a `Case` branch — binds
+# as the text PostgreSQL prints for it (`format_inet_sql`: `::ffff:10.0.0.1`, not `Sockets`'
+# `::ffff:a00:1`), the text every network filter and write already binds. The `::inet` cast comes from
+# `_infer_parameter_sql_type`. (A `Value` holding a VECTOR of addresses takes the array arm above,
+# raw.) SQLite has no network type, so there `sqlite_bind_value` refuses it.
+function add_parameter!(pq::PormGPostgresParam, value::Sockets.IPAddr; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
+  return add_parameter!(pq, Models.format_inet_sql(value); contains=contains, operator=operator, sql_type=sql_type)
+end
+
 # --- SQLInstruction convenience (works for both backends) ---
 add_parameter!(instruc::SQLInstruction, value::Any; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing) = add_parameter!(instruc.parameters, value; contains=contains, operator=operator, sql_type=sql_type)
 

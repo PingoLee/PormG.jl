@@ -691,10 +691,12 @@ order:
     any create or rename on the table, which would otherwise fail with "already exists". A bare index
     is `DROP INDEX`; a constraint-backed one is `ALTER TABLE … DROP CONSTRAINT` on PostgreSQL
     (`DROP INDEX` on an index a constraint owns is refused) and a table rebuild on SQLite (an
-    autoindex cannot be dropped at all). An index the readers refuse — partial, functional,
-    `INCLUDE`, … — never reaches `live`, so it is never dropped.
+    autoindex cannot be dropped at all). An index the readers refuse — `INCLUDE`, an extension's
+    method, a unique partial one, … — never reaches `live`, so it is never dropped. A functional or
+    partial index is advanced (#29 part 2): it is PormG's only under the hashed marker of its text.
   * **Adopt** a match that is advanced and carries no marker: on PostgreSQL a `COMMENT ON INDEX`
-    appends the marker to whatever comment the index has, and from then on it is PormG's. On SQLite
+    appends the marker to whatever comment the index has, and from then on it is PormG's — for a
+    text-holding index the hash of the DECLARED text, which is what every later plan compares. On SQLite
     nothing — an index cannot be commented there, and a drop and re-create would make the first plan
     after `inspectdb` destructive — so an adopted SQLite index stays unowned until something re-creates
     it (an explicit rename does).
@@ -789,7 +791,7 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
   drops = LiveComposite[]
   renames = Tuple{LiveComposite, DeclaredComposite}[]
   creates = DeclaredComposite[]
-  adopts = LiveComposite[]
+  adopts = Tuple{LiveComposite, DeclaredComposite}[]
   for (i, d) in enumerate(declared)
     j = matched[i]
     if j === nothing
@@ -813,7 +815,7 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
       push!(renames, (lc, d))
     end
     # #29: a hand-made advanced index the declaration matches becomes PormG's (see the docstring).
-    conn isa PormGPostgres && !composite_is_owned(lc) && push!(adopts, lc)
+    conn isa PormGPostgres && !composite_is_owned(lc) && push!(adopts, (lc, d))
   end
   unowned = Dict{String, LiveComposite}()
   for (j, (lc, _)) in enumerate(live)
@@ -843,16 +845,16 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
   for d in Iterators.flatten((creates, (d for (_, d) in renames)))
     stranger = get(unowned, _composite_name_key(conn, d.name), nothing)
     stranger === nothing || throw(InvalidMigrationError(
-      "Index name '$(d.name)' on table '$(table)' is held by an index over " *
-      "($(join(stranger.columns, ", "))) that PormG does not own — it carries no pormg:index marker, " *
+      "Index name '$(d.name)' on table '$(table)' is held by an index $(_describe_live_composite(stranger)) " *
+      "that PormG does not own — it carries no pormg:index marker, " *
       "so it is never planned away: one written by hand, or one a declaration adopted on SQLite, " *
       "where adopting writes no marker. Drop it by hand to give the name to a different index, " *
-      "or give this one another name"))
+      "or give this one another name" * _adoption_hint(stranger)))
     holder = get(kept, _composite_name_key(conn, d.name), nothing)
     holder === nothing && continue
     throw(InvalidMigrationError(
-      "Index name '$(d.name)' on table '$(table)' is already the name of the index over " *
-      "($(join(holder.columns, ", "))), which this model also declares; give each UniqueConstraint " *
+      "Index name '$(d.name)' on table '$(table)' is already the name of the index " *
+      "$(_describe_live_composite(holder)), which this model also declares; give each UniqueConstraint " *
       "and Index a distinct name"))
   end
 
@@ -866,10 +868,13 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
   foreach(drop!, drops)
   # Before the renames: the comment belongs to the index, not its name, so a rename after it carries
   # the marker along — and the label sits in the same `_order_statements` bucket, so plan order holds.
-  for lc in adopts
+  for (lc, d) in adopts
+    # #29 part 2: a text-holding index is adopted under the hash of its DECLARED text, which is what
+    # every later plan compares — the catalog's rewritten form would never hash to it.
     _configure_order_dict_migration_plan(migration_plan, model_name,
       "Adopt index: $(replace(lc.name, "Rename field" => "Rename_field"))",
-      Dialect.comment_index(conn, "\"$(Dialect._quote_table_ddl(lc.name))\""; keep = lc.comment))
+      Dialect.comment_index(conn, "\"$(Dialect._quote_table_ddl(lc.name))\""; keep = lc.comment,
+                            marker = something(composite_marker(d), INDEX_MARKER)))
   end
   for (lc, d) in renames
     if conn isa PormGPostgres
@@ -899,14 +904,40 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
       # "Create index…" puts it in `_order_statements`' last bucket, after every same-table rebuild
       # (#152) — correct, since a CREATE INDEX only needs its table to exist.
       #
-      # #29: an advanced index carries its method, directions and classes, and the ownership marker.
+      # #29: an advanced index carries its method, directions and classes, and the ownership marker;
+      # since part 2 also its expressions and condition, under the hashed marker of their text.
       _configure_order_dict_migration_plan(migration_plan, model_name, "Create index: $(d.name)",
         Dialect.create_index(conn, quoted(d.name), quoted(table), cols; if_not_exists = false,
                              method = d.method, descending = d.descending, opclasses = d.opclasses,
-                             marker = composite_is_advanced(d) ? INDEX_MARKER : nothing))
+                             expressions = d.expressions, condition = d.condition,
+                             marker = composite_marker(d)))
     end
   end
   return dropped
+end
+
+# What a live composite indexes, for a message: `over (a, b)`, `over expressions (lower(a))`, and the
+# condition of a partial one.
+function _describe_live_composite(lc::LiveComposite)::String
+  what = isempty(lc.expressions) ? "over ($(join(lc.columns, ", ")))" :
+                                   "over expressions ($(join(lc.expressions, ", ")))"
+  return lc.condition === nothing ? what : "$(what) WHERE $(lc.condition)"
+end
+
+# #29 part 2: a hand-made functional or partial index can be adopted only by declaring the catalog's
+# own text, which PostgreSQL rewrites — so the refusal hands that declaration over, ready to paste.
+function _adoption_hint(lc::LiveComposite)::String
+  composite_holds_text(lc) && !lc.unique || return ""
+  members = isempty(lc.expressions) ?
+    "fields = ($(join((repr((d ? "-" : "") * c) for (c, d) in zip(lc.columns, lc.descending)), ", ")),)" :
+    "expressions = ($(join((repr(e) for e in lc.expressions), ", ")),)"
+  cond = lc.condition === nothing ? "" : ", condition = $(repr(lc.condition))"
+  method = lc.method == "btree" ? "" : ", method = $(repr(lc.method))"
+  opcs = isempty(lc.expressions) && !all(lc.opclass_default) ?
+    ", opclasses = ($(join((d ? "nothing" : repr(o) for (o, d) in zip(lc.opclasses, lc.opclass_default)), ", ")),)" : ""
+  return ". To keep it as PormG's own instead, declare it with the database's text: " *
+         "Models.Index($(members)$(cond), name = $(repr(lc.name))$(method)$(opcs))" *
+         (isempty(lc.expressions) ? " (the columns as the database names them — inspectdb writes the field names)" : "")
 end
 
 # ── Table-level CHECK constraints (#742) ─────────────────────────────────────────────────────────
@@ -1113,7 +1144,10 @@ end
 function _refuse_stale_check_conditions(model::PormGModel, renames::Dict{String, String},
                                         live_columns)::Nothing
   declared = Models.declared_check_constraints(model)
-  isempty(declared) && return nothing
+  text_indexes = Models.Index[ix for ix in get(get(model.cache, "composite_indexes", Dict{String, Any}()),
+                                               "indexes", Models.Index[])
+                              if Models._index_holds_text(ix)]
+  isempty(declared) && isempty(text_indexes) && return nothing
   declared_cols = Set{String}(lowercase(c) for c in _model_physical_columns(model))
   # Each live column the declared model no longer has ⇒ what it was renamed to, or `nothing` if removed.
   gone = Dict{String, Union{String, Nothing}}(String(col) => get(renames, String(col), nothing)
@@ -1134,7 +1168,52 @@ function _refuse_stale_check_conditions(model::PormGModel, renames::Dict{String,
         "table rebuild, a replaced CHECK) it would name a column that no longer exists."))
     end
   end
+  # #29 part 2: an expression or partial index's text, read with the exclusions the SQLite rebuild's
+  # rename splice applies (`_sql_text_column_tokens`), so this refusal and that rewrite agree about
+  # what a column reference is. Renamed: PostgreSQL rewrites the stored index on `RENAME COLUMN` and
+  # the marker's hash still matches, so the stale declaration would surface only when something
+  # re-creates the index. Removed: both engines drop or refuse the index with the column, and the
+  # declaration would then plan to re-create it over a column that is gone.
+  for ix in text_indexes
+    texts = ix.condition === nothing ? ix.expressions : vcat(ix.expressions, ix.condition)
+    for (k, text) in enumerate(texts)
+      for t in _sql_text_column_tokens(text), (old, new) in gone
+        (t.quoted ? t.name == old : lowercase(t.name) == lowercase(old)) || continue
+        what = k > length(ix.expressions) ? "condition" : "expression $(repr(text))"
+        throw(InvalidMigrationError(new === nothing ?
+          "Index '$(ix.name)' on '$(model_table_name(model))' names column '$(old)' in its $(what), " *
+          "which this migration removes. Take it out of the index, or remove the Index — the database " *
+          "drops (PostgreSQL) or refuses to drop (SQLite) a column an index still names." :
+          "Index '$(ix.name)' on '$(model_table_name(model))' still names column '$(old)' in its $(what), " *
+          "which this migration renames to '$(new)'. Update the index's text to the new name — PormG " *
+          "does not rewrite your SQL, and the declaration would otherwise re-create the index over a " *
+          "column that no longer exists."))
+      end
+    end
+  end
   return nothing
+end
+
+# The identifier tokens of an index's SQL text that can be column references: not a function name
+# (followed by `(`), not an unquoted `_SQLITE_INDEX_SYNTAX_WORDS` member, and not the collation after
+# an unquoted `COLLATE` — the three exclusions `_sqlite_rewrite_index_columns` applies (#29 part 2).
+function _sql_text_column_tokens(text::AbstractString)
+  out = _SQLiteIdentifierToken[]
+  after_collate = false
+  for t in _sqlite_identifier_tokens(text)
+    if after_collate
+      after_collate = false
+      continue
+    end
+    if !t.quoted && uppercase(t.name) == "COLLATE"
+      after_collate = true
+      continue
+    end
+    t.called && continue
+    (!t.quoted && uppercase(t.name) in _SQLITE_INDEX_SYNTAX_WORDS) && continue
+    push!(out, t)
+  end
+  return out
 end
 
 # #830: can a CHECK this plan adds be counted against the table as it is now? Only when every column
@@ -2633,7 +2712,7 @@ function _refuse_postgres_only_indexes(current_schema::Dict{Symbol, Dict{Symbol,
              any(!isnothing, ix.opclasses) ? "opclasses = $(Tuple(ix.opclasses))" : nothing
       what === nothing && continue
       throw(BackendCapabilityError(
-        "Model '$(model.name)' declares an Index over ($(join(ix.fields, ", "))) with $(what), which " *
+        "Model '$(model.name)' declares an Index over $(Models._index_label(ix)) with $(what), which " *
         "is PostgreSQL-only: SQLite has b-tree indexes and no operator classes. PormG refuses it " *
         "rather than create a different index; migrate this model on PostgreSQL."))
     end

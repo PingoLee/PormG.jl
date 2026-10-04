@@ -2339,23 +2339,35 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
         # The generated file would load and be unmigratable. Collapse it here, where the Django
         # source is still in view to name in the report.
         if any(p -> Models._index_shape(p) == Models._index_shape(ix) && p.name == ix.name, _existing_indexes(model))
-          @warn "import: duplicate index declaration; keeping one" class=class_label fields=ix.fields
-          push!(markers, "# PormG: a duplicate index over ($(join(ix.fields, ", "))) on " *
+          @warn "import: duplicate index declaration; keeping one" class=class_label index=Models._index_label(ix)
+          push!(markers, "# PormG: a duplicate index over $(_one_line(Models._index_label(ix), 200)) on " *
                          "'$(class_label)' was dropped — the same index is declared twice " *
                          "(Meta.indexes and Meta.index_together can overlap).")
           continue
         end
-        kept = _claim_index_name!(taken_index_names, ix.name, markers, class_label, "index", ix.fields)
+        if ix.name !== nothing && ix.name in taken_index_names &&
+           (Models._index_holds_text(ix) || any(!isnothing, ix.opclasses))
+          @warn "import: index name is already claimed in this import; the index needs its own" name=ix.name class=class_label
+          push!(markers, "# PormG: an index over $(_one_line(Models._index_label(ix), 200)) on '$(class_label)' " *
+                         "was dropped — its name '$(_one_line(ix.name))' is claimed by another declaration in " *
+                         "this import, and a functional, partial or operator-class index cannot take a derived " *
+                         "name. Declare it by hand under a name of its own.")
+          continue
+        end
+        kept = _claim_index_name!(taken_index_names, ix.name, markers, class_label, "index",
+                                  isempty(ix.expressions) ? ix.fields : ix.expressions)
         try
           # Inside the guard (#29): an index naming an opclass cannot lose its name — the constructor
           # refuses it — so a clash reports that one index instead of aborting the import.
           kept === ix.name || (ix = Models._index_renamed(ix, kept))
           Models._apply_indexes!(model, vcat(_existing_indexes(model), [ix]))
+          Models._index_holds_text(ix) &&
+            _note_django_text_index!(markers, class_label, ix.name, isempty(ix.expressions) ? :partial : :functional)
         catch e
           # A declaration that never lands must not burn its name for every later model.
           kept === nothing || delete!(taken_index_names, kept)
-          @warn "import: could not apply an index; skipping it" class=class_label fields=ix.fields exception=e
-          push!(markers, "# PormG: an index over ($(join(ix.fields, ", "))) on '$(class_label)' " *
+          @warn "import: could not apply an index; skipping it" class=class_label index=Models._index_label(ix) exception=e
+          push!(markers, "# PormG: an index over $(_one_line(Models._index_label(ix), 200)) on '$(class_label)' " *
                          "was dropped — $(replace(sprint(showerror, e), "\n" => " "))")
         end
       end
@@ -2428,7 +2440,7 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
   for (slot, model, markers) in pending_renders
     markers = vcat(markers, get(unconstrained, model, String[]))
     rendered = Models.Model_to_str(model; taken_bindings=taken_bindings, taken_names=taken_names)
-    Instructions[slot] = isempty(markers) ? rendered : join(markers, "\n") * "\n" * rendered
+    Instructions[slot] = isempty(markers) ? rendered : join((_marker_line(m) for m in markers), "\n") * "\n" * rendered
   end
 
   generate_models_from_db(file, Instructions, render_settings, path=model_path)
@@ -5608,10 +5620,11 @@ const _UNIQUE_CONSTRAINT_KWARGS = ("fields", "name", "violation_error_message", 
 
 # Django's `models.Index` arguments PormG can honour (#347, #29). There is no Django `Index` kwarg
 # that is a pure no-op on the emitted index, so everything else is refused: `db_tablespace=`,
-# `condition=`, `include=`, `expressions=` and the storage parameters of the PostgreSQL index classes
-# (`fastupdate=`, `pages_per_range=`, `fillfactor=`, …) all change WHAT gets indexed or how — the same
-# reject-rather-than-reinterpret rule `_parse_meta_constraints` documents.
-const _INDEX_KWARGS = ("fields", "name", "opclasses")
+# `include=` and the storage parameters of the PostgreSQL index classes (`fastupdate=`,
+# `pages_per_range=`, `fillfactor=`, …) all change WHAT gets indexed or how — the same
+# reject-rather-than-reinterpret rule `_parse_meta_constraints` documents. `condition=` is honoured
+# since #29 part 2 when its `Q(...)` is one the CheckConstraint translator reads (#768).
+const _INDEX_KWARGS = ("fields", "name", "opclasses", "condition")
 
 # Django's index classes and the access method each one is (#29). `django.contrib.postgres.indexes`
 # adds the five non-b-tree ones; `BloomIndex` is an extension's method PormG cannot declare.
@@ -5634,6 +5647,16 @@ parse is a catastrophic outcome for a guard this cheap.
 """
 _one_line(s::AbstractString, limit::Int = 120)::String =
   String(first(strip(replace(s, r"\s+" => " ")), limit))
+
+# Every `# PormG:` marker reaches the generated file through this, as ONE line. A marker is a `#`
+# comment, so a line break inside it would end the comment and turn the rest of the text into code
+# that runs when the models file is loaded — and some markers carry text derived from the imported
+# `models.py` (a functional index's SQL names its `db_column`, #29 part 2). `_one_line` guards the
+# sites it is called at; this guards every site, including the next one. Every character Julia or an
+# editor may take as a line break is replaced, without truncating the marker.
+_marker_line(m::AbstractString)::String =
+  replace(m, "\r\n" => " ", '\r' => ' ', '\n' => ' ', '\v' => ' ', '\f' => ' ', '\u85' => ' ',
+          ' ' => ' ', ' ' => ' ')
 
 function _drop_constraint!(markers::Vector{String}, class_label::AbstractString,
                            element::AbstractString, reason::AbstractString; reason_limit::Int = 200)
@@ -5690,7 +5713,7 @@ function _claim_index_name!(taken::Set{String}, name::Union{String, Nothing},
     # declarations on the SAME class that share a name, and blaming a different model there would
     # send the reader to the wrong `models.py`.
     @warn "import: index name is already claimed in this import; importing with a derived name" name=name class=class_label kind=kind
-    push!(markers, "# PormG: the $(kind) over ($(join(cols, ", "))) on '$(class_label)' kept its " *
+    push!(markers, "# PormG: the $(kind) over ($(_one_line(join(cols, ", "), 200))) on '$(class_label)' kept its " *
                    "columns but LOST its name '$(_one_line(name))' — another declaration in this " *
                    "import already claims that name, and an index name is unique per database. " *
                    "PormG derives one from the table and columns instead.")
@@ -5920,7 +5943,12 @@ function _q_column(name::AbstractString, fields::Dict{Symbol, Any})
   key === nothing && _q_fail("field `$(name)` matches no imported field")
   field = fields[Symbol(key)]
   Models.is_many_to_many_field(field) && _q_fail("`$(name)` is a ManyToManyField, which has no column")
-  return (sql = _q_ident(Models.field_db_column(field, key)), family = _q_family(field), field = field)
+  col = Models.field_db_column(field, key)
+  # A `db_column` arrives from the imported source with its escapes decoded, so `"a\nb"` holds a real
+  # line break. No column is named that way on purpose, and the SQL it would be quoted into is copied
+  # into comments and DDL — refuse it, as `_q_value` refuses a control character in a literal.
+  any(iscntrl, col) && _q_fail("the column of `$(name)` carries a control character")
+  return (sql = _q_ident(col), family = _q_family(field), field = field)
 end
 
 # The index of the bracket closing the one that opens at `open_i`, or `nothing`. Quote-aware.
@@ -6200,6 +6228,76 @@ function _resolve_index_group(declared::Vector{String}, fields_dict::Dict{Symbol
   return resolved
 end
 
+# #29 part 2: the SQL an imported functional or partial index carries is Django's spelling, which a
+# database Django ALREADY built stores rewritten on PostgreSQL (`lower(apelido::text)`) — and a
+# partial predicate may differ on SQLite too (`WHERE "ativo"`). Such an index is hand-made to PormG,
+# and `makemigrations` refuses its name for this text, printing the declaration that adopts it. Say
+# so beside the declaration, where the reader will look.
+_note_django_text_index!(markers::Vector{String}, class_label::AbstractString, name::AbstractString, kind::Symbol) =
+  push!(markers, "# PormG: index '$(_one_line(name))' on '$(class_label)' is $(kind) and carries Django's SQL. Against a " *
+                 "database Django already built, makemigrations may refuse the name and print the database's " *
+                 "own text: replace this declaration with that one (or with what generate_models_from_db writes).")
+
+# A positional index member that is only a field — `F("a")` or `"a"`, optionally `.asc()` / `.desc()` —
+# as the name `Models.Index(fields = …)` takes: `"a"`, or `"-a"` for descending. `nothing` otherwise.
+function _bare_index_field(t::AbstractString)::Union{String, Nothing}
+  s = String(strip(t))
+  prefix = ""
+  m = match(r"^(.*)\.\s*(asc|desc)\s*\(\s*\)$"s, s)
+  if m !== nothing
+    s = String(strip(m.captures[1]))
+    m.captures[2] == "desc" && (prefix = "-")
+  end
+  fm = match(r"^(?:models\s*\.\s*)?F\s*\(\s*(.*?)\s*\)$"s, s)
+  fm === nothing || (s = String(fm.captures[1]))
+  _py_quoted_literal(s) || return nothing
+  name = _py_unquote(s)
+  occursin(r"^[A-Za-z_]\w*$", name) || return nothing
+  return prefix * name
+end
+
+"""
+    _translate_index_expression(t, fields_dict) -> Union{String, _QUntranslatable}
+
+One positional expression of a Django index as the SQL index member Django itself emits (#29 part 2),
+or why it is not translated. A whitelist, as the `Q(...)` translator is: `F("field")`,
+`Lower(…)` / `Upper(…)` over a field or an `F()`, and a bare string (Django's own shorthand for
+`F()`), each optionally `.asc()` / `.desc()`. The column is
+double-quoted and the function upper-cased — Django's own spelling, so a Django-built SQLite schema
+compares equal and is adopted rather than re-created. Anything else (`Collate`, `OpClass`, another
+function, arithmetic) is reported; the caller drops the index.
+"""
+function _translate_index_expression(t::AbstractString, fields::Dict{Symbol, Any})::Union{String, _QUntranslatable}
+  s = String(strip(t))
+  dir = ""
+  m = match(r"^(.*)\.\s*(asc|desc)\s*\(\s*\)$"s, s)
+  if m !== nothing
+    s = String(strip(m.captures[1]))
+    dir = m.captures[2] == "desc" ? " DESC" : " ASC"
+  end
+  try
+    # Django turns a positional STRING into `F(...)` (`Index.__init__`), so `Index("cpf", …)` names a column.
+    _py_quoted_literal(s) && return _q_column(_py_unquote(s), fields).sql * dir
+    fm = match(r"^(?:models\s*\.\s*)?F\s*\(\s*(.*?)\s*\)$"s, s)
+    if fm !== nothing
+      _py_quoted_literal(fm.captures[1]) || _q_fail("`F(...)` does not name a field")
+      return _q_column(_py_unquote(fm.captures[1]), fields).sql * dir
+    end
+    lm = match(r"^(?:(?:models\s*\.\s*)?functions\s*\.\s*)?(Lower|Upper)\s*\(\s*(.*?)\s*\)$"s, s)
+    lm === nothing && _q_fail("only F(), Lower() and Upper() over a field are translated")
+    arg = String(lm.captures[2])
+    inner = match(r"^(?:models\s*\.\s*)?F\s*\(\s*(.*?)\s*\)$"s, arg)
+    inner === nothing || (arg = String(inner.captures[1]))
+    _py_quoted_literal(arg) || _q_fail("`$(lm.captures[1])(...)` does not name a field")
+    col = _q_column(_py_unquote(arg), fields)
+    col.family == :text || _q_fail("`$(lm.captures[1])(...)` is over a field that is not text")
+    return uppercase(lm.captures[1]) * "(" * col.sql * ")" * dir
+  catch e
+    e isa _QUntranslatable || rethrow()
+    return e
+  end
+end
+
 """
     _parse_meta_indexes(raw, fields_dict, class_label, markers) -> (Vector{Index}, Vector{String})
 
@@ -6218,8 +6316,10 @@ Argument acceptance is a **whitelist** (`_INDEX_KWARGS`), for the reason spelled
 constructor is checked too: `GinIndex`, `BrinIndex` and the other `django.contrib.postgres.indexes`
 classes become `method = …` (#29, `_DJANGO_INDEX_METHODS`), and anything else — `BloomIndex`, a
 project's own subclass — is reported and skipped. A `-field` is a descending column and `opclasses=`
-carries over; `condition=`, `include=`, a positional expression and every storage parameter are
-refused.
+carries over. Since #29 part 2 a `condition=Q(...)` becomes the index's `condition` (through the
+CheckConstraint translator) and a positional expression one of its `expressions`
+([`_translate_index_expression`](@ref)), each only when it translates exactly; `include=`, every
+storage parameter, and an expression or condition outside those whitelists are refused.
 
 Each entry is judged on its own: one rejected index never takes its siblings with it.
 """
@@ -6254,23 +6354,30 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
     end
 
     kwargs = Dict{String, String}()
+    expressions = String[]
+    bare = String[]          # the members that are only a field, as `Models.Index(fields = …)` spells it
     reason::Union{String, Nothing} = nothing
     for tok in split_field_options(args)
       t = String(strip(tok))
       isempty(t) && continue
       kv = _split_top_level_assign(t)
       if kv === nothing
-        # `Index(Lower("name"), name="x")` — a FUNCTIONAL index. PormG would index the column
-        # itself, which is a different index.
-        reason = "it takes a positional expression (`$(t)`) — a functional index, which PormG " *
-                 "cannot declare yet (#29)"
-        break
+        # `Index(Lower("name"), name="x")` — a FUNCTIONAL index (#29 part 2). Translated when the
+        # expression is one `_translate_index_expression` reads; anything else would index something
+        # else, so the whole index is dropped.
+        ex = _translate_index_expression(t, fields_dict)
+        if ex isa _QUntranslatable
+          reason = "its expression `$(t)` is not translated — $(ex.why); declare it by hand as " *
+                   "Models.Index(expressions = …)"
+          break
+        end
+        push!(expressions, ex)
+        b = _bare_index_field(t)
+        b === nothing || push!(bare, b)
+        continue
       end
       k, v = kv
-      if k == "condition"
-        reason = "`condition=` makes it a partial index, which PormG cannot declare yet (#29)"
-        break
-      elseif !(k in _INDEX_KWARGS)
+      if !(k in _INDEX_KWARGS)
         reason = "`$(k)=` changes what the index means and PormG cannot express it"
         break
       end
@@ -6278,6 +6385,59 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
     end
     if reason !== nothing
       _drop_index_decl!(markers, class_label, el, reason)
+      continue
+    end
+
+    # #29 part 2: a partial index's `Q(...)`, through the CheckConstraint translator — the same
+    # whitelist, so a condition it cannot read exactly on both engines drops the index.
+    condition = nothing
+    if haskey(kwargs, "condition")
+      condition = try
+        _q_expression(kwargs["condition"], fields_dict).sql
+      catch e
+        e isa _QUntranslatable || rethrow()
+        _drop_index_decl!(markers, class_label, el, "its `condition=` is not translated — $(e.why)")
+        continue
+      end
+    end
+
+    # `Index(F("a"), "b", …)` names only fields — a column index, which `fields` translates exactly (and
+    # `Models.Index` refuses as expressions). Unless Django itself would refuse the mix below.
+    if !isempty(expressions) && length(bare) == length(expressions) &&
+       !haskey(kwargs, "fields") && !haskey(kwargs, "opclasses")
+      kwargs["fields"] = "[" * join(("\"" * b * "\"" for b in bare), ", ") * "]"
+      empty!(expressions)
+    end
+
+    # Django's own rules for the text-holding kinds, which it raises at class definition: an index is
+    # over fields or expressions, not both, and a functional or partial one is named.
+    iname = haskey(kwargs, "name") ? _meta_string_literal(kwargs["name"]) : nothing
+    if !isempty(expressions) || condition !== nothing
+      if !isempty(expressions) && (haskey(kwargs, "fields") || haskey(kwargs, "opclasses"))
+        _drop_index_decl!(markers, class_label, el,
+          "it mixes expressions with `$(haskey(kwargs, "fields") ? "fields" : "opclasses")=`, which Django refuses")
+        continue
+      end
+      if iname === nothing
+        _drop_index_decl!(markers, class_label, el,
+          "a $(isempty(expressions) ? "partial" : "functional") index needs a `name=` string literal")
+        continue
+      end
+      # Django substitutes `%(class)s` / `%(app_label)s` per model, so the live index carries the
+      # substituted name and the placeholder text would plan a second index beside it — the rule the
+      # CheckConstraint import applies (#768). A derived name is no way out: this index needs its own.
+      if occursin("%(", iname)
+        _drop_index_decl!(markers, class_label, el, "its name uses a %(…)s placeholder")
+        continue
+      end
+    end
+    if !isempty(expressions)
+      try
+        push!(out, Models.Index(expressions = expressions, condition = condition, name = iname, method = method))
+      catch e
+        e isa ModelDefinitionError || rethrow()
+        _drop_index_decl!(markers, class_label, el, replace(sprint(showerror, e), "\n" => " "))
+      end
       continue
     end
 
@@ -6311,9 +6471,10 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
       opclasses = ocs
     end
 
-    if length(resolved) == 1 && method == "btree" && opclasses === nothing && !startswith(resolved[1], "-")
+    if length(resolved) == 1 && method == "btree" && opclasses === nothing && !startswith(resolved[1], "-") &&
+       condition === nothing
       # Django's single-field plain index IS `db_index=True`; translate rather than drop (see the
-      # docstring). No marker: nothing was lost. A one-field GIN, DESC or opclass index is a
+      # docstring). No marker: nothing was lost. A one-field GIN, DESC, opclass or partial index is a
       # different index and stays a `Models.Index` (#29).
       push!(single, resolved[1])
       continue
@@ -6321,12 +6482,12 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
 
     # Django auto-derives a name when `name=` is absent, and a computed one is not a literal we can
     # carry — either way PormG derives `<table>_<cols>_idx`, so this is not a reason to drop.
-    iname = haskey(kwargs, "name") ? _meta_string_literal(kwargs["name"]) : nothing
     if haskey(kwargs, "name") && iname === nothing
       @warn "import: Index name is not a string literal; importing with a derived name" class=class_label value=kwargs["name"]
     end
     try
-      push!(out, Models.Index(fields = resolved, name = iname, method = method, opclasses = opclasses))
+      push!(out, Models.Index(fields = resolved, name = iname, method = method, opclasses = opclasses,
+                              condition = condition))
     catch e
       # A duplicate-field or empty-name rejection from the constructor: report THIS index and keep
       # the rest, rather than losing every index on the model to one bad entry.

@@ -483,10 +483,56 @@ const INDEX_OPCLASS_RE = r"^[a-z_][a-z0-9_]*$"
     INDEX_MARKER
 
 The ownership marker PormG stores beside every advanced index it creates (see [`INDEX_METHODS`](@ref)).
-#29's second half reserves `pormg:index:<16 hex>` for an index whose definition holds SQL text;
-[`INDEX_MARKER_RE`](@ref) already reads that form as owned.
+An index whose definition holds SQL text — `expressions =` or `condition =` — carries the longer
+`pormg:index:<16 hex>` instead ([`index_text_marker`](@ref)); [`INDEX_MARKER_RE`](@ref) reads both
+forms as owned.
 """
 const INDEX_MARKER = "pormg:index"
+
+"""
+    canonical_index_text(expressions, condition) -> String
+
+The comparison form of the SQL text an expression or partial index declares: every expression, then
+the condition, each through [`canonical_check_condition`](@ref) and each length-prefixed — `e<n>:` for
+an expression, `w<n>:` for the condition, `n` its byte count — so no two different definitions can
+encode alike (`("a, b",)` against `("a", "b")`, or a condition against a last expression).
+
+Only the TEXT is encoded. The columns, their direction, the method and the operator classes of an
+`Index(fields = …, condition = …)` are read back from the catalog exactly and compared as a shape, so
+renaming a plain member column does not make the marker stale (#29).
+"""
+function canonical_index_text(expressions::AbstractVector{<:AbstractString},
+                              condition::Union{AbstractString, Nothing})::String
+  io = IOBuffer()
+  for e in expressions
+    c = canonical_check_condition(e)
+    print(io, "e", ncodeunits(c), ":", c)
+  end
+  if condition !== nothing
+    c = canonical_check_condition(condition)
+    print(io, "w", ncodeunits(c), ":", c)
+  end
+  return String(take!(io))
+end
+
+"""
+    index_text_hash(expressions, condition) -> String
+
+The first 16 hex digits of the SHA-256 of [`canonical_index_text`](@ref) — persisted in the database,
+so stable across processes and Julia versions, as [`check_condition_hash`](@ref) is.
+"""
+index_text_hash(expressions::AbstractVector{<:AbstractString}, condition::Union{AbstractString, Nothing})::String =
+  bytes2hex(SHA.sha256(canonical_index_text(expressions, condition)))[1:16]
+
+"""
+    index_text_marker(expressions, condition) -> String
+
+The ownership marker of an index whose definition holds SQL text:
+`pormg:index:<`[`index_text_hash`](@ref)`>`. The hash is how `makemigrations` sees a changed
+expression or condition, since PostgreSQL stores a rewritten form of the text (#29).
+"""
+index_text_marker(expressions::AbstractVector{<:AbstractString}, condition::Union{AbstractString, Nothing})::String =
+  INDEX_MARKER * ":" * index_text_hash(expressions, condition)
 
 # The marker as it may be READ back — anywhere in a PostgreSQL comment, and the whole of the comment
 # closing an SQLite column list. It is the only thing between a hand-made index and a planned DROP, so

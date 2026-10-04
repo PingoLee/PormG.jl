@@ -19,7 +19,7 @@ import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError
 # `Migrations._column_default` compiles the declared side through the same function.
 import PormG: PORTABLE_DB_DEFAULTS
 # #29: index access methods, the operator-class shape, and the `pormg:index` ownership marker.
-import PormG: INDEX_METHODS, INDEX_OPCLASS_RE, INDEX_MARKER
+import PormG: INDEX_METHODS, INDEX_OPCLASS_RE, INDEX_MARKER, is_valid_db_default_sql
 import PormG.ConnectionPool: fetch
 import PormG: postgres_type_map_reverse, date_format_map, sqlite_type_map_reverse
 # The canonical column IR (#507). `alter_field` renders an ALTER from a `ColumnDelta`, which is why
@@ -1851,13 +1851,36 @@ function _index_members(columns::Vector{String}, descending::AbstractVector{Bool
   return out
 end
 
+# #29 part 2: the members of a functional index are its `expressions`, verbatim, and a partial index
+# ends in ` WHERE <condition>`. Both reach here validated by `Models.Index`; the check below is the
+# renderer's own guard against a hand-built caller — the text is spliced into DDL, which takes no bind
+# parameters, so a comment or a top-level `;` in it would change the statement.
+function _index_text_members(columns::Vector{String}, descending::AbstractVector{Bool},
+                             opclasses::AbstractVector, expressions::AbstractVector)::Vector{String}
+  isempty(expressions) && return _index_members(columns, descending, opclasses)
+  isempty(columns) || throw(InvalidValueError("an index takes columns or expressions, not both"))
+  for e in expressions
+    is_valid_db_default_sql(e) || throw(InvalidValueError("index expression $(repr(e)) is not well-formed SQL"))
+  end
+  return String[String(e) for e in expressions]
+end
+
+function _index_where(condition::Union{AbstractString, Nothing})::String
+  condition === nothing && return ""
+  is_valid_db_default_sql(condition) ||
+    throw(InvalidValueError("index condition $(repr(condition)) is not well-formed SQL"))
+  return " WHERE $(condition)"
+end
+
 function create_index(conn::PormGPostgres, index_name::String, table_name::String, columns::Vector{String};
                       if_not_exists::Bool = true, method::String = "btree",
                       descending::AbstractVector{Bool} = Bool[], opclasses::AbstractVector = Union{String, Nothing}[],
+                      expressions::AbstractVector = String[], condition::Union{AbstractString, Nothing} = nothing,
                       marker::Union{String, Nothing} = nothing)
   method in INDEX_METHODS || throw(InvalidValueError("index method $(repr(method)) is not one of $(INDEX_METHODS)"))
   using_ = method == "btree" ? "" : "USING $(method) "
-  stmt = """CREATE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) $(using_)($(join(_index_members(columns, descending, opclasses), ", ")));"""
+  members = join(_index_text_members(columns, descending, opclasses, expressions), ", ")
+  stmt = """CREATE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) $(using_)($(members))$(_index_where(condition));"""
   # The marker rides in the same step as the index, so an index PormG created never exists without
   # the comment that says so — `add_check_constraint`'s shape. `_split_pg_statements` (#841) runs
   # the two one at a time.
@@ -1872,10 +1895,12 @@ end
 # `CREATE INDEX` text verbatim in `sqlite_master` — comments included, through `RENAME TO` and
 # `RENAME COLUMN` — and inside the parentheses it is part of the stored text whatever follows the
 # list. `_sqlite_index_marker` reads it back anchored to that closing parenthesis, the CHECK marker's
-# shape (`_sqlite_check_constraint_clause`).
+# shape (`_sqlite_check_constraint_clause`). A partial index's `WHERE` follows the list, so the
+# marker stays where the reader looks for it (#29 part 2).
 function create_index(conn::PormGSQLite, index_name::String, table_name::String, columns::Vector{String};
                       if_not_exists::Bool = true, method::String = "btree",
                       descending::AbstractVector{Bool} = Bool[], opclasses::AbstractVector = Union{String, Nothing}[],
+                      expressions::AbstractVector = String[], condition::Union{AbstractString, Nothing} = nothing,
                       marker::Union{String, Nothing} = nothing)
   method == "btree" || throw(BackendCapabilityError(
     "SQLite has no index access method \"$(method)\" — only b-tree. An index declared with " *
@@ -1883,9 +1908,9 @@ function create_index(conn::PormGSQLite, index_name::String, table_name::String,
   any(!isnothing, opclasses) && throw(BackendCapabilityError(
     "SQLite has no operator classes, so an index declaring opclasses = $(Tuple(opclasses)) is " *
     "PostgreSQL-only; declare it on a model that migrates on PostgreSQL."))
-  members = join(_index_members(columns, descending, opclasses), ", ")
+  members = join(_index_text_members(columns, descending, opclasses, expressions), ", ")
   marker === nothing || (members *= " /* $(marker) */")
-  return """CREATE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) ($(members));"""
+  return """CREATE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) ($(members))$(_index_where(condition));"""
 end
 
 # The ownership marker as the index's comment — also how a declaration ADOPTS a hand-made index of the

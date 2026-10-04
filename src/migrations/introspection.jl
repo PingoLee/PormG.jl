@@ -1282,7 +1282,8 @@ owners:
 | unique with no backing constraint, any arity | `UniqueConstraint` | nobody: a one-column bare unique index is what a one-field `UniqueConstraint` creates |
 | unique backing a `contype = 'u'` constraint, arity > 1 | `UniqueConstraint`, `constraint = true` | the `unique_constraints` CTE (`= 1`) — the field's `unique` |
 
-`indpred IS NULL` keeps a partial index out. Before #161 the reader carried `NOT indisunique`, so no
+Since #29 part 2 a partial index (`indpred`) and a functional one (`indexprs`) are read too, as SQL
+text — see the last bullet below. Before #161 the reader carried `NOT indisunique`, so no
 composite uniqueness came back at all — neither PormG's own `CREATE UNIQUE INDEX` nor Django's
 `unique_together`, which PostgreSQL holds as a real constraint. Harmless while nothing diffed
 composites; with a diff it would have made every declared `UniqueConstraint` look missing on every
@@ -1324,10 +1325,10 @@ importer applies to `Meta.indexes`. Beyond the shared predicates:
   * `indoption`, `indclass` and `indcollation`, selected per column and filtered in Julia alongside
     the NULL check. Since #29 a non-unique index reads `indoption = 3` as a descending member (`DESC`
     implies `NULLS FIRST`, so that is what plain `DESC` measures) and a non-default **operator class**
-    by its `opcname`, which `Models.Index(opclasses = …)` declares. Still refused: `indoption` 1
-    (`DESC NULLS LAST`) or 2 (`ASC NULLS FIRST`) — a `NULLS` placement the declaration cannot spell —
-    an operator class whose name is not a lower-case identifier, and an explicit **collation**
-    (`COLLATE "C"`), which PormG cannot express.
+    by its `opcname`, which `Models.Index(opclasses = …)` declares. Since #29 part 2 `indoption` 1
+    (`DESC NULLS LAST`) or 2 (`ASC NULLS FIRST`) and an explicit **collation** (`COLLATE "C"`) make
+    a non-unique index a TEXT one (below) — a declaration spells them inside an expression. Still
+    refused for the column path: an operator class whose name is not a lower-case identifier.
 
     The collation test answers the same *question* as the SQLite reader's non-BINARY `coll` filter
     but is not the same *test*, and the difference is deliberate rather than drift — do not "fix"
@@ -1360,8 +1361,16 @@ Two details the naive query gets wrong:
     part of its identity, and `ANY` returns them in table order. `ord <= indnkeyatts` then drops an
     `INCLUDE` clause's non-key columns, which are payload, not index keys.
   * the `LEFT JOIN` to `pg_attribute` is deliberate: an expression member has `attnum = 0` and matches
-    no row. It surfaces as a NULL column name, and the caller drops that index whole rather than
-    declaring the remaining columns as if they were the index (functional indexes are #29).
+    no row. It surfaces as a NULL column name — never declared as if the remaining columns were the
+    index.
+
+**SQL text (#29 part 2).** An index with an expression member, or one whose member carries an
+explicit collation or a `NULLS` placement other than its direction's default, is read as TEXT: its members are the element texts split out of
+`pg_get_indexdef(oid, 0, true)` with [`_index_definition_elements`](@ref), the catalog's own words,
+`COLLATE`, operator class, direction and `NULLS` placement included — so none of the per-column
+tests above applies to it. A split whose count disagrees with the key columns is refused. A partial
+index carries `pg_get_expr(indpred, indrelid, true)` as its `condition`, whichever way its members
+are read. A UNIQUE one of either kind stays unread: `UniqueConstraint` declares neither.
 
 `indnkeyatts` is PostgreSQL 11+, which the pre-existing `indexes` CTE already requires, so this adds
 no floor of its own.
@@ -1394,7 +1403,13 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
            oc.opcname::text AS opc_name,
            am.amname::text AS method,
            (ic.reloptions IS NOT NULL) AS has_reloptions,
-           obj_description(i.indexrelid, 'pg_class') AS index_comment
+           obj_description(i.indexrelid, 'pg_class') AS index_comment,
+           (k.attnum = 0) AS is_expression,
+           CASE WHEN i.indexprs IS NOT NULL OR i.indpred IS NOT NULL
+                  OR (i.indcollation::oid[])[k.ord - 1] NOT IN (0, COALESCE(a.attcollation, 0))
+                  OR (i.indoption::int2[])[k.ord - 1] NOT IN (0, 3)
+                THEN pg_get_indexdef(i.indexrelid, 0, true) END AS index_def,
+           pg_get_expr(i.indpred, i.indrelid, true) AS predicate
     FROM pg_index i
     JOIN pg_class ic ON ic.oid = i.indexrelid
     JOIN pg_am am ON am.oid = ic.relam
@@ -1410,10 +1425,13 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
       $(_PG_OWNABLE_TABLE_FILTER)
       AND NOT i.indisprimary
       AND NOT i.indisexclusion
-      AND i.indpred IS NULL
       AND (i.indisunique OR i.indnkeyatts > 1 OR am.amname <> 'btree'
            OR (i.indoption::int2[])[0] <> 0
            OR NOT (SELECT x.opcdefault FROM pg_opclass x WHERE x.oid = (i.indclass::oid[])[0])
+           OR i.indexprs IS NOT NULL OR i.indpred IS NOT NULL
+           OR (i.indcollation::oid[])[0] NOT IN
+              (0, COALESCE((SELECT x.attcollation FROM pg_attribute x
+                            WHERE x.attrelid = i.indrelid AND x.attnum = (i.indkey::int2[])[0]), 0))
            OR $(_PG_MARKED_INDEX))
       $(schema_clause)
     ORDER BY c.relname, ic.relname, k.ord;
@@ -1427,6 +1445,11 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
   kind = Dict{Tuple{String, String}, Tuple{Bool, Bool}}()      # ⇒ (unique, constraint-backed)
   facts = Dict{Tuple{String, String}, Tuple{String, Bool, Union{String, Nothing}}}()  # ⇒ (method, reloptions, comment)
   refused = Set{Tuple{String, String}}()
+  # #29 part 2: an index with an expression member or an explicitly collated one is read as SQL TEXT —
+  # the catalog's own element texts, split out of `pg_get_indexdef` — and a partial one carries its
+  # predicate. `as_text` marks the first kind; `texts` holds the definition and the predicate.
+  as_text = Set{Tuple{String, String}}()
+  texts = Dict{Tuple{String, String}, Tuple{Union{String, Nothing}, Union{String, Nothing}}}()
   for r in eachrow(rows)
     (r.table_name === missing || r.index_name === missing) && continue
     key = (string(r.table_name), string(r.index_name))
@@ -1438,6 +1461,19 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
     # Whole-index refusals (see the docstring). A NULL defaults to REFUSED, like every test below.
     (r.is_valid !== true || r.has_include !== false || r.nulls_not_distinct !== false ||
      (constraint && r.is_deferrable !== false)) && push!(refused, key)
+    def = r.index_def === missing ? nothing : string(r.index_def)
+    pred = r.predicate === missing ? nothing : string(r.predicate)
+    old = get(texts, key, (nothing, nothing))
+    texts[key] = (def === nothing ? old[1] : def, pred)
+    # An expression member (`attnum = 0`) or an explicit `COLLATE` makes the whole index a text one: its
+    # members are then compared as the catalog writes them, `COLLATE`, operator class and direction
+    # included, and none of the per-column tests below applies.
+    collated = r.idx_coll !== missing && r.idx_coll != 0 &&
+               (r.col_coll === missing || r.idx_coll != r.col_coll)
+    # A NULLS placement other than the direction's default (`indoption` 1 or 2) is not something a
+    # declaration over fields spells, but it is words an expression's text carries: `"grid NULLS FIRST"`.
+    nulls = r.opt !== missing && !(Int(r.opt) in (0, 3))
+    (r.is_expression === true || collated || nulls) && push!(as_text, key)
     # Every test defaults to UNUSABLE on a NULL, which is the safe direction: after the `k.ord - 1`
     # fix the subscripts are always in range, so a NULL here means something unexpected, and this
     # reader's whole contract is that it never reads an index approximately.
@@ -1469,16 +1505,26 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
   end
   for ((tbl, idx), members) in grouped
     (tbl, idx) in refused && continue
-    any(m -> m === nothing, members) && continue    # a member PormG cannot re-emit ⇒ drop it whole
     unique, constraint = kind[(tbl, idx)]
     method, has_reloptions, comment = facts[(tbl, idx)]
     method in INDEX_METHODS || continue              # an extension's access method (`bloom`)
-    lc = LiveComposite(idx, String[m.column for m in members], unique, constraint, method,
-                       Bool[m.descending for m in members],
-                       Union{String, Nothing}[m.opclass for m in members],
-                       Bool[m.opclass_default for m in members],
-                       comment === nothing ? nothing : _match_or_nothing(INDEX_MARKER_RE, comment),
-                       comment)
+    marker = comment === nothing ? nothing : _match_or_nothing(INDEX_MARKER_RE, comment)
+    def, condition = texts[(tbl, idx)]
+    lc = if (tbl, idx) in as_text
+      # #29 part 2: the element texts, split out of the definition with the lexer the SQLite readers
+      # use. A count that disagrees with the key columns means the split misread the text — refuse
+      # it, as every other doubt here is refused.
+      parsed = def === nothing ? nothing : _index_definition_elements(def)
+      (parsed === nothing || length(parsed[1]) != length(members)) && continue
+      LiveComposite(idx, String[], unique, constraint, method, Bool[], Union{String, Nothing}[], Bool[],
+                    marker, comment; expressions = parsed[1], condition = condition)
+    else
+      any(m -> m === nothing, members) && continue  # a member PormG cannot re-emit ⇒ drop it whole
+      LiveComposite(idx, String[m.column for m in members], unique, constraint, method,
+                    Bool[m.descending for m in members],
+                    Union{String, Nothing}[m.opclass for m in members],
+                    Bool[m.opclass_default for m in members], marker, comment; condition = condition)
+    end
     advanced = composite_is_advanced(lc)
     unique && advanced && continue                   # `UniqueConstraint` is plain b-tree only
     advanced && has_reloptions && continue           # `WITH (…)` would be lost on re-emission
@@ -2378,9 +2424,16 @@ function _attach_composite_indexes!(model, composites::Vector{LiveComposite})
       opclasses = copy(lc.opclasses)
     end
     decl = try
-      lc.unique ? Models.UniqueConstraint(fields = lc.columns, name = name) :
-                  Models.Index(fields = String[d ? "-" * c : c for (c, d) in zip(lc.columns, lc.descending)],
-                               name = name, method = lc.method, opclasses = opclasses)
+      if lc.unique
+        Models.UniqueConstraint(fields = lc.columns, name = name)
+      elseif !isempty(lc.expressions)
+        # #29 part 2: a functional index is written as the catalog's own text, which the planner
+        # accepts as equal to the live index — so an adopted schema plans no replace.
+        Models.Index(expressions = lc.expressions, condition = lc.condition, name = name, method = lc.method)
+      else
+        Models.Index(fields = String[d ? "-" * c : c for (c, d) in zip(lc.columns, lc.descending)],
+                     name = name, method = lc.method, opclasses = opclasses, condition = lc.condition)
+      end
     catch e
       e isa ModelDefinitionError || rethrow()
       @debug "introspection: composite index skipped — PormG cannot name it" table=model.name index=lc.name columns=lc.columns exception=e
@@ -2455,8 +2508,11 @@ Four shapes, partitioned against the column readers so no index has two owners:
 | `'c'` (`CREATE UNIQUE INDEX`) | 1 | ≥ 1 | `UniqueConstraint` | nobody: a one-column bare unique index is what a one-field `UniqueConstraint` creates |
 | `'u'` (a `UNIQUE` clause) | 1 | > 1 | `UniqueConstraint`, `constraint = true` | [`_sqlite_single_column_unique_columns`](@ref) — the field's `unique` |
 
-`origin = 'pk'` (the primary key's own index) is never read. `il.partial = 0` keeps a
-`CREATE INDEX … WHERE` out, which PormG cannot declare (#29).
+`origin = 'pk'` (the primary key's own index) is never read. Since #29 part 2 a `CREATE INDEX …
+WHERE` is: it keeps its columns and carries the `WHERE` text as its `condition`, split out of the
+stored DDL with [`_index_definition_elements`](@ref). An expression member, or an explicit `COLLATE`
+on a member, makes the whole index a TEXT one, read as its members exactly as written. A UNIQUE
+partial or functional index is still never read — `UniqueConstraint` declares neither.
 
 Before #161 the reader carried `il."unique" = 0` and `origin = 'c'` and nothing else, so no
 composite uniqueness came back at all — neither PormG's own `CREATE UNIQUE INDEX` nor Django's
@@ -2475,11 +2531,14 @@ Three things this reader needs that the single-column ones do not:
     same columns under different semantics, would declare a *different* index under the developer's
     name — the same reject-rather-than-reinterpret rule the Django importer applies to
     `Meta.indexes`. Three shapes qualify:
-      - an **expression** member (`lower(name)`) has a NULL `ii.name` — functional indexes are #29;
+      - an **expression** member (`lower(name)`) has a NULL `ii.name` — not a column; since #29
+        part 2 the index is read as text instead (above);
       - a **descending** member (`"desc" = 1`) of a UNIQUE index — `UniqueConstraint` has no
         direction. On a non-unique index it is read since #29, as `Models.Index(fields = ["-year"])`
         declares it;
-      - a non-**BINARY** collation (`COLLATE NOCASE`) — a different comparison, so a different index.
+      - a non-**BINARY** collation the DDL does not spell — a collation declared on the COLUMN,
+        which `pragma_index_xinfo` cannot tell from one on the index. One the index spells
+        (`COLLATE NOCASE`) is read as text since #29 part 2.
 
 The ownership marker ([`_sqlite_index_marker`](@ref)) is read from the index's `sqlite_master` text.
 
@@ -2487,12 +2546,12 @@ ONE query per table; an unknown table yields an empty vector rather than throwin
 """
 function _sqlite_composite_indexes(conn::PormGSQLite, table_name)::Vector{LiveComposite}
   rows = fetch(conn, """
-    SELECT il.name AS idx, il."unique" AS is_unique, il.origin AS origin,
+    SELECT il.name AS idx, il."unique" AS is_unique, il.origin AS origin, il.partial AS is_partial,
            ii.name AS col, ii."desc" AS is_desc, ii.coll AS coll, sm.sql AS ddl
     FROM pragma_index_list(?) AS il
     JOIN pragma_index_xinfo(il.name) AS ii
     LEFT JOIN sqlite_master AS sm ON sm.type = 'index' AND sm.name = il.name
-    WHERE il.partial = 0 AND ii."key" = 1
+    WHERE ii."key" = 1
       AND (il.origin = 'c' OR (il.origin = 'u' AND il."unique" = 1))
     ORDER BY il.name, ii.seqno
     """, [string(table_name)]) |> DataFrame
@@ -2502,12 +2561,16 @@ function _sqlite_composite_indexes(conn::PormGSQLite, table_name)::Vector{LiveCo
   grouped = OrderedDict{String, Vector{Union{Tuple{String, Bool}, Nothing}}}()   # ⇒ (column, descending)
   kind = Dict{String, Tuple{Bool, Bool}}()      # index ⇒ (unique, constraint-backed)
   ddl = Dict{String, Union{String, Nothing}}()
+  partial = Set{String}()
+  has_expression = Set{String}()
   for r in eachrow(rows)
     r.idx === missing && continue
     idx = string(r.idx)
     unique = r.is_unique !== missing && r.is_unique != 0
     kind[idx] = (unique, r.origin !== missing && r.origin == "u")
     ddl[idx] = r.ddl === missing ? nothing : string(r.ddl)
+    (r.is_partial === missing || r.is_partial != 0) && push!(partial, idx)
+    r.col === missing && push!(has_expression, idx)
     desc = r.is_desc !== missing && r.is_desc != 0
     unusable = r.col === missing ||                                    # expression member
                r.is_desc === missing || (desc && unique) ||            # DESC member of a UNIQUE index
@@ -2516,19 +2579,48 @@ function _sqlite_composite_indexes(conn::PormGSQLite, table_name)::Vector{LiveCo
   end
   out = LiveComposite[]
   for (idx, members) in grouped
-    any(m -> m === nothing, members) && continue    # a member PormG cannot re-emit ⇒ drop it whole
     unique, constraint = kind[idx]
     marker = ddl[idx] === nothing ? nothing : _sqlite_index_marker(ddl[idx])
+    # #29 part 2: the text of a partial or functional index comes from its stored DDL, which SQLite
+    # keeps exactly as it was written. An expression member, or an explicit `COLLATE` on one, makes
+    # the whole index a text one; a partial index over plain columns keeps its columns and gains the
+    # `WHERE` clause's text.
+    parsed = ddl[idx] === nothing ? nothing : _index_definition_elements(ddl[idx])
+    # Or: its marker is the hash of its own stored members — SQLite keeps the DDL verbatim, so an
+    # `expressions =` declaration PormG created reads back as exactly its text, whatever it spells.
+    # Without this, `"(grid)"`, `"grid ASC"` or `"'grid'"` read back as a plain column, which no
+    # declaration over fields can reproduce at one column, and `inspectdb` lost the index.
+    as_text = idx in has_expression ||
+              (parsed !== nothing && any(_sqlite_index_member_has_collate, parsed[1])) ||
+              (parsed !== nothing && marker !== nothing && marker == index_text_marker(parsed[1], parsed[2]))
+    is_partial = idx in partial
+    # A UNIQUE index is a `UniqueConstraint`, which declares neither.
+    unique && (as_text || is_partial) && continue
+    (as_text || is_partial) && (parsed === nothing || length(parsed[1]) != length(members)) && continue
+    condition = parsed === nothing ? nothing : parsed[2]
+    is_partial == (condition !== nothing) || continue   # a WHERE the split did not find, or invented
+    if as_text
+      push!(out, LiveComposite(idx, String[], false, false, "btree", Bool[], Union{String, Nothing}[],
+                               Bool[], marker, nothing; expressions = parsed[1], condition = condition))
+      continue
+    end
+    any(m -> m === nothing, members) && continue    # a member PormG cannot re-emit ⇒ drop it whole
     desc = Bool[m[2] for m in members]
     # Arity partition (see the table above): one column is a BARE unique index, or a non-unique one
-    # that is descending or marked — every other one-column index is `db_index`'s.
-    length(members) > 1 || (unique && !constraint) || (!unique && (any(desc) || marker !== nothing)) || continue
+    # that is descending, partial or marked — every other one-column index is `db_index`'s.
+    length(members) > 1 || (unique && !constraint) ||
+      (!unique && (any(desc) || is_partial || marker !== nothing)) || continue
     push!(out, LiveComposite(idx, String[m[1] for m in members], unique, constraint, "btree", desc,
                              Union{String, Nothing}[nothing for _ in members], fill(true, length(members)),
-                             marker, nothing))
+                             marker, nothing; condition = condition))
   end
   return out
 end
+
+# Whether one member of an index's column list, as written, carries an explicit `COLLATE` — an
+# UNQUOTED `COLLATE` token, as `_sqlite_index_has_explicit_collate` reads one for the whole list.
+_sqlite_index_member_has_collate(member::AbstractString)::Bool =
+  any(t -> !t.quoted && uppercase(t.name) == "COLLATE", _sqlite_identifier_tokens(member))
 
 """
     _sqlite_index_marker(ddl) -> Union{String, Nothing}
@@ -2549,6 +2641,38 @@ function _sqlite_index_marker(ddl::AbstractString)::Union{String, Nothing}
   return m === nothing ? nothing : String(m.captures[1])
 end
 const _SQLITE_INDEX_MARKER_TAIL = Regex("/\\*\\s*(" * INDEX_MARKER_RE.pattern * ")\\s*\\*/\\s*\\)\\s*\$")
+# The same comment at the end of the LAST member, once the list is split and its `)` is gone.
+const _SQLITE_INDEX_MARKER_COMMENT = Regex("\\s*/\\*\\s*" * INDEX_MARKER_RE.pattern * "\\s*\\*/\\s*\$")
+
+"""
+    _index_definition_elements(ddl) -> Union{Nothing, Tuple{Vector{String}, Union{String, Nothing}}}
+
+A `CREATE INDEX` statement read as SQL text (#29 part 2): its members exactly as written, split at
+the list's top-level commas, with PormG's marker comment taken off the last one, and the text of its
+`WHERE` clause — `nothing` when it has none. `nothing` for a statement that is not that shape: no
+member list, or anything after the list other than a `WHERE` clause (an `INCLUDE`, a `WITH (…)`),
+which no declaration could reproduce.
+
+Two inputs, one lexer: SQLite's stored `sqlite_master.sql`, and PostgreSQL's
+`pg_get_indexdef(oid, 0, true)`, whose literals are standard (`''`-doubled) strings. The split is
+[`_sqlite_table_definition_parts`](@ref), so a `,` or `)` inside a literal, a quoted identifier or a
+comment splits nothing; the first top-level `(` is the member list, because neither engine allows one
+in an unquoted index or table name.
+"""
+function _index_definition_elements(ddl::AbstractString)::Union{Nothing, Tuple{Vector{String}, Union{String, Nothing}}}
+  parts, tail = _sqlite_table_definition_parts(ddl)
+  isempty(parts) && return nothing
+  parts[end] = String(strip(replace(parts[end], _SQLITE_INDEX_MARKER_COMMENT => "")))
+  any(isempty, parts) && return nothing
+  rest = String(rstrip(strip(tail), ';'))
+  isempty(rest) && return (parts, nothing)
+  toks = _sqlite_identifier_tokens(rest)
+  # The tail must BEGIN with an unquoted `WHERE`; everything after it is the predicate.
+  (isempty(toks) || toks[1].quoted || toks[1].start != firstindex(rest) ||
+   uppercase(toks[1].name) != "WHERE") && return nothing
+  cond = String(strip(SubString(rest, nextind(rest, toks[1].stop))))
+  return isempty(cond) ? nothing : (parts, cond)
+end
 
 # ── SQLite index reference analysis (#519) ───────────────────────────────────────────────────────
 #

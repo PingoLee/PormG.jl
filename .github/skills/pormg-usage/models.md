@@ -192,7 +192,12 @@ end
   `Data (pre): …` (before the plan's schema statements) or `Data (post): …` (after them, e.g. a
   backfill of a column the plan adds). Spell the prefix exactly: a near-miss raises
   `InvalidMigrationError`. `makemigrations` then refuses to overwrite the plan: `migrate` it first.
-- **A column that must become `NOT NULL` on a table with rows is two plans**: add it nullable and
-  `migrate`, backfill with `run_once`, then set `null = false` and `migrate` again. `migrate` refuses
-  the second plan while `NULL`s remain (`MigrationPrecheckError`), and a `Data (pre)` step cannot get
-  it past that check: the rows are counted before any statement runs.
+- **A new column that must be `NOT NULL` on a table with rows is two plans**: add it nullable and
+  `migrate`, backfill with `run_once`, then set `null = false` and `migrate` again (or declare a
+  `default`). `migrate` counts the `NULL`s before any statement runs and refuses the plan while any
+  remain (`MigrationPrecheckError`).
+- **An existing nullable column can go `NOT NULL` in one plan** with a `Data (pre)` fill. Append a tab
+  and `handled=pre` to that change's `# pormg-lossy-alter:` header line. The rows are still counted
+  and shown by `dry_run` but not refused, and if the step leaves one the migration rolls back. The mark
+  needs a `Data (pre)` step in the plan and fits only a counted change on a column that already
+  exists, or the plan raises `InvalidMigrationError`.

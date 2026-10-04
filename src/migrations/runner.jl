@@ -183,6 +183,7 @@ function _lossy_alter_header(f::LossyAlter)::String
     push!(fields, "ref_column" => f.references[2])
   end
   f.condition === nothing || push!(fields, "condition" => f.condition)
+  f.handled === nothing || push!(fields, "handled" => f.handled)
   return LOSSY_ALTER_HEADER * join(("$(k)=$(escape_string(string(v)))" for (k, v) in fields), "\t")
 end
 
@@ -208,7 +209,24 @@ function _plan_lossy_alters(plan_path::AbstractString)::Vector{LossyAlter}
     end
   end
   _refuse_unplanned_conditions(found, plan_path)
+  _refuse_unbacked_handled(found, plan_path)
   return found
+end
+
+# #897: `handled=pre` says a `Data (pre):` step of this plan fixes the finding's rows, and it is what
+# lets `migrate` skip refusing them — so a plan that marks one and holds no such step is refused as
+# damaged. Otherwise the marker would be a bare "skip the pre-check" switch, and the rows it was
+# meant to fix would reach the ALTER unfixed with nothing having said so.
+function _refuse_unbacked_handled(found::Vector{LossyAlter}, plan_path::AbstractString)::Nothing
+  handled = filter(f -> f.handled === :pre, found)
+  isempty(handled) && return nothing
+  any(e -> _data_step_kind(first(e)) === :pre, _ordered_entries(_read_migration_plan(plan_path))) &&
+    return nothing
+  f = first(handled)
+  throw(InvalidMigrationError(
+    "Migration plan '$(basename(plan_path))': a `$(strip(LOSSY_ALTER_HEADER))` line is marked " *
+    "`handled=pre` ($(_lossy_alter_summary(f))), but the plan has no `$(DATA_PRE_PREFIX)` step to " *
+    "handle it. Add the step that fixes those rows, or remove `handled=pre` from the line."))
 end
 
 # ==============================================================================
@@ -480,7 +498,7 @@ function _anchor_check_conditions(findings::Vector{LossyAlter}, settings::PormGS
   anchored(f) = f.kind !== :add_check || (f.table, f.column, something(f.condition, "")) in declared
   return LossyAlter[anchored(f) ? f :
                     LossyAlter(f.kind, f.table, f.column, f.old_type, f.new_type, f.bound, f.scale, f.rows,
-                               f.columns, f.references, nothing)
+                               f.columns, f.references, nothing, f.handled)
                     for f in findings]
 end
 
@@ -514,6 +532,12 @@ function _parse_lossy_alter_header(body::AbstractString, file::AbstractString)::
     k, sep, v = _partition_first(part, '=')
     sep || bad("has a field without `=`")
     value = try unescape_string(v) catch; bad("has a value that does not unescape") end
+    # #897: `handled` is the one field a person types, so a near-miss is refused rather than read
+    # as an unknown key — or, typed after spaces instead of a tab, swallowed into the field before it.
+    # Either way the mark would be lost and the plan refused for a reason that never names it.
+    (k != "handled" && occursin(_HANDLED_LOOSE_KEY_RE, k)) && bad("has a field $(repr(k)) that reads like `handled`")
+    (k != "condition" && occursin(_HANDLED_LOOSE_VALUE_RE, value)) &&
+      bad("has `handled` inside its `$k` value: separate `handled=pre` from the field before it with a tab, not spaces")
     k == "member" ? push!(members, value) : (fields[k] = value)
   end
   for key in ("kind", "table", "column", "old", "new")
@@ -545,10 +569,30 @@ function _parse_lossy_alter_header(body::AbstractString, file::AbstractString)::
     references = (fields["ref_table"], fields["ref_column"])
   end
   kind === :add_check && !haskey(fields, "condition") && bad("of kind `add_check` has no `condition` field")
+  # #897: written by the operator, never by `makemigrations`. Only `pre` exists, and only a finding
+  # that is counted can be handled — a `:silent` or `:refused` one has no count for a step to satisfy.
+  handled = nothing
+  if haskey(fields, "handled")
+    fields["handled"] == "pre" || bad("has a `handled` that is not `pre`")
+    LOSSY_ALTER_KINDS[kind] === :rows ||
+      bad("of kind `$kind` is marked `handled`, but only a change whose rows are counted can be handled by a `$(DATA_PRE_PREFIX)` step")
+    # The column does not exist until the plan's ADD COLUMN, which runs after every `pre` step, so
+    # no step can fill it — the way out is a `default`, or a nullable column and a later plan.
+    kind === :add_not_null &&
+      bad("of kind `add_not_null` is marked `handled`, but a `$(DATA_PRE_PREFIX)` step runs before the column is added, so it cannot fill it. $(_LOSSY_ALTER_HINTS[:add_not_null])")
+    handled = :pre
+  end
   return LossyAlter(kind, fields["table"], fields["column"], fields["old"], fields["new"];
                     bound = bound, scale = scale, columns = members, references = references,
-                    condition = kind === :add_check ? fields["condition"] : nothing)
+                    condition = kind === :add_check ? fields["condition"] : nothing, handled = handled)
 end
+
+# #897: what counts as an ATTEMPT at the `handled` field — any case and spacing as a key, or a
+# `handled=` swallowed into another field's value when it was typed after spaces instead of a tab.
+# `condition` is exempt: it is SQL the developer wrote and may say `handled = 1`, and a mangled one is
+# refused by `_refuse_unplanned_conditions` anyway.
+const _HANDLED_LOOSE_KEY_RE = r"^\s*handled\s*$"i
+const _HANDLED_LOOSE_VALUE_RE = r"\shandled\s*="i
 
 # The limits each counted kind is compared against (`_precheck_sql`).
 const _LOSSY_ALTER_REQUIRED = Dict{Symbol, Tuple{Vararg{Symbol}}}(
@@ -1016,10 +1060,15 @@ const _LOSSY_ALTER_HINTS = Dict{Symbol, String}(
                    "in a later migration.")
 
 # The findings `migrate` must refuse whatever the caller opts into: rows that would fail, and changes
-# PostgreSQL cannot apply as planned.
+# PostgreSQL cannot apply as planned. A `handled=pre` finding is not one (#897): a `Data (pre):` step
+# fixes its rows inside the migration, and the database checks them there — see `_handled_alters`.
 _failing_alters(findings::Vector{LossyAlter})::Vector{LossyAlter} =
   filter(f -> lossy_alter_class(f) === :refused ||
-              (lossy_alter_class(f) === :rows && something(f.rows, 0) > 0), findings)
+              (lossy_alter_class(f) === :rows && f.handled === nothing && something(f.rows, 0) > 0), findings)
+
+# The findings the operator marked `handled=pre` (#897): counted like any other, never refused.
+_handled_alters(findings::Vector{LossyAlter})::Vector{LossyAlter} =
+  filter(f -> f.handled === :pre, findings)
 
 # The findings that apply and change data — the destructive guard's opt-in covers them.
 _silent_alters(findings::Vector{LossyAlter})::Vector{LossyAlter} =
@@ -1039,6 +1088,10 @@ function _refuse_failing_alters(findings::Vector{LossyAlter}; interactive::Bool)
   msg = "The plan has $(length(failing)) change(s) the database would refuse on existing rows, or " *
         "cannot apply at all. Nothing was applied. Fix the data (or the models file) and run " *
         "makemigrations() again; `destructive = true` does not bypass this." *
+        # #897: only where a mark is accepted — never beside a kind the parser refuses it on.
+        (any(f -> lossy_alter_class(f) === :rows && f.kind !== :add_not_null, failing) ?
+          " If a `$(DATA_PRE_PREFIX)` step of the plan fixes those rows, append `handled=pre` (after a " *
+          "tab) to that change's `$(strip(LOSSY_ALTER_HEADER))` line." : "") *
         join((" " * _LOSSY_ALTER_HINTS[k] for k in unique(f.kind for f in failing) if haskey(_LOSSY_ALTER_HINTS, k)))
   (interactive && (stdin isa Base.TTY)) || throw(MigrationPrecheckError(msg, failing))
   @error(_emsg("\e[31m$msg\e[0m"))
@@ -1686,7 +1739,8 @@ Use `is_destructive(r)` and `total_statements(r)` for derived properties.
 - `destructive_statements` — the statements the destructive guard flags (a `DROP`, a `TRUNCATE`, a
   `DELETE` with no `WHERE`).
 - `lossy_alters` — the plan's lossy column changes (#803), one [`LossyAlter`](@ref) each, with `rows`
-  counted against the live database for those that fail on existing rows.
+  counted against the live database for those that fail on existing rows. One marked `handled=pre`
+  (#897) is counted too, but `migrate` does not refuse the plan for it.
 - `data_steps` — the labels of the plan's hand-written data steps (#740), in the order they run:
   every `Data (pre): …` before the schema statements, every `Data (post): …` after them.
 """
@@ -1727,6 +1781,7 @@ function Base.show(io::IO, r::DryRunResult)
   # #803, one section per class — each asks something different of the operator.
   silent = _silent_alters(r.lossy_alters)
   failing = _failing_alters(r.lossy_alters)
+  handled = _handled_alters(r.lossy_alters)
   if !isempty(silent)
     println(io, _emsg(io, "  \e[31m⚠ CHANGES EXISTING VALUES: $(length(silent)) column change(s) — needs `destructive = true`\e[0m"))
     for f in silent
@@ -1739,7 +1794,14 @@ function Base.show(io::IO, r::DryRunResult)
       println(io, "    → ", _lossy_alter_summary(f))
     end
   end
-  if isempty(r.destructive_statements) && isempty(silent) && isempty(failing)
+  # #897: not refused, and not "safe" either — the database decides, after the `pre` step.
+  if !isempty(handled)
+    println(io, _emsg(io, "  \e[33m⚠ HANDLED BY A Data (pre) STEP: $(length(handled)) column change(s) — the database checks them inside the migration\e[0m"))
+    for f in handled
+      println(io, "    → ", _lossy_alter_summary(f))
+    end
+  end
+  if isempty(r.destructive_statements) && isempty(silent) && isempty(failing) && isempty(handled)
     println(io, _emsg(io, "  \e[32m✓ Safe (no destructive operations)\e[0m"))
   end
   # #740: hand-written data steps, named — the SQL list below does not say which statements are data.
@@ -3174,6 +3236,13 @@ function migrate(connection::PormGBackend, settings::PormGSettings;
   if !isempty(ordered_statements)
     _refuse_failing_alters(lossy_alters; interactive = interactive) ||
       return MigrationResult(:declined, nothing, 0)
+    # #897: rows a `Data (pre):` step is to fix. Not refused, but said — after the refusal, so a plan
+    # refused for another finding does not first claim these are taken care of.
+    for f in _handled_alters(lossy_alters)
+      something(f.rows, 0) > 0 &&
+        @info("A change is marked handled=pre, so its rows are left to the plan's `Data (pre)` step; if any remain after it, the migration fails and rolls back.",
+              finding = _lossy_alter_summary(f))
+    end
     _confirm_migration(has_destructive, destructive, destructive_stmts; interactive=interactive,
                        lossy_alters = silent_alters) ||
       return MigrationResult(:declined, nothing, 0)

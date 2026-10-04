@@ -235,6 +235,83 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# `handled=pre`: the operator's mark that a `Data (pre)` step fixes a finding's rows (#897)
+# It round-trips like any other field, and it is the one header field written by a person, so
+# it is checked like a damaged line. Only `pre` exists. Only a counted (`:rows`) kind can be
+# handled. A plan with no `Data (pre):` step to back it is refused, or the mark would be a bare
+# "skip the pre-check" switch. A handled finding is counted but never refused.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "handled=pre round-trips, is validated, and needs a Data (pre) step (#897)" begin
+    dir = mktempdir()
+    try
+        alter = OrderedDict{String, String}("Alter field: c" => """ALTER TABLE "race897" ALTER COLUMN "c" SET NOT NULL;""")
+        fill = OrderedDict{String, String}("Data (pre): fill c" => """UPDATE "race897" SET "c" = 'x' WHERE "c" IS NULL;""")
+        handled = LossyAlter(:set_not_null, "race897", "c", "varchar(5)", "varchar(5)"; handled = :pre)
+        backed = OrderedDict{Symbol, OrderedDict{String, String}}(:race897 => alter, :aaa_fill => fill)
+        bare = OrderedDict{Symbol, OrderedDict{String, String}}(:race897 => alter)
+
+        PormG.Generator.generate_migration_plan("backed.jl", backed, dir; lossy_alters = [handled])
+        @test occursin("\thandled=pre", read(joinpath(dir, "backed.jl"), String))
+        @test _plan_lossy_alters(joinpath(dir, "backed.jl")) == [handled]
+
+        # No `Data (pre):` step in the plan: refused, naming the field and the missing step.
+        PormG.Generator.generate_migration_plan("bare.jl", bare, dir; lossy_alters = [handled])
+        err = try _plan_lossy_alters(joinpath(dir, "bare.jl")); nothing catch e; e end
+        @test err isa InvalidMigrationError
+        @test err !== nothing && occursin("handled=pre", sprint(showerror, err)) &&
+              occursin("no `Data (pre):` step", sprint(showerror, err))
+
+        # A value other than `pre`, and a kind with no count to skip: refused as damaged lines.
+        silent = LossyAlter(:decimal_scale, "race897", "c", "numeric(8,2)", "numeric(8,1)")
+        PormG.Generator.generate_migration_plan("silent.jl", backed, dir; lossy_alters = [silent])
+        text = read(joinpath(dir, "backed.jl"), String)
+        for (damaged, needle) in ((replace(text, "handled=pre" => "handled=post"), "not `pre`"),
+                                  (replace(read(joinpath(dir, "silent.jl"), String),
+                                           r"# pormg-lossy-alter: [^\n]*" => l -> l * "\thandled=pre"),
+                                   "only a change whose rows are counted"))
+            write(joinpath(dir, "damaged.jl"), damaged)
+            err = try _plan_lossy_alters(joinpath(dir, "damaged.jl")); nothing catch e; e end
+            @test err isa InvalidMigrationError
+            @test err !== nothing && occursin(needle, sprint(showerror, err))
+        end
+
+        # The field a person types, typed wrong: a near-miss key, or spaces where the tab goes (the
+        # mark would land inside `new=`). Each refused naming the mark, never read as no mark at all.
+        # A new NOT NULL column is refused too: the `pre` step runs before its ADD COLUMN.
+        added = LossyAlter(:add_not_null, "race897", "grid", "", "INTEGER")
+        PormG.Generator.generate_migration_plan("added.jl", backed, dir; lossy_alters = [added])
+        for (damaged, needle) in ((replace(text, "\thandled=pre" => "\tHandled=pre"), "reads like `handled`"),
+                                  (replace(text, "\thandled=pre" => "  handled=pre"), "with a tab, not spaces"),
+                                  (replace(read(joinpath(dir, "added.jl"), String),
+                                           r"# pormg-lossy-alter: [^\n]*" => l -> l * "\thandled=pre"),
+                                   "before the column is added"))
+            write(joinpath(dir, "damaged.jl"), damaged)
+            err = try _plan_lossy_alters(joinpath(dir, "damaged.jl")); nothing catch e; e end
+            @test err isa InvalidMigrationError
+            @test err !== nothing && occursin(needle, sprint(showerror, err))
+        end
+
+        # A CHECK condition is SQL the developer wrote, and may itself say `handled = 1`: not a mark.
+        check = LossyAlter(:add_check, "race897", "is_handled", "", ""; condition = "status <> 0 AND handled = 1")
+        checked = OrderedDict{Symbol, OrderedDict{String, String}}(:race897 => OrderedDict{String, String}(
+            "Create check constraint: is_handled" =>
+                """ALTER TABLE "race897" ADD CONSTRAINT "is_handled" CHECK (status <> 0 AND handled = 1);"""))
+        PormG.Generator.generate_migration_plan("check.jl", checked, dir; lossy_alters = [check])
+        @test _plan_lossy_alters(joinpath(dir, "check.jl")) == [check]
+
+        # Counted, not refused: the same finding with rows is failing unmarked and not failing marked.
+        counted(f) = Migrations._with_rows(f, 3)
+        unmarked = LossyAlter(:set_not_null, "race897", "c", "varchar(5)", "varchar(5)")
+        @test Migrations._failing_alters([counted(unmarked)]) == [counted(unmarked)]
+        @test isempty(Migrations._failing_alters([counted(handled)]))
+        @test Migrations._handled_alters([counted(handled), counted(unmarked)]) == [counted(handled)]
+        @test occursin("3 row(s) for a `Data (pre)` step to fix", Migrations._lossy_alter_summary(counted(handled)))
+    finally
+        rm(dir; recursive = true, force = true)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # The pre-check SQL: identifiers escaped, bounds bound
 # The table and column come back from a file, so they get the same `""` escape every plan
 # statement's identifiers get, and every limit is a parameter — never interpolated.

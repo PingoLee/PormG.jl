@@ -65,13 +65,35 @@ driver = OrderedDict{String, String}(
 - **Only those two spellings.** A label that reads like one and is not — `Data (Pre):`,
   `data (post):`, `Data (post)` without its colon — raises `InvalidMigrationError` instead of running
   somewhere you did not intend.
-- **A `pre` step cannot make a refused column change pass.** Before it runs anything, `migrate`
-  counts the rows a change would fail on — `NULL`s under a new `NOT NULL`, duplicates under a new
-  `unique`, values too long for a shorter `max_length` — and refuses the whole plan if there are any
-  (see [Lossy Column Changes](workflow.md#Lossy-Column-Changes)). Those rows are counted on the
-  database as it is, before a `Data (pre):` step could fix them. Fix them first, with a `run_once`
-  step before `migrate`, or split the change in two plans as in
-  [Expand, backfill, contract](#Expand,-backfill,-contract).
+- **A `pre` step can fix the rows a column change would fail on, if you say so.** Before it runs
+  anything, `migrate` counts the rows a change would fail on (`NULL`s under a new `NOT NULL`,
+  duplicates under a new `unique`, values too long for a shorter `max_length`), and refuses the
+  whole plan if there are any (see [Lossy Column Changes](workflow.md#Lossy-Column-Changes)). It
+  counts on the database as it is, before any `Data (pre):` step has run. To let a `pre` step fix
+  those rows, mark the finding: append a tab and `handled=pre` to its `# pormg-lossy-alter:` line in
+  the plan's header. Making `Driver.code` required, in one plan:
+
+  ```julia
+  # pormg-lossy-alter: kind=set_not_null<TAB>table=driver<TAB>column=code<TAB>old=…<TAB>new=…<TAB>handled=pre
+  ```
+  ```julia
+  "Data (pre): fill code" => """UPDATE "driver" SET "code" = upper(substr("surname", 1, 3)) WHERE "code" IS NULL;""",
+  ```
+
+  (`<TAB>` is a tab character. Leave the rest of the line as `makemigrations` wrote it, and add only
+  the last field.) A marked
+  finding is still counted: `dry_run()` lists it under `HANDLED BY A Data (pre) STEP`, with its rows.
+  But `migrate` does not refuse the plan for it, and the database enforces the change inside the
+  migration, after the step. If the step leaves a row that still fails, the `ALTER` fails and the
+  whole plan rolls back, the step included.
+  - `handled=pre` is the only value, and only a change whose rows are counted can carry it — not
+    a change that rewrites values (a lower `NUMERIC` scale), which has no count and keeps its line
+    as written. A new `NOT NULL` column cannot carry it either: the step runs before the column is
+    added, so it has nothing to fill. Give the column a `default`, or add it nullable first (below).
+    A mark that breaks any of these rules is refused with `InvalidMigrationError`, and so is a plan
+    that marks a finding and has no `Data (pre):` step.
+  - Deleting the line also turns its count off, but then `dry_run` no longer shows the change.
+    Mark the line rather than delete it.
 - **It is part of the plan.** It runs in the plan's single transaction, it is part of the plan's
   checksum, and the [destructive guard](workflow.md#Destructive-Operations-Safety) reads it like any
   other statement: a `DELETE` with no `WHERE` needs `destructive = true`. `dry_run()` lists the data
@@ -171,7 +193,11 @@ data step between them. Making `Driver.code` required on a table that already ha
    of the backfill.
 
 When the backfill is a single `UPDATE` that needs nothing from Julia, a `Data (post):` step in the
-expand plan does the same job inside that plan.
+expand plan does the same job inside that plan. Rows that appear between the backfill and the
+contract can be filled by the contract plan itself: add a `Data (pre):` fill to it and mark its
+`NOT NULL` finding `handled=pre` (see [Data steps in a plan](#Data-steps-in-a-plan)). The expand step
+cannot be skipped this way, because a column the plan adds does not exist yet when a `pre` step
+runs.
 
 ---
 

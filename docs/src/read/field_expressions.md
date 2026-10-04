@@ -78,7 +78,7 @@ FROM "driver" as "Tb"
 WHERE (LOWER("Tb"."surname") = $1::text)
 ```
 
-Against the F1 data this returns Ayrton Senna and Bruno Senna. The right-hand side takes what an `F` comparison takes: a literal, or a column reference such as `F("forename")`.
+Against the F1 data this returns Ayrton Senna and Bruno Senna. The right-hand side takes what an `F` comparison takes: a literal, a column reference such as `F("forename")`, or a scalar `Subquery(...)` (see [A Subquery as a Filter Value](subqueries_and_ctes.md#A-subquery-as-a-filter-value)).
 
 An **aggregate** on the left (`Count("resultid") > 10`) builds an expression too, but `filter` refuses it, because an aggregate cannot be a `WHERE` predicate. Filter on an aggregate through an alias instead. See [In Filters (Auto-HAVING)](#In-Filters-(Auto-HAVING)).
 

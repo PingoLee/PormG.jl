@@ -587,6 +587,27 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeF
     return OperObject(operator="=", values=_walk_slot(x.second), column=SQLField(_check_function(x.first), join(x.first, "__")))
   end
 end
+# #926: a scalar `Subquery(...)` is a filter value — `filter("grid" => Subquery(…))` renders
+# `WHERE "grid" = (SELECT …)`, Django's `filter(grid=Subquery(…))`. It raised a raw `MethodError`
+# naming this function on every pair spelling (`filter`, `Q`/`Qor`, `When`, `on`, `cjoin_on`). Shaped
+# like the function arm below: a subquery is one value per row, not a list and not a text fragment,
+# so the column-RHS refusals apply — except that `@in` gets its own hint, because the membership
+# spelling already takes a subquery: the query itself, unwrapped (the `SQLObjectHandler` arm above).
+function _get_pair_to_oper(x::Pair{Vector{String},SubqueryObject})
+  suffix = x.first[end]
+  if suffix in ("in", "nin")
+    lookup = join(x.first, "__@")
+    throw(FilterError("Error in filter '$(lookup)': '$(suffix)' takes the query itself, not a scalar " *
+                      "Subquery(...) — pass it unwrapped, \e[4m\e[32m\"$(lookup)\" => query\e[0m."))
+  end
+  if haskey(PormGsuffix, suffix)
+    _check_fixed_shape_lookup(suffix, x.second)
+    _check_column_rhs_lookup(x.first)
+    return OperObject(operator=PormGsuffix[suffix], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  else
+    return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
+  end
+end
 # Allow Case/When and other FObject expressions as filter RHS values
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeFunction
   if haskey(PormGsuffix, x.first[end])
@@ -1671,7 +1692,37 @@ end
 function _get_select_query(v::SubqueryObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   # #92: scalar single-column correlated subquery projected as a SELECT-list column.
   _guard_no_nested_projection(instruc, "Subquery")
-  # #433: renders an inline WITH that binds into `:cte` while its text sits in the SELECT list.
+  # #194: a PROJECTED correlation — see `_get_select_query(::ExistsObject)`. `finally` because the
+  # inner build throws routinely (the one-column rule is one of several).
+  prev_correlated = instruc.correlated_projection
+  instruc.correlated_projection = _as === nothing ? "Subquery(…)" : _as
+  try
+    return _render_scalar_subquery(v, instruc)
+  finally
+    instruc.correlated_projection = prev_correlated
+  end
+end
+# #926: the FILTER-position arm — `filter("grid" => Subquery(…))`, `F("grid") == Subquery(…)`, an ON
+# pair. Not bracketed in WHERE or ON, exactly as `_get_filter_query(::ExistsObject)` is not: those
+# predicates are evaluated before GROUP BY, so correlating on an ungrouped column is legal on both
+# backends. A HAVING predicate and a projection's `When` condition are evaluated after it, so there
+# the #194 recorder sees its OuterRefs (`post_group_predicate`, review of #926). Its values bind into whatever clause bucket
+# the caller switched to (`:where`, `:join`, `:having`), as the membership arm's subquery does.
+function _get_filter_query(v::SubqueryObject, instruc::SQLInstruction)
+  instruc.post_group_predicate === nothing && return _render_scalar_subquery(v, instruc)
+  prev_correlated = instruc.correlated_projection
+  instruc.correlated_projection = instruc.post_group_predicate
+  try
+    return _render_scalar_subquery(v, instruc)
+  finally
+    instruc.correlated_projection = prev_correlated
+  end
+end
+
+# The render both arms share: `(SELECT …)` for exactly one projected column, its values bound as one
+# clause-ordered run in the ambient bucket.
+function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::String
+  # #433: renders an inline WITH that binds into `:cte` while its text sits in SELECT or WHERE.
   _guard_no_nested_cte(v.query, "Subquery(...)")
 
   # query() mutates the handler's parameters, and SQLField deepcopy is shallow on `.field`, so the same
@@ -1687,26 +1738,18 @@ function _get_select_query(v::SubqueryObject, instruc::SQLInstruction; _as::Unio
   _warn_if_possible_multirow(handler)
 
   # Passing the shared `parameters` makes query() treat this as a subquery: it inherits the ambient
-  # :select bucket (set by build()) and restores the context afterward, so the inner params flatten in
-  # :select — textually correct (the SELECT list precedes FROM/JOIN/WHERE). Correlate via outer=instruc.
-  # #432: same nested-run reordering as `_build_exists_query` — this subquery's text sits in the
-  # SELECT list, so everything it binds must be one clause-ordered run in the ambient bucket.
+  # bucket the caller switched to (`:select` for a projection, `:where`/`:join`/`:having` for a
+  # predicate, #926) and restores the context afterward, so the inner params flatten where the text
+  # sits. Correlate via outer=instruc.
+  # #432: same nested-run reordering as `_build_exists_query` — everything this subquery binds must be
+  # one clause-ordered run in the ambient bucket.
   nested_mark = nested_parameter_mark(instruc)
-  # #194: see the `ExistsObject` arm above — the flag marks a PROJECTED correlation so every
-  # OuterRef this inner build resolves is recorded against it. `finally` because the inner build
-  # throws routinely (the one-column rule a few lines up is one of several).
-  prev_correlated = instruc.correlated_projection
-  instruc.correlated_projection = _as === nothing ? "Subquery(…)" : _as
-  inner_sql = try
-    query(handler,
-          table_alias=instruc.table_alias,
-          connection=instruc.connection,
-          parameters=instruc.parameters,
-          outer=instruc,
-          own_contexts=true)
-  finally
-    instruc.correlated_projection = prev_correlated
-  end
+  inner_sql = query(handler,
+                    table_alias=instruc.table_alias,
+                    connection=instruc.connection,
+                    parameters=instruc.parameters,
+                    outer=instruc,
+                    own_contexts=true)
   reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
   # #888: the inner build typed its one column (`query()` writes `projection_kinds` back onto
   # `handler`, our copy), so the value this text returns has that kind. File it under the node the
@@ -2805,6 +2848,10 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # Case/When and other SQL function expressions as filter RHS
     placeholders = _get_filter_query(v.values, instruc)
     return _render_column_rhs(column, v.operator, placeholders, instruc)
+  elseif isa(v.values, SubqueryObject)
+    # #926: a scalar subquery, `"grid" => Subquery(…)`. `column` rendered first, so its markers number
+    # ahead of the subquery's — the text order (#586). The filter-position render: no #194 recording.
+    return _render_column_rhs(column, v.operator, _get_filter_query(v.values, instruc), instruc)
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && v.column.field.formatter !== nothing
     @pormg_debug false
     # #576: this is the arm `filter("happened__@month" => "abc")` lands in once the sargable rewrite

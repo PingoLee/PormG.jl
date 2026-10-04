@@ -95,6 +95,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Q/Qor on an Aggregate Alias (#692)" include("unit/test_q_aggregate_alias.jl")
     @testset "Filter Expression Containing an Aggregate (#895)" include("unit/test_filter_aggregate_expression.jl")
     @testset "Aggregate or Window in a Join ON Clause (#917)" include("unit/test_join_condition_aggregate.jl")
+    @testset "Scalar Subquery as a Filter Value (#926)" include("unit/test_subquery_filter_value.jl")
     @testset "Aggregate Flag Through Wrappers (#702)" include("unit/test_aggregate_flag_propagation.jl")
     @testset "Bare Literal Function Operands (#705)" include("unit/test_function_literal_operands.jl")
     @testset "Greatest/Least Skip NULL on SQLite (#844)" include("unit/test_greatest_least_null.jl")

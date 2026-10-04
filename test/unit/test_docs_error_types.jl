@@ -212,6 +212,22 @@ const DOCERR_CASES = [
         end,
     ),
     (
+        "read/subqueries_and_ctes.md — `@in` takes the query itself, not a scalar `Subquery(...)` (#926)",
+        FilterError,
+        () -> begin
+            inner = DOCERR_STATUS_PG.objects.values("statusid")
+            DOCERR_RESULT_PG.objects.filter("statusid__@in" => Subquery(inner)).list(show_query = :dict)
+        end,
+    ),
+    (
+        "read/subqueries_and_ctes.md — a pattern lookup refuses a scalar `Subquery(...)` (#926)",
+        FilterError,
+        () -> begin
+            inner = DOCERR_STATUS_PG.objects.values("status")
+            DOCERR_RESULT_PG.objects.filter("statusid__@contains" => Subquery(inner)).list(show_query = :dict)
+        end,
+    ),
+    (
         "read/values_and_joins.md — alias identifiers reject spaces and punctuation",
         InvalidValueError,
         () -> DOCERR_RESULT_PG.objects.values("bad alias!" => "points").list(show_query = :dict),

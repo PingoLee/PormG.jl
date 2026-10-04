@@ -46,7 +46,7 @@ See also [`Subquery`](@ref) for the scalar (single-value) form and
 Exists(query::SQLObjectHandler) = ExistsObject(query=query)
 Base.deepcopy(x::ExistsObject) = ExistsObject(query=deepcopy(x.query))
 
-# SubqueryObject is a scalar single-column subquery projected as a SELECT-list column (#92).
+# SubqueryObject is a scalar single-column subquery: a SELECT-list column (#92) or a filter value (#926).
 # Like ExistsObject it inherits SQLType directly. It is rendered via query() and correlated with the
 # enclosing query through OuterRef. It is defined before FieldPart (below), which is widened to admit
 # it so an SQLField.field can carry it until get_select_query resolves it to SQL text.
@@ -78,13 +78,19 @@ This is the fan-out-safe way to aggregate across a to-many relation: two `Subque
 two different relations stay exact, where a joined `values(Count(...), Count(...))` would
 row-multiply (the guard for that is #74).
 
+It is also a **filter value** (#926), as in Django's `filter(grid=Subquery(...))`:
+`filter("milliseconds" => Subquery(fastest))` renders `"milliseconds" = (SELECT …)`, and so do
+`F("milliseconds") == Subquery(fastest)`, a `Q`/`When` condition and a join condition.
+`@in`/`@nin` take the query itself instead, unwrapped.
+
 !!! note "Outer `GROUP BY` — guarded (#194)"
-    Combining a correlated `Subquery` with an outer aggregate is only well-defined when the
-    correlated column is itself grouped. When it is not, PormG raises a `QueryBuildError` naming
+    Combining a *projected* correlated `Subquery` with an outer aggregate is only well-defined when
+    the correlated column is itself grouped. When it is not, PormG raises a `QueryBuildError` naming
     the ungrouped column, on both backends and before any SQL runs — left to the database,
     PostgreSQL refuses it while SQLite evaluates the subquery against an *arbitrary* row of each
-    group and returns a plausible-looking wrong number. See
-    [Subqueries and CTEs](read/subqueries_and_ctes.md).
+    group and returns a plausible-looking wrong number. A filter value in `WHERE` or a join
+    condition is not checked, because it is evaluated before grouping. One compared in `HAVING` or
+    in a projection's `When` is checked. See [Subqueries and CTEs](read/subqueries_and_ctes.md).
 
 See also [`Exists`](@ref) for the boolean form and [`OuterRef`](@ref) for the correlation.
 """
@@ -444,6 +450,14 @@ const CorrelatedRef = NamedTuple{(:label, :ref, :column, :expr),NTuple{4,String}
   # one-column rule, the nested-CTE guard, the inner build), and a flag left set would make the NEXT
   # ref recorded against a projection that is no longer rendering.
   correlated_projection::OptionalString = nothing
+  # #926 (review) — the clause evaluated AFTER GROUP BY that is rendering right now, as the label the
+  # #194 message names, or `nothing` outside one. A filter-position `Subquery(...)` is outside the
+  # guard because a WHERE or ON predicate is evaluated before GROUP BY — but a HAVING predicate and
+  # the SELECT list (a `When` condition in a projection) are evaluated after it, so a subquery
+  # compared there is recorded like a projected one. That is how an `Exists` in a projected `When`
+  # already behaves; it over-refuses one legal shape, a subquery inside an aggregate's argument
+  # (#932). Set with `finally` by the two HAVING expression sites and around the SELECT render.
+  post_group_predicate::OptionalString = nothing
   # One entry per OuterRef actually RENDERED inside a projected correlated subquery of this query.
   # Written at resolution time rather than collected by walking the inner query's AST, because the
   # two have opposite failure modes: a walker must enumerate every node type an OuterRef can hide in
@@ -817,7 +831,9 @@ That is a internal function, please do not use it.
   # the field: `Vector{Vector{UInt8}}` is a membership list, `Vector{UInt8}` is one payload. Whether
   # the column can actually hold bytes is decided at RENDER, where the field is known — see the
   # `_is_binary_field` guard in `_get_filter_query(::SQLTypeOper, …)`.
-  values::Union{String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID,SQLObjectHandler,SQLTypeF,SQLTypeFunction,SQLTypeCTE,SQLTypeJoined,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Number,Bool,SQLTypeF,Base.UUID,AbstractVector{UInt8}}
+  # `SubqueryObject` (#926): a scalar subquery compared as one value — `filter("grid" => Subquery(…))`.
+  # Its consumer is the `SubqueryObject` arm of `_get_filter_query(::SQLTypeOper, …)`.
+  values::Union{String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID,SQLObjectHandler,SQLTypeF,SQLTypeFunction,SQLTypeCTE,SQLTypeJoined,SubqueryObject,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Number,Bool,SQLTypeF,Base.UUID,AbstractVector{UInt8}}
   column::ColumnPart
 end
 # `OP` is internal (#202): unexported, undocumented, and the string-lookup form (`"field__@op" =>
@@ -1009,6 +1025,11 @@ const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
 const _CompareLiteral = Union{Integer,Float16,Float32,Float64,String,Base.UUID,Dates.Time,Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime,
                               Dates.Period,Dates.CompoundPeriod}
 const _ColumnHandle   = Union{SQLTypeCTE,SQLTypeJoined}
+# #926 — the third kind of operand: a scalar `Subquery(...)`, one value per row like a column handle,
+# but rendered as `(SELECT …)` with its own bound values — the filter-position render
+# (`_get_filter_query(::SubqueryObject)`), the one the pair spelling `"grid" => Subquery(…)` takes, so
+# `F("grid") == Subquery(…)` renders the same SQL. Composed into both sides below, like the other two.
+const _SubqueryOperand = SubqueryObject
 
 # Carrier for an F reference and any arithmetic built on top of it. Users construct it through
 # `F(field_name)` (documented below) and the Base.:+/-/*// overloads further down; the struct
@@ -1027,7 +1048,7 @@ const _ColumnHandle   = Union{SQLTypeCTE,SQLTypeJoined}
   # `_DurationOperand` is the other half and is NOT part of `_CompareOperand`: those are the operands
   # #25 added for date ARITHMETIC (`F("seen") + Day(1)`), not for comparison. Conflating the two was
   # the whole of #494. `SQLTypeFunction` likewise — `F("x") * Sum("y")` is arithmetic.
-  operand::Union{_CompareLiteral,_ColumnHandle,_DurationOperand,SQLTypeFunction,FExpression,Nothing} = nothing
+  operand::Union{_CompareLiteral,_ColumnHandle,_SubqueryOperand,_DurationOperand,SQLTypeFunction,FExpression,Nothing} = nothing
   function_name::String = "F"
   column::Union{String,SQLTypeField,Vector{String}} = ""
   aggregate::Bool = false
@@ -1267,7 +1288,7 @@ end
 # lack is PROOF, and that is the oracle row `test_f_date_operands.jl` demands per member. A column
 # HANDLE (`_ColumnHandle`) is the other kind of operand and renders as a column reference, never a
 # bound value; `test_node_admission.jl` is what fails when a NODE type is admitted without a consumer.
-const _CompareOperand = Union{_CompareLiteral,_ColumnHandle,FExpression}
+const _CompareOperand = Union{_CompareLiteral,_ColumnHandle,_SubqueryOperand,FExpression}
 
 function _compare(f::FExpression, operation::String, operand)
   if f.operation === nothing

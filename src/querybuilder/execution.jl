@@ -2302,6 +2302,10 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # binds as a VALUE — `F("note") == CTE("ev","code")` rendered `"R1"."note" = ?` with no join
     # emitted at all, which is valid SQL comparing a column against a stringified handle.
     return _get_select_query(operand, instruc)
+  elseif isa(operand, SubqueryObject)
+    # #926: a scalar subquery, rendered as the pair spelling renders it — the filter-position arm, so
+    # its values bind into the clause the comparison sits in and #194 records nothing.
+    return _get_filter_query(operand, instruc)
   elseif isa(operand, Union{Dates.Date,Dates.DateTime,TimeZones.ZonedDateTime})
     # #494 — a date/timestamp literal on the right of an `F(...)` / `Joined(...)` comparison.
     # #533 added `ZonedDateTime`: it is the third temporal type the `format_*_sql` family binds, and

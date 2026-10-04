@@ -57,6 +57,6 @@ function _unsupported_compare_operand(op::AbstractString, operand)
   return QueryBuildError(
     "\e[4m\e[31m$(typeof(operand))\e[0m is not a supported right-hand side for an F/Joined/function comparison " *
     "(\e[4m\e[31m$(op)\e[0m). A comparison operand must be a literal of one of these types — " *
-    "$(accepted) — or a column reference (\e[4m\e[32mF(...)\e[0m, \e[4m\e[32mCTE(...)\e[0m, " *
-    "\e[4m\e[32mJoined(...)\e[0m)." * hint)
+    "$(accepted) — a column reference (\e[4m\e[32mF(...)\e[0m, \e[4m\e[32mCTE(...)\e[0m, " *
+    "\e[4m\e[32mJoined(...)\e[0m), or a scalar \e[4m\e[32mSubquery(...)\e[0m." * hint)
 end

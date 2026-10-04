@@ -628,6 +628,40 @@ function _get_pair_to_oper(x::Pair{Vector{String},Vector{Any}})
   return _get_pair_to_oper(x.first => narrowed)
 end
 
+# #918: a list of query NODES — `"grid__@in" => [F("raceid")]`, `[Lower("surname")]`, `[Max("grid")]`,
+# a `CTE`/`Joined` handle, a subquery — matched no arm above and raised a raw `MethodError` naming this
+# function. Refused, typed, as #793/#811 refuse ONE column expression on `@in` (`_check_column_rhs_lookup`):
+# a membership list holds values, and accepting columns would reopen that decision and give the
+# membership renderer — which binds the whole list — an inline-column arm on each engine.
+#
+# The element bound is the node families, not `PormGAbstractType`, because `PormGBytes` is one too and
+# a binary payload is a value. `Vector{PormGAbstractType}` is admitted by name: it is what Julia infers
+# for `[F("a"), subquery]`, whose two node families share nothing narrower. A mixed node/value list
+# (`[1, F("a")]`) is `Vector{Any}` and keeps the heterogeneity refusal above.
+function _get_pair_to_oper(x::Pair{Vector{String},<:Union{AbstractVector{<:Union{SQLType,SQLObject}},Vector{PormGAbstractType}}})
+  # An empty list binds nothing, whatever its element type — the `Vector{Any}` arm's reasoning.
+  isempty(x.second) && return _get_pair_to_oper(x.first => String[])
+  suffix = x.first[end]
+  lookup = join(x.first, "__@")
+  kinds = join(unique(string.(nameof.(typeof.(x.second)))), ", ")
+  if suffix in ("in", "nin") && all(v -> v isa SQLObjectHandler, x.second)
+    # A subquery wrapped in a list — the fix is to unwrap it, not to compare columns (#918, review).
+    throw(FilterError("Error in filter '$(lookup)': '$(suffix)' takes a subquery directly, not inside a " *
+                      "list — pass it as \e[4m\e[32m\"$(lookup)\" => subquery\e[0m."))
+  elseif suffix in ("in", "nin")
+    # The spelling that works, per polarity: IN is an OR of equalities, NOT IN an AND of inequalities.
+    f = "F(\"$(join(x.first[1:end-1], "__@"))\")"
+    hint = suffix == "in" ?
+      "OR the equalities — \e[4m\e[32mQor($(f) == F(\"a\"), $(f) == F(\"b\"))\e[0m" :
+      "AND the inequalities — \e[4m\e[32mQ($(f) != F(\"a\"), $(f) != F(\"b\"))\e[0m"
+    throw(FilterError("Error in filter '$(lookup)': '$(suffix)' takes a list of values or a subquery, " *
+                      "not a list of column expressions ($(kinds)). To compare against several columns, " *
+                      "$(hint)."))
+  end
+  throw(FilterError("Error in filter '$(lookup)': a list of column expressions ($(kinds)) is not a " *
+                    "filter value. A list right-hand side holds literal values."))
+end
+
 function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Missing,AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID,AbstractVector{UInt8}}
   return _vector_oper_from_suffix(x)
 end

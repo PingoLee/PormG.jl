@@ -27,8 +27,8 @@ using Test
 using PormG
 using PormG.Models
 using PormG.QueryBuilder: inspect_query, F
-using PormG.Functions: Case, When, Lower
-using PormG: Joined, Q
+using PormG.Functions: Case, When, Lower, Max
+using PormG: Joined, Q, Qor
 
 # Dedicated config key + mock types: `runtests.jl` includes every unit file into one `Main`, so a
 # shared key would let another file's settings decide this file's dialect.
@@ -303,4 +303,90 @@ end
   q = _crl_results()
   q.filter("payload__@has_key" => "pole")
   @test _crl_params(q, _CRL_PG) == ["pole"]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #918: a LIST of column expressions on the right is refused, typed
+# `"points__@in" => [F("grid")]` — and the same with a function, an aggregate, a `Case`, a `Joined` or
+# `CTE` handle, a subquery, or a mix of them — matched no `_get_pair_to_oper` arm and raised a raw
+# `MethodError`. It is refused at parse with a FilterError, as one column expression is (#811 above):
+# a membership list holds values. The message names the spelling that compares several columns, and
+# that spelling is asserted to build, so the advice cannot rot.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#918: a list of column expressions is refused" begin
+  subq = () -> _crl_drivers().filter("surname" => "Senna").values("id")
+  # Each list the issue's shapes produce, with the query that can resolve its members. The two mixed
+  # rows are the inference edge: `[F, function]` is a `Vector{SQLType}` and `[F, subquery]` a
+  # `Vector{PormGAbstractType}`, neither of which any single node arm names.
+  lists = (
+    [(label, query, () -> [rhs(), rhs()]) for (label, query, rhs) in _CRL_RESULT_RHS]...,
+    ("aggregate",        _crl_results, () -> [Max("grid")]),
+    ("F + function",     _crl_results, () -> [F("grid"), Lower("grid")]),
+    ("Any[F, F]",        _crl_results, () -> Any[F("grid"), F("positionorder")]),
+    ("F + subquery",     _crl_results, () -> [F("grid"), subq()]),
+  )
+  for (backend, conn) in _CRL_BACKENDS
+    @testset "$backend" begin
+      for op in ("in", "nin"), (label, query, rhs) in lists
+        @testset "@$op => [$label]" begin
+          err = _crl_err(() -> (q = query(); q.filter("points__@$op" => rhs()); q), conn)
+          # The taxonomy type, not the MethodError it used to be.
+          @test err isa PormG.FilterError
+          msg = _crl_msg(err)
+          @test occursin("points__@$op", msg)
+          @test occursin("list of values or a subquery, not a list of column expressions", msg)
+          # The polarity-correct spelling: IN is an OR of equalities, NOT IN an AND of inequalities.
+          @test occursin(op == "in" ? "Qor(F(\"points\") == F(\"a\")" : "Q(F(\"points\") != F(\"a\")", msg)
+        end
+      end
+
+      # A subquery wrapped in a list is told to unwrap it — the column advice would be wrong for it.
+      for op in ("in", "nin")
+        err = _crl_err(() -> (q = _crl_results(); q.filter("driver__@$op" => [subq()]); q), conn)
+        @test err isa PormG.FilterError
+        @test occursin("takes a subquery directly, not inside a list", _crl_msg(err))
+        @test occursin("\"driver__@$op\" => subquery", _crl_msg(err))
+      end
+
+      # The same arm serves every pair spelling: `Q`, `Qor` and a `When` condition.
+      for build in (() -> (q = _crl_results(); q.filter(Q("points__@in" => [F("grid")])); q),
+                    () -> (q = _crl_results(); q.filter(Qor("points__@in" => [F("grid")], "grid" => 1)); q),
+                    () -> (q = _crl_results(); q.values("c" => When("points__@in" => [F("grid")], then = 1, otherwise = 0)); q))
+        @test _crl_err(build, conn) isa PormG.FilterError
+      end
+
+      # A non-membership lookup and a bare path refuse too, with the value-list wording.
+      for key in ("points__@range", "points")
+        err = _crl_err(() -> (q = _crl_results(); q.filter(key => [F("grid"), F("positionorder")]); q), conn)
+        @test err isa PormG.FilterError
+        @test occursin("a list of column expressions (FExpression) is not a filter value", _crl_msg(err))
+      end
+
+      # The advised spellings build, and render one column comparison per member.
+      q = _crl_results()
+      q.filter(Qor(F("points") == F("grid"), F("points") == F("positionorder")))
+      sql = _crl_sql(q, conn)
+      @test occursin("\"Tb\".\"points\" = \"Tb\".\"grid\"", sql) && occursin(" OR ", sql)
+      q = _crl_results()
+      q.filter(Q(F("points") != F("grid"), F("points") != F("positionorder")))
+      sql = _crl_sql(q, conn)
+      @test occursin("\"Tb\".\"points\" != \"Tb\".\"grid\"", sql) && occursin(" AND ", sql)
+
+      # Unchanged neighbours: an empty typed node list is the empty set — rendered exactly as `String[]`
+      # is on each engine (`= ANY($1)` over `'{}'` on PostgreSQL, `(1 = 0)` on SQLite) — a value/node mix
+      # keeps its heterogeneity refusal, and a value list still binds.
+      q = _crl_results()
+      q.filter("points__@in" => PormG.QueryBuilder.FExpression[])
+      q0 = _crl_results()
+      q0.filter("points__@in" => String[])
+      @test _crl_sql(q, conn) == _crl_sql(q0, conn)
+      @test _crl_params(q, conn) == _crl_params(q0, conn)
+      err = _crl_err(() -> (q = _crl_results(); q.filter("points__@in" => [1, F("grid")]); q), conn)
+      @test err isa PormG.FilterError
+      @test occursin("do not share a type", _crl_msg(err))
+      q = _crl_results()
+      q.filter("points__@in" => [1, 2])
+      @test _crl_params(q, conn) isa AbstractVector
+    end
+  end
 end

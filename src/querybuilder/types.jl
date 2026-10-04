@@ -837,6 +837,15 @@ OP(column::AbstractString, value) = OperObject(operator="=", values=value, colum
 OP(column::SQLTypeFunction, value) = OperObject(operator="=", values=value, column=column)
 OP(column::AbstractString, operator::AbstractString, value) = OperObject(operator=String(operator), values=value, column=SQLField(String(column)))
 OP(column::SQLTypeFunction, operator::AbstractString, value) = OperObject(operator=String(operator), values=value, column=column)
+# #920: an `F` expression on the left raised a raw `MethodError`. Refused rather than accepted, because
+# the comparison operators already ARE the `F` predicate API, so an `OP` arm would be a second spelling
+# of a predicate that exists, on a constructor that is internal. The message names the one to use.
+OP(column::SQLTypeF, value) = throw(_op_expression_column(column, "="))
+OP(column::SQLTypeF, operator::AbstractString, value) = throw(_op_expression_column(column, String(operator)))
+_op_expression_column(column, operator::String) = QueryBuildError(
+  "\e[4m\e[31mOP(::$(nameof(typeof(column))), \"$(operator)\", …)\e[0m — `OP` takes a field path, not an " *
+  "`F` expression. Compare the expression directly, e.g. \e[4m\e[32mfilter((F(\"grid\") + 1) > 2)\e[0m, " *
+  "or write a lookup pair, e.g. \e[4m\e[32mfilter(\"grid__@gt\" => 2)\e[0m (#920).")
 
 @kwdef mutable struct QObject <: SQLTypeQ
   filters::Vector{FilterType} # filters to be used in the query

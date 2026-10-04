@@ -1157,7 +1157,8 @@ query.values("points", "r" => Rank(over=WindowOver(order_by=["-points"])))
 query.filter("r" => 1)   # QueryBuildError — "r" projects a window function
 ```
 
-The same applies to a window inside arithmetic (`Rank(...) + 1`), to any lookup suffix
+The same applies to a window compared directly (`filter(Rank(...) <= 3)`), to a window inside
+arithmetic (`Rank(...) + 1`), to any lookup suffix
 (`"r__@lte" => 3`), and to the alias inside `Q(...)` or `Qor(...)`. It also applies to a projection
 whose condition reads a window alias, such as `"top" => Case([When("r" => 1, then = 1)], default = 0)`.
 That projection renders `CASE WHEN RANK() OVER (…) = …`, so `filter("top" => 1)` is refused like

@@ -261,3 +261,48 @@ end
   d = Dict(c => "count")
   @test d[c] == "count"
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Window function on the left of a comparison (#919)
+# `Rank(…) > 1` raised a raw `MethodError: isless(::Int64, ::WindowFunction)`: #895 gave `FObject`
+# the six comparisons and `WindowFunction` is a separate type. It now builds the node
+# `(Rank(…) + 0) > 1` already built, so `filter` refuses it with the CTE advice and a SELECT-side
+# `Case` renders `CASE WHEN (RANK() OVER (…) > ?)` with the operand bound in text order.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#919: a window function on the left of a comparison" begin
+  rank = () -> Rank(over = WindowOver(order_by = ["milliseconds"]))
+  ops = ((==, "="), (!=, "!="), (>, ">"), (<, "<"), (>=, ">="), (<=, "<="))
+  for (backend, Model_) in _F_AGG_MODELS
+    @testset "$backend: filter($sym) is refused with the CTE advice" for (op, sym) in ops
+      err = _f_agg_build_error(Model_, q -> (q.values("raceid", "lap"); q.filter(op(rank(), 1))))
+      @test err isa QueryBuildError
+      msg = sprint(showerror, err)
+      @test occursin("an expression containing a window function", msg)
+      @test occursin("Compute it in a CTE and filter on its column", msg)
+    end
+    @testset "$backend: Case(When(Q(...))) renders $sym" for (op, sym) in ops
+      q = Model_.objects
+      q.values("lap", "c" => Case([When(Q(op(rank(), 1)), then = 1)], default = 0))
+      insp = inspect_query(q)
+      # The comparison wraps the whole window call, operand bound rather than inlined.
+      @test occursin(Regex("WHEN \\(\\(RANK\\(\\) OVER \\(ORDER BY \"Tb\"\\.\"milliseconds\" ASC\\) " *
+                           "$(sym) \\S+\\)\\) THEN"), insp[:sql_text])
+      assert_marker_count(insp, backend)
+      backend === :sqlite && assert_bound_in_text_order(insp, Any[1, 1, 0])
+    end
+  end
+
+  # The operand vocabulary is the `F` one: a function on the right is refused, not answered by Base.
+  err = try; rank() > Upper("surname"); nothing; catch e; e; end
+  @test err isa QueryBuildError
+  @test occursin("is not a supported right-hand side for an F/Joined/function comparison",
+                 sprint(showerror, err))
+
+  # `isequal` stays total, as for `FObject`: identity between two nodes, `false` against anything else.
+  r = rank()
+  @test isequal(r, r)
+  @test !isequal(r, rank())
+  @test !isequal(r, 1)
+  @test !isequal(r, missing)
+  @test length(Set([r, r, rank()])) == 2
+end

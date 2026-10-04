@@ -1850,29 +1850,36 @@ end
 #
 # The operand vocabulary is `_CompareOperand`, the `F` one, and a value outside it is refused by the
 # same funnel. A function on the RIGHT is outside it, as it is for `F`.
-_compare(f::FObject, operation::String, operand) =
+#
+# #919: a window function is the other `SQLTypeFunction`, and `Rank(…) > 1` raised the same raw
+# `MethodError: isless` #895 removed for `Count("id") > 1`. It takes the same methods and builds the
+# same node `(Rank(…) + 0) > 1` already built. `filter(...)` then refuses it with the CTE advice, through
+# `_is_window_expr`, and a SELECT-side `Case` renders it. `aggregate` is `false` on every window.
+const _ComparedFunction = Union{FObject,WindowFunction}
+
+_compare(f::_ComparedFunction, operation::String, operand) =
   FExpression(field_name=f, operation=operation, operand=operand, function_name="F", column="",
               aggregate=f.aggregate)
 
 for (op, sym) in ((:(==), "="), (:(!=), "!="), (:(>), ">"), (:(<), "<"), (:(>=), ">="), (:(<=), "<="))
-  @eval Base.$op(f::FObject, operand::_CompareOperand) = _compare(f, $sym, operand)
+  @eval Base.$op(f::_ComparedFunction, operand::_CompareOperand) = _compare(f, $sym, operand)
   # `FExpression`'s #536/#603 catch-all, for the same reasons: a non-`String` `AbstractString` is
   # normalized and re-dispatched, and anything else is refused instead of answering from `Base`.
-  @eval function Base.$op(x::FObject, operand)
+  @eval function Base.$op(x::_ComparedFunction, operand)
     operand isa AbstractString && return Base.$op(x, String(operand))
     throw(_unsupported_compare_operand($sym, operand))
   end
 end
 # The Base methods these collide with, as for `FExpression` — Aqua's ambiguity check pins the set.
-Base.:(==)(::FObject, operand::Missing) = throw(_unsupported_compare_operand("=", operand))
-Base.:(==)(::FObject, operand::WeakRef) = throw(_unsupported_compare_operand("=", operand))
-Base.:<(::FObject, operand::Missing)    = throw(_unsupported_compare_operand("<", operand))
+Base.:(==)(::_ComparedFunction, operand::Missing) = throw(_unsupported_compare_operand("=", operand))
+Base.:(==)(::_ComparedFunction, operand::WeakRef) = throw(_unsupported_compare_operand("=", operand))
+Base.:<(::_ComparedFunction, operand::Missing)    = throw(_unsupported_compare_operand("<", operand))
 
 # The `isequal` half, as for `FExpression` (#536, #541): `isequal` falls back to `==`, which now
 # builds a predicate, and `Dict`/`Set`/`unique` rely on it answering a `Bool`. Identity for two nodes.
-Base.isequal(a::FObject, b::FObject) = a === b
-Base.isequal(::FObject, ::Any) = false
-Base.isequal(::FObject, ::Missing) = false
+Base.isequal(a::_ComparedFunction, b::_ComparedFunction) = a === b
+Base.isequal(::_ComparedFunction, ::Any) = false
+Base.isequal(::_ComparedFunction, ::Missing) = false
 
 
 # ---

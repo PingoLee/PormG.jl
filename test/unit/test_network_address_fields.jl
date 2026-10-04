@@ -10,7 +10,9 @@ This file covers:
 - Write validation through `validate_field_data` (every writer's path), including `protocol`
 - DDL on PostgreSQL and the SQLite refusal, the canonical column IR, inspectdb and catalog defaults
 - `Model_to_str` round trip
-- Filter SQL: equality and membership (also with a `Sockets` value), pattern lookups over the printed text
+- Filter SQL: equality and membership (also with a `Sockets` value), pattern lookups over the printed text,
+  on a column and on a projection alias over one (#903)
+- A `Sockets` literal (`Value(ip"…")`, a function operand): typed inet text on PostgreSQL, refused on SQLite (#903)
 - Migration retypes: the `USING` clauses, the lossy-ALTER findings and their row counts
 
 Hermetic: mock connections only. The live half — that PostgreSQL itself prints what the normalizer
@@ -24,6 +26,7 @@ using Sockets
 using PormG
 using PormG.Models
 using PormG.QueryBuilder: validate_field_data
+using PormG.Functions: Max, Value, Coalesce, Case, When
 import PormG: Migrations, Dialect, CInet, CCidr, CText, CVarChar, CUnsupported
 import PormG.Migrations: column_spec, column_delta, parse_canonical_type, _lossy_alters,
                          ColumnSpec, NoDefault
@@ -378,6 +381,97 @@ const NET28_CIDR_CORPUS = [
     q_r = _NS.objects.filter("client_ip__@regex" => "^10\\.")
     q_r.values("id")
     @test occursin("HOST(", q_r.list(show_query = :dict)[:sql_text])
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Filters: pattern lookups on a projection alias over a network column (#903)
+  # An alias has no field, only the formatter its projection resolves — `format_inet_sql` for
+  # `Max("client_ip")`. That formatter used to refuse the fragment (`FilterError`), and a whole address
+  # rendered `MAX(…) LIKE $1`, which PostgreSQL has no operator for. The alias now reads the same text
+  # its column does: `HOST(MAX(…))`, `CAST(MAX(…) AS text)` for a cidr, with the fragment bound raw.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "pattern lookups on a projection alias (#903)" begin
+    # An aggregate alias filters in HAVING. The fragment would be refused by `format_inet_sql`.
+    q = _NS.objects
+    q.values("team", "top_ip" => Max("client_ip"))
+    q.filter("top_ip__@startswith" => "10.")
+    res = q.list(show_query = :dict)
+    @test occursin("HAVING HOST(MAX(\"Tb\".\"client_ip\")) LIKE \$1", res[:sql_text])
+    @test res[:parameters] == ["10.%"]
+
+    # A whole address passed the formatter before, and rendered the LIKE PostgreSQL rejects.
+    q_w = _NS.objects
+    q_w.values("team", "top_ip" => Max("client_ip"))
+    q_w.filter("top_ip__@contains" => "10.0.0.1")
+    res_w = q_w.list(show_query = :dict)
+    @test occursin("HOST(MAX(", res_w[:sql_text]) && !occursin("MAX(\"Tb\".\"client_ip\") LIKE", res_w[:sql_text])
+    @test res_w[:parameters] == ["%10.0.0.1%"]
+
+    # A cidr alias reads the cidr's text, prefix included — the same operand its column gets.
+    q_c = _NS.objects
+    q_c.values("team", "lan" => Max("garage_lan"))
+    q_c.filter("lan__@endswith" => "/16")
+    res_c = q_c.list(show_query = :dict)
+    @test occursin("CAST(MAX(\"Tb\".\"garage_lan\") AS text) LIKE \$1", res_c[:sql_text])
+    @test res_c[:parameters] == ["%/16"]
+
+    # A row alias over the bare column filters in WHERE, and is wrapped the same way.
+    q_f = _NS.objects
+    q_f.values("team", "ip2" => F("client_ip"))
+    q_f.filter("ip2__@regex" => "^10\\.")
+    @test occursin("HOST(\"Tb\".\"client_ip\") ~ \$1", q_f.list(show_query = :dict)[:sql_text])
+
+    # A `When` condition on the alias renders through the column path, not the alias filter path,
+    # and has no field either — it reads the alias's formatter the same way.
+    q_w2 = _NS.objects
+    q_w2.values("team", "ip2" => F("client_ip"),
+                "garage" => Case([When(Q("ip2__@startswith" => "10.20."), then = 1)], default = 0))
+    res_w2 = q_w2.list(show_query = :dict)
+    @test occursin("WHEN (HOST(\"Tb\".\"client_ip\") LIKE \$1", res_w2[:sql_text])
+    @test "10.20.%" in res_w2[:parameters]
+
+    # Only a pattern lookup wraps the alias: equality still compares the inet, value normalized.
+    q_e = _NS.objects
+    q_e.values("team", "top_ip" => Max("client_ip"))
+    q_e.filter("top_ip" => "10.0.0.1")
+    res_e = q_e.list(show_query = :dict)
+    @test occursin("HAVING MAX(\"Tb\".\"client_ip\") = \$1", res_e[:sql_text])
+    # ...and a malformed address is still refused there, as on the column.
+    q_bad = _NS.objects
+    q_bad.values("team", "top_ip" => Max("client_ip"))
+    q_bad.filter("top_ip" => "10.")
+    @test_throws PormG.FilterError q_bad.list(show_query = :dict)
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Literals: a `Sockets.IPAddr` binds as PostgreSQL's text, typed inet (#903)
+  # `Value(ip"…")` used to push the `Sockets` struct itself, untyped, leaving the driver to encode it
+  # — and `Sockets` prints `::ffff:a00:1` where PostgreSQL prints `::ffff:10.0.0.1`. Every literal
+  # binding site goes through one PostgreSQL `add_parameter!` arm, so a function operand gets it too.
+  # SQLite has no network type: there the literal is refused, as any value it cannot store is (#721).
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a Sockets literal binds as typed inet text (#903)" begin
+    q = _NS.objects
+    q.values("team", "probe" => Value(ip"::FFFF:10.0.0.1"))
+    res = q.list(show_query = :dict)
+    @test occursin("\$1::inet as \"probe\"", res[:sql_text])
+    @test res[:parameters] == ["::ffff:10.0.0.1"]   # the printed text, not the struct
+    @test all(p -> p isa String, res[:parameters])
+
+    # A `Value` inside a function operand binds through the same arm.
+    q_co = _NS.objects
+    q_co.values("team", "ip_or" => Coalesce("relay_ip", Value(ip"10.0.0.1")))
+    res_co = q_co.list(show_query = :dict)
+    @test res_co[:parameters] == ["10.0.0.1"]
+    @test occursin("\$1::inet", res_co[:sql_text])
+
+    # SQLite refuses the literal rather than store a serialized Julia object.
+    _sl = NA.Model("pit_wall_probe", id = NA.IDField())
+    PormG.config["net28_sl"] = PormG.Configuration.Settings(connections = SL_NET28, change_data = true)
+    _sl.connect_key = "net28_sl"
+    q_sl = _sl.objects
+    q_sl.values("id", "probe" => Value(ip"10.0.0.1"))
+    @test_throws PormG.InvalidValueError q_sl.list(show_query = :dict)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

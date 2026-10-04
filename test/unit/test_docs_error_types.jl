@@ -56,6 +56,9 @@ using PormG.Functions: ToChar
 using PormG.Functions: Extract
 # #696 — the `Cast` type-string claims on the functions page.
 using PormG.Functions: Cast
+# #903 — the `Value(ip"…")` SQLite claim on the fields page.
+using PormG.Functions: Value
+import Sockets
 import DataFrames
 # #733 — the repair-op claim reads a history table, so it needs the SQLite driver (idempotent reload).
 include(joinpath(@__DIR__, "..", "load_drivers.jl"))
@@ -1303,6 +1306,16 @@ const DOCERR_CASES = [
         "fields.md + postgres.md + src/models/fields.jl — a CIDRField raises on SQLite when its column is rendered (#28)",
         BackendCapabilityError,
         () -> PormG.Dialect.field_to_column("garage_lan", CIDRField(), DocErrMockSQLite()),
+    ),
+    # #903. `fields.md` → *Querying network fields* and the `Value` docstring name the type a
+    # `Sockets` literal raises on SQLite, which has no network type. The PostgreSQL bind is pinned in
+    # `test_network_address_fields.jl`.
+    (
+        "fields.md + src/querybuilder/functions.jl — Value(ip\"…\") raises on SQLite (#903)",
+        InvalidValueError,
+        () -> let q = DOCERR_STATUS_SL.objects
+            q.values("statusid", "probe" => Value(Sockets.IPv4("10.0.0.1"))); q.list(show_query = :dict)
+        end,
     ),
     # #876. The same *Text Fields* section names the types a `Bool` raises against a text field: on a
     # write, in a filter, and as a `default=`. Every route and both engines are pinned in

@@ -629,7 +629,8 @@ function _resolve_having_filter_value(alias::MemoKey, raw_value, instruc::SQLIns
   # #654: `@isnull`'s value is the predicate's polarity, not a value of the alias's type, so it is
   # not formatted — `format_number_sql(true)` would be a category error, not a check.
   operator == "ISNULL" && return raw_value
-  formatter = _having_alias_formatter(alias, instruc)
+  # #903: a pattern lookup on an alias over an `inet`/`cidr` column takes a fragment, as on the column.
+  formatter = _lookup_formatter(_having_alias_formatter(alias, instruc), operator)
   # #707: a type the ladder cannot name is not checked — the value binds as given, as it does on
   # the WHERE path for any column-less expression.
   formatter === nothing && return raw_value
@@ -1143,7 +1144,10 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   # #894: an interval alias compared with a duration compares milliseconds on SQLite.
   interval = _render_interval_alias_predicate(v, having_key, instruc)
   interval === nothing || return interval
-  field = _alias_lhs(having_key, having_cached, instruc)
+  # #903: the alias's own column type decides what a pattern lookup reads — `HOST(MAX(…))` for an alias
+  # over an `inet`, exactly as `_get_filter_query(::SQLTypeOper)` wraps the column itself.
+  field = _pattern_operand(string(_alias_lhs(having_key, having_cached, instruc)),
+                           _having_alias_formatter(having_key, instruc), v.operator, instruc)
   # #618: `contains=` / `operator=` are what run `_apply_like_wildcards` (and with it
   # `escape_like_pattern`) inside `add_parameter!`. Without them a pattern lookup on an alias
   # bound its value undecorated AND unescaped — no `%`, and a user-supplied `%` or `_` in the

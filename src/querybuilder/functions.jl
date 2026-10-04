@@ -501,6 +501,10 @@ narrowed to `Float64` there. A value SQLite cannot store as itself (a `Symbol`, 
 integer beyond `Int64`, an arbitrary struct) raises `InvalidValueError` there instead of being bound
 as a serialized Julia object.
 
+A `Sockets.IPv4` / `Sockets.IPv6` binds on PostgreSQL as an `inet`, in the text PostgreSQL prints
+for it: `Value(ip"::FFFF:10.0.0.1")` is `::ffff:10.0.0.1`. SQLite has no network type, so there it
+raises `InvalidValueError`.
+
 ```julia
 using PormG.Functions: Value
 

@@ -223,6 +223,19 @@ _na28_err(f) = try f(); nothing catch e; e end
                 @test sort([r["label"] for r in S().filter("garage_lan__@endswith" => "/16").values("label").list()]) ==
                       ["bulk-1", "bulk-2"]
 
+                # #903: a pattern lookup on an alias over the column reads the same text — the server
+                # has no LIKE for `MAX(inet)`, so this is `HOST(MAX(…))` and must run, not just render.
+                q_alias = S()
+                q_alias.values("label", "top_ip" => PormG.Functions.Max("client_ip"))
+                q_alias.filter("top_ip__@startswith" => "10.40.")
+                @test [r["label"] for r in q_alias.list()] == ["bulk-1"]
+
+                # #903: a `Sockets` literal binds as PostgreSQL's text for it, typed inet — the server
+                # reads it back as it prints it (`::ffff:10.0.0.1`, not `Sockets`' `::ffff:a00:1`).
+                q_lit = S().filter("label" => "opts")
+                q_lit.values("label", "probe" => PormG.Functions.Value(parse(Sockets.IPAddr, "::FFFF:10.0.0.1")))
+                @test string(q_lit.list()[1]["probe"]) == "::ffff:10.0.0.1"
+
                 # Ordering is by network: 10.9.8.7 < 10.9.8.10, though not as text.
                 @test S().filter("relay_ip__@gt" => "10.9.8.10").count() == 0
                 @test S().filter("relay_ip__@lt" => "10.9.8.10").count() == 1

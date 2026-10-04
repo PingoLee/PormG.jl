@@ -2781,13 +2781,17 @@ end
 # disagree with what a read of the column returns. A `cidr` keeps its prefix in the printed form,
 # which is what its text cast gives. PostgreSQL only: SQLite has no such column (#28).
 #
-# The field is typed into the signature on purpose: an untyped 3-argument Dialect helper matches the
+# #903: keyed on the column's KIND (`QueryBuilder._pattern_text_kind`), not on the field struct, so a
+# projection alias — which has a formatter but no field — reaches the same rendering as a column.
+# Typed into the signature on purpose: an untyped 3-argument Dialect helper matches the
 # `(PormGPostgres, AbstractString, AbstractString)` shape `test_operators.jl` reflects over as an
 # operator renderer (#604).
-_network_pattern_operand(::PormGPostgres, ::sGenericIPAddressField, column::AbstractString)::String =
+_pattern_text_operand(::PormGPostgres, ::Val{:inet}, column::AbstractString)::String =
   "HOST($(column))"
-_network_pattern_operand(::PormGPostgres, ::sCIDRField, column::AbstractString)::String =
+_pattern_text_operand(::PormGPostgres, ::Val{:cidr}, column::AbstractString)::String =
   "CAST($(column) AS text)"
+# Any other engine reads the column as written: SQLite has no network column (#28).
+_pattern_text_operand(::PormGAbstractType, ::Val, column::AbstractString)::String = String(column)
 
 function contains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"

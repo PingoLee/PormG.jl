@@ -647,7 +647,11 @@ end
 # window value function over a duration has no millisecond form (#814) and sorts its text, as documented.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#900: Abs over an interval is refused on SQLite; a window keeps the text" begin
-  for (model, operand) in ((_IOM.Io_lap, "lap"), (_IOM.Io_race, _io_gap()), (_IOM.Io_lap, _IO_FN.Max("lap")))
+  # #888: a `Subquery` over the duration is an interval too — it has its one column's kind now, so it
+  # is refused like the column. Before, it answered `nothing` and SQLite took `ABS` of the text.
+  lap_sub = (s = _IOM.Io_lap.objects; s.filter("id" => PormG.OuterRef("id")); s.values("t" => _IO_FN.Max("lap")); s)
+  for (model, operand) in ((_IOM.Io_lap, "lap"), (_IOM.Io_race, _io_gap()), (_IOM.Io_lap, _IO_FN.Max("lap")),
+                           (_IOM.Io_lap, PormG.Subquery(lap_sub)))
     q = model.objects
     q.values("id", "a" => _IO_FN.Abs(operand))
     err = try _io_sql(q); nothing catch e; e end

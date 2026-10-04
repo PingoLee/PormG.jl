@@ -679,6 +679,26 @@ ORDER BY "lap" ASC
 !!! tip
     The `offset` and `default` values are **parameterized** — `$1`/`$3` are the offsets (`1`), `$2`/`$4` are the defaults (`0`). They are never interpolated raw into the SQL string. The `::integer` and `::bigint` casts are PostgreSQL type-inference artefacts; SQLite omits them.
 
+The value functions also read a [`Subquery`](subqueries_and_ctes.md), one value per row. Here each 2009 race gets the most laps any driver completed, and the same figure for the previous round:
+
+```julia
+using PormG.Functions: Lag, Max, WindowOver
+
+race_laps = M.Result.objects
+race_laps.filter("raceid" => OuterRef("raceid"))
+race_laps.values("t" => Max("laps"))
+
+query = M.Race.objects
+query.filter("year" => 2009)
+query.values("round", "name",
+             "laps"      => Subquery(race_laps),
+             "prev_laps" => Lag(Subquery(race_laps), over = WindowOver(order_by = ["round"])))
+query.order_by("round")
+df = query |> DataFrame
+```
+
+`prev_laps` is `missing` for round 1, which has no previous row. The subquery reads back as its column does, so a subquery over a date column gives a `Date` here too.
+
 `default` also takes a column expression, which renders as the column instead of binding a value.
 `default = F("milliseconds")` makes lap 1 fall back to its **own** time, so a lap-over-lap
 comparison reads "no change" on the opening lap instead of a jump from `0`:
@@ -1244,7 +1264,8 @@ column's own values, so they read back as the column does on both engines. For e
 would hand back the stored text. A window whose value is computed, such as `Rank()` or
 `Lag(Sum(...))`, comes back as the engine delivers it. A value function over a `Joined(...)` handle
 reads back as the joined column, and over a `CTE(...)` column as the CTE body projected it: typed
-for a column the body selects, as the engine delivers it for one the body computes (#824).
+for a column the body selects, as the engine delivers it for one the body computes (#824). Over a
+`Subquery(...)` it reads back as the subquery's one column does (#887, #888).
 
 ---
 

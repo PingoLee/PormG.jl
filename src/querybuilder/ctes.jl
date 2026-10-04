@@ -1557,6 +1557,12 @@ function _set_field_from_sql_function(func::WindowFunction, field::String, instr
   column === nothing && return IntegerField()
   column isa String && return _set_field_from_sql_function(column, column, instruct)
   column isa Union{JoinedReference,SQLTypeFunction} && return _set_field_from_sql_function(column, field, instruct)
+  # #887: a window over a subquery has the subquery's type, which a CTE body cannot infer (#878's
+  # reason). `Cast` inside the window names it, and the `SQLTypeFunction` arm above types that.
+  column isa SubqueryObject && _refuse_projection_type(field,
+    "it is $(func.function_name) over Subquery(…), whose type PormG does not infer";
+    hint = "Name the type inside the window, e.g. \e[32mLag(Cast(Subquery(…), \"integer\"), over = …)\e[0m " *
+           "(or the type it returns)")
   throw(QueryBuildError(
     "A CTE column cannot be typed from \e[4m\e[31m$(func.function_name)\e[0m over a " *
     "$(nameof(typeof(column))) argument. Project the window over a field path instead (#685)."))

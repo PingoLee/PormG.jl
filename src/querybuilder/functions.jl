@@ -381,7 +381,8 @@ RowNumber(over::WindowSpec) = RowNumber(over=over)
 Window `LAG(x, offset)` — the value of `x` from `offset` rows **earlier** in the window.
 
 # Arguments
-- `x`: the column to read. Required — passing `nothing` raises `QueryBuildError`.
+- `x`: the column to read — a column path, an expression, or a `Subquery(...)` projecting one
+  value per row. Required — passing `nothing` raises `QueryBuildError`.
 - `offset`: how many rows back. Must be non-negative; negatives raise `QueryBuildError`
   (use [`Lead`](@ref) to look forward).
 - `default`: value returned at the window edge where no previous row exists. Omit it and

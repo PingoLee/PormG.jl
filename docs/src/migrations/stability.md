@@ -64,7 +64,10 @@ Julia's `escape_string`, so a backslash appears doubled. Neither comment is part
 and a plan without them is unchanged. The same holds for the `# pormg-lossy-alter:` lines below
 them — one per [lossy column change](workflow.md#Lossy-Column-Changes), each a tab-separated list
 of `key=value` fields with escaped values — which `dry_run` and `migrate` read back and which change
-nothing about the plan's SQL. `migrate` snapshots the named file only if it still has
+nothing about the plan's SQL. One field is written by the operator, never by `makemigrations`:
+`handled=pre`, which says a `Data (pre):` step of the plan fixes that change's rows (see
+[Data steps in a plan](advanced.md#Data-steps-in-a-plan)). A PormG from before that field ignores
+it, so it counts the rows and refuses the plan as it always did. `migrate` snapshots the named file only if it still has
 that digest. If the header cannot be read, the file is gone, or the file changed after
 `makemigrations`, it logs a warning and takes no snapshot. The migration itself is still applied
 and archived.

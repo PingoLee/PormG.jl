@@ -25,6 +25,8 @@
 #       → text writes the printed form (`abbrev`), not the masked cast (#28);
 #   (q) `inet` → `cidr` counts and refuses an address with bits right of its mask, which the bare
 #       ALTER would zero silently; a column of hosts applies (#905).
+#   (r) SET NOT NULL marked `handled=pre`: a `Data (pre)` fill lets it apply, and a fill that leaves
+#       a NULL fails inside the migration and rolls back, the fill included (#897).
 #
 # Run it under both PostgreSQL drivers: `PORMG_POSTGRES_DRIVER=Postgres` selects Postgres.jl (#788),
 # whose parameter typing differs from LibPQ's.
@@ -245,6 +247,42 @@ end
         @test err !== nothing && only(err.findings).kind === :set_not_null
         @test _la803pg_sql(st, """SELECT attnotnull FROM pg_attribute
                                  WHERE attrelid = '$(_LA803PG_TABLE)'::regclass AND attname = 'grid'""").attnotnull[1] == false
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (r) SET NOT NULL marked `handled=pre`: the database, not the count, decides (#897)
+# The unit file runs this flow on SQLite, whose NOT NULL lands through a table rebuild. Here it is
+# PostgreSQL's own `ALTER … SET NOT NULL`, inside the migration transaction, after the `Data (pre)`
+# step. A fill that leaves a NULL makes the ALTER fail, and the rollback takes the fill with it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: SET NOT NULL marked handled=pre applies after its Data (pre) fill (#897)" begin
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, 'x', NULL, NULL), ('PRO', 1, 1.5, 'x', NULL, NULL), ('HAM', 1, 1.5, 'x', 3, NULL);") do st
+        _la803pg_plan!(st, _la803pg_models(grid = "Models.IntegerField()"))
+        pending = PormG.Migrations._pending_plan_path(st)
+        generated = read(pending, String)
+        mark(text) = replace(text, r"# pormg-lossy-alter: [^\n]*kind=set_not_null[^\n]*" => l -> l * "\thandled=pre")
+        with_step(text, sql) = replace(text, r"\nend\n$" =>
+            "\n# table: aaa_fill\naaa_fill = OrderedDict{String, String}(\"Data (pre): fill grid\" => \"$(sql)\")\n\nend\n")
+        notnull() = _la803pg_sql(st, """SELECT attnotnull FROM pg_attribute
+                                       WHERE attrelid = '$(_LA803PG_TABLE)'::regclass AND attname = 'grid'""").attnotnull[1]
+        nulls() = _la803pg_sql(st, "SELECT COUNT(*) AS n FROM \"$(_LA803PG_TABLE)\" WHERE grid IS NULL").n[1]
+
+        # A fill of one NULL of two: not refused up front, refused by the server's SET NOT NULL, and
+        # rolled back — the fill's own write included, so both NULLs remain.
+        write(pending, mark(with_step(generated, "UPDATE $(_LA803PG_TABLE) SET grid = 0 WHERE code = 'SEN';")))
+        err = _la803pg_err(() -> _la803pg_migrate(st))
+        @test err !== nothing && occursin("contains null values", sprint(showerror, err))
+        @test notnull() == false
+        @test nulls() == 2
+
+        # The fill that works: counted and shown as handled, then applied.
+        write(pending, mark(with_step(generated, "UPDATE $(_LA803PG_TABLE) SET grid = 0 WHERE grid IS NULL;")))
+        dr = PormG.Migrations.dry_run(st.connections, st)
+        @test [(f.kind, f.handled, f.rows) for f in dr.lossy_alters] == [(:set_not_null, :pre, 2)]
+        @test _la803pg_migrate(st).outcome === :applied
+        @test notnull() == true
+        @test nulls() == 0
     end
 end
 

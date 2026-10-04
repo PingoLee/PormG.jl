@@ -397,9 +397,13 @@ A few things to know:
   holds the old type when the count runs. A change that loses
   precision rather than digits (a `DecimalField` or `BigIntegerField` → `FloatField`) is not reported
   either.
-- **Hand-editing the plan.** The header describes the plan `makemigrations` wrote. If you add a
-  backfill or a `USING` clause by hand to get past a finding, delete that finding's
-  `# pormg-lossy-alter:` line too, or regenerate the plan. A line naming a column the database no
+- **Hand-editing the plan.** The header describes the plan `makemigrations` wrote. If a
+  `Data (pre):` step you add fixes a finding's rows, append `handled=pre` to that finding's
+  `# pormg-lossy-alter:` line: it is still counted and shown, but no longer refuses the plan, and the
+  database checks the change after the step (see
+  [Data steps in a plan](advanced.md#Data-steps-in-a-plan)). If you add a `USING` clause by hand
+  instead, delete that finding's line, or regenerate the plan. Deleting a line also drops that
+  change from `dry_run`, and for a change that rewrites values, from the `destructive = true` it needs. A line naming a column the database no
   longer has is ignored with a warning. A `CheckConstraint`'s line carries its condition, but the
   plan is data, so that text is never what the count runs: the condition is counted only when the
   models file declares the same `CheckConstraint` (same table, name and condition), and otherwise the

@@ -198,6 +198,73 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# A Data (pre) step can satisfy a counted column change, when the header says so (#897)
+# `migrate` counts a lossy change's rows before any statement runs, so a `Data (pre)` step that fixes
+# them came too late: the issue's repro, a NOT NULL over NULLs with a pre step that fills them, was
+# refused with MigrationPrecheckError. It still is, unmarked. Marked `handled=pre`, the rows are
+# counted and shown but not refused, the step runs, and the database enforces the NOT NULL — so a step
+# that leaves a NULL fails inside the migration and rolls everything back. A mark with no pre step is
+# refused before anything runs. `destructive = true` throughout: every SQLite column change rebuilds
+# the table, which the destructive guard flags whatever #897 does.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a handled=pre finding lets a Data (pre) step fix its rows (#897)" begin
+    _de740_project("db897") do pool, settings, models_path, pending
+        _de740_write_models(models_path)
+        _de740_makemigrations(pool, settings, models_path)
+        @test _de740_migrate(pool, settings).outcome === :applied
+        fetch(pool, "INSERT INTO circuit740 (name) VALUES ('Monza'), (NULL), (NULL);")
+
+        # `name` becomes NOT NULL over the two NULLs just inserted.
+        write(models_path, replace(read(models_path, String), "Models.CharField(null = true)" => "Models.CharField()"))
+        _de740_makemigrations(pool, settings, models_path)
+        generated = read(pending, String)
+        @test occursin("kind=set_not_null", generated)
+
+        migrate!() = _de740_quiet(() -> Migrations.migrate(pool, settings; interactive = false, destructive = true))
+        with_step(text, sql) = replace(text, r"\nend\n$" =>
+            "\n# table: aaa_fill\naaa_fill = OrderedDict{String, String}(\"Data (pre): fill name\" => \"$(sql)\")\n\nend\n")
+        mark(text) = replace(text, r"# pormg-lossy-alter: [^\n]*kind=set_not_null[^\n]*" => l -> l * "\thandled=pre")
+        nulls() = _de740_rows(pool, "SELECT COUNT(*) AS n FROM circuit740 WHERE name IS NULL;").n[1]
+        fill_sql = "UPDATE circuit740 SET name = 'Unknown' WHERE name IS NULL;"
+
+        # The issue's repro, unmarked: refused before anything runs, the pre step included.
+        write(pending, with_step(generated, fill_sql))
+        @test _de740_raised(migrate!) isa Migrations.MigrationPrecheckError
+        @test nulls() == 2
+
+        # Marked, but no step to back the mark: refused as a damaged plan, by dry_run and migrate alike.
+        write(pending, mark(generated))
+        for run in (() -> Migrations.dry_run(pool, settings), migrate!)
+            e = _de740_raised(run)
+            @test e isa InvalidMigrationError
+            @test e !== nothing && occursin("handled=pre", sprint(showerror, e))
+        end
+
+        # Marked, with a step that fills one NULL of two: not refused up front, so the NOT NULL fails
+        # inside the migration, which rolls back — the step's own write included, so both NULLs are
+        # still there, and the plan still pending.
+        write(pending, mark(with_step(generated,
+            "UPDATE circuit740 SET name = 'Imola' WHERE id = (SELECT MIN(id) FROM circuit740 WHERE name IS NULL);")))
+        e = _de740_raised(migrate!)
+        @test e !== nothing && occursin("NOT NULL constraint failed", sprint(showerror, e))
+        @test nulls() == 2
+        @test isfile(pending)
+
+        # Marked, with the fill: dry_run counts both rows and shows them as handled, migrate applies.
+        write(pending, mark(with_step(generated, fill_sql)))
+        dr = Migrations.dry_run(pool, settings)
+        @test [(f.kind, f.handled, f.rows) for f in dr.lossy_alters] == [(:set_not_null, :pre, 2)]
+        shown = sprint(show, dr)
+        @test occursin("HANDLED BY A Data (pre) STEP: 1", shown)
+        @test !occursin("WOULD FAIL", shown)
+        @test migrate!().outcome === :applied
+        @test nulls() == 0
+        @test _de740_rows(pool, "SELECT \"notnull\" FROM pragma_table_info('circuit740') WHERE name = 'name';").notnull[1] == 1
+        @test sort(_de740_rows(pool, "SELECT name FROM circuit740;").name) == ["Monza", "Unknown", "Unknown"]
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # run_once: once per database, recorded by name
 # The first call runs the block and records it; the second finds the record and does not call the
 # block at all. status() lists the step, and makemigrations does not plan to drop the table it lives

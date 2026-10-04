@@ -136,9 +136,17 @@ entry stays ruled out: the plan is data, never executed (#710).
 - **Every path that replaces or discards the pending plan calls `_refuse_overwriting_data_steps`.**
   Today that is both arms of `_write_pending_plan`. Data steps exist only in that file, and the
   empty-diff arm is the likely one: models and database already agree.
-- Known limit, left to the maintainer: `migrate`'s lossy row pre-check (#803) counts on the live
-  database before any statement runs, so a `Data (pre)` step cannot satisfy it. Do not "fix" it by
-  skipping the pre-check; that is a design change.
+- **`handled=pre` (#897, maintainer's pick of option (d)).** `migrate`'s lossy row pre-check (#803)
+  counts on the live database before any statement runs, so a `Data (pre)` step cannot satisfy it on
+  its own. The operator marks the finding's header line `handled=pre`. The finding is still counted
+  and shown (`dry_run`'s *HANDLED* section), and `_failing_alters` skips it, so the database enforces
+  the change after the step. The rules, each fail-closed: `pre` is the only value; only a `:rows`
+  kind can carry it, and not `:add_not_null` (a `pre` step runs before the column exists); a
+  near-miss key or a `handled=` swallowed into another field (spaces typed for the tab) is refused
+  as damaged; a plan marking one with no `Data (pre):` entry is refused (`_refuse_unbacked_handled`).
+  `makemigrations` never writes it. A PormG that predates the field ignores it as an unknown key,
+  so it still refuses: the safe direction. Do not widen it into parsing the step's SQL to infer
+  which tables it fixes (option (c), rejected on #897).
 
 **`run_once` invariants.**
 

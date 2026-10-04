@@ -897,6 +897,10 @@ the plan's header; [`dry_run`](@ref) lists them and [`migrate`](@ref) acts on th
 - `references` — `(table, column)` of the parent a foreign key points at (`:add_foreign_key`), or
   `nothing`.
 - `condition` — the SQL condition of a `CheckConstraint` (`:add_check`), or `nothing`.
+- `handled` — `:pre` when the operator marked the finding `handled=pre` in the plan's header (#897):
+  a `Data (pre):` step of the same plan fixes the rows, so `migrate` still counts them but does not
+  refuse the plan for them, and the database checks the change when the migration runs. `nothing`
+  otherwise — `makemigrations` never writes it.
 """
 struct LossyAlter
   kind::Symbol
@@ -913,28 +917,29 @@ struct LossyAlter
   columns::Tuple{Vararg{String}}
   references::Union{Nothing, Tuple{String, String}}
   condition::Union{Nothing, String}
+  handled::Union{Nothing, Symbol}
 end
 
 LossyAlter(kind::Symbol, table::AbstractString, column::AbstractString, old_type::AbstractString,
            new_type::AbstractString, bound, scale, rows) =
   LossyAlter(kind, String(table), String(column), String(old_type), String(new_type), bound, scale, rows,
-             (), nothing, nothing)
+             (), nothing, nothing, nothing)
 
 LossyAlter(kind::Symbol, table::AbstractString, column::AbstractString, old_type::AbstractString,
            new_type::AbstractString; bound::Union{Nothing, Integer} = nothing,
            scale::Union{Nothing, Integer} = nothing, rows::Union{Nothing, Integer} = nothing,
            columns = (), references::Union{Nothing, Tuple{AbstractString, AbstractString}} = nothing,
-           condition::Union{Nothing, AbstractString} = nothing) =
+           condition::Union{Nothing, AbstractString} = nothing, handled::Union{Nothing, Symbol} = nothing) =
   LossyAlter(kind, String(table), String(column), String(old_type), String(new_type),
              bound === nothing ? nothing : Int(bound), scale === nothing ? nothing : Int(scale),
              rows === nothing ? nothing : Int(rows), Tuple(String(c) for c in columns),
              references === nothing ? nothing : (String(references[1]), String(references[2])),
-             condition === nothing ? nothing : String(condition))
+             condition === nothing ? nothing : String(condition), handled)
 
 # The same finding with its rows counted (`nothing`: it could not be).
 _with_rows(f::LossyAlter, rows::Union{Nothing, Int})::LossyAlter =
   LossyAlter(f.kind, f.table, f.column, f.old_type, f.new_type, f.bound, f.scale, rows,
-             f.columns, f.references, f.condition)
+             f.columns, f.references, f.condition, f.handled)
 
 """
     LOSSY_ALTER_KINDS
@@ -1012,7 +1017,10 @@ function _lossy_alter_summary(f::LossyAlter)::String
   # An added column has no old type (#829): the header writes `old=` empty.
   what = f.old_type == f.new_type ? "" :
          isempty(f.old_type) ? " ($(f.new_type))" : " ($(f.old_type) → $(f.new_type))"
-  rows = f.rows === nothing ? "" : " — $(f.rows) row(s) would fail"
+  # #897: a handled finding's rows are the `Data (pre)` step's to fix, not a failure.
+  rows = f.rows === nothing ? "" :
+         f.handled === :pre ? " — $(f.rows) row(s) for a `Data (pre)` step to fix (handled=pre)" :
+         " — $(f.rows) row(s) would fail"
   over = isempty(f.columns) ? "" : " over ($(join(repr.(f.columns), ", ")))"
   ref = f.references === nothing ? "" : " → $(repr(f.references[1])).$(repr(f.references[2]))"
   return "$(repr(f.table)).$(repr(f.column)): $(f.kind)$what$over$ref$rows"

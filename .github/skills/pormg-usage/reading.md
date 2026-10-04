@@ -225,6 +225,9 @@ M.Result.objects.
 
 - `When(...; otherwise = …)` is a complete two-way `CASE` on its own. Use `Case([When(...), When(...)];
   default = …)` for more branches.
+- A `When` condition can also be a comparison over `F`, a function or a window, with no `Q(...)`
+  wrapper: `When(F("grid") < F("positionorder"), then = 1, otherwise = 0)`,
+  `When(Lower("surname") == "senna", then = 1)`.
 - `ToChar` accepts any PostgreSQL format on PostgreSQL. On SQLite only a portable subset works, and
   anything else raises `BackendCapabilityError`.
 - **Portable `Extract` parts** are `"YEAR"`, `"MONTH"`, `"DAY"`, `"HOUR"`, `"MINUTE"`, `"SECOND"`,

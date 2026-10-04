@@ -15,7 +15,7 @@ import Sockets  # #28: a `Sockets.IPAddr` is a network-address field value
 import PormG.Models: CharField, IntegerField, get_model_pk_field, sForeignKey, sManyToManyField, sBinaryField
 import PormG: Dialect, Models
 import PormG: config
-import PormG: SQLType, PormGSettings, PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, AbstractPormGParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, SQLTypeCTE, SQLTypeJoined, PormGModel, PormGField, PormGTypeField
+import PormG: SQLType, PormGSettings, PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, AbstractPormGParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, SQLTypeCTE, SQLTypeJoined, PormGModel, PormGField, PormGTypeField, PormGAbstractType
 import PormG: PormGBytes  # binary payloads bind as one blob, not as an array of values (#296)
 # Semantic error taxonomy (#231, #239). The types are defined in `src/exceptions.jl`, included by
 # `Kernel` (layer 1) so every subsystem can reach them; only the message-composing funnels

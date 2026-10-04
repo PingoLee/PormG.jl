@@ -82,6 +82,8 @@ Against the F1 data this returns Ayrton Senna and Bruno Senna. The right-hand si
 
 An **aggregate** on the left (`Count("resultid") > 10`) builds an expression too, but `filter` refuses it, because an aggregate cannot be a `WHERE` predicate. Filter on an aggregate through an alias instead. See [In Filters (Auto-HAVING)](#In-Filters-(Auto-HAVING)).
 
+A **window function** on the left (`Rank(over = w) <= 3`) builds one as well, and `filter` refuses it for the same reason: SQL evaluates windows after `WHERE`. The comparison is still useful inside a projection, as the condition of a `Case`/`When`. To filter on a window, see [Filtering on a Window Result](window_functions.md#Filtering-on-a-Window-Result).
+
 ### Expressions are values, not builders
 
 Every operator — comparison and arithmetic alike — returns a **new** expression and leaves its operands untouched. So an `F()` handle can be bound to a name and reused across as many predicates, queries and projections as you like:

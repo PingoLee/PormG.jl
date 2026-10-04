@@ -403,8 +403,15 @@ The subquery must project exactly one column — see [Subqueries and CTEs](subqu
 
 `@in` and `@nin` take a list of values or a subquery. A column expression on the right, such as
 `"points__@in" => F("grid")`, a `Case`, or a `Joined`/`CTE` column, raises a `FilterError` when the
-filter is built. To test membership against another table's column, pass a subquery that projects
-it.
+filter is built. So does a list of them, such as `"points__@in" => [F("grid"), F("positionorder")]`.
+To test membership against another table's column, pass a subquery that projects it. To compare
+against several columns of the same row, combine the comparisons: `@in` is an OR of equalities and
+`@nin` an AND of inequalities.
+
+```julia
+# Results whose points equal either the grid slot or the finishing position.
+M.Result.objects.filter(Qor(F("points") == F("grid"), F("points") == F("positionorder")))
+```
 
 ### Correlated EXISTS
 

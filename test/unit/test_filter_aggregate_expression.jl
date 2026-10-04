@@ -261,3 +261,94 @@ end
   d = Dict(c => "count")
   @test d[c] == "count"
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Window function on the left of a comparison (#919)
+# `Rank(…) > 1` raised a raw `MethodError: isless(::Int64, ::WindowFunction)`: #895 gave `FObject`
+# the six comparisons and `WindowFunction` is a separate type. It now builds the node
+# `(Rank(…) + 0) > 1` already built, so `filter` refuses it with the CTE advice and a SELECT-side
+# `Case` renders `CASE WHEN (RANK() OVER (…) > ?)` with the operand bound in text order.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#919: a window function on the left of a comparison" begin
+  rank = () -> Rank(over = WindowOver(order_by = ["milliseconds"]))
+  ops = ((==, "="), (!=, "!="), (>, ">"), (<, "<"), (>=, ">="), (<=, "<="))
+  for (backend, Model_) in _F_AGG_MODELS
+    @testset "$backend: filter($sym) is refused with the CTE advice" for (op, sym) in ops
+      err = _f_agg_build_error(Model_, q -> (q.values("raceid", "lap"); q.filter(op(rank(), 1))))
+      @test err isa QueryBuildError
+      msg = sprint(showerror, err)
+      @test occursin("an expression containing a window function", msg)
+      @test occursin("Compute it in a CTE and filter on its column", msg)
+    end
+    @testset "$backend: Case(When(Q(...))) renders $sym" for (op, sym) in ops
+      q = Model_.objects
+      q.values("lap", "c" => Case([When(Q(op(rank(), 1)), then = 1)], default = 0))
+      insp = inspect_query(q)
+      # The comparison wraps the whole window call, operand bound rather than inlined.
+      @test occursin(Regex("WHEN \\(\\(RANK\\(\\) OVER \\(ORDER BY \"Tb\"\\.\"milliseconds\" ASC\\) " *
+                           "$(sym) \\S+\\)\\) THEN"), insp[:sql_text])
+      assert_marker_count(insp, backend)
+      backend === :sqlite && assert_bound_in_text_order(insp, Any[1, 1, 0])
+    end
+  end
+
+  # The operand vocabulary is the `F` one: a function on the right is refused, not answered by Base.
+  err = try; rank() > Upper("surname"); nothing; catch e; e; end
+  @test err isa QueryBuildError
+  @test occursin("is not a supported right-hand side for an F/Joined/function comparison",
+                 sprint(showerror, err))
+
+  # `isequal` stays total, as for `FObject`: identity between two nodes, `false` against anything else.
+  r = rank()
+  @test isequal(r, r)
+  @test !isequal(r, rank())
+  @test !isequal(r, 1)
+  @test !isequal(r, missing)
+  @test length(Set([r, r, rank()])) == 2
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# `When` takes an `F`/function/window comparison directly (#921)
+# `When(F("lap") > 1, then = 1)` raised a raw `MethodError` unless wrapped in `Q(...)`, though the
+# docstring promised it. The bare spelling must render the SAME SQL text and bind the SAME parameters
+# as the `Q`-wrapped one on both backends — that equality is the contract, so it is what is asserted,
+# beside one anchor on the shape so an equal-but-wrong pair cannot pass.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#921: When(expr) renders as When(Q(expr))" begin
+  rank = () -> Rank(over = WindowOver(order_by = ["milliseconds"]))
+  conditions = (
+    ("F vs literal", () -> F("lap") > 1),
+    ("F vs F column", () -> F("lap") < F("milliseconds")),
+    ("F arithmetic", () -> (F("lap") + 1) >= 3),
+    ("function vs literal", () -> Lower("surname") == "senna"),
+    ("transform inside F", () -> F("recorded_at__@year") > 2020),
+    ("window vs literal", () -> rank() <= 3),
+  )
+  # Build the same projection twice, once per spelling, and read back what `inspect_query` renders.
+  render = (Model_, when) -> begin
+    q = Model_.objects
+    q.values("raceid", "c" => Case([when], default = 0))
+    insp = inspect_query(q)
+    (insp[:sql_text], insp[:parameters])
+  end
+  for (backend, Model_) in _F_AGG_MODELS
+    @testset "$backend: $label" for (label, cond) in conditions
+      bare = render(Model_, When(cond(), then = 1))
+      wrapped = render(Model_, When(Q(cond()), then = 1))
+      @test bare == wrapped
+      # Anchor: a WHEN branch with the THEN bound, so equality is not two identical failures.
+      @test occursin(r"CASE\s+WHEN \(\(.+\)\) THEN \S+\s+ELSE \S+\s+END", bare[1])
+    end
+    @testset "$backend: standalone otherwise=" begin
+      q1 = Model_.objects
+      q1.values("raceid", "c" => When(F("lap") > 1, then = 1, otherwise = 0))
+      q2 = Model_.objects
+      q2.values("raceid", "c" => When(Q(F("lap") > 1), then = 1, otherwise = 0))
+      i1, i2 = inspect_query(q1), inspect_query(q2)
+      @test i1[:sql_text] == i2[:sql_text]
+      @test i1[:parameters] == i2[:parameters]
+      @test occursin(r"WHEN \(\(\"Tb\"\.\"lap\" > \S+\)\) THEN", i1[:sql_text])
+      backend === :sqlite && assert_bound_in_text_order(i1, Any[1, 1, 0])
+    end
+  end
+end

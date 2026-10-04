@@ -725,6 +725,13 @@ const DOCERR_CASES = [
         FilterError,
         () -> DOCERR_RESULT_PG.objects.filter("points__@in" => F("resultid")).list(show_query = :dict),
     ),
+    # #918 — the same section says a LIST of column expressions raises `FilterError` too. It was a raw
+    # `MethodError` naming `_get_pair_to_oper`.
+    (
+        "read/filters_and_aggregates.md — @in against a list of column expressions",
+        FilterError,
+        () -> DOCERR_RESULT_PG.objects.filter("points__@in" => [F("resultid"), F("points")]).list(show_query = :dict),
+    ),
     # #811 (review) — the containment section says a column expression raises `FilterError` on both
     # backends; it is refused at parse, ahead of the SQLite capability check, so the SQLite mock too.
     (

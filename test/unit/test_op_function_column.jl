@@ -271,3 +271,34 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OP over an `F` expression: refused, typed (#920)
+# `OP(F("grid") + 1, ">", 2)` had no method and raised a raw `MethodError`. It is refused with a
+# `QueryBuildError` at the call, before any query exists, naming the comparison spelling that IS the
+# `F` predicate API — a second spelling on an internal constructor would add surface, not reach.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#920: OP over an F expression is refused with the comparison spelling" begin
+  F = QB.F
+  for (label, call) in (
+      ("3-arg, bare F", () -> OP(F("grid"), ">", 2)),
+      ("3-arg, F arithmetic", () -> OP(F("grid") + 1, ">", 2)),
+      ("3-arg, SubString operator", () -> OP(F("grid"), SubString(">=", 1), 2)),
+      ("2-arg, bare F", () -> OP(F("grid"), 2)),
+      ("2-arg, F arithmetic", () -> OP(F("grid") * 2, 4)),
+    )
+    @testset "$label" begin
+      err = try; call(); nothing; catch e; e; end
+      # The taxonomy type, not the `MethodError` it used to be.
+      @test err isa PormG.QueryBuildError
+      msg = sprint(showerror, err)
+      @test occursin("takes a field path, not an `F` expression", msg)
+      # Both spellings that work are named.
+      @test occursin("filter((F(\"grid\") + 1) > 2)", msg)
+      @test occursin("filter(\"grid__@gt\" => 2)", msg)
+    end
+  end
+  # The operator the caller wrote is echoed — the 2-arg form is an equality.
+  @test occursin("OP(::FExpression, \">=\"", sprint(showerror, try; OP(F("grid"), ">=", 1); catch e; e; end))
+  @test occursin("OP(::FExpression, \"=\"", sprint(showerror, try; OP(F("grid"), 1); catch e; e; end))
+end

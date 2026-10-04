@@ -137,8 +137,9 @@ M.Lap_times.objects.
 - `LastValue`/`NthValue` under the default frame only see rows up to the current one. An explicit
   `frame = "ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"` fixes that, but
   **`frame=` is PostgreSQL-only** and raises `BackendCapabilityError` on SQLite.
-- `order_by` on a window alias works. `filter` on one raises `QueryBuildError` at build time: SQL
-  evaluates windows after `WHERE` and `HAVING`. To keep, say, only the top-ranked row, rank in a CTE
+- `order_by` on a window alias works. `filter` on one raises `QueryBuildError` at build time, and so
+  does a window compared directly, `filter(Rank(over = w) <= 3)`: SQL evaluates windows after `WHERE`
+  and `HAVING`. That comparison is fine as a `When` condition inside `values()`. To keep, say, only the top-ranked row, rank in a CTE
   and filter on its column from the outer query:
   `ranked = M.Result.objects.values("resultid", "rk" => Rank(over = WindowOver(partition_by = "raceid", order_by = ["-points"])))`,
   then `q.with("ranked" => ranked, join_field = "resultid" => "resultid")` and `q.filter("ranked__rk" => 1)`.

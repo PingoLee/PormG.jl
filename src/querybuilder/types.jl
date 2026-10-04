@@ -425,6 +425,12 @@ const CorrelatedRef = NamedTuple{(:label, :ref, :column, :expr),NTuple{4,String}
   # the caller's node is never written to (#508). `nothing` until the first typed subquery: most
   # builds render none, and a build is allocation-sensitive (#41).
   subquery_kinds::Union{Nothing,IdDict{SubqueryObject,CanonicalType}} = nothing
+  # #929 — and the FORMATTER a value compared with that subquery must satisfy: its one projected
+  # column's, as the inner build resolved it (`_expression_formatter` over the inner instruction, so a
+  # joined path and `Max(…)` over a column answer too). Kept beside the kind, not derived from it:
+  # `field_canonical_kind` names only the kinds the read path owns, so a uuid column has a formatter
+  # but no kind. Same keying and laziness as `subquery_kinds`.
+  subquery_formatters::Union{Nothing,IdDict{SubqueryObject,Function}} = nothing
   connection::ConnType = nothing
   # array_defs::SQLTypeArrays = SQLArrays()
   cache::Dict{MemoKey,SQLTypeField} = sizehint!(Dict{MemoKey,SQLTypeField}(), 12)

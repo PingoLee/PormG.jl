@@ -895,7 +895,7 @@ function _expression_formatter(p::SQLTypeFunction, instruc::SQLInstruction)
   # `Cast` names its type; `Case`/`Coalesce`/`Greatest`/`Least` may (`output_field=`).
   declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
   if declared isa AbstractString
-    formatter = _sql_type_formatter(declared)
+    formatter = _declared_type_formatter(declared, instruc)
     formatter === nothing || return formatter
   end
   if name in _OPERAND_TYPED_FUNCTIONS
@@ -918,6 +918,11 @@ function _expression_formatter(p::Union{String,CTEReference,JoinedReference}, in
   column_field = _alias_column_field(p, instruc)
   return column_field === nothing ? nothing : column_field.formatter
 end
+# #929: a `Subquery(...)` alias compares as its one projected column — the formatter the inner build
+# resolved for it (`_render_scalar_subquery` files it). Read AFTER the SELECT renders, as the kind is;
+# a node this build did not render answers `nothing`, the untyped default.
+_expression_formatter(p::SubqueryObject, instruc::SQLInstruction) =
+  instruc.subquery_formatters === nothing ? nothing : get(instruc.subquery_formatters, p, nothing)
 _expression_formatter(::Any, ::SQLInstruction) = nothing
 
 # #800 — the canonical kind a FUNCTION projection's value is stored as, for the #564 read path, or
@@ -1043,6 +1048,21 @@ end
 _subquery_kind(p::SubqueryObject, instruc::SQLInstruction)::Union{CanonicalType,Nothing} =
   instruc.subquery_kinds === nothing ? nothing : get(instruc.subquery_kinds, p, nothing)
 
+# #929 — the formatter of a subquery's one projected column, asked of the INNER instruction while
+# `query()` still holds it (its `built` callback): the inner memos are what resolve a joined path, and
+# they do not outlive the inner build. `nothing` when the projection names no type.
+function _subquery_projection_formatter(handler::SQLObjectHandler, inner::SQLInstruction)
+  vals = handler.object.values
+  length(vals) == 1 || return nothing
+  return _expression_formatter(only(vals), inner)
+end
+function _record_subquery_formatter!(instruc::SQLInstruction, p::SubqueryObject, formatter)
+  formatter isa Function || return nothing
+  instruc.subquery_formatters === nothing && (instruc.subquery_formatters = IdDict{SubqueryObject,Function}())
+  instruc.subquery_formatters[p] = formatter
+  return nothing
+end
+
 # The kind the inner build recorded. A subquery projects exactly one column (the render refuses any
 # other count), but a wildcard over a one-field model can record that column under two names — its
 # attribute and its `db_column` — so the answer is the kind they agree on, and none if they do not.
@@ -1084,6 +1104,14 @@ function _sql_type_field(type_name::AbstractString)::Union{PormGField,Nothing}
   base in ("numeric", "decimal") && return Models.DecimalField()
   base in ("boolean", "bool") && return Models.BooleanField()
   base == "date" && return Models.DateField()
+  # #929: the types a pattern lookup must read as text (`_pattern_text_kind`). Without them a
+  # `Cast(x, "uuid")` alias had no formatter, so `@startswith` rendered `LIKE` on a uuid, which
+  # PostgreSQL has no operator for, and an equality value on it bound unchecked. All three are typed
+  # on PostgreSQL only: SQLite renders each cast as `CAST(x AS TEXT)`, so the readers that know the
+  # engine ignore or refuse them there (`_declared_type_formatter`, `_declared_type`).
+  base == "uuid" && return Models.UUIDField()
+  base == "inet" && return Models.GenericIPAddressField()
+  base == "cidr" && return Models.CIDRField()
   return nothing
 end
 
@@ -1091,6 +1119,21 @@ function _sql_type_formatter(type_name::AbstractString)
   field = _sql_type_field(type_name)
   return field === nothing ? nothing : field.formatter
 end
+
+# The formatter a declared type (`Cast`'s type, an `output_field=`) gives a value compared with the
+# expression, on this engine. A uuid or network type names none on SQLite: there `Cast(x, "uuid")`
+# renders `CAST(x AS TEXT)`, so the value compares with that text, and running it through the type's
+# formatter would normalize it (`ABCDEF01-…` → `abcdef01-…`, `2001:DB8::1` → `2001:db8::1`) away
+# from what the column holds — a silent no-match (review of #929). A `UUIDField` column there holds
+# the canonical text already, which is why a subquery over one IS typed (`subquery_formatters`).
+function _declared_type_formatter(type_name::AbstractString, instruc::SQLInstruction)
+  field = _sql_type_field(type_name)
+  field === nothing && return nothing
+  instruc.connection isa PormGSQLite && _text_cast_on_sqlite(field) && return nothing
+  return field.formatter
+end
+# The declared types SQLite renders as `CAST(x AS TEXT)` (predicates in sanitization.jl).
+_text_cast_on_sqlite(field::PormGField) = _is_uuid_field(field) || _is_network_field(field)
 
 # The field a `Max`/`Min` or bare-`F` projection's column names, or `nothing` when it names none.
 #

@@ -152,3 +152,106 @@ _sql902(q) = q.list(show_query = :dict)
     @test_throws PormG.FilterError _sql902(_CAR_SL.objects.filter("token" => "550e"))
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# An alias the type ladder could not name (#929)
+# #902/#903 typed a pattern lookup's alias from its projection's formatter, but a `Cast(…, "uuid")`
+# alias had none (`_sql_type_field` did not know `uuid`) and a `Subquery(...)` alias was typed by
+# nothing at all, so both rendered `LIKE` on a uuid, which PostgreSQL rejects. Now the cast names its
+# type, and a subquery has its one projected column's formatter, as the inner build resolved it.
+# ─────────────────────────────────────────────────────────────────────────────
+using PormG.Functions: Cast, Max
+using PormG.QueryBuilder: Subquery, OuterRef
+
+@testset "a Cast or Subquery alias over a uuid (#929)" begin
+  token_of(car) = Subquery(car.objects.filter("id" => OuterRef("id")).values("token"))
+  # The token reached through the lap's foreign key: the inner build resolves a JOINED path, which
+  # only its own memo knows — the reason the formatter is read while the inner build is alive.
+  joined_token_of(car, lap) = Subquery(lap.objects.filter("carid" => OuterRef("id")).values("carid__token"))
+
+  @testset "PostgreSQL wraps the alias as text" begin
+    for (label, proj) in (("Cast", Cast("chassis", "uuid")), ("Subquery", token_of(_CAR_PG)),
+                          ("Subquery over a joined path", joined_token_of(_CAR_PG, _LAP_PG)))
+      for (lookup, value, bound) in (("@startswith", "550e", "550e%"), ("@icontains", "E29B", "%E29B%"))
+        q = _CAR_PG.objects
+        q.values("id", "t" => proj)
+        q.filter("t__$lookup" => value)
+        res = _sql902(q)
+        @test occursin(r"WHERE (UPPER\()?CAST\(.+ AS text\)\)? (I)?LIKE (UPPER\()?\$1", replace(res[:sql_text], r"\s+" => " "))
+        @test !occursin(r"::uuid\)? (I)?LIKE"i, replace(res[:sql_text], r"\s+" => " "))
+        @test res[:parameters] == [bound]
+      end
+    end
+  end
+
+  @testset "SQLite reads it as it is" begin
+    for proj in (Cast("chassis", "uuid"), token_of(_CAR_SL))
+      q = _CAR_SL.objects
+      q.values("id", "t" => proj)
+      q.filter("t__@startswith" => "550e")
+      res = _sql902(q)
+      @test occursin(r"WHERE (CAST\(\"Tb\"\.\"chassis\" AS TEXT\)|\(SELECT .+\)) LIKE \?", replace(res[:sql_text], r"\s+" => " "))
+      @test res[:parameters] == ["550e%"]
+    end
+  end
+
+  # The formatter is what the alias's values are checked against. A UUID value is validated and
+  # canonicalized wherever the compared value IS the canonical text: a cast on PostgreSQL (`::uuid`
+  # compares semantically) and a subquery over a `UUIDField`, whose column stores that text, on both.
+  check_uuid(car, proj) = begin
+    good = car.objects
+    good.values("id", "t" => proj)
+    good.filter("t" => uppercase(_TOKEN902))
+    @test _sql902(good)[:parameters] == [_TOKEN902]
+    bad = car.objects
+    bad.values("id", "t" => proj)
+    bad.filter("t" => "not-a-uuid")
+    err = try; _sql902(bad); nothing; catch e; e; end
+    @test err isa PormG.FilterError
+    @test occursin("is the type uuid", replace(sprint(showerror, err), r"\e\[[0-9;]*m" => ""))
+  end
+  @testset "equality validates the value" begin
+    check_uuid(_CAR_PG, Cast("chassis", "uuid"))
+    check_uuid(_CAR_PG, token_of(_CAR_PG))
+    check_uuid(_CAR_SL, token_of(_CAR_SL))
+    num = _CAR_PG.objects
+    num.values("chassis", "top" => Subquery(_CAR_PG.objects.filter("id" => OuterRef("id")).values("m" => Max("id"))))
+    num.filter("top" => "abc")
+    @test_throws PormG.FilterError _sql902(num)
+  end
+
+  # On SQLite `Cast(x, "uuid")` is `CAST(x AS TEXT)`: the SQL normalizes nothing, so neither does the
+  # value. Lowercasing it would stop it matching an upper-case value stored in a text column
+  # (`chassis` is a `CharField`), and the cast never claimed the text was a UUID (review of #929).
+  @testset "SQLite: a uuid cast binds its value as written" begin
+    for value in (uppercase(_TOKEN902), "not-a-uuid")
+      q = _CAR_SL.objects
+      q.values("id", "t" => Cast("chassis", "uuid"))
+      q.filter("t" => value)
+      res = _sql902(q)
+      @test occursin("WHERE CAST(\"Tb\".\"chassis\" AS TEXT) = ?", res[:sql_text])
+      @test res[:parameters] == [value]
+    end
+  end
+
+  # A CTE column declared `uuid` was refused on both engines ("cannot be typed from the SQL type
+  # uuid"). On PostgreSQL it is typed now, and a filter on it is wrapped like the column's; on SQLite,
+  # where the cast is text, it stays refused.
+  @testset "a CTE column declared uuid" begin
+    cte_query(car) = begin
+      body = car.objects
+      body.values("id", "u" => Cast("chassis", "uuid"))
+      q = car.objects
+      q.with("ev" => body, join_field = "id" => "id")
+      q.values("id", "ev__u")
+      q.filter("ev__u__@startswith" => "550e")
+      q
+    end
+    res = _sql902(cte_query(_CAR_PG))
+    @test occursin(r"WHERE CAST\(\"R1_1\"\.\"u\" AS text\) LIKE \$1", res[:sql_text])
+    @test res[:parameters] == ["550e%"]
+    err = try; _sql902(cte_query(_CAR_SL)); nothing; catch e; e; end
+    @test err isa PormG.QueryBuildError
+    @test occursin("cannot be typed from the SQL type", replace(sprint(showerror, err), r"\e\[[0-9;]*m" => ""))
+  end
+end

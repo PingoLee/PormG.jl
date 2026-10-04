@@ -559,3 +559,69 @@ const NET28_CIDR_CORPUS = [
     @test PormG.QueryBuilder._pg_bulk_cast_type(NA.CIDRField(), PG_NET28) == "cidr"
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# An alias the type ladder could not name (#929)
+# #903 read a network alias's type off its projection's formatter, which a `Max("client_ip")` has but a
+# `Cast(…, "inet")` did not (`_sql_type_field` knew no network type), nor a `Subquery(...)` (typed by
+# nothing). Both rendered `LIKE` on the address, which PostgreSQL has no operator for. On SQLite the
+# cast renders `CAST(x AS TEXT)` and no network column can exist, so there nothing changes: the value
+# binds as written, and a CTE column declared as an address stays refused.
+# ─────────────────────────────────────────────────────────────────────────────
+using PormG.Functions: Cast
+using PormG.QueryBuilder: Subquery, OuterRef
+
+@testset "a Cast or Subquery alias over an address (#929)" begin
+  flat(sql) = replace(sql, r"\s+" => " ")
+  ip_of() = Subquery(_NS.objects.filter("id" => OuterRef("id")).values("client_ip"))
+  cases = (
+    ("Cast inet", Cast("team", "inet"), "@startswith", "10.", r"WHERE HOST\(\(\"Tb\"\.\"team\"\)::inet\) LIKE \$1", ["10.%"]),
+    ("Cast cidr", Cast("team", "cidr"), "@endswith", "/16", r"WHERE CAST\(\(\"Tb\"\.\"team\"\)::cidr AS text\) LIKE \$1", ["%/16"]),
+    ("Subquery over an inet column", ip_of(), "@contains", "10.0", r"WHERE HOST\(\(SELECT .+\)\) LIKE \$1", ["%10.0%"]),
+  )
+  @testset "PostgreSQL: $label" for (label, proj, lookup, value, shape, bound) in cases
+    q = _NS.objects
+    q.values("team", "a" => proj)
+    q.filter("a__$lookup" => value)
+    res = q.list(show_query = :dict)
+    @test occursin(shape, flat(res[:sql_text]))
+    @test res[:parameters] == bound
+  end
+
+  # Equality compares the address natively, and checks the value as one — on the cast as on a column.
+  @testset "PostgreSQL: equality validates an address" begin
+    q = _NS.objects
+    q.values("team", "a" => Cast("team", "inet"))
+    q.filter("a" => "::FFFF:10.0.0.1")
+    res = q.list(show_query = :dict)
+    @test occursin(r"WHERE \(\"Tb\"\.\"team\"\)::inet = \$1", flat(res[:sql_text]))
+    @test res[:parameters] == ["::ffff:10.0.0.1"]
+    bad = _NS.objects
+    bad.values("team", "a" => Cast("team", "inet"))
+    bad.filter("a" => "10.")
+    @test_throws PormG.FilterError bad.list(show_query = :dict)
+  end
+
+  @testset "SQLite: the cast is text, and the value binds as written" begin
+    sl = NA.Model("pit_wall_relay", id = NA.IDField(), team = NA.CharField(max_length = 100))
+    PormG.config["net929_sl"] = PormG.Configuration.Settings(connections = SL_NET28, change_data = true)
+    sl.connect_key = "net929_sl"; sl._module = Main
+    for (lookup, value, bound) in (("", "2001:DB8::1", "2001:DB8::1"), ("__@startswith", "10.", "10.%"))
+      q = sl.objects
+      q.values("team", "a" => Cast("team", "inet"))
+      q.filter("a$lookup" => value)
+      res = q.list(show_query = :dict)
+      @test occursin(r"WHERE CAST\(\"Tb\"\.\"team\" AS TEXT\) (=|LIKE) \?", flat(res[:sql_text]))
+      # Not normalized to `2001:db8::1`: that would stop matching the text the column holds.
+      @test res[:parameters] == [bound]
+    end
+    body = sl.objects
+    body.values("id", "a" => Cast("team", "inet"))
+    q = sl.objects
+    q.with("ev" => body, join_field = "id" => "id")
+    q.values("id", "ev__a")
+    err = try; q.list(show_query = :dict); nothing; catch e; e; end
+    @test err isa PormG.QueryBuildError
+    @test occursin("cannot be typed from the SQL type", _plain28(sprint(showerror, err)))
+  end
+end

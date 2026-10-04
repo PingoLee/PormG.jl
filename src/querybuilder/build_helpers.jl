@@ -1744,17 +1744,21 @@ function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::St
   # #432: same nested-run reordering as `_build_exists_query` — everything this subquery binds must be
   # one clause-ordered run in the ambient bucket.
   nested_mark = nested_parameter_mark(instruc)
+  inner_formatter = Ref{Any}(nothing)
   inner_sql = query(handler,
                     table_alias=instruc.table_alias,
                     connection=instruc.connection,
                     parameters=instruc.parameters,
                     outer=instruc,
-                    own_contexts=true)
+                    own_contexts=true,
+                    built = inner -> (inner_formatter[] = _subquery_projection_formatter(handler, inner)))
   reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
   # #888: the inner build typed its one column (`query()` writes `projection_kinds` back onto
   # `handler`, our copy), so the value this text returns has that kind. File it under the node the
   # caller holds, for `_operand_kind` to read once the enclosing projection has rendered.
   _record_subquery_kind!(instruc, v, handler)
+  # #929: and the formatter a value compared with it must satisfy, for `_expression_formatter`.
+  _record_subquery_formatter!(instruc, v, inner_formatter[])
   return string("(", inner_sql, ")")
 end
 function _get_select_query(q::SQLTypeF, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)

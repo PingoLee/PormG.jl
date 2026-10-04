@@ -697,7 +697,8 @@ it (a `Date` on both engines). A column the body computes, such as `Avg("points"
 comes back as the engine delivers it, even though the table above binds it as the aggregated column's
 field (#824). This is the same rule `values(...)` follows outside a CTE.
 
-The type you declare can be a text, integer, bigint, float, numeric, boolean or date type. That
+The type you declare can be a text, integer, bigint, float, numeric, boolean or date type, and on
+PostgreSQL also `uuid`, `inet` or `cidr`. SQLite renders those three casts as text, so a CTE column declared as one is refused there. That
 includes the aliases `int2`, `int4`, `int8`, `float4` and `float8`, and any field object with one of
 those types, such as `PositiveIntegerField()`, which is typed as a plain integer because a cast does
 not enforce the sign. A timestamp, time or interval type is refused, since each has more than one

@@ -163,7 +163,11 @@ function query(q::SQLObjectHandler;
   # order. `query()` restores the ambient bucket itself below (the `is_subquery` branch), so a
   # caller passing this does NOT need to — and none of them does. Do not delete that restore on the
   # assumption the caller handles it: the failure would be silent and SQLite-only.
-  own_contexts::Bool = false
+  own_contexts::Bool = false,
+  # #929: called with the inner build's instruction right after `build()`, while its memos still hold
+  # what the render resolved — the one window in which a nested render can ask about its own
+  # projection. `_render_scalar_subquery` reads the projected column's formatter through it.
+  built::Union{Nothing,Function} = nothing
   )
 
   @pormg_debug false
@@ -200,6 +204,7 @@ function query(q::SQLObjectHandler;
   # Context switching for select/where/join happens inside build()
   # Subqueries skip context switching to inherit the parent's current bucket.
   instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, set_contexts=set_own_contexts, outer=outer)
+  built === nothing || built(instruction)
   
   # Prevent SELECT * across JOINs which causes DataFrame column collisions downstream.
   # Only enforce during actual execution (:execute) — inspection/dry-run modes (:dict, :sql,

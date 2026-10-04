@@ -1151,10 +1151,14 @@ same whether the filter is written top-level or inside `Q(...)`/`Qor(...)`:
 
 - a column (`F("grid")`, `Max("grid")`, `Coalesce("code", Value("-"))`) has the column's type;
 - a text function (`Lower`, `Upper`, `Trim`, `Replace`, `Concat`) is text;
+- a `Subquery(...)` has the type of the one column it projects, so a subquery over a uuid column is a uuid;
 - `Sum`, `Count`, `Avg` and arithmetic on numbers are numbers;
 - `Cast(...)`, or a function given `output_field = ...`, has the type it names when that is a text,
   number (`integer`, `int8`, `float8`, `numeric`, …), boolean or date type. The SQL casts the value
-  to that type on both engines, so the filter compares like with like. For any other type, such as
+  to that type on both engines, so the filter compares like with like. On PostgreSQL a `uuid`, `inet`
+  or `cidr` type counts too, and a pattern lookup (`@startswith`, `@contains`, …) on such an alias
+  reads it as text, as it does on a column of that type, because PostgreSQL has no `LIKE` for them.
+  SQLite casts those three to text, so there the value binds as given. For any other type, such as
   a timestamp on PostgreSQL, `Coalesce`, `Greatest` and `Least` fall back to their operand's type,
   and `Cast` and `Case` bind the value as given. On SQLite the cast itself refuses a timestamp (see
   [Functions and Dates](functions_and_dates.md)).

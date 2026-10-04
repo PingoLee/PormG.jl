@@ -2676,14 +2676,19 @@ end
 function _pattern_text_kind(formatter)::Union{Symbol,Nothing}
   (formatter === Models.format_inet_sql || formatter === Models.format_inet_unpacked_sql) && return :inet
   formatter === Models.format_cidr_sql && return :cidr
+  # #902: a UUID reads as its canonical lowercase hyphenated text — what SQLite stores and what
+  # PostgreSQL prints. Django's PostgreSQL backend reads the same `::text`; its hyphen stripping
+  # (`UUIDTextMixin`) is only for backends that store 32 hex digits, which PormG never does.
+  formatter === Models.format_uuid_sql && return :uuid
   return nothing
 end
 
 # What such a column needs before its predicate renders. A pattern lookup reads the column's printed
-# text (`Dialect._pattern_text_operand`), because PostgreSQL has no `LIKE` for `inet` or `cidr`.
-# Everything else — `=`, `@in`, `@isnull`, the ordering lookups — compares the column itself,
-# natively. PostgreSQL only: SQLite has no such column, and the DDL that would create one is refused
-# (`Dialect._refuse_specialized_sqlite_type`), so there the predicate is left as written.
+# text (`Dialect._pattern_text_operand`), because PostgreSQL has no `LIKE` for `inet`, `cidr` or
+# `uuid`. Everything else — `=`, `@in`, `@isnull`, the ordering lookups — compares the column itself,
+# natively. On SQLite a UUID column already holds that text, and a network column cannot exist (the
+# DDL that would create one is refused, `Dialect._refuse_specialized_sqlite_type`), so there the
+# predicate is left as written.
 function _pattern_operand(column::AbstractString, formatter, operator::AbstractString,
                           instruc::SQLInstruction)::String
   operator in PATTERN_LOOKUP_OPERATORS || return String(column)
@@ -2693,12 +2698,18 @@ function _pattern_operand(column::AbstractString, formatter, operator::AbstractS
 end
 
 # The formatter a filter value goes through. A pattern lookup's value is a FRAGMENT of an address
-# (`"10.20."`, `"::ffff"`), which the column's strict formatter would refuse, so it binds as plain
-# text — Django's `PatternLookup` skips the field's `get_prep_value` for the same reason. Every
-# other column and lookup keeps its own formatter. The `formatter` arm serves a projection alias
-# (#903), whose formatter may be `nothing` — a type the alias ladder cannot name.
+# (`"10.20."`, `"::ffff"`) or of a UUID (`"550e"`), which the column's strict formatter would refuse,
+# so it binds as plain text — Django's `PatternLookup` skips the field's `get_prep_value` for the
+# same reason. Every other column and lookup keeps its own formatter. The `formatter` arm serves a
+# projection alias (#903), whose formatter may be `nothing` — a type the alias ladder cannot name.
 _lookup_formatter(formatter, operator::AbstractString) =
-  operator in PATTERN_LOOKUP_OPERATORS && _pattern_text_kind(formatter) !== nothing ? Models.format_text_sql : formatter
+  operator in PATTERN_LOOKUP_OPERATORS && _pattern_text_kind(formatter) !== nothing ? format_pattern_text_sql : formatter
+
+# A pattern lookup's value on such a column: plain text, except a whole `UUID`, which is matched as
+# the text the column reads as. `format_text_sql` alone refuses a `UUID` (#860, a text column is not
+# a UUID column), and `"token__@contains" => uuid4()` worked on SQLite before #902.
+format_pattern_text_sql(value::UUIDs.UUID) = Models.format_uuid_sql(value)
+format_pattern_text_sql(value) = Models.format_text_sql(value)
 _lookup_formatter(field::PormGField, operator::AbstractString) = _lookup_formatter(field.formatter, operator)
 
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)

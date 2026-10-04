@@ -217,6 +217,29 @@ end
             updated_lookup = M.Field_validation_scratch.objects
             updated_lookup.filter("uuid_token" => updated_uuid)
             @test updated_lookup.count() == 1
+
+            # #902: pattern lookups match the lowercase hyphenated text on both engines — a
+            # fragment, not a whole UUID, and on PostgreSQL through `CAST(col AS text)`, since the
+            # server has no LIKE for `uuid`. The prefix spans a hyphen, so the hyphenated form is
+            # the one being matched.
+            prefix_query = M.Field_validation_scratch.objects
+            prefix_query.filter("slug" => scratch_slug, "uuid_token__@startswith" => updated_uuid[1:13])
+            @test prefix_query.count() == 1
+            # The text is lowercase: an uppercase fragment matches only case-insensitively.
+            middle = uppercase(updated_uuid[15:23])
+            icontains_query = M.Field_validation_scratch.objects
+            icontains_query.filter("slug" => scratch_slug, "uuid_token__@icontains" => middle)
+            @test icontains_query.count() == 1
+            contains_upper = M.Field_validation_scratch.objects
+            contains_upper.filter("slug" => scratch_slug, "uuid_token__@contains" => middle)
+            @test contains_upper.count() == (middle == lowercase(middle) ? 1 : 0)
+            # A UUID object is matched as its text too.
+            uuid_value_query = M.Field_validation_scratch.objects
+            uuid_value_query.filter("slug" => scratch_slug, "uuid_token__@contains" => Base.UUID(updated_uuid))
+            @test uuid_value_query.count() == 1
+            stale_query = M.Field_validation_scratch.objects
+            stale_query.filter("slug" => scratch_slug, "uuid_token__@startswith" => seeded_uuid[1:13])
+            @test stale_query.count() == (seeded_uuid[1:13] == updated_uuid[1:13] ? 1 : 0)
         finally
             _cleanup_field_validation_scratch_rows!([scratch_slug])
         end

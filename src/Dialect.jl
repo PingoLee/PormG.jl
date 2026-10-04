@@ -2790,8 +2790,13 @@ _pattern_text_operand(::PormGPostgres, ::Val{:inet}, column::AbstractString)::St
   "HOST($(column))"
 _pattern_text_operand(::PormGPostgres, ::Val{:cidr}, column::AbstractString)::String =
   "CAST($(column) AS text)"
-# Any other engine reads the column as written: SQLite has no network column (#28).
-_pattern_text_operand(::PormGAbstractType, ::Val, column::AbstractString)::String = String(column)
+# #902: a `uuid` prints lowercase and hyphenated, the text a `UUIDField` stores on SQLite.
+_pattern_text_operand(::PormGPostgres, ::Val{:uuid}, column::AbstractString)::String =
+  "CAST($(column) AS text)"
+# SQLite reads the column as written: it has no network column (#28), and its UUID column is already
+# that text (#902). SQLite only, so a kind added without a PostgreSQL method raises a `MethodError`
+# there rather than rendering a `LIKE` the server rejects.
+_pattern_text_operand(::PormGSQLite, ::Val, column::AbstractString)::String = String(column)
 
 function contains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"

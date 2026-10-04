@@ -565,6 +565,20 @@ const DOCERR_CASES = [
             q.list(show_query = :dict)
         end,
     ),
+    (
+        # #917. The shape of the doc's refused example — an aggregate beside a legal self-join
+        # correlation — on this file's model. It rendered `ON … AND (COUNT(…) > ?)`, which both
+        # engines reject at execution.
+        "read/custom_joins.md — an aggregate or window function in a join ON clause is refused",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.values("resultid")
+            q.cjoin_on(DOCERR_RESULT_PG, alias = "r2",
+                       on = [Joined("r2", "points") == F("points"), Count("resultid") > 1])
+            q.list(show_query = :dict)
+        end,
+    ),
     # #474 removed TWO cases that stood here, and the removals are the point rather than a
     # tidy-up. Both pinned doc sentences about a CTE name colliding with a join key:
     #

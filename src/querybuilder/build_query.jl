@@ -1575,6 +1575,55 @@ function _guard_where_operand(v::SQLTypeOper, instruc::SQLInstruction)
   return nothing
 end
 
+# #917 — the join-condition twin of `_guard_no_aggregate_predicate`. A join's ON conditions render
+# through their own loop in `build_row_join_sql_text`, which never meets the `filter()` refusals, so
+# `cjoin_on(…; on = [Count("resultid") > 1])` rendered `ON … AND (COUNT("Tb"."resultid") > ?)`, which
+# both engines reject at execution. `on(…)` and `cjoin(…; filters = …)` reach the same loop through a
+# `ModelJoin`'s `on_conditions` and had the same gap (`OP(Count("grid"), ">", 1)`,
+# `"number" => Max("grid")`).
+#
+# A guard of its own rather than a clause label on the WHERE one: that guard's advice is an alias
+# filter, which renders HAVING — wrong for an ON clause, where no clause at this query level can hold
+# the predicate. Unlike WHERE there is no routing question, so both operands are asked alike, after
+# aliases resolve, window first, as #895 does: `_contains_agg` also answers `true` for a window over an
+# aggregate, and that one needs the window wording. `_contains_agg` enters an `OperObject` but
+# `_is_window_expr` does not, hence the split into operands. A subquery or `Exists(…)` is never
+# entered: its aggregates belong to the inner statement. Depth cap as in `_guard_no_aggregate_predicate`.
+function _guard_no_aggregate_on_condition(condition, row::JoinRow, instruc::SQLInstruction, depth::Int = 0)
+  depth > 32 && return nothing
+  if condition isa SQLTypeQ
+    foreach(f -> _guard_no_aggregate_on_condition(f, row, instruc, depth + 1), condition.filters)
+  elseif condition isa SQLTypeQor
+    foreach(f -> _guard_no_aggregate_on_condition(f, row, instruc, depth + 1), condition.or)
+  else
+    # The pair itself is asked too: a plain key naming a projection alias renders that projection,
+    # and only the whole pair is a condition leaf `_reads_alias` resolves — `"n" => 1` over
+    # `"n" => Count(…)` rendered `ON … AND COUNT(…) = ?` with the operands asked alone (review of #917).
+    operands = condition isa SQLTypeOper ? (condition, condition.column, condition.values) : (condition,)
+    any(x -> _resolved_window(x, instruc), operands) && throw(QueryBuildError(
+      "$(_on_condition_label(row)) — a window function cannot appear in a join's ON clause: SQL " *
+      "evaluates windows after the join. " * _ON_CONDITION_ADVICE))
+    any(x -> _resolved_contains_agg(x, instruc), operands) && throw(QueryBuildError(
+      "$(_on_condition_label(row)) — an aggregate cannot appear in a join's ON clause: SQL joins " *
+      "rows before it groups them. " * _ON_CONDITION_ADVICE))
+  end
+  return nothing
+end
+
+# The join the caller declared, in the spelling they wrote. A `ModelJoin` does not keep the path
+# `on()`/`cjoin()` was given, only the table it reaches.
+_on_condition_label(row::AnchorlessJoin) = "\e[4m\e[31mcjoin_on(alias = \"$(row.alias_b)\")\e[0m"
+_on_condition_label(row::JoinRow) =
+  "\e[4m\e[31mon(…) / cjoin(…; filters = …)\e[0m on the join to \"$(row.b)\""
+
+# The spelling that DOES join on an aggregate or a window: materialize it one query level down, then
+# join on the column it becomes. Separate from `_WINDOW_PREDICATE_ADVICE` on purpose — that one ends
+# in a WHERE filter, this one is about the join.
+const _ON_CONDITION_ADVICE =
+  "Compute it in a CTE and join on its column — " *
+  "\e[4m\e[32m.with(\"race_size\" => Result.objects.values(\"raceid\", \"n\" => Count(\"resultid\")), " *
+  "join_field = \"raceid\" => \"raceid\")\e[0m, then \e[4m\e[32mfilter(\"race_size__n__@gt\" => 1)\e[0m (#917)."
+
 # The spelling that DOES filter on a window, shared by the #537 refusal above and the #685 one below
 # so they cannot drift. It
 # was advice nobody could follow until #685: a window in a CTE body died typing its column
@@ -1852,6 +1901,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         # own ON and WHERE parameters are already bound in the wrong order relative to its rendered
         # text (same root cause — the ungated `:join` switch — but on the subquery's own values).
         # `OnExtra` carries that run faithfully, preserving whatever order it arrived in.
+        _guard_no_aggregate_on_condition(condition, value, instruc)   # #917
         mark = parameter_mark(instruc)
         condition_sql = _get_filter_query(condition, instruc)
         condition_params = detach_parameters!(mark)

@@ -292,7 +292,9 @@ query.cjoin_on(M.Model; alias="b2", on=[ ... ], join_type="INNER")
   with a `QueryBuildError`: the join would name a table that lives in another database
   ([#488](https://github.com/PingoLee/PormG.jl/issues/488)).
 - **`alias`** — the SQL alias for the joined copy. Reference its columns as `Joined(alias, "column")`.
-- **`on`** — the expressions that form the **entire** ON clause. No equi-anchor is added.
+- **`on`** — the expressions that form the **entire** ON clause. No equi-anchor is added. An
+  aggregate or a window function is refused here — see
+  [Aggregates and Window Functions in an ON Clause](#Aggregates-and-Window-Functions-in-an-ON-Clause).
 - **`join_type`** — defaults to `"INNER"`.
 
 ### Reference convention
@@ -652,6 +654,35 @@ query = M.Result.objects.
 # ... ON driver.driverid = result.driverid AND driver.nationality = ?
 # WHERE result.points = ?
 ```
+
+### Aggregates and Window Functions in an ON Clause
+
+A join condition cannot contain an aggregate (`Count`, `Sum`, `Max`, …) or a window function
+(`Rank`, `Lag`, …), on either side of the comparison: SQL joins rows before it groups them and
+evaluates windows after the join. Both engines reject such a query, so PormG refuses it when the
+query is built, with a `QueryBuildError`. That holds for all three spellings: `.cjoin_on(...; on=...)`,
+`.cjoin(...; filters=...)` and `.on(...)`
+([#917](https://github.com/PingoLee/PormG.jl/issues/917)).
+
+```julia
+# Refused: an aggregate in the ON clause.
+M.Result.objects.
+    cjoin_on(M.Result; alias="r2", on=[Joined("r2", "raceid") == F("raceid"), Count("resultid") > 1])
+```
+
+Compute the value one query level down instead, in a CTE, then join on the column it becomes. For
+example, every result from a race with more than 30 entries:
+
+```julia
+df = M.Result.objects.
+    with("race_size" => M.Result.objects.values("raceid", "n" => Count("resultid")),
+         join_field="raceid" => "raceid").
+    filter("race_size__n__@gt" => 30).
+    values("resultid", "raceid", CTE("race_size", "n")) |> DataFrame
+```
+
+An `@in` subquery in a join condition may aggregate, and so may an `Exists(...)` in a `cjoin_on`
+condition (the other two spellings do not accept `Exists`): its aggregate belongs to the inner query.
 
 ### Field Name Normalization
 

@@ -1590,8 +1590,9 @@ end
 # filter, which renders HAVING — wrong for an ON clause, where no clause at this query level can hold
 # the predicate. Unlike WHERE there is no routing question, so both operands are asked alike, after
 # aliases resolve, window first, as #895 does: `_contains_agg` also answers `true` for a window over an
-# aggregate, and that one needs the window wording. `_contains_agg` enters an `OperObject` but
-# `_is_window_expr` does not, hence the split into operands. A subquery or `Exists(…)` is never
+# aggregate, and that one needs the window wording. Both walks enter an `OperObject` now (#928 taught
+# `_is_window_expr` to); the operands are still asked one by one beside the whole pair, which is
+# harmless and keeps each operand's own alias resolution. A subquery or `Exists(…)` is never
 # entered: its aggregates belong to the inner statement. Depth cap as in `_guard_no_aggregate_predicate`.
 function _guard_no_aggregate_on_condition(condition, row::JoinRow, instruc::SQLInstruction, depth::Int = 0)
   depth > 32 && return nothing

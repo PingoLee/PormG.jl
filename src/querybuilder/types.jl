@@ -1748,6 +1748,15 @@ _is_window_expr(f::FExpression) = _is_window_expr(f.field_name) || _is_window_ex
 # before #702. The other slots (`output_field`, a `CAST` type, an `EXTRACT` part) answer `false`.
 _is_window_expr(f::FObject) = _is_window_expr(f.column) || any(_is_window_expr, values(f.kwargs))
 _is_window_expr(values::Vector) = any(_is_window_expr, values)
+# #928: and a `When` CONDITION, which sits in `FObject.column` as a `Q`/`Qor` tree or one comparison
+# (`OperObject`). Without these a window there was invisible: `filter("lap__@gt" => Case([When(Rank(…) > 1,
+# then = 1)]))` passed the #895 WHERE guard and failed on the server. The same four node types
+# `_contains_agg` already enters. A subquery is still never entered — its windows belong to the inner
+# statement.
+_is_window_expr(q::QObject) = _is_window_expr(q.filters)
+_is_window_expr(q::QorObject) = _is_window_expr(q.or)
+_is_window_expr(o::OperObject) = _is_window_expr(o.column) || _is_window_expr(o.values)
+_is_window_expr(f::SQLField) = _is_window_expr(f.field)
 _is_window_expr(::Any) = false
 
 # #776 — does the statement AGGREGATE because of this node? Django's `contains_aggregate`.

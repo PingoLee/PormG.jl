@@ -352,3 +352,50 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A window in a `When` CONDITION is a window too (#928)
+# The #895 guard saw a window in a `Case` branch (#756) but not in a condition: the condition sits in
+# the `FObject`'s column as a `Q`/`Qor` tree or one comparison, which `_is_window_expr` never entered.
+# So `filter("lap__@gt" => Case([When(Rank(…) > 1, then = 1)]))` rendered `WHERE "lap" > CASE WHEN
+# ((RANK() OVER (…) > ?)) …`, which both engines reject at execution. Every spelling of the condition
+# is asked, on both sides of a WHERE-bound comparison; the SELECT-side `Case` keeps rendering.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#928: a window in a When condition is refused in WHERE" begin
+  rank = () -> Rank(over = WindowOver(order_by = ["milliseconds"]))
+  case_of = cond -> Case([When(cond, then = 1)], default = 0)
+  rhs = "the right-hand side contains a window function"
+  expr = "an expression containing a window function"
+  cases = (
+    ("bare comparison condition", q -> q.filter("lap__@gt" => case_of(rank() > 1)), rhs),
+    ("Q-wrapped condition", q -> q.filter("lap__@gt" => case_of(Q(rank() > 1))), rhs),
+    ("Qor condition", q -> q.filter("lap" => case_of(Qor(rank() > 1, "surname" => "Senna"))), rhs),
+    ("window arithmetic in the condition", q -> q.filter("lap" => case_of((rank() + 1) > 2)), rhs),
+    ("pair condition whose value is a window", q -> q.filter("lap" => case_of("lap__@gt" => rank())), rhs),
+    ("inside a Q filter", q -> q.filter(Q("lap__@gt" => case_of(rank() > 1))), rhs),
+    ("Case on the left of an F comparison", q -> q.filter(case_of(rank() > 1) == 1), expr),
+  )
+  for (backend, Model_) in _F_AGG_MODELS
+    @testset "$backend: $label" for (label, setup, needle) in cases
+      err = _f_agg_build_error(Model_, q -> (q.values("raceid", "lap"); setup(q)))
+      @test err isa QueryBuildError
+      msg = sprint(showerror, err)
+      @test occursin(needle, msg)
+      @test occursin("Compute it in a CTE and filter on its column", msg)
+    end
+    # The same `Case` as a projection is legal SQL, and is not grouped: a window never is.
+    @testset "$backend: the projected Case still renders, ungrouped" begin
+      q = Model_.objects
+      q.values("raceid", "n" => Count("id"), "c" => case_of(rank() > 1))
+      insp = inspect_query(q)
+      @test occursin(r"CASE\s+WHEN \(\(RANK\(\) OVER", insp[:sql_text])
+      # `raceid` by position and the window's ORDER BY column — never the `Case` itself (position 3).
+      @test occursin(r"GROUP BY 1, \"Tb\"\.\"milliseconds\"\s*$", insp[:sql_text])
+    end
+    # A plain condition beside it keeps filtering in WHERE — the walk did not start refusing rows.
+    @testset "$backend: a window-free condition still filters" begin
+      err = _f_agg_build_error(Model_, q -> q.filter("lap__@gt" => case_of(F("milliseconds") > 1)))
+      @test err === nothing
+    end
+  end
+end

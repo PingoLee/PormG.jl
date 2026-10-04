@@ -763,12 +763,15 @@ end
 
 One `WHEN condition THEN value` branch of a SQL `CASE`.
 
-`condition` accepts four forms:
+`condition` accepts five forms:
 
 - a lookup pair — `When("points__@gt" => 10, then = 1)`
 - a tuple of pairs, ANDed together — `When(("points__@gt" => 10, "grid" => 1), then = 1)`
 - a `Q(...)` / `Qor(...)` object, for OR and nested boolean logic
-- an operator or function object, e.g. an `F` comparison
+- a comparison over an `F`, function or window expression —
+  `When(F("grid") < F("positionorder"), then = 1)`, `When(Lower("surname") == "senna", then = 1)`.
+  It renders exactly as the same expression wrapped in `Q(...)`.
+- an operator or function object
 
 `then` defaults to `0`. A plain value in `then` or the `CASE` `ELSE` is bound as a query
 parameter; a column expression — `F("points")`, `F("points") * 2`, `Joined(…)`, a function —
@@ -813,6 +816,14 @@ function When(x::Union{SQLTypeQ, SQLTypeQor}; then::Any = 0, otherwise::Any = mi
 end
 function When(x::Union{SQLTypeOper, SQLTypeFunction}; then::Any = 0, otherwise::Any = missing)
   return _make_when(x, then, otherwise)
+end
+# #921: an `F` comparison — and since #895 a function or window comparison, which builds the same node —
+# had no arm and raised a raw `MethodError`, though the docstring above already promised it. Django's
+# `When` takes a boolean expression the same way. Delegating to `Q` is deliberate: it runs the
+# `_check_filter_node` walk (transforms inside the expression resolve) and renders byte-for-byte what
+# the documented `When(Q(expr))` workaround rendered, so the two spellings cannot drift apart.
+function When(x::FExpression; then::Any = 0, otherwise::Any = missing)
+  return When(Q(x); then = then, otherwise = otherwise)
 end
 """
     Case(conditions; default = "NULL", output_field = nothing)

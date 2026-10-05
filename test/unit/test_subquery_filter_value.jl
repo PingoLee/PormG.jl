@@ -183,6 +183,48 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #946: the OuterRef in a DEEP-hop on() condition binds the query that owns the join
+# The ON render used to rewrite every base-alias reference onto the hop's left alias. On a first hop
+# that is a no-op (the left alias IS the base alias), which is why the case above never saw it; on
+# `driverid__results` it retargeted the correlation onto the driver — loud when the driver lacks the
+# column, a different correlation when it has one.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#946: an OuterRef in a deep-hop on() condition binds the outer query" begin
+  for (backend, mod) in _SQ_MODELS
+    @testset "$backend: Subquery value" begin
+      q = mod.Result.objects
+      q.on("driverid__results", "grid" => _sq_best(mod, "ON"))
+      q.values("resultid", "driverid__results__grid")
+      q.filter("chassis" => "WHERE")
+      insp = inspect_query(q)
+      sql = _sq_flat(insp[:sql_text])
+      @test occursin("AND \"Tb_2\".\"grid\" = (SELECT ", sql)
+      @test occursin("\"R1\".\"raceid\" = \"Tb\".\"raceid\"", sql)
+      @test !occursin("\"Tb_1\".\"raceid\"", sql)
+      assert_marker_count(insp, backend)
+      @test _sq_text_order(insp, backend) == Any["ON", "WHERE"]
+    end
+    # A bare `F` on a pair's right side is not path-prefixed: it names the base row, as on a first
+    # hop. The rewrite used to move it onto the driver, which has no `raceid` (review of #946).
+    @testset "$backend: bare F value" begin
+      q = mod.Result.objects
+      q.on("driverid__results", "grid" => F("raceid"))
+      q.values("resultid", "driverid__results__grid")
+      sql = _sq_flat(inspect_query(q)[:sql_text])
+      @test occursin("AND \"Tb_2\".\"grid\" = \"Tb\".\"raceid\"", sql)
+    end
+    # The hop's own columns are targeted by the path prefix `on()` applies, not by any rewrite.
+    @testset "$backend: plain condition" begin
+      q = mod.Result.objects
+      q.on("driverid__results", "grid__@gt" => 0)
+      q.values("resultid", "driverid__results__grid")
+      sql = _sq_flat(inspect_query(q)[:sql_text])
+      @test occursin("ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" AND \"Tb_2\".\"grid\" > ", sql)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # An alias compared with a subquery: an expression, not a value to type
 # The typed alias binder handed the node to the alias's value formatter (`format_number_sql`), a raw
 # `MethodError`. It takes the expression route instead, as `F(...)` and `Max(...)` on the right do.
@@ -616,4 +658,34 @@ end
   err = try; OuterRef(OuterRef("driverid")); nothing; catch e; e; end
   @test err isa QueryBuildError
   @test occursin("immediately enclosing query", sprint(showerror, err))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #952: the nearer level wins even when both enclosing levels have the column — and it does not warn
+# Decided as Django's rule, kept as is: a warning or a refusal would fire on this exact shape, which is
+# also the ordinary one (each counted result's own race), with no spelling to say "the middle" instead.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#952: a nested OuterRef binds the middle query, silently, when both levels share the name" begin
+  # (label, outer model, the middle's correlation column)
+  outers = (
+    ("both levels have raceid", mod -> mod.Result, "raceid"),
+    ("only the middle has raceid", mod -> mod.Driver, "driverid"),
+  )
+  for (backend, mod) in _SQ_MODELS
+    @testset "$backend: $label" for (label, outer, corr) in outers
+      middle = mod.Result.objects
+      middle.filter(corr => OuterRef(corr), "grid" => _sq_best(mod))
+      middle.values("n" => Count("resultid"))
+      q = outer(mod).objects
+      q.values("x" => Subquery(middle))
+      # No message at Warn or above: an aggregate subquery triggers no multirow warning either, so any
+      # warning here would be one about the binding.
+      insp = @test_logs min_level = Logging.Warn inspect_query(q)
+      sql = _sq_flat(insp[:sql_text])
+      @test occursin("\"R2\".\"raceid\" = \"R1\".\"raceid\"", sql)
+      @test occursin("\"R1\".\"$corr\" = \"Tb\".\"$corr\"", sql)
+      @test !occursin("\"R2\".\"raceid\" = \"Tb\"", sql)
+      assert_marker_count(insp, backend)
+    end
+  end
 end

@@ -356,7 +356,7 @@ The rules are those of a projected scalar subquery (below), with two differences
 - **Exactly one column.** The inner query must project exactly one column via `.values(...)` (the inner alias is cosmetic). Zero or several columns raise a `QueryBuildError` at build time. The same one-column rule applies to `@in` subqueries, where it surfaces as a `FilterError` — the type names which argument you got wrong (a projection here, a filter there). Catch `PormGError` to handle both.
 - **The alias is mandatory.** Always project as a pair: `"alias" => Subquery(...)`. A bare `Subquery(...)` inside `values()` raises.
 - **At most one row.** The database requires a scalar subquery to return ≤ 1 row ("more than one row returned by a subquery used as an expression" at execution otherwise). An aggregate always satisfies this; for a plain column add `order_by` + `limit(1)` — PormG emits a build-time warning for the non-aggregate/no-limit case but does not block it.
-- **`OuterRef` binds the immediately enclosing query.** A `Subquery`/`Exists` may sit inside another subquery in any position: a filter, a projection, a `When`, a join condition. Its `OuterRef` correlates to the subquery around it, never further out, which is Django's rule. Reaching two levels up (Django's `OuterRef(OuterRef(…))`) is not supported, and raises `QueryBuildError`. One known exception: inside a `Subquery` in a **deep-hop** `on()` condition (`on("driverid__results", …)`), the reference is retargeted to the hop's left alias (#946). Each level renders under its own alias, so the binding is visible in the SQL (#938):
+- **`OuterRef` binds the immediately enclosing query.** A `Subquery`/`Exists` may sit inside another subquery in any position: a filter, a projection, a `When`, a join condition. Its `OuterRef` correlates to the subquery around it, never further out, which is Django's rule. Reaching two levels up (Django's `OuterRef(OuterRef(…))`) is not supported, and raises `QueryBuildError`. Each level renders under its own alias, so the binding is visible in the SQL (#938):
 
   ```julia
   # A driver's pole positions: the races where they started from that race's best grid.
@@ -372,6 +372,20 @@ The rules are those of a projected scalar subquery (below), with two differences
   # … (SELECT MIN("R2"."grid") … WHERE "R2"."raceid" = "R1"."raceid" AND "R2"."grid" > $1) …
   #   … WHERE "R1"."driverid" = "Tb"."driverid" …
   df = query |> DataFrame   # Ayrton Senna 65, Bruno Senna 0
+  ```
+
+  The rule holds when **both** enclosing levels have the column, and it does not warn (#952). Swap the outer `M.Driver` above for `M.Result` (each Senna result, with its driver's pole count), and `best_grid`'s `OuterRef("raceid")` still names the middle result's race, not the outer row's, although both have a `raceid`. This is Django's rule, and here it is also what the query means: the best grid of each race the counted result ran in. To use the outer row's value further in, pass it down a level. Correlate the middle query on it, and the inner reference then carries the same value:
+
+  ```julia
+  # Each of Ayrton Senna's results, flagged 1 when that race was one of his poles.
+  pole_here = M.Result.objects.
+      filter("driverid" => OuterRef("driverid"), "raceid" => OuterRef("raceid"),   # the outer row's race…
+             "grid" => Subquery(best_grid)).      # …so best_grid's OuterRef("raceid") is that race too
+      values("n" => Count("resultid"))
+  query = M.Result.objects.
+      filter("driverid__forename" => "Ayrton", "driverid__surname" => "Senna").
+      values("raceid", "grid", "pole" => Subquery(pole_here))
+  df = query |> DataFrame   # one row per result; sum(df.pole) == 65
   ```
 - **Correlate on base columns.** `OuterRef("driverid")` against a plain outer column is the canonical, supported case. A joined-path `OuterRef` (e.g. `OuterRef("constructorid__name")`) adds a join to the query it binds and is not part of the validated #92 surface.
 - **`OuterRef` inside an expression.** An outer column may be wrapped in a scalar function or a window column inside the correlated query — `Lower(OuterRef("surname"))`, `Cast(OuterRef("driverid"), "text")`, `Lag(OuterRef("driverid"), over = …)` — and resolves against the outer row exactly as a bare `OuterRef` does. Outside a correlated build (a top-level `values()` or `filter()`) an `OuterRef` raises `QueryBuildError`, wrapped or not.

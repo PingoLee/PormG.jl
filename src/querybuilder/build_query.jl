@@ -1942,11 +1942,9 @@ function build_row_join_sql_text(instruc::SQLInstruction)
     # by construction — would make Phase 1c below refuse every `CrossJoin` and Phase 2 misreport
     # #435's "every predicate relocated" case as this one.
     if !isempty(on_conditions)
-      alias_a_quoted = quote_identifier(value.alias_a, instruc.connection)
       original_alias = instruc.alias
       extras = OnExtra[]
 
-      no_anchor = value isa AnchorlessJoin
       for condition in on_conditions
         # #421: lift the values this condition binds straight back out of the bucket. Phase 1b may
         # still move the fragment, so nothing resolved here has a final clause position yet; Phase 2
@@ -1994,11 +1992,11 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         mark = parameter_mark(instruc)
         condition_sql = _get_filter_query(condition, instruc)
         condition_params = detach_parameters!(mark)
-        # #45: anchor-less cjoin_on conditions already carry explicit aliases (bare F = base alias,
-        # Joined("b2","col") = the joined copy), so skip the single-side base-alias remap the FK path needs.
-        if !no_anchor
-          condition_sql = replace(condition_sql, "\"$(original_alias)\"." => "$alias_a_quoted.")
-        end
+        # #946: no alias remap here. `_on`/`_cjoin` prefix every key with the join path, so the
+        # condition's own columns already render under the joined alias, at any hop depth. What is
+        # still under the base alias genuinely names the base row — above all an `OuterRef` in a
+        # nested `Subquery`, which binds the query that owns the join. A text rewrite of the base
+        # alias onto the hop's left alias (a no-op on a first hop) retargeted that correlation.
         push!(extras, OnExtra(condition_sql, condition_params))
       end
 

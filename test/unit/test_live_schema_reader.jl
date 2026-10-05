@@ -802,6 +802,31 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# The pormg:check marker is bounded on both sides, like pormg:index (#934)
+# #909's review gave `INDEX_MARKER_RE` a look-behind; `CHECK_MARKER_RE` (#742) had neither boundary,
+# so `xpormg:check:<hash>` in a DBA's comment — or a 17-digit hash — read as PormG's own, and only the
+# marker stands between a hand-made CHECK and a planned DROP.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the pormg:check marker pattern is bounded on both sides (#934)" begin
+  re = PormG.CHECK_MARKER_RE
+  h = PormG.check_marker("laps >= 0")                    # `pormg:check:` + 16 hex digits
+  @test occursin(re, h)
+  @test occursin(re, "FIA's lap rule $(h)")              # the adoption form: the DBA's note, a space, the marker
+  @test occursin(re, "($(h))")
+  @test !occursin(re, "x" * h)                           # no leading boundary before #934
+  @test !occursin(re, "my:" * h)
+  @test !occursin(re, h * "0")                           # a 17th hex digit is not the reserved form
+  @test !occursin(re, h * "_x")
+  # The same PostgreSQL/PCRE subset as the index marker: `_PG_UNMARKED_CHECK` interpolates it into SQL.
+  @test !occursin(r"\\K|\(\?P?<[A-Za-z]|\+\+|\*\+", re.pattern)
+  @test occursin(re.pattern, Migrations._PG_UNMARKED_CHECK)
+  # The SQLite reader embeds it after `/*\s*`; the boundary changes nothing for the comment PormG writes.
+  @test Migrations._sqlite_check_clause_marker("CHECK (laps >= 0 /* $(h) */)") == h
+  @test Migrations._sqlite_check_clause_marker("CHECK (laps >= 0 /* x$(h) */)") === nothing
+  @test Migrations._sqlite_check_clause_marker("CHECK (laps >= 0 /* $(h)0 */)") === nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # `convertSQLToModel(sql)` is the live reader over a scratch file
 # The regex reader it replaced never read `unique` and wrote a non-canonical `to_table`; running the
 # statement in a throwaway SQLite file and reading THAT closes both gaps by construction. The

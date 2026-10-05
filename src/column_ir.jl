@@ -444,8 +444,11 @@ check_marker(sql::AbstractString)::String = CHECK_MARKER_PREFIX * check_conditio
 
 # The marker as it may be READ back: anywhere in a PostgreSQL comment (a user may append to it), and
 # the whole of the trailing SQL comment on SQLite. One pattern, so the two readers cannot disagree
-# about what a marker looks like.
-const CHECK_MARKER_RE = Regex(CHECK_MARKER_PREFIX * "[0-9a-f]{16}")
+# about what a marker looks like. Bounded on both sides like `INDEX_MARKER_RE` below (#934): an
+# unbounded pattern read `xpormg:check:<hash>` and a 17-digit hash as owned, and the marker is the
+# only thing between a hand-made CHECK and a planned DROP. Same PostgreSQL/PCRE subset, because
+# `_PG_UNMARKED_CHECK` interpolates it into SQL.
+const CHECK_MARKER_RE = Regex("(?<![0-9A-Za-z_:])" * CHECK_MARKER_PREFIX * "[0-9a-f]{16}(?![0-9A-Za-z_:])")
 
 # ── Index access methods, operator classes and ownership (#29) ───────────────────────────────────
 #

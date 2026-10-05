@@ -2543,7 +2543,12 @@ _format_filter_value(formatter, values, operator::AbstractString) =
 # `"rethrow(exc) not allowed outside a catch block"` and masks the error it was handed. There are
 # exactly two callers, both inside a `catch`: `_guarded_format` below and the sargable rewrite's
 # bounds guard. (The `BETWEEN` arm was a third until #654 routed it through `_guarded_format`.)
+#
+# The one `InvalidValueError` it does not convert is a NUL in a JSON value (#954): that refusal keeps
+# its type and its #951 wording, the field named, because this message prints the value — and the
+# text after a NUL is exactly what the refusal must never echo.
 _rethrow_as_filter_error(e, field_name, field_type, values; subject::AbstractString = "field") =
+  _is_json_nul_refusal(e) ? throw(_json_nul_field_refusal(string(field_name), "filter")) :
   e isa InvalidValueError ?
     throw(FilterError("The \e[4m\e[31m$(field_name)\e[0m $(subject) is the type " *
                       "\e[4m\e[32m$(field_type)\e[0m. Please check the value: " *

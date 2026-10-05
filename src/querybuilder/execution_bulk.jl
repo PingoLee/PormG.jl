@@ -2087,6 +2087,9 @@ function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{St
     try
       model.fields[field].formatter(row[col_name])
     catch e
+      # A NUL in a JSON value gets the refusal every writer raises, naming the row (#954) — never the
+      # generic message below, which would print the value.
+      _is_json_nul_refusal(e) && throw(_bulk_cell_error(_json_nul_field_refusal(field, op), op, model, field, index))
       # A collection gets the refusal every writer raises (#716), not the generic message below: the
       # bare formatter can throw on its elements before the bind site's check ever ran. Only here,
       # in the catch: a collection the formatter maps fine (`["A", "B"]`) must not pre-empt another

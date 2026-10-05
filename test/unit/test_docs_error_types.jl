@@ -2251,6 +2251,13 @@ const DOCERR_CASES = [
         InvalidValueError,
         () -> PormG.ConnectionPool.fetch(DocErrMockPostgres(), "SELECT \$1::text", ["Senna\0"]),
     ),
+    # #954 — the JSONField row of `errors.md`. The refusal lives in the JSON formatter every write,
+    # document filter and `get_or_create` lookup passes, so the formatter is the documented claim.
+    (
+        "errors.md + fields.md — a JSONField value containing a NUL character raises InvalidValueError (#954)",
+        InvalidValueError,
+        () -> PormG.Models.format_json_sql(Dict("pit_note" => "box\0box")),
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

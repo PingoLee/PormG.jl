@@ -490,6 +490,7 @@ function _validate_json_value(model::PormGModel, field::String, value::Any, oper
             Models.format_json_sql(value)
             return true
         catch e
+            _is_json_nul_refusal(e) && throw(_json_nul_field_refusal(field, operation))   # #954
             _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass a valid JSON string, Dict, Vector, or scalar value")
         end
     else
@@ -553,13 +554,33 @@ _takes_collection(f_meta) = _is_json_field(f_meta) || _is_binary_field(f_meta) |
 # A NUL in the formatted text is refused here too (#951), so a write names its field — and, through
 # `_bulk_cell_error`, its row; the execution funnels refuse it again for filters and raw params.
 # Checked after the formatter, on what would actually bind: a `BinaryField`'s `PormGBytes` passes,
-# an `ArrayField` literal is checked whole.
+# an `ArrayField` literal is checked whole. A `JSONField` value carries its NUL as the escape
+# `\u0000`, which `format_json_sql` refuses itself (#954); `_format_json_named` names the field.
 function _format_single(f_meta, field::AbstractString, value, op::AbstractString)
   _refuse_collection(f_meta, field, value, op)
-  formatted = _single_value(f_meta.formatter(value), field, op)
+  formatted = _single_value(_is_json_field(f_meta) ? _format_json_named(f_meta, field, value, op) :
+                            f_meta.formatter(value), field, op)
   _contains_nul(formatted) && throw(InvalidValueError(
     "Error in $op, field `$field` contains a NUL character (\\0). " * NUL_REFUSAL_REASON))
   return formatted
+end
+
+# #954 — a NUL in a JSON value is refused by `format_json_sql` itself, the one funnel every JSON value
+# passes (writes, a `@jcontains` or document filter, `get_or_create`'s lookup, a default). The
+# formatter cannot know the field, so the write path re-raises the refusal naming it, in #951's
+# wording — which is also what lets `_bulk_cell_error` name the row. Matched by its exact message:
+# any other formatter error passes as raised.
+_is_json_nul_refusal(e) = e isa InvalidValueError && e.msg == Models.JSON_NUL_REFUSAL
+_json_nul_field_refusal(field::AbstractString, op::AbstractString) = InvalidValueError(
+  "Error in $op, field `$field` contains a NUL character (\\0, written \\u0000 in JSON). " * Models.JSON_NUL_REASON)
+
+function _format_json_named(f_meta, field::AbstractString, value, op::AbstractString)
+  try
+    return f_meta.formatter(value)
+  catch e
+    _is_json_nul_refusal(e) && throw(_json_nul_field_refusal(field, op))
+    rethrow()
+  end
 end
 
 # The raw-value half on its own, for a caller that runs the bare formatter to find the failing cell

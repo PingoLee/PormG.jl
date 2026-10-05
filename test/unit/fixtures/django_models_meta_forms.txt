@@ -100,7 +100,7 @@ class Servidor(models.Model):
             models.Index(Lower("apelido"), name="idx_apelido_lower"),
             # IMPORTED (#29) as method = "gin" — a PostgreSQL-only index, which SQLite refuses.
             GinIndex(fields=["cpf", "apelido"], name="gin_servidor"),
-            # IMPORTED (#29 part 2) as a partial index: condition = "\"ativo\" = TRUE", through the
+            # IMPORTED (#29 part 2) as a partial index: condition = "\"ativo\"" (Django's own spelling, #934), through the
             # CheckConstraint translator. (Rejected before #29 part 2.)
             models.Index(fields=["cpf", "ativo"], condition=Q(ativo=True), name="idx_ativos"),
         ]

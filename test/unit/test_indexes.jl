@@ -915,7 +915,7 @@ end
     # one in Django's own spelling, the partial one's Q() through the CheckConstraint translator.
     @test occursin("Models.Index(fields = (\"cpf\", \"apelido\",), name = \"ok_idx\")", generated)
     @test occursin("Models.Index(expressions = (\"LOWER(\\\"apelido\\\")\",), name = \"lower_idx\")", generated)
-    @test occursin("Models.Index(fields = (\"cpf\", \"ativo\",), name = \"ativo_idx\", condition = \"\\\"ativo\\\" = TRUE\")", generated)
+    @test occursin("Models.Index(fields = (\"cpf\", \"ativo\",), name = \"ativo_idx\", condition = \"\\\"ativo\\\"\")", generated)
     # A bare positional string is Django's shorthand for F().
     @test occursin("Models.Index(expressions = (\"\\\"cpf\\\"\", \"LOWER(\\\"apelido\\\") DESC\",), name = \"str_idx\")", generated)
     # Members that are only fields — `F()` or a bare string — are a column index: `fields`, exactly.

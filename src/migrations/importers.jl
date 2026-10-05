@@ -6045,6 +6045,11 @@ function _q_leaf_sql(k::AbstractString, v::AbstractString, fields::Dict{Symbol, 
     val.kind == :null && return col.sql * " IS NULL"
     _q_admits(fam, val) ||
       _q_fail("`$(k)=` compares a field to a value it cannot be compared to exactly on both engines")
+    # #934: Django's `Exact.as_sql` renders a boolean field against a literal True/False as the bare
+    # column (`WHERE "ativo"`) or its negation (`NOT "ativo"`), never `= TRUE`. Writing its spelling
+    # is what lets an imported CHECK or partial index match the text a Django-built SQLite database
+    # stores, instead of being replaced (a table rebuild, for a CHECK) or refused by name.
+    fam == :bool && val.kind == :bool && return val.sql == "TRUE" ? col.sql : "NOT " * col.sql
     return col.sql * " = " * val.sql
   end
   # gt / gte / lt / lte

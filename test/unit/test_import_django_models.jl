@@ -1404,7 +1404,7 @@ end
         ck("check=Q(tipo=\"a--b\")")                     => "\"tipo\" = 'a--b'",
         ck("check=Q(tipo__in=(\"a\", \"b\"))")           => "\"tipo\" IN ('a', 'b')",
         ck("check=Q(dias__in=[1, 2, 3])")                => "\"dias\" IN (1, 2, 3)",
-        ck("check=Q(homologado=True)")                   => "\"homologado\" = TRUE",
+        ck("check=Q(homologado=True)")                   => "\"homologado\"",
         # The FK's Django name and its `_id` name both resolve to the `_id` column.
         ck("check=Q(servidor__isnull=False)")            => "\"servidor_id\" IS NOT NULL",
         ck("check=Q(servidor_id=None)")                  => "\"servidor_id\" IS NULL",
@@ -1414,14 +1414,14 @@ end
         ck("check=Q(user__gt=0)")                        => "\"user\" > 0",
         # Python precedence: `~` binds tighter than `&`, `&` tighter than `|`.
         ck("check=Q(dias=1) | Q(dias=2) & ~Q(homologado=True)") =>
-            "\"dias\" = 1 OR (\"dias\" = 2 AND NOT (\"homologado\" = TRUE))",
+            "\"dias\" = 1 OR (\"dias\" = 2 AND NOT (\"homologado\"))",
         ck("check=(Q(dias=1) | Q(dias=2)) & Q(homologado=True)") =>
-            "(\"dias\" = 1 OR \"dias\" = 2) AND \"homologado\" = TRUE",
+            "(\"dias\" = 1 OR \"dias\" = 2) AND \"homologado\"",
         ck("check=Q(Q(dias=1) | Q(dias=2), homologado=False)") =>
-            "(\"dias\" = 1 OR \"dias\" = 2) AND \"homologado\" = FALSE",
+            "(\"dias\" = 1 OR \"dias\" = 2) AND NOT \"homologado\"",
         # A BETWEEN beside another AND is parenthesised, so its own AND cannot be misread.
         ck("check=Q(dias__range=(0, 10), homologado=True)") =>
-            "(\"dias\" BETWEEN 0 AND 10) AND \"homologado\" = TRUE",
+            "(\"dias\" BETWEEN 0 AND 10) AND \"homologado\"",
         # An integral float is the integer Django's `int()` makes of it; an integer column may meet a
         # float column through F().
         ck("check=Q(dias=1.0)")                          => "\"dias\" = 1.0",
@@ -1550,8 +1550,8 @@ end
         @test occursin(
             "constraints = [" *
             "Models.CheckConstraint(condition = \"\\\"dias\\\" >= 0 AND \\\"dias\\\" <= \\\"limite_dias\\\"\", name = \"ck_afast_dias\"), " *
-            "Models.CheckConstraint(condition = \"\\\"tipo\\\" IN ('ferias', 'licenca', 'tratamento d''saude') OR \\\"homologado\\\" = FALSE\", name = \"ck_afast_tipo\"), " *
-            "Models.CheckConstraint(condition = \"NOT (\\\"servidor_id\\\" IS NULL) OR \\\"homologado\\\" = FALSE\", name = \"ck_afast_servidor\"), " *
+            "Models.CheckConstraint(condition = \"\\\"tipo\\\" IN ('ferias', 'licenca', 'tratamento d''saude') OR NOT \\\"homologado\\\"\", name = \"ck_afast_tipo\"), " *
+            "Models.CheckConstraint(condition = \"NOT (\\\"servidor_id\\\" IS NULL) OR NOT \\\"homologado\\\"\", name = \"ck_afast_servidor\"), " *
             "Models.CheckConstraint(condition = \"\\\"limite_dias\\\" BETWEEN 1 AND 365\", name = \"ck_afast_limite\")]",
             generated,
         )
@@ -1608,7 +1608,7 @@ end
                 @test refused_by(7, 5, 10, "tratamento d'saude", true) == ""     # the doubled quote matched the value
                 @test rejects("ck_afast_dias", 7, -1, 10, "ferias", true)        # dias >= 0
                 @test rejects("ck_afast_dias", 7, 11, 10, "ferias", true)        # dias <= limite_dias (the F())
-                @test rejects("ck_afast_tipo", 7, 5, 10, "outro", true)          # tipo IN (...) OR homologado = FALSE
+                @test rejects("ck_afast_tipo", 7, 5, 10, "outro", true)          # tipo IN (...) OR NOT homologado
                 @test refused_by(7, 5, 10, "outro", false) == ""                 # ...the OR's other arm
                 @test rejects("ck_afast_servidor", missing, 5, 10, "ferias", true)  # NOT (servidor_id IS NULL) OR ...
                 @test refused_by(missing, 5, 10, "ferias", false) == ""
@@ -1977,7 +1977,7 @@ end
         @test !occursin("Meta.indexes on 'Servidor' — dropped", generated)
         @test count("an index on 'Servidor' was dropped", generated) == 0
         @test occursin("Models.Index(expressions = (\"LOWER(\\\"apelido\\\")\",), name = \"idx_apelido_lower\")", generated)
-        @test occursin("Models.Index(fields = (\"cpf\", \"ativo\",), name = \"idx_ativos\", condition = \"\\\"ativo\\\" = TRUE\")", generated)
+        @test occursin("Models.Index(fields = (\"cpf\", \"ativo\",), name = \"idx_ativos\", condition = \"\\\"ativo\\\"\")", generated)
         @test occursin("Models.Index(fields = (\"-cpf\", \"apelido\",), name = \"idx_servidor_cpf_desc\")", generated)
         @test occursin("Models.Index(fields = (\"cpf\", \"apelido\",), name = \"gin_servidor\", method = \"gin\")", generated)
         # And what it CAN express reached the model: the composite index, plus the single-column

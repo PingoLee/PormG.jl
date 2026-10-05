@@ -826,8 +826,39 @@ end
 # `OP(Max("ts__@date"), …)`) is walked like a pair's right-hand side. A `Q`/`Qor` container is not
 # re-entered: its pairs were resolved when it was built, and a container can hold itself
 # (`push!(q, q)`, pinned by test_cte_reference.jl). `Exists` resolves its own inner query.
-_check_filter_node(v::Union{SQLTypeOper,FExpression}) = _check_function(v)
+_check_filter_node(v::SQLTypeOper) = _check_function(v)
+function _check_filter_node(v::FExpression)
+  _guard_boolean_condition(v)   # #931
+  return _check_function(v)
+end
 _check_filter_node(v) = v
+
+# #931 — an expression used as a CONDITION must be boolean. A top-level arithmetic or bitwise node
+# (`F("lap") + 1`, `~F("flag")`, `F("a") & 4`) rendered as written: PostgreSQL rejects it ("argument of
+# WHERE/CASE must be type boolean"), SQLite reads the number for truthiness and returns rows. Refused
+# here, at construction, because every condition position funnels through `_check_filter_node` —
+# `filter`, `Q`/`Qor` and their `push!`, `When(expr)` (via `Q`), `on`/`cjoin`/`cjoin_on` — while a
+# projection or a right-hand side never does. A bare handle (`operation === nothing`) is left alone: it
+# is how a `BooleanField` is tested (`filter(F("flag"))`), and no column type is known at this point.
+function _guard_boolean_condition(v::FExpression)
+  op = v.operation
+  (op === nothing || op in _COMPARISON_OPERATIONS) && return nothing
+  throw(_non_boolean_condition(op))
+end
+function _non_boolean_condition(op::String)
+  written, fix = if op in _ARITHMETIC_OPERATIONS
+    "an arithmetic expression (`$(op)`)", "compare it, e.g. \e[4m\e[32m(F(\"lap\") + 1) > 0\e[0m"
+  elseif op == "~"
+    "a bitwise NOT (`~`)", "compare the column instead, e.g. \e[4m\e[32mF(\"flag\") == false\e[0m"
+  else
+    "a bitwise expression (`$(op)`)",
+    "combine conditions with \e[4m\e[32mQ(…)\e[0m / \e[4m\e[32mQor(…)\e[0m, or compare the bitwise value, " *
+    "e.g. \e[4m\e[32m(F(\"points\") & 4) > 0\e[0m"
+  end
+  return QueryBuildError(
+    "\e[4m\e[31m$(written) used as a condition\e[0m — a condition must be boolean. PostgreSQL rejects " *
+    "a number there and SQLite reads it for truthiness, so the two engines disagree; $(fix) (#931).")
+end
 
 function _check_filter(x::Pair)
   # #444: a CTE-scoped LHS. Delegate on `ref.path` so the whole String pipeline runs — the `__@`

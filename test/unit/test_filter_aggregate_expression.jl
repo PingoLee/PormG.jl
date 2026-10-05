@@ -399,3 +399,80 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A non-boolean expression used as a CONDITION is refused (#931)
+# `When(F("lap") + 1, then = 1)` rendered `CASE WHEN (("Tb"."lap" + ?)) THEN …`: PostgreSQL rejects it,
+# SQLite reads the number for truthiness and returns rows, so one query answered differently per engine.
+# Every condition position is asked — `When`, `Q`, `Qor`, `push!` onto either, `filter` — for each
+# non-comparison operation kind, and the refusal comes at construction, before any backend is involved.
+# A bare boolean column and a comparison over the same arithmetic keep building.
+# ─────────────────────────────────────────────────────────────────────────────
+using PormG.Models: BooleanField
+
+for (key, name) in (("f_agg_pg", :FAggPgFlag), ("f_agg_sl", :FAggSlFlag))
+  m = Model("f_agg_flags", id = IDField(), lap = IntegerField(), points = IntegerField(),
+            finished = BooleanField())
+  m.connect_key = key
+  @eval const $name = $m
+end
+
+# The exception the construction or the build raises, or `nothing` when both succeed. Unlike
+# `_f_agg_build_error`, the setup is inside the `try`: this guard fires while the node is built.
+function _f_cond_error(Model_, setup)
+  try
+    q = Model_.objects
+    setup(q)
+    inspect_query(q)
+    return nothing
+  catch e
+    return e
+  end
+end
+
+@testset "#931: a non-boolean expression as a condition is refused" begin
+  # (label, condition expression, the hint the message must carry)
+  exprs = (
+    ("addition", () -> F("lap") + 1, "(F(\"lap\") + 1) > 0"),
+    ("multiplication", () -> F("lap") * 2, "(F(\"lap\") + 1) > 0"),
+    ("nested arithmetic", () -> (F("lap") + 1) * F("points"), "(F(\"lap\") + 1) > 0"),
+    ("bitwise AND", () -> F("points") & 4, "(F(\"points\") & 4) > 0"),
+    ("bitwise OR of two comparisons", () -> (F("lap") > 1) | (F("points") > 2), "Qor(…)"),
+    ("bitwise NOT", () -> ~F("finished"), "F(\"flag\") == false"),
+    ("shift", () -> F("points") << 1, "(F(\"points\") & 4) > 0"),
+  )
+  positions = (
+    ("When(expr)", (q, e) -> q.values("c" => Case([When(e, then = 1)], default = 0))),
+    ("When(Q(expr))", (q, e) -> q.values("c" => Case([When(Q(e), then = 1)], default = 0))),
+    ("When(expr; otherwise)", (q, e) -> q.values("c" => When(e, then = 1, otherwise = 0))),
+    ("filter(expr)", (q, e) -> q.filter(e)),
+    ("filter(Q(expr))", (q, e) -> q.filter(Q(e))),
+    ("filter(Qor(expr, pair))", (q, e) -> q.filter(Qor(e, "lap" => 3))),
+    ("push! onto a Q", (q, e) -> q.filter(push!(Q("lap" => 3), e))),
+    ("push! onto a Qor", (q, e) -> q.filter(push!(Qor("lap" => 3), e))),
+  )
+  for (backend, Model_) in ((:postgres, FAggPgFlag), (:sqlite, FAggSlFlag))
+    @testset "$backend: $plabel / $elabel" for (plabel, place) in positions, (elabel, expr, hint) in exprs
+      err = _f_cond_error(Model_, q -> place(q, expr()))
+      @test err isa QueryBuildError
+      msg = sprint(showerror, err)
+      @test occursin("used as a condition", msg)
+      @test occursin(hint, msg)
+      @test occursin("#931", msg)
+    end
+    # The legal neighbours: a bare boolean column, a comparison over the refused arithmetic, and the
+    # arithmetic where it IS a value — a projection, a `then`, a right-hand side.
+    @testset "$backend: boolean conditions and arithmetic values still build" begin
+      @test _f_cond_error(Model_, q -> q.filter(F("finished"))) === nothing
+      @test _f_cond_error(Model_, q -> q.values("c" => Case([When(F("finished"), then = 1)], default = 0))) === nothing
+      @test _f_cond_error(Model_, q -> q.filter((F("lap") + 1) > 0)) === nothing
+      @test _f_cond_error(Model_, q -> q.filter(Q((F("points") & 4) > 0))) === nothing
+      @test _f_cond_error(Model_, q -> q.values("c" => Case([When((F("lap") + 1) > 0, then = F("lap") * 2)], default = 0))) === nothing
+      @test _f_cond_error(Model_, q -> q.values("d" => F("lap") + 1)) === nothing
+      @test _f_cond_error(Model_, q -> q.filter("points__@gt" => F("lap") + 1)) === nothing
+      q = Model_.objects
+      q.filter(F("finished"))
+      @test occursin(r"WHERE \(?\"Tb\"\.\"finished\"\)?", inspect_query(q)[:sql_text])
+    end
+  end
+end

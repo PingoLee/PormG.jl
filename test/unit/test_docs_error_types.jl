@@ -829,6 +829,20 @@ const DOCERR_CASES = [
         QueryBuildError,
         () -> DOCERR_RACE_PG.objects.values("name").filter("raceid" => Max("raceid")).list(show_query = :dict),
     ),
+    # #931 — *Arithmetic is not a condition* (field_expressions.md) and the `When` docstring say an
+    # arithmetic or bitwise expression used as a condition raises at construction. Every position and
+    # operation kind is pinned in `test/unit/test_filter_aggregate_expression.jl`.
+    (
+        "read/field_expressions.md + src/querybuilder/functions.jl — When docstring: an arithmetic condition is refused (#931)",
+        QueryBuildError,
+        () -> DOCERR_RACE_PG.objects.values("name",
+            "c" => PormG.Functions.Case([PormG.Functions.When(F("raceid") + 1, then = 1)], default = 0)).list(show_query = :dict),
+    ),
+    (
+        "read/field_expressions.md — a bitwise expression is refused in filter (#931)",
+        QueryBuildError,
+        () -> DOCERR_RACE_PG.objects.filter(F("raceid") & 4).list(show_query = :dict),
+    ),
     # Intentional PG/SQLite divergence: these pages tell the reader the lookup is PostgreSQL-only
     # and raises on SQLite. Asserting it on the SQLite mock keeps the documented divergence honest.
     (

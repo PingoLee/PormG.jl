@@ -306,14 +306,18 @@ end
   end
 
   # ───────────────────────────────────────────────────────────────────────────
-  # 3. The filter is `unique = 0 AND origin = 'c'`, and NOT the `HAVING COUNT(*) = 1` / `partial = 0`
-  #    pair that `_sqlite_single_column_indexed_columns` adds. That reader answers "is this column
-  #    `db_index = true`?"; this lookup answers "may PormG drop this index?", and a composite or
-  #    partial index is droppable AND blocking — SQLite refuses `DROP COLUMN` on ANY indexed column,
-  #    so the field-deletion caller needs both found. Copying the reader's filter wholesale would
-  #    have broken that path silently, in a file this one never touches.
+  # 3. The filter is `unique = 0 AND origin = 'c'`, and NOT the `HAVING COUNT(*) = 1` that
+  #    `_sqlite_single_column_indexed_columns` adds. That reader answers "is this column
+  #    `db_index = true`?"; this lookup answers "may PormG drop this index?", and a plain composite
+  #    index is droppable and worth finding, so its members stay visible.
+  #    #934 flipped the PARTIAL half of this pin on purpose. It used to say a partial index must be
+  #    found because the field-deletion caller needed it — stale since #519, which routed deletion
+  #    through `_sqlite_indexes_referencing_column`. What was left was harm: a declared partial index
+  #    over the column satisfied `db_index = true` (so nothing was created), and the `_drop_index`
+  #    fallback could drop it. Partial, expression-member and `pormg:index`-marked indexes are the
+  #    composite pass's, so the lookup now skips all three.
   # ───────────────────────────────────────────────────────────────────────────
-  @testset "SQLite: composite and partial indexes stay visible to the lookup" begin
+  @testset "SQLite: composite members stay visible; partial, expression and marked indexes do not (#934)" begin
     mktempdir() do dir
       pool = SQLiteConnectionPool(joinpath(dir, "ruq515arity.sqlite"); pool_size = 1)
       try
@@ -323,8 +327,16 @@ end
 
         @test get_constraints_index(pool, :t, "a") == "t_ab_idx"      # composite member
         @test get_constraints_index(pool, :t, "b") == "t_ab_idx"
-        @test get_constraints_index(pool, :t, "c") == "t_c_part_idx"  # partial
+        @test get_constraints_index(pool, :t, "c") === nothing        # partial: the composite pass's (#934)
         @test get_constraints_index(pool, :t, "d") === nothing        # genuinely unindexed
+        # #934: an expression member and PormG's marker each take the whole index out — so `d`, which
+        # both cover, still has no plain index, and the marked one on `b` never displaces `t_ab_idx`.
+        fetch(pool, """CREATE INDEX "t_d_expr_idx" ON "t" ("d", abs("a"))""")
+        fetch(pool, """CREATE INDEX "t_bd_mark_idx" ON "t" ("b", "d" DESC /* pormg:index */)""")
+        fetch(pool, """CREATE INDEX "t_aa_mark_idx" ON "t" ("a", "c" /* pormg:index */)""")   # sorts first
+        @test get_constraints_index(pool, :t, "d") === nothing
+        @test get_constraints_index(pool, :t, "a") == "t_ab_idx"
+        @test get_constraints_index(pool, :t, "b") == "t_ab_idx"
       finally
         close_pool!(pool)
       end
@@ -390,6 +402,14 @@ end
     @test occursin("pg_constraint", sql)
     # Deterministic, so `result[1, …]` means something.
     @test occursin("ORDER BY", sql)
+    # #934: only an index the `db_index` machinery may own — not a partial, expression-member,
+    # non-b-tree, non-default-sort or non-default-opclass one, and never one PormG marked as a
+    # composite's. Whole-index tests, so a plain composite's member still answers.
+    @test occursin("i.indpred IS NULL", sql)
+    @test occursin("NOT (0 = ANY(i.indkey::int2[]))", sql)
+    @test occursin("am.amname = 'btree'", sql)
+    @test occursin("indoption", sql) && occursin("opcdefault", sql)
+    @test occursin(PormG.Migrations._PG_UNMARKED_INDEX, sql)
   end
 
   # ───────────────────────────────────────────────────────────────────────────

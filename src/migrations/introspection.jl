@@ -2085,10 +2085,20 @@ newly declared `db_index = true` used to see that index, skip the CREATE, and be
 every `makemigrations` forever, because the rebuild renders `UNIQUE` inline rather than as the
 separate index `db_index` means. It now gets its plain index once and converges.
 
-NOT narrowed to single-column, non-partial indexes, unlike the `db_index` reader
+NOT narrowed to single-column indexes, unlike the `db_index` reader
 [`_sqlite_single_column_indexed_columns`](@ref) whose filter this otherwise mirrors. That reader
 answers *"is this column `db_index = true`?"*; this one answers *"may PormG drop this index?"*, and a
-composite index is both droppable and worth finding. Do not collapse the two.
+plain composite index is both droppable and worth finding. Do not collapse the two.
+
+#934: but it IS narrowed to indexes the `db_index` machinery may own. A PARTIAL index, one with an
+EXPRESSION member, and one carrying PormG's `pormg:index` marker are skipped on both engines — and on
+PostgreSQL every other advanced shape too (a method other than b-tree, a non-default sort or operator
+class), which #909 made "read, and never dropped unless marked". Before, the `index_actions` `:create`
+flush took a declared partial index over the column as already satisfying `db_index = true` and
+created nothing, and the `_drop_index` fallback could pick a marked or hand-made advanced index by
+name and drop it — overriding the ownership rule the composite pass applies to the same index. The
+one shape still answered on SQLite is a hand-made `DESC`/`COLLATE` index, a documented divergence
+(`test_sqlite_index_filter.jl`).
 
 #519: THIS FUNCTION IS NOT A DELETION-BLOCKING CHECK, and an earlier version of this docstring said it
 was — *"SQLite refuses `DROP COLUMN` on ANY indexed column, so the planner's field-deletion loop needs
@@ -2117,12 +2127,17 @@ function get_constraints_index(conn::PormGPostgres, table_name::Symbol, field_na
   # Scoped through `current_schemas(false)` for `get_constraints_fk`'s reason — the DDL this arms is
   # emitted UNQUALIFIED and so resolves through the search path, and the lookup has to agree with the
   # statement it is arming. Ordered, because "whichever PostgreSQL returned first" is not an answer.
+  #
+  # #934: only an index the `db_index` machinery may own — whole-index tests, so a composite MEMBER
+  # still answers: no predicate, no expression member (`indkey` 0), b-tree, every key column in the
+  # default sort and operator class, and no `pormg:index` marker (the composite pass owns those).
   query = """
   SELECT ic.relname AS indexname
   FROM pg_index i
   JOIN pg_class ic    ON ic.oid = i.indexrelid
   JOIN pg_class tc    ON tc.oid = i.indrelid
   JOIN pg_namespace n ON n.oid  = tc.relnamespace
+  JOIN pg_am am       ON am.oid = ic.relam
   JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey::int2[])
   WHERE tc.relname = \$1
     AND a.attname  = \$2
@@ -2130,6 +2145,13 @@ function get_constraints_index(conn::PormGPostgres, table_name::Symbol, field_na
     AND NOT i.indisprimary
     AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = ic.oid)
     AND n.nspname = ANY(current_schemas(false))
+    AND i.indpred IS NULL
+    AND NOT (0 = ANY(i.indkey::int2[]))
+    AND am.amname = 'btree'
+    AND NOT EXISTS (SELECT 1 FROM unnest(i.indoption::int2[]) AS o(opt) WHERE o.opt <> 0)
+    AND NOT EXISTS (SELECT 1 FROM unnest(i.indclass::oid[]) AS c(cls)
+                    JOIN pg_opclass oc ON oc.oid = c.cls WHERE NOT oc.opcdefault)
+    AND $(_PG_UNMARKED_INDEX)
   ORDER BY ic.relname;
   """
   result = fetch(conn, query, [string(table_name), field_name]) |> DataFrame
@@ -2151,17 +2173,36 @@ function get_constraints_index(conn::PormGSQLite, table_name::Symbol, field_name
   # `pragma_index_list(?)` / `pragma_index_info(…)` table-valued join, rather than a `fetch` per
   # index in a Julia loop. Ordered so a table carrying two eligible indexes on one column answers
   # the same way twice.
+  #
+  # #934: `il.partial = 0`, and every KEY member read (`pragma_index_xinfo`, whose `name` is NULL for
+  # an expression), so an index with an expression member is skipped whole; the DDL is read for the
+  # `pormg:index` marker. A declared partial index over the column used to satisfy `db_index = true`
+  # here, so the `:create` flush created nothing; a marked one could be picked by `_drop_index`.
   rows = fetch(conn, """
-    SELECT il.name AS idx
+    SELECT il.name AS idx, ii.name AS col, sm.sql AS ddl
     FROM pragma_index_list(?) AS il
-    JOIN pragma_index_info(il.name) AS ii
-    WHERE il."unique" = 0 AND il.origin = 'c' AND ii.name = ?
-    ORDER BY il.name
-    """, [string(table_name), field_name]) |> DataFrame
+    JOIN pragma_index_xinfo(il.name) AS ii
+    LEFT JOIN sqlite_master AS sm ON sm.type = 'index' AND sm.name = il.name
+    WHERE il."unique" = 0 AND il.origin = 'c' AND il.partial = 0 AND ii."key" = 1
+    ORDER BY il.name, ii.seqno
+    """, [string(table_name)]) |> DataFrame
   # An empty frame's columns are eltype Missing, so guard before touching them.
   nrow(rows) == 0 && return nothing
-  rows[1, :idx] === missing && return nothing
-  return string(rows[1, :idx])
+  members = OrderedDict{String, Vector{Union{String, Nothing}}}()
+  ddl = Dict{String, Union{String, Nothing}}()
+  for r in eachrow(rows)
+    r.idx === missing && continue
+    idx = string(r.idx)
+    push!(get!(members, idx, Union{String, Nothing}[]), r.col === missing ? nothing : string(r.col))
+    ddl[idx] = r.ddl === missing ? nothing : string(r.ddl)
+  end
+  for (idx, cols) in members
+    (field_name in cols && all(!isnothing, cols)) || continue
+    d = ddl[idx]
+    d !== nothing && _sqlite_index_marker(d) !== nothing && continue
+    return idx
+  end
+  return nothing
 end
 
 # #151: probe the live schema for a UNIQUE index of ANY arity covering `field_name`. That covers the
@@ -2325,10 +2366,11 @@ An expression member has a NULL `name`, so `MIN(ii.name)` is NULL and the row is
 One divergence from PostgreSQL follows, documented in `docs/src/migrations/index.md`: a field that
 DECLARES `db_index = true` on a column whose only index is one this skips gets PormG's own index
 beside it on PostgreSQL, but — for a `DESC` or explicitly collated index — nothing on SQLite. The
-planner's SQLite `:create` step probes `get_constraints_index`, which answers for any non-unique
-`CREATE INDEX` listing the column as a plain member (#82, #325, #161), so such an index satisfies the
-declaration there. An expression index (no plain member) or a unique one does not, and PormG's own
-index is created as on PostgreSQL. Both converge.
+planner's SQLite `:create` step probes `get_constraints_index`, which answers for a non-unique
+`CREATE INDEX` listing the column as a plain member (#82, #325, #161), so a hand-made `DESC` or
+collated index satisfies the declaration there. An index with an expression member, a partial one, a
+`pormg:index`-marked one (#934) or a unique one does not, and PormG's own index is created as on
+PostgreSQL. Both converge.
 
 Returns the index NAME as well as the column because the planner needs it to drop an index the model
 no longer declares (`model.cache["index"]`); the PostgreSQL path builds the same mapping from its

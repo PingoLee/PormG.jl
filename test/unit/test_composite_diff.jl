@@ -984,3 +984,42 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite: a partial or marked index over a column does not satisfy its db_index (#934)
+# The `index_actions` `:create` flush asks `get_constraints_index` whether a plain index already
+# covers the column, so it does not queue a CREATE beside one a rebuild re-creates. That probe used
+# to answer with ANY non-unique index listing the column — a declared partial index and a marked
+# DESC one included — so `db_index = true` planned nothing and the column never got its own index.
+# Mutation gate: drop the `il.partial = 0` and marker filters from `get_constraints_index` and
+# neither `Create index on grid` is planned.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: a partial or marked index over a column does not satisfy its db_index (#934)" begin
+  for (label, ix) in (("partial", Models.Index(fields = ("grid", "raceid"), condition = "grid > 0", name = "result_grid_part_idx")),
+                      ("marked",  Models.Index(fields = ("grid", "-raceid"), name = "result_grid_desc_idx")))
+    @testset "$label" begin
+      mktempdir() do dir
+        pool = SQLiteConnectionPool(joinpath(dir, "cd_934_$(label).sqlite"); pool_size = 1)
+        try
+          v1 = _cd_result(indexes = [ix])
+          _cd_apply!(pool, _cd_plan(pool, LiveTable[], v1))
+          @test _cd_converged(pool, ("result",), v1)
+          # v2 asks for a plain index on `grid` as well. The composite above lists `grid`, but it is
+          # not a plain index on it, so the plan must create one.
+          v2 = Models.Model("result"; id = Models.IDField(), raceid = Models.IntegerField(),
+                            driverid = Models.IntegerField(), grid = Models.IntegerField(null = true, db_index = true),
+                            indexes = [ix])
+          p2 = _cd_plan(pool, _cd_live(pool, "result"), v2)
+          @test "Create index on grid" in _cd_keys(p2, :result)
+          _cd_apply!(pool, p2)
+          live = only(_cd_live(pool, "result"))
+          @test haskey(live.indexes, "grid")
+          @test live.indexes["grid"] != ix.name
+          @test _cd_converged(pool, ("result",), v2)
+        finally
+          close_pool!(pool)
+        end
+      end
+    end
+  end
+end

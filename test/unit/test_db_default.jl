@@ -192,6 +192,64 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Quoting only one engine can see the end of is refused, and text is read the SQLite way too (#934)
+# The #496 walk knew `'…'` and `"…"` only. PostgreSQL also has `E'…'` (a backslash escapes the quote)
+# and dollar quotes; SQLite has backtick and `[…]` identifiers. Each lets a `;` or `,` the walk takes
+# for quoted data reach the statement — the issue's own string is one literal to the walk and three
+# statements to PostgreSQL. CheckConstraint, db_default and Index text share the validator, so all
+# three were open.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "is_valid_db_default_sql refuses quoting the engines end differently (#934)" begin
+    q = DBD_Q
+    # The issue's string, verbatim: `x = E'\'' ; DROP TABLE result ; SELECT E'\''`.
+    @test !is_valid_db_default_sql("x = E$(q)\\$(q)$(q) ; DROP TABLE result ; SELECT E$(q)\\$(q)$(q)")
+    # `E'…'`, in either case, wherever it starts a token — and only then: `xE'a'` is the identifier
+    # `xE` followed by a standard literal, and an `E` inside a literal is data.
+    for bad in ("E$(q)a$(q)", "e$(q)a$(q)", "x = E$(q)a$(q)", "(E$(q)a$(q))")
+        @test !is_valid_db_default_sql(bad)
+    end
+    @test is_valid_db_default_sql("xE$(q)a$(q)")
+    @test is_valid_db_default_sql("name = $(q)E$(q)")
+    # A backslash right before a quote: an escape when `standard_conforming_strings` is off, a
+    # literal backslash and then the closing quote when it is on. Two endings, so refused.
+    @test !is_valid_db_default_sql("$(q)a\\$(q)$(q)")                    # 'a\''
+    @test !is_valid_db_default_sql("$(q)a\\\\$(q)")                      # 'a\\'
+    @test !is_valid_db_default_sql("$(q)C:\\$(q)")                       # 'C:\' — the documented false rejection
+    # A backslash anywhere else is data, so a regex CHECK keeps loading. The user chose this narrower
+    # rule over "no backslash in a literal" for exactly this case.
+    @test is_valid_db_default_sql("code ~ $(q)^\\d{3}\$$(q)")
+    # Dollar quotes open at `$$` or `$tag$`; `$1` and a `$` inside an identifier open nothing, and
+    # `$$` inside a literal is data.
+    for bad in ("\$\$;\$\$", "\$tag\$ x \$tag\$", "x = \$\$a\$\$")
+        @test !is_valid_db_default_sql(bad)
+    end
+    @test is_valid_db_default_sql("a\$b = 1")
+    @test is_valid_db_default_sql("x1\$\$")                    # `x1$$` is one identifier
+    @test is_valid_db_default_sql("\$1")
+    # …but after a NUMBER or a parameter the `$$` is PostgreSQL's dollar quote: `1` and `$1` end, and
+    # `$$'$$` is a string, so the `'` after it is unterminated (found in review).
+    @test !is_valid_db_default_sql("1\$\$$(q)\$\$$(q)")
+    @test !is_valid_db_default_sql("\$1\$\$x\$\$")
+    @test is_valid_db_default_sql("code <> $(q)\$\$$(q)")
+    # A backtick quotes an identifier on SQLite and is a syntax error on PostgreSQL — refused outright,
+    # here hiding a `'` that would otherwise swallow an injected column on SQLite.
+    @test !is_valid_db_default_sql("`a`")
+    @test !is_valid_db_default_sql("`$(q)` , evil TEXT")
+    # SQLite's reading: `[` opens an identifier ending at the first `]`. `[(]` is one balanced paren
+    # group to the PostgreSQL reading and an identifier on SQLite's, so the `,` after it injects a
+    # column there.
+    @test !is_valid_db_default_sql("[(] , x INT")
+    # Arrays keep passing (the #496 fixtures), and a comma both readings nest stays legal…
+    @test is_valid_db_default_sql("ARRAY[$(q)a$(q)::text, $(q)b$(q)::text]")
+    @test is_valid_db_default_sql("ARRAY[1, 2, 3]")
+    @test is_valid_db_default_sql("(ARRAY[1, 2])[1]")
+    @test is_valid_db_default_sql("a [,] b")
+    # …but a two-dimensional array has a `,` SQLite's reading puts at top level: the documented
+    # false rejection, for a type no SQLite column can hold.
+    @test !is_valid_db_default_sql("ARRAY[ARRAY[1, 2], ARRAY[3, 4]]")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # The constructor contract: what is accepted, what is refused, and in what form it is stored
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "db_default is validated and normalised at construction (#496)" begin
@@ -460,8 +518,12 @@ end
         ("opt-out",   Models.UUIDField(db_default = (postgres = "gen_random_uuid()", sqlite = nothing))),
         # The adversarial one: a double quote closes the literal early, a `$` makes the generated
         # source INTERPOLATE rather than fail, and a backslash escapes whatever follows. All three
-        # have shipped as bugs in this exact seam before (#317, #602).
-        ("hostile",   Models.TextField(db_default = (postgres = "x || \$\$y\$\$ || \"Q\" || $(DBD_Q)a$(DBD_Q) || 'z\\'",))),
+        # have shipped as bugs in this exact seam before (#317, #602). Since #934 the SQL validator
+        # refuses a dollar quote and a backslash right before a quote, which this fixture used to
+        # spell them as (`\$\$y\$\$`, `'z\\'`); the same three characters now sit where SQL allows
+        # them — a `\$` inside a literal and inside an identifier, a backslash before a letter —
+        # because the point is Julia's escaping of them, not the SQL.
+        ("hostile",   Models.TextField(db_default = (postgres = "x\$1 || $(DBD_Q)\$y\$$(DBD_Q) || \"Q\" || $(DBD_Q)a$(DBD_Q) || $(DBD_Q)z\\d$(DBD_Q)",))),
     ]
 
     for (label, field) in cases

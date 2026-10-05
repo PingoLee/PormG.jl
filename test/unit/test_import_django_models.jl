@@ -1336,17 +1336,24 @@ end
         # imported `lotacao_id` column — FK fields gain that suffix at import.
         @test occursin(
             "constraints = [Models.UniqueConstraint(fields = (\"cpf\", \"lotacao_id\",), " *
-            "name = \"uniq_servidor_cpf_lotacao\")]",
+            "name = \"uniq_servidor_cpf_lotacao\")",
             generated,
         )
+        # #934: the partial and the functional one are imported with their text — the partial's
+        # `Q(ativo=True)` in Django's own spelling (#934 commit 4), the functional one as `LOWER`.
+        @test occursin("Models.UniqueConstraint(fields = (\"apelido\",), name = \"uniq_apelido_ativo\", " *
+                       "condition = \"\\\"ativo\\\"\")", generated)
+        @test occursin("Models.UniqueConstraint(expressions = (\"LOWER(\\\"apelido\\\")\",), " *
+                       "name = \"uniq_apelido_lower\")", generated)
 
-        # The rejected forms never become constraints. `apelido` is the column all three of them
-        # cover, so a single-field UniqueConstraint over it is the signature of any leaking through.
-        @test !occursin("Models.UniqueConstraint(fields = (\"apelido\",)", generated)
+        # The rejected forms never become constraints. `cpf` is the column both of them cover, so a
+        # single-field UniqueConstraint over it is the signature of either leaking through — as an
+        # unconditional rule, which would reject rows the live database accepts.
+        @test !occursin("Models.UniqueConstraint(fields = (\"cpf\",)", generated)
 
         # ...and each rejection says which argument it could not express.
-        @test occursin("`condition=` changes what the index means", generated)
-        @test occursin("it takes a positional expression", generated)
+        @test occursin("its `condition=` is not translated", generated)
+        @test occursin("`deferrable=` changes what the index means", generated)
         # #742/#768: a `regex` lookup is outside the translated set, so this CheckConstraint stays a
         # stub — the marker says why, names the PormG type, and carries the constraint's name over.
         @test occursin("CheckConstraint was not translated to SQL (`cpf__regex` is not a field of this " *
@@ -1354,7 +1361,7 @@ end
         @test occursin("declare it as Models.CheckConstraint(condition = \"<SQL>\", " *
                        "name = \"chk_cpf_digitos\")", generated)
 
-        # Rejection is PER CONSTRAINT. Three dropped and the fourth kept, on one model — the
+        # Rejection is PER CONSTRAINT. Three dropped and three kept, on one model — the
         # assertion above proves the survivor, this one proves the other three did not take it with
         # them, which is exactly what the coarse try/catch this replaces used to do.
         # Scoped to Servidor's own markers: other models in the fixture report dropped
@@ -1404,7 +1411,7 @@ end
         ck("check=Q(tipo=\"a--b\")")                     => "\"tipo\" = 'a--b'",
         ck("check=Q(tipo__in=(\"a\", \"b\"))")           => "\"tipo\" IN ('a', 'b')",
         ck("check=Q(dias__in=[1, 2, 3])")                => "\"dias\" IN (1, 2, 3)",
-        ck("check=Q(homologado=True)")                   => "\"homologado\" = TRUE",
+        ck("check=Q(homologado=True)")                   => "\"homologado\"",
         # The FK's Django name and its `_id` name both resolve to the `_id` column.
         ck("check=Q(servidor__isnull=False)")            => "\"servidor_id\" IS NOT NULL",
         ck("check=Q(servidor_id=None)")                  => "\"servidor_id\" IS NULL",
@@ -1414,14 +1421,14 @@ end
         ck("check=Q(user__gt=0)")                        => "\"user\" > 0",
         # Python precedence: `~` binds tighter than `&`, `&` tighter than `|`.
         ck("check=Q(dias=1) | Q(dias=2) & ~Q(homologado=True)") =>
-            "\"dias\" = 1 OR (\"dias\" = 2 AND NOT (\"homologado\" = TRUE))",
+            "\"dias\" = 1 OR (\"dias\" = 2 AND NOT (\"homologado\"))",
         ck("check=(Q(dias=1) | Q(dias=2)) & Q(homologado=True)") =>
-            "(\"dias\" = 1 OR \"dias\" = 2) AND \"homologado\" = TRUE",
+            "(\"dias\" = 1 OR \"dias\" = 2) AND \"homologado\"",
         ck("check=Q(Q(dias=1) | Q(dias=2), homologado=False)") =>
-            "(\"dias\" = 1 OR \"dias\" = 2) AND \"homologado\" = FALSE",
+            "(\"dias\" = 1 OR \"dias\" = 2) AND NOT \"homologado\"",
         # A BETWEEN beside another AND is parenthesised, so its own AND cannot be misread.
         ck("check=Q(dias__range=(0, 10), homologado=True)") =>
-            "(\"dias\" BETWEEN 0 AND 10) AND \"homologado\" = TRUE",
+            "(\"dias\" BETWEEN 0 AND 10) AND \"homologado\"",
         # An integral float is the integer Django's `int()` makes of it; an integer column may meet a
         # float column through F().
         ck("check=Q(dias=1.0)")                          => "\"dias\" = 1.0",
@@ -1550,8 +1557,8 @@ end
         @test occursin(
             "constraints = [" *
             "Models.CheckConstraint(condition = \"\\\"dias\\\" >= 0 AND \\\"dias\\\" <= \\\"limite_dias\\\"\", name = \"ck_afast_dias\"), " *
-            "Models.CheckConstraint(condition = \"\\\"tipo\\\" IN ('ferias', 'licenca', 'tratamento d''saude') OR \\\"homologado\\\" = FALSE\", name = \"ck_afast_tipo\"), " *
-            "Models.CheckConstraint(condition = \"NOT (\\\"servidor_id\\\" IS NULL) OR \\\"homologado\\\" = FALSE\", name = \"ck_afast_servidor\"), " *
+            "Models.CheckConstraint(condition = \"\\\"tipo\\\" IN ('ferias', 'licenca', 'tratamento d''saude') OR NOT \\\"homologado\\\"\", name = \"ck_afast_tipo\"), " *
+            "Models.CheckConstraint(condition = \"NOT (\\\"servidor_id\\\" IS NULL) OR NOT \\\"homologado\\\"\", name = \"ck_afast_servidor\"), " *
             "Models.CheckConstraint(condition = \"\\\"limite_dias\\\" BETWEEN 1 AND 365\", name = \"ck_afast_limite\")]",
             generated,
         )
@@ -1608,7 +1615,7 @@ end
                 @test refused_by(7, 5, 10, "tratamento d'saude", true) == ""     # the doubled quote matched the value
                 @test rejects("ck_afast_dias", 7, -1, 10, "ferias", true)        # dias >= 0
                 @test rejects("ck_afast_dias", 7, 11, 10, "ferias", true)        # dias <= limite_dias (the F())
-                @test rejects("ck_afast_tipo", 7, 5, 10, "outro", true)          # tipo IN (...) OR homologado = FALSE
+                @test rejects("ck_afast_tipo", 7, 5, 10, "outro", true)          # tipo IN (...) OR NOT homologado
                 @test refused_by(7, 5, 10, "outro", false) == ""                 # ...the OR's other arm
                 @test rejects("ck_afast_servidor", missing, 5, 10, "ferias", true)  # NOT (servidor_id IS NULL) OR ...
                 @test refused_by(missing, 5, 10, "ferias", false) == ""
@@ -1977,7 +1984,7 @@ end
         @test !occursin("Meta.indexes on 'Servidor' — dropped", generated)
         @test count("an index on 'Servidor' was dropped", generated) == 0
         @test occursin("Models.Index(expressions = (\"LOWER(\\\"apelido\\\")\",), name = \"idx_apelido_lower\")", generated)
-        @test occursin("Models.Index(fields = (\"cpf\", \"ativo\",), name = \"idx_ativos\", condition = \"\\\"ativo\\\" = TRUE\")", generated)
+        @test occursin("Models.Index(fields = (\"cpf\", \"ativo\",), name = \"idx_ativos\", condition = \"\\\"ativo\\\"\")", generated)
         @test occursin("Models.Index(fields = (\"-cpf\", \"apelido\",), name = \"idx_servidor_cpf_desc\")", generated)
         @test occursin("Models.Index(fields = (\"cpf\", \"apelido\",), name = \"gin_servidor\", method = \"gin\")", generated)
         # And what it CAN express reached the model: the composite index, plus the single-column
@@ -2021,9 +2028,11 @@ end
 
         # ...and so do the constraints, including the FK `_id` resolution and the Django name.
         rc = modelof(:Servidor).cache["unique_constraints"]["constraints"]
-        @test length(rc) == 1
+        @test length(rc) == 3                                   # #934: the partial and functional ones too
         @test rc[1].fields == ["cpf", "lotacao_id"]
         @test rc[1].name == "uniq_servidor_cpf_lotacao"
+        @test (rc[2].fields, rc[2].condition) == (["apelido"], "\"ativo\"")
+        @test rc[3].expressions == ["LOWER(\"apelido\")"]
 
         # A model declaring no db_table must not have acquired one on the way through.
         # (#345 note: this fixture imports with NO prefix — `temp_import_config!` defaults to

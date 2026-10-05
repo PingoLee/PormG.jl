@@ -2273,27 +2273,42 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
         append!(constraints, uq)
       end
       for c in constraints
+        # #934: a partial or functional one is labelled by its text — it may name no field at all.
+        clabel = isempty(c.expressions) ? c.fields : c.expressions
         # The same duplicate-declaration collapse the index loop below does, for the same reason:
         # `unique_together = (('a','b'), ('a','b'))` — a copy-paste in a real models.py — derives ONE
         # index name twice, and the planner then refuses the model with advice ("give each a distinct
         # name") that cannot be followed. The generated file loads and is unmigratable.
-        if any(p -> p.fields == c.fields && p.name == c.name, _existing_unique_constraints(model))
-          @warn "import: duplicate unique constraint; keeping one" class=class_label fields=c.fields
-          push!(markers, "# PormG: a duplicate constraint over ($(join(c.fields, ", "))) on " *
+        if any(p -> p.fields == c.fields && p.name == c.name && p.expressions == c.expressions &&
+                    p.condition == c.condition, _existing_unique_constraints(model))
+          @warn "import: duplicate unique constraint; keeping one" class=class_label fields=clabel
+          push!(markers, "# PormG: a duplicate constraint over ($(_one_line(join(clabel, ", "), 200))) on " *
                          "'$(class_label)' was dropped — the same constraint is declared twice.")
+          continue
+        end
+        # #934: a partial or functional one cannot lose its name — a derived one could not say what
+        # its text holds — so a claimed name drops it, as for a text-holding Index.
+        if Models._unique_holds_text(c) && c.name in taken_index_names
+          @warn "import: constraint name is already claimed in this import; the constraint needs its own" name=c.name class=class_label
+          push!(markers, "# PormG: a constraint over ($(_one_line(join(clabel, ", "), 200))) on '$(class_label)' " *
+                         "was dropped — its name '$(_one_line(c.name))' is claimed by another declaration in " *
+                         "this import, and a partial or functional constraint cannot take a derived name. " *
+                         "Declare it by hand under a name of its own.")
           continue
         end
         # An explicit name reused across models is a silent no-op at migration time; surrender it and
         # let PormG derive one per table. See `_claim_index_name!`.
-        kept = _claim_index_name!(taken_index_names, c.name, markers, class_label, "constraint", c.fields)
+        kept = _claim_index_name!(taken_index_names, c.name, markers, class_label, "constraint", clabel)
         kept === c.name || (c = Models.UniqueConstraint(fields = c.fields, name = kept))
         try
           Models._apply_unique_constraints!(model, vcat(_existing_unique_constraints(model), [c]))
+          Models._unique_holds_text(c) &&
+            _note_django_text_index!(markers, class_label, c.name, isempty(c.expressions) ? :partial : :functional)
         catch e
           # A declaration that never lands must not burn its name for every later model.
           kept === nothing || delete!(taken_index_names, kept)
-          @warn "import: could not apply a unique constraint; skipping it" class=class_label fields=c.fields exception=e
-          push!(markers, "# PormG: a constraint over ($(join(c.fields, ", "))) on '$(class_label)' " *
+          @warn "import: could not apply a unique constraint; skipping it" class=class_label fields=clabel exception=e
+          push!(markers, "# PormG: a constraint over ($(_one_line(join(clabel, ", "), 200))) on '$(class_label)' " *
                          "was dropped — $(replace(sprint(showerror, e), "\n" => " "))")
         end
       end
@@ -2346,11 +2361,11 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
           continue
         end
         if ix.name !== nothing && ix.name in taken_index_names &&
-           (Models._index_holds_text(ix) || any(!isnothing, ix.opclasses))
+           (Models._index_holds_text(ix) || any(!isnothing, ix.opclasses) || !isempty(ix.include))
           @warn "import: index name is already claimed in this import; the index needs its own" name=ix.name class=class_label
           push!(markers, "# PormG: an index over $(_one_line(Models._index_label(ix), 200)) on '$(class_label)' " *
                          "was dropped — its name '$(_one_line(ix.name))' is claimed by another declaration in " *
-                         "this import, and a functional, partial or operator-class index cannot take a derived " *
+                         "this import, and a functional, partial, covering or operator-class index cannot take a derived " *
                          "name. Declare it by hand under a name of its own.")
           continue
         end
@@ -5615,16 +5630,20 @@ const _META_OPTIONS_CONSUMED = ("abstract", "proxy", "db_table", "managed", "con
 
 # Django's `UniqueConstraint` arguments that PormG can honour. `violation_error_message` /
 # `violation_error_code` only change Django's Python-side error text and have no effect on the
-# index, so accepting and ignoring them is faithful.
-const _UNIQUE_CONSTRAINT_KWARGS = ("fields", "name", "violation_error_message", "violation_error_code")
+# index, so accepting and ignoring them is faithful. `condition=` is honoured since #934 when its
+# `Q(...)` is one the CheckConstraint translator reads, and a positional expression when the
+# functional-index translator reads it — `nulls_distinct=`, `deferrable=`, `include=` and `opclasses=`
+# are still refused.
+const _UNIQUE_CONSTRAINT_KWARGS = ("fields", "name", "condition", "violation_error_message", "violation_error_code")
 
 # Django's `models.Index` arguments PormG can honour (#347, #29). There is no Django `Index` kwarg
-# that is a pure no-op on the emitted index, so everything else is refused: `db_tablespace=`,
-# `include=` and the storage parameters of the PostgreSQL index classes (`fastupdate=`,
-# `pages_per_range=`, `fillfactor=`, …) all change WHAT gets indexed or how — the same
-# reject-rather-than-reinterpret rule `_parse_meta_constraints` documents. `condition=` is honoured
-# since #29 part 2 when its `Q(...)` is one the CheckConstraint translator reads (#768).
-const _INDEX_KWARGS = ("fields", "name", "opclasses", "condition")
+# that is a pure no-op on the emitted index, so everything else is refused: `db_tablespace=` and the
+# storage parameters of the PostgreSQL index classes (`fastupdate=`, `pages_per_range=`,
+# `fillfactor=`, …) all change WHAT gets indexed or how — the same reject-rather-than-reinterpret
+# rule `_parse_meta_constraints` documents. `condition=` is honoured since #29 part 2 when its
+# `Q(...)` is one the CheckConstraint translator reads (#768), and `include=` since #934, as
+# `Models.Index(include = …)`.
+const _INDEX_KWARGS = ("fields", "name", "opclasses", "condition", "include")
 
 # Django's index classes and the access method each one is (#29). `django.contrib.postgres.indexes`
 # adds the five non-b-tree ones; `BloomIndex` is an extension's method PormG cannot declare.
@@ -5732,12 +5751,14 @@ Django `Meta.constraints = [...]` → PormG composite uniqueness, plus the `Chec
 one that fails to apply.
 
 Argument acceptance is a **whitelist**, and that is the point of this function rather than an
-incidental detail. `Models.UniqueConstraint` is exactly `(fields, name)`, so a Django
-`UniqueConstraint(fields=…, condition=Q(active=True))` — a *partial* unique index — imported as an
-unconditional one would start silently rejecting rows the live database accepts. The same holds for
-`expressions=`, `nulls_distinct=` and `deferrable=`. Rejecting anything outside the whitelist means
-a Django option this importer has never met is refused rather than quietly reinterpreted, which is
-the only direction that fails safe.
+incidental detail. A Django `UniqueConstraint(fields=…, condition=Q(active=True))` — a *partial*
+unique index — imported as an unconditional one would start silently rejecting rows the live
+database accepts. Since #934 `Models.UniqueConstraint` declares `condition` and `expressions`, so a
+condition the CheckConstraint translator reads and an expression the functional-index translator
+reads are carried over exactly, and anything else drops the constraint. `nulls_distinct=` and
+`deferrable=` are still refused. Rejecting anything outside the whitelist means a Django option this
+importer has never met is refused rather than quietly reinterpreted, which is the only direction that
+fails safe.
 
 Each entry is judged on its own: one rejected constraint never takes its siblings with it.
 """
@@ -5787,16 +5808,27 @@ function _parse_meta_constraints(raw::AbstractString, fields_dict::Dict{Symbol, 
     end
 
     kwargs = Dict{String, String}()
+    expressions = String[]
+    bare = String[]          # the members that are only a field, as `fields = …` spells it
     reason::Union{String, Nothing} = nothing
     for tok in split_field_options(args)
       t = String(strip(tok))
       isempty(t) && continue
       kv = _split_top_level_assign(t)
       if kv === nothing
-        # `UniqueConstraint(Lower("name"), name="x")` — an EXPRESSION constraint. Django indexes a
-        # function of the column; PormG would index the column itself, which is a different index.
-        reason = "it takes a positional expression (`$(t)`)"
-        break
+        # `UniqueConstraint(Lower("name"), name="x")` — a FUNCTIONAL unique constraint (#934), through
+        # the functional-index translator; anything it cannot read exactly drops the constraint, since
+        # indexing the column itself would be a different, stricter rule.
+        ex = _translate_index_expression(t, fields_dict)
+        if ex isa _QUntranslatable
+          reason = "its expression `$(t)` is not translated — $(ex.why); declare it by hand as " *
+                   "Models.UniqueConstraint(expressions = …)"
+          break
+        end
+        push!(expressions, ex)
+        b = _bare_index_field(t)
+        b === nothing || push!(bare, b)
+        continue
       end
       k, v = kv
       if !(k in _UNIQUE_CONSTRAINT_KWARGS)
@@ -5807,6 +5839,54 @@ function _parse_meta_constraints(raw::AbstractString, fields_dict::Dict{Symbol, 
     end
     if reason !== nothing
       _drop_constraint!(markers, class_label, el, reason)
+      continue
+    end
+
+    # #934: a partial unique constraint's `Q(...)`, through the CheckConstraint translator — the same
+    # whitelist, so a condition it cannot read exactly on both engines drops the constraint.
+    condition = nothing
+    if haskey(kwargs, "condition")
+      condition = try
+        _q_expression(kwargs["condition"], fields_dict).sql
+      catch e
+        e isa _QUntranslatable || rethrow()
+        _drop_constraint!(markers, class_label, el, "its `condition=` is not translated — $(e.why)")
+        continue
+      end
+    end
+    # Members that are only fields — `F()` or a bare string — are a constraint over `fields`, exactly.
+    # Not a descending one (`F("x").desc()`): `UniqueConstraint(fields = …)` has no direction, so that
+    # member stays an expression, `"x" DESC`, as Django renders it (found in security review).
+    if !isempty(expressions) && length(bare) == length(expressions) && !haskey(kwargs, "fields") &&
+       !any(b -> startswith(b, "-"), bare)
+      kwargs["fields"] = "[" * join(("\"" * b * "\"" for b in bare), ", ") * "]"
+      empty!(expressions)
+    end
+    cname = haskey(kwargs, "name") ? _meta_string_literal(kwargs["name"]) : nothing
+    if !isempty(expressions) || condition !== nothing
+      # Django's rules, which it raises itself: expressions exclude `fields=`, and both kinds are named.
+      if !isempty(expressions) && haskey(kwargs, "fields")
+        _drop_constraint!(markers, class_label, el, "it mixes expressions with `fields=`, which Django refuses")
+        continue
+      end
+      if cname === nothing
+        _drop_constraint!(markers, class_label, el,
+          "a $(isempty(expressions) ? "partial" : "functional") constraint needs a `name=` string literal")
+        continue
+      end
+      # Django substitutes `%(class)s` per model; the placeholder text would name a second index.
+      if occursin("%(", cname)
+        _drop_constraint!(markers, class_label, el, "its name uses a %(…)s placeholder")
+        continue
+      end
+    end
+    if !isempty(expressions)
+      try
+        push!(out, Models.UniqueConstraint(expressions = expressions, condition = condition, name = cname))
+      catch e
+        e isa ModelDefinitionError || rethrow()
+        _drop_constraint!(markers, class_label, el, replace(sprint(showerror, e), "\n" => " "))
+      end
       continue
     end
 
@@ -5841,14 +5921,13 @@ function _parse_meta_constraints(raw::AbstractString, fields_dict::Dict{Symbol, 
     end
 
     # Django requires `name=`; a computed one (an f-string, a call) is not a literal we can carry,
-    # so the constraint is imported with an auto-derived name rather than dropped — the index is
-    # what matters, its identifier is not.
-    cname = haskey(kwargs, "name") ? _meta_string_literal(kwargs["name"]) : nothing
+    # so a plain constraint is imported with an auto-derived name rather than dropped — the index is
+    # what matters, its identifier is not. (A partial one was dropped above: it needs its name.)
     if haskey(kwargs, "name") && cname === nothing
       @warn "import: UniqueConstraint name is not a string literal; importing with a derived name" class=class_label value=kwargs["name"]
     end
     try
-      push!(out, Models.UniqueConstraint(fields = resolved, name = cname))
+      push!(out, Models.UniqueConstraint(fields = resolved, name = cname, condition = condition))
     catch e
       # A duplicate-field or empty-name rejection from the constructor: report THIS constraint and
       # keep the rest, rather than losing every constraint on the model to one bad entry.
@@ -6045,6 +6124,11 @@ function _q_leaf_sql(k::AbstractString, v::AbstractString, fields::Dict{Symbol, 
     val.kind == :null && return col.sql * " IS NULL"
     _q_admits(fam, val) ||
       _q_fail("`$(k)=` compares a field to a value it cannot be compared to exactly on both engines")
+    # #934: Django's `Exact.as_sql` renders a boolean field against a literal True/False as the bare
+    # column (`WHERE "ativo"`) or its negation (`NOT "ativo"`), never `= TRUE`. Writing its spelling
+    # is what lets an imported CHECK or partial index match the text a Django-built SQLite database
+    # stores, instead of being replaced (a table rebuild, for a CHECK) or refused by name.
+    fam == :bool && val.kind == :bool && return val.sql == "TRUE" ? col.sql : "NOT " * col.sql
     return col.sql * " = " * val.sql
   end
   # gt / gte / lt / lte
@@ -6318,8 +6402,9 @@ classes become `method = …` (#29, `_DJANGO_INDEX_METHODS`), and anything else 
 project's own subclass — is reported and skipped. A `-field` is a descending column and `opclasses=`
 carries over. Since #29 part 2 a `condition=Q(...)` becomes the index's `condition` (through the
 CheckConstraint translator) and a positional expression one of its `expressions`
-([`_translate_index_expression`](@ref)), each only when it translates exactly; `include=`, every
-storage parameter, and an expression or condition outside those whitelists are refused.
+([`_translate_index_expression`](@ref)), each only when it translates exactly; since #934 an
+`include=` list of fields becomes `include = …`. Every storage parameter, and an expression or
+condition outside those whitelists, is refused.
 
 Each entry is judged on its own: one rejected index never takes its siblings with it.
 """
@@ -6409,18 +6494,37 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
       empty!(expressions)
     end
 
+    # #934: a covering index's payload, `include=["a", "b"]` — field names, resolved like `fields=`
+    # but never descending (a payload has no order to sort by).
+    include = String[]
+    if haskey(kwargs, "include")
+      inc_inner = _balanced_group(kwargs["include"])
+      if inc_inner === nothing
+        _drop_index_decl!(markers, class_label, el, "its `include=` is not a list or tuple literal")
+        continue
+      end
+      inc_names = _clean_constraint_field_names(split_field_options(inc_inner))
+      if any(n -> startswith(n, "-"), inc_names)
+        _drop_index_decl!(markers, class_label, el, "its `include=` names a descending field")
+        continue
+      end
+      inc = _resolve_index_group(inc_names, fields_dict, class_label, markers, el)
+      inc === nothing && continue
+      include = inc
+    end
+
     # Django's own rules for the text-holding kinds, which it raises at class definition: an index is
-    # over fields or expressions, not both, and a functional or partial one is named.
+    # over fields or expressions, not both, and a functional, partial or covering one is named.
     iname = haskey(kwargs, "name") ? _meta_string_literal(kwargs["name"]) : nothing
-    if !isempty(expressions) || condition !== nothing
+    if !isempty(expressions) || condition !== nothing || !isempty(include)
       if !isempty(expressions) && (haskey(kwargs, "fields") || haskey(kwargs, "opclasses"))
         _drop_index_decl!(markers, class_label, el,
           "it mixes expressions with `$(haskey(kwargs, "fields") ? "fields" : "opclasses")=`, which Django refuses")
         continue
       end
       if iname === nothing
-        _drop_index_decl!(markers, class_label, el,
-          "a $(isempty(expressions) ? "partial" : "functional") index needs a `name=` string literal")
+        kind = !isempty(expressions) ? "functional" : condition !== nothing ? "partial" : "covering"
+        _drop_index_decl!(markers, class_label, el, "a $(kind) index needs a `name=` string literal")
         continue
       end
       # Django substitutes `%(class)s` / `%(app_label)s` per model, so the live index carries the
@@ -6433,7 +6537,8 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
     end
     if !isempty(expressions)
       try
-        push!(out, Models.Index(expressions = expressions, condition = condition, name = iname, method = method))
+        push!(out, Models.Index(expressions = expressions, condition = condition, name = iname, method = method,
+                                include = include))
       catch e
         e isa ModelDefinitionError || rethrow()
         _drop_index_decl!(markers, class_label, el, replace(sprint(showerror, e), "\n" => " "))
@@ -6472,7 +6577,7 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
     end
 
     if length(resolved) == 1 && method == "btree" && opclasses === nothing && !startswith(resolved[1], "-") &&
-       condition === nothing
+       condition === nothing && isempty(include)
       # Django's single-field plain index IS `db_index=True`; translate rather than drop (see the
       # docstring). No marker: nothing was lost. A one-field GIN, DESC, opclass or partial index is a
       # different index and stays a `Models.Index` (#29).
@@ -6487,7 +6592,7 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
     end
     try
       push!(out, Models.Index(fields = resolved, name = iname, method = method, opclasses = opclasses,
-                              condition = condition))
+                              condition = condition, include = include))
     catch e
       # A duplicate-field or empty-name rejection from the constructor: report THIS index and keep
       # the rest, rather than losing every index on the model to one bad entry.

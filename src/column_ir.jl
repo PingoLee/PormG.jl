@@ -149,6 +149,11 @@ Base.hash(d::LiteralDefault, h::UInt) = hash(d.value, hash(:LiteralDefault, h))
 # the wrapper on, SQLite's renderer added a second one, and `PRAGMA table_info` reported back a
 # different string than was declared. That is a permanent `:default` delta, the exact churn class
 # this file exists to prevent. Found in review.
+#
+# #934 taught `is_valid_db_default_sql` to REFUSE more spellings (`E'…'`, `\'`, dollar quotes,
+# backticks, SQLite's `[…]` reading) and left this scanner alone on purpose: it feeds the CHECK and
+# index hashes stored in databases, and on every text the validator still accepts the two agree.
+# Teach it a new quote only together with a validator that accepts that quote.
 function _wrapped_in_parens(s::AbstractString)::Bool
   (ncodeunits(s) >= 2 && first(s) == '(' && last(s) == ')') || return false
   depth = 0
@@ -324,11 +329,41 @@ Every one of these stays legal *inside* a literal, which is what makes the guard
 accepted. That is deliberate rather than overlooked: it is a typo both engines reject loudly when
 the DDL is applied, which puts it in the "fails at the database" category this guard already leaves
 alone — the guard exists for text that changes the statement *silently*, not for text that is
-merely wrong. Known false rejections, all conservative and all
-rare: a PostgreSQL dollar-quoted body containing any of them, a `/* … */` comment that IS closed
-(every `/*` is refused, not only an unterminated one), and the backslash-escape spellings `E'\\''`
-and `'a\\'b'`, which this walk reads as an unterminated literal because standard SQL escapes a
-quote by doubling it.
+merely wrong.
+
+**Two readings, both must pass (#934).** The text is sent verbatim to whichever engine the model
+migrates on, and the engines do not agree on where a quote ends. A walk that knows only `'…'` and
+`"…"` accepted `x = E'\\'' ; DROP TABLE result ; SELECT E'\\''` — one literal to it, three
+statements to PostgreSQL — and a SQLite `[…]` identifier could hide a top-level `,` from the
+bracket counter. So the text is scanned twice: once with `[`/`]` as PostgreSQL's array brackets,
+once with `[` opening SQLite's bracket identifier that ends at the first `]`. Both readings refuse
+the spellings whose end only one engine can find, rather than lex them:
+
+  * an `E'…'` escape string (an `E` or `e` that starts a token, right before the quote);
+  * a backslash right before a quote inside a literal — an escape under
+    `standard_conforming_strings = off`, a literal backslash then the closing quote under `on`;
+  * a dollar quote opener, `\$\$` or `\$tag\$` (not `\$1`, and not a `\$` inside an identifier);
+  * a backtick, anywhere outside a literal or an identifier.
+
+A backslash anywhere else in a literal stays legal, so a regex CHECK such as `code ~ '^\\d{3}\$'`
+passes — PostgreSQL's deparser prints backslashes inside a plain `'…'` and never writes `E'…'` or a
+dollar quote, so no catalog text the readers see is refused by these rules.
+
+Known false rejections, all conservative and all rare: a `/* … */` comment that IS closed (every
+`/*` is refused, not only an unterminated one); a literal ending in a backslash (`'C:\\'`); a
+`'` or `]` inside a literal inside brackets (`ARRAY['a]']`), which SQLite's reading ends early; and
+a PostgreSQL two-dimensional array (`ARRAY[ARRAY[1, 2], ARRAY[3, 4]]`), whose inner `,` is top-level
+on SQLite's reading. Arrays are not a column type SQLite can hold, so the last one costs nothing a
+portable model could have declared.
+
+Not modeled, deliberately: SQLite's TCL-style parameters (`:a(…)`, `\$a(…)`, `@a(…)`), each one token
+that can swallow a `'` up to its `)`. SQLite refuses a parameter at prepare time in every place this
+text lands — a column DEFAULT, a CHECK, an index member, a partial index's `WHERE` — so the statement
+fails loudly before anything after it could run.
+
+Only this validator applies the two readings. [`_wrapped_in_parens`](@ref), which feeds the CHECK and
+index hashes stored in databases, is deliberately unchanged: for every text this function accepts,
+the two scanners already agree, so no stored marker moves.
 
 Two callers, two policies, and the split is deliberate: a field constructor treats `false` as a
 `FieldValidationError` (the user wrote it; the remedy is one edit), while the schema readers treat it
@@ -338,15 +373,53 @@ column — the #472 failure this codebase spent an issue removing.
 function is_valid_db_default_sql(sql::AbstractString)::Bool
   s = strip(sql)
   isempty(s) && return false
+  return _sql_text_scan(s, false) && _sql_text_scan(s, true)
+end
+
+# PostgreSQL's identifier characters (`_pg_ident_char` in `src/migrations/runner.jl`, restated here
+# because this file is layer 1): an `E` or a `$` right after one belongs to that identifier, so it
+# opens no escape string and no dollar quote.
+_sql_ident_start(c::Char) = isletter(c) || c == '_' || c > '\x7f'
+_sql_ident_char(c::Char) = _sql_ident_start(c) || isdigit(c) || c == '$'
+
+# Whether the `$` at `s[i]` opens a dollar quote (`$$`, `$tag$`) — not a positional parameter (`$1`).
+# The caller has already ruled out a `$` inside an identifier (`a$b`). The shape of `_pg_dollar_tag`.
+function _sql_opens_dollar_quote(s::AbstractString, i::Int)::Bool
+  j = nextind(s, i)
+  j <= lastindex(s) || return false
+  s[j] == '$' && return true
+  _sql_ident_start(s[j]) || return false
+  while j <= lastindex(s) && _sql_ident_char(s[j]) && s[j] != '$'
+    j = nextind(s, j)
+  end
+  return j <= lastindex(s) && s[j] == '$'
+end
+
+# One reading of `is_valid_db_default_sql`'s text — see its docstring. `sqlite_brackets` selects
+# SQLite's: `[` opens an identifier that ends at the first `]`, with no escape. Otherwise `[`/`]`
+# are PostgreSQL's array brackets and count toward `depth` beside the parentheses.
+function _sql_text_scan(s::AbstractString, sqlite_brackets::Bool)::Bool
   depth = 0
   in_single = false          # '…'  — a SQL string literal; '' escapes a quote
   in_double = false          # "…"  — a quoted identifier on both engines
+  in_bracket = false         # […]  — a quoted identifier, on SQLite's reading only
+  prev = nothing             # the previous character outside a quote, for the `E'` rule
+  # Whether the run of identifier characters `s[i]` continues began with an identifier START — so a `$`
+  # here is part of an identifier (`a$b`). A run that began with a digit or a `$` is a number or a
+  # parameter (`1`, `$1`), after which PostgreSQL reads `$$` as a dollar quote (found in review).
+  word = false
   last_i = lastindex(s)
   i = firstindex(s)
   while i <= last_i
     ch = s[i]
     if in_single
-      if ch == '\''
+      if ch == '\\'
+        # A backslash right before a quote is an escape under `standard_conforming_strings = off`
+        # (and in an `E'…'`), and a literal backslash followed by the closing quote under `on`: the
+        # two readings end the literal in different places (#934).
+        j = nextind(s, i)
+        j <= last_i && s[j] == '\'' && return false
+      elseif ch == '\''
         j = nextind(s, i)
         if j <= last_i && s[j] == '\''
           i = nextind(s, j); continue
@@ -361,14 +434,25 @@ function is_valid_db_default_sql(sql::AbstractString)::Bool
         end
         in_double = false
       end
+    elseif in_bracket
+      ch == ']' && (in_bracket = false)
     elseif ch == '\''
+      # `E'…'` is PostgreSQL's escape string: a backslash escapes the quote, which this walk cannot
+      # follow — so the prefix is refused rather than lexed (#934).
+      prev !== nothing && (prev == 'E' || prev == 'e') && return false
       in_single = true
     elseif ch == '"'
       in_double = true
+    elseif ch == '`'
+      return false          # SQLite's (and MySQL's) identifier quote; PostgreSQL has none (#934)
+    elseif ch == '$' && !word && _sql_opens_dollar_quote(s, i)
+      return false          # a dollar-quoted body ends wherever its tag says, not at a `'` (#934)
     elseif ch == ';'
       return false
     elseif ch == ',' && depth == 0
       return false          # injects a whole extra column definition — see the docstring
+    elseif ch == '[' && sqlite_brackets
+      in_bracket = true
     elseif ch == '(' || ch == '['
       depth += 1
     elseif ch == ')' || ch == ']'
@@ -378,9 +462,14 @@ function is_valid_db_default_sql(sql::AbstractString)::Bool
       j = nextind(s, i)
       j <= last_i && s[j] == (ch == '-' ? '-' : '*') && return false
     end
+    word = (in_single || in_double || in_bracket || !_sql_ident_char(ch)) ? false :
+           (prev !== nothing && _sql_ident_char(prev)) ? word : _sql_ident_start(ch)
+    # The `E` of `E'` must start a token: `xE'…'` is the identifier `xE` and a standard literal.
+    prev = (in_single || in_double || in_bracket) ? nothing :
+           (ch == 'E' || ch == 'e') && prev !== nothing && _sql_ident_char(prev) ? 'x' : ch
     i = nextind(s, i)
   end
-  return !in_single && !in_double && depth == 0
+  return !in_single && !in_double && !in_bracket && depth == 0
 end
 
 # ── Table-level CHECK constraints (#742) ─────────────────────────────────────────────────────────
@@ -444,8 +533,11 @@ check_marker(sql::AbstractString)::String = CHECK_MARKER_PREFIX * check_conditio
 
 # The marker as it may be READ back: anywhere in a PostgreSQL comment (a user may append to it), and
 # the whole of the trailing SQL comment on SQLite. One pattern, so the two readers cannot disagree
-# about what a marker looks like.
-const CHECK_MARKER_RE = Regex(CHECK_MARKER_PREFIX * "[0-9a-f]{16}")
+# about what a marker looks like. Bounded on both sides like `INDEX_MARKER_RE` below (#934): an
+# unbounded pattern read `xpormg:check:<hash>` and a 17-digit hash as owned, and the marker is the
+# only thing between a hand-made CHECK and a planned DROP. Same PostgreSQL/PCRE subset, because
+# `_PG_UNMARKED_CHECK` interpolates it into SQL.
+const CHECK_MARKER_RE = Regex("(?<![0-9A-Za-z_:])" * CHECK_MARKER_PREFIX * "[0-9a-f]{16}(?![0-9A-Za-z_:])")
 
 # ── Index access methods, operator classes and ownership (#29) ───────────────────────────────────
 #

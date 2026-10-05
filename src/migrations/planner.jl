@@ -1838,7 +1838,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
       # plan must not count: the column would end up with no index at all (#161). A partial, an
       # expression-member or a marked index never answers (#934): it is not a plain index on `col`,
       # so a declared one over the column used to leave `db_index = true` with no index of its own.
-      probe =conn isa PormGSQLite ? get_constraints_index(conn, catalog_table, col) : nothing
+      probe = conn isa PormGSQLite ? get_constraints_index(conn, catalog_table, col) : nothing
       if probe === nothing || probe in dropped_composites
         index_name = "$(hashed)_idx"
         # `model_name`, not `live.name`: this is DDL, and it runs after a table rename (#615).

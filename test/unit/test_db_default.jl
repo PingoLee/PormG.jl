@@ -224,7 +224,12 @@ end
         @test !is_valid_db_default_sql(bad)
     end
     @test is_valid_db_default_sql("a\$b = 1")
+    @test is_valid_db_default_sql("x1\$\$")                    # `x1$$` is one identifier
     @test is_valid_db_default_sql("\$1")
+    # …but after a NUMBER or a parameter the `$$` is PostgreSQL's dollar quote: `1` and `$1` end, and
+    # `$$'$$` is a string, so the `'` after it is unterminated (found in review).
+    @test !is_valid_db_default_sql("1\$\$$(q)\$\$$(q)")
+    @test !is_valid_db_default_sql("\$1\$\$x\$\$")
     @test is_valid_db_default_sql("code <> $(q)\$\$$(q)")
     # A backtick quotes an identifier on SQLite and is a syntax error on PostgreSQL — refused outright,
     # here hiding a `'` that would otherwise swallow an injected column on SQLite.

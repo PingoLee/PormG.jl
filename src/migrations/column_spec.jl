@@ -548,9 +548,10 @@ duplicated by a second index over the same columns.
 What reaches this struct is exactly what PormG can re-emit — a readers' contract, stated on
 [`_pg_composite_indexes`](@ref) and [`_sqlite_composite_indexes`](@ref). A UNIQUE `INCLUDE` index is
 never read, so it is never matched, never dropped and never renamed; nor is an access method outside
-[`INDEX_METHODS`](@ref), or a unique index that is not plain b-tree — a unique partial or
-functional one included. A non-unique `INCLUDE` index is read since #934 (PostgreSQL only — SQLite
-has none), its payload columns in `include`; the payload makes it advanced.
+[`INDEX_METHODS`](@ref), or a unique index with a method, a descending member, a non-default class or
+a payload. Since #934 a unique partial or functional one is read, as SQL text, like the non-unique
+kind; and a non-unique `INCLUDE` index is read (PostgreSQL only — SQLite has none), its payload
+columns in `include`; the payload makes it advanced.
 
 Since #29 part 2 a functional, partial, explicitly-collated or `NULLS`-placed index IS read, as
 SQL text: its `expressions` are the catalog's own element texts (when any member is an expression or

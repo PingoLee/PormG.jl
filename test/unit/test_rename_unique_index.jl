@@ -409,6 +409,7 @@ end
     @test occursin("NOT (0 = ANY(i.indkey::int2[]))", sql)
     @test occursin("am.amname = 'btree'", sql)
     @test occursin("indoption", sql) && occursin("opcdefault", sql)
+    @test occursin("kc.coll NOT IN (0, ca.attcollation)", sql) && occursin("i.indisvalid", sql)
     @test occursin(PormG.Migrations._PG_UNMARKED_INDEX, sql)
   end
 

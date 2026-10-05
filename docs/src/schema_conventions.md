@@ -665,7 +665,7 @@ subscript, and accepts it only when both readings do. A backslash anywhere else 
 (`code ~ '^\d{3}$'`), and so is an array constructor (`ARRAY['a'::text, 'b'::text]`); a
 two-dimensional one (`ARRAY[ARRAY[1, 2], ARRAY[3, 4]]`) is refused, since SQLite's reading sees a
 top-level `,` in it. The same check applies to a [`CheckConstraint`](models.md#Check-Constraints)
-condition and to an `Index`'s `expressions` and `condition`.
+condition, to an `Index`'s `expressions` and `condition`, and to a `UniqueConstraint`'s.
 
 ### Literal or expression is decided by the DDL, not by the column type
 

@@ -445,12 +445,13 @@ function _default_or_drop(table_name, probe::ColumnSpec, raw,
   # ("both readers re-print a PARSED expression, so neither can contain a top-level `;` or an
   # unterminated quote"). That enumeration was true of the characters the guard rejected when it was
   # written and stopped being true when the comma rule arrived: a deparsed expression certainly can
-  # contain a top-level comma. It cannot today, because `depth` counts brackets so `ARRAY[…]` is
-  # accepted — but the arm is a policy, not a formality, and `check` applies the SAME predicate so
+  # contain a top-level comma. A one-dimensional `ARRAY[…]` passes, because `depth` counts brackets,
+  # but a two-dimensional one (and, since #934, a literal ending in a backslash) does not — so the
+  # arm is reachable, it is a policy, not a formality, and `check` applies the SAME predicate so
   # it never advises pasting a value this would refuse. Found in the delta review.
   if cleaned isa _ExpressionDefault
     if !is_valid_db_default_sql(cleaned.sql)
-      @warn _DEFAULT_DROPPED_MESSAGE table = string(table_name) column = probe.name default = string(cleaned) field_type = _inspectdb_field_name(probe, table_name, conn) reason = "the DEFAULT is a SQL expression PormG cannot render back safely (it contains a statement terminator, a top-level comma, a comment marker, or unbalanced quotes, parentheses or brackets)"
+      @warn _DEFAULT_DROPPED_MESSAGE table = string(table_name) column = probe.name default = string(cleaned) field_type = _inspectdb_field_name(probe, table_name, conn) reason = "the DEFAULT is a SQL expression PormG cannot render back safely (it contains a statement terminator, a top-level comma, a comment marker, unbalanced quotes, parentheses or brackets, or quoting only one engine can end — see is_valid_db_default_sql)"
       return NoDefault()
     end
     return ExpressionDefault(canonical_db_default(cleaned.sql))
@@ -2149,7 +2150,8 @@ function get_constraints_index(conn::PormGPostgres, table_name::Symbol, field_na
   #
   # #934: only an index the `db_index` machinery may own — whole-index tests, so a composite MEMBER
   # still answers: no predicate, no expression member (`indkey` 0), b-tree, every key column in the
-  # default sort and operator class, and no `pormg:index` marker (the composite pass owns those).
+  # default sort, operator class and collation (the `db_index` CTE's relative test), valid, and no
+  # `pormg:index` marker (the composite pass owns those).
   query = """
   SELECT ic.relname AS indexname
   FROM pg_index i
@@ -2171,6 +2173,10 @@ function get_constraints_index(conn::PormGPostgres, table_name::Symbol, field_na
     AND NOT EXISTS (SELECT 1 FROM unnest(i.indoption::int2[]) AS o(opt) WHERE o.opt <> 0)
     AND NOT EXISTS (SELECT 1 FROM unnest(i.indclass::oid[]) AS c(cls)
                     JOIN pg_opclass oc ON oc.oid = c.cls WHERE NOT oc.opcdefault)
+    AND NOT EXISTS (SELECT 1 FROM unnest(i.indkey::int2[], i.indcollation::oid[]) AS kc(attnum, coll)
+                    JOIN pg_attribute ca ON ca.attrelid = i.indrelid AND ca.attnum = kc.attnum
+                    WHERE kc.coll NOT IN (0, ca.attcollation))
+    AND i.indisvalid
     AND $(_PG_UNMARKED_INDEX)
   ORDER BY ic.relname;
   """
@@ -2579,7 +2585,8 @@ Four shapes, partitioned against the column readers so no index has two owners:
 WHERE` is: it keeps its columns and carries the `WHERE` text as its `condition`, split out of the
 stored DDL with [`_index_definition_elements`](@ref). An expression member, or an explicit `COLLATE`
 on a member, makes the whole index a TEXT one, read as its members exactly as written. A UNIQUE
-partial or functional index is still never read — `UniqueConstraint` declares neither.
+partial or functional index is read too since #934, unique, as `UniqueConstraint(condition = …)` /
+`UniqueConstraint(expressions = …)` declares it.
 
 Before #161 the reader carried `il."unique" = 0` and `origin = 'c'` and nothing else, so no
 composite uniqueness came back at all — neither PormG's own `CREATE UNIQUE INDEX` nor Django's

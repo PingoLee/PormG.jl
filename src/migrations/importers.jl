@@ -5855,7 +5855,10 @@ function _parse_meta_constraints(raw::AbstractString, fields_dict::Dict{Symbol, 
       end
     end
     # Members that are only fields — `F()` or a bare string — are a constraint over `fields`, exactly.
-    if !isempty(expressions) && length(bare) == length(expressions) && !haskey(kwargs, "fields")
+    # Not a descending one (`F("x").desc()`): `UniqueConstraint(fields = …)` has no direction, so that
+    # member stays an expression, `"x" DESC`, as Django renders it (found in security review).
+    if !isempty(expressions) && length(bare) == length(expressions) && !haskey(kwargs, "fields") &&
+       !any(b -> startswith(b, "-"), bare)
       kwargs["fields"] = "[" * join(("\"" * b * "\"" for b in bare), ", ") * "]"
       empty!(expressions)
     end

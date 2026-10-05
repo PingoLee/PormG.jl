@@ -356,6 +356,11 @@ a PostgreSQL two-dimensional array (`ARRAY[ARRAY[1, 2], ARRAY[3, 4]]`), whose in
 on SQLite's reading. Arrays are not a column type SQLite can hold, so the last one costs nothing a
 portable model could have declared.
 
+Not modeled, deliberately: SQLite's TCL-style parameters (`:a(…)`, `\$a(…)`, `@a(…)`), each one token
+that can swallow a `'` up to its `)`. SQLite refuses a parameter at prepare time in every place this
+text lands — a column DEFAULT, a CHECK, an index member, a partial index's `WHERE` — so the statement
+fails loudly before anything after it could run.
+
 Only this validator applies the two readings. [`_wrapped_in_parens`](@ref), which feeds the CHECK and
 index hashes stored in databases, is deliberately unchanged: for every text this function accepts,
 the two scanners already agree, so no stored marker moves.
@@ -377,10 +382,9 @@ end
 _sql_ident_start(c::Char) = isletter(c) || c == '_' || c > '\x7f'
 _sql_ident_char(c::Char) = _sql_ident_start(c) || isdigit(c) || c == '$'
 
-# Whether the `$` at `s[i]` opens a dollar quote (`$$`, `$tag$`) — not a positional parameter (`$1`),
-# not a `$` inside an identifier (`a$b`). The shape of `_pg_dollar_tag`.
-function _sql_opens_dollar_quote(s::AbstractString, i::Int, prev::Union{Char, Nothing})::Bool
-  prev !== nothing && _sql_ident_char(prev) && return false
+# Whether the `$` at `s[i]` opens a dollar quote (`$$`, `$tag$`) — not a positional parameter (`$1`).
+# The caller has already ruled out a `$` inside an identifier (`a$b`). The shape of `_pg_dollar_tag`.
+function _sql_opens_dollar_quote(s::AbstractString, i::Int)::Bool
   j = nextind(s, i)
   j <= lastindex(s) || return false
   s[j] == '$' && return true
@@ -399,7 +403,11 @@ function _sql_text_scan(s::AbstractString, sqlite_brackets::Bool)::Bool
   in_single = false          # '…'  — a SQL string literal; '' escapes a quote
   in_double = false          # "…"  — a quoted identifier on both engines
   in_bracket = false         # […]  — a quoted identifier, on SQLite's reading only
-  prev = nothing             # the previous character outside a quote, for the `E'` / `$` rules
+  prev = nothing             # the previous character outside a quote, for the `E'` rule
+  # Whether the run of identifier characters `s[i]` continues began with an identifier START — so a `$`
+  # here is part of an identifier (`a$b`). A run that began with a digit or a `$` is a number or a
+  # parameter (`1`, `$1`), after which PostgreSQL reads `$$` as a dollar quote (found in review).
+  word = false
   last_i = lastindex(s)
   i = firstindex(s)
   while i <= last_i
@@ -437,7 +445,7 @@ function _sql_text_scan(s::AbstractString, sqlite_brackets::Bool)::Bool
       in_double = true
     elseif ch == '`'
       return false          # SQLite's (and MySQL's) identifier quote; PostgreSQL has none (#934)
-    elseif ch == '$' && _sql_opens_dollar_quote(s, i, prev)
+    elseif ch == '$' && !word && _sql_opens_dollar_quote(s, i)
       return false          # a dollar-quoted body ends wherever its tag says, not at a `'` (#934)
     elseif ch == ';'
       return false
@@ -454,6 +462,8 @@ function _sql_text_scan(s::AbstractString, sqlite_brackets::Bool)::Bool
       j = nextind(s, i)
       j <= last_i && s[j] == (ch == '-' ? '-' : '*') && return false
     end
+    word = (in_single || in_double || in_bracket || !_sql_ident_char(ch)) ? false :
+           (prev !== nothing && _sql_ident_char(prev)) ? word : _sql_ident_start(ch)
     # The `E` of `E'` must start a token: `xE'…'` is the identifier `xE` and a standard literal.
     prev = (in_single || in_double || in_bracket) ? nothing :
            (ch == 'E' || ch == 'e') && prev !== nothing && _sql_ident_char(prev) ? 'x' : ch

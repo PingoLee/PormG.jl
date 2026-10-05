@@ -1368,3 +1368,37 @@ end
         [("ux_part", ["raceid", "position"], String[], "position > 0"), ("ux_fn", String[], ["abs(raceid)"], nothing)]
   @test live.cache["composite_index_owners"]["ux_part"] == (nothing, nothing)   # hand-made stays hand-made
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django importer: a UniqueConstraint's positional members (#934)
+# All-field members (`F("a")`, `"b"`) are a constraint over `fields`, exactly — but a DESCENDING one
+# (`F("a").desc()`) is not: `UniqueConstraint(fields = …)` has no direction, so rewriting it into
+# `fields = ("-a", …)` named a field that does not exist and dropped the constraint. It stays an
+# expression in Django's own spelling. Found in the security review.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer: a UniqueConstraint over F() members, ascending and descending (#934)" begin
+  django = """
+  class Lap(models.Model):
+      raceid = models.IntegerField()
+      lap = models.IntegerField()
+
+      class Meta:
+          constraints = [
+              models.UniqueConstraint(F('raceid'), 'lap', name='lap_race_lap_uq'),
+              models.UniqueConstraint(F('raceid').desc(), F('lap'), name='lap_race_desc_uq'),
+          ]
+  """
+  config_key = mktempdir()
+  PormG.config[config_key] = PormG.Configuration.Settings(db_def_folder = config_key, django_prefix = nothing)
+  try
+    import_models_from_django(django; db = config_key, file = "uc_members_unit.jl", force_replace = true)
+    generated = read(joinpath(config_key, "uc_members_unit.jl"), String)
+    @test occursin("Models.UniqueConstraint(fields = (\"raceid\", \"lap\",), name = \"lap_race_lap_uq\")", generated)
+    @test occursin("Models.UniqueConstraint(expressions = (\"\\\"raceid\\\" DESC\", \"\\\"lap\\\"\",), " *
+                   "name = \"lap_race_desc_uq\")", generated)
+    @test !occursin("was dropped", generated)
+  finally
+    delete!(PormG.config, config_key)
+    isdir(config_key) && rm(config_key; recursive = true)
+  end
+end

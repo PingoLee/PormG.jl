@@ -1876,9 +1876,9 @@ a named constraint object. Pass it to [`Model`](@ref) through `constraints =`; a
 is the field option `unique = true` instead.
 
 `condition` and `expressions` are Django's: a **partial** unique constraint, enforced only on the rows
-the condition matches (`condition = "position IS NOT NULL"` — at most one driver per finishing
-position, retirements aside), and a **functional** one, unique over SQL expressions
-(`expressions = ("lower(code)",)`). Both are SQL text under the [`Index`](@ref) contract — physical
+the condition matches (`condition = "position IS NOT NULL"` over a sprint's `(raceid, position)` — one
+classified finisher per position, retirements aside), and a **functional** one, unique over SQL expressions
+(`expressions = ("lower(driverref)",)`). Both are SQL text under the [`Index`](@ref) contract — physical
 unqualified columns, checked only for what would change the statement — `fields` and `expressions`
 are exclusive, and either needs a `name`. Each becomes a `CREATE UNIQUE INDEX … WHERE …` on both
 engines, owned through the hashed `pormg:index:<hash>` marker as an expression or partial `Index` is

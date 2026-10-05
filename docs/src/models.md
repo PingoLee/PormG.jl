@@ -173,33 +173,33 @@ Django's `UniqueConstraint` also takes a `condition` and expressions, and so doe
 text of an [expression or partial index](#Expression-and-partial-indexes), made unique:
 
 ```julia
-Result = Models.Model("result",
-  resultid = Models.IDField(),
+Sprint_result = Models.Model("sprint_results",
+  sprintid = Models.IDField(),
   raceid   = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
   position = Models.IntegerField(null=true),
   constraints = [
-    # one finisher per position in a race — retirements (no position) aside
+    # one classified finisher per position in a sprint — a retirement has no position
     Models.UniqueConstraint(fields=("raceid", "position"), condition="position IS NOT NULL",
-                            name="result_one_per_position"),
+                            name="sprint_one_per_position"),
   ],
 )
 
 Driver = Models.Model("driver",
-  driverid = Models.IDField(),
-  code     = Models.CharField(max_length=3, null=true),
+  driverid  = Models.IDField(),
+  driverref = Models.CharField(),
   constraints = [
-    # "HAM" and "ham" are the same driver code
-    Models.UniqueConstraint(expressions=("lower(code)",), name="driver_code_ci_uniq"),
+    # "hamilton" and "Hamilton" are the same driver reference
+    Models.UniqueConstraint(expressions=("lower(driverref)",), name="driver_ref_ci_uniq"),
   ],
 )
 ```
 
 ```sql
-CREATE UNIQUE INDEX "result_one_per_position" ON "result" ("raceid", "position") WHERE position IS NOT NULL;
-COMMENT ON INDEX "result_one_per_position" IS 'pormg:index:…';
+CREATE UNIQUE INDEX "sprint_one_per_position" ON "sprint_results" ("raceid", "position") WHERE position IS NOT NULL;
+COMMENT ON INDEX "sprint_one_per_position" IS 'pormg:index:837d515127295d74';
 
-CREATE UNIQUE INDEX "driver_code_ci_uniq" ON "driver" (lower(code));
-COMMENT ON INDEX "driver_code_ci_uniq" IS 'pormg:index:…';
+CREATE UNIQUE INDEX "driver_ref_ci_uniq" ON "driver" (lower(driverref));
+COMMENT ON INDEX "driver_ref_ci_uniq" IS 'pormg:index:35ba2c95a4f30f95';
 ```
 
 The text follows the `Index` rules exactly: `fields` or `expressions`, not both; a **`name`** is

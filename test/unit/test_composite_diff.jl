@@ -1095,6 +1095,16 @@ end
     @test _cd_keys(_cd_plan(CD_PG, with_live(declared, cov(other)), declared), :result) ==
           ["Remove composite index: result_race_cov", "Create index: result_race_cov"]
   end
+  # A renamed payload column maps through `column_renames`, as a key column does: `RENAME COLUMN`
+  # carries the index, so nothing else is planned for it. Unmapped, the live index read as one over a
+  # column going away, and the declaration planned a second CREATE under its name (found in review).
+  renamed = Models.Model("result"; id = Models.IDField(), raceid = Models.IntegerField(),
+                         driverid = Models.IntegerField(), start_grid = Models.IntegerField(null = true),
+                         indexes = [Models.Index(fields = ("raceid",), include = ("start_grid", "driverid"),
+                                                 name = "result_race_cov")])
+  p = _cd_plan(CD_PG, with_live(declared, cov(["grid", "driverid"])), renamed; answers = "1\n")
+  @test any(k -> occursin("Rename", k), _cd_keys(p, :result))
+  @test !any(k -> occursin("composite index", k) || startswith(k, "Create index"), _cd_keys(p, :result))
   # A plain declaration over the same key never claims the covering one.
   plain = _cd_result(indexes = [Models.Index(fields = ("raceid", "driverid"), name = "result_race_cov")])
   @test "Remove composite index: result_race_cov" in

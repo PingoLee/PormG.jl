@@ -122,6 +122,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "CTE Reference Namespace (#444/#431/#434)" include("unit/test_cte_reference.jl")
     @testset "Relation Alias Namespace (#474/#447/#424)" include("unit/test_relation_alias_namespace.jl")
     @testset "Memo Access Interface (#478)" include("unit/test_memo_interface.jl")
+    @testset "Render Scope Interface (#932)" include("unit/test_render_scope.jl")
     @testset "F Comparison Immutability (#457)" include("unit/test_f_expression_immutability.jl")
     @testset "Node Admission Invariant (#533)" include("unit/test_node_admission.jl")
     @testset "OuterRef Inside Scalar Functions and Window Columns (#535)" include("unit/test_outer_ref_in_functions.jl")

@@ -1701,13 +1701,7 @@ function _get_select_query(v::ExistsObject, instruc::SQLInstruction; _as::Union{
   # resolves are recorded. The filter-position arm, `_get_filter_query(::ExistsObject)`, is
   # deliberately NOT bracketed — a WHERE predicate is evaluated before GROUP BY, so correlating it
   # on an ungrouped column is legal on both backends.
-  prev = instruc.correlated_projection
-  instruc.correlated_projection = _as === nothing ? "Exists(…)" : _as
-  try
-    return _get_filter_query(v, instruc)
-  finally
-    instruc.correlated_projection = prev
-  end
+  return with_scope(() -> _get_filter_query(v, instruc), instruc; label = something(_as, "Exists(…)"))
 end
 function _get_select_query(v::OuterRefObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   return _get_filter_query(v, instruc)
@@ -1723,31 +1717,20 @@ end
 function _get_select_query(v::SubqueryObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   # #92: scalar single-column correlated subquery projected as a SELECT-list column.
   _guard_no_nested_projection(instruc, "Subquery")
-  # #194: a PROJECTED correlation — see `_get_select_query(::ExistsObject)`. `finally` because the
-  # inner build throws routinely (the one-column rule is one of several).
-  prev_correlated = instruc.correlated_projection
-  instruc.correlated_projection = _as === nothing ? "Subquery(…)" : _as
-  try
-    return _render_scalar_subquery(v, instruc)
-  finally
-    instruc.correlated_projection = prev_correlated
-  end
+  # #194: a PROJECTED correlation — see `_get_select_query(::ExistsObject)`. `with_scope` restores the
+  # label on throw, and the inner build throws routinely (the one-column rule is one of several).
+  return with_scope(() -> _render_scalar_subquery(v, instruc), instruc; label = something(_as, "Subquery(…)"))
 end
 # #926: the FILTER-position arm — `filter("grid" => Subquery(…))`, `F("grid") == Subquery(…)`, an ON
 # pair. Not bracketed in WHERE or ON, exactly as `_get_filter_query(::ExistsObject)` is not: those
 # predicates are evaluated before GROUP BY, so correlating on an ungrouped column is legal on both
 # backends. A HAVING predicate and a projection's `When` condition are evaluated after it, so there
-# the #194 recorder sees its OuterRefs (`post_group_predicate`, review of #926). Its values bind into whatever clause bucket
+# the #194 recorder sees its OuterRefs (`RenderScope.post_group`, review of #926). Its values bind into whatever clause bucket
 # the caller switched to (`:where`, `:join`, `:having`), as the membership arm's subquery does.
 function _get_filter_query(v::SubqueryObject, instruc::SQLInstruction)
-  instruc.post_group_predicate === nothing && return _render_scalar_subquery(v, instruc)
-  prev_correlated = instruc.correlated_projection
-  instruc.correlated_projection = instruc.post_group_predicate
-  try
-    return _render_scalar_subquery(v, instruc)
-  finally
-    instruc.correlated_projection = prev_correlated
-  end
+  post_group = instruc.scope.post_group
+  post_group === nothing && return _render_scalar_subquery(v, instruc)
+  return with_scope(() -> _render_scalar_subquery(v, instruc), instruc; label = post_group)
 end
 
 # The render both arms share: `(SELECT …)` for exactly one projected column, its values bound as one
@@ -1983,9 +1966,9 @@ function _get_filter_query(v::OuterRefObject, instruc::SQLInstruction)
   #
   # A second caller of `_resolve_outer_ref_field_name` must record here too, or the guard in
   # `_check_grouped_correlation` (`build_query.jl`) silently stops seeing that reference.
-  outer.correlated_projection !== nothing &&
-    push!(outer.outer_refs, (label = outer.correlated_projection, ref = v.field_name,
-                             column = column, expr = sql))
+  label = outer.scope.label
+  label !== nothing &&
+    push!(outer.outer_refs, (label = label, ref = v.field_name, column = column, expr = sql))
   return sql
 end
 function _get_filter_query(v::CTEReference, instruc::SQLInstruction)

@@ -369,6 +369,51 @@ second error rather than a fix.
 """
 const CorrelatedRef = NamedTuple{(:label, :ref, :column, :expr),NTuple{4,String}}
 
+"""
+    RenderScope
+
+The dynamic render state the #194 grouped-correlation guard reads, as one immutable value on
+`InstructionObject.scope` (#932). It replaced two mutable flags, each with its own save/restore code:
+
+- `label` — the name the #194 message gives a correlated subquery rendering now, or `nothing` outside
+  one. The OuterRef recorder records a reference only while it is set.
+- `post_group` — the label of a clause evaluated AFTER GROUP BY that is rendering now (a HAVING
+  predicate, the SELECT list), or `nothing`. A filter-position `Subquery(...)` compared there is
+  recorded like a projected one.
+
+**Change it only through `with_scope`**, which restores the previous value on return and on
+throw. A writer that resets to a constant instead of restoring is right only until two renders nest.
+
+Per instruction, not per task, which is why this is not a `Base.ScopedValue`: a subquery runs its own
+`build()` on its own instruction, with its own clauses, while the OuterRef it renders must read the
+OUTER instruction's scope — the clause the outer render is suspended in. A task-scoped value would
+hand it the inner query's.
+"""
+@kwdef struct RenderScope
+  label::OptionalString = nothing
+  post_group::OptionalString = nothing
+end
+
+_with_scope(s::RenderScope; kw...) =
+  RenderScope(; (k => getfield(s, k) for k in fieldnames(RenderScope))..., kw...)
+
+"""
+    with_scope(f, instruc; kw...)
+
+Run `f()` with `instruc.scope` updated by the keyword fields `kw`, then restore the previous scope —
+on return and on throw, so a render that throws (the one-column rule, the nested-CTE guard, an inner
+build) never leaves its state behind for the next one. The only writer of `scope`.
+"""
+function with_scope(f, instruc::SQLInstruction; kw...)
+  prev = instruc.scope
+  instruc.scope = _with_scope(prev; kw...)
+  try
+    return f()
+  finally
+    instruc.scope = prev
+  end
+end
+
 #
 # SQLInstruction Objects (instructions to build a query)
 #
@@ -446,24 +491,10 @@ const CorrelatedRef = NamedTuple{(:label, :ref, :column, :expr),NTuple{4,String}
   # #194 grouped-correlation guard — same evidence-plumbing shape as `agg_sources` above, and for
   # the same reason: what the guard needs cannot be read back off the rendered state.
   #
-  # `correlated_projection` is the output name of the projected correlated Subquery/Exists currently
-  # rendering, or `nothing` outside one. It is set ONLY by the two PROJECTED entry points
-  # (`_get_select_query(::SubqueryObject)` / `(::ExistsObject)`), which is what keeps a
-  # FILTER-position `Exists` out of the guard: a WHERE predicate is evaluated before GROUP BY, so
-  # correlating one on an ungrouped column is legal and both backends run it.
-  #
-  # **Set and restore it with `try`/`finally`.** A projected render throws routinely (the
-  # one-column rule, the nested-CTE guard, the inner build), and a flag left set would make the NEXT
-  # ref recorded against a projection that is no longer rendering.
-  correlated_projection::OptionalString = nothing
-  # #926 (review) — the clause evaluated AFTER GROUP BY that is rendering right now, as the label the
-  # #194 message names, or `nothing` outside one. A filter-position `Subquery(...)` is outside the
-  # guard because a WHERE or ON predicate is evaluated before GROUP BY — but a HAVING predicate and
-  # the SELECT list (a `When` condition in a projection) are evaluated after it, so a subquery
-  # compared there is recorded like a projected one. That is how an `Exists` in a projected `When`
-  # already behaves; it over-refuses one legal shape, a subquery inside an aggregate's argument
-  # (#932). Set with `finally` by the two HAVING expression sites and around the SELECT render.
-  post_group_predicate::OptionalString = nothing
+  # The render state the #194 recorder reads — see `RenderScope`. Written ONLY through `with_scope`,
+  # which restores the previous scope in a `finally`; `test/unit/test_render_scope.jl` scans for any
+  # other write.
+  scope::RenderScope = RenderScope()
   # One entry per OuterRef actually RENDERED inside a projected correlated subquery of this query.
   # Written at resolution time rather than collected by walking the inner query's AST, because the
   # two have opposite failure modes: a walker must enumerate every node type an OuterRef can hide in

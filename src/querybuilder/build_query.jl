@@ -1325,13 +1325,12 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
           _guard_window_alias_predicate(source, having_key[2], instruc)   # #685, as the typed path does
           clause === :where && _guard_where_operand(v, instruc)   # #895: a row alias against an aggregate
           set_context!(instruc, clause)
-          prev_having = instruc.post_group_predicate
-          clause === :having && (instruc.post_group_predicate = _post_group_predicate_label(having_key[2]))
           try
-            push!(clause === :having ? instruc.having : instruc._where, _get_filter_query(v, instruc))
+            post_group = clause === :having ? _having_subquery_label(having_key[2]) : instruc.scope.post_group
+            push!(clause === :having ? instruc.having : instruc._where,
+                  with_scope(() -> _get_filter_query(v, instruc), instruc; post_group = post_group))
           finally
             set_context!(instruc, :where)
-            instruc.post_group_predicate = prev_having
           end
           continue
         end
@@ -1344,7 +1343,7 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         # `BackendCapabilityError` (#618). Leaving the clause's context active would file a later
         # clause's values in the wrong bucket. Harmless today — every such throw escapes `build()` and the
         # instruction is discarded — but it matches what `_get_select_query(::ExistsObject)` already
-        # does for `correlated_projection`, and it stops the next caller who catches one of these
+        # does for its `RenderScope`, and it stops the next caller who catches one of these
         # from inheriting a wrong context.
         set_context!(instruc, clause)
         try
@@ -1820,20 +1819,15 @@ _having_leaf_label(q::SQLTypeQor) = _having_leaf_label(first(q.or))
 function _get_having_query(v::SQLTypeOper, instruc::SQLInstruction)::String
   # #707: an expression on the right is a comparison, not a value to type — see the top-level branch.
   if _expression_operand(v.values)
-    # #926 (review): a subquery on the right is evaluated after GROUP BY here — see `post_group_predicate`.
-    prev_having = instruc.post_group_predicate
-    instruc.post_group_predicate = _post_group_predicate_label(something(_plain_filter_key(v.column), "?"))
-    try
-      return _get_filter_query(v, instruc)
-    finally
-      instruc.post_group_predicate = prev_having
-    end
+    # #926 (review): a subquery on the right is evaluated after GROUP BY here — see `RenderScope`.
+    return with_scope(() -> _get_filter_query(v, instruc), instruc;
+                      post_group = _having_subquery_label(something(_plain_filter_key(v.column), "?")))
   end
   having_key, having_cached = _aggregate_alias_leaf(v, instruc)
   return _render_alias_predicate(v, having_key, having_cached, instruc)
 end
 # What the #194 message calls the correlated subquery of a HAVING predicate on `alias`.
-_post_group_predicate_label(alias::AbstractString) = "Subquery(…) in the HAVING filter on \"$(alias)\""
+_having_subquery_label(alias::AbstractString) = "Subquery(…) in the HAVING filter on \"$(alias)\""
 _get_having_query(q::SQLTypeQ, instruc::SQLInstruction)::String =
   "(" * join([_get_having_query(v, instruc) for v in q.filters], " AND ") * ")"
 _get_having_query(q::SQLTypeQor, instruc::SQLInstruction)::String =
@@ -2334,12 +2328,8 @@ function build(object::SQLObject;
   # Subqueries skip this to inherit the parent's current bucket.
   set_contexts && set_context!(instruct, :select)
   # #926 (review): a subquery compared inside a projection is evaluated after GROUP BY.
-  instruct.post_group_predicate = "Subquery(…) compared in a projection"
-  try
-    get_select_query(object.values, instruct)
-  finally
-    instruct.post_group_predicate = nothing
-  end
+  with_scope(() -> get_select_query(object.values, instruct), instruct;
+             post_group = "Subquery(…) compared in a projection")
   _record_wildcard_projection_kinds!(instruct)
 
   set_contexts && set_context!(instruct, :where)

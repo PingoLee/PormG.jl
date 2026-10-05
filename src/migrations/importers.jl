@@ -879,6 +879,173 @@ function _py_imports(stmts::Vector{PyStmt})::_PyImports
   return _PyImports(names, stars)
 end
 
+# A compound statement whose block runs conditionally or repeatedly. A name bound inside one is not
+# a fixed binding: `if DEBUG: MAX_LEN = 20` may or may not have run when the class body is read.
+# `match`/`case` are soft keywords — `match = 3` is an ordinary assignment — so those two count only
+# as a block header ending in a colon.
+const _PY_BLOCK_HEADER_RE = r"^(?:(?:if|elif|else|try|except|finally|while|(?:async\s+)?(?:for|with))\b|(?:match|case)\b.*:$)"
+# `X += 1`, `X >>= 2`: an augmented assignment, read off the statement text because
+# `_split_top_level_assign` refuses an `=` after `<`/`>` and leaves any other operator on the left.
+const _PY_AUGMENTED_RE = r"^([A-Za-z_]\w*)\s*(?:\*\*|//|<<|>>|[-+*/%@&|^])="
+const _PY_DEF_OR_CLASS_RE = r"^(?:async\s+def|def|class)\s+([A-Za-z_]\w*)"
+
+# `text` split at every top-level `ch` — outside strings and brackets.
+function _py_split_top(text::AbstractString, ch::Char)::Vector{String}
+  out = String[]
+  st = _PyScan()
+  buf = IOBuffer()
+  i = firstindex(text)
+  while i <= lastindex(text)
+    c = text[i]
+    j = _py_step!(st, text, i)
+    if c == ch && st.depth == 0 && !_in_string(st)
+      push!(out, String(take!(buf)))
+    else
+      print(buf, text[i:prevind(text, j)])
+    end
+    i = j
+  end
+  push!(out, String(take!(buf)))
+  return out
+end
+
+"""
+    _py_stmt_targets(text) -> Vector{String}
+
+Every name one statement may bind, without its value (#948): the targets of a plain, chained or
+augmented assignment; the names a `from … import` or `import` binds, or `"*"` for a star import; a
+`def`/`class` name; a `for` target and a `with`/`except … as` name; and, for a one-line compound
+statement (`if DEBUG: X = 1`, `try: from .local import X`) or a `;`-joined line, everything its parts
+bind. It answers "could this statement have rebound the name", never "to what", so over-reporting
+only costs a resolution, never a wrong value.
+"""
+function _py_stmt_targets(text::AbstractString)::Vector{String}
+  out = String[]
+  add!(n) = (n = strip(n); Base.isidentifier(n) && push!(out, String(n)))
+  parts = filter(!isempty ∘ strip, _py_split_top(text, ';'))
+  if length(parts) > 1
+    foreach(p -> append!(out, _py_stmt_targets(p)), parts)
+    return out
+  end
+  t = strip(text)
+  isempty(t) && return out
+  m = match(_PY_DEF_OR_CLASS_RE, t)
+  m === nothing || return push!(out, String(m.captures[1]))
+  im = match(_FROM_IMPORT_RE, t)
+  if im !== nothing
+    rest = strip(String(im.captures[2]), ['(', ')', ' '])
+    rest == "*" && return push!(out, "*")
+    for item in split(rest, ',')
+      isempty(strip(item)) || add!(split(strip(item), r"\s+as\s+")[end])
+    end
+    return out
+  end
+  if startswith(t, "import ")
+    # `import a.b` binds `a`; `import a.b as c` binds `c`.
+    for item in split(t[nextind(t, 6):end], ',')
+      ps = split(strip(item), r"\s+as\s+")
+      add!(length(ps) > 1 ? ps[end] : split(ps[1], '.')[1])
+    end
+    return out
+  end
+  # `(X := 50)` binds X wherever it appears; over-binding only costs a resolution.
+  for wm in eachmatch(r"([A-Za-z_]\w*)\s*:=", t)
+    add!(wm.captures[1])
+  end
+  tm = match(r"^type\s+([A-Za-z_]\w*)", t)              # PEP 695 `type X = …`
+  tm === nothing || return push!(out, String(tm.captures[1]))
+  if occursin(_PY_BLOCK_HEADER_RE, t)
+    fm = match(r"^(?:async\s+)?for\s+(.+?)\s+in\b", t)
+    fm === nothing || foreach(add!, split(replace(fm.captures[1], r"[()\[\]*]" => ""), ','))
+    # `with ctx() as (a, X):` binds every name in the parentheses.
+    for am in eachmatch(r"\bas\s+(\([^)]*\)|[A-Za-z_]\w*)", t)
+      foreach(add!, split(replace(am.captures[1], r"[()*]" => ""), ','))
+    end
+    # A `case` pattern binds its capture names; every identifier in it is a safe over-approximation.
+    if startswith(t, "case")
+      for im in eachmatch(r"[A-Za-z_]\w*", t[nextind(t, 4):something(findlast(':', t), lastindex(t) + 1) - 1])
+        add!(im.match)
+      end
+    end
+    # A one-line compound statement carries its body after the header's top-level colon.
+    segs = _py_split_top(t, ':')
+    length(segs) > 1 && append!(out, _py_stmt_targets(join(segs[2:end], ':')))
+    return out
+  end
+  am = match(_PY_AUGMENTED_RE, t)
+  am === nothing || return push!(out, String(am.captures[1]))
+  # A plain or CHAINED assignment: `X = Y = 50` binds both.
+  rest = t
+  while (kv = _split_top_level_assign(rest)) !== nothing
+    lhs = kv[1]
+    ann = findfirst(':', lhs)
+    ann === nothing || (lhs = lhs[firstindex(lhs):prevind(lhs, ann)])
+    foreach(add!, split(replace(lhs, r"[()\[\]*]" => ""), ','))
+    rest = kv[2]
+  end
+  return out
+end
+
+"""
+    _py_const_bindings(stmts, base) -> Dict{String, Vector{Tuple{Int, String}}}
+
+Every binding of a name in one namespace, in source order, as `(lineno, rhs_text)` (#948). `base` is
+the namespace's own indent: `0` for a module, `nothing` for a class body, which takes the indent of
+its first statement.
+
+**Every** binding is recorded, not only the literal ones, because the reader asks "what does this name
+hold at line N", and a later rebinding answers it. `MAX_LEN = 10` followed by
+`MAX_LEN = compute()` must not resolve to `10`. Only a plain `NAME = <rhs>` at the namespace's own
+level keeps its right-hand side. Every other binding form ([`_py_stmt_targets`](@ref)) is stored with
+an EMPTY one, which no reader treats as a literal — and so is any binding inside an
+`if`/`try`/`for`/`with` block, which may or may not have run: the realistic case is
+`try: from .local_settings import MAX_LEN`, which an earlier literal must not survive. A star import
+is recorded under the key `"*"`, since it may rebind any name.
+
+Statements nested under a `def` or `class` header are skipped: they bind names in another namespace.
+`_py_classes` already lifts a class's own body out, and that body is read through its own call.
+"""
+function _py_const_bindings(stmts::Vector{PyStmt}, base::Union{Int, Nothing})
+  out = Dict{String, Vector{Tuple{Int, String}}}()
+  isempty(stmts) && return out
+  base = something(base, minimum(s.indent for s in stmts))
+  bind!(name, lineno, rhs) = push!(get!(out, String(name), Tuple{Int, String}[]), (lineno, String(rhs)))
+  unknown!(s) = foreach(n -> bind!(n, s.lineno, ""), _py_stmt_targets(s.text))
+  nested = :none       # what the most recent `base`-level header opened: :none, :block or :scope
+  for s in stmts
+    if s.indent > base
+      nested === :scope || unknown!(s)
+      continue
+    end
+    s.indent < base && continue
+    nested = :none
+    if match(_PY_DEF_OR_CLASS_RE, s.text) !== nothing
+      unknown!(s)
+      nested = :scope
+      continue
+    end
+    if occursin(_PY_BLOCK_HEADER_RE, s.text)
+      unknown!(s)
+      nested = :block
+      continue
+    end
+    # The one binding whose value is kept: `NAME = rhs` (or `NAME: T = rhs`), not chained, not part of
+    # a `;`-joined line.
+    kv = count(!isempty ∘ strip, _py_split_top(s.text, ';')) == 1 ?
+         _split_top_level_assign(rstrip(s.text, [';', ' '])) : nothing
+    if kv !== nothing && _split_top_level_assign(kv[2]) === nothing
+      lhs = kv[1]
+      ann = findfirst(':', lhs)
+      ann === nothing || (lhs = String(strip(lhs[firstindex(lhs):prevind(lhs, ann)])))
+      if Base.isidentifier(lhs)
+        bind!(lhs, s.lineno, kv[2])
+        continue
+      end
+    end
+    unknown!(s)
+  end
+  return out
+end
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: The Django import engine — one or many apps (#346)
@@ -1980,7 +2147,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
                               enum_scope_map; class_label = class_label,
                               strict_fields = strict_fields,
                               enum_aliases = graph.enum_aliases,
-                              own_owner = (graph.self, String(class_name)))
+                              own_owner = (graph.self, String(class_name)),
+                              consts = graph.scopes)
 
       # Django's implicit `id`, added only when nothing claimed the key — DERIVED, per field, from
       # what was built and from what the models.py declared, never tracked with a class-wide flag
@@ -2935,8 +3103,9 @@ _meta_is_true(raw::AbstractString)::Bool = parse_value(raw) === true
     _AppScope
 
 One app's contribution to an import run: its `label`, the `keys` a Python module path may name it
-by, its own `classes` in source order, the `own` name→class table (first-wins), and its
-[`_PyImports`](@ref).
+by, its own `classes` in source order, the `own` name→class table (first-wins), its
+[`_PyImports`](@ref), and `consts` — every simple assignment in the module and in each root class
+body, read by [`_resolve_py_constant`](@ref) (#948).
 
 `keys` is EMPTY for the single-app arity. That is not a detail — it is what makes the one-app path
 provably unchanged by #370: with no key, no module path can ever match an app, so import and star
@@ -2950,6 +3119,7 @@ struct _AppScope
   classes::Vector{PyClass}
   own::Dict{String, PyClass}
   imports::_PyImports
+  consts::Dict{String, Dict{String, Vector{Tuple{Int, String}}}}
 end
 
 # The package chain leading to this app's models module: `server/core/models.py` and
@@ -2988,7 +3158,11 @@ function _app_scope(label::AbstractString, path::Union{Nothing, AbstractString},
     d = isempty(pkg) ? nothing : pkg[end]
     (d === nothing || d in keys) || push!(keys, d)
   end
-  return _AppScope(String(label), keys, pkg, classes, own, _py_imports(stmts))
+  consts = Dict{String, Dict{String, Vector{Tuple{Int, String}}}}("" => _py_const_bindings(stmts, 0))
+  for (name, c) in own
+    consts[name] = _py_const_bindings(c.body, nothing)
+  end
+  return _AppScope(String(label), keys, pkg, classes, own, _py_imports(stmts), consts)
 end
 
 """
@@ -4415,7 +4589,10 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
                                # nothing about a same-named abstract base in another one —
                                # `core.Pessoa` abstract, `rh.Pessoa` concrete is an ordinary Django
                                # layout. Comparing the name alone called both owners "this class".
-                               own_owner::Tuple{Int, String} = (1, String(class_name)))
+                               own_owner::Tuple{Int, String} = (1, String(class_name)),
+                               # #948: every app's `_AppScope`, for bare-name option values. A
+                               # keyword for #512's reason; `nothing` resolves no name.
+                               consts::Union{Nothing, Vector{_AppScope}} = nothing)
   # Django's `AbstractUser` columns. A Bool rather than the base-list STRING it used to compare
   # against (#341): the base list is now parsed, so `class User(AbstractUser, SomeMixin)` and a
   # class reaching `AbstractUser` through an abstract base both qualify — an equality test on the
@@ -4738,8 +4915,10 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
                                     class_name = class_name,
                                     enum_scopes = stmt_scopes, class_label = class_label,
                                     field_name = field_name,
-                                    markers = unsupported_type ? String[] : markers)
-    options, related_model = unsupported_type ? with_logger(parse_args, NullLogger()) : parse_args()
+                                    markers = unsupported_type ? String[] : markers,
+                                    consts = consts, const_owner = stmt_owner, lineno = stmt.lineno)
+    options, related_model, resolved_from_name =
+      unsupported_type ? with_logger(parse_args, NullLogger()) : parse_args()
 
     # An IGNORED field type contributes no column, so it cannot be the primary key either. Tested
     # BEFORE the primary-key bookkeeping below for that reason (#346): the other order let
@@ -4907,23 +5086,26 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     # column's name. Parsed HERE, after both skip branches, so a column `autofields_ignore` dropped or
     # #410 skipped never reports on its element.
     element_type, element_options = nothing, nothing
+    element_resolved = Tuple{String, String}[]
     if array_element !== nothing
       element_type = django_field_type(array_element.type)
-      element_options, _ = parse_field_args(array_element.args, array_element.type, parameters_ignore;
+      element_options, _, element_resolved = parse_field_args(array_element.args, array_element.type, parameters_ignore;
                                             enums = enums, enum_aliases = enum_aliases,
                                             class_name = class_name, enum_scopes = stmt_scopes,
                                             class_label = class_label, field_name = field_name,
-                                            markers = markers)
+                                            markers = markers,
+                                            consts = consts, const_owner = stmt_owner,
+                                            lineno = stmt.lineno)
       _drop_array_element_column_kwargs!(element_options, field_name, class_label, array_element.type, markers)
     end
 
     # One constructor for the first attempt AND the #342 retry below, so a new field shape gets one
     # home rather than two arms kept in step by hand. `field_key` already carries the "_id" suffix
     # foreign keys take.
-    construct(opts) =
+    construct(opts, eopts = element_options) =
       field_type in ("ForeignKey", "OneToOneField") ? getfield(Models, Symbol(field_type))(related_model; opts...) :
       field_type == "ManyToManyField" ? Models.ManyToManyField(related_model; opts...) :
-      field_type == "ArrayField" ? Models.ArrayField(getfield(Models, Symbol(element_type))(; element_options...); opts...) :
+      field_type == "ArrayField" ? Models.ArrayField(getfield(Models, Symbol(element_type))(; eopts...); opts...) :
       getfield(Models, Symbol(field_type))(; opts...)
 
     # Instantiate the field
@@ -4979,10 +5161,58 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
           continue
         end
       end
+      # #948's stage, after #342's and only when an option came from a constant: a constant can
+      # resolve perfectly well to a value the constructor refuses (`MAX_LEN = "ten"`, `size=-1`).
+      # Retry without every constant-sourced option — the element's included — and, when #342's
+      # stage ran, without `choices`/`default` too, since that stage alone did not recover. #342's
+      # stage runs FIRST and unchanged, so a field whose constants are fine keeps them.
+      if !isempty(resolved_from_name) || !isempty(element_resolved)
+        from_constants = Set{Symbol}(Symbol(k) for (k, _) in resolved_from_name)
+        element_cleared = Set{Symbol}(Symbol(k) for (k, _) in element_resolved)
+        # The constant-sourced options alone first, so a valid inline `choices` survives a refused
+        # `max_length=BAD`; `choices`/`default` join them only when that is not enough.
+        attempts = [from_constants]
+        (haskey(options, :choices) || haskey(options, :default)) &&
+          push!(attempts, union(from_constants, Set([:choices, :default])))
+        cleared = nothing
+        for attempt in attempts
+          ok = try
+            fields_dict[field_key] =
+              construct(filter(kv -> !(kv.first in attempt), options),
+                        element_options === nothing ? nothing :
+                          filter(kv -> !(kv.first in element_cleared), element_options))
+            true
+          catch e2
+            (e2 isa InterruptException || e2 isa StackOverflowError) && rethrow()
+            false
+          end
+          ok && (cleared = attempt; break)
+        end
+        recovered = cleared !== nothing
+        if recovered
+          reason = _one_line(sprint(showerror, e), 160)
+          dropped = join(vcat(["`$(k)` (from `$(n)`)" for (k, n) in resolved_from_name],
+                              ["the element's `$(k)` (from `$(n)`)" for (k, n) in element_resolved],
+                              ["`$(k)`" for k in (:choices, :default)
+                               if k in cleared && haskey(options, k) && !(k in from_constants)]),
+                         ", ")
+          @warn "import: field option rejected; field imported without it" class=class_label field=field_name dropped=dropped reason=reason
+          push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' — $(dropped) rejected " *
+                         "and dropped: $(rstrip(reason, '.')). The column is real; check the " *
+                         "constant's value.")
+          continue
+        end
+      end
       # A FieldValidationError/InvalidValueError from field construction is already the right
       # type — stringifying it into an ErrorException would eject it from the taxonomy (audit).
+      # It is re-raised as the SAME type with the field and class in front (#948): the bare
+      # constructor message named neither, which on a project with hundreds of models left the
+      # reader grepping for a value.
+      ctx = "Error processing field '$field_name' in class '$class_label': "
+      e isa FieldValidationError && throw(FieldValidationError(ctx * e.msg))
+      e isa InvalidValueError && throw(InvalidValueError(ctx * e.msg))
       e isa PormGError && rethrow()
-      throw(InvalidMigrationError("Error processing field '$field_name' in class '$class_label': $(e)"))
+      throw(InvalidMigrationError(ctx * "$(e)"))
     end
   end
 
@@ -5141,10 +5371,20 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
                          enum_scopes::Vector{Tuple{Int, String}} = Tuple{Int, String}[(1, String(class_name)), (1, "")],
                          class_label::AbstractString = class_name,
                          field_name::AbstractString = "",
-                         markers::Vector{String} = String[])
+                         markers::Vector{String} = String[],
+                         # #948: where a bare-name option value is looked up. `consts` is the
+                         # import's `graph.scopes`, `const_owner` the `(app, class)` the statement
+                         # was WRITTEN in (#402), and `lineno` its line — a name bound after it is a
+                         # `NameError` in Python. With no `consts`, no name resolves.
+                         consts::Union{Nothing, Vector{_AppScope}} = nothing,
+                         const_owner::Tuple{Int, String} = (1, String(class_name)),
+                         lineno::Int = typemax(Int))
   # This function parses field arguments handling nested parentheses and commas
-  # and returns a dictionary of options.
+  # and returns the options, the related model, and the options whose value came from a constant.
   options = Dict{Symbol, Any}()
+  # `(option, constant)` for every option whose value was read through a constant (#948). Returned so
+  # a construction failure can drop exactly these and say which constant it came from.
+  resolved_from_name = Tuple{String, String}[]
   options_list = split_field_options(args_str)
   # println(options_list)
   related_model = missing
@@ -5173,6 +5413,49 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
           # it became the text `"[]"`, which is not an array literal, and the default was rejected.
           if key == "default" && field_type == "ArrayField" && value in ("list", "list()", "[]")
               options[:default] = Any[]
+              continue
+          end
+          # A bare name (#948): `max_length=MAX_LEN`, `choices=STATUS_CHOICES`, `size=MAX_TAGS`.
+          # `parse_value` handed it through as the text "MAX_LEN", which a typed constructor refuses —
+          # and that refusal aborted the import of every model in every app of the call. A constant
+          # this file binds to a literal is read; anything else is dropped and reported, never kept
+          # as text, because `db_column="COL"` or `default="uuid4"` in the schema is a silent wrong
+          # value rather than a missing one.
+          if _is_bare_py_name(value) && !(key in _SYMBOL_VALUED_OPTIONS) &&
+             !(key == "default" && value in ("list", "dict"))
+              c = consts === nothing ? nothing : _resolve_py_constant(consts, const_owner, value, lineno)
+              takes_container = key == "choices" || (key == "default" && field_type == "ArrayField")
+              if c === nothing || (c.container && !takes_container) || (!c.container && key == "choices")
+                  why = c === nothing ? "a name the importer cannot resolve to a literal" :
+                        c.container   ? "a name bound to a tuple or list, which `$(key)` cannot take" :
+                                        "a name bound to a single value, which `choices` cannot take"
+                  @warn "import: option value is a name the importer cannot resolve to a literal; dropped" class=class_label field=field_name option=key name=value
+                  push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' has " *
+                                 "`$(key)=$(value)`, $(why) — `$(key)` was dropped. Only a constant " *
+                                 "assigned a literal above this line in the same models.py (at " *
+                                 "module level or in the class body) is read; a callable, an " *
+                                 "import or a constant from another module is not.")
+                  continue
+              end
+              push!(resolved_from_name, (String(key), String(value)))
+              value = c.text
+          end
+          # A tuple or list default on an ArrayField (#948): `default=["SOFT"]` is the array {SOFT}.
+          # Left to `parse_value`, a list became the text `["SOFT"]`, which the constructor refused,
+          # and a tuple went through `parse_choices` and came out as an EMPTY default, silently.
+          if key == "default" && field_type == "ArrayField" && (inner = _py_paren_scalar(value)) !== nothing
+              value = inner
+          end
+          if key == "default" && field_type == "ArrayField" && _is_py_container(value)
+              items = _py_literal_items(value)
+              if items === nothing
+                  @warn "import: ArrayField default is not a list of literals; dropped" class=class_label field=field_name value=_one_line(value)
+                  push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' has " *
+                                 "`default=$(_one_line(value))`, which is not a list of literals " *
+                                 "the importer can read — `default` was dropped.")
+              else
+                  options[:default] = items
+              end
               continue
           end
           # Resolve `Status.choices` / `Status.DRAFT` BEFORE parse_value (#342), which would
@@ -5266,7 +5549,8 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
                              "kept verbatim as text. The stored default is that source text, not " *
                              "the value the call returns.")
             end
-            options[Symbol(key)] = parse_value(value)
+            n = isempty(resolved_from_name) || last(resolved_from_name)[1] != key ? nothing : _py_number(value)
+            options[Symbol(key)] = n === nothing ? parse_value(value) : n
           end
       else
         if field_type in ["ForeignKey", "OneToOneField", "ManyToManyField"]
@@ -5307,7 +5591,133 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
                    "The column is unaffected.")
   end
 
-  return options, related_model
+  return options, related_model, resolved_from_name
+end
+
+# Option values that are SYMBOLS by design, not constants: `on_delete=CASCADE` (imported from
+# `django.db.models`), and a relation's `to=`/`through=` model name. A bare name there is the
+# value, so #948's constant reader leaves it alone.
+const _SYMBOL_VALUED_OPTIONS = ("on_delete", "to", "through")
+
+_is_bare_py_name(v::AbstractString)::Bool =
+  Base.isidentifier(v) && !(v in ("True", "False", "None"))
+
+# The text inside `t`'s outer brackets when the bracket `t` opens with closes on its LAST character;
+# `nothing` otherwise. `(("a", "A"),) + (("b", "B"),)` opens and closes with brackets too, but the
+# first group closes early, and reading it as one container kept only that group (#948 review).
+function _py_bracket_body(t::AbstractString)::Union{String, Nothing}
+  (startswith(t, '(') || startswith(t, '[')) || return nothing
+  st = _PyScan()
+  i = firstindex(t)
+  while i <= lastindex(t)
+    j = _py_step!(st, t, i)
+    if st.depth == 0 && !_in_string(st)
+      j > lastindex(t) || return nothing
+      return String(t[nextind(t, firstindex(t)):prevind(t, i)])
+    end
+    i = j
+  end
+  return nothing
+end
+
+# `("SOFT")` is the string "SOFT", not a tuple: a parenthesised value with no top-level comma. Returns
+# that value's text, or `nothing`.
+function _py_paren_scalar(v::AbstractString)::Union{String, Nothing}
+  t = strip(v)
+  startswith(t, '(') || return nothing
+  inner = _py_bracket_body(t)
+  (inner === nothing || isempty(strip(inner))) && return nothing
+  length(_py_split_top(inner, ',')) == 1 || return nothing
+  return String(strip(inner))
+end
+
+# A tuple or list display: brackets spanning the whole text, not a parenthesised scalar, and not a
+# comprehension — `[(x, x.upper()) for x in ("a", "b")]` is bracketed too, and reading its body as
+# entries imported the choice `("x", "x.upper()")` (#948 review).
+function _is_py_container(v::AbstractString)::Bool
+  body = _py_bracket_body(strip(v))
+  (body === nothing || _py_paren_scalar(v) !== nothing) && return false
+  return !occursin(r"(?:^|\s)for\s", _py_top_level_text(body))
+end
+
+# `body` with everything inside a string or a nested bracket blanked to spaces — the text a top-level
+# keyword search must look at, so a `for` inside a string or a nested call does not count.
+function _py_top_level_text(body::AbstractString)::String
+  st = _PyScan()
+  buf = IOBuffer()
+  i = firstindex(body)
+  while i <= lastindex(body)
+    top = st.depth == 0 && !_in_string(st)
+    j = _py_step!(st, body, i)
+    print(buf, top && st.depth == 0 && !_in_string(st) ? body[i:prevind(body, j)] : " ")
+    i = j
+  end
+  return String(take!(buf))
+end
+
+# The scalar literals of a `(...)`/`[...]` literal as a Vector, or `nothing` when any entry is not
+# one. `None` is an element NULL.
+function _py_literal_items(v::AbstractString)
+  items = Any[]
+  for e in split_field_options(_py_bracket_body(strip(v)))
+    x = strip(e)
+    isempty(x) && continue
+    _is_py_literal(x) || return nothing
+    n = _py_number(x)
+    push!(items, n === nothing ? parse_value(x) : n)
+  end
+  return items
+end
+
+"""
+    _resolve_py_constant(scopes, owner, name, lineno) -> nothing | (text, container)
+
+What a bare `name` written at `lineno` in a statement owned by `owner = (app, class)` holds, when
+this models.py binds it to something the importer can read (#948). `text` is the right-hand side's
+source: a scalar literal, or a tuple/list literal when `container` is true. `nothing` means no
+readable binding.
+
+Python's rule for a name in a class body: the class's own namespace, then the MODULE's. A base
+class's namespace is not consulted, and neither is an enclosing scope. `owner` is the statement's
+own `(app, class)` (#402), so a statement merged in from an abstract base reads the base's module.
+
+The binding taken is the LAST one before `lineno`: a name bound only after the class is a
+`NameError` when Python runs the class body, and a later non-literal rebinding shadows an earlier
+literal. A right-hand side that is itself a bare name is followed, under the same rule, from the
+line it was written on.
+
+Imported names are never followed (decided for #948). A constant usually lives in `constants.py` or
+`settings`, which is not part of the import, so the import binding is recorded and reads as
+unresolved.
+"""
+function _resolve_py_constant(scopes::Vector{_AppScope}, owner::Tuple{Int, String},
+                              name::AbstractString, lineno::Int,
+                              seen::Set{Tuple{String, Int}} = Set{Tuple{String, Int}}())
+  (String(name), lineno) in seen && return nothing
+  push!(seen, (String(name), lineno))
+  (1 <= owner[1] <= length(scopes)) || return nothing
+  tables = scopes[owner[1]].consts
+  for scope in (isempty(owner[2]) ? ("",) : (owner[2], ""))
+    table = get(tables, scope, Dict{String, Vector{Tuple{Int, String}}}())
+    bindings = get(table, String(name), Tuple{Int, String}[])
+    idx = findlast(b -> b[1] < lineno, bindings)
+    at = idx === nothing ? 0 : bindings[idx][1]
+    # A star import between that binding (or the top of the scope) and the use may have rebound it.
+    any(b -> at < b[1] < lineno, get(table, "*", Tuple{Int, String}[])) && return nothing
+    idx === nothing && continue
+    rhs = strip(bindings[idx][2])
+    # `(10)` is the number 10 and `(MAX_LEN)` is MAX_LEN: a parenthesised scalar is its value.
+    while (inner = _py_paren_scalar(rhs)) !== nothing
+      rhs = inner
+    end
+    _is_py_literal(rhs) && return (text = String(rhs), container = false)
+    # A class-body name is followed from the class's scope; a module name only from the module.
+    _is_bare_py_name(rhs) &&
+      return _resolve_py_constant(scopes, (owner[1], scope), rhs, at, seen)
+    _is_py_container(rhs) && return (text = String(rhs), container = true)
+    return nothing
+  end
+  return nothing
 end
 
 # Sentinels. Two distinct ones, because `nothing` is a legitimate RESOLVED value: an enum member
@@ -5603,9 +6013,10 @@ function parse_choices(choices_str::AbstractString, skipped::Vector{String} = St
                        verbatim::Vector{String} = String[])
   inner = _balanced_group(choices_str)
   if inner === nothing
-    # `choices=STATUS_CHOICES` — a module-level constant, not a literal. There is nothing to read,
-    # and returning an empty tuple in silence is how a field lost its entire enumeration with no
-    # trace. The old docs called this out as the one shape to avoid; the code never did.
+    # Not a bracketed container. A bare NAME no longer arrives here from `parse_field_args` — #948
+    # resolves `choices=STATUS_CHOICES` to its literal or drops and reports it first — but any other
+    # unreadable value still does. There is nothing to read, and returning an empty tuple in silence
+    # is how a field lost its entire enumeration with no trace.
     push!(skipped, String(strip(choices_str)))
     return ()
   end

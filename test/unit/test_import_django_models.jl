@@ -201,13 +201,16 @@ end
 #
 # Run through the SINGLE-APP arity on purpose: the multi-app coverage lives in
 # `test_import_django_project.jl`, and `strict_fields` has to reach both entry points.
+#
+# The fixture used `models.ArrayField(null=True)` until #943 taught the importer to read ArrayField;
+# `FilePathField` is a type PormG has no field for, and the project file's #410 example already.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Django importer reports and skips unsupported field types (#410)" begin
     django_text = """
 from django.db import models
 
 class UnsupportedFieldModel(models.Model):
-    tags = models.ArrayField(null=True)
+    tags = models.FilePathField(null=True)
     label = models.CharField(max_length=50)
 """
     config_key, db_dir_existed = temp_import_config!()
@@ -230,7 +233,8 @@ class UnsupportedFieldModel(models.Model):
         # ...and reported with the same three facts the old exception carried: the field, the class
         # and the type. Plus the models.py line, which the exception never gave.
         @test occursin("# PormG: field 'tags' on 'UnsupportedFieldModel' (models.py line 4) is a " *
-                       "models.ArrayField", generated)
+                       "models.FilePathField, a field type PormG does not implement — NOT imported",
+                       generated)
         @test occursin("NOT imported", generated)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
@@ -254,10 +258,203 @@ class UnsupportedFieldModel(models.Model):
         message = sprint(showerror, err.value)
         @test occursin("tags", message)
         @test occursin("UnsupportedFieldModel", message)
-        @test occursin("ArrayField", message)
+        @test occursin("models.FilePathField", message)
         @test occursin("strict_fields = true", message)
+        # The ArrayField-only caveat about `autofields_ignore` stays out of every other type's message.
+        @test !occursin("drops EVERY ArrayField", message)
     finally
         cleanup_import_test!(config_key2, db_dir_existed2)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#943): an ArrayField is read through its element, in every spelling
+#
+# `ArrayField` takes its element as a positional FIELD CALL, which `parse_field_args` (keywords only)
+# could not read, so #28 left it on #410's report-and-skip path. Now the element is split off, mapped
+# like any other field, and the column is built — and the generated file has to load, because a
+# column that renders but does not evaluate is the abort #410 exists to prevent, moved one step later.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer reads ArrayField(models.X(...)) into Models.ArrayField (#943)" begin
+    source = """
+from django.db import models
+from django.contrib.postgres import fields
+from django.contrib.postgres.fields import ArrayField
+
+class Race_strategy(models.Model):
+    tyre_compounds = ArrayField(models.CharField(max_length=10), size=8)
+    pit_laps = models.ArrayField(models.IntegerField(), default=list, blank=True)
+    lap_deltas = fields.ArrayField(
+        models.DecimalField(max_digits=7, decimal_places=3),
+        null=True,
+    )
+    flags = ArrayField(base_field=models.BooleanField(null=True))
+    sectors = ArrayField(models.CharField(max_length=3, db_index=True))
+    stint_laps = ArrayField(models.IntegerField(), 20)
+    compounds = ArrayField(models.CharField(max_length=4), **ARRAY_OPTS)
+"""
+    generated, config_key, db_dir_existed = import_django_source(source;
+                                                                 output_file = "arrayfield_943_unit.jl")
+    try
+        # The issue's acceptance line, in the renderer's own spelling (`test_array_field.jl`). This
+        # is the bare-name import, which used to take the "field-shaped call" warning path.
+        @test occursin("tyre_compounds = Models.ArrayField(Models.CharField(max_length=10), size=8)",
+                       generated)
+        # `models.ArrayField(...)`, and Django's `default=list` — a callable, not a literal — as the
+        # empty-array default. It used to reach the constructor as the text "[]".
+        @test occursin("pit_laps = Models.ArrayField(Models.IntegerField(), blank=true, default=\"{}\")",
+                       generated)
+        # Through a module alias, wrapped across lines; the element keeps its type modifiers.
+        @test occursin("lap_deltas = Models.ArrayField(Models.DecimalField(max_digits=7, " *
+                       "decimal_places=3), null=true)", generated)
+        # The `base_field=` keyword spelling, and an element-level `null` — the element-NULL rule,
+        # which is not the column's.
+        @test occursin("flags = Models.ArrayField(Models.BooleanField(null=true))", generated)
+
+        # A column option on the ELEMENT. Django ignores it there; PormG refuses it, so passing it
+        # through would have failed the whole column. Dropped, and the file says so.
+        @test occursin("sectors = Models.ArrayField(Models.CharField(max_length=3))", generated)
+        @test occursin("# PormG: field 'sectors' on 'Race_strategy' is an ArrayField whose CharField " *
+                       "element declares `db_index`", generated)
+
+        # Django's `size` is the signature's SECOND positional slot. Left positional, it was dropped
+        # with no report — and PormG enforces `size` on every write.
+        @test occursin("stint_laps = Models.ArrayField(Models.IntegerField(), size=20)", generated)
+        # ...but a `**kwargs` in that slot is not one, and must not be read as `size` — that aborted
+        # the whole import. It is passed over, as on any other field.
+        @test occursin("compounds = Models.ArrayField(Models.CharField(max_length=4))", generated)
+
+        # Nothing was skipped: no #410 report and no "cannot read" report survives.
+        @test !occursin("NOT imported", generated)
+
+        # The file evaluates, and each column is a real array of the declared element.
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        strategy = Core.eval(sandbox, :(arrayfield_943_unit.Race_strategy))
+        tyres = strategy.fields["tyre_compounds"]
+        @test tyres isa PormG.Models.sArrayField
+        @test tyres.base_field isa PormG.Models.sCharField
+        @test tyres.base_field.max_length == 10
+        @test tyres.size == 8
+        @test strategy.fields["pit_laps"].default == "{}"
+        @test strategy.fields["lap_deltas"].base_field.decimal_places == 3
+        @test strategy.fields["flags"].base_field.null
+        @test strategy.fields["stint_laps"].size == 20
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+
+    # The model gate reads the same recognition. A class whose base the import cannot resolve is a
+    # model only if its own body declares a column, and `fields.ArrayField(...)` now counts as one —
+    # it used to be judged by namespace alone, and `fields` is not `models`. The control: a class
+    # whose only member is an unreadable `fields.HStoreField()` is still not taken for a model.
+    gated, key5, existed5 = import_django_source("""
+from django.db import models
+from django.contrib.postgres import fields
+
+class Lap_log(TimeStampedModel):
+    sectors = fields.ArrayField(models.IntegerField())
+
+class Lap_note(TimeStampedModel):
+    sectors = fields.HStoreField()
+"""; output_file = "arrayfield_943_gate.jl")
+    try
+        @test occursin("Lap_log = Models.Model(", gated)
+        @test occursin("sectors = Models.ArrayField(Models.IntegerField())", gated)
+        @test !occursin("Lap_note = Models.Model(", gated)
+    finally
+        cleanup_import_test!(key5, existed5)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#943): an element PormG's ArrayField cannot hold stays reported, by name
+#
+# Reading the element is what lets the report name it. "a field type PormG does not implement" is
+# false of `ArrayField` itself, so the marker and the `strict_fields` error both say which element
+# was refused — and a supported element must not trip `strict_fields` at all.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer reports an ArrayField element it cannot hold (#943)" begin
+    unholdable = """
+from django.db import models
+from django.contrib.postgres.fields import ArrayField
+
+class Telemetry(models.Model):
+    label = models.CharField(max_length=20)
+    payloads = ArrayField(models.JSONField())
+    grid = ArrayField(ArrayField(models.IntegerField()))
+    loose = models.ArrayField(null=True)
+"""
+    generated, config_key, db_dir_existed = import_django_source(unholdable;
+                                                                 output_file = "arrayfield_943_bad.jl")
+    try
+        # The model and its readable column survive; none of the three arrays do.
+        @test occursin("label = Models.CharField(max_length=20)", generated)
+        @test !occursin("payloads = Models.", generated)
+        @test !occursin("grid = Models.", generated)
+        @test !occursin("loose = Models.", generated)
+        # Each marker names the element — the JSONField, the nested ArrayField — or says there was
+        # none. None of them claims ArrayField is unimplemented.
+        @test occursin("# PormG: field 'payloads' on 'Telemetry' (models.py line 6) is an ArrayField " *
+                       "of `models.JSONField()`, an element PormG's ArrayField cannot hold — NOT " *
+                       "imported", generated)
+        @test occursin("# PormG: field 'grid' on 'Telemetry' (models.py line 7) is an ArrayField of " *
+                       "`ArrayField(models.IntegerField())`", generated)
+        @test occursin("# PormG: field 'loose' on 'Telemetry' (models.py line 8) is an ArrayField " *
+                       "with no element field the importer can find", generated)
+        @test !occursin("a field type PormG does not implement", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+
+    # #429's collision report, when the LATER declaration is an array PormG cannot hold: the outcome
+    # clause names that reason, not "has no PormG counterpart", which is false of ArrayField itself.
+    collided, key4, existed4 = import_django_source("""
+from django.db import models
+from django.contrib.postgres.fields import ArrayField
+
+class Lap(models.Model):
+    sectors = models.CharField(max_length=5)
+    sectors = ArrayField(models.JSONField())
+"""; output_file = "arrayfield_943_collision.jl")
+    try
+        @test occursin("NEITHER reaches the model: the later declaration is an ArrayField whose " *
+                       "element PormG's ArrayField cannot hold", collided)
+        @test !occursin("has no PormG counterpart", collided)
+    finally
+        cleanup_import_test!(key4, existed4)
+    end
+
+    # `strict_fields = true` still raises for an element PormG cannot hold, naming that element.
+    key2, existed2 = temp_import_config!()
+    try
+        err = @test_throws PormG.InvalidMigrationError import_models_from_django(
+            unholdable; db = key2, file = "arrayfield_943_strict.jl", force_replace = true,
+            strict_fields = true)
+        msg = sprint(showerror, err.value)
+        @test occursin("payloads", msg)
+        @test occursin("an ArrayField of `models.JSONField()`", msg)
+        # `autofields_ignore` matches the Django type, so for an array the advice is broader than
+        # this one column — and the message says so.
+        @test occursin("which drops EVERY ArrayField in this import", msg)
+    finally
+        cleanup_import_test!(key2, existed2)
+    end
+
+    # ...and no longer raises for one it can: before #943 every ArrayField failed `strict_fields`.
+    key3, existed3 = temp_import_config!()
+    try
+        import_models_from_django("""
+from django.db import models
+from django.contrib.postgres.fields import ArrayField
+
+class Telemetry(models.Model):
+    channels = ArrayField(models.CharField(max_length=10), size=8)
+"""; db = key3, file = "arrayfield_943_strict_ok.jl", force_replace = true, strict_fields = true)
+        @test occursin("channels = Models.ArrayField(Models.CharField(max_length=10), size=8)",
+                       read(joinpath(key3, "arrayfield_943_strict_ok.jl"), String))
+    finally
+        cleanup_import_test!(key3, existed3)
     end
 end
 
@@ -1219,7 +1416,9 @@ end
                       if r.level == Logging.Warn && occursin("field-shaped call", string(r.message))]
         named = [get(Dict(r.kwargs), :field, nothing) for r in unreadable]
 
-        # The fixture's `tags = ArrayField(...)` is a field-shaped call that cannot be read.
+        # The fixture's `tags = HStoreField()` is a field-shaped call that cannot be read. (It was
+        # `ArrayField(...)` until #943 made that one readable; PormG refuses hstore outright, so
+        # this example stays unreadable.)
         @test "tags" in named
 
         # ...and so is `direct_fk = ForeignKey(...)`. It is asserted separately because
@@ -2616,7 +2815,7 @@ from django.db import models
 
 class Legado(models.Model):
     nome = models.CharField(max_length=10)
-    tags = ArrayField(models.CharField(max_length=5))
+    tags = HStoreField()
     situacao = models.CharField(max_length=5, default=Status.DRAFT)
 
     class Meta:

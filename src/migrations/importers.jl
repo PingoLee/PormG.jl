@@ -2915,7 +2915,10 @@ function _declares_fields(cls::PyClass)::Bool
   for s in cls.body
     p = _match_field_statement(s.text)
     p === nothing && continue
-    p.type === nothing || return true           # `models.X(...)`, matched by _FIELD_CALL_RE
+    # `models.X(...)`, matched by _FIELD_CALL_RE — or an `ArrayField` through any namespace (#943):
+    # Django's FORM counterparts are `SimpleArrayField`/`SplitArrayField`, so a target named exactly
+    # `ArrayField` is the model field and needs no namespace discriminator.
+    p.type === nothing || return true
     _looks_like_a_field_call(p.args) || continue
     ns = _field_call_namespace(p.args)
     if ns !== nothing && ns in _MODEL_FIELD_NAMESPACES
@@ -4266,7 +4269,7 @@ const _FIELD_NAME_SUFFIXES = ("Field", "Key")
 """
     _looks_like_a_field_call(rhs) -> Bool
 
-True when `rhs` is a call whose target names a column type — `ArrayField(...)`, `ForeignKey(...)`,
+True when `rhs` is a call whose target names a column type — `HStoreField(...)`, `ForeignKey(...)`,
 `TreeForeignKey(...)`: a field imported directly instead of through `models.`.
 
 Deliberately narrow. Warning on *every* unreadable call buried the one real finding under
@@ -4298,10 +4301,75 @@ function _match_field_statement(text::AbstractString)
   ann === nothing || (lhs = String(strip(lhs[firstindex(lhs):prevind(lhs, ann)])))
   Base.isidentifier(lhs) || return nothing
   m = match(_FIELD_CALL_RE, rhs)
-  m === nothing && return (name = lhs, type = nothing, args = rhs)
+  type = m === nothing ? _array_field_target(rhs) : String(m.captures[1])
+  type === nothing && return (name = lhs, type = nothing, args = rhs)
   args = _balanced_group(rhs)
   args === nothing && return (name = lhs, type = nothing, args = rhs)
-  return (name = lhs, type = String(m.captures[1]), args = args)
+  return (name = lhs, type = type, args = args)
+end
+
+# `ArrayField` is the one type read through any call target, not just `models.` (#943): Django ships
+# it in `django.contrib.postgres.fields`, so the idiomatic spelling is a bare `ArrayField(...)` (or
+# `fields.ArrayField(...)` after `from django.contrib.postgres import fields`), which `_FIELD_CALL_RE`
+# never matches. Only this name is widened — reading every bare `XField(...)` is #340's question, and
+# `_looks_like_a_field_call` keeps reporting the rest.
+function _array_field_target(rhs::AbstractString)::Union{String, Nothing}
+  m = match(_CALL_TARGET_RE, rhs)
+  return m !== nothing && m.captures[1] == "ArrayField" ? "ArrayField" : nothing
+end
+
+"""
+    _split_array_element(args) -> (element, rest)
+
+Separate an `ArrayField`'s element from its own options (#943). `element` is the element call's
+source text — the first POSITIONAL argument, or a `base_field=` keyword, which Django's signature
+`ArrayField(base_field, size=None, **kwargs)` equally allows — or `nothing` when the call has neither.
+`rest` is every other argument, re-joined for `parse_field_args`. A SECOND positional is Django's
+`size` (the signature's second slot) and is re-spelled `size=` — left positional, `parse_field_args`
+would drop it without a word, and PormG enforces `size` on every write.
+
+The positional test is "no top-level `=`", never a plain `split` on `=`: the element
+`models.CharField(max_length=10)` carries one inside its parentheses, and splitting there is how
+`parse_field_args` would have read it as a keyword named `models.CharField(max_length`.
+"""
+function _split_array_element(args::AbstractString)
+  element = nothing
+  rest = String[]
+  positionals = 0
+  for tok in split_field_options(args)
+    kv = _split_top_level_assign(tok)
+    # `*args` / `**common_kwargs` has no `=` either, but it is not a positional slot: counting it
+    # turned `ArrayField(X, **OPTS)` into `size=**OPTS` and aborted the whole import. It stays in
+    # `rest`, where `parse_field_args` passes over it exactly as it does on any other field.
+    if startswith(tok, '*')
+      push!(rest, tok)
+      continue
+    end
+    kv === nothing && (positionals += 1)
+    if element === nothing && (kv === nothing || kv[1] == "base_field")
+      element = kv === nothing ? tok : kv[2]
+    elseif kv === nothing && positionals == 2
+      push!(rest, "size=" * tok)
+    else
+      push!(rest, tok)
+    end
+  end
+  return (element, join(rest, ", "))
+end
+
+"""
+    _array_element_call(element) -> nothing | (type, args)
+
+Read an `ArrayField` element as a field call — `models.CharField(...)`, a bare `CharField(...)`, or
+any dotted target — returning the Django type name and the argument text. `nothing` when it is not a
+call at all (a bare name such as `base_field=TAG_FIELD`), which the importer cannot follow.
+"""
+function _array_element_call(element::AbstractString)
+  m = match(_CALL_TARGET_RE, element)
+  m === nothing && return nothing
+  args = _balanced_group(element)
+  args === nothing && return nothing
+  return (type = String(m.captures[1]), args = args)
 end
 
 # `class_name` and `class_label` are two different jobs and must NOT be collapsed into one (#371):
@@ -4468,7 +4536,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
 
     if parsed.type === nothing
       # #340's actual requirement: never drop a FIELD in silence. An assignment whose right-hand
-      # side is a field-shaped call the importer cannot read (`tags = ArrayField(...)` — a field
+      # side is a field-shaped call the importer cannot read (`tags = HStoreField()` — a field
       # imported directly rather than through `models.`) is reported with its source line so the
       # author can declare it by hand. Managers, constants and enum members are not fields and
       # stay quiet: see `_looks_like_a_field_call` for why the test is deliberately narrow.
@@ -4477,7 +4545,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
       # skip in this loop records the key it would have written — `unsupported_fields` for #410,
       # `ignored_fields` for #428 — so the caller's `:id` guard can ask "did the class claim this
       # name". Here it cannot: `parsed.type === nothing` is exactly the case where the type is
-      # unknown, and the key is a FUNCTION of the type. `id = ArrayField(...)` writes column `id`,
+      # unknown, and the key is a FUNCTION of the type. `id = HStoreField()` writes column `id`,
       # but `id = TreeForeignKey(...)` writes `id_id` in Django and leaves `id` genuinely free — so
       # claiming on the NAME would suppress an implicit `id` the Django table really does want.
       # Reporting the wrong one of those two is worse than reporting neither, and the field's own
@@ -4543,7 +4611,21 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     # helpers below it (`parse_value`, `parse_choices`, `split_field_options`) emit nothing at all. If
     # you ever add an `@error` in there for something structural, exempt it from this scope or it
     # will vanish without trace for exactly the fields already in trouble.
-    unsupported_type = !_is_pormg_field_type(field_type)
+    #
+    # An `ArrayField` (#943) is decided by its ELEMENT, on the same "decided here" terms: the element
+    # is split off its own options now, so `parse_field_args` below sees only `size=`/`null=`/… and
+    # never misreads `models.CharField(max_length=10)` as a keyword. `array_reason` names the element
+    # in every report when PormG's `ArrayField` cannot hold it.
+    array_element, array_reason = nothing, nothing
+    if field_type == "ArrayField"
+      element_src, field_args_str = _split_array_element(field_args_str)
+      array_element, array_reason = _array_element_support(element_src)
+    end
+    unsupported_type = !_is_pormg_field_type(field_type) || array_reason !== nothing
+    # What a skipped column IS, for the three reports below that name it. Byte-identical to the
+    # pre-#943 wording for every non-array type.
+    unsupported_what = array_reason !== nothing ? array_reason :
+                       "a models.$(django_type), a field type PormG does not implement"
 
     # Two statements from ONE class body writing one key (#429). Reported here, before either skip
     # branch acts, so the report does not depend on which half of the pair happened to be buildable:
@@ -4599,7 +4681,9 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
         "class emits one under that name at all — is the EARLIER declaration's, not the one the " *
         "last statement in this body describes. " :
         unsupported_type ?
-        "NEITHER reaches the model: the later declaration's Django type has no PormG counterpart, " *
+        "NEITHER reaches the model: the later declaration" *
+        (array_reason !== nothing ? " is an ArrayField whose element PormG's ArrayField cannot hold, " :
+                                    "'s Django type has no PormG counterpart, ") *
         "and skipping it removes the column both statements name (see the marker below). " :
         "Only the later declaration reaches the model below; the earlier one is lost, including " *
         "any relation it declared. "
@@ -4627,7 +4711,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
         "Django rejects this itself (models.E007), so it can only reach here from a models.py that " *
         "never passed `manage.py check` — rename one of the two fields."
 
-      @warn "import: two declarations collide on one name; one of them is lost" class=class_label name=String(field_key) first="$(prior_name) = models.$(prior_type)()" first_line=prior_line second="$(field_name) = models.$(django_type)()" second_line=stmt.lineno same_class_body=same_body first_written_in=prior[1][2] second_written_in=stmt_owner[2] later_dropped=(later_ignored ? "autofields_ignore" : unsupported_type ? "unimplemented type" : "")
+      @warn "import: two declarations collide on one name; one of them is lost" class=class_label name=String(field_key) first="$(prior_name) = models.$(prior_type)()" first_line=prior_line second="$(field_name) = models.$(django_type)()" second_line=stmt.lineno same_class_body=same_body first_written_in=prior[1][2] second_written_in=stmt_owner[2] later_dropped=(later_ignored ? "autofields_ignore" : array_reason !== nothing ? "unholdable ArrayField element" : unsupported_type ? "unimplemented type" : "")
       push!(markers, "# PormG: '$(class_label)' declares '$(prior_name)' ($(prior_type), models.py " *
                      "line $(prior_line)) and '$(field_name)' ($(django_type), line " *
                      "$(stmt.lineno))" * origin * ", and both " *
@@ -4740,9 +4824,13 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     if unsupported_type
       strict_fields && throw(InvalidMigrationError(
         "import: field '$(field_name)' in class '$(class_label)' (models.py line $(stmt.lineno)) is " *
-        "a models.$(django_type), a field type PormG does not implement, and strict_fields = true. " *
+        "$(unsupported_what), and strict_fields = true. " *
         "Declare that column by hand, add \"$(django_type)\" to autofields_ignore to drop it " *
-        "deliberately, or set strict_fields = false to import the model without it."))
+        "deliberately" *
+        # `autofields_ignore` matches the Django TYPE, so for an array it drops every ArrayField in
+        # the import — the holdable ones too. Say so rather than hand out a broader cut than asked.
+        (array_reason !== nothing ? " (which drops EVERY ArrayField in this import, not just this one)" : "") *
+        ", or set strict_fields = false to import the model without it."))
       # The declaration WINS over whatever sits at this key, exactly as a buildable one would.
       # `class_content` merges abstract bases by concatenation and lets the last write win, so an
       # inherited `codigo = CharField(primary_key=True)` overridden by an unimplemented type used to
@@ -4768,10 +4856,14 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
         delete!(declared_pk, field_key)
         push!(unsupported_pk, field_key)
       end
-      @warn "import: field type PormG does not implement; the column is NOT imported" class=class_label field=field_name django_type=django_type line=stmt.lineno primary_key=declared_key
+      if array_reason === nothing
+        @warn "import: field type PormG does not implement; the column is NOT imported" class=class_label field=field_name django_type=django_type line=stmt.lineno primary_key=declared_key
+      else
+        @warn "import: an ArrayField element PormG's ArrayField cannot hold; the column is NOT imported" class=class_label field=field_name reason=array_reason line=stmt.lineno primary_key=declared_key
+      end
       push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' (models.py line " *
-                     "$(stmt.lineno)) is a models.$(django_type), a field type PormG does not " *
-                     "implement — NOT imported. Declare it by hand; until you do, the column is " *
+                     "$(stmt.lineno)) is $(unsupported_what) — NOT imported. Declare it by hand; " *
+                     "until you do, the column is " *
                      "still in the database and absent from this model, so makemigrations reads " *
                      "it as drift and proposes DROPPING it." *
                      (declared_key ?
@@ -4810,19 +4902,34 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
         "\e[0m — so `manage.py check` would not have accepted this model either."))
     end
 
+    # An `ArrayField`'s element (#943), read like any other field — its own `max_length`,
+    # `max_digits`, `decimal_places`, `null`, enum-resolved `choices` — and reported under this
+    # column's name. Parsed HERE, after both skip branches, so a column `autofields_ignore` dropped or
+    # #410 skipped never reports on its element.
+    element_type, element_options = nothing, nothing
+    if array_element !== nothing
+      element_type = django_field_type(array_element.type)
+      element_options, _ = parse_field_args(array_element.args, array_element.type, parameters_ignore;
+                                            enums = enums, enum_aliases = enum_aliases,
+                                            class_name = class_name, enum_scopes = stmt_scopes,
+                                            class_label = class_label, field_name = field_name,
+                                            markers = markers)
+      _drop_array_element_column_kwargs!(element_options, field_name, class_label, array_element.type, markers)
+    end
+
+    # One constructor for the first attempt AND the #342 retry below, so a new field shape gets one
+    # home rather than two arms kept in step by hand. `field_key` already carries the "_id" suffix
+    # foreign keys take.
+    construct(opts) =
+      field_type in ("ForeignKey", "OneToOneField") ? getfield(Models, Symbol(field_type))(related_model; opts...) :
+      field_type == "ManyToManyField" ? Models.ManyToManyField(related_model; opts...) :
+      field_type == "ArrayField" ? Models.ArrayField(getfield(Models, Symbol(element_type))(; element_options...); opts...) :
+      getfield(Models, Symbol(field_type))(; opts...)
+
     # Instantiate the field
     try
-      # println(field_type)
-      if field_type in ["ForeignKey", "OneToOneField"]
-        # `field_key` already carries the "_id" suffix foreign keys take.
-        # println(related_model, " ", related_model |> typeof)
-        _normalize_django_set_default!(options, field_name, class_label)
-        fields_dict[field_key] = getfield(Models, Symbol(field_type))(related_model; options...)
-      elseif field_type == "ManyToManyField"
-        fields_dict[field_key] = Models.ManyToManyField(related_model; options...)
-      else
-        fields_dict[field_key] = getfield(Models, Symbol(field_type))(; options...)
-      end
+      field_type in ("ForeignKey", "OneToOneField") && _normalize_django_set_default!(options, field_name, class_label)
+      fields_dict[field_key] = construct(options)
     catch e
       @pormg_debug
       # #342's safety net. A choices/default disagreement is the ONE construction failure that used
@@ -4848,13 +4955,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
       if haskey(options, :choices) || haskey(options, :default)
         retry_options = filter(kv -> !(kv.first in (:choices, :default)), options)
         recovered = try
-          if field_type in ["ForeignKey", "OneToOneField"]
-            fields_dict[field_key] = getfield(Models, Symbol(field_type))(related_model; retry_options...)
-          elseif field_type == "ManyToManyField"
-            fields_dict[field_key] = Models.ManyToManyField(related_model; retry_options...)
-          else
-            fields_dict[field_key] = getfield(Models, Symbol(field_type))(; retry_options...)
-          end
+          fields_dict[field_key] = construct(retry_options)
           true
         catch e2
           # A control-flow exception is not a field-validation failure and must not be swallowed
@@ -4960,24 +5061,67 @@ Both halves are load-bearing, and neither is a stand-in for the other:
 Deliberately NOT a check that the constructed value `isa PormGField`: finding that out means calling
 the constructor, which is the throw this exists to avoid.
 
-A third half since #28: [`_DJANGO_FIELDS_NOT_IMPORTED`](@ref), the fields `Models` defines but this
-importer cannot construct from a Django call.
+`ArrayField` passes both halves and is then decided by its ELEMENT (#943) — see
+[`_array_element_support`](@ref). #28 kept it on the skip path through a third half, a list of types
+`Models` defines but the importer could not construct; reading the element emptied that list.
 """
 _is_pormg_field_type(t::AbstractString)::Bool =
-  !(t in _DJANGO_FIELDS_NOT_IMPORTED) &&
   any(sfx -> endswith(t, sfx), _FIELD_NAME_SUFFIXES) && isdefined(Models, Symbol(t))
 
 """
-    _DJANGO_FIELDS_NOT_IMPORTED
+    _array_element_support(element) -> (call, nothing) | (nothing, reason)
 
-Field types `Models` defines that the importer still reports and skips (#410's path) instead of
-constructing. `ArrayField` (#28) takes its element field as a positional argument —
-`ArrayField(models.CharField(max_length = 10))` — and `parse_field_args` reads only `key = value`
-keywords, so constructing it would call `ArrayField(; null = true)` with no element and fail. Reading
-the nested call is a follow-up; until then the column is named in the report, like any type PormG has
-no field for.
+Whether PormG's `ArrayField` can hold the element an `ArrayField(...)` declares (#943). `element` is
+[`_split_array_element`](@ref)'s source text. On success `call` is the element's `(type, args)`; on
+failure `reason` completes "field 'tags' … is …" in every report, naming the element, because
+"a field type PormG does not implement" is false of `ArrayField` itself.
+
+The element is refused when it is missing or not a call; when its type is not one this importer can
+build at all ([`_is_pormg_field_type`](@ref)); and otherwise when `Models.array_element_kind` has no
+method for it — the same table `Models.ArrayField` refuses from, read by DISPATCH so no element is
+constructed here, for the reason `_is_pormg_field_type` gives. That one table is also what refuses a
+relation and a nested `ArrayField` (one dimension only); no second list restates it.
 """
-const _DJANGO_FIELDS_NOT_IMPORTED = ("ArrayField",)
+function _array_element_support(element::Union{AbstractString, Nothing})
+  element === nothing &&
+    return (nothing, "an ArrayField with no element field the importer can find")
+  call = _array_element_call(element)
+  call === nothing &&
+    return (nothing, "an ArrayField whose element `$(_one_line(element))` is not a field call the " *
+                     "importer can read")
+  t = django_field_type(call.type)
+  holdable = _is_pormg_field_type(t) && _array_element_kind_defined(t)
+  holdable && return (call, nothing)
+  return (nothing, "an ArrayField of `$(_one_line(element))`, an element PormG's ArrayField cannot hold")
+end
+
+# True when `Models.array_element_kind` has a method for `t`'s struct (`CharField` → `sCharField`)
+# other than the `::PormGField` fallback that answers `nothing`.
+function _array_element_kind_defined(t::AbstractString)::Bool
+  s = Symbol("s", t)
+  isdefined(Models, s) || return false
+  T = getfield(Models, s)
+  (T isa Type && T <: Models.PormGField) || return false
+  return which(Models.array_element_kind, Tuple{T}) !== which(Models.array_element_kind, Tuple{Models.PormGField})
+end
+
+# The keywords Django accepts on an `ArrayField` element and ignores there — `unique`, `db_index`,
+# `default`, … describe a COLUMN, and the element is not one (#943). PormG's `ArrayField` refuses them
+# rather than ignore them (`Models.ARRAY_ELEMENT_COLUMN_KWARGS`), so passing them through would fail
+# the column over something Django never acted on. Dropped, and said so: the declaration still reads
+# as if it meant something.
+function _drop_array_element_column_kwargs!(element_options::Dict{Symbol, Any}, field_name, class_label,
+                                            element_type, markers::Vector{String})
+  dropped = [k for k in Models.ARRAY_ELEMENT_COLUMN_KWARGS if haskey(element_options, k)]
+  isempty(dropped) && return element_options
+  foreach(k -> delete!(element_options, k), dropped)
+  names = join(("`$(k)`" for k in dropped), ", ")
+  @warn "import: an ArrayField element declares a column option, which Django ignores there; dropped" class=class_label field=field_name element=element_type options=dropped
+  push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' is an ArrayField whose " *
+                 "$(element_type) element declares $(names) — a column option, which Django " *
+                 "ignores on an element and PormG refuses there. Dropped; the column is unaffected.")
+  return element_options
+end
 
 # `class_name` seeds `enum_scopes` — the key vector into `enums`, which is keyed by `(app_index,
 # BARE Python class name)` — so it must not be app-qualified; the app is already the `Int`.
@@ -5022,6 +5166,13 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
           # column to the current timestamp on creation — the closest semantics.
           if key == "default" && field_type in DATETIME_FIELD_TYPES && is_current_time_default(value)
               options[:auto_now_add] = true
+              continue
+          end
+          # Django's `default=list` on an `ArrayField` (#943) — a callable returning a fresh empty
+          # list — is PormG's empty-vector default, stored as the literal `{}`. Left to `parse_value`
+          # it became the text `"[]"`, which is not an array literal, and the default was rejected.
+          if key == "default" && field_type == "ArrayField" && value in ("list", "list()", "[]")
+              options[:default] = Any[]
               continue
           end
           # Resolve `Status.choices` / `Status.DRAFT` BEFORE parse_value (#342), which would

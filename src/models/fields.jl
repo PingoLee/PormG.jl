@@ -3730,6 +3730,13 @@ end
 # The base field describes an ELEMENT, so a keyword that describes a COLUMN has nowhere to go: it
 # would be accepted and never rendered. Django ignores them silently; PormG refuses, the #516 stance.
 # `null` stays — on a base field it is the element-NULL rule, as in Django.
+#
+# Named because the Django importer reads the same list (#943): Django ignores these on an element,
+# so the importer drops them, with a report, before constructing one. A second copy there would
+# drift from this one.
+const ARRAY_ELEMENT_COLUMN_KWARGS = (:primary_key, :unique, :db_index, :db_column, :default, :db_default,
+                                     :auto_now, :auto_now_add, :auto_add)
+
 function _array_base_field(base)
   base isa PormGField ||
     throw(_fielderr("ArrayField: the first argument must be the element field, e.g. ArrayField(Models.IntegerField()), got $(typeof(base))."))
@@ -3742,7 +3749,7 @@ function _array_base_field(base)
   # `db_index = true` unless told otherwise, and that is not something the user declared.
   baseline = getfield(@__MODULE__, Symbol(chopprefix(String(nameof(typeof(base))), "s")))()
   column_only = String[]
-  for k in (:primary_key, :unique, :db_index, :db_column, :default, :db_default, :auto_now, :auto_now_add, :auto_add)
+  for k in ARRAY_ELEMENT_COLUMN_KWARGS
     hasfield(typeof(base), k) || continue
     isequal(getfield(base, k), getfield(baseline, k)) || push!(column_only, String(k))
   end

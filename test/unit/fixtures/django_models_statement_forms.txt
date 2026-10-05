@@ -44,7 +44,7 @@ class ImportBatch(models.Model):
     # and `from django.db.models import ForeignKey` is a normal idiom, so a warning
     # predicate keyed on the "Field" suffix alone drops the most important field type
     # of all in silence.
-    tags = ArrayField(models.CharField(max_length=10))
+    tags = HStoreField()
     direct_fk = ForeignKey("CustomUser", on_delete=CASCADE)
 
     # A manager, not a field. Must NOT warn - it has no PormG equivalent, and noise

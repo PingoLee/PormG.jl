@@ -594,14 +594,44 @@ const ARR28_BASES = [
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # The Django importer still reports ArrayField
-  # `Models.ArrayField` exists now, but the importer reads only keyword arguments, and an ArrayField's
-  # element is a positional field call. It stays on #410's report-and-skip path until the importer
-  # can read the nested call.
+  # The Django importer decides an ArrayField by its element (#943)
+  # #28 pinned the opposite here — ArrayField on #410's report-and-skip path, because the importer
+  # could not read a positional element. #943 reads it, so the TYPE is buildable and the element is
+  # what is judged, against the same `array_element_kind` table `ArrayField` refuses from. The
+  # end-to-end import is covered in `test_import_django_models.jl`.
   # ─────────────────────────────────────────────────────────────────────────────
-  @testset "the Django importer does not construct an ArrayField" begin
-    @test isdefined(AF, :ArrayField)
-    @test !Migrations._is_pormg_field_type("ArrayField")
+  @testset "the Django importer judges an ArrayField by its element" begin
+    @test Migrations._is_pormg_field_type("ArrayField")
     @test Migrations._is_pormg_field_type("CharField")
+    for t in ("CharField", "TextField", "IntegerField", "DecimalField", "DateTimeField", "UUIDField")
+      call, reason = Migrations._array_element_support("models.$t()")
+      @test reason === nothing && call.type == t
+    end
+    # No `array_element_kind` method, a relation, a nested array, a type PormG lacks, no call.
+    for el in ("models.JSONField()", "models.PositiveIntegerField()", "models.ForeignKey(Driver)",
+               "ArrayField(models.IntegerField())", "models.SmallIntegerField()", "TAG_FIELD")
+      call, reason = Migrations._array_element_support(el)
+      @test call === nothing && occursin("ArrayField", reason)
+    end
+    @test Migrations._array_element_support(nothing)[2] ==
+          "an ArrayField with no element field the importer can find"
+    # The element is the first POSITIONAL argument — not split at its own inner `=` — or `base_field=`.
+    @test Migrations._split_array_element("models.CharField(max_length=10), size=8, null=True") ==
+          ("models.CharField(max_length=10)", "size=8, null=True")
+    @test Migrations._split_array_element("base_field=models.IntegerField(null=True), default=list") ==
+          ("models.IntegerField(null=True)", "default=list")
+    @test Migrations._split_array_element("null=True") == (nothing, "null=True")
+    # Django's second positional slot is `size`; it is re-spelled as the keyword, not dropped.
+    @test Migrations._split_array_element("models.IntegerField(), 20, null=True") ==
+          ("models.IntegerField()", "size=20, null=True")
+    # A star argument fills no positional slot — it is neither the element nor `size`.
+    @test Migrations._split_array_element("models.IntegerField(), **OPTS") ==
+          ("models.IntegerField()", "**OPTS")
+    @test Migrations._split_array_element("*EXTRA, size=4") == (nothing, "*EXTRA, size=4")
+    # Every spelling of Django's empty-list default is the empty array, stored as `{}`.
+    for d in ("list", "list()", "[]")
+      @test Migrations.parse_field_args("default=$d", "ArrayField", String[])[1][:default] == Any[]
+      @test AF.ArrayField(AF.IntegerField(); default = Migrations.parse_field_args("default=$d", "ArrayField", String[])[1][:default]).default == "{}"
+    end
   end
 end

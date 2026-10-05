@@ -897,6 +897,29 @@ The `WHERE` filter still applies row-by-row *before* aggregation; it is the abse
 
 These aggregates can carry arithmetic too — e.g. `"id_span" => Max("resultid") - Min("resultid")`, or subtract a constant like `Max("resultid") - 1000`. See [Aggregate Arithmetic](field_expressions.md#Aggregate-Arithmetic).
 
+### Aggregating a Boolean Column
+
+Over a `BooleanField`, `Max` answers "is any row true?" and `Min` answers "are all rows true?". Both read back as a `Bool` on either engine. PostgreSQL has no `max(boolean)`, so PormG renders its boolean aggregates there, `BOOL_OR` and `BOOL_AND`. SQLite stores a boolean as `0`/`1`, where `MAX`/`MIN` already give the same answer.
+
+`Sum` and `Avg` over a boolean raise `QueryBuildError` on both engines. PostgreSQL has no `sum(boolean)`, and SQLite would quietly add up the stored `0`/`1`. To count the true rows, turn the flag into a number explicitly with a standalone `When`, one that sets `otherwise`:
+
+```julia
+using PormG.Functions: Avg, Max, Min, Sum, When
+
+# A race-entry model with a boolean flag, e.g. is_rookie = Models.BooleanField()
+query = M.Race_entry.objects
+query.values(
+    "raceid",
+    "any_rookie" => Max("is_rookie"),                               # BOOL_OR on PostgreSQL
+    "all_rookie" => Min("is_rookie"),                               # BOOL_AND on PostgreSQL
+    "rookies"    => Sum(When("is_rookie" => true, then = 1, otherwise = 0)),   # how many are true
+    "share"      => Avg(When("is_rookie" => true, then = 1, otherwise = 0)),   # fraction that are true
+)
+df = query |> DataFrame
+```
+
+`Sum("is_rookie")` is refused rather than answered differently on the two engines. A `NULL` flag counts as not true in `rookies` and `share`, while `Max`/`Min` skip it.
+
 ### Aggregating Across To-Many Relations (Fan-Out Guard)
 
 Joining a **to-many** relation — a reverse foreign key (one parent → many children) or a many-to-many — repeats each parent row once per related row *before* aggregation. An aggregate over a **parent/base** column would therefore be silently multiplied. PormG refuses this at build time rather than return a confidently-wrong number:

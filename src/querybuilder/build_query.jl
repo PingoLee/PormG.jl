@@ -981,6 +981,11 @@ function _function_projection_kind(p::Union{FObject,WindowFunction}, instruc::SQ
   p isa FObject && p.function_name == "DATE" && return CDate()
   p isa FObject && p.function_name in _AGREEING_OPERAND_FUNCTIONS && return _multi_operand_kind(p, instruc)
   p isa FObject && p.function_name == "NULLIF" && return _operand_kind(first(p.column), instruc)
+  # #953: a boolean extremum is a boolean — `BOOL_OR`/`BOOL_AND` on PostgreSQL, which the driver
+  # types, and `MAX`/`MIN` over SQLite's 0/1, which it does not. `field_canonical_kind` names no
+  # boolean kind (a column read is typed by the driver), so the operand's formatter decides here.
+  p isa FObject && p.function_name in ("MAX", "MIN") &&
+    _expression_formatter(p.column, instruc) === Models.format_bool_sql && return CBool()
   p.function_name in _KIND_PRESERVING_FUNCTIONS || return nothing
   return _operand_kind(p.column, instruc)
 end

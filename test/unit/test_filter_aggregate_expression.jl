@@ -609,3 +609,100 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #953: an aggregate over a BooleanField
+#
+# `MAX`/`MIN`/`SUM`/`AVG` rendered as written whatever the column type. PostgreSQL has none of them
+# for a boolean, so the statement failed there when it ran ("function max(boolean) does not exist"),
+# while SQLite answered over its stored 0/1 — and `When(Max("finished"))`, which #942 types as a
+# boolean condition, was accepted and then failed on PostgreSQL. An extremum now renders
+# `BOOL_OR`/`BOOL_AND` on PostgreSQL and stays `MAX`/`MIN` on SQLite, where 0/1 gives the same answer;
+# a sum or mean is refused on both, because it turns a boolean into a number.
+# ─────────────────────────────────────────────────────────────────────────────
+using PormG.Models: ForeignKey
+
+for (key, name, parent) in (("f_agg_pg", :FAggPgEntry, FAggPgFn), ("f_agg_sl", :FAggSlEntry, FAggSlFn))
+  m = Model("f_agg_entry", id = IDField(), grid = IntegerField(),
+            fnid = ForeignKey(parent, pk_field = "id", related_name = "f_agg_entries"))
+  m.connect_key = key
+  m._module = Main
+  @eval const $name = $m
+end
+
+_f953_plain(s) = replace(s, r"\e\[[0-9;]*m" => "")
+
+@testset "#953: an aggregate over a BooleanField" begin
+  for (backend, Model_, Entry_) in ((:postgres, FAggPgFn, FAggPgEntry), (:sqlite, FAggSlFn, FAggSlEntry))
+    pg = backend === :postgres
+    sql(setup; model = Model_) = (q = model.objects; setup(q); inspect_query(q)[:sql_text])
+    any_of(col) = pg ? "BOOL_OR($(col))" : "MAX($(col))"
+    all_of(col) = pg ? "BOOL_AND($(col))" : "MIN($(col))"
+
+    @testset "$backend: Max/Min render the engine's boolean extremum" begin
+      s = sql(q -> q.values("lap", "any_fin" => Max("finished"), "all_fin" => Min("finished")))
+      @test occursin(any_of("\"Tb\".\"finished\""), s)
+      @test occursin(all_of("\"Tb\".\"finished\""), s)
+      pg && @test !occursin("MAX(", s) && !occursin("MIN(", s)
+      # The `F` handle and a comparison are booleans too; a comparison is what `Max(F(a) > F(b))` is.
+      @test occursin(any_of("\"Tb\".\"finished\""), sql(q -> q.values("lap", "m" => Max(F("finished")))))
+      @test occursin(pg ? "BOOL_OR(" : "MAX(", sql(q -> q.values("lap", "m" => Max(F("lap") > F("points")))))
+      # Across a join: the field is resolved through the join memo, not the root model's fields.
+      @test occursin(r"" * (pg ? "BOOL_OR" : "MAX") * r"\(\"Tb_\d+\"\.\"finished\"\)",
+                     sql(q -> q.values("grid", "m" => Max("fnid__finished")); model = Entry_))
+      # The projection is typed a boolean on both engines, so SQLite's 0/1 reads back as a `Bool`
+      # (`value_parser(::CBool, ::PormGSQLite)`), as PostgreSQL's `BOOL_OR` does by the driver.
+      q = Model_.objects
+      q.values("lap", "a" => Max("finished"), "b" => Min(F("finished")), "p" => Max("points"))
+      PormG.QueryBuilder.query(q; show_query = :sql)
+      @test q.object.projection_kinds[:a] == PormG.CBool()
+      @test q.object.projection_kinds[:b] == PormG.CBool()
+      @test get(q.object.projection_kinds, :p, nothing) === nothing
+      # Controls: an extremum over a non-boolean is untouched on both engines.
+      s = sql(q -> q.values("lap", "m" => Max("points"), "n" => Min("points")))
+      @test occursin("MAX(\"Tb\".\"points\")", s) && occursin("MIN(\"Tb\".\"points\")", s)
+      @test !occursin("BOOL_", s)
+    end
+
+    @testset "$backend: the boolean extremum in HAVING and as a When condition" begin
+      # The alias filter re-renders the aggregate in HAVING, through the same site, and binds a Bool.
+      q = Model_.objects
+      q.values("lap", "any_fin" => Max("finished"))
+      q.filter("any_fin" => true)
+      insp = inspect_query(q)
+      @test occursin("HAVING " * any_of("\"Tb\".\"finished\""), insp[:sql_text])
+      @test insp[:parameters] == Any[true]
+      # #942 accepts it as a condition, and now it renders one PostgreSQL can run.
+      s = sql(q -> q.values("lap", "c" => Case([When(Max("finished"), then = 1)], default = 0)))
+      @test occursin("WHEN " * any_of("\"Tb\".\"finished\"") * " THEN", s)
+    end
+
+    @testset "$backend: Sum/Avg over a boolean are refused" begin
+      # The hint names the caller's own column when the operand is one, a placeholder otherwise.
+      for (label, agg, path) in (("Sum", () -> Sum("finished"), "finished"), ("Avg", () -> Avg("finished"), "finished"),
+                                 ("Sum distinct", () -> Sum("finished", distinct = true), "finished"),
+                                 ("Avg of F", () -> Avg(F("finished")), "finished"),
+                                 ("Sum of a comparison", () -> Sum(F("lap") > F("points")), "is_active"))
+        err = _f_agg_build_error(Model_, q -> q.values("lap", "s" => agg()))
+        @test err isa QueryBuildError
+        msg = _f953_plain(sprint(showerror, err))
+        @test occursin("over a boolean is not supported", msg)
+        @test occursin("When(\"$(path)\" => true, then = 1, otherwise = 0))", msg)
+      end
+      err = _f_agg_build_error(Entry_, q -> q.values("grid", "s" => Sum("fnid__finished")))
+      @test err isa QueryBuildError
+      @test occursin("When(\"fnid__finished\" => true", _f953_plain(sprint(showerror, err)))
+      # The spellings the refusal points to build — a complete CASE, not a bare `WHEN … THEN`, which no
+      # engine parses as an aggregate's operand — and so does an explicit cast.
+      for (fn, name) in ((Sum, "SUM"), (Avg, "AVG"))
+        s = sql(q -> q.values("lap", "n" => fn(When("finished" => true, then = 1, otherwise = 0))))
+        @test occursin(Regex(name * raw"\(CASE WHEN .*\"Tb\"\.\"finished\" = " * (pg ? raw"\$1" : raw"\?") *
+                             raw" THEN .* ELSE .* END\)"), replace(s, r"\s+" => " "))
+      end
+      @test occursin("SUM(", sql(q -> q.values("lap", "n" => Sum(Cast("finished", "integer")))))
+      # Controls: a sum over a number still builds on both engines.
+      @test occursin("SUM(\"Tb\".\"points\")", sql(q -> q.values("lap", "n" => Sum("points"))))
+      @test occursin("AVG(\"Tb\".\"points\")", sql(q -> q.values("lap", "n" => Avg("points"))))
+    end
+  end
+end

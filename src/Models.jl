@@ -3774,11 +3774,12 @@ function format_number_sql(value::Decimals.Decimal)
   end
 end
 
+# #949: the guard was `value in [0, 1] == false`, a chained comparison (`in` and `==` share a
+# precedence level) whose second link is always false — so it never fired, and every integer but 1
+# bound `false`: `filter("is_active" => 5)` silently returned the inactive rows.
 function format_bool_sql(value::Integer)
-    if value in [0, 1] == false
-        throw(InvalidValueError("The value must be 0, 1, true or false"))
-    end
-    return value == 1 ? true : false
+    value in (0, 1) || throw(InvalidValueError("A boolean value must be true, false, 0 or 1. Got the integer $(value)."))
+    return value == 1
 end
 function format_bool_sql(value::Union{Missing, Nothing})
     return missing

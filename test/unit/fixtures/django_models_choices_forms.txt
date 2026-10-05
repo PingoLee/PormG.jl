@@ -208,8 +208,8 @@ class Atributos(models.Model):
 
 
 class Constante(models.Model):
-    """`choices` naming a module-level constant. There is nothing to read, and returning an empty
-    tuple in silence is how a field lost its whole enumeration without a trace."""
+    """`choices` naming a module-level constant bound to a literal above this class. Before #948
+    it was dropped as "a name"; it is now read as the two choices it holds."""
 
     s = models.CharField(max_length=3, choices=SITUACAO_CONSTANTE)
 

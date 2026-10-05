@@ -930,10 +930,10 @@ end
 function _expression_formatter(p::FExpression, instruc::SQLInstruction)
   p.operation === nothing && return _expression_formatter(p.column, instruc)
   # #942: a comparison is not a number. It used to fall into the arithmetic rule below, so
-  # `F("lap") > 0` typed as a NUMBER and `When(Coalesce(F("lap") > 0, false))` was refused. It keeps
-  # no type rather than `format_bool_sql`, whose integer arm reads any non-1 integer as `false`
-  # (#949): an alias filter `"ahead" => 5` would bind `false` silently instead of failing loudly.
-  p.operation in _COMPARISON_OPERATIONS && return nothing
+  # `F("lap") > 0` typed as a NUMBER and `When(Coalesce(F("lap") > 0, false))` was refused. #949: it
+  # is a boolean — #942 left it untyped only while `format_bool_sql` read any non-1 integer as
+  # `false`, so an alias filter `"ahead" => 5` now fails loudly instead of binding `false`.
+  p.operation in _COMPARISON_OPERATIONS && return Models.format_bool_sql
   left = _expression_formatter(p.field_name, instruc)
   return left === Models.format_number_sql ? left : nothing
 end
@@ -981,6 +981,11 @@ function _function_projection_kind(p::Union{FObject,WindowFunction}, instruc::SQ
   p isa FObject && p.function_name == "DATE" && return CDate()
   p isa FObject && p.function_name in _AGREEING_OPERAND_FUNCTIONS && return _multi_operand_kind(p, instruc)
   p isa FObject && p.function_name == "NULLIF" && return _operand_kind(first(p.column), instruc)
+  # #953: a boolean extremum is a boolean — `BOOL_OR`/`BOOL_AND` on PostgreSQL, which the driver
+  # types, and `MAX`/`MIN` over SQLite's 0/1, which it does not. `field_canonical_kind` names no
+  # boolean kind (a column read is typed by the driver), so the operand's formatter decides here.
+  p isa FObject && p.function_name in ("MAX", "MIN") &&
+    _expression_formatter(p.column, instruc) === Models.format_bool_sql && return CBool()
   p.function_name in _KIND_PRESERVING_FUNCTIONS || return nothing
   return _operand_kind(p.column, instruc)
 end

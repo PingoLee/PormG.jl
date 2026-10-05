@@ -922,6 +922,18 @@ function _function_condition_kind(v::SQLTypeFunction)
     haskey(PormGTypeField, name)) && return :non_boolean
   return :unknown
 end
+function _boolean_sum_refusal(v::SQLTypeFunction)
+  written = v.function_name == "SUM" ? "Sum" : "Avg"
+  # The caller's own column when the operand is one; a placeholder for anything else.
+  op = v.column isa FExpression && v.column.operation === nothing ? v.column.field_name : v.column
+  path = op isa SQLField ? op.field : op
+  path = path isa AbstractString ? path : "is_active"
+  return QueryBuildError(
+    "`$(written)` over a boolean is not supported: PostgreSQL has no $(lowercase(v.function_name))(boolean), " *
+    "and SQLite would silently compute it over the stored 0/1. Turn the flag into a number explicitly, e.g. " *
+    "\e[4m\e[32m$(written)(When(\"$(path)\" => true, then = 1, otherwise = 0))\e[0m" *
+    (written == "Avg" ? " for the share of true rows." : " to count the true rows."))
+end
 function _non_boolean_function_condition(v::SQLTypeFunction)
   _condition_not_boolean("`$(v.function_name)(…)`", "a non-boolean value",
     "compare it, e.g. \e[4m\e[32mWhen(Lower(\"surname\") == \"senna\")\e[0m — a function whose result is " *
@@ -1660,6 +1672,16 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     formatter = _expression_formatter(v.column, instruc)
     (formatter === nothing || formatter === Models.format_bool_sql) ||
       throw(_non_boolean_function_condition(v.column))
+  end
+  # #953: an aggregate over a boolean, read once its column resolves (as the check above is).
+  # PostgreSQL has none of `max/min/sum/avg(boolean)`, so each failed there when it ran, while SQLite
+  # answered over its stored 0/1. An extremum keeps its meaning — any true, all true — so it renders
+  # PostgreSQL's own aggregate (`Dialect.MAX`). A sum or mean turns a boolean into a number, which
+  # PormG does not do implicitly: refused on both engines, pointing to the explicit count.
+  if v.function_name in ("MAX", "MIN", "SUM", "AVG") &&
+     _expression_formatter(v.column, instruc) === Models.format_bool_sql
+    v.function_name in ("SUM", "AVG") && throw(_boolean_sum_refusal(v))
+    resolved_kwargs["boolean"] = true
   end
 
   # #74 fan-out guard: record COUNT/SUM/AVG and the source alias of their column so build() can

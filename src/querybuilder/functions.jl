@@ -106,6 +106,10 @@ _aggregate_refusal(fn::String, y) =
     Sum(column; distinct=false)
 
 Computes the sum of all values in the column.
+
+A `Sum` over a `BooleanField` is refused with a `QueryBuildError` (#953): PostgreSQL has no
+`sum(boolean)`, and SQLite would add up the stored 0/1. Count the true rows explicitly —
+`Sum(When("is_active" => true, then = 1, otherwise = 0))`.
 """
 function Sum(x; distinct::Bool = false)
   return FObject(function_name = "SUM", column = _aggregate_operand("Sum", x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
@@ -123,6 +127,9 @@ Like [`Count`](@ref) and [`Sum`](@ref) — and unlike [`Max`](@ref)/[`Min`](@ref
 covered by the to-many fan-out guard (#74): a join that multiplies rows would silently
 inflate the mean, so PormG raises instead. Passing `distinct = true` is an explicit opt-in
 and is exempt.
+
+An `Avg` over a `BooleanField` is refused with a `QueryBuildError`, as [`Sum`](@ref) is (#953): the
+share of true rows is `Avg(When("is_active" => true, then = 1, otherwise = 0))`.
 
 See also [Filters and Aggregates](@ref).
 """
@@ -167,6 +174,10 @@ returns one of the column's own values, so the column's read-side parser applies
 not extend to a computed aggregate: [`Sum`](@ref) and [`Avg`](@ref) come back as the engine
 delivers them.
 
+Over a `BooleanField` it answers "is any row true?" and reads back as a `Bool` on both engines. It
+renders `BOOL_OR(x)` on PostgreSQL, which has no `max(boolean)`, and `MAX(x)` over SQLite's stored
+0/1 (#953).
+
 See also [`Min`](@ref), [Filters and Aggregates](@ref).
 """
 function Max(x)
@@ -178,7 +189,8 @@ end
 
 Aggregate `MIN(x)` — the smallest value of `x` in the group. The mirror of [`Max`](@ref) in
 every respect: no `distinct` keyword, exempt from the fan-out guard (#74), and the result
-reads back as the column's own Julia type on both engines (#800).
+reads back as the column's own Julia type on both engines (#800). Over a `BooleanField` it answers
+"are all rows true?": `BOOL_AND(x)` on PostgreSQL, `MIN(x)` on SQLite (#953).
 
 See also [Filters and Aggregates](@ref).
 """

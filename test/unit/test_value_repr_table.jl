@@ -205,6 +205,18 @@ const _VRT_KINDS = [
     @test PormG.value_parser(PormG.CDecimal(16, 2), _VRT_SL) === nothing
     @test PormG.value_parser(PormG.CDecimal(nothing, nothing), _VRT_SL) === nothing
     @test PormG.value_parser(PormG.CDecimal(15, 4), _VRT_PG) === nothing
+
+    # #953: a boolean `MAX`/`MIN` reads SQLite's stored 0/1 back as a `Bool`; PostgreSQL's driver
+    # already types `BOOL_OR`/`BOOL_AND`. Fail-open: only 0 and 1 are read, anything else is returned.
+    @test PormG.value_parser(PormG.CBool(), _VRT_PG) === nothing
+    parse_b = PormG.value_parser(PormG.CBool(), _VRT_SL)
+    @test parse_b(1) === true
+    @test parse_b(0) === false
+    @test parse_b(true) === true
+    @test parse_b(false) === false
+    @test parse_b(5) === 5
+    @test parse_b(missing) === missing
+    @test parse_b("1") == "1"
   end
 
   # ───────────────────────────────────────────────────────────────────────────

@@ -46,7 +46,7 @@ import PormG: value_parser, value_formatter, sql_canonicalize, field_canonical_k
 # #721 — the SQLite collector binds through the same table, so a literal never reaches SQLite.jl's
 # serializing `bind!(::Any)` fallback; `literal_canonical_kind` types a projected `Value(x)`.
 import PormG: sqlite_bind_value, literal_canonical_kind
-import PormG: CanonicalType, CDate, CDateTime, CTime, CInterval
+import PormG: CanonicalType, CDate, CDateTime, CTime, CInterval, CBool
 import PormG: CInt32   # #801 — the kind of a DATE - DATE difference (a whole number of days)
 import PormG: CInt64   # #882 — a BigIntegerField used as a day count beside a date
 import PormG: CDecimal # #881 — a number an interval may be multiplied or divided by

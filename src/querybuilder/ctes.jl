@@ -770,6 +770,12 @@ function _bind_cte_filter!(f, q::SQLObject, depth::Int = 0)
   return nothing
 end
 
+# #958 — one rule for every spelling: a condition's KEY / left side is prefixed with the join path, so
+# it names the joined row; a comparison's RIGHT side is never prefixed, so a bare `F` there names the
+# base row (the joined row stays reachable through its path, `F("driverid__number")`). The `Pair` arm
+# always left `filter.second` alone, but the `OperObject` arm (what `Q`/`Qor`/`OP` build) and the
+# `FExpression` arm prefixed the right side too — so `Q("number" => F("number"))` rendered
+# `"Tb_1"."number" = "Tb_1"."number"`, a tautology that silently dropped the predicate.
 function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGModel,Nothing})
   if filter isa Pair
     key = filter.first
@@ -812,12 +818,8 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
       column = _normalize_cjoin_filter_key(column, prefix, foreign_model)
     end
 
-    values = new_oper.values
-    if values isa FExpression
-      values = _prefix_join_filter(values, prefix, foreign_model)
-    end
-
-    return OperObject(operator=new_oper.operator, values=values, column=column)
+    # #958: `values` is the right-hand side — never prefixed, as in the `Pair` arm.
+    return OperObject(operator=new_oper.operator, values=new_oper.values, column=column)
   elseif filter isa FExpression
     # #444: sweep the F expression BEFORE prefixing. `F("sku") == CTE("ev","sku")` is a `FilterType`,
     # so `on()`/`cjoin()` accept it, and the arms below only rewrite `String` slots — a handle rode
@@ -835,7 +837,9 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
     end
 
     column = new_filter.column
-    if column isa String
+    # #958: `""` is the placeholder `_compare` writes when it nests a comparison over an expression
+    # (`(F("a") + F("b")) > …`); the column lives in `field_name`, and prefixing `""` threw.
+    if column isa String && !isempty(column)
       column = _normalize_cjoin_filter_key(column, prefix, foreign_model)
     elseif column isa Vector{String}
       column = [_normalize_cjoin_filter_key(v, prefix, foreign_model) for v in column]
@@ -848,8 +852,10 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
       )
     end
 
+    # #958: a comparison's operand is its right-hand side, which names the base row — not prefixed.
+    # An arithmetic/bitwise operand is part of the same side as `field_name`, so it is.
     operand = new_filter.operand
-    if operand isa FExpression
+    if operand isa FExpression && !(new_filter.operation in _COMPARISON_OPERATIONS)
       operand = _prefix_join_filter(operand, prefix, foreign_model)
     end
 

@@ -2233,6 +2233,24 @@ const DOCERR_CASES = [
             PormG.Configuration.Settings(db_config_settings = Dict{String,Any}("unignore_defaults" => ["sqlite_sequence"])),
             PormG.sqlite_ignore_schema),
     ),
+    # #951 — the NUL refusal row of `errors.md` and the raw-hatch paragraph of `async.md`. Each
+    # fires before the driver, which is what lets a mock stand in: a write at its format step, a
+    # filter and a raw value at the execution funnel.
+    (
+        "errors.md — a write value containing a NUL character raises InvalidValueError (#951)",
+        InvalidValueError,
+        () -> DOCERR_DRIVER_PG.objects.create("surname" => "Senna\0", "nationality" => "Brazilian"),
+    ),
+    (
+        "errors.md — a filter value containing a NUL character raises InvalidValueError (#951)",
+        InvalidValueError,
+        () -> DOCERR_DRIVER_SL.objects.filter("surname" => "Senna\0").list(),
+    ),
+    (
+        "async.md + errors.md — a raw manual-params value containing a NUL character raises InvalidValueError (#951)",
+        InvalidValueError,
+        () -> PormG.ConnectionPool.fetch(DocErrMockPostgres(), "SELECT \$1::text", ["Senna\0"]),
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

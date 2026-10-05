@@ -95,6 +95,8 @@ rows = fetch(settings, "SELECT * FROM driver WHERE nationality = ?", ["Brazilian
 
 The driver binds each value as **data**, so a user value can never change the statement's structure. Write a NULL as `missing` (a bare `nothing` is normalized to it). The array bypasses the ORM's field formatters (datetime canonicalization, float precision, `bool`→`int`), which is expected for a raw hatch — pre-format any such values yourself.
 
+The one check the hatch does apply: a string containing a NUL character (`'\0'`) — anywhere in the array, nested or not, or in the SQL text itself — raises `InvalidValueError` before the statement is sent, on every backend, exactly as an ORM filter or write does. PostgreSQL text cannot store a NUL, and the drivers would otherwise truncate the value at it or fail with a driver error; binary values (`Vector{UInt8}`) are not affected.
+
 Because the placeholder style is backend-native, a manual-params string is **not portable** across backends. For portable queries — and for row post-processing and connection management — prefer the ORM surface (`list()` / `count()` / `filter(...)` wrapped in a task, as above). Reach for the values-array hatch only for static SQL you own that the ORM can't express.
 
 !!! danger "Never interpolate user input into the SQL string"

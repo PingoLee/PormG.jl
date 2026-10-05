@@ -51,6 +51,7 @@ Catch the umbrella when you want a category, the concrete type when you want a r
 | `create` / `update` naming a field that does not exist | `UnknownFieldError` | Same message as the read path above — names the table searched and its available fields. Reverse accessors are **not** listed: they are addressable in a filter path, but they are not columns you can write |
 | bulk writers, `get_or_create` / `update_or_create` naming a field that does not exist | `UnknownFieldError` | Same type, with their own wording and no available-field list — usually the model and the field, and for a `bulk_update` `columns=` mapping the DataFrame's columns instead |
 | `create` with a `null` value on a non-null field | `InvalidValueError` | Rejected by PormG **before** any statement is sent |
+| a text value containing a NUL character (`'\0'`): in a filter, a write (`create`, `update`, the bulk writers), a raw `fetch` value or an advisory-lock key | `InvalidValueError` | Rejected **before** any statement is sent, the same on every backend: PostgreSQL text cannot store a NUL, and the drivers would truncate the value or fail. A write names the field, a bulk write the row too; binary values are not affected, and a `JSONField` value carries it escaped as `\u0000` |
 | `create` / `bulk_insert` violating a constraint | `IntegrityError` | The **database** refused it — `UNIQUE`, `FOREIGN KEY`, `NOT NULL`, `CHECK` |
 
 ### Transactions and connections

@@ -11,6 +11,7 @@ import PormG.ConnectionPool: acquire_connection, release_connection
 # database-error boundary (#268) or `with_advisory_lock` would be the last public entry point
 # still leaking raw `LibPQ.Errors.*`.
 import PormG.ConnectionPool: _as_database_error
+import PormG.ConnectionPool: NUL_REFUSAL_REASON
 # Same reason, one defect class further on (#322): this module awaits driver handles directly, so a
 # Ctrl-C leaves it holding a connection the driver has not let go of — and unlike a plain query, a
 # session-level advisory lock is still held on it. Renewal is what releases that lock.
@@ -195,6 +196,7 @@ function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractStrin
                             # a typo fails on PostgreSQL too rather than lying in wait for SQLite.
                             on_missing_lock::Symbol = :warn)
   _validate_on_missing_lock(on_missing_lock)
+  _refuse_nul_key(key)
   conn = acquire_connection(pool)
   got_lock = false
   old_timeout = nothing
@@ -389,6 +391,16 @@ function _claim_sqlite_lock_warning(key::AbstractString)::Symbol
   end
 end
 
+# #951 — the key is bound straight to `backend_execute_async`, past every funnel `_refuse_nul` sits
+# in, and under LibPQ a NUL would cut it short silently: "job\0a" and "job\0b" would both take the
+# lock on "job", so two bodies written to run independently would exclude each other. Before the
+# acquire, so a refusal leases nothing.
+function _refuse_nul_key(key::AbstractString)
+  '\0' in key && throw(InvalidValueError(
+    "with_advisory_lock: the key contains a NUL character (\\0). " * NUL_REFUSAL_REASON))
+  return nothing
+end
+
 function _validate_on_missing_lock(on_missing_lock::Symbol)
   on_missing_lock in (:warn, :ignore, :error) && return nothing
   throw(InvalidValueError(
@@ -400,6 +412,7 @@ end
 function with_advisory_lock(f::Function, conn::PormGSQLite, key::AbstractString;
                             on_missing_lock::Symbol = :warn, kwargs...)
   _validate_on_missing_lock(on_missing_lock)
+  _refuse_nul_key(key)   # SQLite never sends the key; refused anyway so a call site behaves alike
 
   if on_missing_lock === :error
     throw(BackendCapabilityError(

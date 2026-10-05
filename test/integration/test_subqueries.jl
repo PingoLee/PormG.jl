@@ -492,6 +492,55 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Grouped-correlation guard (#932): it decides by evaluation phase, and these four shapes correlate
+# on `raceid`, which the outer query does NOT group by — legal all the same, because each subquery is
+# evaluated before grouping: inside an aggregate's argument, in WHERE, or inside an expression the
+# query groups by whole. The guard used to refuse all four. Running them live is what proves the
+# engine accepts the SQL the relaxed guard lets through, and that the rows are right: every count is
+# checked against an independent Julia computation over the base rows (the pole position of a 2009
+# race is its smallest positive grid).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery (#932) - correlations evaluated before grouping execute and count right" begin
+    pole_grid = () -> Subquery(M.Result.objects.
+        filter("raceid" => OuterRef("raceid"), "grid__@gt" => 0).
+        values("p" => Min("grid")))
+    on_pole = () -> Case([When("grid" => pole_grid(), then = 1)], default = 0)
+
+    # The independent answer: base rows of 2009, poles worked out in Julia.
+    base = M.Result.objects.filter("raceid__year" => 2009).
+        values("raceid", "constructorid", "grid") |> DataFrame
+    pole = Dict(k.raceid => minimum(filter(>(0), g.grid)) for (k, g) in pairs(groupby(base, :raceid)))
+    base.is_pole = [row.grid == pole[row.raceid] for row in eachrow(base)]
+    want = Dict(k.constructorid => count(g.is_pole) for (k, g) in pairs(groupby(base, :constructorid)))
+    @test sum(values(want)) == length(pole) > 10   # one pole a race, and the season has races
+
+    # Item 1 — inside an aggregate's argument.
+    df = M.Result.objects.filter("raceid__year" => 2009).
+        values("constructorid", "poles" => Sum(on_pole())) |> DataFrame
+    @test Dict(row.constructorid => row.poles for row in eachrow(df)) == want
+
+    # Item 4 — the whole-queryset form, which has no GROUP BY at all.
+    total = M.Result.objects.filter("raceid__year" => 2009).aggregate("poles" => Sum(on_pole()))
+    @test total.poles == length(pole)
+
+    # Item 2 — a function around the subquery in WHERE.
+    df = M.Result.objects.filter("raceid__year" => 2009, "grid" => Coalesce(pole_grid(), 0)).
+        values("constructorid", "n" => Count("resultid")) |> DataFrame
+    @test Dict(row.constructorid => row.n for row in eachrow(df)) == filter(p -> p.second > 0, want)
+
+    # Item 3 — a non-aggregate `Case` holding the subquery is a GROUP BY key, whole.
+    df = M.Result.objects.filter("raceid__year" => 2009).
+        values("constructorid",
+               "start" => Case([When("grid" => pole_grid(), then = Value("pole"))], default = Value("other")),
+               "n" => Count("resultid")) |> DataFrame
+    for (k, g) in pairs(groupby(base, :constructorid))
+        got = Dict(row.start => row.n for row in eachrow(df) if row.constructorid == k.constructorid)
+        @test get(got, "pole", 0) == count(g.is_pole)
+        @test get(got, "other", 0) == count(!, g.is_pole)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Subquery (#878): the operand of a one-argument scalar function or a date transform. #863 made a
 # Subquery an argument of the variadic functions (`Coalesce`, `Greatest`, …); `Lower`, `Abs`,
 # `Round`, `Cast`, `Extract` and the `@date` transform were a `MethodError` until #878. The unit

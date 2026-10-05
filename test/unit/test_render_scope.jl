@@ -117,6 +117,12 @@ end
                                 object = RScopeLap.objects.object)
     base = instruc.scope
     @test base == RenderScope()
+    # FAIL-CLOSED: a clause entry that forgets to set the phase must leave a correlated subquery
+    # CHECKED (`:group`), so the cost of a missed site is a loud false refusal, never wrong rows.
+    # Every clause in `build()` sets its phase today, so no query reaches this default — which is
+    # exactly why it is pinned here rather than through one.
+    @test base.phase === :group
+    @test base.group_key === false
 
     @test with_scope(() -> instruc.scope.label, instruc; label = "x") == "x"
     @test instruc.scope === base

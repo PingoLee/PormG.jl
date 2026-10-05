@@ -230,6 +230,26 @@ _na28_err(f) = try f(); nothing catch e; e end
                 q_alias.filter("top_ip__@startswith" => "10.40.")
                 @test [r["label"] for r in q_alias.list()] == ["bulk-1"]
 
+                # #929: an alias whose type only the declared cast or the subquery's column names —
+                # the server rejected `LIKE` on each of these until the alias got that type.
+                q_cast = S()
+                q_cast.values("label", "ip" => PormG.Functions.Cast("client_ip", "inet"))
+                q_cast.filter("ip__@startswith" => "10.40.")
+                @test [r["label"] for r in q_cast.list()] == ["bulk-1"]
+                q_cidr = S()
+                q_cidr.values("label", "lan" => PormG.Functions.Cast("garage_lan", "cidr"))
+                q_cidr.filter("lan__@endswith" => "/16")
+                @test sort([r["label"] for r in q_cidr.list()]) == ["bulk-1", "bulk-2"]
+                q_sub = S()
+                q_sub.values("label", "ip" => Subquery(S().filter("id" => OuterRef("id")).values("client_ip")))
+                q_sub.filter("ip__@startswith" => "10.40.")
+                @test [r["label"] for r in q_sub.list()] == ["bulk-1"]
+                # A uuid cast reads its canonical text, so a fragment of it matches — on every row.
+                q_uuid = S()
+                q_uuid.values("label", "u" => PormG.Functions.Cast(PormG.Functions.Value("550E8400-E29B-41D4-A716-446655440000"), "uuid"))
+                q_uuid.filter("u__@startswith" => "550e8400-e29b")
+                @test length(q_uuid.list()) == S().count()   # `count()` drops the projection, alias and all
+
                 # #903: a `Sockets` literal binds as PostgreSQL's text for it, typed inet — the server
                 # reads it back as it prints it (`::ffff:10.0.0.1`, not `Sockets`' `::ffff:a00:1`).
                 q_lit = S().filter("label" => "opts")

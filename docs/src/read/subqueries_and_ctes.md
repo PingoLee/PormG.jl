@@ -294,6 +294,63 @@ df = query |> DataFrame   # df.last_race holds Dates.Date values on PostgreSQL a
 
 A function over the subquery follows its usual rule with that type: `Coalesce(Subquery(last_race), Date(1900, 1, 1))` is a `Date` too, and `NullIf` takes the subquery's type. A computed inner column (`Avg`, `Sum`, `Count`, arithmetic) is not a model column's value, so it comes back as the engine delivers it. Wrap it in `Cast(Subquery(…), "date")` (or the type it holds) to name the type yourself.
 
+### A subquery as a filter value
+
+A `Subquery` can also be the value a filter compares against, as in Django's `filter(grid=Subquery(...))`. The comparison renders as `column = (SELECT …)`, evaluated once per outer row. Each race's fastest lap in 2009:
+
+```julia
+using PormG.Functions: Min
+
+fastest = M.Lap_times.objects
+fastest.filter("raceid" => OuterRef("raceid"))
+fastest.values("m" => Min("milliseconds"))
+
+query = M.Lap_times.objects
+query.filter("raceid__year" => 2009, "milliseconds" => Subquery(fastest))
+query.values("raceid__name", "driverid__surname", "lap", "milliseconds")
+query.order_by("raceid__date")
+df = query |> DataFrame   # 17 rows: one per race (Rosberg's lap 48 in Australia, …)
+```
+
+```sql
+SELECT "Tb_1"."name" as "raceid__name", "Tb_2"."surname" as "driverid__surname",
+  "Tb"."lap" as "lap", "Tb"."milliseconds" as "milliseconds"
+FROM "lap_times" as "Tb"
+ INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
+ INNER JOIN "driver" AS "Tb_2" ON "Tb"."driverid" = "Tb_2"."driverid"
+WHERE "Tb_1"."year" = $1 AND
+   "Tb"."milliseconds" = (SELECT MIN("R1"."milliseconds") as "m"
+FROM "lap_times" as "R1"
+WHERE "R1"."raceid" = "Tb"."raceid")
+ORDER BY "Tb_1"."date" ASC NULLS LAST
+```
+
+The ordering lookups take it too. The 2009 podiums of drivers who started behind their race's average grid position:
+
+```julia
+using PormG.Functions: Avg
+
+avg_grid = M.Result.objects
+avg_grid.filter("raceid" => OuterRef("raceid"))
+avg_grid.values("g" => Avg("grid"))
+
+query = M.Result.objects
+query.filter("raceid__year" => 2009, "grid__@gt" => Subquery(avg_grid), "positionorder__@lte" => 3)
+query.values("raceid__name", "driverid__surname", "grid", "positionorder")
+df = query |> DataFrame   # Trulli from grid 20 in Australia, Hamilton from grid 17 in Brazil
+```
+
+The same subquery works in every place a filter value goes:
+
+- **An `F` comparison:** `query.filter(F("milliseconds") == Subquery(fastest))` renders the same predicate as the pair, and so does a function or a `Joined(...)` handle on the left.
+- **Inside `Q(...)`/`Qor(...)`, and in a `When` condition.**
+- **A join condition:** a pair in `cjoin_on(...; on = [...])`, `on(...)` or `cjoin(...; filters = [...])`. Its values bind in the join's place in the statement, so it is safe on SQLite's positional parameters too.
+- **An alias:** `values("best" => Max("grid")); filter("best__@gt" => Subquery(...))` compares in `HAVING`.
+
+The rules are those of a projected scalar subquery (below), with two differences:
+- **The grouped-correlation check depends on the clause.** A `WHERE` filter or a join condition is evaluated before `GROUP BY`, so it may correlate on a column the outer query does not group by. A comparison on an aggregate alias (`HAVING`), or in a projection's `When` condition, is evaluated after grouping. That case is checked by the #194 guard (below), the same as a projected subquery. The check is conservative: it also refuses a few shapes whose SQL is legal, namely a subquery inside an aggregate's argument (`Sum(Case([When("grid" => Subquery(…), then = 1)], default = 0))`) and one inside a non-aggregate `Case` the query groups by whole (#932). `Exists(…)` in a projected `When` behaves the same way.
+- **Lookups that need something other than one value refuse it.** `@in`/`@nin` raise a `FilterError` that names the membership spelling, which takes the query itself, unwrapped: `"grid__@in" => query`. The pattern lookups (`@contains`, `@startswith`, …), `@isnull` and `@range` raise a `FilterError` too, as they do for a column expression.
+
 ### Rules and limitations
 
 - **Exactly one column.** The inner query must project exactly one column via `.values(...)` (the inner alias is cosmetic). Zero or several columns raise a `QueryBuildError` at build time. The same one-column rule applies to `@in` subqueries, where it surfaces as a `FilterError` — the type names which argument you got wrong (a projection here, a filter there). Catch `PormGError` to handle both.
@@ -640,7 +697,8 @@ it (a `Date` on both engines). A column the body computes, such as `Avg("points"
 comes back as the engine delivers it, even though the table above binds it as the aggregated column's
 field (#824). This is the same rule `values(...)` follows outside a CTE.
 
-The type you declare can be a text, integer, bigint, float, numeric, boolean or date type. That
+The type you declare can be a text, integer, bigint, float, numeric, boolean or date type, and on
+PostgreSQL also `uuid`, `inet` or `cidr`. SQLite renders those three casts as text, so a CTE column declared as one is refused there. That
 includes the aliases `int2`, `int4`, `int8`, `float4` and `float8`, and any field object with one of
 those types, such as `PositiveIntegerField()`, which is typed as a plain integer because a cast does
 not enforce the sign. A timestamp, time or interval type is refused, since each has more than one

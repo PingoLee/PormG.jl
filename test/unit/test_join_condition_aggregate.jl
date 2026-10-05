@@ -15,7 +15,7 @@
 using Test
 using PormG
 using PormG.QueryBuilder: inspect_query, F, Q, Qor, OP, Joined, Exists, OuterRef
-using PormG.Functions: Count, Max, Lower, Rank, WindowOver
+using PormG.Functions: Count, Max, Lower, Rank, WindowOver, Case, When
 using PormG: QueryBuildError
 
 struct JoinAggMockPostgres <: PormG.PormGPostgres end
@@ -129,6 +129,8 @@ end
     ("OP over a window", () -> OP(_ja_rank(), ">", 1)),
     ("window on the right of a pair", () -> "grid" => _ja_rank()),
     ("window over an aggregate", () -> OP(Rank(over = WindowOver(partition_by = [Count("resultid")])), ">", 1)),
+    # #928: a window in a `When` CONDITION, which `_is_window_expr` did not enter before.
+    ("window in a When condition", () -> "grid" => Case([When(_ja_rank() > 1, then = 1)], default = 0)),
   )
   for (backend, mod) in _JOIN_AGG_MODELS
     @testset "$backend: $label" for (label, term) in cases

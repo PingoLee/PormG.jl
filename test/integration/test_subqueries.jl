@@ -582,3 +582,43 @@ end
     end
     @test all(==(df.last[1]), df.first_last)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subquery (#926): a scalar subquery as a filter VALUE. `filter("milliseconds" => Subquery(…))` raised a
+# raw `MethodError` until #926. The unit suite pins the SQL and the parameter order on mock
+# connections; this proves the predicate runs on the real engine and returns the right rows. The
+# oracle is the per-race minimum computed in Julia over the raw rows, with a bound value before and
+# after the subquery so a misplaced parameter would change the answer rather than pass unnoticed.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Subquery (#926) - a scalar Subquery as a filter value" begin
+    fastest = M.Lap_times.objects
+    fastest.filter("raceid" => OuterRef("raceid"), "lap__@gte" => 2)
+    fastest.values("m" => Min("milliseconds"))
+
+    raw = M.Lap_times.objects.
+        filter("raceid__year" => 2009, "lap__@gte" => 2).
+        values("raceid", "driverid", "lap", "milliseconds") |> DataFrame
+    best = Dict(first(k) => minimum(g.milliseconds) for (k, g) in pairs(groupby(raw, :raceid)))
+    expected = sort([(r.raceid, r.driverid, r.lap) for r in eachrow(raw) if r.milliseconds == best[r.raceid]])
+
+    as_tuples(df) = sort([(r.raceid, r.driverid, r.lap) for r in eachrow(df)])
+
+    # The pair, with values bound before ("raceid__year") and after ("lap__@gte") the subquery's own.
+    pair = M.Lap_times.objects.
+        filter("raceid__year" => 2009, "milliseconds" => Subquery(fastest), "lap__@gte" => 2).
+        values("raceid", "driverid", "lap") |> DataFrame
+    @test !isempty(expected)
+    @test as_tuples(pair) == expected
+
+    # The F spelling is the same predicate.
+    fcmp = M.Lap_times.objects.
+        filter("raceid__year" => 2009, F("milliseconds") == Subquery(fastest), "lap__@gte" => 2).
+        values("raceid", "driverid", "lap") |> DataFrame
+    @test as_tuples(fcmp) == expected
+
+    # An ordering lookup: the laps slower than their race's fastest, counted both ways.
+    slower = M.Lap_times.objects.
+        filter("raceid__year" => 2009, "milliseconds__@gt" => Subquery(fastest), "lap__@gte" => 2).
+        count()
+    @test slower == count(r -> r.milliseconds > best[r.raceid], eachrow(raw))
+end

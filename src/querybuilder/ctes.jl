@@ -1492,10 +1492,14 @@ function _declared_type(func::SQLTypeFunction, instruct::SQLInstruction)
   declared = get(func.kwargs, func.function_name == "CAST" ? "type" : "output_field", nothing)
   (declared isa AbstractString && !isempty(declared)) || return nothing
   typed = _sql_type_field(declared)
-  typed === nothing && throw(QueryBuildError(
+  # #929: `uuid`/`inet`/`cidr` became nameable for the alias filter, on PostgreSQL. They stay refused
+  # on SQLite, where they were refused before: there each cast renders `CAST(x AS TEXT)`, so typing the
+  # column would check — and normalize — its filter values against a type the engine never applied.
+  sqlite = instruct.connection isa PormGSQLite
+  (typed === nothing || (sqlite && _text_cast_on_sqlite(typed))) && throw(QueryBuildError(
     "A CTE column cannot be typed from the SQL type \e[4m\e[31m$(declared)\e[0m on " *
-    "$(func.function_name)(…). Name a text, integer, bigint, float, numeric, boolean or date type " *
-    "instead (#812, #823)."))
+    "$(func.function_name)(…). Name a text, integer, bigint, float, numeric, boolean or date type" *
+    "$(sqlite ? "" : ", or uuid / inet / cidr") instead (#812, #823, #929)."))
   return typed
 end
 

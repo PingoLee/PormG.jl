@@ -358,8 +358,9 @@ end
       err = try; inspect_query(q); nothing; catch e; e; end
       @test err isa QueryBuildError
       msg = replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
-      @test occursin("Subquery(…) compared in a projection", msg)
-      @test occursin("correlates on raceid", msg)
+      # #932: the label is the projection the condition sits in, as for every projected correlation —
+      # the column the user named — where it was a generic "Subquery(…) compared in a projection".
+      @test occursin("correlated column n correlates on raceid", msg)
     end
     @testset "$backend: grouped on the correlated column" begin
       q = mod.Result.objects
@@ -367,5 +368,167 @@ end
       insp = inspect_query(q)
       @test occursin(r"CASE WHEN \"Tb\"\.\"grid\" = \(SELECT .+ GROUP BY 1, 2", _sq_flat(insp[:sql_text]))
     end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #194 decides by EVALUATION PHASE, not by render entry point (#932)
+# The guard needs one fact: is the outer column read before GROUP BY (per row) or after it (per
+# group)? It used to answer a different question — which render entry point the subquery reached —
+# and every disagreement became a patch. Now only clauses set the phase: WHERE, ON and a grouping
+# aggregate's argument are per row; the SELECT list, HAVING and ORDER BY are per group; an expression
+# that is itself a GROUP BY key is grouped whole. Every rendered OuterRef is recorded with that phase.
+#
+# One matrix, clause × spelling, each cell built or refused, so the next spelling of a subquery is a
+# new ROW here rather than a new branch in the guard. The outer query groups by `chassis` and every
+# subquery correlates on the UNGROUPED `raceid`, so a cell builds only when the phase makes it legal.
+# ─────────────────────────────────────────────────────────────────────────────
+using PormG.QueryBuilder: Exists
+using PormG.Functions: Coalesce, Sum, Lag, WindowOver, Value
+using PormG.QueryBuilder: SQLOrder, SQLField
+
+@testset "#932: the #194 guard decides by evaluation phase" begin
+  for (backend, mod) in _SQ_MODELS
+    sq = () -> _sq_best(mod)
+    ex = () -> Exists(mod.Result.objects.filter("raceid" => OuterRef("raceid"), "chassis" => "IN"))
+    inq = () -> mod.Result.objects.filter("raceid" => OuterRef("raceid")).values("grid")
+    # Condition spellings: what a `filter`, a `When` or an `on` takes.
+    conds = (
+      ("pair = Subquery", () -> "grid" => sq()),
+      ("F(...) == Subquery", () -> F("grid") == sq()),
+      ("pair = Coalesce(Subquery)", () -> "grid" => Coalesce(sq(), 0)),
+      ("Q(Exists)", () -> Q(ex())),
+    )
+    # Value spellings: what a projection or the right of an alias filter takes.
+    vals = (
+      ("bare Subquery", sq),
+      ("Coalesce(Subquery)", () -> Coalesce(sq(), 0)),
+    )
+    grouped = q -> q.values("chassis", "n" => Count("resultid"))
+    cells = Tuple{String,Function,Symbol}[]
+    for (cl, c) in conds
+      # Before GROUP BY: legal on both engines.
+      push!(cells, ("WHERE / $cl", q -> (grouped(q); q.filter(c())), :builds))
+      push!(cells, ("inside Max(Case) / $cl",
+                    q -> q.values("chassis", "m" => Max(Case([When(c(), then = 1)], default = 0))), :builds))   # item 1
+      push!(cells, ("aggregate(Sum(Case)) / $cl",
+                    q -> q.aggregate("m" => Sum(Case([When(c(), then = 1)], default = 0)), show_query = :dict), :builds))   # item 4
+      # A non-aggregate `Case` is a GROUP BY key whole, subquery and all (item 3).
+      push!(cells, ("projected Case, grouped / $cl",
+                    q -> q.values("chassis", "n" => Count("resultid"),
+                                  "lbl" => Case([When(c(), then = Value("a"))], default = Value("b"))), :builds))
+      # After GROUP BY and not grouped: a mixed term, evaluated per group — refused.
+      push!(cells, ("projected Case, mixed / $cl",
+                    q -> q.values("chassis", "grid", "n" => Case([When(c(), then = Count("resultid"))], default = 0)),
+                    :refused))
+    end
+    for (vl, v) in vals
+      push!(cells, ("WHERE value / $vl", q -> (grouped(q); q.filter("grid" => v())), :builds))   # item 2
+      push!(cells, ("HAVING value / $vl",
+                    q -> (q.values("chassis", "best" => Max("grid")); q.filter("best__@gt" => v())), :refused))
+      push!(cells, ("HAVING value inside Q / $vl",
+                    q -> (q.values("chassis", "best" => Max("grid")); q.filter(Q("best__@gt" => v()))), :refused))
+      push!(cells, ("inside a window / $vl",
+                    q -> q.values("chassis", "n" => Count("resultid"),
+                                  "w" => Lag(v(), over = WindowOver(order_by = ["chassis"]))), :refused))
+    end
+    # Projected values: a bare subquery is never grouped (it is one value per row), so it is checked.
+    push!(cells, ("projected / bare Subquery", q -> q.values("chassis", "n" => Count("resultid"), "s" => sq()), :refused))
+    push!(cells, ("projected / Exists", q -> q.values("chassis", "n" => Count("resultid"), "e" => ex()), :refused))
+    # A wrapped one is grouped by position, so it is a GROUP BY key whole.
+    push!(cells, ("projected, grouped / Coalesce(Subquery)",
+                  q -> q.values("chassis", "n" => Count("resultid"), "s" => Coalesce(sq(), 0)), :builds))
+    push!(cells, ("inside Max / Coalesce(Subquery)",
+                  q -> q.values("chassis", "m" => Max(Coalesce(sq(), 0))), :builds))
+    # ORDER BY: a term not projected is pushed into GROUP BY whole.
+    push!(cells, ("ORDER BY / Coalesce(Subquery)",
+                  q -> (grouped(q); q.order_by(SQLOrder(SQLField(Coalesce(sq(), 0), "o")))), :builds))
+    # …but only while the grouping is real (review of #932). A `"*"` ahead of the projection expands
+    # before the ordinals resolve, so `GROUP BY 3` names a model column, not `s`; and an ORDER BY term
+    # holding an aggregate is no valid grouping key at all. Both stay checked.
+    push!(cells, ("projected after a \"*\" / Coalesce(Subquery)",
+                  q -> q.values("*", "n" => Count("resultid"), "s" => Coalesce(sq(), 0)), :refused))
+    push!(cells, ("ORDER BY with an aggregate / Coalesce(Subquery)",
+                  q -> (grouped(q); q.order_by(SQLOrder(SQLField(Max("grid") + Coalesce(sq(), 0), "o")))), :refused))
+    push!(cells, ("ORDER BY reading an aggregate alias / Coalesce(Subquery)",
+                  q -> (grouped(q); q.order_by(SQLOrder(SQLField(
+                        Case([When("n__@gt" => 1, then = Coalesce(sq(), 0))], default = 0), "o")))), :refused))
+    # ON is per row.
+    push!(cells, ("ON / pair = Subquery",
+                  q -> (q.on("driverid", "number" => sq()); q.values("driverid__code", "n" => Count("resultid"))), :builds))
+    # `__@in` in a projected `When` is refused by the #798 guard first; in WHERE it builds.
+    push!(cells, ("WHERE / grid__@in subquery", q -> (grouped(q); q.filter("grid__@in" => inq())), :builds))
+
+    @testset "$backend: $label" for (label, setup, want) in cells
+      err = try
+        q = mod.Result.objects
+        r = setup(q)
+        r isa Dict || inspect_query(q)
+        nothing
+      catch e
+        e
+      end
+      if want === :builds
+        @test err === nothing
+      else
+        @test err isa QueryBuildError
+        @test occursin("grouped-correlation guard (#194)", sprint(showerror, err))
+      end
+    end
+  end
+end
+
+# The legal shapes the guard used to refuse (#932 items 1–4, and the two GROUP BY keys), rendered:
+# the subquery sits where the phase says it does — inside the aggregate call, in WHERE, inside a
+# GROUP BY key.
+@testset "#932: the newly built shapes render the subquery where the phase says" begin
+  for (backend, mod) in _SQ_MODELS
+    sq = () -> _sq_best(mod)
+    sub = "\\(SELECT MIN\\(\"R1\"\\.\"grid\"\\) as \"m\" FROM \"result\" as \"R1\" WHERE \"R1\"\\.\"raceid\" = \"Tb\"\\.\"raceid\""
+    @testset "$backend: item 1 — inside the aggregate call" begin
+      q = mod.Result.objects
+      q.values("chassis", "m" => Max(Case([When("grid" => sq(), then = 1)], default = 0)))
+      @test occursin(Regex("MAX\\(CASE WHEN \"Tb\"\\.\"grid\" = $sub.+ GROUP BY 1\\s*\$"), _sq_flat(inspect_query(q)[:sql_text]))
+    end
+    @testset "$backend: item 2 — Coalesce(Subquery) in WHERE" begin
+      q = mod.Result.objects
+      q.values("chassis", "n" => Count("resultid"))
+      q.filter("grid" => Coalesce(sq(), 0))
+      @test occursin(Regex("WHERE \"Tb\"\\.\"grid\" = COALESCE\\($sub.+ GROUP BY 1\\s*\$"), _sq_flat(inspect_query(q)[:sql_text]))
+    end
+    @testset "$backend: item 3 — a non-aggregate Case is grouped by position" begin
+      q = mod.Result.objects
+      q.values("chassis", "n" => Count("resultid"), "lbl" => Case([When("grid" => sq(), then = Value("a"))], default = Value("b")))
+      @test occursin(Regex("CASE WHEN \"Tb\"\\.\"grid\" = $sub.+ as \"lbl\" FROM .+ GROUP BY 1, 3\\s*\$"), _sq_flat(inspect_query(q)[:sql_text]))
+    end
+    @testset "$backend: item 4 — aggregate() over a conditional sum" begin
+      q = mod.Result.objects
+      res = q.aggregate("m" => Sum(Case([When("grid" => sq(), then = 1)], default = 0)), show_query = :dict)
+      sql = _sq_flat(res[:sql_text])
+      @test occursin(Regex("^SELECT SUM\\(CASE WHEN \"Tb\"\\.\"grid\" = $sub"), sql)
+      @test !occursin("GROUP BY", sql)
+    end
+    @testset "$backend: an ORDER BY term is grouped whole" begin
+      q = mod.Result.objects
+      q.values("chassis", "n" => Count("resultid"))
+      q.order_by(SQLOrder(SQLField(Coalesce(sq(), 0), "o")))
+      @test occursin(Regex("GROUP BY 1, COALESCE\\($sub.+ ORDER BY COALESCE\\($sub"), _sq_flat(inspect_query(q)[:sql_text]))
+    end
+  end
+end
+
+# The nested half of #932 item 2 is NOT fixed here: inside another subquery, `Coalesce(Subquery)` in
+# WHERE is still refused — by the #92 nesting guard, which keys on the render entry point. Pinned so
+# that fixing #938 has to touch this line on purpose.
+@testset "#932: Coalesce(Subquery) in a nested WHERE is still refused by #92 (#938)" begin
+  for (backend, mod) in _SQ_MODELS
+    inner = mod.Result.objects
+    inner.filter("grid" => Coalesce(_sq_best(mod), 0))
+    inner.values("m" => Min("grid"))
+    q = mod.Result.objects
+    q.values("raceid", "x" => Subquery(inner))
+    err = try; inspect_query(q); nothing; catch e; e; end
+    @test err isa QueryBuildError
+    @test occursin("projected inside another subquery", sprint(showerror, err))
   end
 end

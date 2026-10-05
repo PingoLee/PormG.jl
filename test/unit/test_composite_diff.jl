@@ -837,6 +837,13 @@ end
       @test err isa PormG.InvalidMigrationError
       @test occursin("does not own", err.msg)
       @test occursin("Models.Index(expressions = (\"abs(driverid)\",), condition = \"grid > 1\", name = \"hand_abs\")", err.msg)
+      # #934: catalog text the declaration validator refuses is never pasted as advice — the
+      # declaration would throw. A literal ending in a backslash is one PostgreSQL's deparser prints.
+      odd = PormG.Migrations.LiveComposite("hand_path", String[], false, false, "btree", Bool[],
+                                            Union{String, Nothing}[], Bool[], nothing, nothing;
+                                            expressions = ["(path || 'C:\\')"])
+      hint = PormG.Migrations._adoption_hint(odd)
+      @test occursin("cannot adopt it", hint) && !occursin("Models.Index(", hint)
 
       # A column the declared text names cannot be renamed under it, nor removed.
       renamed(text) = Models.Model("result"; id = Models.IDField(), raceid = Models.IntegerField(),

@@ -928,7 +928,13 @@ end
 # own text, which PostgreSQL rewrites — so the refusal hands that declaration over, ready to paste.
 function _adoption_hint(lc::LiveComposite)::String
   composite_holds_text(lc) && !lc.unique || return ""
-  members = isempty(lc.expressions) ?
+  # Catalog text the declaration validator refuses (#934 — a literal ending in a backslash, say) would
+  # make the pasted declaration throw: advice that errors when followed. Say why instead.
+  texts = lc.condition === nothing ? lc.expressions : [lc.expressions; lc.condition]
+  all(is_valid_db_default_sql, texts) ||
+    return ". PormG cannot adopt it: its definition holds SQL text a declaration refuses (see " *
+           "`Models.Index`), so give the declaration another name, or drop the index by hand"
+  members =isempty(lc.expressions) ?
     "fields = ($(join((repr((d ? "-" : "") * c) for (c, d) in zip(lc.columns, lc.descending)), ", ")),)" :
     "expressions = ($(join((repr(e) for e in lc.expressions), ", ")),)"
   cond = lc.condition === nothing ? "" : ", condition = $(repr(lc.condition))"

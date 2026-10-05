@@ -331,7 +331,9 @@ Result = Models.Model("result",
 The text is **SQL, sent to both engines as written** — over the table's physical, unqualified column
 names, and never a `Q(...)`, because DDL takes no bind parameters. PormG checks it only for what would
 silently change the statement it lands in: a `--` or `/*` comment, an unterminated quote, a top-level
-`;` — or a top-level `,`, so each entry of `expressions` is exactly one member. Both engines have
+`;` — or a top-level `,`, so each entry of `expressions` is exactly one member — and an `E'…'` string,
+a backslash right before a quote, a dollar quote or a backtick, whose end only one engine can find.
+Both engines have
 expression and partial indexes; write SQL both understand when a model runs on both.
 
 ```sql
@@ -464,7 +466,10 @@ Result = Models.Model(
   does not survive a SQLite table rebuild. It is not a `Q(...)` — a CHECK is DDL, which takes no bind
   parameters. Write SQL both engines accept, as you would for `db_default`. PormG checks it only for
   the typos that would silently change the statement it lands in: a `--` or `/*` comment, an
-  unterminated quote, a `;` or a `,` outside parentheses.
+  unterminated quote, a `;` or a `,` outside parentheses — and for quoting whose end only one engine
+  can find: an `E'…'` string, a backslash right before a quote, a dollar quote or a backtick. The
+  rules are the `db_default` ones, spelled out in
+  [Schema Conventions](schema_conventions.md#db_default-is-rendered-verbatim,-and-that-is-a-deliberate-exception).
 - **`name` is required** — it is the constraint's identity — and at most 63 bytes, PostgreSQL's limit.
   Names are unique within a model across `UniqueConstraint` and `CheckConstraint`. On PostgreSQL a
   constraint name is also unique per *table*, so `makemigrations` refuses one that another constraint

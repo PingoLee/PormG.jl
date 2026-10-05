@@ -543,6 +543,9 @@ end
     @test occursin("not well-formed SQL", msg(() -> Models.Index(expressions = (bad,), name = "x")))
   end
   @test occursin("not well-formed SQL", msg(() -> Models.Index(fields = ("a", "b"), condition = "a > 0; DROP TABLE t", name = "x")))
+  # #934: quoting whose end only one engine can find, through the same validator.
+  @test occursin("not well-formed SQL", msg(() -> Models.Index(fields = ("a", "b"), condition = "a <> \$\$;\$\$", name = "x")))
+  @test occursin("not well-formed SQL", msg(() -> Models.Index(expressions = ("lower(`a`)",), name = "x")))
   # A model that declares two text indexes under one name is refused when it is built.
   @test_throws PormG.ModelDefinitionError Models.Model("dup_text_ix", id = Models.IDField(), a = Models.IntegerField(),
     indexes = [Models.Index(expressions = ("abs(a)",), name = "same"), Models.Index(fields = ("a",), condition = "a > 0", name = "same")])

@@ -1965,7 +1965,8 @@ column names (`db_column`, where a field sets one) and unqualified — `grid >= 
 a CHECK is DDL, which takes no bind parameters, so there is nothing to translate one into. Like
 `db_default`, it is author-written schema text; PormG checks it only for the typos that would
 silently change the statement it lands in — a `--` or `/*` comment, an unterminated quote, a
-top-level `;` or `,`.
+top-level `;` or `,` — and for the quotes only one engine can see the end of: an `E'…'` string, a
+backslash right before a quote, a dollar quote, a backtick (#934).
 
 `name` is **required**: it is the constraint's identity. PostgreSQL rewrites a stored condition's
 text (`pg_get_constraintdef` re-parenthesises and re-casts it), so a condition is never matched by
@@ -2016,7 +2017,8 @@ function CheckConstraint(; condition::Union{AbstractString, Nothing} = nothing,
     throw(ModelDefinitionError("CheckConstraint '$(name)' requires a condition"))
   is_valid_db_default_sql(condition) || throw(ModelDefinitionError(
     "CheckConstraint '$(name)' condition is not well-formed SQL: $(repr(String(condition))). It must " *
-    "not contain a `--` or `/*` comment, an unterminated quote, or a `;` or `,` outside parentheses — " *
+    "not contain a `--` or `/*` comment, an unterminated quote, a `;` or `,` outside parentheses, an " *
+    "`E'…'` string, a backslash right before a quote, a dollar quote or a backtick — " *
     "each would silently change the statement the CHECK is rendered into"))
   return CheckConstraint(String(condition), String(name))
 end
@@ -2367,7 +2369,8 @@ function _check_index_sql(sql::AbstractString, what::AbstractString)
   isempty(strip(sql)) && throw(ModelDefinitionError("Index $(what) must not be blank"))
   is_valid_db_default_sql(sql) || throw(ModelDefinitionError(
     "Index $(what) is not well-formed SQL: $(repr(String(sql))). It must not contain a `--` or " *
-    "`/*` comment, an unterminated quote, or a `;` or `,` outside parentheses — each would " *
+    "`/*` comment, an unterminated quote, a `;` or `,` outside parentheses, an `E'…'` string, a " *
+    "backslash right before a quote, a dollar quote or a backtick — each would " *
     "silently change the CREATE INDEX it is rendered into" *
     (what == "expression" ? "; give each index member as its own entry" : "")))
   return nothing

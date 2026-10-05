@@ -3333,7 +3333,7 @@ class Pessoa(models.Model):
 
     codigo = models.IntegerField(primary_key=True)
     estado = models.CharField(max_length=2, choices=Situacao.choices, default=Situacao.RASCUNHO)
-    tags = ArrayField(models.CharField(max_length=10))
+    tags = HStoreField()
 
     class Meta:
         nao_existe_essa_opcao = True
@@ -4309,7 +4309,7 @@ end
 # `CharField(max_length=10)` came back as `Models.IDField()`, mis-typing the one column every
 # query reads, with no marker anywhere saying so.
 #
-# The `_looks_like_a_field_call` path (`id = ArrayField(...)`) stays outside the set and is NOT
+# The `_looks_like_a_field_call` path (`id = HStoreField()`) stays outside the set and is NOT
 # covered here: its type is unknown, so its KEY is unknowable — `id = TreeForeignKey(...)` writes
 # `id_id` in Django and leaves `id` genuinely free. The reasoning is recorded beside that branch
 # in `process_class_fields!`.
@@ -4799,7 +4799,7 @@ from django.db import models
 
 class Thing(models.Model):
     id = models.CharField(max_length=10)
-    tags = ArrayField(models.IntegerField())
+    tags = HStoreField()
 """
     key_m, existed_m = project_config!()
     try

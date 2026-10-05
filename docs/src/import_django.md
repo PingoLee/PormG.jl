@@ -156,10 +156,11 @@ import_models_from_django("/path/to/your/models.py")
   See [Relation targets](@ref).
 
 - **`strict_fields::Bool`**: `false` (the default) **skips** a field whose Django type PormG does not
-  implement, with a `@warn` and a `# PormG:` marker naming the field, its class and its `models.py`
-  line. `true` raises `InvalidMigrationError` instead. The lenient default is not about tolerating one
-  bad column — before it, a single unimplemented type aborted the import of *every* model in *every*
-  app of the call. See the note under [Supported Django Fields](#Supported-Django-Fields).
+  implement, or an `ArrayField` whose element PormG's `ArrayField` cannot hold, with a `@warn` and a
+  `# PormG:` marker naming the field, its class and its `models.py` line. `true` raises
+  `InvalidMigrationError` instead. The lenient default is not about tolerating one bad column —
+  before it, a single unimplemented type aborted the import of *every* model in *every* app of the
+  call. See the note under [Supported Django Fields](#Supported-Django-Fields).
 
 - **`binding_overrides::AbstractDict`**: spell a generated Julia binding differently from the derived
   one. See [Choosing your own binding](@ref).
@@ -459,6 +460,40 @@ column.
 - `BinaryField` → `BinaryField`
 - `FileField` → `FileField`
 - `ImageField` → `ImageField`
+- `ArrayField` → `ArrayField`, read through its element (PostgreSQL only — see below)
+
+!!! note "An `ArrayField` is read through its element"
+    Django's `ArrayField` takes its element as a field call, and the importer reads that call like
+    any other field — its `max_length`, `max_digits`, `decimal_places`, `null` and `choices`
+    (enumerations included) carry over:
+
+    ```python
+    from django.contrib.postgres.fields import ArrayField
+
+    class RaceStrategy(models.Model):
+        tyre_compounds = ArrayField(models.CharField(max_length=10), size=8)
+        pit_laps = ArrayField(models.IntegerField(), default=list)
+    ```
+
+    imports as
+
+    ```julia
+    tyre_compounds = Models.ArrayField(Models.CharField(max_length=10), size=8),
+    pit_laps = Models.ArrayField(Models.IntegerField(), default="{}")
+    ```
+
+    The bare `ArrayField(...)` is recognised as well as `models.ArrayField(...)` or any other module
+    prefix (`fields.ArrayField(...)`), and the element may be passed as `base_field=`. A second
+    positional argument is Django's `size`, and imports as `size=`. Django's `default=list` becomes
+    the empty-array default, which PormG stores as the literal `"{}"`.
+
+    A column option on the **element** (`db_index`, `unique`, `default`, …) is dropped and
+    reported: Django ignores it there, and PormG refuses it — see [Array Fields](fields.md#Array-Fields).
+
+    An element PormG's `ArrayField` cannot hold — a `JSONField`, a relation, a nested `ArrayField`,
+    or a type PormG does not implement — is reported and skipped like an unimplemented type (next
+    note), and the report names the element. So is an `ArrayField` whose element is not a call the
+    importer can read, such as a module constant.
 
 !!! note "Every Django auto key imports as `IDField`"
     `BigAutoField` is Django 3.2+'s `DEFAULT_AUTO_FIELD`. It is BIGINT auto-increment, which is
@@ -479,11 +514,6 @@ column.
     **its own column and nothing else**: every other field, every other class and every other app in
     the same call still import. The skip is reported both ways, with a `@warn` and a `# PormG:` marker
     naming the field, its class and its `models.py` line.
-
-    `ArrayField` is reported the same way, although PormG has one: its element is a positional field
-    call (`ArrayField(models.CharField(max_length = 10))`), which the importer does not read yet.
-    Declare it by hand as `Models.ArrayField(Models.CharField(max_length = 10))` — see
-    [Array Fields](fields.md#Array-Fields).
 
     Mind the consequence: the skipped column is still in the database and now absent from the model,
     so `makemigrations` reads it as drift and proposes **dropping** it. Declare that column by hand
@@ -1049,8 +1079,8 @@ no such translation, so it is reported like any other call.
 | | |
 |---|---|
 | **Imported** | Fields (including definitions wrapped across lines; Django's `BigAutoField` maps to `IDField`, an exact match), `ForeignKey` / `OneToOneField` / `ManyToManyField` — including `"self"`, `"<app_label>.<Class>"` and `settings.AUTH_USER_MODEL` targets, `Meta.db_table`, `Meta.unique_together`, `Meta.constraints`, `Meta.indexes`, `Meta.index_together` (the last three: see the whitelists above), abstract-base inheritance, `AbstractUser` auth columns, `TextChoices` / `IntegerChoices` enumerations |
-| **Imported, but degraded and annotated** | An `AutoField` or `SmallAutoField` — imported as `IDField`, because `IDField` is PormG's only integer key type (see the note under *Supported Django Fields*); the key is faithful, the declared width is not. A model whose base lives in another file — its own fields only. A relation whose target is not in this import — the column survives as a `BigIntegerField`, the relation does not (a `ManyToManyField` has no column, so it is dropped); `strict_relations = true` raises instead. A `Meta.db_table` that is computed rather than a plain string literal — ignored, name derived from the class. A `db_table` on an abstract base — not inherited by its children. A `unique_together` that is a name rather than a literal, or names a field that did not import. A field whose enum this file cannot see — the column survives, the enumeration does not. A field whose `choices` and/or `default` the field type rejects at construction — including a lone `default` on a field with no choices at all, such as one longer than `max_length` — the column survives without them. A `default` the importer cannot read as one value (`uuid.uuid4`, `uuid.uuid4()` and any other call, `'a' + 'b'`, an f-string, a raw or triple-quoted literal) — kept verbatim as text, so the stored default is that source text rather than what it denotes (see [String defaults](#String-defaults)). A `choices` **entry** whose value or label is not one literal — the entry is kept, carrying that source text, and reported (see [Choices](#Choices)). A `primary_key=True` on a field type PormG cannot key on — the column survives, the key does not, and no `id` is substituted; the model is then unusable by relations until you re-declare the key (see the warning above). A class-declared field named `id` that is **not** the primary key — the declared column is kept and Django's implicit `id` is not substituted over it, so the model has no key until you declare one. A field named `id` whose type `autofields_ignore` dropped — the column is gone as you asked, and no implicit `id` is written under its name either, because dropping a column and replacing it with a BIGINT auto-increment key are two different requests. Two declarations that write one column under **different field names** — `owner = ForeignKey(…)` and `owner_id = IntegerField()` both name the column `owner_id`, because Django appends `_id` to a relation's column. Both are named with their source lines, and the report says which one the file actually emits: the later declaration normally, *neither* if the later one's type has no PormG counterpart, and the *earlier* one if the later one's type is in `autofields_ignore`. Reported whether the two sit in one class body or arrive through an abstract base, and the report names which body each one is in — Django rejects both arrangements (`models.E007`), because an abstract base's fields are copied into the child. A child **re-declaring the same field name** it inherited is not this: that is the merge working as intended, and it stays silent. The same name declared **twice in one body** is reported, but as what it is — Python rebinds, so Django sees one field and `manage.py check` passes; the advice is to delete the declaration you did not mean, not to rename one |
-| **Reported and skipped** | `Meta.ordering` and every other option with no PormG equivalent; a `UniqueConstraint` or an `Index` PormG cannot express; multi-table inheritance; proxy models; a field-shaped call the importer cannot read (`tags = ArrayField(...)`); a field whose Django type PormG does not implement (`FilePathField`, `SmallIntegerField`, …) — the field, its class and its `models.py` line are named, and every other field, class and app in the call still imports, with `strict_fields = true` raising instead. Both leave the live column addressable by nothing in the model, so `makemigrations` reads it as drift |
+| **Imported, but degraded and annotated** | An `AutoField` or `SmallAutoField` — imported as `IDField`, because `IDField` is PormG's only integer key type (see the note under *Supported Django Fields*); the key is faithful, the declared width is not. A model whose base lives in another file — its own fields only. A relation whose target is not in this import — the column survives as a `BigIntegerField`, the relation does not (a `ManyToManyField` has no column, so it is dropped); `strict_relations = true` raises instead. A `Meta.db_table` that is computed rather than a plain string literal — ignored, name derived from the class. A `db_table` on an abstract base — not inherited by its children. A `unique_together` that is a name rather than a literal, or names a field that did not import. A field whose enum this file cannot see — the column survives, the enumeration does not. A field whose `choices` and/or `default` the field type rejects at construction — including a lone `default` on a field with no choices at all, such as one longer than `max_length` — the column survives without them. A `default` the importer cannot read as one value (`uuid.uuid4`, `uuid.uuid4()` and any other call, `'a' + 'b'`, an f-string, a raw or triple-quoted literal) — kept verbatim as text, so the stored default is that source text rather than what it denotes (see [String defaults](#String-defaults)). A `choices` **entry** whose value or label is not one literal — the entry is kept, carrying that source text, and reported (see [Choices](#Choices)). A `primary_key=True` on a field type PormG cannot key on — the column survives, the key does not, and no `id` is substituted; the model is then unusable by relations until you re-declare the key (see the warning above). A class-declared field named `id` that is **not** the primary key — the declared column is kept and Django's implicit `id` is not substituted over it, so the model has no key until you declare one. A field named `id` whose type `autofields_ignore` dropped — the column is gone as you asked, and no implicit `id` is written under its name either, because dropping a column and replacing it with a BIGINT auto-increment key are two different requests. Two declarations that write one column under **different field names** — `owner = ForeignKey(…)` and `owner_id = IntegerField()` both name the column `owner_id`, because Django appends `_id` to a relation's column. Both are named with their source lines, and the report says which one the file actually emits: the later declaration normally, *neither* if the later one's type has no PormG counterpart, and the *earlier* one if the later one's type is in `autofields_ignore`. Reported whether the two sit in one class body or arrive through an abstract base, and the report names which body each one is in — Django rejects both arrangements (`models.E007`), because an abstract base's fields are copied into the child. A child **re-declaring the same field name** it inherited is not this: that is the merge working as intended, and it stays silent. The same name declared **twice in one body** is reported, but as what it is — Python rebinds, so Django sees one field and `manage.py check` passes; the advice is to delete the declaration you did not mean, not to rename one. A column option on an `ArrayField`'s **element** (`db_index`, `unique`, `default`, …) — dropped, because Django ignores it there and PormG refuses it; the array column itself imports |
+| **Reported and skipped** | `Meta.ordering` and every other option with no PormG equivalent; a `UniqueConstraint` or an `Index` PormG cannot express; multi-table inheritance; proxy models; a field-shaped call the importer cannot read (`tags = HStoreField()`); a field whose Django type PormG does not implement (`FilePathField`, `SmallIntegerField`, …), or an `ArrayField` whose element PormG's `ArrayField` cannot hold (`ArrayField(models.JSONField())`) — the field, its class and its `models.py` line are named, and every other field, class and app in the call still imports, with `strict_fields = true` raising instead. Both leave the live column addressable by nothing in the model, so `makemigrations` reads it as drift |
 | **Not supported** | Model methods, managers, signals and validators are Python and have no PormG counterpart |
 
 Nothing in the middle two rows is dropped in silence: each one produces a `@warn` at import time and

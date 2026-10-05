@@ -5544,3 +5544,42 @@ class Pedido(models.Model):
         cleanup_project_test!(key_p, existed_p)
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#948): a constant resolves in the module its statement was WRITTEN in (#402)
+#
+# The constant reader follows #402's owner rule, as enum references do: a field merged in from an
+# abstract base in `core` reads `core`'s `LEN`, even though the child's own module binds a different
+# `LEN` — and the child's own statement reads the child's.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a merged base statement reads its OWN module's constant (#948, #402)" begin
+    core = """
+from django.db import models
+
+LEN = 5
+
+class Base(models.Model):
+    nome = models.CharField(max_length=LEN)
+
+    class Meta:
+        abstract = True
+"""
+    shop = """
+from django.db import models
+from core.models import Base
+
+LEN = 50
+
+class Pedido(Base):
+    apelido = models.CharField(max_length=LEN)
+"""
+    generated, key, existed = import_project(["core" => core, "shop" => shop];
+                                             output_file = "const_948_origin.jl")
+    try
+        @test occursin("nome = Models.CharField(max_length=5)", generated)
+        @test occursin("apelido = Models.CharField(max_length=50)", generated)
+        @test !occursin("# PormG: field", generated)
+    finally
+        cleanup_project_test!(key, existed)
+    end
+end

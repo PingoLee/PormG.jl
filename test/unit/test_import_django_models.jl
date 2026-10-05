@@ -2669,16 +2669,13 @@ end
             generated,
         )
 
-        # `choices` naming a module-level constant: nothing to read, and an empty tuple in silence
-        # is how a field lost its whole enumeration without a trace. The marker must say the WHOLE
-        # option went — the per-entry phrasing shares this channel and would leave a reader thinking
-        # the rest survived.
-        @test occursin("s = Models.CharField(max_length=3)", generated)
-        @test occursin(
-            "has `choices=SITUACAO_CONSTANTE`, which is a name rather than a literal — the whole " *
-            "option was dropped.",
-            generated,
-        )
+        # `choices` naming a module-level constant. Until #948 this asserted the option was
+        # DROPPED as "a name rather than a literal" — but the fixture binds `SITUACAO_CONSTANTE` to
+        # a tuple literal above the class, so Python reads exactly these two choices, and now so
+        # does the importer. An unresolvable `choices` name is covered by #948's drop testset.
+        @test occursin("s = Models.CharField(max_length=3, " *
+                       "choices=((\"A\", \"Ativo\"), (\"I\", \"Inativo\")))", generated)
+        @test !occursin("`choices=SITUACAO_CONSTANTE`", generated)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end
@@ -3502,5 +3499,342 @@ class Posterior(models.Model):
         @test occursin("nome = Models.CharField(max_length=30)", generated)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#948): a field option written as a NAME reads the constant this file binds
+#
+# `max_length=MAX_LEN` reached the typed constructor as the text "MAX_LEN", which it refused — and
+# that refusal aborted the import of every model in every app of the call, with a message naming
+# neither the field nor the class. A name bound to a literal earlier in the same models.py (module
+# level or the class body, Python's lookup for a class body) is now read; the `Ok` model beside it
+# is the blast-radius check.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer reads a same-file constant as a field option's value (#948)" begin
+    source = """
+from django.db import models
+from django.contrib.postgres.fields import ArrayField
+
+MAX_LEN = 10
+DIGITS = 7
+MAX_TAGS = 4
+BIG = 1_000
+ALIAS = MAX_LEN
+ANNOTATED: int = 6
+COL = "nome_piloto"
+STATUS_CHOICES = (("A", "Ativo"), ("I", "Inativo"))
+DEFAULT_STATUS = "A"
+TYRES = ("SOFT", "HARD")
+PREC = 50
+LATE_CLS = 50
+PAREN = (8)
+TRAILING = 9;
+
+class Ok(models.Model):
+    nome = models.CharField(max_length=20)
+
+class Pilot(models.Model):
+    CODE_LEN = 3
+    PREC = 3
+    prec = models.CharField(max_length=PREC)
+    late = models.CharField(max_length=LATE_CLS)
+    LATE_CLS = 4
+    entre_parenteses = models.CharField(max_length=PAREN)
+    com_ponto_e_virgula = models.CharField(max_length=TRAILING)
+    nome = models.CharField(max_length=MAX_LEN, db_column=COL)
+    codigo = models.CharField(max_length=CODE_LEN)
+    apelido = models.CharField(max_length=ALIAS)
+    biografia = models.CharField(max_length=BIG)
+    anotado = models.CharField(max_length=ANNOTATED)
+    salario = models.DecimalField(max_digits=DIGITS, decimal_places=3)
+    status = models.CharField(max_length=1, choices=STATUS_CHOICES, default=DEFAULT_STATUS)
+    tags = ArrayField(models.IntegerField(), size=MAX_TAGS)
+    voltas = ArrayField(models.IntegerField(), MAX_TAGS)
+    equipes = ArrayField(models.CharField(max_length=MAX_LEN))
+    pneus = ArrayField(models.CharField(max_length=12), default=TYRES)
+    compostos = ArrayField(models.CharField(max_length=12), default=["SOFT"])
+    tentativas = ArrayField(models.CharField(max_length=12), default=("SOFT",))
+    grid = ArrayField(models.IntegerField(), default=[1, 2])
+"""
+    generated, config_key, db_dir_existed = import_django_source(source;
+                                                                 output_file = "const_948_unit.jl")
+    try
+        # Every value is the constant's, in the renderer's own spelling. Before the fix the first
+        # field of this class aborted the whole import, `Ok` included.
+        @test occursin("nome = Models.CharField(max_length=10, db_column=\"nome_piloto\")", generated)
+        @test occursin("codigo = Models.CharField(max_length=3)", generated)       # class body
+        @test occursin("apelido = Models.CharField(max_length=10)", generated)     # ALIAS → MAX_LEN
+        @test occursin("biografia = Models.CharField(max_length=1000)", generated) # 1_000 is 1000
+        @test occursin("anotado = Models.CharField(max_length=6)", generated)    # `X: int = 6`
+        # Python's class-body lookup: the class's own binding outranks the module's, but only once it
+        # has run — a class binding below the field leaves the module's value in force.
+        @test occursin("prec = Models.CharField(max_length=3)", generated)
+        @test occursin("late = Models.CharField(max_length=50)", generated)
+        @test occursin("entre_parenteses = Models.CharField(max_length=8)", generated) # `(8)` is 8
+        @test occursin("com_ponto_e_virgula = Models.CharField(max_length=9)", generated) # `9;`
+        @test occursin("tags = Models.ArrayField(Models.IntegerField(), size=4)", generated)
+        @test occursin("voltas = Models.ArrayField(Models.IntegerField(), size=4)", generated) # positional
+        @test occursin("equipes = Models.ArrayField(Models.CharField(max_length=10))", generated)
+        # `choices=STATUS_CHOICES` is the common Django idiom; it used to be dropped as "a name".
+        @test occursin("choices=((\"A\", \"Ativo\"), (\"I\", \"Inativo\"))", generated)
+        # A list or tuple default on an ArrayField is the array it denotes. The tuple spelling used
+        # to come out as the EMPTY array, silently; the list spelling was refused and dropped.
+        @test occursin("pneus = Models.ArrayField(Models.CharField(max_length=12), default=\"{SOFT,HARD}\")", generated)
+        @test occursin("compostos = Models.ArrayField(Models.CharField(max_length=12), default=\"{SOFT}\")", generated)
+        @test occursin("tentativas = Models.ArrayField(Models.CharField(max_length=12), default=\"{SOFT}\")", generated)
+        @test occursin("grid = Models.ArrayField(Models.IntegerField(), default=\"{1,2}\")", generated)
+        # Nothing was dropped and nothing was reported.
+        @test !occursin("# PormG: field", generated)
+
+        # The file loads, and the values are the constructed ones, not text.
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        @test Core.eval(sandbox, :(isdefined(const_948_unit, :Ok)))
+        pilot = Core.eval(sandbox, :(const_948_unit.Pilot))
+        @test pilot.fields["nome"].max_length == 10
+        @test pilot.fields["salario"].max_digits == 7
+        @test pilot.fields["salario"].decimal_places == 3
+        @test pilot.fields["status"].default == "A"
+        @test pilot.fields["tags"].size == 4
+        @test pilot.fields["equipes"].base_field.max_length == 10
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#948): a name the importer cannot read is DROPPED and reported, never kept as text
+#
+# Kept as text, `db_column=COL` named a column "COL" and `default=uuid4` stored the default "uuid4":
+# silent wrong values. An imported name, a name bound only after the class (a NameError in Python),
+# and a literal later rebound to a call all read as unresolved. Symbol-valued options
+# (`on_delete=CASCADE`) and `default=list` are not constants and pass through as before.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer drops and reports an option naming something it cannot read (#948)" begin
+    source = """
+from django.db import models
+from django.db.models import CASCADE
+from django.contrib.postgres.fields import ArrayField
+from .constants import IMPORTED_LEN
+import uuid
+
+REBOUND = 5
+REBOUND = compute_len()
+PAIRS = (("A", "Ativo"),)
+COND = 5
+if DEBUG:
+    COND = 20
+INLINE = 5
+if DEBUG: INLINE = 20
+TRYLEN = 10
+try:
+    from .local_settings import TRYLEN
+except ImportError:
+    pass
+CHAINED = 3
+OTHER = CHAINED = 50
+SHIFTED = 64
+SHIFTED >>= 1
+LOOPED = 10
+for LOOPED in (20,): pass
+JOINED = 3
+OTHER2 = 1; JOINED = 50
+CAT = (("a", "A"),) + (("b", "B"),)
+SCALAR_CH = "abc"
+COMP = [(x, x.upper()) for x in ("a", "b")]
+WALRUS = 10
+(WALRUS := 50)
+WITHN = 10
+with ctx() as (first, WITHN):
+    pass
+
+class Ok(models.Model):
+    nome = models.CharField(max_length=20)
+
+class Pilot(models.Model):
+    a = models.CharField(max_length=IMPORTED_LEN)
+    b = models.CharField(max_length=LATER)
+    c = models.CharField(max_length=REBOUND)
+    d = models.CharField(max_length=5, db_column=UNKNOWN_COL)
+    e = models.CharField(max_length=40, default=uuid4)
+    f = models.CharField(max_length=PAIRS)
+    g = ArrayField(models.IntegerField(), default=[compute(), 2])
+    h = models.CharField(max_length=3, choices=UNDEFINED_CHOICES)
+    i = models.CharField(max_length=COND)
+    j = models.CharField(max_length=INLINE)
+    k = models.CharField(max_length=TRYLEN)
+    l = models.CharField(max_length=CHAINED)
+    m = models.CharField(max_length=SHIFTED)
+    n = models.CharField(max_length=LOOPED)
+    o = models.CharField(max_length=JOINED)
+    p = models.CharField(max_length=3, choices=CAT)
+    q = models.CharField(max_length=3, choices=SCALAR_CH)
+    r = ArrayField(models.CharField(max_length=12), default=("SOFT"))
+    s = models.CharField(max_length=3, choices=COMP)
+    t = models.CharField(max_length=WALRUS)
+    u = models.CharField(max_length=WITHN)
+    team = models.ForeignKey(Ok, on_delete=CASCADE)
+    laps = ArrayField(models.IntegerField(), default=list)
+
+LATER = 3
+"""
+    generated, config_key, db_dir_existed = import_django_source(source;
+                                                                 output_file = "const_948_drop.jl")
+    try
+        # Each column survives without the option, and none of the names reaches the schema.
+        @test occursin("a = Models.CharField()", generated)
+        @test occursin("b = Models.CharField()", generated)
+        @test occursin("c = Models.CharField()", generated)
+        @test occursin("d = Models.CharField(max_length=5)", generated)
+        @test occursin("e = Models.CharField(max_length=40)", generated)
+        @test occursin("f = Models.CharField()", generated)
+        @test occursin("g = Models.ArrayField(Models.IntegerField())", generated)
+        @test occursin("h = Models.CharField(max_length=3)", generated)
+        @test occursin("i = Models.CharField()", generated)
+        @test occursin("j = Models.CharField()", generated)
+        for fld in ("k", "l", "m", "n", "o", "t", "u")
+            @test occursin("$(fld) = Models.CharField()", generated)
+        end
+        @test occursin("p = Models.CharField(max_length=3)", generated)
+        @test occursin("q = Models.CharField(max_length=3)", generated)
+        @test occursin("s = Models.CharField(max_length=3)", generated)
+        @test !occursin("x.upper()", replace(generated, r"# PormG:[^\n]*" => ""))
+        @test occursin("# PormG: field 'q' on 'Pilot' has `choices=SCALAR_CH`, a name bound to a " *
+                       "single value, which `choices` cannot take", generated)
+        # `("SOFT")` is the string "SOFT", not a one-element tuple, so it is not the array {SOFT}:
+        # the ArrayField refuses it and #342's retry drops it, with a marker.
+        @test occursin("r = Models.ArrayField(Models.CharField(max_length=12))", generated)
+        @test occursin("# PormG: field 'r' on 'Pilot' — `default` rejected and dropped", generated)
+        code = replace(generated, r"# PormG:[^\n]*" => "")   # the markers name them on purpose
+        @test !occursin("UNKNOWN_COL", code)
+        @test !occursin("uuid4", code)
+        # One marker per dropped option, naming field, class, option and name.
+        for (fld, opt, nm) in (("a", "max_length", "IMPORTED_LEN"), ("b", "max_length", "LATER"),
+                               ("c", "max_length", "REBOUND"), ("d", "db_column", "UNKNOWN_COL"),
+                               ("e", "default", "uuid4"), ("h", "choices", "UNDEFINED_CHOICES"),
+                               # A binding inside an `if` may or may not have run: not a constant.
+                               ("i", "max_length", "COND"), ("j", "max_length", "INLINE"),
+                               # `try: from .local_settings import TRYLEN` may have rebound it.
+                               ("k", "max_length", "TRYLEN"),
+                               # Chained, augmented, a `for` target, a `;`-joined line: each rebinds.
+                               ("l", "max_length", "CHAINED"), ("m", "max_length", "SHIFTED"),
+                               ("n", "max_length", "LOOPED"), ("o", "max_length", "JOINED"),
+                               # An expression building a tuple is not one literal display. Read as
+                               # one, it kept only the first group, silently.
+                               ("p", "choices", "CAT"),
+                               # A comprehension is bracketed too, but its body is not entries: read
+                               # as one, it imported the choice ("x", "x.upper()").
+                               ("s", "choices", "COMP"),
+                               # A walrus and a tuple `with` target rebind as well.
+                               ("t", "max_length", "WALRUS"), ("u", "max_length", "WITHN"))
+            @test occursin("# PormG: field '$(fld)' on 'Pilot' has `$(opt)=$(nm)`, a name the " *
+                           "importer cannot resolve to a literal — `$(opt)` was dropped.", generated)
+        end
+        @test occursin("# PormG: field 'f' on 'Pilot' has `max_length=PAIRS`, a name bound to a " *
+                       "tuple or list, which `max_length` cannot take", generated)
+        @test occursin("# PormG: field 'g' on 'Pilot' has `default=[compute(), 2]`, which is not a " *
+                       "list of literals the importer can read — `default` was dropped.", generated)
+        # Symbols by design pass through exactly as before.
+        @test occursin("team_id = Models.ForeignKey(\"Ok\", pk_field=\"id\", on_delete=CASCADE)", generated)
+        @test occursin("laps = Models.ArrayField(Models.IntegerField(), default=\"{}\")", generated)
+        @test occursin("Ok = Models.Model(", generated)
+        # ...and the file loads.
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        @test Core.eval(sandbox, :(isdefined(const_948_drop, :Pilot)))
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+
+    # A star import may rebind any name, so a literal bound before it no longer resolves; one bound
+    # after it does.
+    starred, key2, existed2 = import_django_source("""
+from django.db import models
+
+BEFORE = 10
+from .constants import *
+AFTER = 12
+
+class Pilot(models.Model):
+    a = models.CharField(max_length=BEFORE)
+    b = models.CharField(max_length=AFTER)
+"""; output_file = "const_948_star.jl")
+    try
+        @test occursin("a = Models.CharField()", starred)
+        @test occursin("has `max_length=BEFORE`, a name the importer cannot resolve", starred)
+        @test occursin("b = Models.CharField(max_length=12)", starred)
+    finally
+        cleanup_import_test!(key2, existed2)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#948): a constant the constructor refuses is dropped; a field that still fails
+# names itself
+#
+# A constant can resolve to a value the field refuses (`BAD = "ten"`). Like #342's choices/default
+# retry, the field is rebuilt without the constant-sourced options and the file says which. #342's
+# stage runs first, so a field whose only problem is its default keeps its constant. When nothing
+# recovers, the error keeps its type and now carries the field and class.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer recovers from a refused constant and names an unrecoverable field (#948)" begin
+    source = """
+from django.db import models
+from django.contrib.postgres.fields import ArrayField
+
+BAD = "ten"
+MAX_LEN = 4
+
+class Ok(models.Model):
+    nome = models.CharField(max_length=20)
+
+class Pilot(models.Model):
+    nome = models.CharField(max_length=BAD)
+    sigla = models.CharField(max_length=MAX_LEN, default="much too long")
+    equipes = ArrayField(models.CharField(max_length=BAD))
+    status = models.CharField(max_length=BAD, choices=(("a", "A"),))
+"""
+    generated, config_key, db_dir_existed = import_django_source(source;
+                                                                 output_file = "const_948_retry.jl")
+    try
+        @test occursin("nome = Models.CharField()", generated)
+        @test occursin("# PormG: field 'nome' on 'Pilot' — `max_length` (from `BAD`) rejected and " *
+                       "dropped: CharField: 'max_length' must be an Integer or a numeric String, " *
+                       "got \"ten\". The column is real; check the constant's value.", generated)
+        # #342's stage alone recovers this one: the default goes, the constant stays.
+        @test occursin("sigla = Models.CharField(max_length=4)", generated)
+        @test occursin("# PormG: field 'sigla' on 'Pilot' — `default` rejected and dropped", generated)
+        # The element's constant is named as the element's.
+        @test occursin("equipes = Models.ArrayField(Models.CharField())", generated)
+        @test occursin("the element's `max_length` (from `BAD`)", generated)
+        # The constant-sourced option is dropped FIRST: the valid inline choices stay.
+        @test occursin("status = Models.CharField(choices=((\"a\", \"A\"),))", generated)
+        @test occursin("# PormG: field 'status' on 'Pilot' — `max_length` (from `BAD`) rejected", generated)
+        @test occursin("Ok = Models.Model(", generated)
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+
+    # Nothing to retry: `DecimalField(primary_key=True)` is refused on its own terms and still
+    # aborts, as it should — but as the same FieldValidationError, now naming the field and class.
+    config_key2, existed2 = temp_import_config!()
+    try
+        err = try
+            import_models_from_django("""
+from django.db import models
+
+class Pilot(models.Model):
+    v = models.DecimalField(max_digits=5, decimal_places=2, primary_key=True)
+"""; db = config_key2, file = "const_948_fatal.jl", force_replace = true)
+            nothing
+        catch e
+            e
+        end
+        @test err isa PormG.FieldValidationError
+        @test occursin("Error processing field 'v' in class 'Pilot': DecimalField cannot be used " *
+                       "as a Primary Key", sprint(showerror, err))
+    finally
+        cleanup_import_test!(config_key2, existed2)
     end
 end

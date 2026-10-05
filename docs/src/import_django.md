@@ -485,7 +485,9 @@ column.
     The bare `ArrayField(...)` is recognised as well as `models.ArrayField(...)` or any other module
     prefix (`fields.ArrayField(...)`), and the element may be passed as `base_field=`. A second
     positional argument is Django's `size`, and imports as `size=`. Django's `default=list` becomes
-    the empty-array default, which PormG stores as the literal `"{}"`.
+    the empty-array default, which PormG stores as the literal `"{}"`. A list or tuple of literals
+    is the array it denotes: `default=["SOFT", "HARD"]` imports as `default="{SOFT,HARD}"`. A list
+    holding anything else (a call, a name) is dropped and reported.
 
     A column option on the **element** (`db_index`, `unique`, `default`, …) is dropped and
     reported: Django ignores it there, and PormG refuses it — see [Array Fields](fields.md#Array-Fields).
@@ -536,7 +538,53 @@ Django parameters are automatically converted to PormG equivalents:
 | `default=value` | `default=value` | Value conversion — `True`/`False`/`None`, numbers, and one quoted string literal, including one written across a line continuation. A value written as a string but not readable as one (a concatenation, an f-string, a raw or triple-quoted literal), and a **call** (`uuid.uuid4()`, `Decimal('0.00')`), are kept verbatim as text and reported. See [String defaults](#String-defaults). |
 | `on_delete=CASCADE` | `on_delete=CASCADE` | Direct mapping |
 | `choices=[…]` | `choices=(…)` | List to tuple; also resolves `TextChoices`/`IntegerChoices` — see [Choices](#Choices) |
+| `max_length=MAX_LEN` | `max_length=10` | A **name** is read as the constant it holds — see [Options written as a name](#Options-written-as-a-name) |
 | `related_name='name'` | `related_name="name"` | Direct mapping. **Refused** if it contains `__` or `@`, or ends with `_` — `__` is PormG's lookup-path separator, and traversing an accessor appends it, so any of the three registers a name that can then never be written as a lookup-path segment. Django refuses the same names through system checks `fields.E309` and `fields.E308`, so a project that passes `manage.py check` cannot hit this. |
+
+### Options written as a name
+
+An option value written as a bare name — `max_length=MAX_LEN`, `choices=STATUS_CHOICES`,
+`size=MAX_TAGS` — is read as the constant it holds, when the same `models.py` assigns it a literal
+**above the field**, at module level or in the class body:
+
+```python
+MAX_LEN = 10
+STATUS_CHOICES = (("A", "Ativo"), ("I", "Inativo"))
+
+class Driver(models.Model):
+    CODE_LEN = 3
+    surname = models.CharField(max_length=MAX_LEN)
+    code = models.CharField(max_length=CODE_LEN)
+    status = models.CharField(max_length=1, choices=STATUS_CHOICES)
+```
+
+imports as `max_length=10`, `max_length=3` and the two choices. This is Python's own lookup for a
+class body: the class's namespace, then the module's. A name bound to another name (`ALIAS = MAX_LEN`)
+is followed. A field inherited from an abstract base reads the constants of the module the base is
+written in, as an enumeration does.
+
+A name the importer cannot read as a literal is **dropped and reported**, never kept as text:
+
+- a name imported from another module (`from .constants import MAX_LEN`) — imports are not
+  followed, because a constants module is not part of the import. That includes a name a
+  `from … import *` may have rebound;
+- a name assigned only after the class, which Python would not have bound yet, or rebound later to
+  something that is not a literal (`MAX_LEN = compute()`), or rebound inside an `if`/`try` block
+  that may not have run (`try: from .local_settings import MAX_LEN`);
+- a tuple or list built by an expression (`BASE + EXTRA`, a comprehension), where only a literal
+  display is read;
+- a callable such as `default=uuid4`.
+
+Before this, such a value reached the schema as text: `db_column=COL` named a column `"COL"`. The
+column survives without the option, and the `# PormG:` marker names the field, the class, the option
+and the name. Declare the option by hand if you need it. `on_delete=CASCADE`, a relation's
+`to=`/`through=`, and `default=list` / `default=dict` are symbols, not constants, and import as
+before.
+
+A constant that resolves to a value the field refuses (`MAX_LEN = "ten"`) costs that option, not
+the import: the field is rebuilt without it and reported, like a `choices`/`default` pair that
+disagrees. A field that still cannot be built stops the import with the field's own error, which
+names the field and the class.
 
 ### Meta Options
 
@@ -882,8 +930,9 @@ a literal default is not something to discover later.
 The same treatment reaches a `default` that is not dotted at all but still is not one value — a
 concatenation such as `default='a' + 'b'`. See [String defaults](#String-defaults).
 
-A `choices` naming a module-level constant (`choices=STATUS_CHOICES`) has nothing to read: the
-option is dropped and reported rather than becoming an empty enumeration.
+A `choices` naming a module-level constant (`choices=STATUS_CHOICES`) is read when the same
+`models.py` binds it to a literal above the class; otherwise the option is dropped and reported
+rather than becoming an empty enumeration. See [Options written as a name](#Options-written-as-a-name).
 
 **`choices` needs a `CharField`.** It is the only PormG field type with a `choices` slot, so a Django
 `TextField(choices=…)` imports as a plain `TextField` with the option dropped and reported. The column

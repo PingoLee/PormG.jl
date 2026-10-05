@@ -18,6 +18,9 @@ PormG provides date-related modifiers through the `__@` suffix system. These wor
 | `@quarter` | Extract quarter (1-4) | `"date__@quarter"` | `"date__@quarter" => 1` |
 | `@quadrimester` | Extract quadrimester (1-3) | `"date__@quadrimester"` | `"date__@quadrimester" => 2` |
 | `@date` | Extract date from datetime | `"created_at__@date"` | `"created_at__@date" => Date(2023,1,1)` |
+| `@hour` | Extract hour (0-23) | `"start_at__@hour"` | `"start_at__@hour" => 13` |
+| `@minute` | Extract minute (0-59) | `"start_at__@minute"` | `"start_at__@minute" => 30` |
+| `@second` | Extract whole second (0-59) | `"time__@second"` | `"time__@second" => 0` |
 | `@yyyy_mm` | Year-month as string | `"date__@yyyy_mm"` | `"date__@yyyy_mm" => "1991-10"` |
 | `@yyyy_q` | Year-quarter as string | `"date__@yyyy_q"` | `"date__@yyyy_q" => "1991-Q1"` |
 | `@yyyy_quad` | Year-quadrimester as string | `"date__@yyyy_quad"` | `"date__@yyyy_quad" => "1991-Q1"` |
@@ -84,6 +87,47 @@ query = M.Race.objects.filter("date__@month__@gte" => 6)
 # Combine: Q1 races in 1991
 query = M.Race.objects.filter("date__@year" => 1991, "date__@quarter" => 1)
 ```
+
+### Time of day (`@hour`, `@minute`, `@second`)
+
+The time parts work on a `DateTimeField` and on a `TimeField`, in `filter()` and `values()` alike.
+They read back as integers on both engines. `@second` is the **whole** second: PostgreSQL truncates
+a fractional `45.6` to `45`, as SQLite does, instead of rounding it to `46`.
+
+```julia
+# Races that started at 13:00-13:59 (`start_at` is a DateTimeField; see the time-zone note below)
+M.Race.objects.filter("start_at__@hour" => 13)
+
+# The same question asked of the TimeField: races scheduled on the half hour
+M.Race.objects.filter("time__@minute" => 30)
+
+# How many races started in each hour of the day
+q = M.Race.objects
+q.values("hour" => "start_at__@hour", "races" => Count("raceid"))
+q.filter("start_at__@isnull" => false)
+q.order_by("hour")
+```
+
+Each part validates its comparison value the same way `@quarter` does. An hour outside `0`–`23`, a
+minute or second outside `0`–`59`, a fraction, or a value that is not a number raises `FilterError`,
+instead of building SQL that silently matches nothing.
+
+!!! warning "Time zones"
+    On SQLite a `DateTimeField` is stored in UTC, so `@hour` is the UTC hour. On PostgreSQL a
+    `DateTimeField` is a `timestamptz` by default, and `EXTRACT` reads it in the connection's
+    **session** time zone, which PormG does not set. The two engines agree only when that session
+    time zone is UTC. A `DateTimeField(type="TIMESTAMP")` and a `TimeField` carry no time zone, so
+    they return the stored wall-clock value on both engines. `@date` and `@day` share this caveat
+    near midnight.
+
+!!! note "A plain `DateField` has no time of day"
+    `@hour`, `@minute` and `@second` are meant for a `DateTimeField` or a `TimeField`. On a
+    `DateField`, SQLite returns `0` while PostgreSQL rejects the query, so do not rely on either
+    result.
+
+The week parts Django offers (`week`, `week_day`, `iso_week_day`, `iso_year`) are not available yet:
+the two engines number weeks differently, and the numbering each name should promise is still
+being decided.
 
 ### Grouped Date Query
 

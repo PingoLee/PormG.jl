@@ -527,6 +527,32 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Case-insensitive equality returns the same ROWS on both engines (#634)
+# The oracle is a Julia-side scan of every non-NULL surname with `lowercase`, independent of both
+# renderers: PostgreSQL folds with LOWER, SQLite with the pormg_lower UDF (#78), and the upper-case
+# accented spelling is the case SQLite's own ASCII-only LOWER would have returned 0 for.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Case-insensitive equality lookups (#634)" begin
+    all_surnames = [String(s) for s in (M.Driver.objects.values("surname") |> DataFrame).surname
+                    if !ismissing(s)]
+    expected(term) = count(s -> lowercase(s) == lowercase(term), all_surnames)
+
+    for term in ("Hamilton", "HAMILTON", "hamilton", "RÄIKKÖNEN", "räikkönen")
+        @test expected(term) > 0
+        @test M.Driver.objects.filter("surname__@iexact" => term).count() == expected(term)
+        # The negated twin is the exact complement over the non-NULL surnames.
+        @test M.Driver.objects.filter("surname__@niexact" => term).count() ==
+              length(all_surnames) - expected(term)
+    end
+
+    # Whole-value equality, not a substring or prefix: "Hamil" is a prefix of "Hamilton".
+    @test M.Driver.objects.filter("surname__@istartswith" => "hamil").count() > 0
+    @test M.Driver.objects.filter("surname__@iexact" => "hamil").count() == 0
+    # The value binds verbatim, so `%` is a literal character rather than a wildcard.
+    @test M.Driver.objects.filter("surname__@iexact" => "%").count() == 0
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # POSIX regex lookups — PostgreSQL only (#635)
 # PostgreSQL runs `~` / `~*` / `!~` / `!~*` natively; SQLite has no regex engine and PormG will not
 # emulate one with a PCRE UDF, since the two dialects would read the same pattern differently. The

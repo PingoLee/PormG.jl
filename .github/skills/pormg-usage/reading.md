@@ -87,7 +87,8 @@ M.Result.objects.
 | `__@isnull` | `IS NULL` / `IS NOT NULL` | `"number__@isnull" => true` |
 | `__@contains` / `__@icontains` | `LIKE` / case-insensitive | `"name__@icontains" => "monaco"` |
 | `__@startswith` `__@endswith` (+ `i` forms) | prefix / suffix match | `"surname__@istartswith" => "ver"` |
-| `__@ncontains`, `__@nistartswith`, … | negated twins of every pattern lookup | |
+| `__@iexact` | case-insensitive `=` (a `%` in the value is literal) | `"surname__@iexact" => "HAMILTON"` |
+| `__@ncontains`, `__@nistartswith`, `__@niexact`, … | negated twins of every pattern lookup | |
 
 `__@in` also accepts a one-column query instead of a vector. That is a subquery; see
 [`advanced.md`](advanced.md). PostgreSQL-only lookups — `@iunaccent_contains`/`@iunaccent_exact`,
@@ -103,9 +104,12 @@ They work in `values()`, `filter()` and `order_by()`:
 | `__@year` `__@month` `__@day` | number | `"dob__@year" => 1960` |
 | `__@quarter` / `__@quadrimester` | 1–4 / 1–3 | `"date__@quarter" => 1` |
 | `__@date` | date part of a datetime | `"start_at__@date" => Date(2009, 3, 29)` |
+| `__@hour` `__@minute` `__@second` | 0–23 / 0–59 / 0–59, on a `DateTimeField` or `TimeField` | `"start_at__@hour" => 13` |
 | `__@yyyy_mm` / `__@yyyy_q` / `__@yyyy_quad` | year-qualified label | `"date__@yyyy_mm" => "1991-10"` |
 
 Use `@quarter` for "Q1 of every year", and `@yyyy_q` as a grouping key when years must not merge.
+On PostgreSQL a `timestamptz` is read in the session time zone, so `@hour` matches SQLite (which
+stores UTC) only when that session is UTC. There are no week transforms (`week`, `week_day`, …).
 
 ## `Q` / `Qor`: boolean logic
 

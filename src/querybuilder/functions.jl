@@ -1215,6 +1215,12 @@ end
 MONTH(x) = Extract(x, "MONTH", formatter = Models.format_number_sql)
 YEAR(x) = Extract(x, "YEAR", formatter = Models.format_number_sql)
 DAY(x) = Extract(x, "DAY", formatter = Models.format_number_sql)
+# #636: the time parts. `Dialect.EXTRACT` already renders all three on both engines — PostgreSQL
+# `trunc`s `SECOND` so a fractional timestamp agrees with SQLite's `%S` — so only the range-checking
+# formatter is new: a value no clock can show is refused rather than silently matching nothing (#579).
+HOUR(x) = Extract(x, "HOUR", formatter = Models.format_hour_sql)
+MINUTE(x) = Extract(x, "MINUTE", formatter = Models.format_minute_sql)
+SECOND(x) = Extract(x, "SECOND", formatter = Models.format_second_sql)
 Y_M(x) = ToChar(x, "YYYY-MM", formatter = Models.format_yyyy_mm)
 # #562: `@date` no longer goes through `ToChar`. A `ToChar` node carries the format mask as SQL
 # text, which forces one spelling on both engines; `DATE` is the one transform where the correct

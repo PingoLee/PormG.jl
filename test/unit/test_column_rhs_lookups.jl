@@ -277,6 +277,17 @@ end
   q = _crl_drivers()
   q.filter("surname__@iunaccent_exact" => F("forename"))
   @test occursin("immutable_unaccent(\"Tb\".\"forename\")", _crl_sql(q, _CRL_PG))
+  # #634: `iexact` / `niexact` are verbatim, so a column compares case-insensitively on both engines
+  # — `LOWER` on PostgreSQL, the Unicode-aware `pormg_lower` UDF (#78) on SQLite.
+  for (op, cmp) in (("iexact", "="), ("niexact", "<>"))
+    q = _crl_drivers()
+    q.filter("surname__@$(op)" => F("forename"))
+    @test occursin("LOWER(\"Tb\".\"surname\") $(cmp) LOWER(\"Tb\".\"forename\")", _crl_sql(q, _CRL_PG))
+    q = _crl_drivers()
+    q.filter("surname__@$(op)" => F("forename"))
+    @test occursin("pormg_lower(\"Tb\".\"surname\") $(cmp) pormg_lower(\"Tb\".\"forename\")",
+                   _crl_sql(q, _CRL_SL))
+  end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

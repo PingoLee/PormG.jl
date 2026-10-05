@@ -236,6 +236,15 @@ const VR_CASES = VRCase[
   vrcase("at_quadrimester_f", :timestamp, c -> F("$(c)__@quadrimester"),
          v -> cld(month(_vr_utc_naive(v)), 4),
          result_kind = :integer, pair = c -> "$(c)__@quadrimester"),
+  # #636: the time parts, through the same `EXTRACT` arm. The probe's `.123` milliseconds are what
+  # make `at_second_f` meaningful: PostgreSQL's `EXTRACT(SECOND …)` is 45.123, and only the `trunc`
+  # in its arm makes it agree with SQLite's `%S` (45). The `+1` nudge stays in range (13 / 31 / 46).
+  vrcase("at_hour_f", :timestamp, c -> F("$(c)__@hour"), v -> hour(_vr_utc_naive(v)),
+         result_kind = :integer, pair = c -> "$(c)__@hour"),
+  vrcase("at_minute_f", :timestamp, c -> F("$(c)__@minute"), v -> minute(_vr_utc_naive(v)),
+         result_kind = :integer, pair = c -> "$(c)__@minute"),
+  vrcase("at_second_f", :timestamp, c -> F("$(c)__@second"), v -> second(_vr_utc_naive(v)),
+         result_kind = :integer, pair = c -> "$(c)__@second"),
   # ── DATE ─────────────────────────────────────────────────────────────────
   # `date(...)` == `format_date_sql` is asserted only in a comment today (`Dialect.jl:83`); this
   # is that claim as a measurement.
@@ -272,9 +281,15 @@ const VR_CASES = VRCase[
   # ── TIME ─────────────────────────────────────────────────────────────────
   # `TimeField` has no dedicated formatter — it rides `format_text_sql(::Time)` — and no SQL
   # canonicalizer or read-side parser at all. `F(time) ± duration` raises `InvalidValueError`
-  # by design (a duration only applies to a DATE/TIMESTAMP column), so identity is the whole
-  # surface.
+  # by design (a duration only applies to a DATE/TIMESTAMP column), so identity and the #636 time
+  # parts are the whole surface.
   vrcase("identity", :time, c -> F(c), v -> v),
+  vrcase("at_hour_f", :time, c -> F("$(c)__@hour"), v -> hour(v),
+         result_kind = :integer, pair = c -> "$(c)__@hour"),
+  vrcase("at_minute_f", :time, c -> F("$(c)__@minute"), v -> minute(v),
+         result_kind = :integer, pair = c -> "$(c)__@minute"),
+  vrcase("at_second_f", :time, c -> F("$(c)__@second"), v -> second(v),
+         result_kind = :integer, pair = c -> "$(c)__@second"),
   # ── INTERVAL ─────────────────────────────────────────────────────────────
   # `DurationField` writes `HH:MM:SS.sss` through `format_duration_sql`; identity plus the pair
   # spelling is the whole surface (no arithmetic, no transforms).

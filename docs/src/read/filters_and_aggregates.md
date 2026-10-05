@@ -35,6 +35,7 @@ These work in both `filter()` and `values()`.
 | `@istartswith` | `ILIKE 'val%'` | Case-insensitive prefix | `"surname__@istartswith" => "ver"` |
 | `@endswith` | `LIKE '%val'` | Case-sensitive suffix | `"surname__@endswith" => "sen"` |
 | `@iendswith` | `ILIKE '%val'` | Case-insensitive suffix | `"surname__@iendswith" => "SEN"` |
+| `@iexact` | `LOWER(col) = LOWER(val)` | Case-insensitive equality | `"surname__@iexact" => "HAMILTON"` |
 | `@iunaccent_contains` | `immutable_unaccent(col) ILIKE immutable_unaccent('%val%')` | Accent- & case-insensitive substring (PostgreSQL only) | `"surname__@iunaccent_contains" => "raikkonen"` |
 | `@iunaccent_exact` | `LOWER(immutable_unaccent(col)) = LOWER(immutable_unaccent(val))` | Accent- & case-insensitive equality (PostgreSQL only) | `"surname__@iunaccent_exact" => "raikkonen"` |
 | `@regex` | `~ pattern` | POSIX regular expression, case-sensitive (PostgreSQL only) | `"surname__@regex" => "^Ver"` |
@@ -54,6 +55,7 @@ without inverting the logic by hand.
 | `@nistartswith` | `NOT ILIKE 'val%'` | Does not start with, case-insensitive | `"surname__@nistartswith" => "m"` |
 | `@nendswith` | `NOT LIKE '%val'` | Does not end with | `"surname__@nendswith" => "son"` |
 | `@niendswith` | `NOT ILIKE '%val'` | Does not end with, case-insensitive | `"surname__@niendswith" => "SON"` |
+| `@niexact` | `LOWER(col) <> LOWER(val)` | Case-insensitive inequality | `"surname__@niexact" => "hamilton"` |
 | `@nrange` | `NOT BETWEEN a AND b` | Outside two bounds | `"laps__@nrange" => [1, 10]` |
 | `@niunaccent_contains` | `immutable_unaccent(col) NOT ILIKE immutable_unaccent('%val%')` | Accent- & case-insensitive substring absent (PostgreSQL only) | `"surname__@niunaccent_contains" => "raikkonen"` |
 | `@niunaccent_exact` | `LOWER(immutable_unaccent(col)) <> LOWER(immutable_unaccent(val))` | Accent- & case-insensitive inequality (PostgreSQL only) | `"surname__@niunaccent_exact" => "raikkonen"` |
@@ -86,6 +88,9 @@ without inverting the logic by hand.
 | `@quarter` | Extract quarter (1-4) | `"date__@quarter" => 1` | `"date__@quarter"` |
 | `@quadrimester` | Extract quadrimester (1-3) | `"date__@quadrimester" => 2` | `"date__@quadrimester"` |
 | `@date` | Extract date from datetime | `"created__@date" => Date(...)` | `"created__@date"` |
+| `@hour` | Extract hour (0-23) | `"start_at__@hour" => 13` | `"start_at__@hour"` |
+| `@minute` | Extract minute (0-59) | `"start_at__@minute" => 30` | `"start_at__@minute"` |
+| `@second` | Extract whole second (0-59) | `"time__@second" => 0` | `"time__@second"` |
 | `@yyyy_mm` | Year-month string | `"date__@yyyy_mm" => "1991-10"` | `"date__@yyyy_mm"` |
 | `@yyyy_q` | Year-quarter label | `"date__@yyyy_q" => "1991-Q1"` | `"date__@yyyy_q"` |
 | `@yyyy_quad` | Year-quadrimester label | `"date__@yyyy_quad" => "1991-Q1"` | `"date__@yyyy_quad"` |
@@ -95,7 +100,8 @@ be part of the answer. `@quarter` and `@quadrimester` extract the period **numbe
 and `1` through `3` — so `filter("date__@quarter" => 1)` selects the first quarter of *every* year.
 `@yyyy_q` and `@yyyy_quad` build the year-qualified **label** (`"1991-Q1"`), which is what you want as
 a `values()` grouping key when each year's quarters must stay separate. A value outside the period's
-range raises `FilterError` rather than matching nothing.
+range raises `FilterError` rather than matching nothing. The same goes for the time parts `@hour`,
+`@minute` and `@second` — see [Time of day](functions_and_dates.md#Time-of-day-(@hour,-@minute,-@second)).
 
 A label filter compares the whole `"YYYY-Qn"` string, so `filter("date__@yyyy_q" => "1991-Q1")`
 selects one quarter of one season, where `filter("date__@quarter" => 1)` selects that quarter of
@@ -150,8 +156,8 @@ The `contains`, `startswith` and `endswith` lookups, with their case-insensitive
 and negated twins, match a **text value**. PormG wraps the value in `%` and escapes any `%` or `_`
 inside it, so it matches literally. That cannot be done to a column, so a column expression on the
 right (`"surname__@contains" => F("forename")`) raises a `FilterError` on both backends. The
-PostgreSQL-only `@regex` and `@iunaccent_exact` families do take a column, because they use their
-right-hand side as it is.
+`@iexact` pair and the PostgreSQL-only `@regex` and `@iunaccent_exact` families do take a column,
+because they use their right-hand side as it is.
 
 ### Case-Sensitive (`@contains`)
 
@@ -220,6 +226,26 @@ All four escape `%` and `_` in the bound value, so user input is matched literal
     no `LIKE` for those types: every pattern lookup reads the column's printed text
     (`CAST(col AS text)`, or `HOST(col)` for an `inet`). See [UUID Fields](../fields.md#UUID-Fields) and
     [Querying network fields](../fields.md#Querying-network-fields).
+
+### Case-Insensitive Equality (`@iexact`)
+
+`@iexact` matches the **whole** value, ignoring case. It is `LOWER(col) = LOWER(val)` on PostgreSQL
+and `pormg_lower(col) = pormg_lower(val)` on SQLite, so accented text folds the same way on both
+backends, as with [`@icontains`](#Case-Insensitive-(@icontains)). `@niexact` is its negated twin
+(`<>`). Both work on PostgreSQL and SQLite.
+
+```julia
+# Finds "Hamilton" whatever case the query term is in, but only as the whole surname
+M.Driver.objects.filter("surname__@iexact" => "HAMILTON")
+
+# A column on the right: results where the driver shares the team's nationality
+M.Result.objects.filter("driverid__nationality__@iexact" => F("constructorid__nationality"))
+```
+
+The value is compared with `=`, not `LIKE`, so a `%` or `_` in it is an ordinary character and no
+escaping happens. To match accents loosely as well, use the PostgreSQL-only `@iunaccent_exact` below.
+On PostgreSQL a btree index on `lower(col)` serves `@iexact` — see
+[Expression and partial indexes](../models.md#Expression-and-partial-indexes).
 
 ### Accent-Insensitive (`@iunaccent_contains`, `@iunaccent_exact`)
 

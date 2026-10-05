@@ -875,6 +875,26 @@ end
     @test "a\\%b%" in insp_esc[:parameter_buckets][:where]
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Case-insensitive equality on SQLite (#634)
+# @iexact / @niexact fold both sides through pormg_lower (#78) and compare with `=` / `<>`. They are
+# verbatim lookups, so unlike the LIKE family above there is no ESCAPE clause and a `%` in the value
+# binds as a literal character — asserting the parameter unchanged is what separates this from an
+# `ILIKE`-without-wildcards implementation, which would have matched `a%b` against `aXYZb`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Alignment Verification - Case-Insensitive Equality SQLite (#634)" begin
+    insp_ie = M.Result.objects.filter("driverid__surname__@iexact" => "a%b") |> inspect_query
+    @test contains(insp_ie[:sql_text], "WHERE pormg_lower(\"Tb_1\".\"surname\") = pormg_lower(?)\n")
+    @test !contains(insp_ie[:sql_text], "LIKE")
+    @test !contains(insp_ie[:sql_text], "ESCAPE")
+    @test "a%b" in insp_ie[:parameter_buckets][:where]
+
+    insp_nie = M.Result.objects.filter("driverid__surname__@niexact" => "a%b") |> inspect_query
+    @test contains(insp_nie[:sql_text], "WHERE pormg_lower(\"Tb_1\".\"surname\") <> pormg_lower(?)\n")
+    @test !contains(insp_nie[:sql_text], "ESCAPE")
+    @test "a%b" in insp_nie[:parameter_buckets][:where]
+end
+
 @testset "Alignment Verification - Prefix/Suffix Operators (@lt, @lte, @gt, @gte combined)" begin
     # Test all comparison operators together on different fields
     q = M.Result.objects.filter(

@@ -343,7 +343,7 @@ Driver = Models.Model("driver",
   driverid = Models.IDField(),
   surname  = Models.CharField(max_length=255),
   indexes = [
-    # case-insensitive lookups: `WHERE lower(surname) = 'senna'`
+    # case-insensitive equality: `"surname__@iexact" => "senna"` renders `WHERE LOWER(surname) = LOWER(…)`
     Models.Index(expressions=("lower(surname)",), name="driver_surname_lower_idx"),
   ],
 )

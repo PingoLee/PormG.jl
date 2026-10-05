@@ -68,6 +68,9 @@ const PormGsuffix = Dict{String,Union{Int64, String}}(
   "nin" => "NOT IN",
   "contains" => "contains",
   "icontains" => "icontains",
+  # #634: case-insensitive equality, the last gap in the `i*` family. Verbatim — it compares with `=`,
+  # so it sits in VERBATIM_PATTERN_OPERATORS below and a literal `%` in the value stays literal.
+  "iexact" => "iexact",
   "iunaccent_contains" => "iunaccent_contains",
   "iunaccent_exact" => "iunaccent_exact",
   "startswith" => "startswith",
@@ -89,6 +92,7 @@ const PormGsuffix = Dict{String,Union{Int64, String}}(
   # These negate a match rather than compose a NOT-group (PormG has no .exclude()/~Q by design).
   "ncontains" => "ncontains",
   "nicontains" => "nicontains",
+  "niexact" => "niexact",             # #634 (`<>`)
   "niunaccent_contains" => "niunaccent_contains",
   "niunaccent_exact" => "niunaccent_exact",
   "nstartswith" => "nstartswith",
@@ -132,9 +136,10 @@ const LIKE_PREFIX_OPERATORS   = ("startswith", "istartswith", "nstartswith", "ni
 const LIKE_SUFFIX_OPERATORS   = ("endswith", "iendswith", "nendswith", "niendswith")
 
 # Everything that takes `%` decoration (and, with it, `escape_like_pattern`). Deliberately NOT the
-# same set as PATTERN_LOOKUP_OPERATORS below: `iunaccent_exact` / `niunaccent_exact` render through
-# Dialect but compare with `=` / `<>`, and the regex four (#635) hand the value to `~` as a pattern,
-# so a wildcard — or LIKE escaping — on their value would change what they match.
+# same set as PATTERN_LOOKUP_OPERATORS below: `iexact` / `niexact` and `iunaccent_exact` /
+# `niunaccent_exact` render through Dialect but compare with `=` / `<>`, and the regex four (#635)
+# hand the value to `~` as a pattern, so a wildcard — or LIKE escaping — on their value would change
+# what they match.
 #
 # Defined as the union rather than spelled out, so the gate and the shapes cannot drift apart: the
 # builder gates the wildcard call on membership HERE, `_apply_like_wildcards` picks the shape from
@@ -145,7 +150,9 @@ const LIKE_WILDCARD_OPERATORS = (LIKE_CONTAINS_OPERATORS..., LIKE_PREFIX_OPERATO
                                  LIKE_SUFFIX_OPERATORS...)
 
 # The pattern lookups whose value binds verbatim — no `%`, no `escape_like_pattern`, no `ESCAPE`.
-const VERBATIM_PATTERN_OPERATORS = ("iunaccent_exact", "niunaccent_exact",
+# `iexact` / `niexact` (#634) belong here for `iunaccent_exact`'s reason: they compare with `=` /
+# `<>`, so a wildcard set would silently turn a user's literal `%` into a wildcard.
+const VERBATIM_PATTERN_OPERATORS = ("iexact", "niexact", "iunaccent_exact", "niunaccent_exact",
                                     "regex", "iregex", "nregex", "niregex")
 
 # Every operator whose SQL comes from `getfield(Dialect, Symbol(op))` in the pattern branch of
@@ -167,6 +174,12 @@ const PormGtransform = Dict{String,Union{Int64, String}}(
   # names shaped like the `@yyyy_mm` bucket it belongs beside.
   "yyyy_q" => "Y_Q",
   "yyyy_quad" => "Y_QUAD",
+  # #636: the time parts of a `DateTimeField` / `TimeField`. The week parts (`week`, `week_day`,
+  # `iso_week_day`, `iso_year`) are deliberately absent — the two engines number weeks differently,
+  # and which numbering each name promises is still an open decision on #636.
+  "hour" => "HOUR",
+  "minute" => "MINUTE",
+  "second" => "SECOND",
 )
 
 # dictionary from function to type of the field

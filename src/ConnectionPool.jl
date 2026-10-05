@@ -71,6 +71,53 @@ _normalize_manual_params(params::ManualParams, connection::PormGSQLite) =
   Any[PormG.sqlite_bind_value(v, connection) for v in _normalize_manual_params(params)]
 _normalize_manual_params(params::ManualParams, ::PormGPostgres) = _normalize_manual_params(params)
 
+# #951 — a NUL ('\0') in text is refused before anything is sent, the same way on every backend.
+# Each driver handles it differently, and none of them correctly: LibPQ hands a text parameter to
+# libpq as a C string, so the value is silently cut at the NUL (a filter on "alice\0x" matches
+# "alice", an insert stores "alice"); Postgres.jl sends every byte and the server rejects it with
+# SQLSTATE 22021, a `StatementError` for what is really client input; SQLite stores every byte, but
+# its `length()` and SQLite.jl's read-back stop at the NUL, and a `LIKE` pattern is cut at it (an
+# `@icontains` on "Senna\0x" matches "Ayrton Senna"). PostgreSQL `text` cannot hold one at all.
+#
+# Text only. Binary reaches here as a `PormGBytes` (PostgreSQL hex text, which cannot contain a NUL)
+# or a raw `Vector{UInt8}` (SQLite), and a NUL byte is valid data there; the generic arms would
+# already answer `false` for both, so their methods are fast paths that skip a per-byte walk. A
+# vector or tuple is walked, because a value can be nested: PostgreSQL `bulk_insert`/`bulk_update`
+# bind one array per column (#672), an `__in` list binds one array, and a raw-params tuple can hold
+# anything.
+_contains_nul(x::AbstractString) = '\0' in x
+_contains_nul(x::AbstractChar) = x == '\0'
+_contains_nul(x::PormG.PormGArrayLiteral) = _contains_nul(x.literal)
+_contains_nul(::PormG.PormGBytes) = false
+_contains_nul(::AbstractVector{UInt8}) = false
+_contains_nul(x::Union{AbstractVector, Tuple}) = any(_contains_nul, x)
+_contains_nul(x) = false
+
+# The why and the remedy, shared by every refusal so they cannot drift. Never the value itself: a
+# bound value can be a password or another secret (the connection-string check names the key, not
+# the value, for the same reason).
+const NUL_REFUSAL_REASON = "PostgreSQL text cannot store one and SQLite cannot read it back past it, " *
+  "so PormG refuses it on every backend, before the statement is sent. Remove or replace the NUL."
+
+# The execution-time check, at every funnel that hands a statement to a driver (`fetch_async`,
+# `with_transaction`, `with_transaction_async`). Writes are refused earlier, by `_format_single`,
+# with the field named; this is what covers filter values, raw manual params and the statement text.
+# The text is checked too, because no driver handles a NUL rendered inline (a `ToChar` passthrough
+# format, a field `default` in DDL) correctly: LibPQ takes the statement as a C string, so Julia
+# refuses it with an `ArgumentError` that quotes the whole statement; SQLite's prepare stops at the
+# NUL, which is a syntax error or, right after a complete statement, the rest dropped silently.
+function _refuse_nul(sql::AbstractString, params)
+  '\0' in sql && throw(InvalidValueError(
+    "The statement text contains a NUL character (\\0). " * NUL_REFUSAL_REASON))
+  params === nothing && return nothing
+  values = params isa AbstractPormGParam ? params.parameters : params
+  for (i, v) in enumerate(values)
+    _contains_nul(v) && throw(InvalidValueError(
+      "Parameter $i contains a NUL character (\\0). " * NUL_REFUSAL_REASON))
+  end
+  return nothing
+end
+
 # A pool starts at `pool_size` connections and may grow lazily (on demand) up to
 # `pool_size * POOL_EXPANSION_FACTOR` before acquisition fails with a PoolTimeoutError (#37).
 # The base stays small (idle footprint) while the ceiling gives async fan-out real headroom.
@@ -2303,6 +2350,8 @@ function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
   if params isa ManualParams
     params = _normalize_manual_params(params, connection)
   end
+  # #951: before a connection is leased, so a refusal costs nothing and sends nothing.
+  _refuse_nul(sql, params)
 
   # Check for transaction context first — on THIS pool only (#831). A transaction open on another
   # database is not this statement's transaction: reusing its connection would run the statement on
@@ -2496,6 +2545,7 @@ function with_transaction_async(pool::Union{PormGPostgres, PormGSQLite}, sql::St
   # Raw values are normalized as `fetch_async` does it (#218/#721), and before the acquire, so a
   # value SQLite refuses to bind raises without leasing a connection.
   params isa ManualParams && (params = _normalize_manual_params(params, pool))
+  _refuse_nul(sql, params)   # #951, before the acquire for the same reason
   if conn === nothing
     if pool isa PormGSQLite
       conn = acquire_connection(pool; mode=:write)
@@ -2586,6 +2636,7 @@ function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
     # SQLite refuses to bind still reaches the release below — a caller's `release_conn = true`
     # included (#846). `_as_database_error` passes that `InvalidValueError` through as it is.
     params isa ManualParams && (params = _normalize_manual_params(params, pool))
+    _refuse_nul(sql, params)   # #951 — inside the `try` for the same #846 reason
     # Use async execution but await immediately
     task = if pool isa PormGPostgres
       backend_execute_async(pool, conn, sql, params)

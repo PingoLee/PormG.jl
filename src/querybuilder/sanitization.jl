@@ -550,9 +550,16 @@ _takes_collection(f_meta) = _is_json_field(f_meta) || _is_binary_field(f_meta) |
 # element it cannot format — `[1.5, 2.5]`, `["a", nothing]`, a tuple — crashed there first, as a raw
 # `MethodError` that named no field. The formatted value is checked AFTER it too (#712), which is what
 # lets a `JSONField` vector through: it is one string by then.
+# A NUL in the formatted text is refused here too (#951), so a write names its field — and, through
+# `_bulk_cell_error`, its row; the execution funnels refuse it again for filters and raw params.
+# Checked after the formatter, on what would actually bind: a `BinaryField`'s `PormGBytes` passes,
+# an `ArrayField` literal is checked whole.
 function _format_single(f_meta, field::AbstractString, value, op::AbstractString)
   _refuse_collection(f_meta, field, value, op)
-  return _single_value(f_meta.formatter(value), field, op)
+  formatted = _single_value(f_meta.formatter(value), field, op)
+  _contains_nul(formatted) && throw(InvalidValueError(
+    "Error in $op, field `$field` contains a NUL character (\\0). " * NUL_REFUSAL_REASON))
+  return formatted
 end
 
 # The raw-value half on its own, for a caller that runs the bare formatter to find the failing cell

@@ -885,9 +885,47 @@ function _non_boolean_condition(op::String)
     "combine conditions with \e[4m\e[32mQ(…)\e[0m / \e[4m\e[32mQor(…)\e[0m, or compare the bitwise value, " *
     "e.g. \e[4m\e[32m(F(\"points\") & 4) > 0\e[0m"
   end
-  return QueryBuildError(
-    "\e[4m\e[31m$(written) used as a condition\e[0m — a condition must be boolean. PostgreSQL rejects " *
-    "a number there and SQLite reads it for truthiness, so the two engines disagree; $(fix) (#931).")
+  return _condition_not_boolean(written, "a number", fix, 931)
+end
+# The sentence #931 and #942 share: what was written, why the engines disagree, and how to fix it.
+_condition_not_boolean(written::String, value::String, fix::String, issue::Int) = QueryBuildError(
+  "\e[4m\e[31m$(written) used as a condition\e[0m — a condition must be boolean. PostgreSQL rejects " *
+  "$(value) there and SQLite reads it for truthiness, so the two engines disagree; $(fix) (#$(issue)).")
+
+# #942 — a FUNCTION used as a `When` condition. `When(Lower("chassis"))` rendered
+# `CASE WHEN LOWER(…) THEN …`: PostgreSQL rejects it, SQLite coerces the text to a number and reads it
+# for truthiness, so the query silently took the default on every row. `When` is the only condition
+# position that admits a bare function — `filter`/`Q`/`on` refuse one by type (`FilterType`) — but
+# #931's node-type rule cannot decide it, because a function CAN be boolean (`Cast(x, "boolean")`,
+# `output_field = "boolean"`, `Coalesce` over a `BooleanField`). The result type decides instead:
+#
+# - `:boolean` / `:non_boolean` when the node alone names its type — a declared `Cast` type or
+#   `output_field`, a formatter the constructor set, or a name whose result type is fixed;
+# - `:unknown` when only the operands can say (`Coalesce`, `Max`, `Lag`, an untyped `Case`). `When`
+#   builds those, and `_render_function_body` asks `_expression_formatter` once the columns resolve.
+#
+# Only a type that is KNOWN to be non-boolean is refused, as `_expression_formatter` only answers a
+# known type: an expression whose type cannot be named builds, unchecked, as it did before.
+const _NUMBER_RESULT_FUNCTIONS = ("SUM", "AVG", "RANK", "DENSE_RANK", "ROW_NUMBER")
+function _function_condition_kind(v::SQLTypeFunction)
+  name = v.function_name
+  # A declared type names the result outright, including one `_sql_type_field` has no field for
+  # (`jsonb`, `timestamp`, an array): only `boolean` itself is a condition.
+  declared = get(v.kwargs, name == "CAST" ? "type" : "output_field", nothing)
+  if declared isa AbstractString
+    base = Base.endswith(strip(declared), "]") ? "" : lowercase(strip(first(split(declared, '('))))
+    return base in ("boolean", "bool") ? :boolean : :non_boolean
+  end
+  v.formatter === nothing || return v.formatter === Models.format_bool_sql ? :boolean : :non_boolean
+  # A `WHEN` branch is not a value at all; the rest have one fixed result type.
+  (name == "WHEN" || name in _NUMBER_RESULT_FUNCTIONS || name in _TEXT_OUTPUT_FUNCTIONS ||
+    haskey(PormGTypeField, name)) && return :non_boolean
+  return :unknown
+end
+function _non_boolean_function_condition(v::SQLTypeFunction)
+  _condition_not_boolean("`$(v.function_name)(…)`", "a non-boolean value",
+    "compare it, e.g. \e[4m\e[32mWhen(Lower(\"surname\") == \"senna\")\e[0m — a function whose result is " *
+    "boolean (\e[4m\e[32mCast(…, \"boolean\")\e[0m, \e[4m\e[32moutput_field = \"boolean\"\e[0m) is accepted", 942)
 end
 
 function _check_filter(x::Pair)
@@ -1619,6 +1657,13 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   else
     resolved_column = _get_select_query(_null_skipping_operands(v, instruc), instruc, _as=_as)
   end
+  # #942: the half of the `When` condition check construction could not do. Read after the condition
+  # renders, so a joined path's field memo exists for `_expression_formatter` to find.
+  if v.function_name == "WHEN" && v.column isa SQLTypeFunction && _function_condition_kind(v.column) === :unknown
+    formatter = _expression_formatter(v.column, instruc)
+    (formatter === nothing || formatter === Models.format_bool_sql) ||
+      throw(_non_boolean_function_condition(v.column))
+  end
 
   # #74 fan-out guard: record COUNT/SUM/AVG and the source alias of their column so build() can
   # refuse aggregates a to-many join would silently inflate. MAX/MIN are immune and omitted; a
@@ -1667,16 +1712,16 @@ function _get_select_query(q::SQLTypeQ, instruc::SQLInstruction; _as::Union{Noth
   end
   return "(" * join(resp, " AND ") * ")"
 end
-# #92: fail loud rather than silently mis-correlate a projected subquery nested inside another one —
-# OuterRef resolves only one level, so nesting could bind to the wrong outer query and return a wrong
-# value. `instruc.outer !== nothing` means the current build is itself a subquery.
-function _guard_no_nested_projection(instruc::SQLInstruction, what::AbstractString)
-  instruc.outer === nothing || throw(QueryBuildError(
-    "$what(...) projected inside another subquery is not supported yet: OuterRef resolves one level " *
-    "only, so a nested projected subquery could correlate to the wrong level. Keep projected subqueries " *
-    "to a single level of correlation."))
-  return nothing
-end
+# #938: a Subquery/Exists nested inside another subquery builds in every position. #92 refused the
+# PROJECTED spelling only ("OuterRef resolves one level, so a nested projected subquery could correlate
+# to the wrong level"), which left the filter spelling of the same predicate open (#926) and refused
+# `Coalesce(Subquery(…))` in a nested WHERE while the bare `Subquery(…)` built. Neither level can
+# mis-bind: every nested render passes `outer = instruc`, so `OuterRef` resolves against the
+# IMMEDIATELY enclosing query — Django's rule — and the shared `SQLTbAlias` counter gives each level
+# its own alias (`Tb`, `R1`, `R2`, …), so an inner `OuterRef` cannot be captured by a deeper scope.
+# Correlating two levels up (Django's `OuterRef(OuterRef(…))`) is not expressible; it is not
+# mis-resolved either. The guard's other premise, the nested parameter order, is #432's
+# `nested_parameter_mark` / `detach_nested_run!` since.
 
 # #433: a `.with(...)` declared INSIDE a Subquery / Exists / `__@in` subquery is refused, because
 # no backend renders it correctly today. The three call sites fail in two different ways, and the
@@ -1738,9 +1783,9 @@ function _warn_if_possible_multirow(handler::SQLObjectHandler)
 end
 
 function _get_select_query(v::ExistsObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
-  _guard_no_nested_projection(instruc, "Exists")   # #92
   # #194 needs nothing here (#932): the clause this renders in set the evaluation phase, and the
-  # OuterRef recorder reads it. The projected/filter split survives only for #92 above.
+  # OuterRef recorder reads it. Nesting needs nothing either (#938, above): the projected and the
+  # filter spelling render the same `EXISTS (…)`.
   return _get_filter_query(v, instruc)
 end
 function _get_select_query(v::OuterRefObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
@@ -1755,9 +1800,8 @@ function _get_select_query(v::JoinedReference, instruc::SQLInstruction; _as::Uni
   return _resolve_joined(v, instruc)
 end
 function _get_select_query(v::SubqueryObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
-  # #92: scalar single-column correlated subquery projected as a SELECT-list column.
-  _guard_no_nested_projection(instruc, "Subquery")
-  # #194: decided by the clause's phase, not here — see `_get_select_query(::ExistsObject)`.
+  # #92: scalar single-column correlated subquery projected as a SELECT-list column. #194 is decided
+  # by the clause's phase and nesting is legal (#938) — see `_get_select_query(::ExistsObject)`.
   return _render_scalar_subquery(v, instruc)
 end
 # #926: the FILTER-position arm — `filter("grid" => Subquery(…))`, `F("grid") == Subquery(…)`, an ON
@@ -1984,7 +2028,10 @@ function _resolve_joined(ref::JoinedReference, instruc::SQLInstruction)::String
                 safe_column_identifier(Models.field_db_column(target_model.fields[ref.path], ref.path), instruc.connection))
 end
 function _get_filter_query(v::SQLTypeFunction, instruc::SQLInstruction)
-  return _get_select_query(v, instruc) # Does this have any coletaral efect?
+  # A function in a condition renders as it does projected: a filter-position function is an operand
+  # (`Coalesce(Subquery(…), 0)`), and its arguments render through the same arms either way. #938
+  # removed the one difference the two entry points used to make, the #92 nesting refusal.
+  return _get_select_query(v, instruc)
 end
 function _get_filter_query(v::ExistsObject, instruc::SQLInstruction)
   return _build_exists_query(v.query, instruc)

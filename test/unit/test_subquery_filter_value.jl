@@ -20,6 +20,8 @@ using PormG
 using PormG.QueryBuilder: inspect_query, F, Q, Qor, Joined, Subquery, OuterRef
 using PormG.Functions: Count, Max, Min, Lower, Case, When
 using PormG: QueryBuildError, FilterError
+using PormG.Functions: Greatest
+import Logging
 
 include("helper_marker_alignment.jl")
 
@@ -517,18 +519,101 @@ end
   end
 end
 
-# The nested half of #932 item 2 is NOT fixed here: inside another subquery, `Coalesce(Subquery)` in
-# WHERE is still refused — by the #92 nesting guard, which keys on the render entry point. Pinned so
-# that fixing #938 has to touch this line on purpose.
-@testset "#932: Coalesce(Subquery) in a nested WHERE is still refused by #92 (#938)" begin
+# ─────────────────────────────────────────────────────────────────────────────
+# A Subquery / Exists nested inside another subquery builds in every position (#938)
+# The #92 guard refused a nested subquery only when it reached the PROJECTED render entry point, so
+# `Coalesce(Subquery(…))` in a nested WHERE was refused while the bare `Subquery(…)` built. Neither
+# can mis-correlate: an `OuterRef` binds the IMMEDIATELY enclosing query (Django's rule) and each
+# level has its own alias. Three levels below: the outer driver (`Tb`), a correlated result count
+# (`R1`, bound to `"Tb"."driverid"`), and inside it the race's best grid (`R2`, bound to
+# `"R1"."raceid"` — never to `"Tb"`). Every position is asked on both engines, with a value bound at
+# each level, so the SQLite vector is checked against PostgreSQL's text order (#432's differential).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#938: a subquery nested inside another subquery builds in every position" begin
+  # The race's best grid among chassis "IN": correlated to whichever result row encloses it.
+  best(mod) = Subquery(mod.Result.objects.filter("raceid" => OuterRef("raceid"), "chassis" => "IN").values("m" => Min("grid")))
+  same_race(mod) = mod.Result.objects.filter("raceid" => OuterRef("raceid"), "chassis" => "IN")
+  count_rows(q) = q.values("n" => Count("resultid"))
+  # (position, how the middle query uses the innermost one, text order on PostgreSQL / on SQLite)
+  positions = (
+    ("filter pair", (q, m) -> count_rows(q.filter("grid" => best(m))), Any["MID", "IN", "OUT"]),
+    ("Coalesce in WHERE", (q, m) -> count_rows(q.filter("grid" => Coalesce(best(m), 0))), Any["MID", "IN", 0, "OUT"]),
+    # SQLite emulates GREATEST as MAX(COALESCE(a, b), COALESCE(b, a)), so each operand renders twice.
+    ("Greatest in WHERE", (q, m) -> count_rows(q.filter("grid" => Greatest(best(m), 0))),
+      (postgres = Any["MID", "IN", 0, "OUT"], sqlite = Any["MID", "IN", 0, 0, "IN", "OUT"])),
+    ("Q", (q, m) -> count_rows(q.filter(Q("grid" => best(m)))), Any["MID", "IN", "OUT"]),
+    ("Exists in WHERE", (q, m) -> count_rows(q.filter(Q(Exists(same_race(m))))), Any["MID", "IN", "OUT"]),
+    ("__@in", (q, m) -> count_rows(q.filter("resultid__@in" => same_race(m).values("resultid"))), Any["MID", "IN", "OUT"]),
+    ("When condition", (q, m) -> q.values("n" => Sum(Case([When("grid" => best(m), then = 1)], default = 0))),
+      Any["IN", 1, 0, "MID", "OUT"]),
+    ("When then", (q, m) -> q.values("n" => Sum(Case([When("grid__@gt" => 0, then = best(m))], default = 0))),
+      Any[0, "IN", 0, "MID", "OUT"]),
+    ("projected Subquery", (q, m) -> q.values("n" => Max(Coalesce(best(m), 0))), Any["IN", 0, "MID", "OUT"]),
+    ("projected Exists", (q, m) -> q.values("n" => Exists(same_race(m))), Any["IN", "MID", "OUT"]),
+    # A join condition: the ON value renders (and binds) ahead of the middle query's WHERE. The WHERE
+    # term on the joined driver is what materializes the join `on()` decorates.
+    ("on() condition", (q, m) -> count_rows(q.on("driverid", "code" => Subquery(same_race(m).values("c" => Min("chassis")))).
+                                              filter("driverid__number__@gte" => 0)), Any["IN", "MID", 0, "OUT"]),
+  )
   for (backend, mod) in _SQ_MODELS
-    inner = mod.Result.objects
-    inner.filter("grid" => Coalesce(_sq_best(mod), 0))
-    inner.values("m" => Min("grid"))
-    q = mod.Result.objects
-    q.values("raceid", "x" => Subquery(inner))
-    err = try; inspect_query(q); nothing; catch e; e; end
-    @test err isa QueryBuildError
-    @test occursin("projected inside another subquery", sprint(showerror, err))
+    @testset "$backend: $label" for (label, use, order) in positions
+      middle = mod.Result.objects
+      middle.filter("driverid" => OuterRef("driverid"), "chassis" => "MID")
+      use(middle, mod)
+      q = mod.Driver.objects
+      q.filter("code" => "OUT")
+      q.values("driverid", "x" => Subquery(middle))
+      # `projected Exists` is a non-aggregate column with no LIMIT: its soft warning is not under test.
+      insp = Logging.with_logger(Logging.NullLogger()) do
+        inspect_query(q)
+      end
+      sql = _sq_flat(insp[:sql_text])
+      # Each OuterRef binds the query immediately around it: the innermost to the middle, the middle
+      # to the outer driver. No reference skips a level.
+      @test occursin("\"R2\".\"raceid\" = \"R1\".\"raceid\"", sql)
+      @test occursin("\"R1\".\"driverid\" = \"Tb\".\"driverid\"", sql)
+      @test !occursin("\"R2\".\"raceid\" = \"Tb\"", sql)
+      assert_marker_count(insp, backend)
+      @test _sq_text_order(insp, backend) == (order isa NamedTuple ? order[backend] : order)
+    end
   end
+
+  # The same WHERE-side positions with the middle query held by an `Exists(...)` and by a
+  # `"col__@in"` subquery instead of a `Subquery(...)`. The oracle here is the differential itself:
+  # SQLite's vector must equal PostgreSQL's text order (GREATEST's SQLite text differs, so it is left
+  # to the marker count).
+  containers = (
+    ("Exists", (q, middle) -> q.filter(Q(Exists(middle)))),
+    ("__@in", (q, middle) -> q.filter("driverid__@in" => middle.values("driverid"))),
+  )
+  where_positions = [(label, use) for (label, use, _) in positions if !occursin(r"When|projected", label)]
+  @testset "inside $clabel: $label" for (clabel, hold) in containers, (label, use) in where_positions
+    insp = Dict{Symbol, Any}()
+    for (backend, mod) in _SQ_MODELS
+      middle = mod.Result.objects
+      middle.filter("driverid" => OuterRef("driverid"), "chassis" => "MID")
+      # The position's own projection is dropped: these containers need no single scalar column.
+      use(middle, mod)
+      middle.object.values = empty(middle.object.values)
+      q = mod.Driver.objects
+      q.filter("code" => "OUT")
+      hold(q, middle)
+      q.values("driverid")
+      insp[backend] = inspect_query(q)
+      sql = _sq_flat(insp[backend][:sql_text])
+      @test occursin("\"R2\".\"raceid\" = \"R1\".\"raceid\"", sql)
+      @test occursin("\"R1\".\"driverid\" = \"Tb\".\"driverid\"", sql)
+      assert_marker_count(insp[backend], backend)
+    end
+    occursin("Greatest", label) ||
+      @test insp[:sqlite][:parameters] == _sq_text_order(insp[:postgres], :postgres)
+  end
+end
+
+# Django's two-levels-up spelling is named in the docs, so it raises a message rather than a raw
+# `MethodError` (review of #938): an `OuterRef` binds the immediately enclosing query only.
+@testset "#938: OuterRef(OuterRef(…)) is refused with a message" begin
+  err = try; OuterRef(OuterRef("driverid")); nothing; catch e; e; end
+  @test err isa QueryBuildError
+  @test occursin("immediately enclosing query", sprint(showerror, err))
 end

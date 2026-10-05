@@ -356,8 +356,24 @@ The rules are those of a projected scalar subquery (below), with two differences
 - **Exactly one column.** The inner query must project exactly one column via `.values(...)` (the inner alias is cosmetic). Zero or several columns raise a `QueryBuildError` at build time. The same one-column rule applies to `@in` subqueries, where it surfaces as a `FilterError` — the type names which argument you got wrong (a projection here, a filter there). Catch `PormGError` to handle both.
 - **The alias is mandatory.** Always project as a pair: `"alias" => Subquery(...)`. A bare `Subquery(...)` inside `values()` raises.
 - **At most one row.** The database requires a scalar subquery to return ≤ 1 row ("more than one row returned by a subquery used as an expression" at execution otherwise). An aggregate always satisfies this; for a plain column add `order_by` + `limit(1)` — PormG emits a build-time warning for the non-aggregate/no-limit case but does not block it.
-- **One level of correlation.** `OuterRef` resolves against the immediately enclosing query only, so a `Subquery`/`Exists` projected *inside another subquery* raises rather than risk silently correlating to the wrong level. Multi-level correlation is a possible future extension. The check keys on the spelling, not the clause: inside another subquery, `filter("grid" => Coalesce(Subquery(…), 0))` raises too, while a bare `filter("grid" => Subquery(…))` builds (#938).
-- **Correlate on base columns.** `OuterRef("driverid")` against a plain outer column is the canonical, supported case. A joined-path `OuterRef` (e.g. `OuterRef("constructorid__name")`) adds a join to the outer query and is not part of the validated #92 surface.
+- **`OuterRef` binds the immediately enclosing query.** A `Subquery`/`Exists` may sit inside another subquery in any position: a filter, a projection, a `When`, a join condition. Its `OuterRef` correlates to the subquery around it, never further out, which is Django's rule. Reaching two levels up (Django's `OuterRef(OuterRef(…))`) is not supported, and raises `QueryBuildError`. One known exception: inside a `Subquery` in a **deep-hop** `on()` condition (`on("driverid__results", …)`), the reference is retargeted to the hop's left alias (#946). Each level renders under its own alias, so the binding is visible in the SQL (#938):
+
+  ```julia
+  # A driver's pole positions: the races where they started from that race's best grid.
+  best_grid = M.Result.objects.
+      filter("raceid" => OuterRef("raceid"), "grid__@gt" => 0).   # the race of the result row below
+      values("g" => Min("grid"))
+  poles = M.Result.objects.
+      filter("driverid" => OuterRef("driverid"), "grid" => Subquery(best_grid)).   # the driver
+      values("n" => Count("resultid"))
+  query = M.Driver.objects.
+      filter("surname" => "Senna").
+      values("forename", "surname", "poles" => Subquery(poles))
+  # … (SELECT MIN("R2"."grid") … WHERE "R2"."raceid" = "R1"."raceid" AND "R2"."grid" > $1) …
+  #   … WHERE "R1"."driverid" = "Tb"."driverid" …
+  df = query |> DataFrame   # Ayrton Senna 65, Bruno Senna 0
+  ```
+- **Correlate on base columns.** `OuterRef("driverid")` against a plain outer column is the canonical, supported case. A joined-path `OuterRef` (e.g. `OuterRef("constructorid__name")`) adds a join to the query it binds and is not part of the validated #92 surface.
 - **`OuterRef` inside an expression.** An outer column may be wrapped in a scalar function or a window column inside the correlated query — `Lower(OuterRef("surname"))`, `Cast(OuterRef("driverid"), "text")`, `Lag(OuterRef("driverid"), over = …)` — and resolves against the outer row exactly as a bare `OuterRef` does. Outside a correlated build (a top-level `values()` or `filter()`) an `OuterRef` raises `QueryBuildError`, wrapped or not.
 - **Outer `GROUP BY` — guarded at build time (#194).** When the outer query aggregates and a correlated `Subquery`/`Exists` that is evaluated **after** grouping — in the `SELECT` list, `HAVING` or `ORDER BY` — correlates on a column that is **not** in the group set, PormG raises a `QueryBuildError` naming the ungrouped column. Left to the database the two backends disagree: PostgreSQL refuses it (`subquery uses ungrouped column … from outer query`) while **SQLite evaluates the subquery against an arbitrary row of each group** and returns a plausible-looking wrong number. The guard runs before any SQL does, so both engines behave the same way and neither can hand back the wrong number. The legitimate shape is unaffected: group by `driverid` and correlate on `OuterRef("driverid")` and the query builds silently on both backends. Three notes on the edges: a whole-table aggregate (`values("n" => Count(...), "s" => Subquery(...))`, no `GROUP BY` at all) is refused too, because it is the same shape with an empty group set; a column that reaches the group set only through `order_by` counts as grouped, because it genuinely is; and a subquery evaluated **before** grouping is not guarded, because correlating it on an ungrouped column is legal on both engines. That covers three places (#932):
     - a `WHERE` filter or a join condition;

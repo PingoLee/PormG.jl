@@ -99,6 +99,19 @@ query.values("driverid__surname", "laps",
 
 The refusal is there because the two engines disagree about the bare form: PostgreSQL rejects a number used as a condition, and SQLite reads it as true when it is non-zero, so the same query would return rows on one engine and fail on the other. A bare **boolean column** is a condition already and keeps working, for example `filter(F("is_active"))` or `When(F("is_active"), then = 1)`. Arithmetic stays legal anywhere a value goes: in a projection, in `then`, and on the right of a comparison.
 
+A **function** is a `When` condition only when its result is boolean, for the same reason. `When(Lower("surname"), then = 1)` raises `QueryBuildError`, and so do `Length`, `Sum`, `Rank`, a `Cast` to a non-boolean type, and a `Coalesce` or `Max` over a number or text column. Compare the function instead, as in `When(Lower("surname") == "senna", then = 1)`. A function whose result is boolean keeps working:
+
+```julia
+using PormG.Functions: Case, When, Cast
+
+query = M.Result.objects
+query.filter("raceid__year" => 2009)
+query.values("driverid__surname", "laps",
+             "started" => Case([When(Cast("laps", "boolean"), then = 1)], default = 0))
+```
+
+A boolean result is recognized from a `Cast(…, "boolean")`, an `output_field = "boolean"`, or a `BooleanField` operand (`Coalesce(F("is_active"), false)`). PormG checks the result type when it can name it. A function whose type it cannot name, such as `Lag` over a column or a `Case` with no `output_field`, is not checked and renders as written.
+
 ### Expressions are values, not builders
 
 Every operator — comparison and arithmetic alike — returns a **new** expression and leaves its operands untouched. So an `F()` handle can be bound to a name and reused across as many predicates, queries and projections as you like:

@@ -3130,12 +3130,12 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Subquery (#92) - fail-loud nesting boundary: a Subquery/Exists projected
-# INSIDE another subquery must raise, because OuterRef resolves one level only —
-# a nested projection could silently correlate to the wrong outer query and
-# return a wrong number (the exact failure mode the #74 guard exists to stop).
+# Subquery (#92, #938) - a Subquery projected INSIDE another subquery builds. #92 refused it ("OuterRef
+# resolves one level only"); #938 lifted that, because nothing mis-binds: each OuterRef resolves
+# against the query immediately around it (Django's rule), and each level renders under its own
+# alias. The innermost count correlates to the middle row (`R1`), the middle to the driver (`Tb`).
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "Subquery projection (#92) - nested projected subquery raises" begin
+@testset "Subquery projection (#92, #938) - nested projected subquery binds the enclosing level" begin
     innermost = M.Driver_standings.objects
     innermost.filter("driverid" => OuterRef("driverid"))
     innermost.values("t" => Count("driverstandingsid"))
@@ -3147,13 +3147,13 @@ end
     q = M.Driver.objects
     q.values("x" => Subquery(middle))
 
-    # The nested projection is detected while rendering `middle` as a subquery. `middle` also
-    # triggers the incidental non-aggregate/no-LIMIT soft warn first — silence it; the throw is
-    # what this testset locks in.
-    err = Logging.with_logger(Logging.NullLogger()) do
-        try q |> inspect_query; nothing catch e; e end
+    # `middle` projects a non-aggregate column with no LIMIT, which only warns; silence it.
+    sql = Logging.with_logger(Logging.NullLogger()) do
+        replace((q |> inspect_query)[:sql_text], r"\s+" => " ")
     end
-    @test err isa PormGError && occursin("one level", err.msg)
+    @test occursin("WHERE \"R2\".\"driverid\" = \"R1\".\"driverid\"", sql)   # innermost → middle
+    @test occursin("WHERE \"R1\".\"driverid\" = \"Tb\".\"driverid\"", sql)   # middle → outer
+    @test !occursin("\"R2\".\"driverid\" = \"Tb\"", sql)                     # no level skipped
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

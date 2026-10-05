@@ -88,6 +88,9 @@ without inverting the logic by hand.
 | `@quarter` | Extract quarter (1-4) | `"date__@quarter" => 1` | `"date__@quarter"` |
 | `@quadrimester` | Extract quadrimester (1-3) | `"date__@quadrimester" => 2` | `"date__@quadrimester"` |
 | `@date` | Extract date from datetime | `"created__@date" => Date(...)` | `"created__@date"` |
+| `@hour` | Extract hour (0-23) | `"start_at__@hour" => 13` | `"start_at__@hour"` |
+| `@minute` | Extract minute (0-59) | `"start_at__@minute" => 30` | `"start_at__@minute"` |
+| `@second` | Extract whole second (0-59) | `"time__@second" => 0` | `"time__@second"` |
 | `@yyyy_mm` | Year-month string | `"date__@yyyy_mm" => "1991-10"` | `"date__@yyyy_mm"` |
 | `@yyyy_q` | Year-quarter label | `"date__@yyyy_q" => "1991-Q1"` | `"date__@yyyy_q"` |
 | `@yyyy_quad` | Year-quadrimester label | `"date__@yyyy_quad" => "1991-Q1"` | `"date__@yyyy_quad"` |
@@ -97,7 +100,8 @@ be part of the answer. `@quarter` and `@quadrimester` extract the period **numbe
 and `1` through `3` — so `filter("date__@quarter" => 1)` selects the first quarter of *every* year.
 `@yyyy_q` and `@yyyy_quad` build the year-qualified **label** (`"1991-Q1"`), which is what you want as
 a `values()` grouping key when each year's quarters must stay separate. A value outside the period's
-range raises `FilterError` rather than matching nothing.
+range raises `FilterError` rather than matching nothing. The same goes for the time parts `@hour`,
+`@minute` and `@second` — see [Time of day](functions_and_dates.md#Time-of-day-(@hour,-@minute,-@second)).
 
 A label filter compares the whole `"YYYY-Qn"` string, so `filter("date__@yyyy_q" => "1991-Q1")`
 selects one quarter of one season, where `filter("date__@quarter" => 1)` selects that quarter of

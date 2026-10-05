@@ -207,6 +207,9 @@ with NULL semantics and indexing notes, is in
 | `field__@yyyy_q` | Year-qualified quarter label (`values()` only) | `"q" => "date__@yyyy_q"` |
 | `field__@yyyy_quad` | Year-qualified quadrimester label (`values()` only) | `"q" => "date__@yyyy_quad"` |
 | `field__@date` | Extract date from datetime | `"created_at__@date" => Date(2025, 1, 1)` |
+| `field__@hour` | Extract hour (0-23) | `"start_at__@hour" => 13` |
+| `field__@minute` | Extract minute (0-59) | `"start_at__@minute" => 30` |
+| `field__@second` | Extract whole second (0-59) | `"time__@second" => 0` |
 
 For the full list of operators and transforms, see [Filters and Aggregates](read/filters_and_aggregates.md).
 

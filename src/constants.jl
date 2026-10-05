@@ -174,6 +174,12 @@ const PormGtransform = Dict{String,Union{Int64, String}}(
   # names shaped like the `@yyyy_mm` bucket it belongs beside.
   "yyyy_q" => "Y_Q",
   "yyyy_quad" => "Y_QUAD",
+  # #636: the time parts of a `DateTimeField` / `TimeField`. The week parts (`week`, `week_day`,
+  # `iso_week_day`, `iso_year`) are deliberately absent — the two engines number weeks differently,
+  # and which numbering each name promises is still an open decision on #636.
+  "hour" => "HOUR",
+  "minute" => "MINUTE",
+  "second" => "SECOND",
 )
 
 # dictionary from function to type of the field

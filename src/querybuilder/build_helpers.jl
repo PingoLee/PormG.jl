@@ -1055,9 +1055,6 @@ const UNIMPLEMENTED_LOOKUP_HINTS = Dict{String,String}(
   "week"         => "there is no week transform either; `__@month` and `__@yyyy_mm` are the nearest buckets",
   "week_day"     => "there is no weekday transform either",
   "iso_week_day" => "there is no weekday transform either",
-  "hour"         => "there is no time-part transform either; `__@date` truncates a timestamp to its day",
-  "minute"       => "there is no time-part transform either",
-  "second"       => "there is no time-part transform either",
 )
 
 function _check_if_field_is_a_operator(field::String)
@@ -1073,7 +1070,7 @@ function _check_if_field_is_a_operator(field::String)
   # told PormG has no such lookup than by the generic "no such field". Only the WORDING was wrong.
   # (`regex`/`iregex` were two of the 11 until #635 wired them, and `iexact` a third until #634;
   # they now arrive through PATTERN_LOOKUP_OPERATORS, and the reachability check below flips their
-  # message by itself.)
+  # message by itself. #636 did the same for `hour`/`minute`/`second` through `PormGtransform`.)
   common_operators = [PATTERN_LOOKUP_OPERATORS...,
     "exact", "in", "gt", "gte", "lt", "lte", "range", "nrange", "date", "isnull",
     "year", "iso_year", "quarter", "month", "day", "week", "week_day", "iso_week_day",

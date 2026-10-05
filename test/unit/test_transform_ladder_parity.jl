@@ -281,6 +281,52 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# The time-part transforms (#636).
+# `@hour` / `@minute` / `@second` reuse `Dialect.EXTRACT`, so the rendering is quoted literally here
+# for the same reason as #562's controls above: the parity loops iterate `PormGtransform` and would be
+# satisfied by both ladders rendering the wrong part together. `SECOND` is the one whose PostgreSQL
+# arm differs from the rest — `trunc` first, because `numeric::integer` ROUNDS (45.6 → 46) where
+# SQLite's `%S` truncates. Range refusal follows #579: a value no clock can show is a `FilterError`,
+# never a bound parameter that silently matches nothing.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#636: the time-part transforms render and validate on both engines" begin
+  expected = Dict(
+    (:sqlite, "hour")   => "CAST(strftime('%H', \"Tb\".\"ts\") AS INTEGER)",
+    (:sqlite, "minute") => "CAST(strftime('%M', \"Tb\".\"ts\") AS INTEGER)",
+    (:sqlite, "second") => "CAST(strftime('%S', \"Tb\".\"ts\") AS INTEGER)",
+    (:postgres, "hour")   => "EXTRACT(HOUR FROM \"Tb\".\"ts\")::integer",
+    (:postgres, "minute") => "EXTRACT(MINUTE FROM \"Tb\".\"ts\")::integer",
+    (:postgres, "second") => "trunc(EXTRACT(SECOND FROM \"Tb\".\"ts\"))::integer",
+  )
+  for (engine, conn) in ((:sqlite, _TLP_SL), (:postgres, _TLP_PG))
+    for key in ("hour", "minute", "second")
+      want = expected[(engine, key)]
+      @test occursin(want, _tlp_string_route("ts", key, conn))
+      @test occursin(want, _tlp_f_route("ts", key, conn))
+    end
+  end
+
+  for (backend, conn) in _TLP_BACKENDS
+    for (key, hi) in (("hour", 23), ("minute", 59), ("second", 59))
+      build(v) = (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)" => v); q)
+      # Out of range on either side, fractional, and not a number at all.
+      for bad in (hi + 1, -1, 1.5, "abc")
+        @test_throws PormG.FilterError _tlp_sql(build(bad); conn = conn)
+      end
+      # Both ends of the range bind, as integers.
+      @test _tlp_params(build(0); conn = conn) == [0]
+      @test _tlp_params(build(hi); conn = conn) == [hi]
+      # The check reaches inside a collection (same engine-specific `IN` shape as #579 above).
+      @test _tlp_params(
+        (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)__@in" => [0, hi]); q);
+        conn = conn) == (conn === _TLP_SL ? [0, hi] : [[0, hi]])
+      @test_throws PormG.FilterError _tlp_sql(
+        (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)__@in" => [0, hi + 1]); q); conn = conn)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # The label transforms bind correctly in every position (#586, #587).
 # Two pre-existing parameter defects became reachable through a documented spelling once `@yyyy_q`
 # and `@yyyy_quad` existed — a predicate rendered the expansion twice and kept both sets of

@@ -3913,6 +3913,11 @@ end
 
 format_quarter_sql(value) = _format_period_sql(value, 1, 4, "quarter")
 format_quadrimester_sql(value) = _format_period_sql(value, 1, 3, "quadrimester")
+# #636: the time-part transforms. `second` stops at 59 because the rendered SQL truncates to whole
+# seconds on both engines; a leap second is not representable in either engine's timestamp type.
+format_hour_sql(value) = _format_period_sql(value, 0, 23, "hour")
+format_minute_sql(value) = _format_period_sql(value, 0, 59, "minute")
+format_second_sql(value) = _format_period_sql(value, 0, 59, "second")
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Comparison Tools

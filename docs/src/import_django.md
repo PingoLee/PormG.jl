@@ -510,6 +510,7 @@ Django parameters are automatically converted to PormG equivalents:
 | `db_table = "x"` | **imported** as `db_table = "x"` | The physical table. Absolute, as in Django: it overrides the derived name *and* a configured `django_prefix`. The positional slot keeps the derived logical name (`"matricula"`) either way — see [The app prefix](#The-app-prefix). |
 | `unique_together = ('a', 'b')` | **imported** as `constraints = [Models.UniqueConstraint(fields = ("a", "b"))]` | A tuple-of-tuples (several composite keys) becomes one `UniqueConstraint` per group. |
 | `constraints = [UniqueConstraint(fields=…, name=…)]` | **imported** | The modern spelling. See the acceptance rule below — it is narrower than Django's. |
+| `constraints = [UniqueConstraint(fields=…, condition=Q(…), name=…)]`, `UniqueConstraint(Lower('x'), name=…)` | **imported** as `Models.UniqueConstraint(fields = …, name = …, condition = "<SQL>")` / `Models.UniqueConstraint(expressions = (…,), name = …)` | A partial or functional unique constraint, translated exactly as a partial or functional `Index` is; the generated file notes it carries Django's SQL (see the note below the table). |
 | `constraints = [CheckConstraint(…)]` | **converted** when the `Q(...)` is simple; otherwise **reported**, as a stub | The condition becomes SQL over the table's physical columns, double-quoted as Django renders them: `check=Q(laps__gte=0) & Q(grid__lte=F("laps"))` imports as `Models.CheckConstraint(condition = "\"laps\" >= 0 AND \"grid\" <= \"laps\"", name = "…")`. Converted: `exact` and `in` on text, number and boolean fields; `gt`, `gte`, `lt`, `lte` and `range` on number fields, with whole-number values on an integer field (Django runs `int()` on the value, so `laps__gt=1.5` there means `> 1`); `isnull=True/False` and `=None` on any field; `F("field")` against a field of the same kind; a boolean field compared to `True` / `False` is written as Django renders it, `"ativo"` / `NOT "ativo"`; all combined with `&`, `|`, `~` and parentheses. Anything else stays a stub, because a mistranslated condition would accept or refuse the wrong rows without a word: ordering comparisons on text (the collation differs between PostgreSQL and SQLite), dates, times and decimals (SQLite stores them in more than one representation), other lookups (`regex`, `startswith`, …), a string with an escape such as `\x41` or `\u00e9`, traversal through a relation, `F()` arithmetic, and a name with a `%(class)s` placeholder. The stub's marker says why, names `Models.CheckConstraint(condition = "<SQL>", name = "…")` with the constraint's own name, and is followed by the original `Q(...)`; write the condition and add it to `constraints = [...]`. `violation_error_message` / `violation_error_code` are dropped with a marker — they only change Django's Python-side error. |
 | `abstract = True` | **no table** | The class becomes a base: its fields merge into every child. See [Model inheritance](#Model-inheritance). |
 | `proxy = True` | **no table** | A proxy shares its parent's table; emitting one would declare that table twice. |
@@ -559,16 +560,18 @@ the name its `models.py` actually uses. And a name quoted because the source *wr
 class, an enum, a field — stays verbatim: only the class a report is *about* is qualified.
 
 !!! warning "`Meta.constraints` acceptance is a whitelist"
-    A `UniqueConstraint` is imported only when its arguments are within
-    `fields`, `name`, `violation_error_message`, `violation_error_code`. Anything else — `condition`,
-    `expressions`, `nulls_distinct`, `deferrable`, or a positional expression such as
-    `UniqueConstraint(Lower("name"), …)` — causes **that one constraint** to be dropped and reported;
-    its siblings on the same model are unaffected.
+    A `UniqueConstraint` is imported only when its arguments are within `fields`, `name`,
+    `condition`, `violation_error_message`, `violation_error_code`, plus positional expressions.
+    A `condition=Q(...)` goes through the `CheckConstraint` translator and a positional expression
+    (`UniqueConstraint(Lower("name"), …)`) through the functional-index one, each only when it
+    translates exactly, and both need a `name=` string literal. Anything else — `nulls_distinct`,
+    `deferrable`, `include`, `opclasses`, a `Q(...)` or an expression outside those whitelists —
+    causes **that one constraint** to be dropped and reported; its siblings on the same model are
+    unaffected.
 
-    The direction is deliberate. `Models.UniqueConstraint` is exactly `(fields, name)`, so a Django
-    *partial* index (`condition=Q(active=True)`) imported as an unconditional one would start
-    silently rejecting rows the live database accepts. Refusing an option is recoverable;
-    reinterpreting one is not.
+    The direction is deliberate. A Django *partial* index (`condition=Q(active=True)`) imported as an
+    unconditional one would start silently rejecting rows the live database accepts. Refusing an
+    option is recoverable; reinterpreting one is not.
 
 !!! warning "`Meta.indexes` acceptance is a whitelist too"
     An entry is imported only when it is a `models.Index` or one of the `django.contrib.postgres`

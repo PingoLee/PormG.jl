@@ -1298,3 +1298,73 @@ end
     isdir(config_key) && rm(config_key; recursive = true)
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UniqueConstraint(condition = …, expressions = …): a unique partial or functional index (#934)
+# Django's UniqueConstraint takes both; PormG's did not, so such an index was never read and never
+# dropped. Construction follows `Index`'s text rules — fields XOR expressions, a required name, the
+# validator, bare-column expressions refused — and a plain constraint is unchanged. The renderer writes
+# `CREATE UNIQUE INDEX … WHERE …` with the hashed marker (PostgreSQL: the comment; SQLite: inside the
+# list). `Model_to_str` and inspectdb round-trip both.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "UniqueConstraint(condition = …, expressions = …) is a unique partial or functional index (#934)" begin
+  msg(f) = try; f(); ""; catch e; e isa PormG.ModelDefinitionError ? sprint(showerror, e) : rethrow(); end
+  part = Models.UniqueConstraint(fields = ("raceid", "position"), condition = "position IS NOT NULL", name = "result_one_per_place")
+  @test (part.fields, part.condition, part.expressions) == (["raceid", "position"], "position IS NOT NULL", String[])
+  fn = Models.UniqueConstraint(expressions = ("lower(code)",), name = "driver_code_ci")
+  @test (fn.fields, fn.expressions, fn.condition) == (String[], ["lower(code)"], nothing)
+  plain = Models.UniqueConstraint(fields = ("raceid", "driverid"))
+  @test (plain.expressions, plain.condition, plain.name) == (String[], nothing, nothing)   # unchanged
+  @test occursin("fields or expressions, not both", msg(() -> Models.UniqueConstraint(fields = ("a",), expressions = ("lower(a)",), name = "x")))
+  @test occursin("requires fields or expressions", msg(() -> Models.UniqueConstraint(name = "x")))
+  @test occursin("needs an explicit name", msg(() -> Models.UniqueConstraint(fields = ("a",), condition = "a > 0")))
+  @test occursin("needs an explicit name", msg(() -> Models.UniqueConstraint(expressions = ("lower(a)",))))
+  @test occursin("name only columns", msg(() -> Models.UniqueConstraint(expressions = ("a", "b"), name = "x")))
+  @test occursin("UniqueConstraint condition is not well-formed SQL", msg(() -> Models.UniqueConstraint(fields = ("a",), condition = "a > 0; DROP TABLE t", name = "x")))
+  @test occursin("UniqueConstraint expression is not well-formed SQL", msg(() -> Models.UniqueConstraint(expressions = ("lower(`a`)",), name = "x")))
+
+  # Render: the plain form is byte-identical; the text forms carry the WHERE and the hashed marker.
+  @test PormG.Dialect.create_unique_index(IXMockPostgres(), "\"u\"", "\"t\"", ["\"a\"", "\"b\""]; if_not_exists = false) ==
+        "CREATE UNIQUE INDEX \"u\" ON \"t\" (\"a\", \"b\");"
+  m = PormG.index_text_marker(String[], "position IS NOT NULL")
+  @test PormG.Dialect.create_unique_index(IXMockPostgres(), "\"u\"", "\"t\"", ["\"a\""]; if_not_exists = false,
+                                          condition = "position IS NOT NULL", marker = m) ==
+        "CREATE UNIQUE INDEX \"u\" ON \"t\" (\"a\") WHERE position IS NOT NULL;\nCOMMENT ON INDEX \"u\" IS '$(m)';"
+  @test PormG.Dialect.create_unique_index(IXMockSQLite(), "\"u\"", "\"t\"", String[]; if_not_exists = false,
+                                          expressions = ["lower(code)"], marker = "pormg:index:0123456789abcdef") ==
+        "CREATE UNIQUE INDEX \"u\" ON \"t\" (lower(code) /* pormg:index:0123456789abcdef */);"
+  @test_throws PormG.InvalidValueError PormG.Dialect.create_unique_index(IXMockSQLite(), "\"u\"", "\"t\"", String[];
+                                                                         expressions = ["a); DROP TABLE t; --"])
+
+  # Planner, at table creation: the text forms carry their marker; a plain one renders as it always did.
+  model = Models.Model("result_uc", id = Models.IDField(), raceid = Models.IntegerField(),
+                       position = Models.IntegerField(null = true), code = Models.CharField(max_length = 3),
+                       constraints = [part, Models.UniqueConstraint(expressions = ("lower(code)",), name = "result_uc_code_ci")])
+  p = _ix_plan_one(IXMockSQLite(), :result_uc, model)
+  @test p[:result_uc]["Create unique constraint: result_one_per_place"] ==
+        "CREATE UNIQUE INDEX \"result_one_per_place\" ON \"result_uc\" (\"raceid\", \"position\" /* $(m) */) WHERE position IS NOT NULL;"
+  @test p[:result_uc]["Create unique constraint: result_uc_code_ci"] ==
+        "CREATE UNIQUE INDEX \"result_uc_code_ci\" ON \"result_uc\" (lower(code) /* $(PormG.index_text_marker(["lower(code)"], nothing)) */);"
+
+  # Model_to_str round trip.
+  src = Models.Model_to_str(model)
+  @test occursin("Models.UniqueConstraint(fields = (\"raceid\", \"position\",), name = \"result_one_per_place\", " *
+                 "condition = \"position IS NOT NULL\")", src)
+  @test occursin("Models.UniqueConstraint(expressions = (\"lower(code)\",), name = \"result_uc_code_ci\")", src)
+  back = _ix_reload(src)
+  ucs = back.cache["unique_constraints"]["constraints"]
+  @test [(u.fields, u.expressions, u.condition) for u in ucs] ==
+        [(["raceid", "position"], String[], "position IS NOT NULL"), (String[], ["lower(code)"], nothing)]
+
+  # inspectdb: a live unique text index comes back as a UniqueConstraint carrying the text.
+  live = Models.Model("result_uc", id = Models.IDField(), raceid = Models.IntegerField(), position = Models.IntegerField())
+  _attach_composite_indexes!(live, [
+    LiveComposite("ux_part", ["raceid", "position"], true, false, "btree", [false, false],
+                  Union{String, Nothing}[nothing, nothing], [true, true], nothing, nothing; condition = "position > 0"),
+    LiveComposite("ux_fn", String[], true, false, "btree", Bool[], Union{String, Nothing}[], Bool[], nothing, nothing;
+                  expressions = ["abs(raceid)"])])
+  read_back = live.cache["unique_constraints"]["constraints"]
+  @test [(u.name, u.fields, u.expressions, u.condition) for u in read_back] ==
+        [("ux_part", ["raceid", "position"], String[], "position > 0"), ("ux_fn", String[], ["abs(raceid)"], nothing)]
+  @test live.cache["composite_index_owners"]["ux_part"] == (nothing, nothing)   # hand-made stays hand-made
+end

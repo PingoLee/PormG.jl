@@ -1934,12 +1934,26 @@ function comment_index(conn::PormGPostgres, index_name::String; marker::String =
   return """COMMENT ON INDEX $(index_name) IS '$(replace(text, "'" => "''"))';"""
 end
 
-function create_unique_index(conn::PormGPostgres, index_name::String, table_name::String, columns::Vector{String}; if_not_exists::Bool = true)
-  return """CREATE UNIQUE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) ($(join(columns, ", ")));"""
+# #934: a partial or functional `UniqueConstraint` renders its text exactly as `create_index` does —
+# the members verbatim, the `WHERE` after the list — and carries the hashed marker the same way: the
+# index's comment on PostgreSQL, an SQL comment closing the list on SQLite. Without `expressions`,
+# `condition` and `marker` the statement is byte-identical to the plain one every caller emitted before.
+function create_unique_index(conn::PormGPostgres, index_name::String, table_name::String, columns::Vector{String};
+                             if_not_exists::Bool = true, expressions::AbstractVector = String[],
+                             condition::Union{AbstractString, Nothing} = nothing,
+                             marker::Union{String, Nothing} = nothing)
+  members = join(_index_text_members(columns, Bool[], Union{String, Nothing}[], expressions), ", ")
+  stmt = """CREATE UNIQUE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) ($(members))$(_index_where(condition));"""
+  return marker === nothing ? stmt : stmt * "\n" * comment_index(conn, index_name; marker = marker)
 end
 
-function create_unique_index(conn::PormGSQLite, index_name::String, table_name::String, columns::Vector{String}; if_not_exists::Bool = true)
-  return """CREATE UNIQUE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) ($(join(columns, ", ")));"""
+function create_unique_index(conn::PormGSQLite, index_name::String, table_name::String, columns::Vector{String};
+                             if_not_exists::Bool = true, expressions::AbstractVector = String[],
+                             condition::Union{AbstractString, Nothing} = nothing,
+                             marker::Union{String, Nothing} = nothing)
+  members = join(_index_text_members(columns, Bool[], Union{String, Nothing}[], expressions), ", ")
+  marker === nothing || (members *= " /* $(marker) */")
+  return """CREATE UNIQUE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) ($(members))$(_index_where(condition));"""
 end
 
 """

@@ -1336,17 +1336,24 @@ end
         # imported `lotacao_id` column — FK fields gain that suffix at import.
         @test occursin(
             "constraints = [Models.UniqueConstraint(fields = (\"cpf\", \"lotacao_id\",), " *
-            "name = \"uniq_servidor_cpf_lotacao\")]",
+            "name = \"uniq_servidor_cpf_lotacao\")",
             generated,
         )
+        # #934: the partial and the functional one are imported with their text — the partial's
+        # `Q(ativo=True)` in Django's own spelling (#934 commit 4), the functional one as `LOWER`.
+        @test occursin("Models.UniqueConstraint(fields = (\"apelido\",), name = \"uniq_apelido_ativo\", " *
+                       "condition = \"\\\"ativo\\\"\")", generated)
+        @test occursin("Models.UniqueConstraint(expressions = (\"LOWER(\\\"apelido\\\")\",), " *
+                       "name = \"uniq_apelido_lower\")", generated)
 
-        # The rejected forms never become constraints. `apelido` is the column all three of them
-        # cover, so a single-field UniqueConstraint over it is the signature of any leaking through.
-        @test !occursin("Models.UniqueConstraint(fields = (\"apelido\",)", generated)
+        # The rejected forms never become constraints. `cpf` is the column both of them cover, so a
+        # single-field UniqueConstraint over it is the signature of either leaking through — as an
+        # unconditional rule, which would reject rows the live database accepts.
+        @test !occursin("Models.UniqueConstraint(fields = (\"cpf\",)", generated)
 
         # ...and each rejection says which argument it could not express.
-        @test occursin("`condition=` changes what the index means", generated)
-        @test occursin("it takes a positional expression", generated)
+        @test occursin("its `condition=` is not translated", generated)
+        @test occursin("`deferrable=` changes what the index means", generated)
         # #742/#768: a `regex` lookup is outside the translated set, so this CheckConstraint stays a
         # stub — the marker says why, names the PormG type, and carries the constraint's name over.
         @test occursin("CheckConstraint was not translated to SQL (`cpf__regex` is not a field of this " *
@@ -1354,7 +1361,7 @@ end
         @test occursin("declare it as Models.CheckConstraint(condition = \"<SQL>\", " *
                        "name = \"chk_cpf_digitos\")", generated)
 
-        # Rejection is PER CONSTRAINT. Three dropped and the fourth kept, on one model — the
+        # Rejection is PER CONSTRAINT. Three dropped and three kept, on one model — the
         # assertion above proves the survivor, this one proves the other three did not take it with
         # them, which is exactly what the coarse try/catch this replaces used to do.
         # Scoped to Servidor's own markers: other models in the fixture report dropped
@@ -2021,9 +2028,11 @@ end
 
         # ...and so do the constraints, including the FK `_id` resolution and the Django name.
         rc = modelof(:Servidor).cache["unique_constraints"]["constraints"]
-        @test length(rc) == 1
+        @test length(rc) == 3                                   # #934: the partial and functional ones too
         @test rc[1].fields == ["cpf", "lotacao_id"]
         @test rc[1].name == "uniq_servidor_cpf_lotacao"
+        @test (rc[2].fields, rc[2].condition) == (["apelido"], "\"ativo\"")
+        @test rc[3].expressions == ["LOWER(\"apelido\")"]
 
         # A model declaring no db_table must not have acquired one on the way through.
         # (#345 note: this fixture imports with NO prefix — `temp_import_config!` defaults to

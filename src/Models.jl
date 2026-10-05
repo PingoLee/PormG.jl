@@ -1868,10 +1868,21 @@ end
 # its own; it references existing fields by name.
 """
     UniqueConstraint(; fields, name = nothing)
+    UniqueConstraint(; fields, condition, name)
+    UniqueConstraint(; expressions, condition = nothing, name)
 
 Require a combination of columns to be unique together — Django's `Meta.unique_together`, spelled as
 a named constraint object. Pass it to [`Model`](@ref) through `constraints =`; a single-column rule
 is the field option `unique = true` instead.
+
+`condition` and `expressions` are Django's: a **partial** unique constraint, enforced only on the rows
+the condition matches (`condition = "position IS NOT NULL"` — at most one driver per finishing
+position, retirements aside), and a **functional** one, unique over SQL expressions
+(`expressions = ("lower(code)",)`). Both are SQL text under the [`Index`](@ref) contract — physical
+unqualified columns, checked only for what would change the statement — `fields` and `expressions`
+are exclusive, and either needs a `name`. Each becomes a `CREATE UNIQUE INDEX … WHERE …` on both
+engines, owned through the hashed `pormg:index:<hash>` marker as an expression or partial `Index` is
+(#934).
 
 `fields` names fields **on this model** — one name, or an iterable of them. Foreign keys are
 referenced by their field name and resolved to the physical column (honoring `db_column`), and the
@@ -1921,18 +1932,45 @@ See also [`Model`](@ref).
 struct UniqueConstraint
   fields::Vector{String}
   name::Union{String, Nothing}
+  # #934: a unique FUNCTIONAL index's members (exclusive with `fields`) and a unique PARTIAL index's
+  # `WHERE` — SQL text under `Index`'s contract (#29 part 2), owned through the same hashed marker.
+  expressions::Vector{String}
+  condition::Union{String, Nothing}
 end
-function UniqueConstraint(; fields, name::Union{AbstractString, Nothing} = nothing)
-  cols = _normalize_constraint_fields(fields)
-  isempty(cols) && throw(ModelDefinitionError("UniqueConstraint requires at least one field"))
+function UniqueConstraint(; fields = nothing, expressions = nothing, condition = nothing,
+                          name::Union{AbstractString, Nothing} = nothing)
+  # Django's rule, as for `Index`: over fields OR over expressions — never both, never neither.
+  fields !== nothing && expressions !== nothing && throw(ModelDefinitionError(
+    "UniqueConstraint takes fields or expressions, not both; write a column as an expression " *
+    "(\"surname\") to mix the two"))
+  fields === nothing && expressions === nothing && throw(ModelDefinitionError(
+    "UniqueConstraint requires fields or expressions"))
+  exprs = _index_sql_texts(expressions, "UniqueConstraint")
+  cond = _index_condition(condition, "UniqueConstraint")
+  # Expressions that are all bare columns, with no condition, ARE a plain unique constraint over those
+  # columns — `Index`'s rule, for `Index`'s reason: the catalog reads it back as columns.
+  !isempty(exprs) && cond === nothing && all(e -> occursin(_BARE_COLUMN_RE, e), exprs) &&
+    throw(ModelDefinitionError(
+      "UniqueConstraint expressions $(exprs) name only columns, which is a plain unique constraint: " *
+      "declare it with fields = (…) naming the fields those columns belong to"))
+  cols = fields === nothing ? String[] : _normalize_constraint_fields(fields)
+  fields !== nothing && isempty(cols) && throw(ModelDefinitionError("UniqueConstraint requires at least one field"))
   length(unique(cols)) == length(cols) ||
     throw(ModelDefinitionError("UniqueConstraint has duplicate fields: $(cols)"))
   # A blank name would render as an empty (invalid) index identifier; require nothing (auto-derive)
   # or a real name.
   name !== nothing && isempty(strip(name)) &&
     throw(ModelDefinitionError("UniqueConstraint name must be non-empty (pass name=nothing to auto-derive)"))
-  return UniqueConstraint(cols, name === nothing ? nothing : String(name))
+  # Django requires a name on every UniqueConstraint; PormG derives one for a plain constraint, but a
+  # name derived from the columns could not say what SQL text the index holds (`Index`'s rule).
+  (!isempty(exprs) || cond !== nothing) && name === nothing && throw(ModelDefinitionError(
+    "UniqueConstraint $(isempty(exprs) ? "on $(cols) with a condition" : "over expressions $(exprs)") " *
+    "needs an explicit name="))
+  return UniqueConstraint(cols, name === nothing ? nothing : String(name), exprs, cond)
 end
+
+# Whether a `UniqueConstraint` holds SQL text — a unique functional or partial index (#934).
+_unique_holds_text(c::UniqueConstraint)::Bool = !isempty(c.expressions) || c.condition !== nothing
 
 # Accept a single field name (Symbol/String) or an iterable of them; normalize each via
 # `format_fild_name` so declared names match the model's field-dict keys (#57 is
@@ -2373,34 +2411,34 @@ const _BARE_COLUMN_RE = r"^(?:[A-Za-z_][A-Za-z0-9_\$]*|\"(?:[^\"]|\"\")+\")$"
 # `expressions =`: a lone string is one expression, not its characters. Each must be well-formed SQL
 # by `is_valid_db_default_sql` — which refuses a top-level `,`, so an entry is exactly ONE index
 # member, and a comment or a `;` that would change the statement it is rendered into.
-_index_sql_texts(::Nothing)::Vector{String} = String[]
-_index_sql_texts(e::AbstractString)::Vector{String} = _index_sql_texts((e,))
-function _index_sql_texts(es)::Vector{String}
+_index_sql_texts(::Nothing, label::AbstractString = "Index")::Vector{String} = String[]
+_index_sql_texts(e::AbstractString, label::AbstractString = "Index")::Vector{String} = _index_sql_texts((e,), label)
+function _index_sql_texts(es, label::AbstractString = "Index")::Vector{String}
   applicable(iterate, es) || throw(ModelDefinitionError(
-    "Index expressions must be a tuple or vector of SQL strings, got $(typeof(es))"))
+    "$(label) expressions must be a tuple or vector of SQL strings, got $(typeof(es))"))
   out = String[]
   for e in es
     e isa AbstractString || throw(ModelDefinitionError(
-      "Index expressions must be SQL strings, got $(typeof(e)): $(repr(e))"))
-    _check_index_sql(e, "expression")
+      "$(label) expressions must be SQL strings, got $(typeof(e)): $(repr(e))"))
+    _check_index_sql(e, "expression", label)
     push!(out, String(strip(e)))
   end
-  isempty(out) && throw(ModelDefinitionError("Index expressions must name at least one expression"))
+  isempty(out) && throw(ModelDefinitionError("$(label) expressions must name at least one expression"))
   return out
 end
 
-_index_condition(::Nothing) = nothing
-function _index_condition(c)
+_index_condition(::Nothing, label::AbstractString = "Index") = nothing
+function _index_condition(c, label::AbstractString = "Index")
   c isa AbstractString || throw(ModelDefinitionError(
-    "Index condition must be an SQL string, got $(typeof(c)): $(repr(c))"))
-  _check_index_sql(c, "condition")
+    "$(label) condition must be an SQL string, got $(typeof(c)): $(repr(c))"))
+  _check_index_sql(c, "condition", label)
   return String(strip(c))
 end
 
-function _check_index_sql(sql::AbstractString, what::AbstractString)
-  isempty(strip(sql)) && throw(ModelDefinitionError("Index $(what) must not be blank"))
+function _check_index_sql(sql::AbstractString, what::AbstractString, label::AbstractString = "Index")
+  isempty(strip(sql)) && throw(ModelDefinitionError("$(label) $(what) must not be blank"))
   is_valid_db_default_sql(sql) || throw(ModelDefinitionError(
-    "Index $(what) is not well-formed SQL: $(repr(String(sql))). It must not contain a `--` or " *
+    "$(label) $(what) is not well-formed SQL: $(repr(String(sql))). It must not contain a `--` or " *
     "`/*` comment, an unterminated quote, a `;` or `,` outside parentheses, an `E'…'` string, a " *
     "backslash right before a quote, a dollar quote or a backtick — each would " *
     "silently change the CREATE INDEX it is rendered into" *
@@ -3062,8 +3100,13 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
         # is the common case.
         cols = join((format_string(get(renamed, f, f)) for f in cfields), ", ")
         namepart = c.name === nothing ? "" : ", name = $(format_string(String(c.name)))"
+        # #934: a functional one names no field — its members are SQL over physical columns, emitted
+        # verbatim as an `Index`'s are; a partial one adds its condition. A plain one renders as before.
+        memberpart = isempty(c.expressions) ? "fields = ($(cols),)" :
+          "expressions = ($(join((format_string(e) for e in c.expressions), ", ")),)"
+        condpart = c.condition === nothing ? "" : ", condition = $(format_string(c.condition))"
         # Trailing comma keeps a single-field tuple valid Julia: ("a",)
-        push!(rendered_constraints, "Models.UniqueConstraint(fields = ($(cols),)$(namepart))")
+        push!(rendered_constraints, "Models.UniqueConstraint($(memberpart)$(namepart)$(condpart))")
       end
       for c in ccs
         push!(rendered_constraints,

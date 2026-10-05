@@ -851,7 +851,11 @@ function declared_composites(model::PormGModel)::Vector{DeclaredComposite}
                                      String[Models.model_column(model, f) for f in decl.include]))
       else
         name = decl.name === nothing ? composite_index_name(table, cols, unique) : String(decl.name)
-        push!(out, DeclaredComposite(name, cols, unique, decl.name !== nothing, false))
+        # #934: a partial or functional UniqueConstraint carries its text, and with it the hashed marker
+        # (`composite_marker`) — a plain one is the plain composite it always was.
+        push!(out, DeclaredComposite(name, cols, unique, decl.name !== nothing, false, "btree",
+                                     fill(false, length(cols)), Union{String, Nothing}[nothing for _ in cols],
+                                     copy(decl.expressions), decl.condition))
       end
     end
   end
@@ -985,7 +989,8 @@ the plan's header; [`dry_run`](@ref) lists them and [`migrate`](@ref) acts on th
   empty otherwise.
 - `references` — `(table, column)` of the parent a foreign key points at (`:add_foreign_key`), or
   `nothing`.
-- `condition` — the SQL condition of a `CheckConstraint` (`:add_check`), or `nothing`.
+- `condition` — the SQL condition of a `CheckConstraint` (`:add_check`), the `WHERE` of a partial
+  `UniqueConstraint` (`:add_composite_unique`, #934), or `nothing`.
 - `handled` — `:pre` when the operator marked the finding `handled=pre` in the plan's header (#897):
   a `Data (pre):` step of the same plan fixes the rows, so `migrate` still counts them but does not
   refuse the plan for them, and the database checks the change when the migration runs. `nothing`
@@ -1259,16 +1264,20 @@ function _lossy_foreign_key(delta::ColumnDelta; table::AbstractString, column::A
 end
 
 """
-    _lossy_composite_unique(table, name, columns) -> Vector{LossyAlter}
+    _lossy_composite_unique(table, name, columns; condition = nothing) -> Vector{LossyAlter}
 
 The `:add_composite_unique` finding for a `UniqueConstraint` the plan creates on an existing table
 (#830). `columns` are the catalog's names for its members, or `nothing` for a member the catalog
 does not have yet (a column this plan adds): that one cannot be counted, so there is no finding.
+`condition` is a partial constraint's `WHERE` (#934): only the rows it matches are counted, and like
+a CHECK's condition it is interpolated only once the models file vouches for it
+(`_anchor_check_conditions`).
 """
-function _lossy_composite_unique(table::AbstractString, name::AbstractString,
-                                 columns::AbstractVector)::Vector{LossyAlter}
+function _lossy_composite_unique(table::AbstractString, name::AbstractString, columns::AbstractVector;
+                                 condition::Union{AbstractString, Nothing} = nothing)::Vector{LossyAlter}
   any(c -> c === nothing, columns) && return LossyAlter[]
-  return [LossyAlter(:add_composite_unique, table, name, "", ""; columns = String[c for c in columns])]
+  return [LossyAlter(:add_composite_unique, table, name, "", ""; columns = String[c for c in columns],
+                     condition = condition === nothing ? nothing : String(condition))]
 end
 
 """

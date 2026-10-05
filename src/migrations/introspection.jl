@@ -1541,7 +1541,10 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
                     include = includes[(tbl, idx)])
     end
     advanced = composite_is_advanced(lc)
-    unique && advanced && continue                   # `UniqueConstraint` is plain b-tree only
+    # `UniqueConstraint` is b-tree over plain ascending columns with default classes — or, since #934,
+    # SQL text (`expressions` / `condition`), which carries any of those inside it.
+    unique && (lc.method != "btree" || any(lc.descending) || !all(lc.opclass_default) ||
+               !isempty(lc.include)) && continue
     advanced && has_reloptions && continue           # `WITH (…)` would be lost on re-emission
     # Arity partition (see the table above): one column is a BARE unique index, or a non-unique one
     # that is advanced or marked — every other one-column index is `db_index`'s.
@@ -2484,7 +2487,10 @@ function _attach_composite_indexes!(model, composites::Vector{LiveComposite})
     end
     decl = try
       if lc.unique
-        Models.UniqueConstraint(fields = lc.columns, name = name)
+        # #934: a unique functional or partial one carries the catalog's own text, as an `Index` does.
+        isempty(lc.expressions) ?
+          Models.UniqueConstraint(fields = lc.columns, condition = lc.condition, name = name) :
+          Models.UniqueConstraint(expressions = lc.expressions, condition = lc.condition, name = name)
       elseif !isempty(lc.expressions)
         # #29 part 2: a functional index is written as the catalog's own text, which the planner
         # accepts as equal to the live index — so an adopted schema plans no replace.
@@ -2655,13 +2661,13 @@ function _sqlite_composite_indexes(conn::PormGSQLite, table_name)::Vector{LiveCo
               (parsed !== nothing && any(_sqlite_index_member_has_collate, parsed[1])) ||
               (parsed !== nothing && marker !== nothing && marker == index_text_marker(parsed[1], parsed[2]))
     is_partial = idx in partial
-    # A UNIQUE index is a `UniqueConstraint`, which declares neither.
-    unique && (as_text || is_partial) && continue
+    # Since #934 a UNIQUE one is read too — `UniqueConstraint(condition = …, expressions = …)` declares
+    # both. (A table-level `UNIQUE (…)` clause, origin 'u', can be neither.)
     (as_text || is_partial) && (parsed === nothing || length(parsed[1]) != length(members)) && continue
     condition = parsed === nothing ? nothing : parsed[2]
     is_partial == (condition !== nothing) || continue   # a WHERE the split did not find, or invented
     if as_text
-      push!(out, LiveComposite(idx, String[], false, false, "btree", Bool[], Union{String, Nothing}[],
+      push!(out, LiveComposite(idx, String[], unique, constraint, "btree", Bool[], Union{String, Nothing}[],
                                Bool[], marker, nothing; expressions = parsed[1], condition = condition))
       continue
     end

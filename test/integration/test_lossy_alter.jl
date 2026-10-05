@@ -454,6 +454,26 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# (m2) A partial UniqueConstraint: its duplicates are counted among the rows its condition matches,
+# with the condition evaluated by the server (#934)
+# SEN twice where `grid >= 0` — counted; PRO twice where it is negative — outside the index, so not.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: a partial UniqueConstraint over duplicates is counted under its condition (#934)" begin
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, 'x', 1, NULL), ('SEN', 2, 2.5, 'y', 2, NULL), " *
+                                    "('PRO', 3, 3.5, 'z', -1, NULL), ('PRO', 4, 4.5, 'w', -2, NULL);") do st
+        models = _la803pg_models(constraints = "[Models.UniqueConstraint(fields = (\"code\",), condition = \"grid >= 0\", " *
+                                               "name = \"pormg_test_lossy803_code_uq\")]")
+        sink = _la803pg_plan!(st, models)
+        @test [(f.kind, f.condition) for f in sink] == [(:add_composite_unique, "grid >= 0")]
+        err = _la803pg_err(() -> _la803pg_migrate(st))
+        @test err isa PormG.Migrations.MigrationPrecheckError
+        @test err !== nothing && only(err.findings).rows == 2
+        PormG.ConnectionPool.fetch(st.connections, "UPDATE \"$(_LA803PG_TABLE)\" SET grid = -5 WHERE big = 2;")
+        @test _la803pg_migrate(st).outcome === :applied
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # (o) A castless retype of a column with a DEFAULT applies, and carries the declared default (#828)
 # `TYPE … USING` converts the values but casts the DEFAULT with an assignment cast, which a castless
 # pair does not have: with the old `'0'` default left in place the ALTER fails on every table. The

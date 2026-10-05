@@ -479,8 +479,10 @@ means the finding keeps its place with no condition (`_finding_countable`), and 
 the CHECK when the migration runs, as it did before #830.
 """
 function _anchor_check_conditions(findings::Vector{LossyAlter}, settings::PormGSettings)::Vector{LossyAlter}
-  any(f -> f.kind === :add_check, findings) || return findings
+  partial(f) = f.kind === :add_composite_unique && f.condition !== nothing
+  any(f -> f.kind === :add_check || partial(f), findings) || return findings
   declared = Set{Tuple{String, String, String}}()
+  declared_unique = Set{Tuple{String, String, String}}()     # #934: partial UniqueConstraints
   try
     schema = _load_current_models(_resolve_models_file(settings, nothing, "the CheckConstraint row count"))
     for entry in values(schema)
@@ -489,17 +491,25 @@ function _anchor_check_conditions(findings::Vector{LossyAlter}, settings::PormGS
       for c in Models.declared_check_constraints(m)
         push!(declared, (String(model_table_name(m)), c.name, c.condition))
       end
+      for c in Models._declared_unique_constraints(m)
+        (c.condition === nothing || c.name === nothing || !isempty(c.expressions)) && continue
+        push!(declared_unique, (String(model_table_name(m)), c.name, c.condition))
+      end
     end
   catch e
     (e isa InterruptException || e isa StackOverflowError) && rethrow()
-    @warn("The models file could not be loaded, so no CheckConstraint is pre-counted; the database still checks each one when the migration runs.",
+    @warn("The models file could not be loaded, so no CheckConstraint or partial UniqueConstraint is pre-counted; the database still checks each one when the migration runs.",
           exception = e)
   end
   anchored(f) = f.kind !== :add_check || (f.table, f.column, something(f.condition, "")) in declared
+  # #934: a partial UniqueConstraint's condition the models do not vouch for is not counted at all —
+  # counting the whole table instead would refuse duplicates the constraint never covers — so the
+  # finding is dropped, and the database checks the index when the migration runs.
+  kept = filter(f -> !partial(f) || (f.table, f.column, f.condition) in declared_unique, findings)
   return LossyAlter[anchored(f) ? f :
                     LossyAlter(f.kind, f.table, f.column, f.old_type, f.new_type, f.bound, f.scale, f.rows,
                                f.columns, f.references, nothing, f.handled)
-                    for f in findings]
+                    for f in kept]
 end
 
 # #830: an `:add_check` finding carries the condition the pre-check interpolates into its
@@ -509,14 +519,21 @@ end
 # `CHECK (<condition> /* pormg:check:… */)` in SQLite's rebuild. A header that does not match was
 # edited apart from the plan, and is refused like any other damaged line.
 function _refuse_unplanned_conditions(found::Vector{LossyAlter}, plan_path::AbstractString)::Nothing
-  checks = filter(f -> f.kind === :add_check, found)
+  # #934: a partial UniqueConstraint's condition rides the same way, and must match the plan's own
+  # `CREATE UNIQUE INDEX … WHERE <condition>;`.
+  checks = filter(f -> f.kind === :add_check || (f.kind === :add_composite_unique && f.condition !== nothing), found)
   isempty(checks) && return nothing
   statements, _ = _order_statements(_read_migration_plan(plan_path))
   for f in checks
-    pg, sl = "CHECK ($(f.condition))", "CHECK ($(f.condition) /* "
-    any(s -> occursin(pg, s) || occursin(sl, s), statements) && continue
+    planned = if f.kind === :add_check
+      pg, sl = "CHECK ($(f.condition))", "CHECK ($(f.condition) /* "
+      any(s -> occursin(pg, s) || occursin(sl, s), statements)
+    else
+      any(s -> occursin("CREATE UNIQUE INDEX", s) && occursin(" WHERE $(f.condition);", s), statements)
+    end
+    planned && continue
     throw(InvalidMigrationError(
-      "Migration plan '$(basename(plan_path))': a `$(strip(LOSSY_ALTER_HEADER))` line of kind `add_check` " *
+      "Migration plan '$(basename(plan_path))': a `$(strip(LOSSY_ALTER_HEADER))` line of kind `$(f.kind)` " *
       "names a condition no statement in the plan adds (constraint $(repr(f.column)) on $(repr(f.table))). " *
       "Regenerate the plan with makemigrations()."))
   end
@@ -584,7 +601,9 @@ function _parse_lossy_alter_header(body::AbstractString, file::AbstractString)::
   end
   return LossyAlter(kind, fields["table"], fields["column"], fields["old"], fields["new"];
                     bound = bound, scale = scale, columns = members, references = references,
-                    condition = kind === :add_check ? fields["condition"] : nothing, handled = handled)
+                    condition = kind === :add_check ? fields["condition"] :
+                                kind === :add_composite_unique ? get(fields, "condition", nothing) : nothing,
+                    handled = handled)
 end
 
 # #897: what counts as an ATTEMPT at the `handled` field — any case and spacing as a key, or a
@@ -764,7 +783,9 @@ ALTER would fail on — not an estimate:
 - `:add_not_null` — every row: the column does not exist yet, and a NOT NULL column with no default
   has nothing to put in any of them (#829).
 - `:add_unique`, `:add_composite_unique` — every row in a group of two or more equal non-NULL
-  values (tuples), since a NULL is distinct from every value on both engines (#830).
+  values (tuples), since a NULL is distinct from every value on both engines (#830). A partial
+  `UniqueConstraint` counts only among the rows its condition is TRUE for (#934) — a NULL condition
+  leaves a row out of a partial index on both engines, and `AND (…)` drops it the same way.
 - `:add_primary_key` — the same duplicates, plus the NULLs on PostgreSQL, which makes a key column
   NOT NULL. SQLite's non-`INTEGER` primary key accepts NULL, and its `INTEGER PRIMARY KEY` fills one
   with a rowid, so NULLs fail it only through NOT NULL — which is `:set_not_null`'s finding.
@@ -789,15 +810,18 @@ function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
   f.kind === :add_not_null && return ("SELECT COUNT(*) AS n FROM \"$table\"", Any[])
   # The rows in duplicate groups, as one integer on both engines (PostgreSQL's `SUM` of a count is
   # `numeric`).
-  duplicates(cols) = "SELECT COALESCE(SUM(n), 0) AS n FROM (SELECT COUNT(*) AS n FROM \"$table\" WHERE " *
-                     join(("$c IS NOT NULL" for c in cols), " AND ") * " GROUP BY $(join(cols, ", ")) " *
-                     "HAVING COUNT(*) > 1) AS pormg_duplicates"
+  # #934: a partial UniqueConstraint counts only the rows its condition matches — the condition is
+  # interpolated, as a CHECK's is, and only once `_anchor_check_conditions` found it in the models.
+  duplicates(cols; where = nothing) =
+    "SELECT COALESCE(SUM(n), 0) AS n FROM (SELECT COUNT(*) AS n FROM \"$table\" WHERE " *
+    join(("$c IS NOT NULL" for c in cols), " AND ") * (where === nothing ? "" : " AND ($(where))") *
+    " GROUP BY $(join(cols, ", ")) HAVING COUNT(*) > 1) AS pormg_duplicates"
   if f.kind === :add_unique || (f.kind === :add_primary_key && conn isa PormGSQLite)
     return ("SELECT CAST(($(duplicates([col]))) AS BIGINT) AS n", Any[])
   elseif f.kind === :add_primary_key
     return ("SELECT CAST(($(duplicates([col]))) + (SELECT COUNT(*) FROM \"$table\" WHERE $col IS NULL) AS BIGINT) AS n", Any[])
   elseif f.kind === :add_composite_unique
-    return ("SELECT CAST(($(duplicates([q(c) for c in f.columns]))) AS BIGINT) AS n", Any[])
+    return ("SELECT CAST(($(duplicates([q(c) for c in f.columns]; where = f.condition))) AS BIGINT) AS n", Any[])
   elseif f.kind === :add_check
     # Interpolated, and only here — and only a condition the models file declares: `dry_run` and
     # `migrate` pass every finding through `_anchor_check_conditions`, which strips any other, and

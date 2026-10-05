@@ -76,14 +76,20 @@ class Servidor(models.Model):
         constraints = [
             # IMPORTED. `lotacao` resolves to the imported `lotacao_id` column.
             models.UniqueConstraint(fields=["cpf", "lotacao"], name="uniq_servidor_cpf_lotacao"),
-            # REJECTED — a PARTIAL unique index. Imported unconditionally it would start rejecting
-            # rows the live database accepts, which is silent data loss on write.
+            # IMPORTED (#934) — a PARTIAL unique index, its Q() through the CheckConstraint
+            # translator: condition = "\"ativo\"".
             models.UniqueConstraint(
                 fields=["apelido"], condition=Q(ativo=True), name="uniq_apelido_ativo"
             ),
-            # REJECTED — an expression constraint. Django indexes lower(apelido); PormG would index
-            # apelido, which is a different index wearing the same name.
+            # IMPORTED (#934) — a FUNCTIONAL unique index, in Django's own SQL spelling.
             models.UniqueConstraint(Lower("apelido"), name="uniq_apelido_lower"),
+            # REJECTED — a condition outside the translated set. Imported unconditionally it would
+            # start rejecting rows the live database accepts, which is silent data loss on write.
+            models.UniqueConstraint(
+                fields=["cpf"], condition=Q(apelido__startswith="A"), name="uniq_cpf_apelido_a"
+            ),
+            # REJECTED — `deferrable=` moves the check to commit time, which PormG cannot declare.
+            models.UniqueConstraint(fields=["cpf"], deferrable=models.Deferrable.DEFERRED, name="uniq_cpf_deferred"),
             # REJECTED — no PormG equivalent at all.
             models.CheckConstraint(check=Q(cpf__regex=r"^\d{11}$"), name="chk_cpf_digitos"),
         ]

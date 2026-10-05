@@ -708,7 +708,8 @@ end
 # `,` inside a literal splitting nothing. A partial index over plain columns keeps its columns and
 # carries `pg_get_expr(indpred)` as its condition. A NULLS placement is part of a text
 # member's words, so it makes the index a text one too (`expressions = ("grid NULLS FIRST",)`). A UNIQUE partial or functional
-# index stays unread (UniqueConstraint declares neither), and so does a definition whose split
+# index is read too since #934 (UniqueConstraint declares both; until then they were the refused
+# rows), while a unique one over a DESC column stays unread, and so does a definition whose split
 # disagrees with the key-column count. The query admits the shapes at arity 1 and keeps the db_index
 # CTE's `indpred IS NULL`.
 # Mutation gate: make `_index_definition_elements` return `nothing` and every text index vanishes
@@ -749,20 +750,28 @@ end
       def = "CREATE INDEX ix_part_nulls ON public.result USING btree (raceid, points DESC NULLS LAST) WHERE grid > 0")
   add("ix_nulls_first", ["grid"]; tbl = "result", opt = 2,
       def = "CREATE INDEX ix_nulls_first ON public.result USING btree (grid NULLS FIRST)")
-  # Refused.
+  # Read since #934: a unique partial and a unique functional index are `UniqueConstraint(condition =
+  # …)` / `UniqueConstraint(expressions = …)`. They were the refused rows until then.
   add("ux_part", ["raceid", "driverid"]; tbl = "result", unique = true, pred = "grid > 0",
       def = "CREATE UNIQUE INDEX ux_part ON public.result USING btree (raceid, driverid) WHERE grid > 0")
   add("ux_lower", ["?"]; unique = true, expr = true, coll = (100, 0),
       def = "CREATE UNIQUE INDEX ux_lower ON public.driver USING btree (lower(surname::text))")
+  # Refused.
   add("ix_misread", ["?", "dob"]; expr = [true, false], coll = (100, 0),
       def = "CREATE INDEX ix_misread ON public.driver USING btree (lower(surname::text))")
+  # A UNIQUE partial index over a DESC column: `UniqueConstraint(fields = …)` has no direction.
+  add("ux_desc_part", ["raceid"]; tbl = "result", unique = true, opt = 3, pred = "grid > 0",
+      def = "CREATE UNIQUE INDEX ux_desc_part ON public.result USING btree (raceid DESC) WHERE grid > 0")
   PG161_ROWS[] = DataFrame(rows)
 
   out = Migrations._pg_composite_indexes(CompositeMockPg161())
   driver = Dict(lc.name => lc for lc in out["driver"])
   result = Dict(lc.name => lc for lc in out["result"])
-  @test sort(collect(keys(driver))) == ["ix_coll", "ix_gin_text", "ix_literal", "ix_lower", "ix_nulls_text"]
-  @test sort(collect(keys(result))) == ["ix_nulls_first", "ix_part", "ix_part_nulls", "ix_part_one"]
+  @test sort(collect(keys(driver))) == ["ix_coll", "ix_gin_text", "ix_literal", "ix_lower", "ix_nulls_text", "ux_lower"]
+  @test sort(collect(keys(result))) == ["ix_nulls_first", "ix_part", "ix_part_nulls", "ix_part_one", "ux_part"]
+  @test driver["ux_lower"].unique && driver["ux_lower"].expressions == ["lower(surname::text)"]
+  @test result["ux_part"].unique && result["ux_part"].columns == ["raceid", "driverid"] &&
+        result["ux_part"].condition == "grid > 0"
 
   @test driver["ix_lower"].expressions == ["lower(surname::text)"] && isempty(driver["ix_lower"].columns)
   @test driver["ix_coll"].expressions == ["surname COLLATE \"C\""]

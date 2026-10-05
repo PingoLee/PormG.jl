@@ -167,6 +167,53 @@ CREATE UNIQUE INDEX "uniq_constructor_year"
 Adding, removing or changing a constraint later is planned like any other schema change — see
 [Changing composites on an existing table](#Changing-composites-on-an-existing-table).
 
+### Partial and functional unique constraints
+
+Django's `UniqueConstraint` also takes a `condition` and expressions, and so does PormG's — the SQL
+text of an [expression or partial index](#Expression-and-partial-indexes), made unique:
+
+```julia
+Result = Models.Model("result",
+  resultid = Models.IDField(),
+  raceid   = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+  position = Models.IntegerField(null=true),
+  constraints = [
+    # one finisher per position in a race — retirements (no position) aside
+    Models.UniqueConstraint(fields=("raceid", "position"), condition="position IS NOT NULL",
+                            name="result_one_per_position"),
+  ],
+)
+
+Driver = Models.Model("driver",
+  driverid = Models.IDField(),
+  code     = Models.CharField(max_length=3, null=true),
+  constraints = [
+    # "HAM" and "ham" are the same driver code
+    Models.UniqueConstraint(expressions=("lower(code)",), name="driver_code_ci_uniq"),
+  ],
+)
+```
+
+```sql
+CREATE UNIQUE INDEX "result_one_per_position" ON "result" ("raceid", "position") WHERE position IS NOT NULL;
+COMMENT ON INDEX "result_one_per_position" IS 'pormg:index:…';
+
+CREATE UNIQUE INDEX "driver_code_ci_uniq" ON "driver" (lower(code));
+COMMENT ON INDEX "driver_code_ci_uniq" IS 'pormg:index:…';
+```
+
+The text follows the `Index` rules exactly: `fields` or `expressions`, not both; a **`name`** is
+required; the SQL is checked only for what would change the statement it lands in; both engines
+support both kinds. It is owned the same way too — through the hash of its text in the
+`pormg:index:<hash>` marker — so changing the condition or an expression is a drop and a create,
+and a hand-made unique partial or functional index is adopted by a declaration of its own text and
+never planned away undeclared.
+
+`migrate` counts a new partial constraint's duplicates **among the rows its condition matches** before
+it runs, as it does for a plain one. A functional one is not counted ahead of time — it has no
+columns to group by — so duplicates surface as the database's own error when the plan runs, which
+rolls the migration back.
+
 ## Composite Indexes (`Meta.indexes`)
 
 A plain single-column index is a field option (`db_index=true`). To index a combination of **two or
@@ -450,8 +497,8 @@ matches a live index built with that default.
 
     Indexes PormG cannot reproduce are never read, so they are never dropped either: an access
     method other than the six above, `INCLUDE (…)` on a unique index, storage parameters on an advanced index (`WITH (fastupdate = off)`),
-    `NULLS NOT DISTINCT`, a `DEFERRABLE` constraint, a unique index with a method, direction,
-    operator class, expression or condition, and an invalid index (which
+    `NULLS NOT DISTINCT`, a `DEFERRABLE` constraint, a unique index with a method, direction or
+    operator class (a unique expression or condition is a `UniqueConstraint`, read like any other), and an invalid index (which
     [`check`](migrations/workflow.md#Finding-Invalid-Indexes) reports). The
     [PostgreSQL guide](postgres.md#Production-notes) lists them. A **one-column non-unique** index
     with one of those properties is skipped the same way, rather than read as a `db_index`, so it is

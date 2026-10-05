@@ -477,18 +477,21 @@ end
       fetch(pool, "CREATE INDEX ix_expr ON t347(lower(c), d);")
       fetch(pool, "CREATE INDEX ix_desc ON t347(c DESC, d);")
       fetch(pool, "CREATE INDEX ix_coll ON t347(c COLLATE NOCASE, d);")
-      # #29 part 2: a UNIQUE partial or functional index is still never read — `UniqueConstraint`
-      # declares neither a condition nor an expression.
+      # #934: a UNIQUE partial or functional index is read — `UniqueConstraint(condition = …,
+      # expressions = …)` declares both. (Until #934 these two were never read.) A UNIQUE one over a
+      # DESC column still is not: `UniqueConstraint(fields = …)` has no direction.
       fetch(pool, "CREATE UNIQUE INDEX ux_part ON t347(e, f) WHERE e IS NOT NULL;")
       fetch(pool, "CREATE UNIQUE INDEX ux_expr ON t347(lower(e), f);")
+      fetch(pool, "CREATE UNIQUE INDEX ux_desc ON t347(a DESC, g);")
 
       idx = _sqlite_composite_indexes(pool, :t347)
       byname = Dict(lc.name => lc for lc in idx)
       names = collect(keys(byname))
 
-      # Exactly eight survive every filter. The table-level UNIQUE's name is SQLite's, not ours.
+      # Exactly ten survive every filter. The table-level UNIQUE's name is SQLite's, not ours.
       auto = only(filter(n -> startswith(n, "sqlite_autoindex_t347_"), names))
-      @test sort(names) == sort(["ix_ba", "ix_coll", "ix_desc", "ix_expr", "ix_part", "ux_cd", "ux_solo", auto])
+      @test sort(names) == sort(["ix_ba", "ix_coll", "ix_desc", "ix_expr", "ix_part", "ux_cd", "ux_expr",
+                                 "ux_part", "ux_solo", auto])
 
       # Column ORDER is the index's identity, and it is DECLARED order, not table order. `b` comes
       # after `a` in the table, so a reader aggregating by attribute would return ["a","b"] here —
@@ -515,7 +518,12 @@ end
       @test byname["ix_expr"].expressions == ["lower(c)", "d"] && isempty(byname["ix_expr"].columns)
       @test !PormG.Migrations.composite_is_owned(byname["ix_part"])
       @test !PormG.Migrations.composite_is_owned(byname["ix_expr"])
-      @test !("ux_part" in names) && !("ux_expr" in names)
+      # #934: the unique ones the same way, unique — and unmarked, so hand-made too.
+      @test (byname["ux_part"].columns, byname["ux_part"].condition, byname["ux_part"].unique) ==
+            (["e", "f"], "e IS NOT NULL", true)
+      @test byname["ux_expr"].expressions == ["lower(e)", "f"] && byname["ux_expr"].unique
+      @test !PormG.Migrations.composite_is_owned(byname["ux_part"])
+      @test !("ux_desc" in names)
       # The two shapes `pragma_index_info` cannot even see, which is why this reader uses `xinfo`.
       # Read through `info`, both would come back as a plain ascending BINARY index and regenerate as
       # one. Since #29 a DESC key is declarable (`Models.Index(fields = ["-c", "d"])`), so it is read
@@ -547,7 +555,11 @@ end
       # #161: the three unique shapes come back as `UniqueConstraint`s. Without this an inspectdb'd
       # models file would declare none of them, and the first `makemigrations` — which now drops an
       # undeclared composite — would plan their removal.
-      ucs = Dict(uc.fields => uc for uc in m.cache["unique_constraints"]["constraints"])
+      all_ucs = m.cache["unique_constraints"]["constraints"]
+      # #934: the partial and functional ones come back with their text, under their live names.
+      @test only(uc for uc in all_ucs if uc.name == "ux_part").condition == "e IS NOT NULL"
+      @test only(uc for uc in all_ucs if uc.name == "ux_expr").expressions == ["lower(e)", "f"]
+      ucs = Dict(uc.fields => uc for uc in all_ucs if !PormG.Models._unique_holds_text(uc))
       @test sort(collect(keys(ucs))) == sort([["c", "d"], ["f", "e"], ["g"]])
       @test ucs[["c", "d"]].name == "ux_cd"
       @test ucs[["g"]].name == "ux_solo"

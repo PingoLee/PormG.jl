@@ -744,7 +744,10 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
                                   # `UniqueConstraint` records into. `nothing` for a table this plan
                                   # creates — it is empty, so nothing can fail.
                                   live_columns = nothing,
-                                  lossy_alters::Vector{LossyAlter} = LossyAlter[])::Set{String}
+                                  lossy_alters::Vector{LossyAlter} = LossyAlter[],
+                                  # #934: the live columns this plan retypes, which a partial
+                                  # UniqueConstraint's condition cannot be counted over.
+                                  retyped::Set{String} = Set{String}())::Set{String}
   declared = declared_composites(model)
   table = String(model_table_name(model))
   declared_cols = _model_physical_columns(model)
@@ -803,11 +806,16 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
       # #830: a UniqueConstraint the table does not have yet fails on duplicate tuples already there.
       # Counted under the catalog's column names — a member renamed by this plan under its old one, a
       # member it adds under none (then there is no finding: the column cannot be counted).
-      if d.unique && !d.auto && live_columns !== nothing
+      # #934: a partial one counts only the rows its condition matches — when every column the
+      # condition names can be counted now (`_sql_text_countable`, the CHECK rule); a functional one
+      # has no columns to group by, so no finding, and the database checks it when the plan runs.
+      if d.unique && !d.auto && live_columns !== nothing && isempty(d.expressions) &&
+         (d.condition === nothing || _sql_text_countable(d.condition, model, live_columns, retyped))
         live_name(c) = something(findfirst(==(c), column_renames),
                                  c in live_columns ? c : nothing, Some(nothing))
         append!(lossy_alters, _lossy_composite_unique(String(catalog_table), d.name,
-                                                      Union{String, Nothing}[live_name(c) for c in d.columns]))
+                                                      Union{String, Nothing}[live_name(c) for c in d.columns];
+                                                      condition = d.condition))
       end
       continue
     end
@@ -902,8 +910,11 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
       _configure_order_dict_migration_plan(migration_plan, model_name, "Create many-to-many unique index",
         Dialect.create_unique_index(conn, quoted(d.name), quoted(table), cols; if_not_exists = false))
     elseif d.unique
+      # #934: a partial or functional one carries its text and the hashed marker; a plain one neither.
       _configure_order_dict_migration_plan(migration_plan, model_name, "Create unique constraint: $(d.name)",
-        Dialect.create_unique_index(conn, quoted(d.name), quoted(table), cols; if_not_exists = false))
+        Dialect.create_unique_index(conn, quoted(d.name), quoted(table), cols; if_not_exists = false,
+                                    expressions = d.expressions, condition = d.condition,
+                                    marker = composite_marker(d)))
     else
       # "Create index…" puts it in `_order_statements`' last bucket, after every same-table rebuild
       # (#152) — correct, since a CREATE INDEX only needs its table to exist.
@@ -932,14 +943,14 @@ end
 # #29 part 2: a hand-made functional or partial index can be adopted only by declaring the catalog's
 # own text, which PostgreSQL rewrites — so the refusal hands that declaration over, ready to paste.
 function _adoption_hint(lc::LiveComposite)::String
-  composite_holds_text(lc) && !lc.unique || return ""
+  composite_holds_text(lc) || return ""
   # Catalog text the declaration validator refuses (#934 — a literal ending in a backslash, say) would
   # make the pasted declaration throw: advice that errors when followed. Say why instead.
   texts = lc.condition === nothing ? lc.expressions : [lc.expressions; lc.condition]
   all(is_valid_db_default_sql, texts) ||
     return ". PormG cannot adopt it: its definition holds SQL text a declaration refuses (see " *
            "`Models.Index`), so give the declaration another name, or drop the index by hand"
-  members =isempty(lc.expressions) ?
+  members = isempty(lc.expressions) ?
     "fields = ($(join((repr((d ? "-" : "") * c) for (c, d) in zip(lc.columns, lc.descending)), ", ")),)" :
     "expressions = ($(join((repr(e) for e in lc.expressions), ", ")),)"
   cond = lc.condition === nothing ? "" : ", condition = $(repr(lc.condition))"
@@ -947,8 +958,10 @@ function _adoption_hint(lc::LiveComposite)::String
   opcs = isempty(lc.expressions) && !all(lc.opclass_default) ?
     ", opclasses = ($(join((d ? "nothing" : repr(o) for (o, d) in zip(lc.opclasses, lc.opclass_default)), ", ")),)" : ""
   inc = isempty(lc.include) ? "" : ", include = ($(join((repr(c) for c in lc.include), ", ")),)"
-  return ". To keep it as PormG's own instead, declare it with the database's text: " *
-         "Models.Index($(members)$(cond), name = $(repr(lc.name))$(method)$(opcs)$(inc))" *
+  # #934: a unique one is a `UniqueConstraint`, which has no method, classes or payload to add.
+  decl = lc.unique ? "Models.UniqueConstraint($(members)$(cond), name = $(repr(lc.name)))" :
+                     "Models.Index($(members)$(cond), name = $(repr(lc.name))$(method)$(opcs)$(inc))"
+  return ". To keep it as PormG's own instead, declare it with the database's text: " * decl *
          (isempty(lc.expressions) ? " (the columns as the database names them — inspectdb writes the field names)" : "")
 end
 
@@ -1156,9 +1169,15 @@ end
 function _refuse_stale_check_conditions(model::PormGModel, renames::Dict{String, String},
                                         live_columns)::Nothing
   declared = Models.declared_check_constraints(model)
-  text_indexes = Models.Index[ix for ix in get(get(model.cache, "composite_indexes", Dict{String, Any}()),
-                                               "indexes", Models.Index[])
-                              if Models._index_holds_text(ix)]
+  # Every text-holding composite as (kind, name, expressions, condition): an `Index` (#29 part 2) or,
+  # since #934, a partial or functional `UniqueConstraint`.
+  text_indexes = Tuple{String, String, Vector{String}, Union{String, Nothing}}[
+    ("Index", String(ix.name), ix.expressions, ix.condition)
+    for ix in get(get(model.cache, "composite_indexes", Dict{String, Any}()), "indexes", Models.Index[])
+    if Models._index_holds_text(ix)]
+  for uc in Models._declared_unique_constraints(model)
+    Models._unique_holds_text(uc) && push!(text_indexes, ("UniqueConstraint", String(uc.name), uc.expressions, uc.condition))
+  end
   isempty(declared) && isempty(text_indexes) && return nothing
   declared_cols = Set{String}(lowercase(c) for c in _model_physical_columns(model))
   # Each live column the declared model no longer has ⇒ what it was renamed to, or `nothing` if removed.
@@ -1186,17 +1205,17 @@ function _refuse_stale_check_conditions(model::PormGModel, renames::Dict{String,
   # the marker's hash still matches, so the stale declaration would surface only when something
   # re-creates the index. Removed: both engines drop or refuse the index with the column, and the
   # declaration would then plan to re-create it over a column that is gone.
-  for ix in text_indexes
-    texts = ix.condition === nothing ? ix.expressions : vcat(ix.expressions, ix.condition)
+  for (kind, ixname, exprs, cond) in text_indexes
+    texts = cond === nothing ? exprs : vcat(exprs, cond)
     for (k, text) in enumerate(texts)
       for t in _sql_text_column_tokens(text), (old, new) in gone
         (t.quoted ? t.name == old : lowercase(t.name) == lowercase(old)) || continue
-        what = k > length(ix.expressions) ? "condition" : "expression $(repr(text))"
+        what = k > length(exprs) ? "condition" : "expression $(repr(text))"
         throw(InvalidMigrationError(new === nothing ?
-          "Index '$(ix.name)' on '$(model_table_name(model))' names column '$(old)' in its $(what), " *
-          "which this migration removes. Take it out of the index, or remove the Index — the database " *
+          "$(kind) '$(ixname)' on '$(model_table_name(model))' names column '$(old)' in its $(what), " *
+          "which this migration removes. Take it out of the index, or remove the $(kind) — the database " *
           "drops (PostgreSQL) or refuses to drop (SQLite) a column an index still names." :
-          "Index '$(ix.name)' on '$(model_table_name(model))' still names column '$(old)' in its $(what), " *
+          "$(kind) '$(ixname)' on '$(model_table_name(model))' still names column '$(old)' in its $(what), " *
           "which this migration renames to '$(new)'. Update the index's text to the new name — PormG " *
           "does not rewrite your SQL, and the declaration would otherwise re-create the index over a " *
           "column that no longer exists."))
@@ -1234,11 +1253,14 @@ end
 # cannot see. Names are read with the same token scan `_refuse_stale_check_conditions` uses: a token
 # followed by `(` is a function, bare tokens compare case-insensitively, and a token that names no
 # declared column (a keyword, a literal's neighbour) is ignored.
-function _check_countable(c::Models.CheckConstraint, model::PormGModel, live::LiveTable,
-                          retyped::Set{String})::Bool
+_check_countable(c::Models.CheckConstraint, model::PormGModel, live::LiveTable, retyped::Set{String})::Bool =
+  _sql_text_countable(c.condition, model, keys(live.columns), retyped)
+
+# The same question for any condition text — since #934 also a partial `UniqueConstraint`'s `WHERE`,
+# which the duplicate count filters by.
+function _sql_text_countable(text::AbstractString, model::PormGModel, live_cols, retyped::Set{String})::Bool
   declared_cols = _model_physical_columns(model)
-  live_cols = keys(live.columns)
-  for t in _sqlite_identifier_tokens(c.condition)
+  for t in _sqlite_identifier_tokens(text)
     t.called && continue
     for name in declared_cols
       (t.quoted ? t.name == name : lowercase(t.name) == lowercase(name)) || continue
@@ -1787,7 +1809,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
                                                 catalog_table = catalog_table,
                                                 targets = composite_targets,
                                                 live_columns = Set{String}(keys(live.columns)),
-                                                lossy_alters = lossy_alters)
+                                                lossy_alters = lossy_alters, retyped = retyped)
 
   # #830: each CHECK this plan adds fails on the rows already there whose condition is false — on
   # both engines (SQLite adds it through the rebuild `_plan_check_drops!` registered).

@@ -957,6 +957,85 @@ end
     end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Lossy ALTERs (#934): a partial UniqueConstraint counts only the rows its condition matches
+# Counting the whole table would refuse duplicates the constraint never covers, so the condition rides
+# in the header — interpolated into the count only when the plan's own CREATE UNIQUE INDEX carries
+# it and the models file still declares it (the CHECK rule). A condition the models no longer vouch
+# for drops the finding: the database checks the index when the plan runs. A functional one has no
+# columns to group by, so it records no finding at all.
+# Mutation gate: drop `where = f.condition` from `_precheck_sql` and the end-to-end count is 3, not 2.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#934: a partial UniqueConstraint's duplicates are counted under its condition" begin
+    comp = LossyAlter(:add_composite_unique, "race934", "uq", "", ""; columns = ["code"], condition = "laps > 0")
+    @test _precheck_sql(SL_LA803, comp) ==
+          ("SELECT CAST((SELECT COALESCE(SUM(n), 0) AS n FROM (SELECT COUNT(*) AS n FROM \"race934\" " *
+           "WHERE \"code\" IS NOT NULL AND (laps > 0) GROUP BY \"code\" HAVING COUNT(*) > 1) " *
+           "AS pormg_duplicates) AS BIGINT) AS n", Any[])
+
+    # The header round-trips it, and a condition no planned CREATE UNIQUE INDEX carries is refused.
+    dir = mktempdir()
+    try
+        plan = OrderedDict{Symbol, OrderedDict{String, String}}(
+            :race934 => OrderedDict{String, String}(
+                "Create unique constraint: uq" =>
+                    "CREATE UNIQUE INDEX \"uq\" ON \"race934\" (\"code\" /* pormg:index:0123456789abcdef */) WHERE laps > 0;"))
+        PormG.Generator.generate_migration_plan("p.jl", plan, dir; lossy_alters = [comp])
+        @test _plan_lossy_alters(joinpath(dir, "p.jl")) == [comp]
+        text = read(joinpath(dir, "p.jl"), String)
+        write(joinpath(dir, "tampered.jl"), replace(text, "condition=laps > 0" => "condition=laps > 0 OR 1 = 1"))
+        err = try _plan_lossy_alters(joinpath(dir, "tampered.jl")); nothing catch e; e end
+        @test err isa InvalidMigrationError
+        @test err !== nothing && occursin("kind `add_composite_unique` names a condition no statement", sprint(showerror, err))
+    finally
+        rm(dir; recursive = true, force = true)
+    end
+end
+
+@testset "SQLite #934: a partial UniqueConstraint is counted under its condition, refused, then applies" begin
+    _la803_with_key("la934part") do key, pool
+        # MON twice among the rows the condition covers (laps > 0) — two duplicates. SPA twice, and a
+        # third MON, among the rows it does not cover — never counted.
+        fetch(pool, "INSERT INTO race803 (name, code, laps) VALUES ('Monaco', 'MON', 78), ('Monte Carlo', 'MON', 77), " *
+                    "('Spa', 'SPA', 0), ('Spa 2', 'SPA', 0), ('Monaco 2020', 'MON', NULL);")
+        write(joinpath(key, "models.jl"),
+              _la830_models("Models.UniqueConstraint(fields = (\"code\",), condition = \"laps > 0\", name = \"race803_code_raced\")"))
+        err = _la830_refused(key, pool, :add_composite_unique, 2)
+        @test err !== nothing && only(err.findings).condition == "laps > 0"
+        fetch(pool, "UPDATE race803 SET laps = 0 WHERE name = 'Monte Carlo';")
+        @test _la830_applies(key)
+        # The index PormG built is the partial one, and it enforces exactly that.
+        ddl = only(DataFrame(fetch(pool, "SELECT sql FROM sqlite_master WHERE name = 'race803_code_raced'")).sql)
+        @test occursin("WHERE laps > 0", ddl) && occursin("pormg:index:", ddl)
+        @test (try fetch(pool, "INSERT INTO race803 (name, code, laps) VALUES ('X', 'SPA', 0);"); true catch; false end)
+        @test (try fetch(pool, "INSERT INTO race803 (name, code, laps) VALUES ('Y', 'MON', 5);"); true catch; false end) == false
+    end
+end
+
+@testset "SQLite #934: a functional UniqueConstraint records no finding; an unvouched condition is not counted" begin
+    _la803_with_key("la934fn") do key, pool
+        fetch(pool, "INSERT INTO race803 (name, code) VALUES ('Monaco', 'mon'), ('Spa', 'SPA');")
+        write(joinpath(key, "models.jl"),
+              _la830_models("Models.UniqueConstraint(expressions = (\"lower(code)\",), name = \"race803_code_ci\")"))
+        _la803_quiet(() -> Migrations.makemigrations(key; interactive = false))
+        @test isempty(_plan_lossy_alters(joinpath(key, "migrations", "pending_migrations.jl")))
+        @test _la830_applies(key)
+    end
+    _la803_with_key("la934anchor") do key, pool
+        write(joinpath(key, "models.jl"),
+              _la830_models("Models.UniqueConstraint(fields = (\"code\",), condition = \"laps > 0\", name = \"race803_code_raced\")"))
+        _la803_quiet(() -> Migrations.makemigrations(key; interactive = false))
+        found = _plan_lossy_alters(joinpath(key, "migrations", "pending_migrations.jl"))
+        @test only(found).condition == "laps > 0"
+        @test only(Migrations._anchor_check_conditions(found, PormG.config[key])).condition == "laps > 0"
+        # The models file changed since the plan: the header's condition is no longer vouched for, so
+        # the finding is dropped rather than counted over the whole table.
+        write(joinpath(key, "models.jl"),
+              _la830_models("Models.UniqueConstraint(fields = (\"code\",), condition = \"laps > 1\", name = \"race803_code_raced\")"))
+        @test isempty(_la803_quiet(() -> Migrations._anchor_check_conditions(found, PormG.config[key])))
+    end
+end
+
 @testset "SQLite #830: a CheckConstraint some rows fail is counted and refused, then applies" begin
     _la803_with_key("la830ck") do key, pool
         fetch(pool, "INSERT INTO race803 (name, laps) VALUES ('Monaco', 78), ('Spa', -1), ('Monza', NULL);")

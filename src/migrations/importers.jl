@@ -4959,9 +4959,25 @@ Both halves are load-bearing, and neither is a stand-in for the other:
 
 Deliberately NOT a check that the constructed value `isa PormGField`: finding that out means calling
 the constructor, which is the throw this exists to avoid.
+
+A third half since #28: [`_DJANGO_FIELDS_NOT_IMPORTED`](@ref), the fields `Models` defines but this
+importer cannot construct from a Django call.
 """
 _is_pormg_field_type(t::AbstractString)::Bool =
+  !(t in _DJANGO_FIELDS_NOT_IMPORTED) &&
   any(sfx -> endswith(t, sfx), _FIELD_NAME_SUFFIXES) && isdefined(Models, Symbol(t))
+
+"""
+    _DJANGO_FIELDS_NOT_IMPORTED
+
+Field types `Models` defines that the importer still reports and skips (#410's path) instead of
+constructing. `ArrayField` (#28) takes its element field as a positional argument —
+`ArrayField(models.CharField(max_length = 10))` — and `parse_field_args` reads only `key = value`
+keywords, so constructing it would call `ArrayField(; null = true)` with no element and fail. Reading
+the nested call is a follow-up; until then the column is named in the report, like any type PormG has
+no field for.
+"""
+const _DJANGO_FIELDS_NOT_IMPORTED = ("ArrayField",)
 
 # `class_name` seeds `enum_scopes` — the key vector into `enums`, which is keyed by `(app_index,
 # BARE Python class name)` — so it must not be app-qualified; the app is already the `Int`.

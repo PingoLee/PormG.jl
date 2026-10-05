@@ -66,6 +66,9 @@ Field attributes no DDL path expresses, so a difference in one can never be a co
     constructor default no matter what was declared (#325, #334).
   * `through`, `db_table`, `source_field`, `target_field` — `sManyToManyField` only, which is not a
     physical column at all (`column_spec` refuses it).
+  * `size` — `ArrayField`'s element bound (#28). PostgreSQL neither enforces a declared array size nor
+    keeps it (`format_type` prints `integer[3]` as `integer[]`), so PormG checks it on write and the
+    catalog can never report it back.
 
 `on_update`, `deferrable` and `initially_deferred` were on this list from #507 until **#516** removed
 the three keywords outright. There is no slot left to classify — they are gone from `sForeignKey` and
@@ -74,7 +77,7 @@ the three keywords outright. There is no slot left to classify — they are gone
 const NON_DB_ATTRS = (:blank, :choices, :db_index, :editable, :verbose_name, :related_name,
                       :how, :formatter, :protocol, :unpack_ipv4,
                       :auto_now, :auto_now_add, :auto_add, :auto_hash,
-                      :through, :db_table, :source_field, :target_field)
+                      :through, :db_table, :source_field, :target_field, :size)
 
 """
     SCHEMA_ATTRS
@@ -87,9 +90,12 @@ to be compared:
     elsewhere);
   * `to_table` resolves `ForeignKeyRef.table`, the physical parent — it is never compared on its own,
     which is what stopped every foreign key reporting a difference on every run (#360).
+
+`base_field` (`ArrayField`, #28) is read the way `max_length` is: through the rendered type, which
+is the element's type followed by `[]`, so a change of element type or modifier is a type delta.
 """
 const SCHEMA_ATTRS = (:type, :primary_key, :unique, :null, :default, :db_default, :db_column,
-                      :max_length, :max_digits, :decimal_places,
+                      :max_length, :max_digits, :decimal_places, :base_field,
                       :to, :to_table, :pk_field, :on_delete, :db_constraint,
                       :generated, :generated_always, :auto_increment)
 
@@ -123,6 +129,16 @@ end
 
 _arg(args::Vector{Int}, i::Int) = length(args) >= i ? args[i] : nothing
 
+# #28: a trailing `[]` — or `[n]`, or several — marks an array. `format_type` prints every array as
+# its element type and one `[]`, whatever was declared, so the brackets carry nothing to keep.
+const _PG_ARRAY_SUFFIX = r"^(.*?)\s*((?:\[\s*\d*\s*\])+)\s*$"
+
+# The element kinds an `ArrayField` can declare (`Models.array_element_kind`). Any other element — a
+# `smallint[]`, an `inet[]`, a `jsonb[]` — is an array PormG could not have written, and stays
+# `CUnsupported` like every other spelling PormG never renders.
+const _ArrayElementKind = Union{CVarChar, CText, CInt32, CInt64, CFloat64, CDecimal, CBool, CDate,
+                                CDateTime, CUUID}
+
 """
     parse_canonical_type(raw, conn) -> CanonicalType
 
@@ -138,14 +154,22 @@ Every collapse below is FORCED by what `Dialect._get_column_type` writes, never 
 convenience: two spellings collapse only when PormG renders both as the same string, so the
 database genuinely cannot tell them apart. Two spellings PormG writes distinctly must stay
 distinct, or a real declaration change would stop being planned — and a catalog spelling PormG
-never writes (`character(n)`, an array, `bit(n)`) stays `CUnsupported` on purpose, so a declared
+never writes (`character(n)`, an array of an element `ArrayField` cannot declare, `bit(n)`) stays
+`CUnsupported` on purpose, so a declared
 `CharField` no longer silently equates to a `char(8)` column the way the old reverse map made it.
 
 Unrecognised input degrades to `CUnsupported(lowercased raw)`, which compares by that string — the
 behaviour `Dialect._column_signature` had for every type — so an exotic column loses precision, never
 correctness, and never aborts `makemigrations`.
 """
-function parse_canonical_type(raw::AbstractString, ::PormGPostgres)::CanonicalType
+function parse_canonical_type(raw::AbstractString, conn::PormGPostgres)::CanonicalType
+  # Before `_split_rendered_type`, which would read `character varying(10)[]` as the base
+  # `character varying []` with the modifier 10.
+  am = match(_PG_ARRAY_SUFFIX, strip(String(raw)))
+  if am !== nothing
+    element = parse_canonical_type(am[1], conn)
+    return element isa _ArrayElementKind ? CArray(element) : CUnsupported(lowercase(strip(String(raw))))
+  end
   base, args = _split_rendered_type(raw)
   base in ("smallint", "int2")            && return CInt16()
   base in ("integer", "int", "int4", "serial")         && return CInt32()
@@ -1061,11 +1085,11 @@ Every kind a [`LossyAlter`](@ref) can carry, with its class — the closed set, 
 | `:to_time` | PostgreSQL | `:silent` | a timestamp becomes a time, dropping the date |
 | `:drop_timezone` | PostgreSQL | `:silent` | `timestamptz` becomes `timestamp`, dropping the offset |
 | `:text_affinity` | SQLite | `:silent` | text becomes a numeric/boolean column, so `'0042'` stores as `42` |
-| `:text_cast` | PostgreSQL | `:rows` | text becomes a number, boolean, date, timestamp, UUID, JSON or an IP address or network (the plan casts with `USING`), and some values do not parse |
+| `:text_cast` | PostgreSQL | `:rows` | text becomes a number, boolean, date, timestamp, UUID, JSON, an IP address or network, or an array (the plan casts with `USING`) — or an array's element type changes other than by widening (it converts through text) — and some values do not parse |
 | `:host_bits` | PostgreSQL | `:rows` | an IP address (`inet`) becomes a network (`cidr`), and some values have bits set right of their mask (`10.0.0.1/24`) |
 | `:to_boolean` | PostgreSQL | `:silent` | a number becomes a boolean (`USING "c" <> 0`), so every non-zero value becomes `true` |
 | `:drop_default` | PostgreSQL | `:silent` | a `USING` retype must drop a database default the model does not declare, and nothing puts it back |
-| `:no_implicit_cast` | PostgreSQL | `:refused` | the engine has no automatic cast between the two types and the plan writes no `USING` |
+| `:no_implicit_cast` | PostgreSQL | `:refused` | the engine has no automatic cast between the two types and the plan writes no `USING` — since #28, an array becoming a scalar other than text, or a scalar other than text becoming an array |
 
 `:rows` findings are counted before `migrate` runs and refuse the plan when any row would fail;
 `:silent` ones need `destructive = true`; `:refused` ones cannot be applied as planned.
@@ -1074,7 +1098,8 @@ Since #828 every pair `:no_implicit_cast` used to name gets a `USING` (see
 `Dialect._postgres_retype_using`), so the planner no longer records it: text into a parsed type is
 `:text_cast`, a number into a boolean `:to_boolean`, and a boolean into a number nothing at all — `true`
 is 1 and `false` 0. The kind stays, for a plan written before #828, whose SQL has no `USING` and
-which is still refused.
+which is still refused — and #28 gives it live pairs again: an `ArrayField` and a scalar column other
+than text have no conversion PormG would write.
 """
 const LOSSY_ALTER_KINDS = (
   set_not_null       = :rows,
@@ -1168,6 +1193,16 @@ _exceeds(a::Union{Int, Nothing}, b::Int)::Bool = a === nothing || a > b
 # Not the only pairs with a `USING`, though: `inet` → text (#28) and `inet` → `cidr` (#905) have an
 # assignment cast that would change values, so they get one anyway and are not castless.
 function _pg_no_implicit_cast(old::CanonicalType, new::CanonicalType)::Bool
+  # #28, first because it is decided by the array side alone: an array converts to text (an I/O cast,
+  # which is an assignment cast) and to an array whose elements only widen; to anything else it has no
+  # cast at all. Text has no cast to an array either, and no other scalar has one. Only the text and
+  # array pairs get a `USING`, so the rest are refused.
+  if old isa CArray
+    new isa _TextType && return false
+    new isa CArray && return !Dialect._pg_array_element_widens(old.element, new.element)
+    return true
+  end
+  new isa CArray && return true
   old isa _TextType && return new isa Union{_NumericType, CBool, CDate, CDateTime, CUUID, CJSON, CInet, CCidr}
   old isa CBool && return new isa _NumericType
   old isa _NumericType && return new isa CBool
@@ -1328,7 +1363,7 @@ function _lossy_type_alters(old::CanonicalType, new::CanonicalType, ::PormGSQLit
   (old isa _TextType && new isa Union{_NumericType, CBool}) ? [finding(:text_affinity)] : LossyAlter[]
 end
 
-function _lossy_type_alters(old::CanonicalType, new::CanonicalType, ::PormGPostgres, finding)::Vector{LossyAlter}
+function _lossy_type_alters(old::CanonicalType, new::CanonicalType, conn::PormGPostgres, finding)::Vector{LossyAlter}
   if _pg_no_implicit_cast(old, new)
     # The ALTER cannot run at all, so nothing narrower is worth reporting beside it.
     _pg_retype_has_using(old, new) || return [finding(:no_implicit_cast)]
@@ -1336,6 +1371,15 @@ function _lossy_type_alters(old::CanonicalType, new::CanonicalType, ::PormGPostg
     # parse (or overflows it) fails the ALTER — one count covers both. A number into a boolean
     # applies and changes values; a boolean into a number loses nothing.
     old isa _TextType && return [finding(:text_cast)]
+    # #28: an array whose elements change converts through text (see `_postgres_retype_using`): an
+    # element the new type does not parse fails the ALTER, so the rows are counted like text's. The
+    # element changes that apply WITHOUT failing — a scale that rounds, an offset or a time of day
+    # dropped — are the scalar ones, and need the same opt-in.
+    if old isa CArray && new isa CArray
+      silent = filter(f -> f.kind in (:decimal_scale, :to_date, :to_time, :drop_timezone),
+                      _lossy_type_alters(old.element, new.element, conn, finding))
+      return [finding(:text_cast); silent]
+    end
     new isa CBool && return [finding(:to_boolean)]
     return LossyAlter[]
   end
@@ -1542,6 +1586,38 @@ _db_default_from_spec(spec::ColumnSpec, conn::Union{PormGPostgres, PormGSQLite})
     (sqlite = spec.default.sql,)
   end
 
+# #28: the element field of an adopted array column — the bare constructor of the element's kind, as
+# `parse_canonical_type` only produces a `CArray` for an element `ArrayField` can declare. The element
+# keeps the constructor's `null = false`: the catalog has no per-element NOT NULL to read, and NULL
+# elements are then refused on write, as for any declared `ArrayField` that does not opt in. The two
+# modifier-less spellings warn exactly as their scalar arms do, for the same reason.
+function _inspectdb_array_element(kind::CanonicalType, spec::ColumnSpec, table_name::AbstractString,
+                                  conn::PormGPostgres)::PormGField
+  kind isa CInt32 && return Models.IntegerField()
+  kind isa CInt64 && return Models.BigIntegerField()
+  kind isa CFloat64 && return Models.FloatField()
+  kind isa CBool && return Models.BooleanField()
+  kind isa CText && return Models.TextField()
+  kind isa CDate && return Models.DateField()
+  kind isa CUUID && return Models.UUIDField()
+  kind isa CDateTime && return kind.with_timezone ? Models.DateTimeField() : Models.DateTimeField(type = "TIMESTAMP")
+  if kind isa CDecimal
+    (kind.precision !== nothing && kind.scale !== nothing) &&
+      return Models.DecimalField(max_digits = kind.precision, decimal_places = kind.scale)
+    @warn "inspectdb: the array's numeric element type carries no precision, which no DecimalField can " *
+          "declare; emitting the constructor default. The first makemigrations will plan that width." table = string(table_name) column = spec.name type = spec.raw
+    return Models.DecimalField()
+  end
+  if kind isa CVarChar
+    kind.length === nothing || return Models.CharField(max_length = kind.length)
+    @warn "inspectdb: the array's element is a varchar without a length, which no CharField can " *
+          "declare; emitting the constructor default. The first makemigrations will plan that length." table = string(table_name) column = spec.name type = spec.raw
+    return Models.CharField()
+  end
+  # Unreachable while `_ArrayElementKind` and this function list the same kinds.
+  throw(InvalidMigrationError("inspectdb: no ArrayField element declares $(kind) (column $(spec.name) of $(table_name))"))
+end
+
 function _inspectdb_field(spec::ColumnSpec, table_name::AbstractString,
                           conn::Union{PormGPostgres, PormGSQLite}, indexed::Bool, default,
                           db_default = nothing)::PormGField
@@ -1673,6 +1749,8 @@ function _inspectdb_field(spec::ColumnSpec, table_name::AbstractString,
     return Models.GenericIPAddressField(; base...)
   elseif ctype isa CCidr
     return Models.CIDRField(; base...)
+  elseif ctype isa CArray
+    return Models.ArrayField(_inspectdb_array_element(ctype.element, spec, table_name, conn); base...)
   elseif ctype isa CBytes
     bound = findfirst(c -> c isa ByteLengthCheck, spec.checks)
     return bound === nothing ? Models.BinaryField(; base...) :

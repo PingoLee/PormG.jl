@@ -356,6 +356,23 @@ function _d_field_args(f::Models.sManyToManyField)
   return args
 end
 
+# #28: the base field leads, as the constructor's positional argument, rendered by its own `show`.
+# The rest is the diff against `ArrayField(base)` — not against a zero-argument instance, which this
+# constructor cannot build. That construction is safe here: `base` already passed `ArrayField`'s
+# validation once, when `f` was built, and the call is guarded by the caller like every other arm.
+function _d_field_args(f::Models.sArrayField)
+  base = getfield(f, :base_field)
+  args = String[sprint(show, base)]
+  default = Models.ArrayField(base)
+  for slot in fieldnames(typeof(f))
+    slot in (:formatter, :type, :base_field) && continue
+    v = getfield(f, slot)
+    v == getfield(default, slot) && continue
+    push!(args, "$slot=$(_d_value(v))")
+  end
+  return args
+end
+
 function _d_push_relational_args!(args::Vector{String}, f)
   od = getfield(f, :on_delete)
   od === nothing || push!(args, "on_delete=" * _d_func_name(od))
@@ -421,6 +438,22 @@ end
 #
 # Concretely, this is the difference between a card whose every CharField line reads `CharField()` —
 # true, and useless — and one that reads `VARCHAR(250)  null`.
+# A field's declared type tag with its length or precision, the way the database reports it. An
+# `ArrayField` (#28) is its element's type followed by `[]` — its own tag, `ARRAY`, says nothing about
+# what the column holds.
+function _d_declared_type(f)::String
+  f isa Models.sArrayField && return _d_declared_type(getfield(f, :base_field)) * "[]"
+  hasfield(typeof(f), :type) || return ""
+  sqltype = String(getfield(f, :type))
+  if hasfield(typeof(f), :max_length) && getfield(f, :max_length) isa Integer
+    sqltype *= "($(getfield(f, :max_length)))"
+  elseif hasfield(typeof(f), :max_digits) && getfield(f, :max_digits) isa Integer
+    dp = hasfield(typeof(f), :decimal_places) ? getfield(f, :decimal_places) : nothing
+    sqltype *= dp isa Integer ? "($(getfield(f, :max_digits)),$(dp))" : "($(getfield(f, :max_digits)))"
+  end
+  return sqltype
+end
+
 function _d_field_detail(fname::AbstractString, f::Kernel.PormGField)
   try
     parts = String[]
@@ -429,20 +462,7 @@ function _d_field_detail(fname::AbstractString, f::Kernel.PormGField)
     # that in the SQL-type position asserts a column type for a field the table does not have — on a
     # card whose whole premise is "the column as the database holds it". It says where it points and
     # through what instead; the join table is the physical thing, and it is what a reader needs.
-    sqltype = if Models.is_many_to_many_field(f)
-      ""
-    elseif hasfield(typeof(f), :type)
-      String(getfield(f, :type))
-    else
-      ""
-    end
-    # The declared length belongs with the type, the way the database reports it.
-    if hasfield(typeof(f), :max_length) && getfield(f, :max_length) isa Integer
-      sqltype *= "($(getfield(f, :max_length)))"
-    elseif hasfield(typeof(f), :max_digits) && getfield(f, :max_digits) isa Integer
-      dp = hasfield(typeof(f), :decimal_places) ? getfield(f, :decimal_places) : nothing
-      sqltype *= dp isa Integer ? "($(getfield(f, :max_digits)),$(dp))" : "($(getfield(f, :max_digits)))"
-    end
+    sqltype = Models.is_many_to_many_field(f) ? "" : _d_declared_type(f)
     isempty(sqltype) || push!(parts, sqltype)
 
     # A relation says where it points before it says anything else.

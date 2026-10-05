@@ -19,7 +19,7 @@ engine; this file asserts the TABLE's own shape, hermetically. Neither replaces 
 property test would still pass if the table were bypassed entirely, and this one would still pass if
 the renderers never consulted it.
 
-The census (`length(concrete) == 27`) deliberately lives in `test_value_repr_property.jl` only —
+The census (`length(concrete) == 28`) deliberately lives in `test_value_repr_property.jl` only —
 two copies of one census is the allowlist mistake, where the second copy is updated and the first
 quietly stops meaning anything.
 
@@ -255,6 +255,7 @@ const _VRT_KINDS = [
       T === Models.sOneToOneField   ? Models.OneToOneField("Races") :
       T === Models.sManyToManyField ? Models.ManyToManyField("Races") :
       T === Models.sDecimalField    ? Models.DecimalField(max_digits = 8, decimal_places = 3) :
+      T === Models.sArrayField      ? Models.ArrayField(Models.IntegerField()) :   # #28: takes its element
       getfield(Models, Symbol(String(nameof(T))[2:end]))()
 
     seen = Set{PormG.CanonicalType}()
@@ -278,7 +279,8 @@ const _VRT_KINDS = [
     # it — which is precisely why it is the flavour a table method forgets. It gets its own
     # assertion below rather than being quietly folded into this set.
     @test seen == Set([PormG.CDateTime(true), PormG.CDate(), PormG.CTime(), PormG.CInterval(),
-                       PormG.CDecimal(8, 3)])   # #648 — the `sDecimalField` instance above is (8, 3)
+                       PormG.CDecimal(8, 3),    # #648 — the `sDecimalField` instance above is (8, 3)
+                       PormG.CArray(PormG.CInt32())])   # #28 — the `sArrayField` instance holds integers
 
     # The flavour the walk cannot see. A method written for `CDateTime(true)` alone would let this
     # one fall through to a generic arm and lose its representation — on the render side that is the

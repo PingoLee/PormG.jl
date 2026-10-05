@@ -394,6 +394,25 @@ function add_parameter!(sq::PormGSQLiteParam, value::PormGBytes; contains::Bool=
   return "?"
 end
 
+# --- Array values (#28) ---
+# An `ArrayField` value arrives as its PostgreSQL literal (`Models.ArrayFormatter`), and binds as that
+# one text parameter. No cast: every position a column value binds at (`=`, INSERT VALUES, UPDATE SET)
+# gives the server the column's type, on both drivers, so the literal is read as that array type. A
+# `PormGArrayLiteral` is not an `AbstractArray`, so it never reaches the list arms above, which would
+# turn it into an `= ANY(…)` membership list.
+function add_parameter!(pq::PormGPostgresParam, value::PormGArrayLiteral; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
+  contains && throw(FilterError("A pattern lookup does not apply to an array column; compare the whole array, or test its elements with a containment lookup."))
+  pq.parameter_count += 1
+  push!(pq.parameters, value.literal)
+  return "\$$(pq.parameter_count)$(_postgres_parameter_cast(sql_type))"
+end
+# SQLite has no array type: `field_to_column` refuses an `ArrayField` there, so a value can only reach
+# this arm through a model whose table PormG did not create. Refused rather than bound as text, the
+# general rule for a specialized type on SQLite.
+function add_parameter!(sq::PormGSQLiteParam, value::PormGArrayLiteral; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
+  throw(BackendCapabilityError("An ArrayField value cannot be bound on SQLite: SQLite has no array type, and PormG does not emulate one. Run this model on PostgreSQL."))
+end
+
 # #903: a scalar `Sockets.IPAddr` literal — `Value(ip"…")`, a `Value` operand, a `Case` branch — binds
 # as the text PostgreSQL prints for it (`format_inet_sql`: `::ffff:10.0.0.1`, not `Sockets`'
 # `::ffff:a00:1`), the text every network filter and write already binds. The `::inet` cast comes from

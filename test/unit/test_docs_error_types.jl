@@ -37,6 +37,8 @@ using PormG.Models: FloatField
 using PormG.Models: DecimalField
 # #28 — the network-address claims on `fields.md` and `postgres.md`.
 using PormG.Models: GenericIPAddressField, CIDRField
+# #28 — the ArrayField claims on `fields.md` and `postgres.md`, and the element fields they name.
+using PormG.Models: ArrayField
 # #632 — the same bullet's `Decimal` rule, which needs the type to state its refusing half.
 import Decimals
 using PormG.QueryBuilder: bulk_insert, bulk_update
@@ -1357,6 +1359,58 @@ const DOCERR_CASES = [
         "fields.md + postgres.md + src/models/fields.jl — a CIDRField raises on SQLite when its column is rendered (#28)",
         BackendCapabilityError,
         () -> PormG.Dialect.field_to_column("garage_lan", CIDRField(), DocErrMockSQLite()),
+    ),
+    # #28. `fields.md` → *Array Fields* names the type each ArrayField refusal raises. The write
+    # refusals go through `create`; every writer and both drivers are pinned live in
+    # `test/integration/test_array_field.jl`, the rest in `test/unit/test_array_field.jl`.
+    (
+        "fields.md — an element field ArrayField cannot hold raises when the model is defined (#28)",
+        FieldValidationError,
+        () -> ArrayField(JSONField()),
+    ),
+    (
+        "fields.md — a nested ArrayField raises when the model is defined (#28)",
+        FieldValidationError,
+        () -> ArrayField(ArrayField(IntegerField())),
+    ),
+    (
+        "fields.md — a column keyword on the element field raises when the model is defined (#28)",
+        FieldValidationError,
+        () -> ArrayField(IntegerField(unique = true)),
+    ),
+    (
+        "fields.md — a function default raises when the model is defined (#28)",
+        FieldValidationError,
+        () -> ArrayField(IntegerField(); default = () -> Int[]),
+    ),
+    (
+        "fields.md — an element past the element field's max_length raises on a write (#28)",
+        InvalidValueError,
+        () -> let m = Model("docerr_strategy_28a", id = IDField(), tyre_compounds = ArrayField(CharField(max_length = 12)))
+            m.connect_key = "docerr_pg"; m._module = Main
+            m.objects.create("tyre_compounds" => ["INTERMEDIATE!"], show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — a pattern lookup on an ArrayField raises (#28)",
+        FilterError,
+        () -> let m = Model("docerr_strategy_28b", id = IDField(), tyre_compounds = ArrayField(CharField(max_length = 12)))
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("tyre_compounds__@contains" => "SOFT"); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — a membership list of whole arrays raises (#28)",
+        FilterError,
+        () -> let m = Model("docerr_strategy_28c", id = IDField(), pit_laps = ArrayField(IntegerField()))
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("pit_laps__@in" => [[12], [12, 30]]); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md + postgres.md + src/models/fields.jl — an ArrayField raises on SQLite when its column is rendered (#28)",
+        BackendCapabilityError,
+        () -> PormG.Dialect.field_to_column("pit_laps", ArrayField(IntegerField()), DocErrMockSQLite()),
     ),
     # #902. `fields.md` → *UUID Fields* names the type a malformed UUID raises in an equality filter —
     # the half of the paragraph the pattern lookups (which take a fragment) do not change. The

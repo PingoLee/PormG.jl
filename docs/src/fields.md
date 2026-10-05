@@ -332,6 +332,121 @@ M.Pit_wall_session.objects.
 
 ---
 
+## Array Fields
+
+`ArrayField` holds a one-dimensional PostgreSQL array of another field's values. It is Django's
+`ArrayField`, from `django.contrib.postgres.fields`.
+
+| Field | Holds | PostgreSQL | SQLite |
+|---|---|---|---|
+| `ArrayField(base_field)` | a list of `base_field` values | the base type followed by `[]`, e.g. `integer[]` | not supported |
+
+**PostgreSQL only.** SQLite has no array type, and PormG does not emulate one: on SQLite,
+`makemigrations` raises `BackendCapabilityError` for a model that declares an `ArrayField`. To keep
+a model on SQLite, put the elements in a related model with a `ForeignKey` per element.
+
+### ArrayField(base_field)
+
+**Purpose**: A short list of values that belongs to one row, such as the tyre compounds a team
+brought to a race or the laps it pitted on.
+
+```julia
+Race_strategy = Models.Model("race_strategy",
+  id             = Models.IDField(),
+  raceid         = Models.ForeignKey("Race"),
+  team           = Models.CharField(max_length = 100),
+  tyre_compounds = Models.ArrayField(Models.CharField(max_length = 12); size = 6),
+  pit_laps       = Models.ArrayField(Models.IntegerField(), default = Int[]),
+  stint_targets  = Models.ArrayField(Models.DecimalField(max_digits = 7, decimal_places = 3), null = true),
+)
+```
+
+**The element field** describes one element. It may be a `CharField`, `TextField`, `SlugField`,
+`EmailField`, `URLField`, `IntegerField`, `BigIntegerField`, `FloatField`, `DecimalField`,
+`BooleanField`, `DateField`, `DateTimeField` or `UUIDField`. Other types, and a nested
+`ArrayField`, raise `FieldValidationError` when the model is defined.
+
+It takes only `null` and its type modifiers (`max_length`, `max_digits`, `decimal_places`, `type`).
+`null = true` allows a NULL **element**; without it a `nothing` or `missing` element is refused. A
+column keyword (`unique`, `db_index`, `default`, `db_column`, …) belongs on the `ArrayField` itself,
+and on the element field it raises `FieldValidationError`.
+
+**Key Parameters**:
+- `size::Union{Int, Nothing} = nothing`: the most elements a value may have. PormG checks it on every
+  write. PostgreSQL neither enforces nor keeps a declared array size, so it is not part of the schema
+  and changing it plans no migration.
+- `null::Bool = false`: whether the whole column may be NULL. Elements follow the element field's `null`.
+- `default`: a `Vector` or a `Tuple`. `default = Int[]` is Django's `default = list`. It is stored as
+  PostgreSQL array text (`"{}"`, `"{1,2}"`), so there is no shared mutable vector between rows.
+  A function is refused.
+
+**Values.** Write a `Vector` (or a `Tuple`). Each element is validated as the element field
+validates a value, so `ArrayField(CharField(max_length = 12))` refuses `["INTERMEDIATE!"]` with
+`CharField`'s `max_length` message, naming the element. PostgreSQL's own array text (`"{1,2}"`) is
+accepted too. A `default=` is held to the same element rules when the model is defined. In a filter,
+pass a `Vector`, and write a NULL element there as `missing`.
+
+A read returns a `Vector{T}`, where `T` is what a scalar read of the element field returns, on both
+PostgreSQL drivers:
+
+| Element field | Read back as |
+|---|---|
+| `CharField`, `TextField`, `SlugField`, `EmailField`, `URLField`, `UUIDField` | `Vector{String}` (a UUID as its lowercase text) |
+| `IntegerField` / `BigIntegerField` | `Vector{Int32}` / `Vector{Int64}` |
+| `FloatField` | `Vector{Float64}` |
+| `DecimalField` | `Vector{Decimal}` |
+| `BooleanField` | `Vector{Bool}` |
+| `DateField` | `Vector{Date}` |
+| `DateTimeField` | `Vector{ZonedDateTime}` in UTC (`Vector{DateTime}` for `type = "TIMESTAMP"`) |
+
+A NULL element reads as `missing`, and the vector is then `Vector{Union{Missing, T}}`. Every array
+reads 1-based, including one another client stored with a different lower bound.
+
+### Querying array fields
+
+```julia
+# Equality compares the whole array, order included. The vector binds as ONE value.
+M.Race_strategy.objects.
+  filter("tyre_compounds" => ["SOFT", "MEDIUM"]).
+  values("team").
+  list()
+
+# A strategy with no pit stop recorded yet.
+M.Race_strategy.objects.
+  filter("pit_laps" => Int[]).
+  values("team").
+  list()
+
+M.Race_strategy.objects.
+  filter("stint_targets__@isnull" => true).
+  count()
+```
+
+- **Equality** compares the whole array, and `@isnull` the whole column. A vector on any other
+  column still needs an operator (`"surname__@in" => [...]`).
+- **Containment is not available yet.** Django's array lookups — `contains`, `contained_by`,
+  `overlap`, `len`, and index and slice transforms — are the next part of #28. PormG will spell array
+  containment `@acontains`, because `@contains` is a `LIKE` on every other field (JSON containment is
+  `@jcontains` for the same reason). Until then a pattern lookup on an `ArrayField`
+  (`"tyre_compounds__@contains" => "SOFT"`) raises `FilterError` instead of matching the array's text.
+- A membership list of whole arrays (`"pit_laps__@in" => [[12], [12, 30]]`) raises `FilterError`;
+  combine the equalities with `Qor`.
+
+### Arrays in bulk writes and migrations
+
+`bulk_insert`, `bulk_update` and `bulk_copy` all take array columns. A `DataFrame` cell holds the
+`Vector`; rows may have different lengths, and a `nothing` cell is a NULL array. An `ArrayField`
+cannot be a `match_on` key of `bulk_update`, nor the key `returning=` matches rows by.
+
+`makemigrations` reads an `integer[]` or `character varying(12)[]` column back as an `ArrayField`
+(it used to be a warned `TextField`), and `inspectdb` writes one. Changing the element field is a
+type change: an element that only widens (`IntegerField` → `BigIntegerField`, a longer `max_length`)
+is a plain `ALTER`; any other change converts each element through its text, and the rows whose
+values the new element type cannot read are counted before anything runs. See
+[Lossy Column Changes](migrations/workflow.md#Lossy-Column-Changes).
+
+---
+
 ## Text Fields
 
 **A text value is a string, an integer, a date or a time.** An integer of any width (`1`,

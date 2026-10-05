@@ -233,15 +233,16 @@ _vr_base() = VRM.Probe.objects.filter("label" => _VR_LABEL)
                             type == "INTERVAL"                   ? :interval : nothing
     concrete = filter(T -> isconcretetype(T) && parentmodule(T) === PormG.Models,
                       subtypes(PormG.PormGField))
-    # The census, pinned exactly as `test_column_spec.jl` pins it: a 28th struct fails here until
+    # The census, pinned exactly as `test_column_spec.jl` pins it: a 29th struct fails here until
     # it is classified below. No `try` around the constructor — a struct that cannot be built by
     # this table is a loud failure, not a silent skip.
-    @test length(concrete) == 27   # 25 until #28 added GenericIPAddressField and CIDRField (not temporal)
+    @test length(concrete) == 28   # 25 until #28 added GenericIPAddressField, CIDRField and ArrayField (not temporal)
     instance(T) =
       T === Models.sForeignKey        ? Models.ForeignKey("Races") :
       T === Models.sOneToOneField     ? Models.OneToOneField("Races") :
       T === Models.sManyToManyField   ? Models.ManyToManyField("Races") :
       T === Models.sDecimalField      ? Models.DecimalField(max_digits = 8, decimal_places = 3) :
+      T === Models.sArrayField        ? Models.ArrayField(Models.IntegerField()) :   # #28: takes its element
       getfield(Models, Symbol(String(nameof(T))[2:end]))()
     temporal = Dict{Type,Symbol}()
     for T in concrete

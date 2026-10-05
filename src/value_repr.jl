@@ -111,6 +111,8 @@ function field_canonical_kind(f::PormGField)::Union{CanonicalType, Nothing}
   # digits, and a value that does not fit `(max_digits, decimal_places)` is not the one written.
   t == "DECIMAL" && hasfield(typeof(f), :max_digits) &&
     return CDecimal(getfield(f, :max_digits), getfield(f, :decimal_places))
+  # #28: the element kind travels on the array kind, because the read parser converts each element.
+  t == "ARRAY" && f isa Models.sArrayField && return CArray(Models.array_element_kind(f.base_field))
   return nothing
 end
 
@@ -139,6 +141,10 @@ value_formatter(::CInterval, ::PormGBackend) = Models.format_duration_sql
 # it yet — every consumer of slot 1 narrows to a date kind first — but a kind a field declares must
 # answer, which is what `test_value_repr_table.jl`'s totality testset holds the table to.
 value_formatter(::CDecimal,  ::PormGBackend) = Models.format_number_sql
+# #28: the canonical array literal — what an `ArrayField` value is written as. Like `CDecimal`'s, a
+# cell for totality: the array's own formatter (`Models.ArrayFormatter`) is the one the write path
+# uses, because it also holds the base field's element rules.
+value_formatter(k::CArray,   ::PormGBackend) = v -> Models.canonical_array_literal(v, k.element)
 # Every other canonical type. `nothing` means "this table does not own the representation", which
 # is the same answer it gave before this file existed.
 value_formatter(::CanonicalType, ::PormGBackend) = nothing
@@ -321,6 +327,10 @@ before this table existed — and can never produce a wrong typed value.
 value_parser(::CanonicalType, ::PormGPostgres) = nothing
 # #581: `Dates.CompoundPeriod` on every engine and driver — a type pin, not a re-decomposition.
 value_parser(::CInterval,     ::PormGPostgres) = Dialect._parse_postgres_interval
+# #28, the same reason as INTERVAL and further apart: LibPQ returns the raw `{…}` text for every array
+# but the numeric ones (and those as offset-indexed `Array`s), Postgres.jl a typed `Vector` or a
+# `Vector{Any}`. The cell gives every driver shape one result, a 1-based `Vector{T}`.
+value_parser(k::CArray,       ::PormGPostgres) = v -> Models.normalize_pg_array(v, k.element)
 value_parser(::CDateTime, ::PormGSQLite) = Dialect._parse_sqlite_timestamp
 value_parser(::CDate,     ::PormGSQLite) = Dialect._parse_sqlite_date
 value_parser(::CTime,     ::PormGSQLite) = Dialect._parse_sqlite_time

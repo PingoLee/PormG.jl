@@ -292,8 +292,11 @@ end
   # #28: the network types PormG renders since GenericIPAddressField / CIDRField. `inet` sat in the
   # unsupported loop below until then.
   @test pg("inet") == PormG.CInet() && pg("cidr") == PormG.CCidr()
+  # #28: `ArrayField` renders an array of its element, so `integer[]` left the unsupported loop below;
+  # an array of an element no ArrayField declares (`smallint[]`) took its place there.
+  @test pg("integer[]") == PormG.CArray(CInt32())
   # Deliberately unsupported — PormG never renders them, so a declaration must not match them.
-  for raw in ("character(8)", "bpchar", "integer[]", "bit(1)", "macaddr", "citext")
+  for raw in ("character(8)", "bpchar", "smallint[]", "bit(1)", "macaddr", "citext")
     @test (raw, pg(raw) isa CUnsupported) == (raw, true)
   end
 

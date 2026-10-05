@@ -175,6 +175,12 @@ function _is_binary_field(f_meta)::Bool
     return f_meta isa sBinaryField
 end
 
+# `ArrayField` (#28). Keyed on the struct for the binary predicate's reason: its `type` tag,
+# `"ARRAY"`, names no element type, and the base field is what every per-element check reads.
+function _is_array_field(f_meta)::Bool
+    return f_meta isa sArrayField
+end
+
 function _string_uses_scientific_notation(value::AbstractString)::Bool
     return occursin(r"^[+-]?(?:\d+\.?\d*|\.\d+)[eE][+-]?\d+$", strip(value))
 end
@@ -437,6 +443,45 @@ function _validate_network_value(model::PormGModel, field::String, f_meta, value
     end
 end
 
+# #28. The shape first (a one-dimensional vector, a tuple, or an array literal), then each element
+# exactly as the base field validates a scalar — so `ArrayField(CharField(max_length = 3))` refuses
+# `["abcd"]` with CharField's own max_length message, naming the element. A NULL element is the base
+# field's `null` rule. The formatter re-checks all of this; running it here first is what puts the
+# model and field in the message, as every other field's validator does.
+function _validate_array_value(model::PormGModel, field::String, f_meta, value::Any, operation::String)
+    value isa PormGArrayLiteral && return true
+    elems = if value isa AbstractString
+        try
+            Models.parse_pg_array_literal(value)
+        catch e
+            e isa InvalidValueError || rethrow()
+            _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass a Vector, e.g. [1, 2]")
+        end
+    elseif value isa Union{AbstractVector, Tuple}
+        value
+    else
+        _type_mismatch_error(operation, model, field, value, "a Vector (an ArrayField holds a one-dimensional array)";
+                             suggestion=value isa AbstractArray ? "pass a one-dimensional Vector" : "wrap a single element as [x]")
+    end
+    size = f_meta.size
+    if size !== nothing && length(elems) > size
+        _validation_error(operation, model, field, "holds at most $size elements (size = $size), got $(length(elems))")
+    end
+    base = f_meta.base_field
+    for (i, el) in enumerate(elems)
+        value isa AbstractString && el !== nothing && continue   # literal text: the formatter types it
+        if el isa Union{AbstractArray, Tuple} && !(el isa AbstractString)
+            _validation_error(operation, model, field, "element $i is a $(typeof(el)): an ArrayField holds a one-dimensional array")
+        end
+        if (el === nothing || ismissing(el)) && !base.null
+            _validation_error(operation, model, field, "element $i is null, and the base field does not allow null elements";
+                              suggestion="declare the element field with null = true")
+        end
+        _validate_field_value(model, "$field[$i]", base, el, operation)
+    end
+    return true
+end
+
 function _validate_json_value(model::PormGModel, field::String, value::Any, operation::String)
     if value isa Union{AbstractDict, AbstractVector, NamedTuple, Bool, Integer, AbstractFloat}
         return true
@@ -495,9 +540,10 @@ function _single_value(value::_CollectionValue, field::AbstractString, op::Abstr
 end
 
 # The fields whose formatter turns a collection into ONE value: a `JSONField` serializes it to one
-# JSON string, a `BinaryField` wraps a `Vector{UInt8}` as one blob. The binary half is keyed on the
+# JSON string, a `BinaryField` wraps a `Vector{UInt8}` as one blob, an `ArrayField` prints it as one
+# array literal (#28). The binary half is keyed on the
 # field struct, so `ImageField`/`FileField` (`"BLOB"`, but they hold path text) are not among them.
-_takes_collection(f_meta) = _is_json_field(f_meta) || _is_binary_field(f_meta)
+_takes_collection(f_meta) = _is_json_field(f_meta) || _is_binary_field(f_meta) || _is_array_field(f_meta)
 
 # The write path's format step, used at every bind site. The raw value is checked BEFORE the
 # formatter for every other field (#716): `format_text_sql` maps a collection element-wise, so an
@@ -594,6 +640,11 @@ function _validate_field_value(model::PormGModel, field::String, f_meta, value::
         _validate_network_value(model, field, f_meta, value, operation)
     elseif _is_binary_field(f_meta)
         _validate_binary_value(model, field, value, operation)
+    elseif _is_array_field(f_meta)
+        # Every check below is a scalar's, so the whole of an array's validation is here, and it
+        # returns: the column-level checks (max_length, the decimal width) are the ELEMENTS', run per
+        # element through this same function against the base field.
+        return _validate_array_value(model, field, f_meta, value, operation)
     end
 
     # 6. Max length validation.

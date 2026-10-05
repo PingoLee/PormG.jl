@@ -384,6 +384,17 @@ function _coerce_default(value, ctype::CanonicalType)
     return Models.format_inet_sql(String(value))
   elseif ctype isa CCidr
     return Models.format_cidr_sql(String(value))
+  elseif ctype isa CArray
+    # #28: the canonical literal both sides of the comparison are written in, so the catalog's
+    # `{1.50}` meets a declared `default = [1.5]`. The cast suffix (`::integer[]`) is already gone,
+    # stripped by `_PG_TRAILING_CAST`.
+    value isa AbstractString || throw(FieldValidationError("a $(typeof(value)) is not an array literal"))
+    try
+      return Models.canonical_array_literal(String(value), ctype.element)
+    catch e
+      e isa InvalidValueError || rethrow()
+      throw(FieldValidationError(e.msg))
+    end
   elseif ctype isa CInterval
     return Models.format_duration_sql(value)
   elseif ctype isa CBytes

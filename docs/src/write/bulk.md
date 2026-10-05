@@ -103,8 +103,15 @@ bulk_insert(M.Status.objects, statuses_df, show_query = :params)
 
 Each cell must hold a single value on both backends. A `Vector` or a tuple in a text-like column (`CharField`, `TextField`, …) raises `InvalidValueError` naming the field, whatever its elements, since neither row source can store it. `JSONField` and `BinaryField` values are unaffected: each is serialized to one value first.
 
+An `ArrayField` (PostgreSQL only) is the other column whose one value is a vector. Each cell holds the
+`Vector` (or `nothing`), and rows may have different lengths. A column of arrays cannot be one
+two-dimensional array parameter — rows of different lengths are not one array, and `unnest` flattens
+every dimension — so each cell travels as its PostgreSQL array text in a `text[]` parameter and is cast
+back to the column's type in the statement (`"u"."c3"::integer[]`, `source."pit_laps"::integer[]`).
+An `ArrayField` cannot be a `bulk_update` `match_on` key, nor the key `returning=` matches rows by.
+
 !!! warning "PostgreSQL: the column must have its field's type"
-    Each array is typed with the column type its field renders, the same cast `bulk_update()` has always applied. So on PostgreSQL a bulk write fails when there is no *assignment cast* from the field's type to the column's real type. The typical case is an enum, `inet`, `xml`, `tsvector`, array, range or geometric column adopted from an existing database and declared as a `TextField`/`CharField` (an `inet` or `cidr` column has its own field since #28, `GenericIPAddressField` / `CIDRField`, which binds the native type); the statement then fails with the database's `… is of type … but expression is of type text` error.
+    Each array is typed with the column type its field renders, the same cast `bulk_update()` has always applied. So on PostgreSQL a bulk write fails when there is no *assignment cast* from the field's type to the column's real type. The typical case is an enum, `inet`, `xml`, `tsvector`, array, range or geometric column adopted from an existing database and declared as a `TextField`/`CharField` (an `inet` or `cidr` column has its own field since #28, `GenericIPAddressField` / `CIDRField`, which binds the native type, and so does an array column, `ArrayField`); the statement then fails with the database's `… is of type … but expression is of type text` error.
 
     A difference that does have an assignment cast (`varchar` into `text`, `integer` into `bigint`) is written normally. A `json` (not `jsonb`) column under a `JSONField` is written, but normalized the way `jsonb` normalizes.
 

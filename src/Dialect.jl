@@ -35,7 +35,7 @@ import PormG: CDate, CDateTime, CInterval
 # #828: the rest of the castless-retype targets, for `_postgres_retype_using`.
 import PormG: CBool, CUUID, CJSON
 # #28: the network-address kinds, for the same function.
-import PormG: CInet, CCidr
+import PormG: CInet, CCidr, CArray
 import PormG: _has_non_negative, _byte_bound
 import PormG: get_constraints_pk, get_constraints_unique, get_constraints_checks, get_constraints_byte_length_checks
 import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_column, fk_target_column, format_timezone_sql, model_table_name, fk_target_table
@@ -1119,7 +1119,7 @@ end
 # ---
 # Convert PormGField to SQL column string
 # ---
-import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sRelationalColumn, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField, sBinaryField, sImageField, sGenericIPAddressField, sCIDRField
+import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sRelationalColumn, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField, sBinaryField, sImageField, sGenericIPAddressField, sCIDRField, sArrayField
 
 """
     db_default_sql(field, conn) -> Union{String, Nothing}
@@ -1287,6 +1287,9 @@ cast would change values: `inet` → text (#28) and `inet` → `cidr` (#905), be
   on its own writes the mask too (`10.0.0.1/32`), so every row's text would change. A `cidr` needs
   no `USING`: its cast to text keeps the prefix, which is what it prints, while `abbrev(cidr)` would
   drop the zero octets (`10.1/16`).
+- text / varchar → an array (#28): `CAST(… AS integer[])`, the column read as array literals;
+- an array → an array of another element type (#28): through text, `CAST(CAST(… AS text) AS …[])`,
+  unless the elements only widen (`_pg_array_element_widens`), which needs no `USING`;
 - `inet` → `cidr` (#905): through text, `CAST(CAST(… AS text) AS cidr)`. The assignment cast
   PostgreSQL would apply on its own zeroes the bits right of the mask (`10.0.0.1/24` becomes
   `10.0.0.0/24`) without a word; `cidr`'s input function refuses that value instead, so such a row
@@ -1310,8 +1313,63 @@ function _postgres_retype_using(field_name::Union{String, Symbol}, old_type::Can
     return "CAST(CAST($ref AS integer) AS $type_sql)"
   elseif old_type isa numeric && new_type isa CBool
     return "($ref <> 0)"
+  elseif old_type isa Union{CText, CVarChar} && new_type isa CArray
+    # #28: text holding array literals (`{1,2}`), parsed by the array type's input function. Cast to
+    # the type WITHOUT its modifiers (`varchar[]`, not `varchar(3)[]`): an explicit cast to `varchar(n)`
+    # truncates silently, while the ALTER's own assignment to the column type applies the modifier
+    # and raises on a value too long — the rule the planner's `pg_input_is_valid` count measures.
+    return "CAST($ref AS $(_pg_unmodified_type(type_sql)))"
+  elseif old_type isa CArray && new_type isa CArray && !_pg_array_element_widens(old_type.element, new_type.element)
+    # #28: through text, so each element is read by the new element type's INPUT function rather
+    # than converted by a cast. An element that does not parse, or no longer fits (an out-of-range
+    # integer, a too-long varchar, a numeric with too many whole digits), fails the ALTER instead of
+    # being cast to something else — the modifier-less target for the reason above.
+    return "CAST(CAST($ref AS text) AS $(_pg_unmodified_type(type_sql)))"
   end
   return nothing
+end
+
+# A rendered type with its modifiers removed: `varchar(3)[]` → `varchar[]`, `decimal(5, 2)[]` →
+# `decimal[]`. Lower-cased, as `_pg_bulk_cast_type` spells the same thing for the bulk writers.
+_pg_unmodified_type(type_sql::AbstractString)::String = lowercase(replace(type_sql, r"\([^)]*\)" => ""))
+
+"""
+    _pg_array_element_widens(old, new) -> Bool
+
+Whether an array of `old` elements becomes an array of `new` ones without a `USING` and without
+changing a value (#28): the element pairs whose assignment cast exists and loses nothing — a wider
+integer, a longer varchar, a numeric with at least as many whole and fractional digits, a date into a
+timestamp. Every other array → array change converts through text (`_postgres_retype_using`), so one
+rule — the new element type's input function — decides every value, and the planner counts the rows it
+would refuse.
+"""
+function _pg_array_element_widens(old::CanonicalType, new::CanonicalType)::Bool
+  old == new && return true
+  int_digits(k) = k isa CInt32 ? 10 : 19
+  if old isa Union{CInt32, CInt64}
+    new isa CInt64 && return true
+    new isa CFloat64 && return true
+    new isa CDecimal && return new.precision === nothing ||
+                               (new.scale !== nothing && new.precision - new.scale >= int_digits(old))
+    return false
+  elseif old isa CDecimal
+    new isa CFloat64 && return true
+    new isa CDecimal || return false
+    new.precision === nothing && return true
+    (old.precision === nothing || old.scale === nothing || new.scale === nothing) && return false
+    return new.scale >= old.scale && new.precision - new.scale >= old.precision - old.scale
+  elseif old isa CVarChar
+    new isa CText && return true
+    new isa CVarChar || return false
+    return new.length === nothing || (old.length !== nothing && old.length <= new.length)
+  elseif old isa CUUID
+    return new isa CText || (new isa CVarChar && (new.length === nothing || new.length >= 36))
+  elseif old isa CDate
+    return new isa CDateTime
+  elseif old isa CDateTime
+    return new isa CDateTime && !old.with_timezone && new.with_timezone
+  end
+  return false
 end
 
 function _postgres_interval_cast_expression(field_name::Union{String, Symbol}, old_type::Union{Nothing, CanonicalType})
@@ -1379,6 +1437,11 @@ function _get_column_type(field::PormGField, conn::PormGPostgres; type_map::Dict
     return type_map[field.type]
   elseif field isa Union{sGenericIPAddressField, sCIDRField}
     return type_map[field.type]   # `inet` / `cidr` (#28)
+  elseif field isa sArrayField
+    # #28: the element's own type, then `[]`. No size and no dimension count: PostgreSQL enforces
+    # neither and `format_type` prints neither, so rendering one would differ from the catalog on
+    # every read. `ArrayField(size = n)` is checked by PormG on write instead.
+    return _get_column_type(field.base_field, conn; type_map = type_map) * "[]"
   elseif field isa sBinaryField
     # `bytea` takes no length parameter — a BinaryField's `max_length` is a BYTE bound enforced by
     # the CHECK constraint below, not by the column type (#296).
@@ -1430,7 +1493,7 @@ function _get_column_type(field::PormGField, conn::PormGSQLite; type_map::Dict{S
     return sql_type
   elseif field isa sJSONField
     return sql_type
-  elseif field isa Union{sGenericIPAddressField, sCIDRField}
+  elseif field isa Union{sGenericIPAddressField, sCIDRField, sArrayField}
     # #28: for the migration compiler only — `field_to_column` refuses these on SQLite, so no DDL
     # PormG writes carries it. See `_refuse_specialized_sqlite_type`.
     return sql_type
@@ -1525,7 +1588,21 @@ end
 # and `_get_column_type` is no place for it — the migration compiler launders its errors into a
 # warning. `_get_column_type` still renders these fields (`TEXT`), for that compiler only: no DDL
 # PormG writes ever carries it.
+# A connection-free PostgreSQL value to dispatch `_get_column_type` on, so the SQLite refusal can name
+# the PostgreSQL type the field would have had. `Migrations`' `_PostgresEngine` is the same shape, at
+# a later include step.
+struct _PostgresTypeEngine <: PormGPostgres end
+const _PG_TYPE_ENGINE = _PostgresTypeEngine()
+
 function _refuse_specialized_sqlite_type(col_name::AbstractString, field::PormGField)::Nothing
+  if field isa sArrayField
+    pg = _get_column_type(field, _PG_TYPE_ENGINE)
+    throw(BackendCapabilityError(
+      "ArrayField \"$(col_name)\" is a PostgreSQL array (`$(pg)`), and SQLite has no array type: " *
+      "it cannot store, compare or index the elements of one value. PormG refuses the column on " *
+      "SQLite rather than emulate it as text. Run this model on PostgreSQL, or keep the elements in " *
+      "a related model (a ForeignKey per element) if it must run on SQLite."))
+  end
   field isa Union{sGenericIPAddressField, sCIDRField} || return nothing
   name = field isa sCIDRField ? "CIDRField" : "GenericIPAddressField"
   pg = field isa sCIDRField ? "cidr" : "inet"

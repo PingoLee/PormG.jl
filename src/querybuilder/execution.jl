@@ -878,9 +878,11 @@ end
 # get_or_create's get() by the conflict target, unexecuted: through the fluent builder for
 # dialect-correct binding, and inside a transaction on the pinned connection (same pattern as save()).
 #
-# A `JSONField` collection is handed to `filter()` already serialized (#717). `filter()` refuses a
+# A `JSONField` collection is handed to `filter()` already serialized (#717). `filter()` refused a
 # bare vector with no operator at parse time, where it has no model to tell a JSON column from a
 # text one (#596's constraint), so `get_or_create("payload" => ["a", "b"])` failed before any SQL.
+# (Since #28 a bare vector parses as an equality and is refused at render for any column but an
+# `ArrayField`; the serialization below is still what a JSON column needs.)
 # As a string it takes the scalar arm and binds the exact text the miss INSERT binds, so the hit read
 # matches by the same column equality as the ON CONFLICT target (and `update_or_create`): `jsonb`
 # equality on PostgreSQL, the serialized text on SQLite.

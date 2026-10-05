@@ -11,6 +11,11 @@ import PormG: PormGField, PormGModel, reserved_words, MODEL_OPTION_KWARGS, Migra
 import PormG: model_table_name, model_has_db_table, model_is_managed
 import PormG: DATETIME_FORMAT
 import PormG: PormGBytes  # binary-payload wrapper the parameter collectors bind as one blob (#296)
+import PormG: PormGArrayLiteral  # an ArrayField value, bound as one array-literal parameter (#28)
+# #28: the element kinds an `ArrayField` dispatches on (`models/pg_array.jl`) — the canonical column
+# IR's nouns (Kernel), bound into `PormG` before this module is included.
+import PormG: CanonicalType, CInt32, CInt64, CFloat64, CBool, CText, CDate, CUUID, CVarChar,
+              CDecimal, CDateTime, CArray
 import PormG: _emsg  # shared TTY-aware error-message strip helper (Kernel)
 import PormG: _canonical_folder_path, _folder_tag, _usable_folder_tag  # models-folder identity (#550, Kernel)
 # The "same parent?" rule (#360/#390), shared with the column IR's `reference_delta` and owned by
@@ -55,7 +60,7 @@ import PormG: @pormg_debug
 #
 # Everything else here (`add_field!`, `ensure_model_initialized`, `validate_default`,
 # `normalize_sqlite_datetime_string`, …) is genuinely internal and deliberately omitted.
-public AutoField, BigIntegerField, BinaryField, BooleanField, CharField, CIDRField, DateField,
+public ArrayField, AutoField, BigIntegerField, BinaryField, BooleanField, CharField, CIDRField, DateField,
   DateTimeField, DecimalField, DurationField, EmailField, FileField, FloatField, ForeignKey,
   GenericIPAddressField, IDField, ImageField, IntegerField, JSONField, ManyToManyField,
   OneToOneField, PasswordField, PositiveIntegerField, PositiveSmallIntegerField, SlugField,
@@ -3057,6 +3062,8 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
         _model_to_str_foreign_key(field_name, field, struct_name, sets, fields)
       elseif struct_name == :ManyToManyField
         _model_to_str_many_to_many(field_name, field, sets, fields)
+      elseif struct_name == :ArrayField
+        _model_to_str_array(field_name, field, sets, fields)
       else
         _model_to_str_general(field_name, field, struct_name, sets, fields)
       end
@@ -3303,9 +3310,9 @@ end
 # one in that case.
 _db_column_already_pinned(sets)::Bool = any(s -> startswith(s, "db_column="), sets)
 
-function _model_to_str_general(field_name, field, struct_name, sets, fields)
-  stadard_field = getfield(@__MODULE__, struct_name)()
-  pinned = _db_column_already_pinned(sets)
+# The keyword arguments that rebuild `field`: every slot that differs from `baseline`, the instance
+# the same constructor builds with no keywords. `skip` names slots no constructor takes as a keyword.
+function _field_kwarg_sets!(sets, field, baseline; skip = (), pinned::Bool = false)
   for sfield in fieldnames(typeof(field))
     pinned && sfield === :db_column && continue
     # No constructor takes a `formatter` keyword — the struct derives it from the others. It can
@@ -3313,10 +3320,17 @@ function _model_to_str_general(field_name, field, struct_name, sets, fields)
     # `format_inet_unpacked_sql`), and emitting it would write a keyword the reload only warns about.
     # `display.jl` skips it for the same reason.
     sfield === :formatter && continue
-    if getfield(field, sfield) != getfield(stadard_field, sfield)
+    sfield in skip && continue
+    if getfield(field, sfield) != getfield(baseline, sfield)
       push!(sets, """$sfield=$(getfield(field, sfield) |> format_string)""")
     end
   end
+  return sets
+end
+
+function _model_to_str_general(field_name, field, struct_name, sets, fields)
+  stadard_field = getfield(@__MODULE__, struct_name)()
+  _field_kwarg_sets!(sets, field, stadard_field; pinned = _db_column_already_pinned(sets))
   if struct_name == :IDField
     fields = ",\n  $field_name = Models.$struct_name($(join(sets, ", ")))" * fields
   else 
@@ -3355,6 +3369,21 @@ function _model_to_str_foreign_key(field_name, field, struct_name, sets, fields)
   fields *= ",\n  $field_name = Models.$struct_name($(format_string(String(to))), $(join(sets, ", ")))"
   return fields
   
+end
+
+# #28: an `ArrayField` is the one field whose constructor takes a positional FIELD, so it cannot be
+# diffed against a zero-argument instance. The base field renders as its own constructor call, and
+# the array's keywords are diffed against `ArrayField(base)` — the instance the same base builds with
+# no keywords — so only what the declaration actually said is emitted.
+function _model_to_str_array(field_name, field, sets, fields)
+  base = field.base_field
+  base_name = Symbol(chopprefix(String(nameof(typeof(base))), "s"))
+  base_sets = _field_kwarg_sets!(String[], base, getfield(@__MODULE__, base_name)())
+  base_call = "Models.$base_name($(join(base_sets, ", ")))"
+  _field_kwarg_sets!(sets, field, ArrayField(base); skip = (:base_field,),
+                     pinned = _db_column_already_pinned(sets))
+  fields *= ",\n  $field_name = Models.ArrayField($base_call$(isempty(sets) ? "" : ", " * join(sets, ", ")))"
+  return fields
 end
 
 function _model_to_str_many_to_many(field_name, field, sets, fields)
@@ -3955,6 +3984,7 @@ _fk_target_binding(field::PormGField)::Union{String, Nothing} =
 #═══════════════════════════════════════════════════════════════════════════════
 
 include("models/network_address.jl")
+include("models/pg_array.jl")
 include("models/fields.jl")
 
 is_many_to_many_field(::PormGField)::Bool = false

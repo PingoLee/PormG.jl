@@ -596,7 +596,10 @@ const _E = _OperTestEvent
     # --- bare field + collection value, no __@ operator at all ---
     # Reaches the length(field_path) < 2 branch: the message must name the field
     # and show actionable examples, not treat the field name as a bogus operator.
-    e_bare = grab(() -> _D.objects.filter("id" => [1, 2]))
+    # Raised at BUILD since #28, not at `filter()`: a bare-path vector is an equality against an
+    # `ArrayField`, so only the resolved field can say this column holds one value. Same funnel,
+    # same message.
+    e_bare = grab(() -> _D.objects.filter("id" => [1, 2]).list(show_query = :dict))
     @test e_bare isa PormGError
     m_bare = e_bare.msg
     @test occursin("was given a vector value but no operator", m_bare)

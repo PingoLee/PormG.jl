@@ -546,10 +546,11 @@ not: `rebuild_table` renders no table-level constraint). It does NOT change iden
 duplicated by a second index over the same columns.
 
 What reaches this struct is exactly what PormG can re-emit — a readers' contract, stated on
-[`_pg_composite_indexes`](@ref) and [`_sqlite_composite_indexes`](@ref). An `INCLUDE` index is never
-read, so it is never matched, never dropped and never renamed; nor is an access method outside
+[`_pg_composite_indexes`](@ref) and [`_sqlite_composite_indexes`](@ref). A UNIQUE `INCLUDE` index is
+never read, so it is never matched, never dropped and never renamed; nor is an access method outside
 [`INDEX_METHODS`](@ref), or a unique index that is not plain b-tree — a unique partial or
-functional one included.
+functional one included. A non-unique `INCLUDE` index is read since #934 (PostgreSQL only — SQLite
+has none), its payload columns in `include`; the payload makes it advanced.
 
 Since #29 part 2 a functional, partial, explicitly-collated or `NULLS`-placed index IS read, as
 SQL text: its `expressions` are the catalog's own element texts (when any member is an expression or
@@ -589,17 +590,20 @@ struct LiveComposite
   # empty, because the text holds all of it. `condition`: a partial index's `WHERE` text.
   expressions::Vector{String}
   condition::Union{String, Nothing}
+  # #934: a covering index's `INCLUDE (…)` payload columns, in catalog order. PostgreSQL only.
+  include::Vector{String}
 end
-# Every reader before #29 part 2, and most test fixtures: no SQL text unless given by keyword.
+# Every reader before #29 part 2, and most test fixtures: no SQL text or payload unless given by keyword.
 LiveComposite(name::AbstractString, columns::Vector{String}, unique::Bool, constraint::Bool,
               method::AbstractString, descending::Vector{Bool}, opclasses::Vector{Union{String, Nothing}},
               opclass_default::Vector{Bool}, marker::Union{AbstractString, Nothing},
               comment::Union{AbstractString, Nothing};
-              expressions::Vector{String} = String[], condition::Union{AbstractString, Nothing} = nothing) =
+              expressions::Vector{String} = String[], condition::Union{AbstractString, Nothing} = nothing,
+              include::Vector{String} = String[]) =
   LiveComposite(String(name), columns, unique, constraint, String(method), descending, opclasses,
                 opclass_default, marker === nothing ? nothing : String(marker),
                 comment === nothing ? nothing : String(comment), expressions,
-                condition === nothing ? nothing : String(condition))
+                condition === nothing ? nothing : String(condition), include)
 # A plain b-tree composite — every reader before #29, and most test fixtures.
 LiveComposite(name::AbstractString, columns::Vector{String}, unique::Bool, constraint::Bool) =
   LiveComposite(String(name), columns, unique, constraint, "btree", fill(false, length(columns)),
@@ -623,7 +627,8 @@ member, a non-default operator class (#29), an expression or a condition (#29 pa
 indexes are owned through the `pormg:index` marker; plain ones through the models file alone.
 """
 composite_is_advanced(c::LiveComposite)::Bool =
-  c.method != "btree" || any(c.descending) || !all(c.opclass_default) || composite_holds_text(c)
+  c.method != "btree" || any(c.descending) || !all(c.opclass_default) || composite_holds_text(c) ||
+  !isempty(c.include)
 
 """
     composite_is_owned(c::LiveComposite) -> Bool
@@ -725,18 +730,23 @@ struct DeclaredComposite
   # #29 part 2: the declared SQL text — see `Models.Index`. `columns` is empty beside `expressions`.
   expressions::Vector{String}
   condition::Union{String, Nothing}
+  # #934: the declared `include` payload, as physical column names.
+  include::Vector{String}
 end
 DeclaredComposite(name::AbstractString, columns::Vector{String}, unique::Bool, explicit::Bool, auto::Bool,
-                  method::AbstractString, descending::Vector{Bool}, opclasses::Vector{Union{String, Nothing}}) =
+                  method::AbstractString, descending::Vector{Bool}, opclasses::Vector{Union{String, Nothing}},
+                  expressions::Vector{String} = String[], condition::Union{AbstractString, Nothing} = nothing,
+                  include::Vector{String} = String[]) =
   DeclaredComposite(String(name), columns, unique, explicit, auto, String(method), descending, opclasses,
-                    String[], nothing)
+                    expressions, condition === nothing ? nothing : String(condition), include)
 # A plain b-tree composite: every `UniqueConstraint`, the join-table index, a plain `Index`.
 DeclaredComposite(name::AbstractString, columns::Vector{String}, unique::Bool, explicit::Bool, auto::Bool) =
   DeclaredComposite(String(name), columns, unique, explicit, auto, "btree", fill(false, length(columns)),
                     Union{String, Nothing}[nothing for _ in columns])
 
 composite_is_advanced(d::DeclaredComposite)::Bool =
-  d.method != "btree" || any(d.descending) || any(!isnothing, d.opclasses) || composite_holds_text(d)
+  d.method != "btree" || any(d.descending) || any(!isnothing, d.opclasses) || composite_holds_text(d) ||
+  !isempty(d.include)
 
 """
     composite_marker(d::DeclaredComposite) -> Union{String, Nothing}
@@ -760,8 +770,12 @@ default class it names. The name is never part of it (see [`DeclaredComposite`](
 is the live side in the declared model's terms — the planner maps a renamed column first.
 """
 function composite_shape_matches(live::LiveComposite, d::DeclaredComposite;
-                                 columns::Vector{String} = live.columns)::Bool
+                                 columns::Vector{String} = live.columns,
+                                 include::Vector{String} = live.include)::Bool
   (live.unique == d.unique && live.method == d.method) || return false
+  # #934: the payload is part of the index, in order, as PostgreSQL stores it — in the declared
+  # model's terms, like `columns`.
+  include == d.include || return false
   if !isempty(d.expressions)
     # The members are text, so only the text can say whether they match. A live index that happens
     # to read as plain columns (`expressions = ("a", "b DESC")`) is still matched by its marker.
@@ -833,7 +847,8 @@ function declared_composites(model::PormGModel)::Vector{DeclaredComposite}
           String(decl.name)
         push!(out, DeclaredComposite(name, cols, unique, decl.name !== nothing, false, decl.method,
                                      copy(decl.descending), copy(decl.opclasses),
-                                     copy(decl.expressions), decl.condition))
+                                     copy(decl.expressions), decl.condition,
+                                     String[Models.model_column(model, f) for f in decl.include]))
       else
         name = decl.name === nothing ? composite_index_name(table, cols, unique) : String(decl.name)
         push!(out, DeclaredComposite(name, cols, unique, decl.name !== nothing, false))
@@ -893,7 +908,7 @@ function live_table(model::PormGModel, conn::Union{PormGPostgres, PormGSQLite}):
   composites = LiveComposite[
     LiveComposite(d.name, d.columns, d.unique, false, d.method, copy(d.descending), copy(d.opclasses),
                   Bool[o === nothing for o in d.opclasses], ownership(d)...;
-                  expressions = copy(d.expressions), condition = d.condition)
+                  expressions = copy(d.expressions), condition = d.condition, include = copy(d.include))
     for d in declared_composites(model)]
   # #742: a model read as a live table holds its declared CHECKs as PormG created them — owned, with
   # the marker of their own condition — so a model diffed against itself plans nothing.

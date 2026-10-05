@@ -2346,11 +2346,11 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
           continue
         end
         if ix.name !== nothing && ix.name in taken_index_names &&
-           (Models._index_holds_text(ix) || any(!isnothing, ix.opclasses))
+           (Models._index_holds_text(ix) || any(!isnothing, ix.opclasses) || !isempty(ix.include))
           @warn "import: index name is already claimed in this import; the index needs its own" name=ix.name class=class_label
           push!(markers, "# PormG: an index over $(_one_line(Models._index_label(ix), 200)) on '$(class_label)' " *
                          "was dropped — its name '$(_one_line(ix.name))' is claimed by another declaration in " *
-                         "this import, and a functional, partial or operator-class index cannot take a derived " *
+                         "this import, and a functional, partial, covering or operator-class index cannot take a derived " *
                          "name. Declare it by hand under a name of its own.")
           continue
         end
@@ -5619,12 +5619,13 @@ const _META_OPTIONS_CONSUMED = ("abstract", "proxy", "db_table", "managed", "con
 const _UNIQUE_CONSTRAINT_KWARGS = ("fields", "name", "violation_error_message", "violation_error_code")
 
 # Django's `models.Index` arguments PormG can honour (#347, #29). There is no Django `Index` kwarg
-# that is a pure no-op on the emitted index, so everything else is refused: `db_tablespace=`,
-# `include=` and the storage parameters of the PostgreSQL index classes (`fastupdate=`,
-# `pages_per_range=`, `fillfactor=`, …) all change WHAT gets indexed or how — the same
-# reject-rather-than-reinterpret rule `_parse_meta_constraints` documents. `condition=` is honoured
-# since #29 part 2 when its `Q(...)` is one the CheckConstraint translator reads (#768).
-const _INDEX_KWARGS = ("fields", "name", "opclasses", "condition")
+# that is a pure no-op on the emitted index, so everything else is refused: `db_tablespace=` and the
+# storage parameters of the PostgreSQL index classes (`fastupdate=`, `pages_per_range=`,
+# `fillfactor=`, …) all change WHAT gets indexed or how — the same reject-rather-than-reinterpret
+# rule `_parse_meta_constraints` documents. `condition=` is honoured since #29 part 2 when its
+# `Q(...)` is one the CheckConstraint translator reads (#768), and `include=` since #934, as
+# `Models.Index(include = …)`.
+const _INDEX_KWARGS = ("fields", "name", "opclasses", "condition", "include")
 
 # Django's index classes and the access method each one is (#29). `django.contrib.postgres.indexes`
 # adds the five non-b-tree ones; `BloomIndex` is an extension's method PormG cannot declare.
@@ -6323,8 +6324,9 @@ classes become `method = …` (#29, `_DJANGO_INDEX_METHODS`), and anything else 
 project's own subclass — is reported and skipped. A `-field` is a descending column and `opclasses=`
 carries over. Since #29 part 2 a `condition=Q(...)` becomes the index's `condition` (through the
 CheckConstraint translator) and a positional expression one of its `expressions`
-([`_translate_index_expression`](@ref)), each only when it translates exactly; `include=`, every
-storage parameter, and an expression or condition outside those whitelists are refused.
+([`_translate_index_expression`](@ref)), each only when it translates exactly; since #934 an
+`include=` list of fields becomes `include = …`. Every storage parameter, and an expression or
+condition outside those whitelists, is refused.
 
 Each entry is judged on its own: one rejected index never takes its siblings with it.
 """
@@ -6414,18 +6416,37 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
       empty!(expressions)
     end
 
+    # #934: a covering index's payload, `include=["a", "b"]` — field names, resolved like `fields=`
+    # but never descending (a payload has no order to sort by).
+    include = String[]
+    if haskey(kwargs, "include")
+      inc_inner = _balanced_group(kwargs["include"])
+      if inc_inner === nothing
+        _drop_index_decl!(markers, class_label, el, "its `include=` is not a list or tuple literal")
+        continue
+      end
+      inc_names = _clean_constraint_field_names(split_field_options(inc_inner))
+      if any(n -> startswith(n, "-"), inc_names)
+        _drop_index_decl!(markers, class_label, el, "its `include=` names a descending field")
+        continue
+      end
+      inc = _resolve_index_group(inc_names, fields_dict, class_label, markers, el)
+      inc === nothing && continue
+      include = inc
+    end
+
     # Django's own rules for the text-holding kinds, which it raises at class definition: an index is
-    # over fields or expressions, not both, and a functional or partial one is named.
+    # over fields or expressions, not both, and a functional, partial or covering one is named.
     iname = haskey(kwargs, "name") ? _meta_string_literal(kwargs["name"]) : nothing
-    if !isempty(expressions) || condition !== nothing
+    if !isempty(expressions) || condition !== nothing || !isempty(include)
       if !isempty(expressions) && (haskey(kwargs, "fields") || haskey(kwargs, "opclasses"))
         _drop_index_decl!(markers, class_label, el,
           "it mixes expressions with `$(haskey(kwargs, "fields") ? "fields" : "opclasses")=`, which Django refuses")
         continue
       end
       if iname === nothing
-        _drop_index_decl!(markers, class_label, el,
-          "a $(isempty(expressions) ? "partial" : "functional") index needs a `name=` string literal")
+        kind = !isempty(expressions) ? "functional" : condition !== nothing ? "partial" : "covering"
+        _drop_index_decl!(markers, class_label, el, "a $(kind) index needs a `name=` string literal")
         continue
       end
       # Django substitutes `%(class)s` / `%(app_label)s` per model, so the live index carries the
@@ -6438,7 +6459,8 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
     end
     if !isempty(expressions)
       try
-        push!(out, Models.Index(expressions = expressions, condition = condition, name = iname, method = method))
+        push!(out, Models.Index(expressions = expressions, condition = condition, name = iname, method = method,
+                                include = include))
       catch e
         e isa ModelDefinitionError || rethrow()
         _drop_index_decl!(markers, class_label, el, replace(sprint(showerror, e), "\n" => " "))
@@ -6477,7 +6499,7 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
     end
 
     if length(resolved) == 1 && method == "btree" && opclasses === nothing && !startswith(resolved[1], "-") &&
-       condition === nothing
+       condition === nothing && isempty(include)
       # Django's single-field plain index IS `db_index=True`; translate rather than drop (see the
       # docstring). No marker: nothing was lost. A one-field GIN, DESC, opclass or partial index is a
       # different index and stays a `Models.Index` (#29).
@@ -6492,7 +6514,7 @@ function _parse_meta_indexes(raw::AbstractString, fields_dict::Dict{Symbol, Any}
     end
     try
       push!(out, Models.Index(fields = resolved, name = iname, method = method, opclasses = opclasses,
-                              condition = condition))
+                              condition = condition, include = include))
     catch e
       # A duplicate-field or empty-name rejection from the constructor: report THIS index and keep
       # the rest, rather than losing every index on the model to one bad entry.

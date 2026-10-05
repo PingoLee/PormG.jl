@@ -133,8 +133,9 @@ _ps739_raised(f) = try f(); nothing catch e; e end
     # those slots, and frozen. Re-pinned by #29 part 2, which added `expressions` and `condition`,
     # WITHOUT a `_SCHEMA_FINGERPRINT_VERSION` bump: the fingerprint (#739) has shipped in no tag yet,
     # so the only plans it refuses are ones generated from `main` since then, for tables with composites.
+    # Re-pinned again by #934, which added `include`, on the same footing: #739 is still Unreleased.
     composite = LiveComposite("drivers_uniq", ["driverid", "surname"], true, true)
-    @test Migrations._schema_table_fingerprint(_ps739_table(composites = [composite])) == "53bd48d03380e739"
+    @test Migrations._schema_table_fingerprint(_ps739_table(composites = [composite])) == "2b218adc58e4b8d6"
     # Each #29 facet of an index is a different schema for a plan to run on.
     adv(; method = "btree", desc = [false], opc = Union{String, Nothing}["int4_ops"], dflt = [true], marker = nothing) =
         _ps739_table(composites = [LiveComposite("drivers_ix", ["driverid"], false, false, method, desc, opc, dflt,
@@ -156,6 +157,13 @@ _ps739_raised(f) = try f(); nothing catch e; e end
         @test (facet, Migrations._schema_table_fingerprint(t)) != (facet, plain_ix)
         @test (facet, Migrations._schema_table_fingerprint(t)) != (facet, Migrations._schema_table_fingerprint(text(exprs = ["driverid"])))
     end
+    # #934: a covering index's payload is a different schema too, and so is its order.
+    covering(inc) = _ps739_table(composites = [LiveComposite("drivers_ix", ["driverid"], false, false, "btree", [false],
+                                                             Union{String, Nothing}["int4_ops"], [true], "pormg:index",
+                                                             "pormg:index"; include = inc)])
+    @test Migrations._schema_table_fingerprint(covering(["surname"])) != plain_ix
+    @test Migrations._schema_table_fingerprint(covering(["surname", "forename"])) !=
+          Migrations._schema_table_fingerprint(covering(["forename", "surname"]))
     # A timestamp default is written as its UTC wall time, never through `repr` (which is TimeZones'
     # to change): it digests, and two instants are two defaults.
     at(t) = Migrations._schema_table_fingerprint(_ps739_table(columns = [_ps739_col("driverid"; pk = true),

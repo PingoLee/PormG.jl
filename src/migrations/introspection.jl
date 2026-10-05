@@ -1339,7 +1339,9 @@ importer applies to `Meta.indexes`. Beyond the shared predicates:
     with a non-default collation, which PostgreSQL keeps (re-emitting the index reproduces it
     exactly) and SQLite drops for want of the information to do better.
   * Four whole-index refusals, each a shape PormG would re-emit as a DIFFERENT index (#161): an
-    `INCLUDE` clause (`indnatts <> indnkeyatts` — the payload columns vanish on re-emission); an
+    `INCLUDE` clause on a UNIQUE index (`indnatts <> indnkeyatts` — `UniqueConstraint` declares no
+    payload, so it would vanish on re-emission; since #934 a non-unique one is read, its payload in
+    `include` from `indkey` past `indnkeyatts`, and it is advanced, so owned through the marker); an
     invalid index (`NOT indisvalid`, a failed `CREATE INDEX CONCURRENTLY`); a `DEFERRABLE` unique
     constraint (a different enforcement point); and `NULLS NOT DISTINCT`. The last is read from
     `pg_get_indexdef` rather than `pg_index.indnullsnotdistinct`, which only exists from PostgreSQL
@@ -1359,7 +1361,8 @@ Two details the naive query gets wrong:
 
   * `unnest(indkey) WITH ORDINALITY` rather than `attnum = ANY(indkey)`: an index's column ORDER is
     part of its identity, and `ANY` returns them in table order. `ord <= indnkeyatts` then drops an
-    `INCLUDE` clause's non-key columns, which are payload, not index keys.
+    `INCLUDE` clause's non-key columns, which are payload, not index keys — read separately, in their
+    own order, into `include_columns` (#934).
   * the `LEFT JOIN` to `pg_attribute` is deliberate: an expression member has `attnum = 0` and matches
     no row. It surfaces as a NULL column name — never declared as if the remaining columns were the
     index.
@@ -1394,6 +1397,10 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
            con.condeferrable AS is_deferrable,
            i.indisvalid AS is_valid,
            (i.indnatts <> i.indnkeyatts) AS has_include,
+           (SELECT json_agg(x.attname ORDER BY p.ord)::text
+              FROM unnest(i.indkey::int2[]) WITH ORDINALITY AS p(attnum, ord)
+              JOIN pg_attribute x ON x.attrelid = i.indrelid AND x.attnum = p.attnum
+             WHERE p.ord > i.indnkeyatts) AS include_columns,
            (i.indisunique AND pg_get_indexdef(i.indexrelid) LIKE '%NULLS NOT DISTINCT%') AS nulls_not_distinct,
            a.attname AS column_name,
            (i.indoption::int2[])[k.ord - 1] AS opt,
@@ -1425,7 +1432,7 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
       $(_PG_OWNABLE_TABLE_FILTER)
       AND NOT i.indisprimary
       AND NOT i.indisexclusion
-      AND (i.indisunique OR i.indnkeyatts > 1 OR am.amname <> 'btree'
+      AND (i.indisunique OR i.indnkeyatts > 1 OR am.amname <> 'btree' OR i.indnatts <> i.indnkeyatts
            OR (i.indoption::int2[])[0] <> 0
            OR NOT (SELECT x.opcdefault FROM pg_opclass x WHERE x.oid = (i.indclass::oid[])[0])
            OR i.indexprs IS NOT NULL OR i.indpred IS NOT NULL
@@ -1450,6 +1457,7 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
   # predicate. `as_text` marks the first kind; `texts` holds the definition and the predicate.
   as_text = Set{Tuple{String, String}}()
   texts = Dict{Tuple{String, String}, Tuple{Union{String, Nothing}, Union{String, Nothing}}}()
+  includes = Dict{Tuple{String, String}, Vector{String}}()   # #934: the `INCLUDE (…)` payload, in order
   for r in eachrow(rows)
     (r.table_name === missing || r.index_name === missing) && continue
     key = (string(r.table_name), string(r.index_name))
@@ -1459,8 +1467,13 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
     facts[key] = (r.method === missing ? "" : string(r.method), r.has_reloptions !== false,
                   r.index_comment === missing ? nothing : string(r.index_comment))
     # Whole-index refusals (see the docstring). A NULL defaults to REFUSED, like every test below.
-    (r.is_valid !== true || r.has_include !== false || r.nulls_not_distinct !== false ||
-     (constraint && r.is_deferrable !== false)) && push!(refused, key)
+    # #934: an `INCLUDE` payload is read on a non-unique index (`Models.Index(include = …)`); a unique
+    # one stays refused — `UniqueConstraint` declares no payload.
+    covering = r.has_include === true
+    (r.is_valid !== true || r.has_include === missing || (covering && (unique || r.include_columns === missing)) ||
+     r.nulls_not_distinct !== false || (constraint && r.is_deferrable !== false)) && push!(refused, key)
+    includes[key] = covering && r.include_columns !== missing ?
+      String[String(c) for c in JSON.parse(String(r.include_columns))] : String[]
     def = r.index_def === missing ? nothing : string(r.index_def)
     pred = r.predicate === missing ? nothing : string(r.predicate)
     old = get(texts, key, (nothing, nothing))
@@ -1517,13 +1530,15 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
       parsed = def === nothing ? nothing : _index_definition_elements(def)
       (parsed === nothing || length(parsed[1]) != length(members)) && continue
       LiveComposite(idx, String[], unique, constraint, method, Bool[], Union{String, Nothing}[], Bool[],
-                    marker, comment; expressions = parsed[1], condition = condition)
+                    marker, comment; expressions = parsed[1], condition = condition,
+                    include = includes[(tbl, idx)])
     else
       any(m -> m === nothing, members) && continue  # a member PormG cannot re-emit ⇒ drop it whole
       LiveComposite(idx, String[m.column for m in members], unique, constraint, method,
                     Bool[m.descending for m in members],
                     Union{String, Nothing}[m.opclass for m in members],
-                    Bool[m.opclass_default for m in members], marker, comment; condition = condition)
+                    Bool[m.opclass_default for m in members], marker, comment; condition = condition,
+                    include = includes[(tbl, idx)])
     end
     advanced = composite_is_advanced(lc)
     unique && advanced && continue                   # `UniqueConstraint` is plain b-tree only
@@ -2119,11 +2134,12 @@ function get_constraints_index(conn::PormGPostgres, table_name::Symbol, field_na
   # an index that is not unique — so what comes back is provably owned by no constraint, which is
   # what lets `_drop_index` emit a bare `DROP INDEX` with no `DROP CONSTRAINT` ahead of it.
   #
-  # `indkey` covers INCLUDE columns as well as key columns, on purpose: an INCLUDE column is as much a
-  # reason to re-create the index under a new name after a `RENAME COLUMN` as a key column is, and this
-  # lookup arms that. (#519: it is NOT arming a deletion — PostgreSQL drops an index with the column it
-  # covers and never refuses the `DROP COLUMN`, as the docstring above says. An earlier version of this
-  # comment claimed the lookup existed "to find what stands in the way", which contradicted it.)
+  # `indkey` covers INCLUDE columns as well as key columns, and that used to be on purpose: an INCLUDE
+  # column was as much a reason to re-create the index after a `RENAME COLUMN` as a key column. Since
+  # #934 a covering index is the composite pass's (`Models.Index(include = …)`, owned through its
+  # marker), so `indnatts = indnkeyatts` takes it out below and `indkey` is only key columns here.
+  # (#519: this is NOT arming a deletion — PostgreSQL drops an index with the column it covers and
+  # never refuses the `DROP COLUMN`, as the docstring above says.)
   # Scoped through `current_schemas(false)` for `get_constraints_fk`'s reason — the DDL this arms is
   # emitted UNQUALIFIED and so resolves through the search path, and the lookup has to agree with the
   # statement it is arming. Ordered, because "whichever PostgreSQL returned first" is not an answer.
@@ -2146,6 +2162,7 @@ function get_constraints_index(conn::PormGPostgres, table_name::Symbol, field_na
     AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = ic.oid)
     AND n.nspname = ANY(current_schemas(false))
     AND i.indpred IS NULL
+    AND i.indnatts = i.indnkeyatts
     AND NOT (0 = ANY(i.indkey::int2[]))
     AND am.amname = 'btree'
     AND NOT EXISTS (SELECT 1 FROM unnest(i.indoption::int2[]) AS o(opt) WHERE o.opt <> 0)
@@ -2448,8 +2465,8 @@ function _attach_composite_indexes!(model, composites::Vector{LiveComposite})
   kept_ix = Models.Index[]
   owners = Dict{String, Tuple{Union{String, Nothing}, Union{String, Nothing}}}()
   for lc in composites
-    if !all(c -> haskey(model.fields, c), lc.columns)
-      @debug "introspection: composite index skipped — column not on the introspected model" table=model.name index=lc.name columns=lc.columns
+    if !all(c -> haskey(model.fields, c), Iterators.flatten((lc.columns, lc.include)))
+      @debug "introspection: composite index skipped — column not on the introspected model" table=model.name index=lc.name columns=lc.columns include=lc.include
       continue
     end
     name = startswith(lc.name, "sqlite_autoindex_") ? nothing : lc.name
@@ -2471,10 +2488,12 @@ function _attach_composite_indexes!(model, composites::Vector{LiveComposite})
       elseif !isempty(lc.expressions)
         # #29 part 2: a functional index is written as the catalog's own text, which the planner
         # accepts as equal to the live index — so an adopted schema plans no replace.
-        Models.Index(expressions = lc.expressions, condition = lc.condition, name = name, method = lc.method)
+        Models.Index(expressions = lc.expressions, condition = lc.condition, name = name, method = lc.method,
+                     include = lc.include)
       else
         Models.Index(fields = String[d ? "-" * c : c for (c, d) in zip(lc.columns, lc.descending)],
-                     name = name, method = lc.method, opclasses = opclasses, condition = lc.condition)
+                     name = name, method = lc.method, opclasses = opclasses, condition = lc.condition,
+                     include = lc.include)
       end
     catch e
       e isa ModelDefinitionError || rethrow()
@@ -2692,8 +2711,9 @@ const _SQLITE_INDEX_MARKER_COMMENT = Regex("\\s*/\\*\\s*" * INDEX_MARKER_RE.patt
 A `CREATE INDEX` statement read as SQL text (#29 part 2): its members exactly as written, split at
 the list's top-level commas, with PormG's marker comment taken off the last one, and the text of its
 `WHERE` clause — `nothing` when it has none. `nothing` for a statement that is not that shape: no
-member list, or anything after the list other than a `WHERE` clause (an `INCLUDE`, a `WITH (…)`),
-which no declaration could reproduce.
+member list, or anything after the list other than an optional `INCLUDE (…)` and a `WHERE` clause
+(a `WITH (…)`, a `TABLESPACE`), which no declaration could reproduce. Since #934 the `INCLUDE (…)` is
+skipped rather than refused: its columns are read from the catalog, not from this text.
 
 Two inputs, one lexer: SQLite's stored `sqlite_master.sql`, and PostgreSQL's
 `pg_get_indexdef(oid, 0, true)`, whose literals are standard (`''`-doubled) strings. The split is
@@ -2709,6 +2729,17 @@ function _index_definition_elements(ddl::AbstractString)::Union{Nothing, Tuple{V
   rest = String(rstrip(strip(tail), ';'))
   isempty(rest) && return (parts, nothing)
   toks = _sqlite_identifier_tokens(rest)
+  # #934: PostgreSQL writes a covering index's `INCLUDE (…)` between the list and the `WHERE`. The
+  # payload is read from the catalog (`indkey` past `indnkeyatts`), so its text is only skipped here.
+  if !isempty(toks) && !toks[1].quoted && toks[1].start == firstindex(rest) && uppercase(toks[1].name) == "INCLUDE"
+    after = String(lstrip(SubString(rest, nextind(rest, toks[1].stop))))
+    Base.startswith(after, "(") || return nothing
+    group = _sqlite_clause_through_parens(after, firstindex(after))
+    Base.endswith(group, ")") || return nothing
+    rest = String(strip(after[ncodeunits(group) + 1:end]))
+    isempty(rest) && return (parts, nothing)
+    toks = _sqlite_identifier_tokens(rest)
+  end
   # The tail must BEGIN with an unquoted `WHERE`; everything after it is the predicate.
   (isempty(toks) || toks[1].quoted || toks[1].start != firstindex(rest) ||
    uppercase(toks[1].name) != "WHERE") && return nothing

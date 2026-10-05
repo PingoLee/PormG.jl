@@ -1062,3 +1062,58 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: a covering index over a hand-built live side (#934)
+# Plan shape only — the catalog half (`indkey` past `indnkeyatts`) is test_importers_introspection.jl.
+# The payload is part of the index: the same payload converges, another one (or another order) is a
+# drop and a create, and a renamed payload column maps through `column_renames` like a key column.
+# A hand-made covering index is read and adopted, never planned away undeclared.
+# Mutation gate: drop the `include == d.include` line from `composite_shape_matches` and the drift
+# case plans nothing.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: a covering index over a hand-built live side (#934)" begin
+  with_live(model, composites...) = begin
+    t = live_table(model, CD_PG)
+    LiveTable[LiveTable(t.name, t.columns, t.indexes, collect(LiveComposite, composites), t.checks)]
+  end
+  cov(inc; marker = "pormg:index", comment = marker, name = "result_race_cov") =
+    LiveComposite(name, ["raceid"], false, false, "btree", [false], Union{String, Nothing}["int4_ops"], [true],
+                  marker, comment; include = inc)
+  base = _cd_result()
+  declared = _cd_result(indexes = [Models.Index(fields = ("raceid",), include = ("grid", "driverid"), name = "result_race_cov")])
+
+  p = _cd_plan(CD_PG, with_live(base), declared)
+  @test p[:result]["Create index: result_race_cov"] ==
+        "CREATE INDEX \"result_race_cov\" ON \"result\" (\"raceid\") INCLUDE (\"grid\", \"driverid\");\n" *
+        "COMMENT ON INDEX \"result_race_cov\" IS 'pormg:index';"
+  # The same payload, marked: unchanged.
+  @test all(isempty, values(_cd_plan(CD_PG, with_live(declared, cov(["grid", "driverid"])), declared)))
+  # Another payload, or the same one in another order: a drop and a create of the one name.
+  for other in (["grid"], ["driverid", "grid"])
+    @test _cd_keys(_cd_plan(CD_PG, with_live(declared, cov(other)), declared), :result) ==
+          ["Remove composite index: result_race_cov", "Create index: result_race_cov"]
+  end
+  # A plain declaration over the same key never claims the covering one.
+  plain = _cd_result(indexes = [Models.Index(fields = ("raceid", "driverid"), name = "result_race_cov")])
+  @test "Remove composite index: result_race_cov" in
+        _cd_keys(_cd_plan(CD_PG, with_live(plain, cov(["grid", "driverid"])), plain), :result)
+  # Hand-made: adopted under the bare marker, the DBA's note kept; undeclared, never dropped.
+  hand = cov(["grid", "driverid"]; marker = nothing, comment = "ops note")
+  p = _cd_plan(CD_PG, with_live(declared, hand), declared)
+  @test _cd_keys(p, :result) == ["Adopt index: result_race_cov"]
+  @test p[:result]["Adopt index: result_race_cov"] == "COMMENT ON INDEX \"result_race_cov\" IS 'ops note pormg:index';"
+  @test all(isempty, values(_cd_plan(CD_PG, with_live(base, hand), base)))
+  # PormG's own, undeclared: dropped.
+  @test _cd_keys(_cd_plan(CD_PG, with_live(base, cov(["grid", "driverid"])), base), :result) ==
+        ["Remove composite index: result_race_cov"]
+  # A refused name shows the payload in the message, and in the declaration that adopts the index.
+  taker = _cd_result(indexes = [Models.Index(fields = ("raceid", "grid"), condition = "grid > 1", name = "result_race_cov")])
+  hand_part = LiveComposite("result_race_cov", ["raceid"], false, false, "btree", [false],
+                            Union{String, Nothing}["int4_ops"], [true], nothing, nothing;
+                            condition = "grid > 0", include = ["driverid"])
+  err = try; _cd_plan(CD_PG, with_live(taker, hand_part), taker); nothing; catch e; e; end
+  @test err isa PormG.InvalidMigrationError
+  @test occursin("INCLUDE (driverid)", err.msg)
+  @test occursin("include = (\"driverid\",)", err.msg)
+end

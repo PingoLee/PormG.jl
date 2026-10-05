@@ -1865,6 +1865,11 @@ function _index_text_members(columns::Vector{String}, descending::AbstractVector
   return String[String(e) for e in expressions]
 end
 
+# #934: a covering index's payload columns, ` INCLUDE ("a", "b")` between the member list and the
+# `WHERE` — PostgreSQL's order. Quoted identifiers, as `columns` arrive; PostgreSQL-only (SQLite's
+# `create_index` refuses a non-empty list).
+_index_include(include::AbstractVector)::String = isempty(include) ? "" : " INCLUDE ($(join(include, ", ")))"
+
 function _index_where(condition::Union{AbstractString, Nothing})::String
   condition === nothing && return ""
   is_valid_db_default_sql(condition) ||
@@ -1876,11 +1881,11 @@ function create_index(conn::PormGPostgres, index_name::String, table_name::Strin
                       if_not_exists::Bool = true, method::String = "btree",
                       descending::AbstractVector{Bool} = Bool[], opclasses::AbstractVector = Union{String, Nothing}[],
                       expressions::AbstractVector = String[], condition::Union{AbstractString, Nothing} = nothing,
-                      marker::Union{String, Nothing} = nothing)
+                      marker::Union{String, Nothing} = nothing, include::AbstractVector = String[])
   method in INDEX_METHODS || throw(InvalidValueError("index method $(repr(method)) is not one of $(INDEX_METHODS)"))
   using_ = method == "btree" ? "" : "USING $(method) "
   members = join(_index_text_members(columns, descending, opclasses, expressions), ", ")
-  stmt = """CREATE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) $(using_)($(members))$(_index_where(condition));"""
+  stmt = """CREATE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) $(using_)($(members))$(_index_include(include))$(_index_where(condition));"""
   # The marker rides in the same step as the index, so an index PormG created never exists without
   # the comment that says so — `add_check_constraint`'s shape. `_split_pg_statements` (#841) runs
   # the two one at a time.
@@ -1901,12 +1906,17 @@ function create_index(conn::PormGSQLite, index_name::String, table_name::String,
                       if_not_exists::Bool = true, method::String = "btree",
                       descending::AbstractVector{Bool} = Bool[], opclasses::AbstractVector = Union{String, Nothing}[],
                       expressions::AbstractVector = String[], condition::Union{AbstractString, Nothing} = nothing,
-                      marker::Union{String, Nothing} = nothing)
+                      marker::Union{String, Nothing} = nothing, include::AbstractVector = String[])
   method == "btree" || throw(BackendCapabilityError(
     "SQLite has no index access method \"$(method)\" — only b-tree. An index declared with " *
     "method = \"$(method)\" is PostgreSQL-only; declare it on a model that migrates on PostgreSQL."))
   any(!isnothing, opclasses) && throw(BackendCapabilityError(
     "SQLite has no operator classes, so an index declaring opclasses = $(Tuple(opclasses)) is " *
+    "PostgreSQL-only; declare it on a model that migrates on PostgreSQL."))
+  # #934: SQLite has no covering indexes. Refused rather than created without the payload, which
+  # would be a different index — the renderer half of the #648 rule.
+  isempty(include) || throw(BackendCapabilityError(
+    "SQLite has no covering indexes, so an index declaring include = $(Tuple(include)) is " *
     "PostgreSQL-only; declare it on a model that migrates on PostgreSQL."))
   members = join(_index_text_members(columns, descending, opclasses, expressions), ", ")
   marker === nothing || (members *= " /* $(marker) */")

@@ -691,9 +691,10 @@ order:
     any create or rename on the table, which would otherwise fail with "already exists". A bare index
     is `DROP INDEX`; a constraint-backed one is `ALTER TABLE … DROP CONSTRAINT` on PostgreSQL
     (`DROP INDEX` on an index a constraint owns is refused) and a table rebuild on SQLite (an
-    autoindex cannot be dropped at all). An index the readers refuse — `INCLUDE`, an extension's
-    method, a unique partial one, … — never reaches `live`, so it is never dropped. A functional or
-    partial index is advanced (#29 part 2): it is PormG's only under the hashed marker of its text.
+    autoindex cannot be dropped at all). An index the readers refuse — a unique `INCLUDE` one, an
+    extension's method, … — never reaches `live`, so it is never dropped. A functional or partial
+    index is advanced (#29 part 2): it is PormG's only under the hashed marker of its text; so is a
+    covering one (#934), under the bare marker.
   * **Adopt** a match that is advanced and carries no marker: on PostgreSQL a `COMMENT ON INDEX`
     appends the marker to whatever comment the index has, and from then on it is PormG's — for a
     text-holding index the hash of the DECLARED text, which is what every later plan compares. On SQLite
@@ -750,10 +751,13 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
 
   # The live side in the declared model's terms: renamed columns mapped, composites over a column
   # that is going away skipped (the docstring says why that is not a drop).
-  live = Tuple{LiveComposite, Vector{String}}[]
+  # #934: a covering index's payload columns are mapped and checked the same way — PostgreSQL's
+  # `DROP COLUMN` takes the index with an INCLUDE column as well.
+  live = Tuple{LiveComposite, Vector{String}, Vector{String}}[]
   for lc in live_composites
     cols = String[get(column_renames, c, c) for c in lc.columns]
-    all(c -> c in declared_cols, cols) && push!(live, (lc, cols))
+    inc = String[get(column_renames, c, c) for c in lc.include]
+    all(c -> c in declared_cols, cols) && all(c -> c in declared_cols, inc) && push!(live, (lc, cols, inc))
   end
 
   # Match declared ⇒ live by kind and columns. Two passes, so that when the live side carries two
@@ -767,7 +771,7 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
   for by_name in (true, false), (i, d) in enumerate(declared)
     matched[i] === nothing || continue
     j = findfirst(eachindex(live)) do j
-      !taken[j] && composite_shape_matches(live[j][1], d; columns = live[j][2]) &&
+      !taken[j] && composite_shape_matches(live[j][1], d; columns = live[j][2], include = live[j][3]) &&
         (by_name ? samename(live[j][1].name, d.name) :
                    !(_composite_name_key(conn, live[j][1].name) in claimed))
     end
@@ -910,7 +914,7 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
         Dialect.create_index(conn, quoted(d.name), quoted(table), cols; if_not_exists = false,
                              method = d.method, descending = d.descending, opclasses = d.opclasses,
                              expressions = d.expressions, condition = d.condition,
-                             marker = composite_marker(d)))
+                             marker = composite_marker(d), include = String[quoted(c) for c in d.include]))
     end
   end
   return dropped
@@ -921,6 +925,7 @@ end
 function _describe_live_composite(lc::LiveComposite)::String
   what = isempty(lc.expressions) ? "over ($(join(lc.columns, ", ")))" :
                                    "over expressions ($(join(lc.expressions, ", ")))"
+  isempty(lc.include) || (what *= " INCLUDE ($(join(lc.include, ", ")))")
   return lc.condition === nothing ? what : "$(what) WHERE $(lc.condition)"
 end
 
@@ -941,8 +946,9 @@ function _adoption_hint(lc::LiveComposite)::String
   method = lc.method == "btree" ? "" : ", method = $(repr(lc.method))"
   opcs = isempty(lc.expressions) && !all(lc.opclass_default) ?
     ", opclasses = ($(join((d ? "nothing" : repr(o) for (o, d) in zip(lc.opclasses, lc.opclass_default)), ", ")),)" : ""
+  inc = isempty(lc.include) ? "" : ", include = ($(join((repr(c) for c in lc.include), ", ")),)"
   return ". To keep it as PormG's own instead, declare it with the database's text: " *
-         "Models.Index($(members)$(cond), name = $(repr(lc.name))$(method)$(opcs))" *
+         "Models.Index($(members)$(cond), name = $(repr(lc.name))$(method)$(opcs)$(inc))" *
          (isempty(lc.expressions) ? " (the columns as the database names them — inspectdb writes the field names)" : "")
 end
 
@@ -2717,12 +2723,13 @@ function _refuse_postgres_only_indexes(current_schema::Dict{Symbol, Dict{Symbol,
     model = current_schema[table][:model]
     for ix in get(get(model.cache, "composite_indexes", Dict{String, Any}()), "indexes", Models.Index[])
       what = ix.method != "btree" ? "method = \"$(ix.method)\"" :
-             any(!isnothing, ix.opclasses) ? "opclasses = $(Tuple(ix.opclasses))" : nothing
+             any(!isnothing, ix.opclasses) ? "opclasses = $(Tuple(ix.opclasses))" :
+             !isempty(ix.include) ? "include = $(Tuple(ix.include))" : nothing   # #934
       what === nothing && continue
       throw(BackendCapabilityError(
         "Model '$(model.name)' declares an Index over $(Models._index_label(ix)) with $(what), which " *
-        "is PostgreSQL-only: SQLite has b-tree indexes and no operator classes. PormG refuses it " *
-        "rather than create a different index; migrate this model on PostgreSQL."))
+        "is PostgreSQL-only: SQLite has b-tree indexes, no operator classes and no covering indexes. " *
+        "PormG refuses it rather than create a different index; migrate this model on PostgreSQL."))
     end
   end
   return nothing

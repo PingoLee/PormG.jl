@@ -578,10 +578,10 @@ fetch(::CompositeMockPg161, sql::String; conn = nothing, params = nothing, ignor
   rows = NamedTuple[]
   # One row per key column. Every flag defaults to the value a plain PormG-created index carries.
   add(idx, cols; unique = false, contype = missing, deferrable = missing, valid = true,
-      include = false, nnd = false, opt = 0, tbl = "lap") =
+      include = false, nnd = false, opt = 0, tbl = "lap", payload = missing) =
     for c in cols
       push!(rows, (table_name = tbl, index_name = idx, is_unique = unique, contype = contype,
-                   is_deferrable = deferrable, is_valid = valid, has_include = include,
+                   is_deferrable = deferrable, is_valid = valid, has_include = include, include_columns = payload,
                    nulls_not_distinct = nnd, column_name = c, opt = opt, idx_coll = 0,
                    col_coll = 0, opc_default = true, opc_name = "int4_ops", method = "btree",
                    has_reloptions = false, index_comment = missing,
@@ -593,18 +593,26 @@ fetch(::CompositeMockPg161, sql::String; conn = nothing, params = nothing, ignor
   add("ux_g",    ["g"];      unique = true)                             # one-field UniqueConstraint
   add("uq_fe",   ["f", "e"]; unique = true, contype = "u", deferrable = false)   # Django's UNIQUE (f, e)
   add("uq_h",    ["h"];      unique = true, contype = "u", deferrable = false)   # the field's `unique`
-  add("ux_incl", ["c", "d"]; unique = true, include = true)             # INCLUDE payload
+  add("ux_incl", ["c", "d"]; unique = true, include = true, payload = "[\"e\"]")   # INCLUDE on a UNIQUE: still refused
   add("ux_bad",  ["c", "d"]; unique = true, valid = false)              # failed CONCURRENTLY build
   add("uq_def",  ["c", "d"]; unique = true, contype = "u", deferrable = true)    # DEFERRABLE
   add("ux_nnd",  ["c", "d"]; unique = true, nnd = true)                 # NULLS NOT DISTINCT
   add("ix_desc", ["c", "d"]; opt = 3)                                   # DESC keys: read since #29
+  # #934: a non-unique covering index is read, its payload in catalog order — at one key column
+  # too, since the payload makes it advanced (the `db_index` CTE refuses `indnatts <> indnkeyatts`).
+  add("ix_cov",  ["c", "d"]; include = true, payload = "[\"f\", \"e\"]")
+  add("ix_cov1", ["c"];      include = true, payload = "[\"e\"]")
   add("ux_other", ["x", "y"]; unique = true, tbl = "pit")               # keyed by its own table
   PG161_ROWS[] = DataFrame(rows)
 
   out = Migrations._pg_composite_indexes(CompositeMockPg161())
   lap = Dict(lc.name => lc for lc in out["lap"])
-  @test sort(collect(keys(lap))) == ["ix_ba", "ix_desc", "uq_fe", "ux_cd", "ux_g"]
+  @test sort(collect(keys(lap))) == ["ix_ba", "ix_cov", "ix_cov1", "ix_desc", "uq_fe", "ux_cd", "ux_g"]
   @test lap["ix_desc"].descending == [true, true]
+  @test (lap["ix_cov"].columns, lap["ix_cov"].include) == (["c", "d"], ["f", "e"])
+  @test (lap["ix_cov1"].columns, lap["ix_cov1"].include) == (["c"], ["e"])
+  @test Migrations.composite_is_advanced(lap["ix_cov1"]) && !Migrations.composite_is_owned(lap["ix_cov1"])   # unmarked: hand-made
+  @test isempty(lap["ix_ba"].include)
   @test lap["ix_ba"].descending == [false, false] && lap["ix_ba"].method == "btree"
   @test (lap["ix_ba"].columns, lap["ix_ba"].unique, lap["ix_ba"].constraint) == (["b", "a"], false, false)
   @test (lap["ux_cd"].unique, lap["ux_cd"].constraint) == (true, false)
@@ -638,7 +646,7 @@ end
       reloptions = false, comment = missing) =
     for (k, c) in enumerate(cols)
       push!(rows, (table_name = "result", index_name = idx, is_unique = unique, contype = missing,
-                   is_deferrable = missing, is_valid = true, has_include = false,
+                   is_deferrable = missing, is_valid = true, has_include = false, include_columns = missing,
                    nulls_not_distinct = false, column_name = c, opt = opt isa Vector ? opt[k] : opt,
                    idx_coll = 0, col_coll = 0, opc_default = opc_default isa Vector ? opc_default[k] : opc_default,
                    opc_name = opc isa Vector ? opc[k] : opc, method = method, has_reloptions = reloptions,
@@ -714,7 +722,7 @@ end
       e = expr isa Vector ? expr[k] : expr
       cc = coll isa Vector ? coll[k] : coll
       push!(rows, (table_name = tbl, index_name = idx, is_unique = unique, contype = missing,
-                   is_deferrable = missing, is_valid = true, has_include = false, nulls_not_distinct = false,
+                   is_deferrable = missing, is_valid = true, has_include = false, include_columns = missing, nulls_not_distinct = false,
                    column_name = e ? missing : c, opt = opt isa Vector ? opt[k] : opt,
                    idx_coll = cc[1], col_coll = e ? missing : cc[2], opc_default = true,
                    opc_name = "text_ops", method = method, has_reloptions = false, index_comment = comment,

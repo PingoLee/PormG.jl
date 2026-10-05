@@ -361,6 +361,42 @@ declarations it writes match the live indexes — adopting a database plans noth
 follows the ownership rule below: declared under its catalog text, it is adopted; undeclared, it is
 never planned away.
 
+### Covering indexes (`include`)
+
+`include` names fields whose values the index **carries** without sorting by them — Django's
+`Index(include=...)`, PostgreSQL's `INCLUDE (…)`. A query that filters on the key and reads only the
+carried columns is answered from the index alone, without visiting the table:
+
+```julia
+Result = Models.Model("result",
+  resultid = Models.IDField(),
+  raceid   = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+  points   = Models.FloatField(),
+  position = Models.IntegerField(null=true),
+  indexes = [
+    # a race's points table, read from the index alone — PostgreSQL only
+    Models.Index(fields=("raceid",), include=("points", "position"), name="result_race_points_cov"),
+  ],
+)
+```
+
+```sql
+CREATE INDEX "result_race_points_cov" ON "result" ("raceid") INCLUDE ("points", "position");
+COMMENT ON INDEX "result_race_points_cov" IS 'pormg:index';
+```
+
+- It needs a **`name`** (Django's rule), and combines with `fields` or `expressions` and with a
+  `condition`. One key field is enough: the payload makes it a different index from `db_index`.
+- A field is either part of the key or included, not both. `include` works with the `btree`, `gist`
+  and `spgist` methods (`spgist` from PostgreSQL 14); `hash`, `gin` and `brin` refuse it.
+- The payload is part of the index: changing it, or its order, is a drop and a create.
+- It is **PostgreSQL-only**: SQLite has no covering indexes, so `makemigrations` refuses a model that
+  declares one there with `BackendCapabilityError`, as it does a `method` or an operator class.
+
+A covering index is owned the way an index with a `method` is: PormG marks the ones it creates, a
+hand-made one is adopted by its declaration and never planned away undeclared, and `inspectdb` writes
+`include` back. A *unique* covering index stays unread — `UniqueConstraint` has no `include`.
+
 ## Changing composites on an existing table
 
 `makemigrations` diffs `UniqueConstraint` and `Index` declarations against the live database the way
@@ -413,7 +449,7 @@ matches a live index built with that default.
     a declaration adopts it again.
 
     Indexes PormG cannot reproduce are never read, so they are never dropped either: an access
-    method other than the six above, `INCLUDE (…)`, storage parameters on an advanced index (`WITH (fastupdate = off)`),
+    method other than the six above, `INCLUDE (…)` on a unique index, storage parameters on an advanced index (`WITH (fastupdate = off)`),
     `NULLS NOT DISTINCT`, a `DEFERRABLE` constraint, a unique index with a method, direction,
     operator class, expression or condition, and an invalid index (which
     [`check`](migrations/workflow.md#Finding-Invalid-Indexes) reports). The

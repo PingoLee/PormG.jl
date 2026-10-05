@@ -357,6 +357,75 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Index(include = …): a covering index, PostgreSQL-only (#934)
+# Django's `include=`: payload columns stored in the index but not part of its key. The constructor
+# takes field names, refuses what PostgreSQL would refuse at migrate (a method without INCLUDE
+# support, a key field repeated as payload) and requires a name (Django's rule). The payload makes
+# the index advanced, so one key field is accepted and the index is owned through `pormg:index`. The
+# planner renders `INCLUDE` between the member list and the `WHERE`, over PHYSICAL columns; SQLite is
+# refused at both sites (the #648 pattern). `Model_to_str` and inspectdb round-trip it.
+# Mutation gate: drop the `include` arm of `_refuse_postgres_only_indexes` and the planner half of
+# the SQLite refusal fails; drop `_index_include` from the PostgreSQL renderer and the render fails.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Index(include = …) is a PostgreSQL covering index (#934)" begin
+  msg(f) = try; f(); ""; catch e; e isa PormG.ModelDefinitionError ? sprint(showerror, e) : rethrow(); end
+  ix = Models.Index(fields = ("raceid",), include = ("points", "position"), name = "result_race_cov")
+  @test ix.include == ["points", "position"] && ix.fields == ["raceid"]
+  @test Models._index_is_advanced(ix)                                         # one key field is fine
+  @test Models.Index(fields = ("raceid", "lap"), include = "position", name = "x").include == ["position"]   # a lone name
+  @test Models.Index(fields = ("raceid", "lap"), include = (), name = "x").include == String[]              # empty: none
+  @test isempty(Models.Index(fields = ("raceid", "lap")).include)
+  @test Models.Index(expressions = ("lower(code)",), include = ("surname",), name = "x").include == ["surname"]
+  @test Models.Index(fields = ("raceid",), include = ("points",), method = "gist", name = "x").method == "gist"
+  @test occursin("needs an explicit name", msg(() -> Models.Index(fields = ("raceid", "lap"), include = ("points",))))
+  @test occursin("duplicate fields", msg(() -> Models.Index(fields = ("raceid",), include = ("points", "points"), name = "x")))
+  @test occursin("part of the key or included", msg(() -> Models.Index(fields = ("raceid", "lap"), include = ("lap",), name = "x")))
+  @test occursin("does not support include", msg(() -> Models.Index(fields = ("raceid",), include = ("points",), method = "gin", name = "x")))
+  @test occursin("does not support include", msg(() -> Models.Index(fields = ("raceid",), include = ("points",), method = "brin", name = "x")))
+  # The payload names fields of the model, checked when the model is built.
+  @test_throws PormG.ModelDefinitionError Models.Model("result_cov", id = Models.IDField(),
+    raceid = Models.IntegerField(), indexes = [Models.Index(fields = ("raceid",), include = ("nope",), name = "x")])
+
+  # Planner, PostgreSQL: INCLUDE over the PHYSICAL column, then the bare ownership marker.
+  cov = Models.Model("result_cov", id = Models.IDField(), raceid = Models.IntegerField(),
+                     points = Models.FloatField(db_column = "pts"), grid = Models.IntegerField(),
+                     indexes = [Models.Index(fields = ("raceid",), include = ("points",), condition = "grid > 0",
+                                             name = "result_cov_race")])
+  pg = _ix_plan_one(IXMockPostgres(), :result_cov, cov)
+  @test pg[:result_cov]["Create index: result_cov_race"] ==
+        "CREATE INDEX \"result_cov_race\" ON \"result_cov\" (\"raceid\") INCLUDE (\"pts\") WHERE grid > 0;\n" *
+        "COMMENT ON INDEX \"result_cov_race\" IS '$(PormG.index_text_marker(String[], "grid > 0"))';"
+  @test PormG.Dialect.create_index(IXMockPostgres(), "\"i\"", "\"t\"", ["\"a\""]; if_not_exists = false,
+                                   method = "gist", include = ["\"b\""]) ==
+        "CREATE INDEX \"i\" ON \"t\" USING gist (\"a\") INCLUDE (\"b\");"
+
+  # SQLite: refused at the planner, before anything is diffed, and at the renderer.
+  e = try; _ix_plan_one(IXMockSQLite(), :result_cov, cov); nothing; catch x; x; end
+  @test e isa PormG.BackendCapabilityError
+  @test occursin("include = (\"points\",)", sprint(showerror, e)) && occursin("PostgreSQL-only", sprint(showerror, e))
+  e_r = try; PormG.Dialect.create_index(IXMockSQLite(), "\"i\"", "\"t\"", ["\"a\""]; include = ["\"b\""]); nothing; catch x; x; end
+  @test e_r isa PormG.BackendCapabilityError && occursin("no covering indexes", sprint(showerror, e_r))
+
+  # Model_to_str writes the payload under the field's (possibly re-spelled) name, and it reloads.
+  src = Models.Model_to_str(cov)
+  @test occursin("Models.Index(fields = (\"raceid\",), name = \"result_cov_race\", condition = \"grid > 0\", " *
+                 "include = (\"points\",))", src)
+  back = _ix_reload(src)
+  @test only(back.cache["composite_indexes"]["indexes"]).include == ["points"]
+
+  # inspectdb: a live covering index is written as declared, payload included.
+  m = Models.Model("result_cov", id = Models.IDField(), raceid = Models.IntegerField(), pts = Models.FloatField())
+  live = LiveComposite("result_cov_race", ["raceid"], false, false, "btree", [false],
+                       Union{String, Nothing}["int4_ops"], [true], nothing, nothing; include = ["pts"])
+  _attach_composite_indexes!(m, [live])
+  @test only(m.cache["composite_indexes"]["indexes"]).include == ["pts"]
+  # …and one whose payload column the model lacks is skipped, not half-declared.
+  m2 = Models.Model("result_cov", id = Models.IDField(), raceid = Models.IntegerField())
+  _attach_composite_indexes!(m2, [live])
+  @test !haskey(m2.cache, "composite_indexes")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # `indexes` is a model-level option, so a COLUMN of that name is unreachable
 # Adding "indexes" to MODEL_OPTION_KWARGS means the kwarg is peeled before the field
 # slurp. A consuming app that declared a column called `indexes` must now pin it with
@@ -902,6 +971,7 @@ end
               BloomIndex(fields=['cpf', 'apelido'], name='bloom_idx'),
               GinIndex(fields=['apelido'], fastupdate=False, name='slow_gin_idx'),
               models.Index(fields=['cpf'], include=['apelido'], name='covering_idx'),
+              models.Index(fields=['cpf', 'ativo'], include=['apelido']),
           ]
   """
   config_key = mktempdir()
@@ -920,7 +990,9 @@ end
     @test occursin("Models.Index(expressions = (\"\\\"cpf\\\"\", \"LOWER(\\\"apelido\\\") DESC\",), name = \"str_idx\")", generated)
     # Members that are only fields — `F()` or a bare string — are a column index: `fields`, exactly.
     @test occursin("Models.Index(fields = (\"cpf\", \"-ativo\",), name = \"f_idx\")", generated)
-    @test count(r"Models\.Index\((fields|expressions) = \(", generated) == 5   # declarations, not the hint in a marker
+    # #934: a covering index carries its payload — one field is fine, since `include` makes it advanced.
+    @test occursin("Models.Index(fields = (\"cpf\",), name = \"covering_idx\", include = (\"apelido\",))", generated)
+    @test count(r"Models\.Index\((fields|expressions) = \(", generated) == 6   # declarations, not the hint in a marker
     # Each translated text index carries a note: its SQL is Django's, which a database Django already
     # built may store rewritten — so makemigrations may refuse it there and print the adopting text.
     # One per index that LANDED: the repeated `lower_idx` collapses, and so does its note.
@@ -937,7 +1009,7 @@ end
     @test occursin("its name uses a %(…)s placeholder", generated)
     @test occursin("BloomIndex has no PormG equivalent", generated)
     @test occursin("`fastupdate=` changes what the index means", generated)
-    @test occursin("`include=` changes what the index means", generated)
+    @test occursin("a covering index needs a `name=`", generated)   # Django's rule; a named one translates (#934)
     # Eight dropped indexes, eight markers — a blanket "report something" would pass a count of 1.
     @test count("an index on 'Servidor' was dropped", generated) == 8
   finally

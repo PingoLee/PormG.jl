@@ -520,6 +520,7 @@ Django parameters are automatically converted to PormG equivalents:
 | `indexes = [GinIndex(fields=['a'], opclasses=['gin_trgm_ops'], name=…)]` | **imported** as `Models.Index(fields = ("a",), name = …, method = "gin", opclasses = ("gin_trgm_ops",))` | Likewise `BTreeIndex`, `HashIndex`, `GistIndex`, `SpGistIndex` and `BrinIndex` from `django.contrib.postgres.indexes`, each as its `method`. These are PostgreSQL-only: `makemigrations` on SQLite refuses the model. |
 | `indexes = [Index(Lower('name'), name=…)]` | **imported** as `Models.Index(expressions = ("LOWER(\"name\")",), name = …)` | A functional index, in Django's own spelling of the SQL. Translated: `F('a')`, `Lower(…)` and `Upper(…)` over a text field or an `F()`, each optionally `.desc()` / `.asc()`. Anything else is reported (below). |
 | `indexes = [Index(fields=['a', 'b'], condition=Q(…), name=…)]` | **imported** as `Models.Index(fields = ("a", "b"), name = …, condition = "<SQL>")` | A partial index. The `Q(...)` goes through the same translator as a `CheckConstraint`'s, with the same whitelist; one it cannot translate drops the index and reports why. |
+| `indexes = [Index(fields=['a'], include=['b'], name=…)]` | **imported** as `Models.Index(fields = ("a",), name = …, include = ("b",))` | A covering index: `include=` carries over as field names. PostgreSQL-only, like the `contrib.postgres` classes: `makemigrations` on SQLite refuses the model. |
 | `index_together = (('a','b'), …)` | **imported** as one `Models.Index` per group | The legacy spelling; the non-unique twin of `unique_together`. |
 | `ordering`, `get_latest_by` | **dropped**, reported | PormG orders per query, not per model. |
 | `verbose_name*`, `permissions`, `default_related_name`, `app_label`, … | **dropped**, reported | No PormG equivalent. |
@@ -581,9 +582,9 @@ class, an enum, a field — stays verbatim: only the class a report is *about* i
       `CheckConstraint` translator's whitelist. Importing the columns alone would build a different
       index under the developer's name; the report names `Models.Index(expressions = …)`, so the
       index can be declared by hand;
-    - a functional or partial index without a string-literal `name=`, and one mixing expressions
-      with `fields=` or `opclasses=` — Django refuses all of these itself;
-    - `include=`, `db_tablespace=`, and an index class's storage parameters
+    - a functional, partial or covering index without a string-literal `name=`, and one mixing
+      expressions with `fields=` or `opclasses=` — Django refuses all of these itself;
+    - `db_tablespace=`, and an index class's storage parameters
       (`fastupdate=`, `gin_pending_list_limit=`, `pages_per_range=`, `fillfactor=`, …) — each
       changes *what* is indexed, how, or where it lives;
     - any other class, such as `BloomIndex` (an extension's access method) or a project's own

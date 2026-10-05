@@ -2211,6 +2211,112 @@ if adapter_name == "PostgreSQL"
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL covering indexes: declared, marked, read back, adopted, owned (#934)
+# The live half of test/unit/test_composite_diff.jl's #934 testset. `Index(include = …)` is created
+# with `INCLUDE (…)` and the bare marker, read back by the composite reader with its payload from
+# `indkey` past `indnkeyatts` (a one-key-column one too, and a partial one through the text path,
+# whose `pg_get_indexdef` carries `INCLUDE (…)` before the `WHERE`), and converges. `inspectdb`
+# writes `include` back. A hand-made covering index is never planned away, then adopted. A unique
+# covering index stays unread. The same table checks #934's `get_constraints_index` filters on a real
+# catalog: a covering, partial or marked index over a column is not the column's plain index.
+# Dropped in `finally`.
+# Mutation gate: refuse `has_include` again in `_pg_composite_indexes` and the declared covering
+# indexes stop reading back, so the converged plan re-creates them.
+# ─────────────────────────────────────────────────────────────────────────────
+if adapter_name == "PostgreSQL"
+  @testset "Covering indexes: declared, marked, read back, adopted, owned (#934)" begin
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
+    tbl = "pormg_it_934_result"
+    drop934!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
+    M = PormG.Models
+    IX = M.Index
+    model934(indexes...) = M.Model(tbl;
+      id = M.IDField(), raceid = M.IntegerField(), driverid = M.IntegerField(), points = M.FloatField(),
+      position = M.IntegerField(null = true), grid = M.IntegerField(db_column = "start_grid"),
+      indexes = collect(indexes))
+    schema934(m) = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+      Symbol(tbl) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => m, :exist => false))
+    settings934 = (s = PormG.Configuration.Settings(); s.change_db = true; s)
+    live934() = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
+    plan934(m) = PormG.Migrations.get_migration_plan([live934()], schema934(m), pool, settings934; interactive = false)
+    keys934(p) = haskey(p, Symbol(tbl)) ? collect(keys(p[Symbol(tbl)])) : String[]
+    apply934!(plan) = for sql in first(PormG.Migrations._order_statements(collect(values(plan))))
+      foreach(ddl, PormG.Migrations._split_pg_statements(sql))
+    end
+    declared = (
+      IX(fields = ("raceid", "driverid"), include = ("points", "grid"), name = "pormg_it_934_race_cov"),
+      IX(fields = ("driverid",), include = ("points",), name = "pormg_it_934_driver_cov"),
+      IX(fields = ("raceid",), include = ("position",), condition = "position IS NOT NULL", name = "pormg_it_934_fin_cov"),
+    )
+    names = [ix.name for ix in declared]
+
+    drop934!()
+    try
+      apply934!(PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema934(model934()), pool,
+                                                     settings934; interactive = false))
+      p = plan934(model934(declared...))
+      @test sort(keys934(p)) == sort(["Create index: $(n)" for n in names])
+      apply934!(p)
+      defs = Dict(String(r.indexname) => String(r.indexdef) for r in eachrow(ddl(
+        "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = '$(tbl)'")))
+      # PostgreSQL built the payload over the PHYSICAL column (`grid` is `start_grid`).
+      @test occursin("(raceid, driverid) INCLUDE (points, start_grid)", defs["pormg_it_934_race_cov"])
+      @test occursin("INCLUDE (\"position\") WHERE", defs["pormg_it_934_fin_cov"]) ||
+            occursin("INCLUDE (position) WHERE", defs["pormg_it_934_fin_cov"])
+
+      # Read back with the payload, in order, and converged — the one-key-column and partial ones too.
+      byname = Dict(c.name => c for c in live934().composites)
+      @test issubset(names, keys(byname))
+      @test (byname["pormg_it_934_race_cov"].columns, byname["pormg_it_934_race_cov"].include) ==
+            (["raceid", "driverid"], ["points", "start_grid"])
+      @test byname["pormg_it_934_driver_cov"].include == ["points"]
+      @test byname["pormg_it_934_fin_cov"].include == ["position"]
+      @test all(byname[n].marker !== nothing for n in names)
+      @test isempty(live934().indexes)                # none is a `db_index`: one owner per index
+      @test all(isempty, values(plan934(model934(declared...))))
+
+      # #934 commit 3, on a real catalog: no covering, partial or marked index is a column's plain index.
+      @test PormG.Migrations.get_constraints_index(pool, Symbol(tbl), "driverid") === nothing
+      @test PormG.Migrations.get_constraints_index(pool, Symbol(tbl), "raceid") === nothing
+      ddl("CREATE INDEX pormg_it_934_plain ON \"$(tbl)\" (raceid, points)")
+      @test PormG.Migrations.get_constraints_index(pool, Symbol(tbl), "raceid") == "pormg_it_934_plain"
+      ddl("DROP INDEX pormg_it_934_plain")
+
+      # inspectdb writes the payload back, and its own output plans nothing.
+      read_back = only(m for m in PormG.Migrations.convert_schema_to_models(pool; include_table = [tbl]))
+      src = PormG.Models.Model_to_str(read_back)
+      @test occursin("name = \"pormg_it_934_race_cov\", include = (\"points\", \"start_grid\",))", src)
+      mod934 = Module()
+      Core.eval(mod934, :(import PormG.Models))
+      @test all(isempty, values(plan934(Core.eval(mod934, Meta.parse(src)))))
+
+      # A hand-made covering index with a DBA's note: never planned away, then adopted, note kept.
+      ddl("CREATE INDEX pormg_it_934_hand ON \"$(tbl)\" (position) INCLUDE (raceid)")
+      ddl("COMMENT ON INDEX pormg_it_934_hand IS 'built by ops'")
+      @test all(isempty, values(plan934(model934(declared...))))
+      adopting = model934(declared..., IX(fields = ("position",), include = ("raceid",), name = "pormg_it_934_hand"))
+      p = plan934(adopting)
+      @test keys934(p) == ["Adopt index: pormg_it_934_hand"]
+      apply934!(p)
+      @test all(isempty, values(plan934(adopting)))
+      # A unique covering index is not read, so it is never planned away either.
+      ddl("CREATE UNIQUE INDEX pormg_it_934_ux ON \"$(tbl)\" (id) INCLUDE (points)")
+      @test !any(c -> c.name == "pormg_it_934_ux", live934().composites)
+
+      # Undeclared: PormG's own — the adopted one included — go; the unique stranger stays.
+      p = plan934(model934())
+      @test sort(keys934(p)) == sort(["Remove composite index: $(n)" for n in vcat(names, "pormg_it_934_hand")])
+      apply934!(p)
+      @test all(isempty, values(plan934(model934())))
+      @test nrow(ddl("SELECT 1 FROM pg_indexes WHERE indexname = 'pormg_it_934_ux'")) == 1
+    finally
+      drop934!()
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Expression and partial indexes: declared, marked, read back, adopted, owned (#29 part 2)
 # The live half of test/unit/test_composite_diff.jl's part-2 testsets, on both engines. A functional
 # index, a partial one, an explicitly collated one and (PostgreSQL) a GIN index over an expression are

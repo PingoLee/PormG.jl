@@ -127,7 +127,7 @@ const SPEC_CORPUS = [
   @testset "every field kind compiles on both engines" begin
     concrete = filter(T -> isconcretetype(T) && parentmodule(T) === PormG.Models,
                       subtypes(PormG.PormGField))
-    @test length(concrete) == 27   # 25 until #28 added GenericIPAddressField and CIDRField
+    @test length(concrete) == 28   # 25 until #28 added GenericIPAddressField and CIDRField, then ArrayField
 
     # One constructible instance per struct. Relational types need a target; the bounded ones need
     # their bound. Anything not listed takes its zero-argument constructor.
@@ -136,6 +136,7 @@ const SPEC_CORPUS = [
       T === Models.sOneToOneField     ? Models.OneToOneField("Races") :
       T === Models.sManyToManyField   ? Models.ManyToManyField("Races") :
       T === Models.sDecimalField      ? Models.DecimalField(max_digits = 8, decimal_places = 3) :
+      T === Models.sArrayField        ? Models.ArrayField(Models.IntegerField()) :   # #28: takes its element
       getfield(Models, Symbol(String(nameof(T))[2:end]))()
 
     for T in concrete

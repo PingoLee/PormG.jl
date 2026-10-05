@@ -88,6 +88,25 @@ Layer 1 on purpose: `Models` produces it and `QueryBuilder` consumes it, so neit
 struct PormGBytes <: PormGAbstractType
   bytes::Vector{UInt8}
 end
+
+"""
+    PormGArrayLiteral(literal::String)
+
+An `ArrayField` value on its way to PostgreSQL — the wrapper the field's formatter returns (#28).
+`literal` is the array in PostgreSQL's own text form (`{1,2}`, `{"a b",NULL}`), already validated
+element by element and printed the way PostgreSQL's `array_out` prints it.
+
+PormG binds this text as ONE parameter and lets the column type it, rather than handing a Julia
+vector to the driver: LibPQ and Postgres.jl each render a vector differently (LibPQ writes
+`nothing` and `Inf` as the words), and a bare vector already means "a list of values" to the
+parameter collectors, which expand it for `@in`. The wrapper is not an `AbstractArray`, so no
+collector can mistake it for one — the [`PormGBytes`](@ref) reasoning.
+
+Layer 1 for the same reason as `PormGBytes`: `Models` produces it and `QueryBuilder` consumes it.
+"""
+struct PormGArrayLiteral <: PormGAbstractType
+  literal::String
+end
 """
     SQLObject <: PormGAbstractType
 
@@ -434,7 +453,7 @@ include("column_ir.jl")
 
 # Type hierarchy
 export PormGAbstractType, PormGSettings, PormGBackend, PormGPostgres, PormGSQLite,
-       AbstractPormGParam, PormGPostgresParam, PormGSQLiteParam, PormGBytes,
+       AbstractPormGParam, PormGPostgresParam, PormGSQLiteParam, PormGBytes, PormGArrayLiteral,
        SQLObject, SQLObjectHandler, SQLTableAlias, SQLInstruction,
        SQLType, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeFunction, SQLTypeOper,
        SQLTypeText, SQLTypeArrays, SQLTypeField, SQLTypeOrder, SQLTypeCTE, SQLTypeJoined,

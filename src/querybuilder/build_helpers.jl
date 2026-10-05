@@ -687,6 +687,25 @@ function _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Union{Mis
   return _vector_oper_from_suffix(x)
 end
 
+# #28: every other vector right-hand side — in practice a list of vectors, `"tags__@in" => [[1], [2]]`,
+# the shape an `ArrayField` membership list would take. It used to match no method and leak a raw
+# `MethodError`. A membership list of whole arrays is not supported: the PostgreSQL membership render
+# binds the list as ONE array parameter, and an array of arrays is a single two-dimensional value, not
+# a list of them. Strictly less specific than every arm above, so it only catches what they do not.
+function _get_pair_to_oper(x::Pair{Vector{String},<:AbstractVector})
+  lookup = join(x.first, "__@")
+  path = join(haskey(PormGsuffix, x.first[end]) ? x.first[1:end-1] : x.first, "__")
+  # A `nothing` among values is the other shape that lands here (`["SOFT", nothing]` is a
+  # `Vector{Union{Nothing, String}}`). In a filter value a NULL element is spelled `missing`.
+  any(isnothing, x.second) && throw(FilterError(
+    "Error in filter '$(lookup)': a filter value cannot hold `nothing`; write a NULL element as " *
+    "`missing` — \e[4m\e[32m\"$(path)\" => [\"SOFT\", missing]\e[0m."))
+  kinds = join(unique(string.(typeof.(x.second))), ", ")
+  throw(FilterError("Error in filter '$(lookup)': a list of $(kinds) values is not a filter value. " *
+                    "To match an ArrayField against several whole arrays, OR the equalities: " *
+                    "\e[4m\e[32mQor(\"$(path)\" => [1, 2], \"$(path)\" => [3])\e[0m."))
+end
+
 # The suffix ladder for a VECTOR right-hand side, extracted so the `Vector{UInt8}` method above can
 # reach it (#596). It cannot get here by delegation — a `Pair{Vector{String},Vector{UInt8}}` dispatches
 # to its own, more specific method — and the first cut of #596 reimplemented the two-branch SCALAR
@@ -698,6 +717,17 @@ end
 # one of them.
 function _vector_oper_from_suffix(x::Pair{Vector{String},<:AbstractVector})
   suffix = x.first[end]
+  # #28: a bare path — the last segment is no operator — is an equality against the WHOLE vector, the
+  # meaning an `ArrayField` gives it. Built here without knowing the field, as the `Vector{UInt8}` arm
+  # above builds a binary equality, and for the same reason: `Q`/`Qor`/`When` reach this ladder with
+  # no model. The render resolves the field and refuses the vector for any other column
+  # (`_guard_vector_equality`), with the "no operator" message this ladder used to give at parse time.
+  #
+  # Only a path with no `__@` segment, whose last `__` segment is not an operator name: `surname__in`
+  # is a typo for `surname__@in`, and keeps the "no operator" message that names the fix.
+  if length(x.first) == 1 && !haskey(PormGsuffix, last(split(x.first[1], "__")))
+    return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
+  end
   if suffix in ["in", "nin"]
     @pormg_debug false
     return OperObject(operator=PormGsuffix[suffix], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
@@ -2053,7 +2083,7 @@ function _render_json_lookup_comparison(v::SQLTypeOper, column::String, instruc:
   # does `string(v.values)`, which stringified the payload's Julia `repr` into
   # `#>> '{"kind"}' = 'UInt8[0x01, 0x02]'` — valid SQL, zero rows, no error. A JSON value is never a
   # byte payload, so the refusal is unconditional.
-  _guard_scalar_bytes(v, nothing)
+  _guard_vector_equality(v, nothing)
   # #811: the same silent arm, reached by a column expression. `"payload__kind" => F("grid")` bound
   # the `FExpression`'s `repr` as text on PostgreSQL — zero rows, no error — while SQLite refused it as
   # an unbindable value. Comparing extracted JSON against a column needs a per-engine cast nobody has
@@ -2581,15 +2611,22 @@ end
 #
 # The refusal is the funnel the parse ladder used, with the same `allowed` list, so a non-binary
 # field reports the message it has always reported for an operator-less vector value.
-function _guard_scalar_bytes(v::SQLTypeOper, f_meta, label::AbstractString)
-  (v.operator == "=" && v.values isa Vector{UInt8}) || return nothing
-  (f_meta !== nothing && _is_binary_field(f_meta)) && return nothing
+#
+# #28 widened it from bytes to every vector: a bare-path vector is now admitted at parse for any
+# element type (`_vector_oper_from_suffix`), because an `ArrayField` compares one whole vector. So the
+# same render-time decision covers both columns whose ONE value is a vector — a `BinaryField` given a
+# flat `Vector{UInt8}`, and an `ArrayField` given any vector — and refuses the vector everywhere else,
+# with the message the parse ladder gave before. Renamed from `_guard_scalar_bytes` for that reason.
+function _guard_vector_equality(v::SQLTypeOper, f_meta, label::AbstractString)
+  (v.operator == "=" && v.values isa AbstractVector) || return nothing
+  (f_meta !== nothing && _is_array_field(f_meta)) && return nothing
+  (v.values isa Vector{UInt8} && f_meta !== nothing && _is_binary_field(f_meta)) && return nothing
   _raise_invalid_filter_operator([String(label)], "vector",
                                  ["in", "nin", "range", "nrange", "has_any_keys", "has_keys", "jcontains"])
 end
 # Label-deriving form, for the arms that have no field name of their own to pass (the JSON-path
 # lookup).
-_guard_scalar_bytes(v::SQLTypeOper, f_meta) = _guard_scalar_bytes(v, f_meta, _filter_path_label(v))
+_guard_vector_equality(v::SQLTypeOper, f_meta) = _guard_vector_equality(v, f_meta, _filter_path_label(v))
 
 # The path the user wrote, for an error message on an arm that has no field name of its own (the
 # JSON-path lookup). Best effort: falls back to the rendered column.
@@ -2755,6 +2792,8 @@ end
 # share: a field carries it, and an alias over one resolves it (`_having_alias_formatter`) — the alias
 # has no field to ask.
 function _pattern_text_kind(formatter)::Union{Symbol,Nothing}
+  # #28: an array has no one text to match — refused in `_pattern_operand`, never read as text.
+  formatter isa Models.ArrayFormatter && return :array
   (formatter === Models.format_inet_sql || formatter === Models.format_inet_unpacked_sql) && return :inet
   formatter === Models.format_cidr_sql && return :cidr
   # #902: a UUID reads as its canonical lowercase hyphenated text — what SQLite stores and what
@@ -2771,10 +2810,17 @@ end
 # DDL that would create one is refused, `Dialect._refuse_specialized_sqlite_type`), so there the
 # predicate is left as written.
 function _pattern_operand(column::AbstractString, formatter, operator::AbstractString,
-                          instruc::SQLInstruction)::String
+                          instruc::SQLInstruction; label::AbstractString = column)::String
   operator in PATTERN_LOOKUP_OPERATORS || return String(column)
   kind = _pattern_text_kind(formatter)
   kind === nothing && return String(column)
+  # #28. Django spells array containment `contains`, and PormG's `@contains` is a LIKE. Reading the
+  # array as text and matching a fragment of `{a,b}` would answer a different question than the one
+  # either spelling asks, so it is refused — the `@jcontains` precedent: one operator, one meaning.
+  kind === :array && throw(FilterError(
+    "Error in filter '$(label)': a pattern lookup (`@contains`, `@startswith`, `@regex`, …) matches " *
+    "text, and this is an ArrayField. Array containment is a separate lookup, `@acontains`, which " *
+    "is not available yet (#28). Compare the whole array instead: \"$(label)\" => [ … ]."))
   return Dialect._pattern_text_operand(instruc.connection, Val(kind), column)
 end
 
@@ -2832,7 +2878,11 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   operand_field, _ = _operand_field(v, instruc)
   operand_formatter = operand_field !== nothing ? operand_field.formatter :
                       alias !== nothing ? _having_alias_formatter(memo_key(:base, alias), instruc) : nothing
-  column = _pattern_operand(column, operand_formatter, v.operator, instruc)
+  # The label is derived only for an array column — the one kind that refuses here and names a path.
+  # `_filter_path_label` has no method for every column kind (an `F` transform), so it is not asked
+  # for the others.
+  column = _pattern_operand(column, operand_formatter, v.operator, instruc;
+                            label = operand_formatter isa Models.ArrayFormatter ? _filter_path_label(v) : column)
   if isa(v.values, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
     @pormg_debug false
     # #894: a `DurationField` ordered against an `F` interval — another `DurationField`, a timestamp
@@ -2869,7 +2919,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # (`@year`, `@month`, `@yyyy_mm`, …) always attach a formatter (`functions.jl`), so they land
     # here. The two arms below need a function node with `formatter === nothing`, which no public
     # spelling produces — they carry the same guard as a fail-safe, and say so there.
-    _guard_scalar_bytes(v, nothing, _label)
+    _guard_vector_equality(v, nothing, _label)
     # #618: the transform arms reach the `Dialect` dispatch below, so their SQL keyword and `ESCAPE`
     # clause were always right — but they bound the value with no `contains=` / `operator=`, so a
     # pattern lookup over a transform column got no `%` and no `escape_like_pattern`. That is the same
@@ -2884,7 +2934,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # about. Leaving them raw would keep that coincidence load-bearing.
     _fmt = getfield(Models, PormGTypeField[v.column.field.function_name])
     _label, _type, _subject = _transform_filter_labels(v.column, _fmt)   # #576
-    _guard_scalar_bytes(v, nothing, _label)   # #596 — fail-safe; no public spelling reaches this arm
+    _guard_vector_equality(v, nothing, _label)   # #596 — fail-safe; no public spelling reaches this arm
     placeholders = add_parameter!(instruc,
       _guarded_format(_fmt, v.values, v.operator, _label, _type; subject = _subject),
       contains = v.operator in LIKE_WILDCARD_OPERATORS, operator = v.operator)   # #618
@@ -2904,7 +2954,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     _own = v.column isa FObject ? v.column.formatter : nothing
     _fmt = _own !== nothing ? _own : getfield(Models, PormGTypeField[v.column.function_name])
     _label, _type, _subject = _transform_filter_labels(v.column, _fmt)   # #576
-    _guard_scalar_bytes(v, nothing, _label)   # #596 — fail-safe; no public spelling reaches this arm
+    _guard_vector_equality(v, nothing, _label)   # #596 — fail-safe; no public spelling reaches this arm
     placeholders = add_parameter!(instruc,
       _guarded_format(_fmt, v.values, v.operator, _label, _type; subject = _subject),
       contains = v.operator in LIKE_WILDCARD_OPERATORS, operator = v.operator)   # #618
@@ -2985,7 +3035,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       # `_apply_like_wildcards`, which picks the shape from the same constants (#604).
       is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
       _f_meta = instruc.object.model.fields[v.column.field]
-      _guard_scalar_bytes(v, _f_meta, v.column.field)   # #596
+      _guard_vector_equality(v, _f_meta, v.column.field)   # #596
       # #576: was a hand-written `try` whose `catch` carried the note below; it is now the shared
       # `_guarded_format`, which also moves `add_parameter!` OUT of the guard. That is what #467
       # said it wanted ("`add_parameter!` stays outside the new `try`") and what the `BETWEEN` arm
@@ -3012,7 +3062,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     elseif (_vc_field = memo_field(instruc, memo_key(v.column))) !== nothing # #474
       @pormg_debug false
       is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
-      _guard_scalar_bytes(v, _vc_field, memo_key(v.column)[2])   # #596: the joined-path twin
+      _guard_vector_equality(v, _vc_field, memo_key(v.column)[2])   # #596: the joined-path twin
       # #576: unguarded, and CONFIRMED — this is the ordinary joined-path filter, not an exotic
       # one. Any FK traversal lands here, because `"driverid__dob"` is not a key of `model.fields`,
       # so `filter("driverid__dob" => "not-a-date")` reported `InvalidValueError` on what is
@@ -3041,7 +3091,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
       # itself is a fallback whose reachability is not pinned by anything — if a future column kind
       # lands here, the silent expansion is what it would get. Do not "cover" it by reaching in past
       # the public API; if a real spelling is ever found, that is the test.
-      _guard_scalar_bytes(v, nothing, string(v.column.field))
+      _guard_vector_equality(v, nothing, string(v.column.field))
       placeholders = add_parameter!(instruc, v.values, contains=is_like_op, operator=v.operator)
     else
       @pormg_debug false

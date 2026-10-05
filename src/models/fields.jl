@@ -3586,3 +3586,259 @@ function JSONField(; kwargs...)
   )
 end
 
+# ============================================================================
+# Array field (#28)
+# ============================================================================
+
+"""
+    array_element_kind(base::PormGField) -> Union{CanonicalType, Nothing}
+
+The canonical kind of one element of an `ArrayField(base)`, or `nothing` when `base` cannot be an
+array element. This is the one table of what an `ArrayField` may hold.
+
+Kept equal to what the migration compiler reads back from the rendered column type by a unit test
+(`parse_canonical_type(_get_column_type(ArrayField(b)))` must be `CArray(array_element_kind(b))` for
+every base listed here), so a base whose DDL changes cannot drift from its element codec silently.
+
+Left out on purpose: keys and relations (no array form); `PositiveIntegerField`/
+`PositiveSmallIntegerField` (their `>= 0` CHECK has no per-element form); `JSONField`, `BinaryField`,
+`DurationField`, `TimeField` (the drivers decode their array elements differently, the #581 shape);
+`ImageField`/`FileField`/`PasswordField` (write-side behaviour of their own); the network fields; and
+`ArrayField` itself — `format_type` prints `integer[][]` as `integer[]`, so a nested array could not
+be told apart from a flat one by the migration planner.
+"""
+array_element_kind(f::sCharField) = CVarChar(f.max_length)
+array_element_kind(f::sURLField) = CVarChar(f.max_length)
+array_element_kind(f::sSlugField) = CVarChar(f.max_length)
+array_element_kind(::sTextField) = CText()
+array_element_kind(::sEmailField) = CText()   # rendered `text` on PostgreSQL (no length), see `Dialect._get_column_type`
+array_element_kind(::sIntegerField) = CInt32()
+array_element_kind(::sBigIntegerField) = CInt64()
+array_element_kind(::sFloatField) = CFloat64()
+array_element_kind(f::sDecimalField) = CDecimal(f.max_digits, f.decimal_places)
+array_element_kind(::sBooleanField) = CBool()
+array_element_kind(::sDateField) = CDate()
+array_element_kind(f::sDateTimeField) = CDateTime(f.type == "TIMESTAMPTZ")
+array_element_kind(::sUUIDField) = CUUID()
+array_element_kind(::PormGField) = nothing
+
+"""
+    ArrayFormatter(base, kind, size)
+
+The formatter of an `ArrayField`: a callable `Function` (it fills the field's `formatter` slot like
+every other formatter) that turns a vector into a [`PormGArrayLiteral`](@ref). Each element goes
+through `base`'s own formatter first — so an `ArrayField(IntegerField())` refuses `"abc"` with the
+same reason an `IntegerField` does — and is then converted to its `kind` value and printed. A struct
+rather than a closure so `Model_to_str`, `display` and the kwargs snapshot can name it
+(`nameof` → `format_array_sql`) and read the base field back off it.
+"""
+struct ArrayFormatter <: Function
+  base::PormGField
+  kind::CanonicalType
+  size::Union{Int, Nothing}
+end
+Base.nameof(::ArrayFormatter) = :format_array_sql
+
+function (f::ArrayFormatter)(value)
+  (value === missing || value === nothing) && return missing
+  value isa PormGArrayLiteral && return value
+  # A String is an array literal — the form a `default=` is stored in, and the one the insert path
+  # hands back here to fill a missing column. Its elements are read into `kind` values first, so they
+  # reach the base formatter as the typed values it takes rather than as PostgreSQL's spelling of them.
+  elems = value isa AbstractString ?
+    Any[e === nothing ? nothing : pg_array_element_value(f.kind, e) for e in parse_pg_array_literal(value)] :
+    _pg_array_elements(value)
+  f.size !== nothing && length(elems) > f.size &&
+    throw(InvalidValueError("this ArrayField holds at most $(f.size) elements (size = $(f.size)), got $(length(elems))."))
+  texts = Vector{Union{Nothing, String}}(undef, length(elems))
+  for (i, el) in enumerate(elems)
+    if el === nothing || el === missing
+      f.base.null ||
+        throw(InvalidValueError("element $i is null, and this ArrayField's base field does not allow null elements (declare it with null = true)."))
+      texts[i] = nothing
+      continue
+    end
+    (el isa Union{AbstractArray, Tuple} && !(el isa AbstractString)) &&
+      throw(InvalidValueError("element $i is a $(typeof(el)): an ArrayField holds a one-dimensional array, so an element cannot be a collection."))
+    texts[i] = try
+      formatted = f.base.formatter(el)
+      # A float into a numeric element converts through its shortest text (`string`, `1.1`), not the
+      # formatter's 17 significant digits (`1.1000000000000001`), which is the noise a declared
+      # `default = [1.1]` would otherwise carry into the DDL and every literal. The formatter still
+      # runs first, so it still refuses what it refuses.
+      # The IEEE types by name: under Decimals 0.4 a `Decimal` is an `AbstractFloat` too, and its text
+      # is not a plain number. `string`, not `repr`: `repr(1.5f0)` is `"1.5f0"`.
+      source = f.kind isa CDecimal && el isa Union{Float16, Float32, Float64} ? string(el) : formatted
+      pg_array_element_text(f.kind, pg_array_element_value(f.kind, source))
+    catch e
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()   # #472
+      # The base formatters cover their own types; one handed another type (`format_bool_sql("t")`)
+      # has no method for it. Either way the reason belongs to the element, so say which one.
+      reason = e isa InvalidValueError ? e.msg :
+               e isa MethodError ? "$(repr(el)) is not a valid $(_pg_kind_label(f.kind)) value" : rethrow()
+      throw(InvalidValueError("element $i of the array: $(rstrip(reason, '.'))."))
+    end
+  end
+  return PormGArrayLiteral(print_pg_array_literal(texts))
+end
+
+# The element bounds the write path checks per element (`QueryBuilder._validate_array_value`) and a
+# formatter does not: a text element's `max_length`, a numeric element's `max_digits` and
+# `decimal_places`. A scalar `CharField(default = …)` is refused for the same overrun, so an array
+# default is too — otherwise the column's DDL default would be refused only by the server, on the
+# first insert that relies on it or at `migrate`. Read off the canonical literal, whose element text is
+# the value's own (`1.5`, not `1.50`).
+function _check_array_default_bounds(base::PormGField, literal::AbstractString)
+  for (i, text) in enumerate(parse_pg_array_literal(literal))
+    text === nothing && continue
+    if hasfield(typeof(base), :max_length) && getfield(base, :max_length) isa Integer &&
+       length(text) > getfield(base, :max_length)
+      throw(_fielderr("Invalid default value for ArrayField: element $i has length $(length(text)), " *
+                      "and the element field's max_length is $(getfield(base, :max_length))."))
+    end
+    if base isa sDecimalField
+      digits = replace(text, r"^-" => "")
+      whole, frac = occursin('.', digits) ? split(digits, '.'; limit = 2) : (digits, "")
+      nwhole = whole == "0" ? 0 : length(whole)
+      if length(frac) > base.decimal_places || nwhole > base.max_digits - base.decimal_places
+        throw(_fielderr("Invalid default value for ArrayField: element $i ($text) does not fit the " *
+                        "element field's max_digits = $(base.max_digits), decimal_places = $(base.decimal_places)."))
+      end
+    end
+  end
+  return nothing
+end
+
+mutable struct sArrayField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  db_column::Union{String, Nothing}
+  default::Union{String, Nothing}
+  editable::Bool
+  type::String
+  formatter::Function
+  base_field::PormGField
+  size::Union{Int, Nothing}
+  db_default::DbDefault
+end
+
+# The base field describes an ELEMENT, so a keyword that describes a COLUMN has nowhere to go: it
+# would be accepted and never rendered. Django ignores them silently; PormG refuses, the #516 stance.
+# `null` stays — on a base field it is the element-NULL rule, as in Django.
+function _array_base_field(base)
+  base isa PormGField ||
+    throw(_fielderr("ArrayField: the first argument must be the element field, e.g. ArrayField(Models.IntegerField()), got $(typeof(base))."))
+  kind = array_element_kind(base)
+  kind === nothing && throw(_fielderr(
+    "ArrayField: a $(chopprefix(String(nameof(typeof(base))), "s")) cannot be an array element. Elements may be CharField, " *
+    "TextField, SlugField, EmailField, URLField, IntegerField, BigIntegerField, FloatField, " *
+    "DecimalField, BooleanField, DateField, DateTimeField or UUIDField."))
+  # Compared against the base type's own constructor defaults, not against `false`: a `SlugField` is
+  # `db_index = true` unless told otherwise, and that is not something the user declared.
+  baseline = getfield(@__MODULE__, Symbol(chopprefix(String(nameof(typeof(base))), "s")))()
+  column_only = String[]
+  for k in (:primary_key, :unique, :db_index, :db_column, :default, :db_default, :auto_now, :auto_now_add, :auto_add)
+    hasfield(typeof(base), k) || continue
+    isequal(getfield(base, k), getfield(baseline, k)) || push!(column_only, String(k))
+  end
+  isempty(column_only) || throw(_fielderr(
+    "ArrayField: the element field declares $(join(("`$k`" for k in column_only), ", ")), which " *
+    "describe$(length(column_only) == 1 ? "s" : "") a column, not an element, and would never be " *
+    "rendered. Declare it on the ArrayField instead, or remove it."))
+  return kind
+end
+
+"""
+    ArrayField(base_field; size = nothing, kwargs...)
+
+A one-dimensional PostgreSQL array of `base_field` values — Django's `ArrayField`, from
+`django.contrib.postgres.fields`. `ArrayField(Models.CharField(max_length = 10))` is a
+`character varying(10)[]` column.
+
+Values are written and read as a Julia `Vector`. A read returns `Vector{T}`, `T` being what a scalar
+read of the base field returns (`Int32` for `IntegerField`, `String` for the text fields and
+`UUIDField`, `Decimal` for `DecimalField`, a UTC `ZonedDateTime` for a `timestamptz`), or
+`Vector{Union{Missing, T}}` when an element is NULL. Each element is validated as the base field
+validates a value, before the server sees it. A NULL element is refused unless the base field is
+declared `null = true`.
+
+**PostgreSQL only.** SQLite has no array type, and PormG does not emulate one: creating or altering a
+SQLite table with this field raises `BackendCapabilityError`.
+
+The element field describes an element, so it takes only `null` and its type modifiers
+(`max_length`, `max_digits`, `decimal_places`, `type`); a column keyword on it (`unique`,
+`db_index`, `default`, …) is refused with `FieldValidationError`. Elements may be `CharField`,
+`TextField`, `SlugField`, `EmailField`, `URLField`, `IntegerField`, `BigIntegerField`, `FloatField`,
+`DecimalField`, `BooleanField`, `DateField`, `DateTimeField` or `UUIDField`. A nested `ArrayField`
+is not supported.
+
+# Keyword Arguments
+- `size::Union{Int, Nothing} = nothing`: the most elements a value may have, checked by PormG on every write (PostgreSQL does not enforce a declared size, and does not keep it, so it is not part of the schema)
+- `verbose_name::Union{String, Nothing} = nothing`: A human-readable name for the field
+- `unique::Bool = false`: Whether values in this field must be unique across all records
+- `blank::Bool = false`: Whether the field can be left blank in forms
+- `null::Bool = false`: Whether the database column can store NULL values (the whole array; see above for elements)
+- `db_index::Bool = false`: Whether to create a database index on this field
+- `default = nothing`: Default array — a `Vector` or a `Tuple` (`default = Int[]` is Django's `default = list`), or an array literal String. Stored as its canonical literal (`"{1,2}"`), so it is never a shared mutable vector. A function is refused
+- `db_default::Union{NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). Pin it to PostgreSQL — `(postgres = "ARRAY[]::integer[]",)`. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `editable::Bool = true`: Whether the field should be editable in forms
+
+# Database Mapping
+- **PostgreSQL Type**: the base field's type followed by `[]` (`integer[]`, `character varying(10)[]`)
+- **SQLite**: none — rendering the column raises `BackendCapabilityError` (see above)
+
+# Examples
+```julia
+Race_strategy = Models.Model("race_strategy",
+  id             = Models.IDField(),
+  raceid         = Models.ForeignKey("Race"),
+  tyre_compounds = Models.ArrayField(Models.CharField(max_length = 12); size = 6),
+  pit_laps       = Models.ArrayField(Models.IntegerField(), default = Int[]),
+)
+```
+"""
+function ArrayField(base_field; kwargs...)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
+    _common_kwargs("ArrayField", kwargs; editable = true, extra = (:size,))
+
+  kind = _array_base_field(base_field)
+  size = get(kwargs, :size, nothing)
+  if size !== nothing
+    size = _int_kwarg("ArrayField", "size", size)
+    size >= 1 || throw(_fielderr("ArrayField: 'size' must be at least 1, got $(size)."))
+  end
+  formatter = ArrayFormatter(base_field, kind, size)
+
+  default = get(kwargs, :default, nothing)
+  if default !== nothing
+    default isa Function && throw(_fielderr(
+      "ArrayField: 'default' must be a value, not a function: write `default = Int[]` for Django's " *
+      "`default = list`. PormG stores the default as text, so it is never one shared mutable vector."))
+    default = try
+      formatter(default).literal
+    catch e
+      e isa InvalidValueError || rethrow(e)
+      throw(FieldValidationError("Invalid default value for ArrayField: $(e.msg)"))
+    end
+    _check_array_default_bounds(base_field, default)
+  end
+
+  return sArrayField(
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    db_column,
+    default,
+    editable,
+    "ARRAY",
+    formatter,
+    base_field, size, db_default
+  )
+end

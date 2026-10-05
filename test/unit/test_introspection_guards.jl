@@ -1370,7 +1370,7 @@ end
   # A field-restricted interval is the same column as a bare one (PormG can declare no restriction).
   @test parse_pg("interval day to second(3)") == PormG.CInterval()
   # Deliberately unsupported: PormG never renders these, so a declared field must NOT equate to them.
-  @test parse_pg("integer[]")    isa PormG.CUnsupported
+  @test parse_pg("smallint[]")   isa PormG.CUnsupported   # `integer[]` until #28's ArrayField rendered it
   @test parse_pg("character(8)") isa PormG.CUnsupported
 
   # Through the reader: the modifier lands on the right slot for the right type, and nowhere for a

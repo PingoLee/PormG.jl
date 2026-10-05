@@ -1146,6 +1146,16 @@ function _resolve_bulk_update_keys!(df::DataFrames.DataFrame, model::PormGModel,
     end
   end
 
+  # #28: a row is matched by `"Tb"."key" = source."key"`, and an array column's source is the text of
+  # its literal (see `_pg_bulk_source_cast`), so it could not be compared without the cast this
+  # predicate does not carry. Matching rows on a whole array is not a key anyone means; refused
+  # rather than left to the server's "operator does not exist".
+  for key in dynamic_filters
+    model.fields[key] isa sArrayField && throw(QueryBuildError(
+      "bulk_update: `$key` is an ArrayField and cannot be a match_on key; match rows on a scalar " *
+      "column (the primary key, or a unique field)"))
+  end
+
   return dynamic_filters, static_filters
 end
 
@@ -1277,10 +1287,12 @@ function _bulk_returning_key(model::PormGModel, on_conflict, fields_df::Vector{S
       throw(QueryBuildError("Error in bulk_insert, returning matches rows to the input by the on_conflict " *
         "target, but target column(s) $(join(absent, ", ")) take no part in this INSERT; include them " *
         "in the DataFrame/columns selection"))
+    _refuse_array_returning_key(model, target)
     return target, nothing
   end
 
   pks = String[field for field in model.field_names if model.fields[field].primary_key]
+  _refuse_array_returning_key(model, pks)
   isempty(pks) &&
     throw(QueryBuildError("Error in bulk_insert, returning needs a key to match rows to the input, and " *
       "model $(model.name) has no primary key; pass on_conflict = (action = …, target = [...])"))
@@ -1292,6 +1304,18 @@ function _bulk_returning_key(model::PormGModel, on_conflict, fields_df::Vector{S
     "input row: the DataFrame does not carry the primary key of model $(model.name), and it is not an " *
     "auto-increment integer PormG can pre-allocate. Supply the primary key column, or pass " *
     "on_conflict = (action = …, target = [...]) naming a unique key the DataFrame carries"))
+end
+
+# #28: `returning` matches a written row to its input row by the key's text, and an array's written
+# literal and the vector read back are not comparable that way. An array is no one's row key in
+# practice, so it is refused by name instead of failing as an unmatched row.
+function _refuse_array_returning_key(model::PormGModel, key::Vector{String})
+  for field in key
+    haskey(model.fields, field) && model.fields[field] isa sArrayField && throw(QueryBuildError(
+      "Error in bulk_insert, returning matches written rows to the input by their key, and `$field` " *
+      "is an ArrayField, which cannot serve as one. Key the rows on a scalar column."))
+  end
+  return nothing
 end
 
 # A working-frame column name for a value PormG supplies, disjoint from every caller column —
@@ -1611,7 +1635,9 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # PostgreSQL collects each chunk as one array per field and binds them at flush (#672); SQLite
   # binds each cell as it goes and collects `(?, ?, …)` row tuples.
   pg_arrays = connection isa PormGPostgres
-  casts = pg_arrays ? [_pg_bulk_cast_type(model.fields[field], connection) for field in fields_df] : String[]
+  casts = pg_arrays ? [_pg_bulk_param_type(model.fields[field], connection) for field in fields_df] : String[]
+  # #28: an array column's source is text, cast back to its array type in the SELECT list.
+  source_casts = pg_arrays ? [_pg_bulk_source_cast(model.fields[field], connection) for field in fields_df] : String[]
   new_columns() = [Any[] for _ in fields_df]
 
   # Everything that depends on the field alone is resolved once per column, not once per cell
@@ -1671,7 +1697,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
       end
       count += 1
       if count == effective_chunk || index == total
-        source_sql = pg_arrays ? "SELECT * FROM " * _pg_unnest_source!(parameters, columns, casts) :
+        source_sql = pg_arrays ? _pg_unnest_select(_pg_unnest_source!(parameters, columns, casts), source_casts) :
                                  "VALUES " * join(rows, ", ")
         chunk_range = (index - count + 1):index
         run_chunk() = _bulk_insert(model, connection, fields_df, source_sql, pk_field, settings, show_query, parameters;
@@ -1768,6 +1794,9 @@ bytes.
 that is needed here.
 """
 _bulk_copy_cell(value::PormGBytes) = "\\x" * bytes2hex(value.bytes)
+# #28: an `ArrayField` value is its array literal. `CSV.write` force-quotes it and doubles each `"`,
+# and COPY's CSV reader undoes exactly that before `array_in` reads the literal.
+_bulk_copy_cell(value::PormGArrayLiteral) = value.literal
 _bulk_copy_cell(value) = value
 
 """
@@ -1830,7 +1859,29 @@ _pg_array_element(::Union{Missing, Nothing}) = missing
 _pg_array_element(value::Integer) = value
 _pg_array_element(value::AbstractString) = String(value)
 _pg_array_element(value::PormGBytes) = _pg_bytea_text(value)
+_pg_array_element(value::PormGArrayLiteral) = value.literal   # one element of a `text[]` (#28)
 _pg_array_element(value) = string(value)
+
+# ── Array columns (#28) ──
+# A column of `ArrayField` values cannot travel as one `int[][]` parameter: a PostgreSQL array is
+# rectangular, so rows of different lengths are not one value, and `unnest` flattens every dimension
+# into one column of elements. Each cell travels instead as the TEXT of its literal, in a `text[]`,
+# and is cast back to the column's array type where the row is read (`_pg_unnest_select`'s SELECT
+# list, `bulk_update`'s SET). The cast drops modifiers like the per-column one does, so the column's
+# own `varchar(n)`/`numeric(p,s)` is enforced on assignment exactly as for a single write.
+_pg_bulk_param_type(field::PormGField, conn::PormGPostgres)::String =
+  field isa sArrayField ? "text" : _pg_bulk_cast_type(field, conn)
+_pg_bulk_source_cast(field::PormGField, conn::PormGPostgres)::String =
+  field isa sArrayField ? "::" * _pg_bulk_cast_type(field, conn) : ""
+
+# The INSERT's row source. `SELECT *` while no column needs a cast — the text every statement used
+# before #28 — and an explicit list over named `unnest` columns when one does.
+function _pg_unnest_select(unnest_sql::String, source_casts::Vector{String})::String
+  all(isempty, source_casts) && return "SELECT * FROM " * unnest_sql
+  cols = ["\"c$j\"" for j in eachindex(source_casts)]
+  return "SELECT " * join(("\"u\".$c$cast" for (c, cast) in zip(cols, source_casts)), ", ") *
+         " FROM " * unnest_sql * " AS \"u\"(" * join(cols, ", ") * ")"
+end
 
 # Bind one chunk's column arrays after whatever `params` already holds — the #665 WHERE prefix for
 # bulk_update, nothing for bulk_insert — and render the `unnest(…)` call that expands them. Each
@@ -2429,7 +2480,10 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
       # their `unnest($n::<type>[])` arrays (#672).
       quoted_field = safe_column_identifier(Models.field_db_column(model.fields[field], field), connection)
       quoted_source_field = quote_identifier(field, connection)
-      push!(safe_set_parts, "$quoted_field = source.$quoted_source_field")
+      # The one exception (#28): an array column's `source` column is the text of its literal, so it
+      # is cast back to the column's array type here — see `_pg_bulk_source_cast`.
+      source_cast = connection isa PormGPostgres ? _pg_bulk_source_cast(model.fields[field], connection) : ""
+      push!(safe_set_parts, "$quoted_field = source.$quoted_source_field$source_cast")
     end
   end
   safe_set_clause = join(safe_set_parts, ", ")
@@ -2455,7 +2509,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   # PostgreSQL collects each chunk as one array per joined column and binds them at flush (#672);
   # SQLite binds each cell as it goes and collects `(?, ?, …)` row tuples for its VALUES CTE.
   pg_arrays = connection isa PormGPostgres
-  casts = pg_arrays ? [_pg_bulk_cast_type(model.fields[field], connection) for field in joined_columns] : String[]
+  casts = pg_arrays ? [_pg_bulk_param_type(model.fields[field], connection) for field in joined_columns] : String[]
   new_columns() = [Any[] for _ in joined_columns]
 
   # Resolved once per column, not once per cell (#704), as in `bulk_insert`: the field-name half of

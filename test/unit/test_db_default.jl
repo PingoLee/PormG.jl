@@ -302,6 +302,10 @@ end
         @test f.db_default == "CURRENT_TIMESTAMP"
         @test f.default === nothing
     end
+    # …and `ArrayField` (#28), which takes its element field positionally.
+    f = Models.ArrayField(Models.IntegerField(); db_default = (postgres = "'{}'::integer[]",))
+    @test f.db_default == (postgres = "'{}'::integer[]",)
+    @test f.default === nothing
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

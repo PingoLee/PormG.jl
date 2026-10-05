@@ -787,14 +787,15 @@ function _alias_lhs(alias::MemoKey, cached, instruc::SQLInstruction)
   return _get_select_query(source.field, instruc, _as = source._as)
 end
 
-# `_guard_scalar_bytes`'s alias twin (#596). Same decision, different evidence: a projection alias has
-# no `PormGField`, only whatever formatter `_having_alias_formatter` resolved for it, so binary-ness is
-# read off that. `format_binary_sql` is what a projection over a `BinaryField` resolves to and is the
-# only formatter that may carry a byte payload; every other alias refuses one, through the same funnel
-# the WHERE arms use so the message is the one a user already knows.
-function _guard_alias_scalar_bytes(v::SQLTypeOper, formatter, label::AbstractString)
-  (v.operator == "=" && v.values isa Vector{UInt8}) || return nothing
-  formatter === Models.format_binary_sql && return nothing
+# `_guard_vector_equality`'s alias twin (#596, #28). Same decision, different evidence: a projection
+# alias has no `PormGField`, only whatever formatter `_having_alias_formatter` resolved for it, so the
+# column's kind is read off that. `format_binary_sql` (a projection over a `BinaryField`) may carry a
+# byte payload and an `ArrayFormatter` (over an `ArrayField`) any vector; every other alias refuses a
+# vector, through the same funnel the WHERE arms use so the message is the one a user already knows.
+function _guard_alias_vector_equality(v::SQLTypeOper, formatter, label::AbstractString)
+  (v.operator == "=" && v.values isa AbstractVector) || return nothing
+  formatter isa Models.ArrayFormatter && return nothing
+  (v.values isa Vector{UInt8} && formatter === Models.format_binary_sql) && return nothing
   _raise_invalid_filter_operator([String(label)], "vector",
                                  ["in", "nin", "range", "nrange", "has_any_keys", "has_keys", "jcontains"])
 end
@@ -1177,7 +1178,7 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   # projection over a `BinaryField` resolves to, and only that one may carry a payload.
   # (`ImageField`/`FileField` share `type == "BLOB"` but carry `format_text_sql`, so the
   # formatter test is as tight as the WHERE side's `_is_binary_field` struct test.)
-  _guard_alias_scalar_bytes(v, _having_alias_formatter(having_key, instruc), having_key[2])
+  _guard_alias_vector_equality(v, _having_alias_formatter(having_key, instruc), having_key[2])
   # #618: refuse, in this clause, the operators `_render_predicate` has no arm for — since #654
   # only the JSON four. Naming the user's own spelling matters here: the internal token is
   # `jcontains`, but nobody types that — they type `@jcontains`.
@@ -1190,7 +1191,8 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   # #903: the alias's own column type decides what a pattern lookup reads — `HOST(MAX(…))` for an alias
   # over an `inet`, exactly as `_get_filter_query(::SQLTypeOper)` wraps the column itself.
   field = _pattern_operand(string(_alias_lhs(having_key, having_cached, instruc)),
-                           _having_alias_formatter(having_key, instruc), v.operator, instruc)
+                           _having_alias_formatter(having_key, instruc), v.operator, instruc;
+                           label = having_key[2])
   # #618: `contains=` / `operator=` are what run `_apply_like_wildcards` (and with it
   # `escape_like_pattern`) inside `add_parameter!`. Without them a pattern lookup on an alias
   # bound its value undecorated AND unescaped — no `%`, and a user-supplied `%` or `_` in the

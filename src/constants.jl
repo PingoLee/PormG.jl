@@ -226,7 +226,10 @@ const sqlite_type_map_reverse = Dict{String, String}(
   # refuses both fields there, so no DDL carries this. It keeps the compiled spec a `CText` rather
   # than an `INET` that SQLite's affinity rule would read as INTEGER.
   "INET" => "TEXT",
-  "CIDR" => "TEXT"
+  "CIDR" => "TEXT",
+  # #28, the same arrangement for `ArrayField`: SQLite has no array type and `field_to_column`
+  # refuses it there, so this only keeps the compiled spec a `CText`.
+  "ARRAY" => "TEXT"
 )
 
 const postgres_type_map_reverse = Dict{String, String}(

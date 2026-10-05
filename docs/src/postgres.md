@@ -112,6 +112,30 @@ Pit_wall_session = Models.Model("pit_wall_session",
 
 Reference: **[Fields → Network Address Fields](fields.md#Network-Address-Fields)**.
 
+### `ArrayField` — `integer[]`, `character varying(n)[]`, …
+
+```julia
+Race_strategy = Models.Model("race_strategy",
+  id = Models.IDField(),
+  tyre_compounds = Models.ArrayField(Models.CharField(max_length = 12); size = 6),
+  pit_laps = Models.ArrayField(Models.IntegerField(), default = Int[]),
+)
+```
+
+- A native one-dimensional array of the element field's type. A value is a Julia `Vector`, and it
+  reads back as `Vector{T}` with `T` the element field's scalar read type, on both PostgreSQL drivers.
+- `size` is checked by PormG on write. PostgreSQL neither enforces nor keeps it, so it is not part of
+  the schema.
+- A vector filter value is an equality against the whole array. The array lookups (`@acontains`,
+  `@contained_by`, `@overlap`, `@len`, index and slice transforms) are not available yet (#28).
+- A text → array retype parses each value as an array literal and counts the rows that do not parse.
+  An array whose elements only widen (`integer[]` → `bigint[]`) is a plain `ALTER`; any other element
+  change converts through text, and the rows with an element that no longer fits are counted first.
+- Why SQLite is refused: it has no array type. A text column would store the array's literal, which no
+  query could compare, index or take apart by element.
+
+Reference: **[Fields → Array Fields](fields.md#Array-Fields)**.
+
 ## PostgreSQL-only lookups and functions
 
 A few query features compile to PostgreSQL operators or functions that SQLite does not have. On
@@ -184,6 +208,7 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 | **`JSONField` storage** | `JSONB` (binary, indexable) | `TEXT` (JSON string) |
 | **`UUIDField` storage** | native `UUID` | `TEXT` |
 | **`GenericIPAddressField` / `CIDRField`** | native `inet` / `cidr` | not supported — `makemigrations` raises `BackendCapabilityError` |
+| **`ArrayField`** | native arrays (`integer[]`, …) | not supported — `makemigrations` raises `BackendCapabilityError` |
 | **`DecimalField` width** | `numeric`, exact at any `max_digits` | `NUMERIC` affinity, exact up to `max_digits = 15`; a wider declaration raises `BackendCapabilityError` at `makemigrations` |
 | **Window frames** | explicit `frame=` clauses | default frame only |
 | **JSONB lookups** (`@jcontains`, `@has_key`, `@has_any_keys`, `@has_keys`) | JSONB operators | `BackendCapabilityError` — `__` key paths still work |

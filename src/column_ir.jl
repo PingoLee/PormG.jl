@@ -84,6 +84,21 @@ struct CDateTime <: CanonicalType
   with_timezone::Bool
 end
 
+# A one-dimensional PostgreSQL array of `element` (#28, `ArrayField`) — the first kind that holds
+# another kind. A parameterized kind rather than a family of singletons (`CIntArray`, …) because the
+# element is a full kind in its own right, modifiers included: `varchar(10)[]` and `varchar(20)[]`
+# differ exactly as `varchar(10)` and `varchar(20)` do, and the retype rules for the elements are
+# the scalar ones.
+#
+# PostgreSQL-only, like `CInet`: the SQLite parser never produces it. Default `==`/`hash` are right
+# — the struct is immutable and `element` is itself compared field-wise — so it carries no custom
+# pair. A declared size or dimension count is NOT here, and cannot be: `format_type` prints
+# `integer[3]` and `integer[][]` both as `integer[]`, so a kind that carried either would differ
+# from the catalog on every run.
+struct CArray <: CanonicalType
+  element::CanonicalType
+end
+
 struct CUnsupported <: CanonicalType
   raw::String
 end

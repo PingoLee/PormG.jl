@@ -480,6 +480,11 @@ column.
     the same call still import. The skip is reported both ways, with a `@warn` and a `# PormG:` marker
     naming the field, its class and its `models.py` line.
 
+    `ArrayField` is reported the same way, although PormG has one: its element is a positional field
+    call (`ArrayField(models.CharField(max_length = 10))`), which the importer does not read yet.
+    Declare it by hand as `Models.ArrayField(Models.CharField(max_length = 10))` — see
+    [Array Fields](fields.md#Array-Fields).
+
     Mind the consequence: the skipped column is still in the database and now absent from the model,
     so `makemigrations` reads it as drift and proposes **dropping** it. Declare that column by hand
     before you migrate — or pass `strict_fields = true` to fail the import instead of receiving a

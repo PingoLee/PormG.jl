@@ -27,6 +27,9 @@
 #       ALTER would zero silently; a column of hosts applies (#905).
 #   (r) SET NOT NULL marked `handled=pre`: a `Data (pre)` fill lets it apply, and a fill that leaves
 #       a NULL fails inside the migration and rolls back, the fill included (#897).
+#   (s) text → an `ArrayField` parses each literal through its `USING`, an element-widening array
+#       change is a plain ALTER, and a narrowing one converts through text and counts the elements that
+#       no longer fit (#28).
 #
 # Run it under both PostgreSQL drivers: `PORMG_POSTGRES_DRIVER=Postgres` selects Postgres.jl (#788),
 # whose parameter typing differs from LibPQ's.
@@ -549,6 +552,50 @@ end
         PormG.ConnectionPool.fetch(st.connections, alter * ";")
         @test _la803pg_type(st, "note") == "cidr"
         @test note_of("SEN") == "10.0.0.0/24" && note_of("ALO") == "2001:db8::/64"
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (s) Array columns (#28)
+# text holding array literals → `integer[]` casts with a `USING`, and a value that is no integer array
+# is counted by the server's own parser. integer[] → bigint[] only widens: a plain ALTER, no finding.
+# bigint[] → integer[] converts through text, so an element past the integer range is counted and
+# refused rather than failing inside the ALTER.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: array retypes cast, widen, or count what no longer fits (#28)" begin
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, '{1,2}', 1, NULL), ('PRO', 2, 2.5, '{}', 2, NULL), " *
+                  "('ALO', 3, 3.5, NULL, 3, NULL);") do st
+        sink = _la803pg_plan!(st, _la803pg_models(note = "Models.ArrayField(Models.IntegerField(), null = true)"))
+        @test [f.kind for f in sink] == [:text_cast]
+        @test only(PormG.Migrations.dry_run(st.connections, st).lossy_alters).rows == 0
+        @test _la803pg_migrate(st).outcome === :applied
+        @test _la803pg_type(st, "note") == "integer[]"
+
+        # Widening: nothing to count, and the values are untouched.
+        sink = _la803pg_plan!(st, _la803pg_models(note = "Models.ArrayField(Models.BigIntegerField(), null = true)"))
+        @test isempty(sink)
+        @test _la803pg_migrate(st).outcome === :applied
+        @test _la803pg_type(st, "note") == "bigint[]"
+
+        # Narrowing back: an element past the integer range is counted, and the plan refused.
+        PormG.ConnectionPool.fetch(st.connections, "UPDATE \"$(_LA803PG_TABLE)\" SET note = '{1,9999999999}' WHERE code = 'PRO';")
+        sink = _la803pg_plan!(st, _la803pg_models(note = "Models.ArrayField(Models.IntegerField(), null = true)"))
+        @test [f.kind for f in sink] == [:text_cast]
+        err = _la803pg_err(() -> _la803pg_migrate(st; destructive = true))
+        @test err isa PormG.Migrations.MigrationPrecheckError
+        @test err !== nothing && only(err.findings).rows == 1
+        @test _la803pg_type(st, "note") == "bigint[]"
+        # With the row fixed, the same plan applies through its `USING`.
+        PormG.ConnectionPool.fetch(st.connections, "UPDATE \"$(_LA803PG_TABLE)\" SET note = '{1,2}' WHERE code = 'PRO';")
+        @test _la803pg_migrate(st).outcome === :applied
+        @test _la803pg_type(st, "note") == "integer[]"
+    end
+    _la803pg_case(_LA803PG_INSERT * "('SEN', 1, 1.5, '{1,2}', 1, NULL), ('PRO', 2, 2.5, 'pit-wall', 2, NULL);") do st
+        _la803pg_plan!(st, _la803pg_models(note = "Models.ArrayField(Models.IntegerField(), null = true)"))
+        err = _la803pg_err(() -> _la803pg_migrate(st; destructive = true))
+        @test err isa PormG.Migrations.MigrationPrecheckError
+        @test err !== nothing && only(err.findings).rows == 1
+        @test _la803pg_type(st, "note") == "text"
     end
 end
 

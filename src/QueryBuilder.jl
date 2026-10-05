@@ -12,11 +12,12 @@ import Sockets  # #28: a `Sockets.IPAddr` is a network-address field value
 # `QB.sForeignKey`; nothing in this module or `src/querybuilder/` names it any more, since the
 # FK/one-to-one gates spell the pair `Models.sRelationalColumn` (#418). Do not drop it as unused
 # without moving that precompile hint to `PormG.Models.sForeignKey` first.
-import PormG.Models: CharField, IntegerField, get_model_pk_field, sForeignKey, sManyToManyField, sBinaryField
+import PormG.Models: CharField, IntegerField, get_model_pk_field, sForeignKey, sManyToManyField, sBinaryField, sArrayField
 import PormG: Dialect, Models
 import PormG: config
 import PormG: SQLType, PormGSettings, PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, AbstractPormGParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, SQLTypeCTE, SQLTypeJoined, PormGModel, PormGField, PormGTypeField, PormGAbstractType
 import PormG: PormGBytes  # binary payloads bind as one blob, not as an array of values (#296)
+import PormG: PormGArrayLiteral  # an ArrayField value binds as one array-literal parameter (#28)
 # Semantic error taxonomy (#231, #239). The types are defined in `src/exceptions.jl`, included by
 # `Kernel` (layer 1) so every subsystem can reach them; only the message-composing funnels
 # (`_unsupported_conn`, `_write_not_allowed`) live in `querybuilder/error_funnels.jl`.

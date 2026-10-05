@@ -1509,3 +1509,59 @@ end
     # Every driver without a win went through the ELSE branch only.
     @test all(v == (0.0, 0.0) for (k, v) in got if !haskey(expected, k))
 end
+
+@testset "Aggregates over a BooleanField (#953)" begin
+    # Logic: `Max`/`Min` over a boolean answer "any true" / "all true" on both engines — `BOOL_OR` /
+    # `BOOL_AND` on PostgreSQL, which has no max(boolean), and `MAX`/`MIN` over SQLite's 0/1 — and
+    # read back as a `Bool`. `Sum`/`Avg` are refused at build on both engines.
+    # Why: before #953 both rendered `MAX(col)`, which PostgreSQL rejected when it ran, while SQLite
+    # answered; the same query worked on one engine only.
+    # Its own rows, under a marker, so the shared New_join_position fixture (test_cjoin.jl) is untouched.
+    rows = ("s183-a" => [true, true], "s183-b" => [true, false, missing], "s183-c" => [false, false])
+    purge() = (q = M.New_join_position.objects; q.filter("description__@startswith" => "s183-"); q.exists() && q.delete())
+    purge()
+    try
+        for (label, flags) in rows, flag in flags
+            M.New_join_position.objects.create("description" => label, "boolean_field" => flag)
+        end
+        q = M.New_join_position.objects
+        q.filter("description__@startswith" => "s183-")
+        q.values(
+            "description",
+            "any_b"   => Max("boolean_field"),
+            "all_b"   => Min("boolean_field"),
+            "n_true"  => Sum(When("boolean_field" => true, then = 1, otherwise = 0)),
+            "share"   => Avg(When("boolean_field" => true, then = 1, otherwise = 0)),
+            "any_c"   => Case([When(Max("boolean_field"), then = 1)], default = 0),
+        )
+        got = Dict(r[:description] => r for r in q.list())
+        @test Set(keys(got)) == Set(first.(rows))
+        # Independent answer: Julia's own any/all over the non-NULL flags each group was given.
+        for (label, flags) in rows
+            vals = collect(skipmissing(flags))
+            @test got[label][:any_b] === any(vals)
+            @test got[label][:all_b] === all(vals)
+            # The documented spellings for a sum and a mean: a NULL flag counts as not true.
+            @test got[label][:n_true] == count(vals)
+            @test Float64(got[label][:share]) ≈ count(vals) / length(flags)
+            @test got[label][:any_c] == (any(vals) ? 1 : 0)
+        end
+
+        # The alias filters in HAVING, against the same aggregate.
+        h = M.New_join_position.objects
+        h.filter("description__@startswith" => "s183-")
+        h.values("description", "any_b" => Max("boolean_field"))
+        h.filter("any_b" => true)
+        @test Set(r[:description] for r in h.list()) == Set(["s183-a", "s183-b"])
+
+        for agg in (Sum("boolean_field"), Avg("boolean_field"))
+            r = M.New_join_position.objects
+            r.filter("description__@startswith" => "s183-")
+            r.values("description", "x" => agg)
+            err = @test_throws PormG.QueryBuildError r.list()
+            @test occursin("over a boolean is not supported", sprint(showerror, err.value))
+        end
+    finally
+        purge()
+    end
+end

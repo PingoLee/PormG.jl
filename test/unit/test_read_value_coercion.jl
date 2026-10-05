@@ -204,10 +204,13 @@ end
   # A kind the table does not own has no parser on either engine — `nothing`, not a passthrough
   # function, so the read path can skip the column entirely rather than call an identity per row.
   # ───────────────────────────────────────────────────────────────────────────
+  # `CBool` left this list with #953: SQLite delivers a boolean EXPRESSION (`MAX(flag)`) as its stored
+  # 0/1, so the table owns that cell on SQLite (`test_value_repr_table.jl` covers it).
   @testset "an unowned kind has no parser" begin
-    for kind in (PormG.CText(), PormG.CInt64(), PormG.CBool(), PormG.CBytes())
+    for kind in (PormG.CText(), PormG.CInt64(), PormG.CBytes())
       @test PormG.value_parser(kind, _RVC_SL) === nothing
     end
+    @test PormG.value_parser(PormG.CBool(), _RVC_SL) === PormG.Dialect._parse_sqlite_bool
   end
 
   # ───────────────────────────────────────────────────────────────────────────

@@ -245,6 +245,18 @@ function _parse_sqlite_time(v::Any)
     end
 end
 
+"""
+    _parse_sqlite_bool(v) -> Union{Bool, typeof(v)}
+
+The READ half of `Models.format_bool_sql` on SQLite, where a boolean is stored as `0`/`1`. A column
+read reaches PormG as a `Bool` already — the driver maps the declared `BOOLEAN` type — but an
+expression has no declared type, so `MAX(flag)` came back as the integer while PostgreSQL's
+`BOOL_OR(flag)` came back as a `Bool` (#953). Only `0` and `1` are read; any other value is returned
+as it is.
+"""
+_parse_sqlite_bool(v::Integer) = (v === true || v === false) ? v : v == 1 ? true : v == 0 ? false : v
+_parse_sqlite_bool(v::Any) = v
+
 # `HH:MM:SS` with an optional fraction and an optional leading sign — the shape
 # `Models._duration_nanoseconds_to_string` writes.
 const _SQLITE_INTERVAL = r"^([+-]?)(\d+):(\d{2}):(\d{2})(?:\.(\d{1,9}))?$"
@@ -478,8 +490,11 @@ function COUNT(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   end
 end
 
+# #953: PostgreSQL has no `max(boolean)`/`min(boolean)`; its boolean extrema are `bool_or` ("any
+# true") and `bool_and` ("all true"). `format["boolean"]` is set by the builder when the operand is a
+# boolean. SQLite stores a boolean as 0/1, so its `MAX`/`MIN` already give the same answer and stay.
 function MAX(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  return "MAX($(column))"
+  return get(format, "boolean", false) === true ? "BOOL_OR($(column))" : "MAX($(column))"
 end
 
 function MAX(column::String, format::Dict{String,Any}, conn::PormGSQLite)
@@ -487,7 +502,7 @@ function MAX(column::String, format::Dict{String,Any}, conn::PormGSQLite)
 end
 
 function MIN(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  return "MIN($(column))"
+  return get(format, "boolean", false) === true ? "BOOL_AND($(column))" : "MIN($(column))"
 end
 
 function MIN(column::String, format::Dict{String,Any}, conn::PormGSQLite)

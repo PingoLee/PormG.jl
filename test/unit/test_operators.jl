@@ -1533,6 +1533,57 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# A BooleanField refuses an integer other than 0/1 (#949)
+#
+# `format_bool_sql(::Integer)` guarded with `value in [0, 1] == false`, a chained comparison whose
+# second link is always false, so the guard never fired and every integer but 1 bound `false`:
+# `filter("ok" => 5)` silently matched the false rows. Asserting the error on BOTH engines, because
+# SQLite's native-bind path keeps the raw integer after formatting, and a guard reached only on
+# PostgreSQL would leave SQLite binding `5` against a 0/1 column, which matches nothing.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a BooleanField refuses an integer other than 0/1 (#949)" begin
+  @test PormG.Models.format_bool_sql(0) === false
+  @test PormG.Models.format_bool_sql(1) === true
+  @test PormG.Models.format_bool_sql(true) === true
+  @test PormG.Models.format_bool_sql(missing) === missing
+  for bad in (5, -1, 2, Int8(3), UInt(7))
+    @test_throws PormG.InvalidValueError PormG.Models.format_bool_sql(bad)
+  end
+
+  sl = _MockSQLiteIn411()
+  for conn in (nothing, sl)
+    inspect(q) = conn === nothing ? q.list(show_query = :dict) :
+                                    PormG.QueryBuilder.inspect_query(q; connection = conn)
+    # The filter path reports the filter's type, as #411 made every wrong-typed value do.
+    err = @test_throws PormG.FilterError inspect(_IN411.objects.filter("ok" => 5))
+    @test occursin("The ok field is the type BOOLEAN. Please check the value: 5", _plain(err.value.msg))
+    @test_throws PormG.FilterError inspect(_IN411.objects.filter("ok" => -1))
+    @test_throws PormG.FilterError inspect(_IN411.objects.filter("ok__@in" => [1, 2]))
+    # Across a join, which resolves the field through the memo rather than `model.fields`.
+    @test_throws PormG.FilterError inspect(_IN411R.objects.filter("eventid__ok" => 5))
+    # Controls: 0 and 1 still bind, as the boolean on PostgreSQL and the native 0/1 on SQLite.
+    @test inspect(_IN411.objects.filter("ok" => 1))[:parameters] == Any[conn === nothing ? true : 1]
+    @test inspect(_IN411.objects.filter("ok" => 0))[:parameters] == Any[conn === nothing ? false : 0]
+    @test inspect(_IN411.objects.filter("ok" => true))[:parameters] == Any[true]
+  end
+
+  # The write path runs through the same formatter, so it is fixed too: `update`/`create` with a 2
+  # silently wrote `false` before. The value is often runtime data (an import, a form field), so no
+  # call-site scan can rule it out — which is why this half is pinned as well.
+  upd = _IN411.objects
+  upd.filter("id" => 1)
+  @test_throws PormG.InvalidValueError upd.update("ok" => 2, show_query = :dict)
+  # Control, compared with `===`: `1 == true`, so an `in`/`==` check passes whatever was bound.
+  upd = _IN411.objects
+  upd.filter("id" => 1)
+  @test upd.update("ok" => 1, show_query = :dict)[:parameters][end] === true
+  # An `ArrayField(BooleanField())` formats each element through the same formatter, so `[true, 2]`
+  # was written as `{t,f}`.
+  arr_err = @test_throws PormG.InvalidValueError PormG.Models.ArrayField(PormG.Models.BooleanField()).formatter([true, 2])
+  @test occursin("Got the integer 2", _plain(sprint(showerror, arr_err.value)))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # A non-aggregate projection alias resolves its own formatter, not IntegerField's (#576)
 #
 # The HAVING ladder only ever inspected `SQLTypeFunction`, and a bare `F("col")` is an

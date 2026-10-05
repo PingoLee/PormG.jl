@@ -65,6 +65,9 @@ import DataFrames
 # #733 — the repair-op claim reads a history table, so it needs the SQLite driver (idempotent reload).
 include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
+# #953 — an aggregate over a BooleanField, for the filters-page and Sum/Avg docstring claims below.
+using PormG.Models: BooleanField
+using PormG.Functions: Sum, Avg
 # Mock backends: dialect dispatch is by connection TYPE, so a bare subtype is enough to render
 # SQL and to fire the backend-capability guards. No DB, no pool.
 struct DocErrMockPostgres <: PormG.PormGPostgres end
@@ -181,6 +184,13 @@ Docerr_cycle_b = Models.Model("docerr_cycle_b",
 )
 
 PormG.Models.set_models(@__MODULE__, "docerr_cycle")
+end
+
+# #953 — a boolean column on both engines: the refusal of `Sum`/`Avg` over one is engine-independent.
+const DOCERR_ENTRY953_PG, DOCERR_ENTRY953_SL = map(("docerr_pg", "docerr_sl")) do key
+    m = Model("docerr_entry953_$key", id = IDField(), raceid = IntegerField(),
+              is_rookie = BooleanField())
+    m.connect_key = key; m._module = Main; m
 end
 
 # (docs claim this test pins, expected type, the call that must raise it).
@@ -2250,6 +2260,21 @@ const DOCERR_CASES = [
         "async.md + errors.md — a raw manual-params value containing a NUL character raises InvalidValueError (#951)",
         InvalidValueError,
         () -> PormG.ConnectionPool.fetch(DocErrMockPostgres(), "SELECT \$1::text", ["Senna\0"]),
+    ),
+    (
+        "read/filters_and_aggregates.md — `Sum`/`Avg` over a boolean raise QueryBuildError on both engines (#953)",
+        QueryBuildError,
+        () -> DOCERR_ENTRY953_SL.objects.values("raceid", "n" => Sum("is_rookie")).list(show_query = :dict),
+    ),
+    (
+        "src/querybuilder/functions.jl — Sum docstring: a `Sum` over a `BooleanField` is refused (#953)",
+        QueryBuildError,
+        () -> DOCERR_ENTRY953_PG.objects.values("raceid", "n" => Sum("is_rookie")).list(show_query = :dict),
+    ),
+    (
+        "src/querybuilder/functions.jl — Avg docstring: an `Avg` over a `BooleanField` is refused (#953)",
+        QueryBuildError,
+        () -> DOCERR_ENTRY953_PG.objects.values("raceid", "n" => Avg("is_rookie")).list(show_query = :dict),
     ),
 ]
 

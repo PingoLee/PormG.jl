@@ -196,6 +196,20 @@ const _E = _OperTestEvent
     @test !contains(r_iue[:sql_text], "ESCAPE")
     @test r_iue[:parameters] == ["são josé"]
 
+    # #634: iexact → LOWER(column) = LOWER(val). Verbatim like iunaccent_exact: a literal `%` / `_`
+    # binds unchanged and there is no ESCAPE clause, so `ILIKE`-style wildcards cannot sneak in.
+    r_ie = _D.objects.filter("forename__@iexact" => "50%_Off").list(show_query=:dict)
+    @test contains(r_ie[:sql_text], "WHERE LOWER(\"Tb\".\"forename\") = LOWER(\$1)\n")
+    @test !contains(r_ie[:sql_text], "LIKE")
+    @test !contains(r_ie[:sql_text], "ESCAPE")
+    @test r_ie[:parameters] == ["50%_Off"]
+
+    # #634: niexact → LOWER(column) <> LOWER(val), the negated twin.
+    r_nie = _D.objects.filter("forename__@niexact" => "50%_Off").list(show_query=:dict)
+    @test contains(r_nie[:sql_text], "WHERE LOWER(\"Tb\".\"forename\") <> LOWER(\$1)\n")
+    @test !contains(r_nie[:sql_text], "ESCAPE")
+    @test r_nie[:parameters] == ["50%_Off"]
+
     # startswith → LIKE 'val%'
     q_sw = _D.objects.filter("nationality__@startswith" => "Brit")
     r_sw = q_sw.list(show_query=:dict)
@@ -748,14 +762,14 @@ end
     end
   end
 
-  # The two *_exact lookups and the four regex lookups (#635) are in the render list but NOT in the
-  # wildcard list, and that asymmetry is load-bearing: the first pair compares with = / <>, the regex
+  # The four *exact lookups (#634) and the four regex lookups (#635) are in the render list but NOT in
+  # the wildcard list, and that asymmetry is load-bearing: the *exact ones compare with = / <>, the regex
   # four hand the value to ~ as a pattern, so decorating or escaping it would change what they match.
   # Pin the gap as a literal — comparing against VERBATIM_PATTERN_OPERATORS would be the constant
   # agreeing with itself — so a future "simplification" cannot collapse the two lists.
   @testset "The verbatim pattern lookups render but take no wildcards" begin
     exact_only = setdiff(Set(PormG.PATTERN_LOOKUP_OPERATORS), Set(PormG.LIKE_WILDCARD_OPERATORS))
-    @test exact_only == Set(["iunaccent_exact", "niunaccent_exact",
+    @test exact_only == Set(["iexact", "niexact", "iunaccent_exact", "niunaccent_exact",
                              "regex", "iregex", "nregex", "niregex"])
     for op in exact_only
       r = _D.objects.filter("forename__@$(op)" => "a%b").list(show_query=:dict)
@@ -804,7 +818,7 @@ end
     # The hint list is a local inside `_check_if_field_is_a_operator`; probing through the public
     # surface is deliberate — it is the message a user sees that is under test, not the literal.
     hint_names = [PormG.PATTERN_LOOKUP_OPERATORS...,
-      "exact", "iexact", "in", "gt", "gte", "lt", "lte", "range", "nrange", "date", "isnull",
+      "exact", "in", "gt", "gte", "lt", "lte", "range", "nrange", "date", "isnull",
       "year", "iso_year", "quarter", "month", "day", "week", "week_day", "iso_week_day",
       "hour", "minute", "second"]
 
@@ -833,13 +847,13 @@ end
       end
     end
 
-    # The 9 are named here so the count is visible rather than implied: if one gets wired, this
+    # The 8 are named here so the count is visible rather than implied: if one gets wired, this
     # list is where the change is declared, and the loop above proves the message moved with it.
-    # (#635 wired `regex`/`iregex` — they were 2 of the original 11. They still reach the loop
-    # through PATTERN_LOOKUP_OPERATORS, now on the "requires '@' prefix" arm.)
+    # (#635 wired `regex`/`iregex` and #634 `iexact` — 3 of the original 11. They still reach the
+    # loop through PATTERN_LOOKUP_OPERATORS, now on the "requires '@' prefix" arm.)
     unreachable = [n for n in hint_names
                    if !haskey(PormG.PormGsuffix, n) && !haskey(PormG.PormGtransform, n)]
-    @test sort(unreachable) == sort(["exact", "iexact", "iso_year", "week", "week_day",
+    @test sort(unreachable) == sort(["exact", "iso_year", "week", "week_day",
                                      "iso_week_day", "hour", "minute", "second"])
 
     # The alternatives table is a message table, not a registry: every key must be one of the

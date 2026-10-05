@@ -1051,7 +1051,6 @@ const UNIMPLEMENTED_LOOKUP_HINTS = Dict{String,String}(
   # under no lookup spelling at all. "no spelling of it works — a bare `field => value` already IS
   # an exact match" read as a contradiction, so this entry says what to write instead of what fails.
   "exact"        => "write it as a bare `field => value`, which already IS an exact match",
-  "iexact"       => "the nearest are `__@iunaccent_exact` and `__@icontains`",
   "iso_year"     => "the nearest is `__@year`",
   "week"         => "there is no week transform either; `__@month` and `__@yyyy_mm` are the nearest buckets",
   "week_day"     => "there is no weekday transform either",
@@ -1072,10 +1071,11 @@ function _check_if_field_is_a_operator(field::String)
   # #604's own two-step dead end surviving 11 more times. The MEMBERSHIP is deliberate and stays:
   # this is a near-miss hint, and a reader who typed `surname__week_day` is better served by being
   # told PormG has no such lookup than by the generic "no such field". Only the WORDING was wrong.
-  # (`regex`/`iregex` were two of the 11 until #635 wired them; they now arrive through
-  # PATTERN_LOOKUP_OPERATORS, and the reachability check below flips their message by itself.)
+  # (`regex`/`iregex` were two of the 11 until #635 wired them, and `iexact` a third until #634;
+  # they now arrive through PATTERN_LOOKUP_OPERATORS, and the reachability check below flips their
+  # message by itself.)
   common_operators = [PATTERN_LOOKUP_OPERATORS...,
-    "exact", "iexact", "in", "gt", "gte", "lt", "lte", "range", "nrange", "date", "isnull",
+    "exact", "in", "gt", "gte", "lt", "lte", "range", "nrange", "date", "isnull",
     "year", "iso_year", "quarter", "month", "day", "week", "week_day", "iso_week_day",
     "hour", "minute", "second"]
   field in common_operators || return nothing

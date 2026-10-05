@@ -75,6 +75,13 @@ struct _PormgLowerMockSQLite <: PormG.PormGSQLite end
         end
     end
 
+    # #634: case-insensitive EQUALITY folds both sides the same way, and compares with `=` / `<>`
+    # rather than LIKE — a LIKE here would read a literal `%` or `_` in the value as a wildcard.
+    for (op, cmp) in ((:iexact, "="), (:niexact, "<>"))
+        sql = getfield(PormG.Dialect, op)(conn, col, ph)
+        @test sql == "pormg_lower($(col)) $(cmp) pormg_lower($(ph))"
+    end
+
     # Case-SENSITIVE family: folding here would silently make `@contains` case-insensitive, which is
     # the whole reason `PRAGMA case_sensitive_like = ON` is set beside the UDF registration.
     for op in (:contains, :startswith, :endswith, :ncontains, :nstartswith, :nendswith)

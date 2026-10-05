@@ -2948,6 +2948,22 @@ function icontains(conn::PormGAbstractType, column::AbstractString, value)
   return nothing
 end
 
+# #634: case-insensitive equality. `=` over folded text, not `ILIKE` without wildcards: the value binds
+# verbatim (VERBATIM_PATTERN_OPERATORS), so `ILIKE` would read a user's literal `%` or `_` as a
+# wildcard. `LOWER(col)` is also the expression a functional index on `lower(col)` serves.
+function iexact(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "LOWER($(column)) = LOWER($(value))"
+end
+function iexact(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+  # pormg_lower = Unicode-aware LOWER UDF (#78) — SQLite's own LOWER folds ASCII only, so `É` would
+  # not equal `é` here while it does on PostgreSQL.
+  return "pormg_lower($(column)) = pormg_lower($(value))"
+end
+function iexact(conn::PormGAbstractType, column::AbstractString, value)
+  throw(InvalidValueError("The value must be a String"))
+  return nothing
+end
+
 function iunaccent_contains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   # Uses the IMMUTABLE wrapper (see Configuration._install_immutable_unaccent!) so the
   # expression can be backed by a functional/pg_trgm index on large tables.
@@ -3088,6 +3104,19 @@ function nicontains(conn::PormGSQLite, column::AbstractString, value::AbstractSt
   return "pormg_lower($(column)) NOT LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
 function nicontains(conn::PormGAbstractType, column::AbstractString, value)
+  throw(InvalidValueError("The value must be a String"))
+  return nothing
+end
+
+# #634: the negated twin of `iexact`; verbatim like it, so no wildcard reaches the `<>`.
+function niexact(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "LOWER($(column)) <> LOWER($(value))"
+end
+function niexact(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+  # pormg_lower = Unicode-aware LOWER UDF (#78); `<>` over folded text mirrors iexact.
+  return "pormg_lower($(column)) <> pormg_lower($(value))"
+end
+function niexact(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end

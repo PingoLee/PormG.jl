@@ -186,8 +186,9 @@ PormG uses `__@` suffixes for lookup operators and field transforms:
 | `field__@istartswith` | `ILIKE 'val%'` | `"surname__@istartswith" => "ver"` |
 | `field__@endswith` | `LIKE '%val'` | `"surname__@endswith" => "sen"` |
 | `field__@iendswith` | `ILIKE '%val'` | `"surname__@iendswith" => "SEN"` |
+| `field__@iexact` | `LOWER(col) = LOWER(val)` | `"surname__@iexact" => "HAMILTON"` |
 
-Every pattern lookup above has a negated twin (`@ncontains`, `@nistartswith`, …). There are also
+Every pattern lookup above has a negated twin (`@ncontains`, `@nistartswith`, `@niexact`, …). There are also
 two PostgreSQL-only pairs: the accent-insensitive `@iunaccent_contains` / `@iunaccent_exact`, and
 the POSIX regular-expression `@regex` / `@iregex`. Each has a negated twin as well
 (`@niunaccent_*`, `@nregex` / `@niregex`). The full table,

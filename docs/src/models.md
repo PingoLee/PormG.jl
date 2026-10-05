@@ -286,6 +286,79 @@ Plain indexes carry no marker and render exactly as above.
     `run_once` step ([Data Migrations](migrations/advanced.md#Data-Migrations)), then declare it as it stands — the declaration adopts it
     (below), and nothing is rebuilt.
 
+### Expression and partial indexes
+
+Two more options take **SQL text**, the way a [`CheckConstraint`](#Check-Constraints)'s condition
+does — Django's `Index(Lower("surname"))` and `Index(..., condition=Q(...))`:
+
+```julia
+Driver = Models.Model("driver",
+  driverid = Models.IDField(),
+  surname  = Models.CharField(max_length=255),
+  indexes = [
+    # case-insensitive lookups: `WHERE lower(surname) = 'senna'`
+    Models.Index(expressions=("lower(surname)",), name="driver_surname_lower_idx"),
+  ],
+)
+
+Result = Models.Model("result",
+  resultid = Models.IDField(),
+  raceid   = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+  position = Models.IntegerField(null=true),
+  points   = Models.FloatField(),
+  indexes = [
+    # only the classified finishers — a retirement has no position
+    Models.Index(fields=("raceid", "-points"), condition="position IS NOT NULL",
+                 name="result_finishers_idx"),
+  ],
+)
+```
+
+- **`expressions`** indexes the result of SQL expressions instead of columns — a *functional*
+  index. Give `fields` or `expressions`, not both. Each entry is one index member, in PostgreSQL's
+  index-element syntax: a function call (`"lower(surname)"`), or any other expression in parentheses
+  (`"(points * 2)"`). A collation, an operator class or a direction goes inside the text —
+  `"surname COLLATE \"C\""`, `"lower(surname) text_pattern_ops"`, `"lower(surname) DESC"` — so
+  `opclasses` is refused beside `expressions`. PostgreSQL requires every function used to be
+  `IMMUTABLE`.
+  A `NULLS` placement other than the direction's default is spelled the same way:
+  `"points DESC NULLS LAST"` (PostgreSQL only — SQLite's `CREATE INDEX` has no `NULLS`).
+- **`condition`** makes the index *partial*: only the rows it matches are indexed. It combines with
+  either `fields` or `expressions`, and with one field too — a partial one-column index is a
+  different index from `db_index`.
+- Either one needs a **`name`** (Django's rule: a derived name could not say what the text indexes).
+
+The text is **SQL, sent to both engines as written** — over the table's physical, unqualified column
+names, and never a `Q(...)`, because DDL takes no bind parameters. PormG checks it only for what would
+silently change the statement it lands in: a `--` or `/*` comment, an unterminated quote, a top-level
+`;` — or a top-level `,`, so each entry of `expressions` is exactly one member. Both engines have
+expression and partial indexes; write SQL both understand when a model runs on both.
+
+```sql
+CREATE INDEX "driver_surname_lower_idx" ON "driver" (lower(surname));
+COMMENT ON INDEX "driver_surname_lower_idx" IS 'pormg:index:599190475f20d2a4';
+
+CREATE INDEX "result_finishers_idx" ON "result" ("raceid", "points" DESC) WHERE position IS NOT NULL;
+COMMENT ON INDEX "result_finishers_idx" IS 'pormg:index:837d515127295d74';
+```
+
+The marker carries a **hash of the declared text**. PostgreSQL stores a rewritten form of it —
+`lower(surname::text)` — so a declaration can never be compared with the catalog's text; the hash
+is what `makemigrations` compares instead. So:
+
+- **Changing the text** — an expression, or the condition — is a drop and a create of the index,
+  which `migrate` treats as destructive. Changing only `name` is a rename, as for any index.
+- **Renaming or removing a column the text names** is refused by `makemigrations` with
+  `InvalidMigrationError`, until the text no longer names it. PormG does not rewrite your SQL: write
+  the new name into the text in the same edit, and the plan re-creates the index.
+- A declaration over **fields** never claims a functional or partial index over the same columns:
+  `fields=("raceid", "-points")` without a `condition` is another index.
+
+`inspectdb` reads expression and partial indexes back with the database's own text, and the
+declarations it writes match the live indexes — adopting a database plans nothing. A hand-made one
+follows the ownership rule below: declared under its catalog text, it is adopted; undeclared, it is
+never planned away.
+
 ## Changing composites on an existing table
 
 `makemigrations` diffs `UniqueConstraint` and `Index` declarations against the live database the way
@@ -295,12 +368,12 @@ it diffs columns — on a table that already exists, not only when the table is 
 |---|---|
 | add a `UniqueConstraint` / `Index` | `CREATE UNIQUE INDEX` / `CREATE INDEX` |
 | remove one | `DROP INDEX` — or, when a table constraint backs the index, `ALTER TABLE … DROP CONSTRAINT` on PostgreSQL and a table rebuild on SQLite |
-| change its `fields`, a direction, its `method` or its `opclasses` | the drop, then the create |
+| change its `fields`, a direction, its `method`, its `opclasses`, its `expressions` or its `condition` | the drop, then the create |
 | change an explicit `name` | `ALTER INDEX … RENAME TO` on PostgreSQL (`ALTER TABLE … RENAME CONSTRAINT` for a constraint); a drop and a create on SQLite, which cannot rename an index |
 
 A declaration is matched to a live index by **what it is** — unique or not, its columns in order,
-and each column's direction, the access method and each column's operator class — and never by its
-name. So an index some other tool created counts as the one you declared: a schema adopted from Django
+and each column's direction, the access method and each column's operator class, and for an
+expression or partial index the hash of its text — and never by its name. So an index some other tool created counts as the one you declared: a schema adopted from Django
 keeps its `unique_together` constraint instead of gaining a second index beside it, and `inspectdb`
 writes every composite it reads into the generated model, so adopting a database plans nothing. A
 declaration naming a column's *default* operator class (`opclasses=("jsonb_ops",)` on a GIN index)
@@ -314,14 +387,20 @@ matches a live index built with that default.
     `dry_run()` lists it, and `migrate()` refuses it without `destructive=true`. Declare the index to
     keep it.
 
-    An index with a **method, a descending column or an operator class** follows the
-    [`CheckConstraint`](#How-a-CHECK-migrates) rule instead, because those are exactly the indexes
-    people write by hand (a trigram GIN index, a `varchar_pattern_ops` one):
+    An index with a **method, a descending column, an operator class, an expression or a
+    condition** follows the [`CheckConstraint`](#How-a-CHECK-migrates) rule instead, because those
+    are exactly the indexes people write by hand (a trigram GIN index, a `varchar_pattern_ops` one, a
+    `lower(email)` one):
 
     | The live index | Declared | Not declared |
     |---|---|---|
     | carries PormG's `pormg:index` marker | kept | dropped — **destructive** |
     | has no marker (written by hand, or by Django) | **adopted** — on PostgreSQL a `COMMENT ON INDEX` adds the marker after any comment already there; on SQLite nothing is planned | **never planned away** |
+
+    A hand-made expression or partial index is adopted only by a declaration of **its own text**, as
+    the database spells it — `inspectdb`'s text, which PostgreSQL rewrites (`lower(surname::text)`).
+    When a declaration asks for such an index's name with other text, the refusal prints the
+    declaration that would adopt it instead, ready to paste.
 
     An index adopted on SQLite stays unmarked, so removing its declaration later leaves it in place;
     an explicit `name=` that renames it re-creates it, marked. A declaration cannot take the *name*
@@ -331,12 +410,10 @@ matches a live index built with that default.
     with `pg_restore --no-comments` — turns PormG's index into a hand-made one: never dropped, until
     a declaration adopts it again.
 
-    Indexes PormG cannot reproduce are never read, so they are never dropped either: partial
-    (`WHERE …`), functional (`lower(name)`), an access method other than the six above, a `NULLS`
-    placement other than the direction's default (`DESC NULLS LAST`), an explicit collation,
-    `INCLUDE (…)`, storage parameters on an index with a method, direction or operator class
-    (`WITH (fastupdate = off)`), `NULLS NOT DISTINCT`, a `DEFERRABLE` constraint, a unique index
-    with a method, direction or operator class, and an invalid index (which
+    Indexes PormG cannot reproduce are never read, so they are never dropped either: an access
+    method other than the six above, `INCLUDE (…)`, storage parameters on an advanced index (`WITH (fastupdate = off)`),
+    `NULLS NOT DISTINCT`, a `DEFERRABLE` constraint, a unique index with a method, direction,
+    operator class, expression or condition, and an invalid index (which
     [`check`](migrations/workflow.md#Finding-Invalid-Indexes) reports). The
     [PostgreSQL guide](postgres.md#Production-notes) lists them. A **one-column non-unique** index
     with one of those properties is skipped the same way, rather than read as a `db_index`, so it is

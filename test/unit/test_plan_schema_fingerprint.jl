@@ -130,9 +130,11 @@ _ps739_raised(f) = try f(); nothing catch e; e end
 
     # #29: the pin above has no composite, so it cannot see a slot added to `LiveComposite` — which is
     # exactly how #29's six slots went in without moving it. This second pin can: computed once, with
-    # those slots, and frozen.
+    # those slots, and frozen. Re-pinned by #29 part 2, which added `expressions` and `condition`,
+    # WITHOUT a `_SCHEMA_FINGERPRINT_VERSION` bump: the fingerprint (#739) has shipped in no tag yet,
+    # so the only plans it refuses are ones generated from `main` since then, for tables with composites.
     composite = LiveComposite("drivers_uniq", ["driverid", "surname"], true, true)
-    @test Migrations._schema_table_fingerprint(_ps739_table(composites = [composite])) == "2f23c4529100d99d"
+    @test Migrations._schema_table_fingerprint(_ps739_table(composites = [composite])) == "53bd48d03380e739"
     # Each #29 facet of an index is a different schema for a plan to run on.
     adv(; method = "btree", desc = [false], opc = Union{String, Nothing}["int4_ops"], dflt = [true], marker = nothing) =
         _ps739_table(composites = [LiveComposite("drivers_ix", ["driverid"], false, false, method, desc, opc, dflt,
@@ -143,6 +145,16 @@ _ps739_raised(f) = try f(); nothing catch e; e end
                        "opclass" => adv(opc = Union{String, Nothing}["int4_minmax_ops"], dflt = [false], marker = "pormg:index"),
                        "marker" => adv())
         @test (facet, Migrations._schema_table_fingerprint(t)) != (facet, plain_ix)
+    end
+    # #29 part 2: an expression and a condition are each a different schema too.
+    text(; exprs = String[], cond = nothing) =
+        _ps739_table(composites = [LiveComposite("drivers_ix", String[], false, false, "btree", Bool[],
+                                                 Union{String, Nothing}[], Bool[], "pormg:index", nothing;
+                                                 expressions = exprs, condition = cond)])
+    for (facet, t) in ("expressions" => text(exprs = ["lower(surname)"]),
+                       "condition" => text(exprs = ["driverid"], cond = "driverid > 0"))
+        @test (facet, Migrations._schema_table_fingerprint(t)) != (facet, plain_ix)
+        @test (facet, Migrations._schema_table_fingerprint(t)) != (facet, Migrations._schema_table_fingerprint(text(exprs = ["driverid"])))
     end
     # A timestamp default is written as its UTC wall time, never through `repr` (which is TimeZones'
     # to change): it digests, and two instants are two defaults.

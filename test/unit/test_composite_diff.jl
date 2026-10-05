@@ -368,8 +368,10 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SQLite: a create collides loudly, and names are checked once per plan (#161)
-# Without IF NOT EXISTS a name another object holds fails the migration — here a partial index the
-# readers refuse (so the diff never sees it) already owns the derived name. Before, the CREATE was a
+# Without IF NOT EXISTS a name another object holds fails the migration — here a UNIQUE partial index
+# the readers refuse (so the diff never sees it) already owns the derived name. (A plain partial index
+# was the fixture until #29 part 2 made it readable; its name clash is now refused at plan time — see
+# the expression and partial index testset below.) Before, the CREATE was a
 # silent no-op and the next makemigrations planned it again, forever. Collisions the plan CAN see —
 # one name created twice on any tables, SQLite's reserved `sqlite_` prefix, a name that differs only
 # in case on SQLite (which folds identifiers) — are refused before anything runs.
@@ -379,7 +381,7 @@ end
     pool = SQLiteConnectionPool(joinpath(dir, "cd_collide.sqlite"); pool_size = 1)
     try
       _cd_apply!(pool, _cd_plan(pool, LiveTable[], _cd_result()))
-      fetch(pool, """CREATE INDEX "result_raceid_driverid_uniq" ON "result" ("grid") WHERE "grid" > 0;""")
+      fetch(pool, """CREATE UNIQUE INDEX "result_raceid_driverid_uniq" ON "result" ("grid") WHERE "grid" > 0;""")
       p = _cd_plan(pool, _cd_live(pool, "result"),
                    _cd_result(constraints = [Models.UniqueConstraint(fields = ("raceid", "driverid"))]))
       # The database's own refusal, naming the index — not some unrelated failure of the harness.
@@ -760,4 +762,218 @@ end
   taker = _cd_result(indexes = [Models.Index(fields = ("raceid", "grid"), name = "result_theirs")])
   err = try; _cd_plan(CD_PG, with_live(taker, gin("result_theirs", "jsonb_ops", true)), taker); nothing; catch e; e; end
   @test err isa PormG.InvalidMigrationError && occursin("does not own", err.msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite: expression and partial indexes are PormG's by their hashed marker (#29 part 2)
+# A functional index and a partial one, end to end on a real database. Each is created under the
+# hashed marker `pormg:index:<hash>` of its declared TEXT, reads back with that text and converges.
+# Changing a condition's text is a drop and a create (destructive); a plain declaration over the same
+# columns does not claim a partial index. A hand-made functional+partial index is read, never planned
+# away, and declaring it under its own text adopts it with no statement; declaring its name for other
+# text is refused with the declaration that would adopt it, ready to paste. A column a declared
+# expression names cannot be renamed or removed under it; with the text updated the rename converges.
+# A table rebuild re-creates the marked indexes verbatim and the table still converges.
+# Mutation gate: drop `_composite_text_matches` from `composite_shape_matches` and v2 re-plans
+# forever; mark hand-made text indexes owned (`composite_is_owned` → true) and `hand_abs` is planned
+# away; return early from the index half of `_refuse_stale_check_conditions` and the rename plans.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: expression and partial indexes are PormG's by their hashed marker (#29 part 2)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "cd_text29.sqlite"); pool_size = 1)
+    try
+      _cd_apply!(pool, _cd_plan(pool, LiveTable[], _cd_result()))
+      grid_abs = Models.Index(expressions = ("abs(grid)",), name = "result_grid_abs_idx")
+      finishers(cond) = Models.Index(fields = ("raceid", "-grid"), condition = cond, name = "result_finishers_idx")
+      v2 = _cd_result(indexes = [grid_abs, finishers("grid IS NOT NULL")])
+      p2 = _cd_plan(pool, _cd_live(pool, "result"), v2)
+      @test sort(_cd_keys(p2, :result)) == ["Create index: result_finishers_idx", "Create index: result_grid_abs_idx"]
+      m_abs = PormG.index_text_marker(["abs(grid)"], nothing)
+      m_fin = PormG.index_text_marker(String[], "grid IS NOT NULL")
+      @test m_abs != m_fin && startswith(m_abs, "pormg:index:")
+      # The marker closes the member list, so a partial index's WHERE follows it.
+      @test p2[:result]["Create index: result_grid_abs_idx"] ==
+            "CREATE INDEX \"result_grid_abs_idx\" ON \"result\" (abs(grid) /* $(m_abs) */);"
+      @test p2[:result]["Create index: result_finishers_idx"] ==
+            "CREATE INDEX \"result_finishers_idx\" ON \"result\" (\"raceid\", \"grid\" DESC /* $(m_fin) */) WHERE grid IS NOT NULL;"
+      _cd_apply!(pool, p2)
+
+      # Read back: the functional one as text, the partial one as its columns plus the condition.
+      byname = Dict(c.name => c for c in only(_cd_live(pool, "result")).composites)
+      @test byname["result_grid_abs_idx"].expressions == ["abs(grid)"]
+      @test byname["result_grid_abs_idx"].marker == m_abs
+      @test byname["result_finishers_idx"].columns == ["raceid", "grid"]
+      @test byname["result_finishers_idx"].descending == [false, true]
+      @test byname["result_finishers_idx"].condition == "grid IS NOT NULL"
+      @test byname["result_finishers_idx"].marker == m_fin
+      @test _cd_converged(pool, ("result",), v2)
+
+      # A changed condition is a drop and a create of the one name, and the drop is destructive.
+      v3 = _cd_result(indexes = [grid_abs, finishers("grid > 0")])
+      p3 = _cd_plan(pool, _cd_live(pool, "result"), v3)
+      @test _cd_keys(p3, :result) == ["Remove composite index: result_finishers_idx", "Create index: result_finishers_idx"]
+      @test is_destructive(p3[:result]["Remove composite index: result_finishers_idx"])
+      _cd_apply!(pool, p3)
+      @test _cd_converged(pool, ("result",), v3)
+
+      # A plain declaration over the same columns is a different index: it never claims the partial one.
+      plain = _cd_result(indexes = [grid_abs, Models.Index(fields = ("raceid", "-grid"), name = "result_finishers_idx")])
+      @test _cd_keys(_cd_plan(pool, _cd_live(pool, "result"), plain), :result) ==
+            ["Remove composite index: result_finishers_idx", "Create index: result_finishers_idx"]
+
+      # Hand-made, functional AND partial: read, unmarked, never planned away.
+      fetch(pool, "CREATE INDEX hand_abs ON result(abs(driverid)) WHERE grid > 1;")
+      hand = only(c for c in only(_cd_live(pool, "result")).composites if c.name == "hand_abs")
+      @test hand.expressions == ["abs(driverid)"] && hand.condition == "grid > 1" && hand.marker === nothing
+      @test _cd_converged(pool, ("result",), v3)
+      # Declared under its own text, it is adopted — on SQLite with no statement at all.
+      adopt = _cd_result(indexes = [grid_abs, finishers("grid > 0"),
+                                    Models.Index(expressions = ("abs(driverid)",), condition = "grid > 1", name = "hand_abs")])
+      @test _cd_converged(pool, ("result",), adopt)
+      # Its name for other text is refused, and the message carries the declaration that adopts it.
+      clash = _cd_result(indexes = [grid_abs, finishers("grid > 0"),
+                                    Models.Index(expressions = ("abs(raceid)",), name = "hand_abs")])
+      err = try; _cd_plan(pool, _cd_live(pool, "result"), clash); nothing; catch e; e; end
+      @test err isa PormG.InvalidMigrationError
+      @test occursin("does not own", err.msg)
+      @test occursin("Models.Index(expressions = (\"abs(driverid)\",), condition = \"grid > 1\", name = \"hand_abs\")", err.msg)
+
+      # A column the declared text names cannot be renamed under it, nor removed.
+      renamed(text) = Models.Model("result"; id = Models.IDField(), raceid = Models.IntegerField(),
+                                   driverid = Models.IntegerField(), start_grid = Models.IntegerField(null = true),
+                                   indexes = [Models.Index(expressions = (text,), name = "result_grid_abs_idx")])
+      err = try; _cd_plan(pool, _cd_live(pool, "result"), renamed("abs(grid)"); answers = "1\n"); nothing; catch e; e; end
+      @test err isa PormG.InvalidMigrationError
+      @test occursin("Index 'result_grid_abs_idx'", err.msg) && occursin("still names column 'grid'", err.msg)
+      gone = Models.Model("result"; id = Models.IDField(), raceid = Models.IntegerField(), driverid = Models.IntegerField(),
+                          indexes = [grid_abs])
+      err = try; _cd_plan(pool, _cd_live(pool, "result"), gone); nothing; catch e; e; end
+      @test err isa PormG.InvalidMigrationError && occursin("which this migration removes", err.msg)
+      # With the text updated, the rename converges in one plan: the old index is re-created.
+      fixed = renamed("abs(start_grid)")
+      p = _cd_plan(pool, _cd_live(pool, "result"), fixed; answers = "1\n")
+      @test "Create index: result_grid_abs_idx" in _cd_keys(p, :result)
+      _cd_apply!(pool, p)
+      @test _cd_converged(pool, ("result",), fixed)
+      @test only(c for c in only(_cd_live(pool, "result")).composites if c.name == "result_grid_abs_idx").expressions ==
+            ["abs(start_grid)"]
+
+      # A rebuild (NULL → NOT NULL) re-creates the marked text index verbatim and still converges.
+      rebuilt = Models.Model("result"; id = Models.IDField(), raceid = Models.IntegerField(),
+                             driverid = Models.IntegerField(), start_grid = Models.IntegerField(),
+                             indexes = [Models.Index(expressions = ("abs(start_grid)",), name = "result_grid_abs_idx")])
+      p = _cd_plan(pool, _cd_live(pool, "result"), rebuilt)
+      @test any(startswith("Alter"), _cd_keys(p, :result))
+      _cd_apply!(pool, p)
+      @test _cd_converged(pool, ("result",), rebuilt)
+    finally
+      close_pool!(pool)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: expression and partial indexes over a hand-built live side (#29 part 2)
+# Plan shape only — the catalog half (PostgreSQL's rewritten text, `pg_get_indexdef`) is
+# test_importers_introspection.jl. The create renders `USING`, the expressions verbatim and the
+# `WHERE`, then the hashed marker as the index's comment. A live index whose marker is the hash of the
+# declared text converges even though its catalog text differs (`lower(surname::text)`); one whose
+# hash is stale is dropped and re-created. A hand-made index declared under its catalog text is
+# adopted with the HASHED marker, the DBA's comment kept; renamed, it is `ALTER INDEX`.
+# Mutation gate: adopt with the bare `INDEX_MARKER` instead of `composite_marker(d)` and the adoption
+# assertion fails; drop the marker half of `_composite_text_matches` and the rewritten-text index
+# re-plans forever.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: expression and partial indexes over a hand-built live side (#29 part 2)" begin
+  with_live(model, composites...) = begin
+    t = live_table(model, CD_PG)
+    LiveTable[LiveTable(t.name, t.columns, t.indexes, collect(LiveComposite, composites), t.checks)]
+  end
+  text_ix(name, exprs, cond; method = "btree", marker = nothing, comment = marker) =
+    LiveComposite(name, String[], false, false, method, Bool[], Union{String, Nothing}[], Bool[], marker, comment;
+                  expressions = exprs, condition = cond)
+  base = _cd_result()
+  decl = Models.Index(expressions = ("abs(grid)",), condition = "grid IS NOT NULL", name = "result_grid_abs_idx",
+                      method = "brin")
+  declared = _cd_result(indexes = [decl])
+  m = PormG.index_text_marker(["abs(grid)"], "grid IS NOT NULL")
+
+  # Created from nothing: USING, the text verbatim, the WHERE, then the hashed marker.
+  p = _cd_plan(CD_PG, with_live(base), declared)
+  @test p[:result]["Create index: result_grid_abs_idx"] ==
+        "CREATE INDEX \"result_grid_abs_idx\" ON \"result\" USING brin (abs(grid)) WHERE grid IS NOT NULL;\n" *
+        "COMMENT ON INDEX \"result_grid_abs_idx\" IS '$(m)';"
+
+  # The catalog's rewritten text, under the marker of the declared text: unchanged.
+  rewritten = text_ix("result_grid_abs_idx", ["abs(grid)"], "(grid IS NOT NULL)"; method = "brin", marker = m)
+  @test all(isempty, values(_cd_plan(CD_PG, with_live(declared, rewritten), declared)))
+  odd = text_ix("result_grid_abs_idx", ["abs((grid)::integer)"], "grid IS NOT NULL"; method = "brin", marker = m)
+  @test all(isempty, values(_cd_plan(CD_PG, with_live(declared, odd), declared)))
+  # A stale hash under the same name: drop, then create.
+  stale = text_ix("result_grid_abs_idx", ["abs((grid)::integer)"], "grid > 0"; method = "brin",
+                  marker = PormG.index_text_marker(["abs(grid)"], "grid > 0"))
+  @test _cd_keys(_cd_plan(CD_PG, with_live(declared, stale), declared), :result) ==
+        ["Remove composite index: result_grid_abs_idx", "Create index: result_grid_abs_idx"]
+  # Another method is another index, whatever the text says.
+  btree = text_ix("result_grid_abs_idx", ["abs(grid)"], "grid IS NOT NULL"; marker = m)
+  @test _cd_keys(_cd_plan(CD_PG, with_live(declared, btree), declared), :result) ==
+        ["Remove composite index: result_grid_abs_idx", "Create index: result_grid_abs_idx"]
+
+  # Hand-made, declared under its catalog text: adopted with the HASHED marker, the DBA's comment kept.
+  hand = text_ix("result_grid_abs_idx", ["abs(grid)"], "(grid IS NOT NULL)"; method = "brin", comment = "ops note")
+  p = _cd_plan(CD_PG, with_live(declared, hand), declared)
+  @test _cd_keys(p, :result) == ["Adopt index: result_grid_abs_idx"]
+  @test p[:result]["Adopt index: result_grid_abs_idx"] == "COMMENT ON INDEX \"result_grid_abs_idx\" IS 'ops note $(m)';"
+  # Under a new explicit name it is adopted, then renamed in place.
+  moved = _cd_result(indexes = [Models.Index(expressions = ("abs(grid)",), condition = "grid IS NOT NULL",
+                                             name = "result_grid_abs_brin", method = "brin")])
+  p = _cd_plan(CD_PG, with_live(moved, rewritten), moved)
+  @test _cd_keys(p, :result) == ["Rename composite index: result_grid_abs_idx"]
+  @test p[:result]["Rename composite index: result_grid_abs_idx"] ==
+        "ALTER INDEX \"result_grid_abs_idx\" RENAME TO \"result_grid_abs_brin\";"
+
+  # The refusal's adopting declaration carries a hand-made partial index's operator classes too.
+  pattern = LiveComposite("result_hand_part", ["raceid", "driverid"], false, false, "btree", [false, false],
+                          Union{String, Nothing}["int4_ops", "int4_minmax_ops"], [true, false], nothing, nothing;
+                          condition = "grid > 0")
+  taker = _cd_result(indexes = [Models.Index(fields = ("raceid", "grid"), condition = "grid > 1", name = "result_hand_part")])
+  err = try; _cd_plan(CD_PG, with_live(taker, pattern), taker); nothing; catch e; e; end
+  @test err isa PormG.InvalidMigrationError
+  @test occursin("Models.Index(fields = (\"raceid\", \"driverid\",), condition = \"grid > 0\", " *
+                 "name = \"result_hand_part\", opclasses = (nothing, \"int4_minmax_ops\",))", err.msg)
+
+  # Undeclared: PormG's is dropped, a hand-made one never is.
+  @test _cd_keys(_cd_plan(CD_PG, with_live(base, rewritten), base), :result) == ["Remove composite index: result_grid_abs_idx"]
+  @test all(isempty, values(_cd_plan(CD_PG, with_live(base, hand), base)))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite: an expression index that SQLite stores as a plain column still reads back as its text (#29 part 2)
+# `"(grid)"`, `"grid ASC"` and `"'grid'"` are expressions to the declaration, but SQLite records each
+# as the column `grid`. Read as columns, a one-column index of that shape has no `fields` spelling, so
+# `inspectdb` declared nothing and the generated model's first plan dropped the index. SQLite keeps
+# the DDL verbatim, so an index whose stored members hash to its own marker is read as that text.
+# Mutation gate: drop the marker-hash arm from `_sqlite_composite_indexes`' `as_text` and the
+# read-back model plans `Remove composite index` for each.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: an expression index stored as a plain column reads back as its text (#29 part 2)" begin
+  for (k, text) in enumerate(("(grid)", "grid ASC", "'grid'"))
+    mktempdir() do dir
+      pool = SQLiteConnectionPool(joinpath(dir, "cd_plaintext29_$(k).sqlite"); pool_size = 1)
+      try
+        _cd_apply!(pool, _cd_plan(pool, LiveTable[], _cd_result()))
+        declared = _cd_result(indexes = [Models.Index(expressions = (text,), name = "result_grid_text_idx")])
+        _cd_apply!(pool, _cd_plan(pool, _cd_live(pool, "result"), declared))
+        @test _cd_converged(pool, ("result",), declared)
+        lc = only(c for c in only(_cd_live(pool, "result")).composites if c.name == "result_grid_text_idx")
+        @test (text, lc.expressions) == (text, [text])
+        # inspectdb writes that text back, and its model plans nothing — the index is not dropped.
+        read_back = only(m for m in Migrations.convert_schema_to_models(pool) if lowercase(string(m.name)) == "result")
+        p = get_migration_plan(_cd_live(pool, "result"), _cd_schema(read_back), pool, _cd_settings(); interactive = false)
+        @test (text, _cd_keys(p, :result)) == (text, String[])
+      finally
+        close_pool!(pool)
+      end
+    end
+  end
 end

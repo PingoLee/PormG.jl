@@ -515,17 +515,21 @@ end
     @test haskey(uniq.cache, "composite_indexes")
     live_ix = uniq.cache["composite_indexes"]["indexes"]
     live_ix_names = [i.name for i in live_ix]
+    ix_by_name_coll(ixs) = only(i for i in ixs if i.name == "pormg_it_uniq_coll_idx")
     # The composite UNIQUE above must not also arrive here. On PostgreSQL it is a `pg_constraint`
     # row whose backing index is `indisunique`; on SQLite `il."unique" = 1`. Either filter failing
     # would re-declare a uniqueness guarantee as a plain index.
-    expected_ix = is_pg ? ["pormg_it_uniq_ba_idx", "pormg_it_uniq_desc_idx", "pormg_it_uniq_opc_idx"] :
+    # #29 part 2: the explicitly collated one is read too, as SQL text (it used to be refused).
+    expected_ix = is_pg ? ["pormg_it_uniq_ba_idx", "pormg_it_uniq_coll_idx", "pormg_it_uniq_desc_idx", "pormg_it_uniq_nf_idx", "pormg_it_uniq_opc_idx"] :
                           ["pormg_it_uniq_ba_idx", "pormg_it_uniq_desc_idx"]
     @test live_ix_names == expected_ix
     # Named individually as well, so a failure says WHICH shape leaked rather than only that the
     # list moved.
     if is_pg
-      @test !("pormg_it_uniq_nf_idx" in live_ix_names)     # ASC + NULLS FIRST: indoption == 2
-      @test !("pormg_it_uniq_coll_idx" in live_ix_names)   # explicit COLLATE: indcollation differs
+      # ASC + NULLS FIRST (indoption == 2): read since #29 part 2 as text, the placement in the member's words
+      @test only(i for i in live_ix if i.name == "pormg_it_uniq_nf_idx").expressions == ["b NULLS FIRST", "a"]
+      # explicit COLLATE (indcollation differs): read since #29 part 2 as the catalog's element texts
+      @test ix_by_name_coll(live_ix).expressions == ["plain COLLATE \"C\"", "slug"]
     end
     ix_by_name = Dict(i.name => i for i in live_ix)
     @test ix_by_name["pormg_it_uniq_ba_idx"].fields == ["b", "a"]        # declared order, not attribute order
@@ -545,8 +549,9 @@ end
     # …and it survives the model → source → module round trip a user actually performs, which is
     # the whole point of reading it back: `inspectdb` writes through `Model_to_str`.
     uniq_src = PormG.Models.Model_to_str(uniq)
-    @test occursin("indexes = [Models.Index(fields = (\"b\", \"a\",), name = \"pormg_it_uniq_ba_idx\"), " *
-                   "Models.Index(fields = (\"-b\", \"a\",), name = \"pormg_it_uniq_desc_idx\")", uniq_src)
+    @test occursin("indexes = [Models.Index(fields = (\"b\", \"a\",), name = \"pormg_it_uniq_ba_idx\"), ", uniq_src)
+    @test occursin("Models.Index(fields = (\"-b\", \"a\",), name = \"pormg_it_uniq_desc_idx\")", uniq_src)
+    is_pg && @test occursin("Models.Index(expressions = (\"plain COLLATE \\\"C\\\"\", \"slug\",), name = \"pormg_it_uniq_coll_idx\")", uniq_src)
     is_pg && @test occursin("Models.Index(fields = (\"plain\", \"slug\",), name = \"pormg_it_uniq_opc_idx\", " *
                             "opclasses = (\"text_pattern_ops\", nothing,))", uniq_src)
     uniq_mod = Module()
@@ -2202,6 +2207,153 @@ if adapter_name == "PostgreSQL"
     finally
       drop29!()
     end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Expression and partial indexes: declared, marked, read back, adopted, owned (#29 part 2)
+# The live half of test/unit/test_composite_diff.jl's part-2 testsets, on both engines. A functional
+# index, a partial one, an explicitly collated one and (PostgreSQL) a GIN index over an expression are
+# each created under the hashed marker of their declared text and read back with the CATALOG's text —
+# rewritten by PostgreSQL (`lower(surname::text)`), verbatim on SQLite — yet converge, because the
+# marker, not the text, is compared. `inspectdb` writes the catalog's text back, and its own output
+# plans nothing. A hand-made functional+partial index is left alone, adopted by a declaration of its
+# catalog text (on PostgreSQL a COMMENT with the hashed marker after the DBA's note), and refuses its
+# name to other text with the adopting declaration in the message. A changed condition is a
+# destructive drop and create; removing a column the text names is refused. Undeclared, PormG's go
+# and the hand-made one stays (on SQLite also once adopted: adopting writes no marker there).
+# Dropped in `finally`.
+# Mutation gate: make `_index_definition_elements` return `nothing` and the functional and partial
+# indexes stop reading back on both engines, so the converged plan re-creates them.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Expression and partial indexes: declared, marked, read back, adopted, owned (#29 part 2)" begin
+  pool = PormG.config[PORMG_DB_FOLDER].connections
+  pg = adapter_name == "PostgreSQL"
+  ddl(sql) = (PormG.ConnectionPool.fetch(pool, sql); nothing)          # DDL: no result set on SQLite
+  q29b(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
+  tbl = "pormg_it_29b_driver"
+  drop29b!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
+  M29b = PormG.Models
+  IX = M29b.Index
+  model29b(indexes...; with_surname = true) = M29b.Model(tbl;
+    id = M29b.IDField(), raceid = M29b.IntegerField(), points = M29b.FloatField(),
+    position = M29b.IntegerField(null = true),
+    (with_surname ? (surname = M29b.CharField(max_length = 60),) : NamedTuple())...,
+    indexes = collect(indexes))
+  schema29b(m) = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+    Symbol(tbl) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => m, :exist => false))
+  settings29b = (s = PormG.Configuration.Settings(); s.change_db = true; s)
+  live29b() = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
+  plan29b(m) = PormG.Migrations.get_migration_plan([live29b()], schema29b(m), pool, settings29b; interactive = false)
+  keys29b(p) = haskey(p, Symbol(tbl)) ? collect(keys(p[Symbol(tbl)])) : String[]
+  apply29b!(plan) = for sql in first(PormG.Migrations._order_statements(collect(values(plan))))
+    foreach(ddl, pg ? PormG.Migrations._split_pg_statements(sql) : PormG.Migrations._split_sqlite_statements(sql))
+  end
+  # The marker as stored: the index's comment on PostgreSQL, the comment closing the list on SQLite.
+  marker29b(name) = pg ?
+    (r = q29b("SELECT obj_description('\"$(name)\"'::regclass, 'pg_class') AS c")[1, :c]; r === missing ? nothing : String(r)) :
+    PormG.Migrations._sqlite_index_marker(String(q29b("SELECT sql FROM sqlite_master WHERE name = '$(name)'")[1, :sql]))
+
+  lower = IX(expressions = ("lower(surname)",), name = "pormg_it_29b_surname_lower")
+  finishers(cond) = IX(fields = ("raceid", "-points"), condition = cond, name = "pormg_it_29b_finishers")
+  collated = IX(expressions = (pg ? "surname COLLATE \"C\"" : "surname COLLATE NOCASE",), name = "pormg_it_29b_surname_coll")
+  declared = Any[lower, finishers("position IS NOT NULL"), collated]
+  pg && push!(declared, IX(expressions = ("to_tsvector('simple', surname)",), method = "gin", name = "pormg_it_29b_surname_tsv"))
+  # A NULLS placement written as an expression: PostgreSQL stores a plain column with `indoption` 1,
+  # which the reader takes as text — so it is read back, and the plan converges (SQLite has no NULLS
+  # in CREATE INDEX).
+  pg && push!(declared, IX(expressions = ("points DESC NULLS LAST",), name = "pormg_it_29b_points_nulls"))
+  names = [ix.name for ix in declared]
+
+  drop29b!()
+  try
+    apply29b!(PormG.Migrations.get_migration_plan(PormG.Migrations.LiveTable[], schema29b(model29b()), pool,
+                                                   settings29b; interactive = false))
+    p = plan29b(model29b(declared...))
+    @test sort(keys29b(p)) == sort(["Create index: $(n)" for n in names])
+    apply29b!(p)
+    # Each carries the hash of its DECLARED text.
+    for ix in declared
+      @test marker29b(ix.name) == PormG.index_text_marker(ix.expressions, ix.condition)
+    end
+
+    # Read back with the catalog's text — and converged anyway.
+    byname = Dict(c.name => c for c in live29b().composites)
+    @test issubset(names, keys(byname))
+    # Measured: PostgreSQL's pretty deparse (`pg_get_indexdef(oid, 0, true)`) — the cast unparenthesised,
+    # a keyword-named column quoted in the predicate.
+    @test byname["pormg_it_29b_surname_lower"].expressions == [pg ? "lower(surname::text)" : "lower(surname)"]
+    fin = byname["pormg_it_29b_finishers"]
+    @test (fin.columns, fin.descending) == (["raceid", "points"], [false, true])
+    @test fin.condition == (pg ? "\"position\" IS NOT NULL" : "position IS NOT NULL")
+    @test byname["pormg_it_29b_surname_coll"].expressions == [pg ? "surname COLLATE \"C\"" : "surname COLLATE NOCASE"]
+    pg && @test byname["pormg_it_29b_surname_tsv"].expressions == ["to_tsvector('simple'::regconfig, surname::text)"]
+    @test isempty(live29b().indexes)                 # none is a `db_index`: one owner per index
+    @test all(isempty, values(plan29b(model29b(declared...))))
+
+    # The partial index really is partial: the planner may use it for a matching predicate.
+    if !pg
+      qp = q29b("EXPLAIN QUERY PLAN SELECT raceid FROM \"$(tbl)\" WHERE raceid = 1 AND position IS NOT NULL ORDER BY points DESC")
+      @test any(occursin("pormg_it_29b_finishers", string(d)) for d in qp.detail)
+    end
+
+    # inspectdb writes the catalog's text, which plans nothing against the live table.
+    read_back = only(m for m in PormG.Migrations.convert_schema_to_models(pool; include_table = [tbl]))
+    src = PormG.Models.Model_to_str(read_back)
+    @test occursin(pg ? "name = \"pormg_it_29b_finishers\", condition = \"\\\"position\\\" IS NOT NULL\")" :
+                        "name = \"pormg_it_29b_finishers\", condition = \"position IS NOT NULL\")", src)
+    @test occursin(pg ? "Models.Index(expressions = (\"lower(surname::text)\",)" : "Models.Index(expressions = (\"lower(surname)\",)", src)
+    mod29b = Module()
+    Core.eval(mod29b, :(import PormG.Models))
+    regenerated = Core.eval(mod29b, Meta.parse(src))
+    @test all(isempty, values(plan29b(regenerated)))
+
+    # A hand-made functional + partial index: read, unmarked, never planned away…
+    ddl("CREATE INDEX pormg_it_29b_hand ON \"$(tbl)\" (upper(surname)) WHERE points > 10")
+    pg && ddl("COMMENT ON INDEX pormg_it_29b_hand IS 'built by ops for the standings page'")
+    hand = only(c for c in live29b().composites if c.name == "pormg_it_29b_hand")
+    @test hand.marker === nothing && !PormG.Migrations.composite_is_owned(hand)
+    @test all(isempty, values(plan29b(model29b(declared...))))
+    # …its name refused to other text, with the declaration that adopts it in the message…
+    err = try; plan29b(model29b(declared..., IX(expressions = ("upper(surname)",), name = "pormg_it_29b_hand"))); nothing
+          catch e; e; end
+    @test err isa PormG.InvalidMigrationError
+    @test occursin("Models.Index(expressions = ($(repr(only(hand.expressions))),), condition = $(repr(hand.condition)), " *
+                   "name = \"pormg_it_29b_hand\")", err.msg)
+    # …and adopted by a declaration of the catalog's text: a COMMENT on PostgreSQL, nothing on SQLite.
+    adopting = model29b(declared..., IX(expressions = hand.expressions, condition = hand.condition, name = "pormg_it_29b_hand"))
+    p = plan29b(adopting)
+    @test keys29b(p) == (pg ? ["Adopt index: pormg_it_29b_hand"] : String[])
+    apply29b!(p)
+    pg && @test marker29b("pormg_it_29b_hand") ==
+                "built by ops for the standings page " * PormG.index_text_marker(hand.expressions, hand.condition)
+    @test all(isempty, values(plan29b(adopting)))
+
+    # A changed condition: drop and create the one name, destructive. (The adopted index stays declared.)
+    adopted = IX(expressions = hand.expressions, condition = hand.condition, name = "pormg_it_29b_hand")
+    changed = model29b(lower, finishers("position > 0"), declared[3:end]..., adopted)
+    p = plan29b(changed)
+    @test keys29b(p) == ["Remove composite index: pormg_it_29b_finishers", "Create index: pormg_it_29b_finishers"]
+    @test PormG.Migrations.is_destructive(join(values(p[Symbol(tbl)]), "\n"))
+    apply29b!(p)
+    @test marker29b("pormg_it_29b_finishers") == PormG.index_text_marker(String[], "position > 0")
+    @test all(isempty, values(plan29b(changed)))
+
+    # A column the declared text names cannot be removed under it.
+    err = try; plan29b(model29b(lower; with_surname = false)); nothing; catch e; e; end
+    @test err isa PormG.InvalidMigrationError && occursin("which this migration removes", err.msg)
+
+    # Undeclared: PormG's own go; the hand-made one stays — on SQLite even after adoption.
+    p = plan29b(model29b())
+    gone = pg ? vcat(names, "pormg_it_29b_hand") : names
+    @test sort(keys29b(p)) == sort(["Remove composite index: $(n)" for n in gone])
+    apply29b!(p)
+    left = Set(String(n) for n in q29b(pg ? "SELECT indexname AS n FROM pg_indexes WHERE tablename = '$(tbl)' AND indexname <> '$(tbl)_pkey'" :
+                                         "SELECT name AS n FROM pragma_index_list('$(tbl)') WHERE origin = 'c'").n)
+    @test left == (pg ? Set{String}() : Set(["pormg_it_29b_hand"]))
+    @test all(isempty, values(plan29b(model29b())))
+  finally
+    drop29b!()
   end
 end
 

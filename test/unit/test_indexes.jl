@@ -485,6 +485,145 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Models.Index: expressions and condition (#29 part 2)
+# Django's rules, on SQL text: fields OR expressions, a name for either text, no opclasses beside
+# expressions (the text carries its own), hash/spgist over one member however it is spelled. The
+# text is checked for exactly what would change the CREATE INDEX it lands in — a comment, an
+# unterminated quote, a top-level `;` or `,` — so each expression is one member. A partial index is
+# a different index from `db_index`, so it may have one field.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Index expressions and condition (#29 part 2)" begin
+  f = Models.Index(expressions = ("lower(surname)",), name = "driver_surname_lower_idx")
+  @test f.expressions == ["lower(surname)"] && isempty(f.fields) && f.condition === nothing
+  @test f.descending == Bool[] && f.opclasses == Union{String, Nothing}[]
+  @test Models._index_is_advanced(f) && Models._index_holds_text(f)
+  # A lone string is one expression; surrounding whitespace is trimmed.
+  @test Models.Index(expressions = "  lower(surname) ", name = "x").expressions == ["lower(surname)"]
+  # A comma INSIDE parentheses or a literal is one member.
+  @test Models.Index(expressions = ("coalesce(code, 'n,a')",), name = "x").expressions == ["coalesce(code, 'n,a')"]
+  p = Models.Index(fields = ("raceid", "-points"), condition = "position IS NOT NULL", name = "result_finishers_idx")
+  @test (p.fields, p.descending, p.condition) == (["raceid", "points"], [false, true], "position IS NOT NULL")
+  # One field is enough for a partial index: `db_index` cannot read it back.
+  @test Models.Index(fields = ("raceid",), condition = "grid > 0", name = "x").fields == ["raceid"]
+  # Both texts at once, under another method.
+  g = Models.Index(expressions = ("to_tsvector('simple', surname)",), condition = "dob IS NOT NULL",
+                   method = "gin", name = "driver_search_idx")
+  @test (g.method, g.condition) == ("gin", "dob IS NOT NULL")
+
+  # The helpers carry the text: shape (the importer's duplicate collapse) and rename keep it.
+  @test Models._index_shape(f) != Models._index_shape(Models.Index(expressions = ("upper(surname)",), name = "y"))
+  @test Models._index_shape(p) != Models._index_shape(Models.Index(fields = ("raceid", "-points"), condition = "grid > 0", name = "y"))
+  r = Models._index_renamed(g, "renamed")
+  @test (r.name, r.expressions, r.condition, r.method) == ("renamed", g.expressions, g.condition, "gin")
+  @test Models._index_renamed(p, "q").condition == "position IS NOT NULL"
+  @test Models._index_label(f) == "expressions (lower(surname))" && Models._index_label(p) == "(raceid, points)"
+
+  err(f) = try; f(); nothing; catch e; e; end
+  msg(f) = (e = err(f); e isa PormG.ModelDefinitionError ? sprint(showerror, e) : "NOT A ModelDefinitionError: $(e)")
+  @test occursin("not both", msg(() -> Models.Index(fields = ("a",), expressions = ("abs(b)",), name = "x")))
+  # Expressions naming only columns are a column index — `inspectdb` would read it back as `fields`,
+  # or at one column as nothing at all. Mixed with a real expression, or with a condition, they stay.
+  @test occursin("name only columns", msg(() -> Models.Index(expressions = ("grid",), name = "x")))
+  @test occursin("name only columns", msg(() -> Models.Index(expressions = ("raceid", "\"grid\""), name = "x")))
+  @test Models.Index(expressions = ("raceid", "abs(grid)"), name = "x").expressions == ["raceid", "abs(grid)"]
+  @test Models.Index(expressions = ("grid",), condition = "grid > 0", name = "x").condition == "grid > 0"
+  @test Models.Index(expressions = ("grid DESC",), name = "x").expressions == ["grid DESC"]
+  @test occursin("requires fields or expressions", msg(() -> Models.Index(name = "x")))
+  @test occursin("explicit name=", msg(() -> Models.Index(expressions = ("lower(a)",))))
+  @test occursin("explicit name=", msg(() -> Models.Index(fields = ("a", "b"), condition = "a > 0")))
+  @test occursin("inside the expression text", msg(() -> Models.Index(expressions = ("lower(a)",), opclasses = ("text_ops",), name = "x")))
+  @test occursin("single member", msg(() -> Models.Index(expressions = ("lower(a)", "b"), method = "hash", name = "x")))
+  @test occursin("at least one expression", msg(() -> Models.Index(expressions = String[], name = "x")))
+  @test occursin("must be SQL strings", msg(() -> Models.Index(expressions = (:a,), name = "x")))
+  @test occursin("must be an SQL string", msg(() -> Models.Index(fields = ("a", "b"), condition = :a, name = "x")))
+  @test occursin("must not be blank", msg(() -> Models.Index(fields = ("a", "b"), condition = "  ", name = "x")))
+  @test occursin("must not be blank", msg(() -> Models.Index(expressions = ("",), name = "x")))
+  # What would change the statement the text is rendered into.
+  for bad in ("a, b", "lower(a); DROP TABLE driver", "lower(a) -- tail", "lower(a) /* c */", "lower('a)")
+    @test occursin("not well-formed SQL", msg(() -> Models.Index(expressions = (bad,), name = "x")))
+  end
+  @test occursin("not well-formed SQL", msg(() -> Models.Index(fields = ("a", "b"), condition = "a > 0; DROP TABLE t", name = "x")))
+  # A model that declares two text indexes under one name is refused when it is built.
+  @test_throws PormG.ModelDefinitionError Models.Model("dup_text_ix", id = Models.IDField(), a = Models.IntegerField(),
+    indexes = [Models.Index(expressions = ("abs(a)",), name = "same"), Models.Index(fields = ("a",), condition = "a > 0", name = "same")])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The hashed marker of an index's SQL text (#29 part 2)
+# The marker is persisted in the database and compared in another process, maybe by another
+# PormG version, so its value is pinned, not merely checked for shape. Canonical text ignores what
+# cannot change the index — outer whitespace and a wrapping pair of parentheses — and the encoding is
+# length-prefixed, so a comma inside one expression never reads as two, and a condition never reads
+# as a last expression.
+# Mutation gate: drop the length prefix (join with ",") and the two collision pairs hash alike.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "The hashed marker of an index's SQL text (#29 part 2)" begin
+  @test PormG.index_text_marker(["lower(surname)"], nothing) == "pormg:index:" * PormG.index_text_hash(["lower(surname)"], nothing)
+  @test PormG.index_text_hash(["lower(surname)"], nothing) == "599190475f20d2a4"
+  @test occursin(PormG.INDEX_MARKER_RE, PormG.index_text_marker(["lower(surname)"], "dob IS NOT NULL"))
+  @test PormG.canonical_index_text(["lower(surname)"], "position IS NOT NULL") == "e14:lower(surname)w20:position IS NOT NULL"
+  # What does not change the index does not change the hash.
+  @test PormG.index_text_hash([" lower(surname) "], "(position IS NOT NULL)") ==
+        PormG.index_text_hash(["lower(surname)"], "position IS NOT NULL")
+  # What does, does — including the split between members, and between members and the condition.
+  @test PormG.index_text_hash(["a, b"], nothing) != PormG.index_text_hash(["a", "b"], nothing)
+  @test PormG.index_text_hash(["a"], "b") != PormG.index_text_hash(["a", "b"], nothing)
+  @test PormG.index_text_hash(["a"], nothing) != PormG.index_text_hash(String[], "a")
+  @test PormG.index_text_hash(["lower(surname)"], nothing) != PormG.index_text_hash(["LOWER(surname)"], nothing)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Planner and renderer: expressions and a WHERE, under the hashed marker (#29 part 2)
+# The text is rendered verbatim — it is DDL, which takes no bind parameters — after the renderer
+# re-checks it, as its own guard against a hand-built caller.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Renderer: expressions and a WHERE, under the hashed marker (#29 part 2)" begin
+  pg, sl = IXMockPostgres(), IXMockSQLite()
+  m = PormG.index_text_marker(["lower(surname)"], "dob IS NOT NULL")
+  @test PormG.Dialect.create_index(pg, "\"i\"", "\"driver\"", String[]; if_not_exists = false,
+          expressions = ["lower(surname)"], condition = "dob IS NOT NULL", marker = m) ==
+        "CREATE INDEX \"i\" ON \"driver\" (lower(surname)) WHERE dob IS NOT NULL;\nCOMMENT ON INDEX \"i\" IS '$(m)';"
+  @test PormG.Dialect.create_index(sl, "\"i\"", "\"driver\"", String[]; if_not_exists = false,
+          expressions = ["lower(surname)"], condition = "dob IS NOT NULL", marker = m) ==
+        "CREATE INDEX \"i\" ON \"driver\" (lower(surname) /* $(m) */) WHERE dob IS NOT NULL;"
+  # Columns with a condition: the members render as before, the WHERE after the list.
+  @test PormG.Dialect.create_index(pg, "\"i\"", "\"result\"", ["\"raceid\"", "\"points\""]; if_not_exists = false,
+          descending = [false, true], condition = "position IS NOT NULL") ==
+        "CREATE INDEX \"i\" ON \"result\" (\"raceid\", \"points\" DESC) WHERE position IS NOT NULL;"
+  # The renderer's own guard.
+  guard(f) = (e = try; f(); nothing; catch x; x; end; e isa PormG.InvalidValueError ? sprint(showerror, e) : "NOT AN InvalidValueError: $(e)")
+  @test occursin("columns or expressions, not both",
+                 guard(() -> PormG.Dialect.create_index(pg, "\"i\"", "\"t\"", ["\"a\""]; expressions = ["b"])))
+  @test occursin("index expression \"a; DROP TABLE t\" is not well-formed SQL",
+                 guard(() -> PormG.Dialect.create_index(pg, "\"i\"", "\"t\"", String[]; expressions = ["a; DROP TABLE t"])))
+  @test occursin("index condition \"a > 0 -- x\" is not well-formed SQL",
+                 guard(() -> PormG.Dialect.create_index(sl, "\"i\"", "\"t\"", ["\"a\""]; condition = "a > 0 -- x")))
+  # SQLite still refuses a method beside text.
+  @test_throws PormG.BackendCapabilityError PormG.Dialect.create_index(sl, "\"i\"", "\"t\"", String[];
+          expressions = ["lower(a)"], method = "gin")
+end
+
+@testset "Model_to_str round-trips expression and partial indexes (#29 part 2)" begin
+  m = Models.Model("driver_rt",
+    id      = Models.IDField(),
+    surname = Models.CharField(max_length = 60),
+    code    = Models.CharField(max_length = 3, null = true),
+    indexes = [
+      Models.Index(expressions = ("lower(surname)", "surname COLLATE \"C\""), name = "rt_lower"),
+      Models.Index(fields = ("surname", "-code"), condition = "code <> '\$\$'", name = "rt_partial"),
+      Models.Index(expressions = ("to_tsvector('simple', surname)",), method = "gin", condition = "code IS NOT NULL", name = "rt_gin"),
+    ],
+  )
+  str = Models.Model_to_str(m)
+  @test occursin("Models.Index(expressions = (\"lower(surname)\", \"surname COLLATE \\\"C\\\"\",), name = \"rt_lower\")", str)
+  @test occursin("Models.Index(fields = (\"surname\", \"-code\",), name = \"rt_partial\", condition = \"code <> '\\\$\\\$'\")", str)
+  @test occursin("name = \"rt_gin\", method = \"gin\", condition = \"code IS NOT NULL\")", str)
+  r = _ix_reload(str).cache["composite_indexes"]["indexes"]
+  @test [Models._index_shape(ix) for ix in r] == [Models._index_shape(ix) for ix in m.cache["composite_indexes"]["indexes"]]
+  @test [ix.name for ix in r] == ["rt_lower", "rt_partial", "rt_gin"]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Model_to_str: the declaration round-trips through the `indexes=` kwarg
 # inspectdb and the Django importer both render through Model_to_str, so an index that
 # does not survive the render is an index the generated models file silently loses.
@@ -735,7 +874,9 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Django importer reports the Meta.indexes it cannot express" begin
   # Since #29 a descending column, `opclasses=` and the `django.contrib.postgres` index classes
-  # translate; what is left refused is what changes the index into one PormG cannot declare.
+  # translate, and since #29 part 2 a `Lower`/`Upper`/`F` expression and a `condition=` the
+  # CheckConstraint translator reads; what is left refused is what changes the index into one PormG
+  # cannot declare.
   django = """
   class Servidor(models.Model):
       cpf = models.CharField(max_length=11)
@@ -745,8 +886,16 @@ end
       class Meta:
           indexes = [
               models.Index(fields=['cpf', 'apelido'], name='ok_idx'),
-              models.Index(Lower('apelido'), name='expr_idx'),
-              models.Index(fields=['cpf', 'ativo'], condition=Q(ativo=True), name='partial_idx'),
+              models.Index(Collate('apelido', 'C'), name='expr_idx'),
+              models.Index(fields=['cpf', 'ativo'], condition=Q(apelido__startswith='A'), name='partial_idx'),
+              models.Index(Lower('apelido'), name='lower_idx'),
+              models.Index(Lower('apelido'), name='lower_idx'),
+              models.Index('cpf', Lower('apelido').desc(), name='str_idx'),
+              models.Index(F('cpf'), F('ativo').desc(), name='f_idx'),
+              models.Index(fields=['cpf', 'ativo'], condition=Q(ativo=True), name='ativo_idx'),
+              models.Index(Lower('apelido'), fields=['cpf'], name='mixed_idx'),
+              models.Index(Lower('cpf'), name='%(class)s_cpf_lower'),
+              models.Index(Lower('apelido')),
               BloomIndex(fields=['cpf', 'apelido'], name='bloom_idx'),
               GinIndex(fields=['apelido'], fastupdate=False, name='slow_gin_idx'),
               models.Index(fields=['cpf'], include=['apelido'], name='covering_idx'),
@@ -759,19 +908,35 @@ end
     import_models_from_django(django; db = config_key, file = "ix_reject_unit.jl", force_replace = true)
     generated = read(joinpath(config_key, "ix_reject_unit.jl"), String)
 
-    # The one PormG can express survives, and it is the ONLY Index emitted.
+    # The three PormG can express survive, and they are the ONLY Indexes emitted: the functional
+    # one in Django's own spelling, the partial one's Q() through the CheckConstraint translator.
     @test occursin("Models.Index(fields = (\"cpf\", \"apelido\",), name = \"ok_idx\")", generated)
-    @test count("Models.Index(", generated) == 1
+    @test occursin("Models.Index(expressions = (\"LOWER(\\\"apelido\\\")\",), name = \"lower_idx\")", generated)
+    @test occursin("Models.Index(fields = (\"cpf\", \"ativo\",), name = \"ativo_idx\", condition = \"\\\"ativo\\\" = TRUE\")", generated)
+    # A bare positional string is Django's shorthand for F().
+    @test occursin("Models.Index(expressions = (\"\\\"cpf\\\"\", \"LOWER(\\\"apelido\\\") DESC\",), name = \"str_idx\")", generated)
+    # Members that are only fields — `F()` or a bare string — are a column index: `fields`, exactly.
+    @test occursin("Models.Index(fields = (\"cpf\", \"-ativo\",), name = \"f_idx\")", generated)
+    @test count(r"Models\.Index\((fields|expressions) = \(", generated) == 5   # declarations, not the hint in a marker
+    # Each translated text index carries a note: its SQL is Django's, which a database Django already
+    # built may store rewritten — so makemigrations may refuse it there and print the adopting text.
+    # One per index that LANDED: the repeated `lower_idx` collapses, and so does its note.
+    @test count("carries Django's SQL", generated) == 3
+    @test count("index 'lower_idx' on 'Servidor' is functional", generated) == 1
+    @test occursin("# PormG: index 'ativo_idx' on 'Servidor' is partial and carries Django's SQL", generated)
 
     # Each refusal is named in the file, with the reason that makes it a refusal.
-    @test occursin("positional expression", generated)
-    @test occursin("a functional index, which PormG cannot declare yet (#29)", generated)
-    @test occursin("`condition=` makes it a partial index, which PormG cannot declare yet (#29)", generated)
+    @test occursin("its expression `Collate('apelido', 'C')` is not translated", generated)
+    @test occursin("Models.Index(expressions = …)", generated)
+    @test occursin("its `condition=` is not translated", generated)
+    @test occursin("it mixes expressions with `fields=`", generated)
+    @test occursin("a functional index needs a `name=`", generated)
+    @test occursin("its name uses a %(…)s placeholder", generated)
     @test occursin("BloomIndex has no PormG equivalent", generated)
     @test occursin("`fastupdate=` changes what the index means", generated)
     @test occursin("`include=` changes what the index means", generated)
-    # Five dropped indexes, five markers — a blanket "report something" would pass a count of 1.
-    @test count("an index on 'Servidor' was dropped", generated) == 5
+    # Eight dropped indexes, eight markers — a blanket "report something" would pass a count of 1.
+    @test count("an index on 'Servidor' was dropped", generated) == 8
   finally
     delete!(PormG.config, config_key)
     isdir(config_key) && rm(config_key; recursive = true)
@@ -977,6 +1142,82 @@ end
     @test count("Models.UniqueConstraint(", shared_uq) == 2            # both children keep the rule
     @test count("name = \"base_ab_uq\"", shared_uq) == 1               # …only one keeps the name
     @test occursin("LOST its name 'base_ab_uq'", shared_uq)
+  finally
+    delete!(PormG.config, config_key)
+    isdir(config_key) && rm(config_key; recursive = true)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django importer: no line break from the imported source reaches a `# PormG:` marker (#29 part 2)
+# A marker is a `#` comment in the generated models file, so a line break inside it ends the comment
+# and the rest of the text runs as code when the file is loaded. A functional index's translated SQL
+# names its `db_column`, which arrives from the imported `models.py` with `\n` decoded — and the
+# duplicate-index, apply-failure and name-claim markers interpolate that SQL. Two guards: a column
+# with a control character is not translated (the index is dropped and reported), and every marker
+# is written as one line whatever a site put into it.
+# Three guards, each enough on its own here: the `iscntrl` refusal, `_one_line` at the interpolating
+# sites, and `_marker_line` at the join. Mutation gate: drop the `iscntrl` refusal and the
+# control-character report vanishes (the index is then translated); make `_marker_line` the identity
+# and its direct assertion fails.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer: no line break from the source reaches a marker (#29 part 2)" begin
+  django = """
+  class Driver(models.Model):
+      surname = models.CharField(max_length=50, db_column="surname\\nrun(`touch /tmp/pormg_pwned`)\\n#")
+      forename = models.CharField(max_length=50)
+
+      class Meta:
+          indexes = [
+              models.Index(Lower("surname"), name="drv_lower"),
+              models.Index(Lower("surname"), name="drv_lower"),
+          ]
+  """
+  config_key = mktempdir()
+  PormG.config[config_key] = PormG.Configuration.Settings(db_def_folder = config_key, django_prefix = nothing)
+  try
+    import_models_from_django(django; db = config_key, file = "ix_inject_unit.jl", force_replace = true)
+    generated = read(joinpath(config_key, "ix_inject_unit.jl"), String)
+    @test !any(l -> startswith(lstrip(l), "run("), split(generated, '\n'))
+    @test occursin("the column of `surname` carries a control character", generated)
+    @test !occursin("name = \"drv_lower\")", generated)   # no declaration landed
+  finally
+    delete!(PormG.config, config_key)
+    isdir(config_key) && rm(config_key; recursive = true)
+  end
+  # The structural guard on its own: whatever a site interpolated, a marker is one line.
+  @test PormG.Migrations._marker_line("# PormG: x\nrun(`id`)\r\n# y z") == "# PormG: x run(`id`) # y z"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django importer: a functional index whose name another model claimed is dropped once (#29 part 2)
+# An index name is unique per database, so the importer surrenders a reused name and lets PormG
+# derive one — but a functional or partial index cannot take a derived name (`Models.Index` requires
+# one). The second claimant is therefore dropped, with ONE marker that says why; before, it got the
+# "kept its columns but LOST its name" marker and a constructor refusal, which contradicted each other.
+# Mutation gate: delete the early `continue` in the claim loop and the "LOST its name" marker returns.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer: a claimed name drops a functional index once (#29 part 2)" begin
+  django = """
+  class Driver(models.Model):
+      surname = models.CharField(max_length=50)
+      class Meta:
+          indexes = [models.Index(Lower("surname"), name="shared_lower")]
+
+  class Constructor(models.Model):
+      surname = models.CharField(max_length=50)
+      class Meta:
+          indexes = [models.Index(Lower("surname"), name="shared_lower")]
+  """
+  config_key = mktempdir()
+  PormG.config[config_key] = PormG.Configuration.Settings(db_def_folder = config_key, django_prefix = nothing)
+  try
+    import_models_from_django(django; db = config_key, file = "ix_claim_unit.jl", force_replace = true)
+    generated = read(joinpath(config_key, "ix_claim_unit.jl"), String)
+    @test count("name = \"shared_lower\")", generated) == 1
+    @test count("is claimed by another declaration in this import", generated) == 1
+    @test !occursin("LOST its name", generated)
+    @test count("carries Django's SQL", generated) == 1      # the note rides only on the one that landed
   finally
     delete!(PormG.config, config_key)
     isdir(config_key) && rm(config_key; recursive = true)

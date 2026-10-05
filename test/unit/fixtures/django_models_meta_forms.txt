@@ -95,12 +95,13 @@ class Servidor(models.Model):
             models.Index(fields=["cpf", "lotacao"], name="idx_servidor_cpf_lotacao"),
             # IMPORTED (#29) with the direction kept: Models.Index(fields = ("-cpf", "apelido")).
             models.Index(fields=["-cpf", "apelido"], name="idx_servidor_cpf_desc"),
-            # REJECTED — a functional index. Django indexes lower(apelido); PormG would index the
-            # column, which is not the same index.
+            # IMPORTED (#29 part 2) as Models.Index(expressions = ("LOWER(\"apelido\")",)) — the
+            # functional index in Django's own spelling. (Rejected before #29 part 2.)
             models.Index(Lower("apelido"), name="idx_apelido_lower"),
             # IMPORTED (#29) as method = "gin" — a PostgreSQL-only index, which SQLite refuses.
             GinIndex(fields=["cpf", "apelido"], name="gin_servidor"),
-            # REJECTED — `condition=` makes it a partial index over a subset of rows.
+            # IMPORTED (#29 part 2) as a partial index: condition = "\"ativo\" = TRUE", through the
+            # CheckConstraint translator. (Rejected before #29 part 2.)
             models.Index(fields=["cpf", "ativo"], condition=Q(ativo=True), name="idx_ativos"),
         ]
         index_together = (("apelido", "ativo"),)

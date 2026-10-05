@@ -584,7 +584,8 @@ fetch(::CompositeMockPg161, sql::String; conn = nothing, params = nothing, ignor
                    is_deferrable = deferrable, is_valid = valid, has_include = include,
                    nulls_not_distinct = nnd, column_name = c, opt = opt, idx_coll = 0,
                    col_coll = 0, opc_default = true, opc_name = "int4_ops", method = "btree",
-                   has_reloptions = false, index_comment = missing))
+                   has_reloptions = false, index_comment = missing,
+                   is_expression = false, index_def = missing, predicate = missing))
     end
   add("ix_ba",   ["b", "a"])                                            # Index, declared order
   add("ix_solo", ["s"])                                                 # arity 1: db_index's
@@ -641,7 +642,7 @@ end
                    nulls_not_distinct = false, column_name = c, opt = opt isa Vector ? opt[k] : opt,
                    idx_coll = 0, col_coll = 0, opc_default = opc_default isa Vector ? opc_default[k] : opc_default,
                    opc_name = opc isa Vector ? opc[k] : opc, method = method, has_reloptions = reloptions,
-                   index_comment = comment))
+                   index_comment = comment, is_expression = false, index_def = missing, predicate = missing))
     end
   # Read.
   add("ix_gin",          ["tags"]; method = "gin", opc = "jsonb_ops")                      # one column, GIN
@@ -690,6 +691,95 @@ end
   @test !occursin("am.amname = 'btree'", sql)
   @test occursin(Migrations._PG_MARKED_INDEX, sql)
   @test occursin("obj_description(i.indexrelid, 'pg_class') AS index_comment", sql)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: the composite reader reads expression and partial indexes as text (#29 part 2)
+# An expression member (`attnum = 0`, so no column name) or an explicit COLLATE makes the whole index
+# a TEXT one: its members are the element texts split out of `pg_get_indexdef(oid, 0, true)`, with a
+# `,` inside a literal splitting nothing. A partial index over plain columns keeps its columns and
+# carries `pg_get_expr(indpred)` as its condition. A NULLS placement is part of a text
+# member's words, so it makes the index a text one too (`expressions = ("grid NULLS FIRST",)`). A UNIQUE partial or functional
+# index stays unread (UniqueConstraint declares neither), and so does a definition whose split
+# disagrees with the key-column count. The query admits the shapes at arity 1 and keeps the db_index
+# CTE's `indpred IS NULL`.
+# Mutation gate: make `_index_definition_elements` return `nothing` and every text index vanishes
+# (`ix_lower` first); drop the count check and `ix_misread` is read with one member.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: the composite reader reads expression and partial indexes as text (#29 part 2)" begin
+  rows = NamedTuple[]
+  add(idx, cols; tbl = "driver", unique = false, opt = 0, method = "btree", expr = false, coll = (0, 0),
+      def = missing, pred = missing, comment = missing) =
+    for (k, c) in enumerate(cols)
+      e = expr isa Vector ? expr[k] : expr
+      cc = coll isa Vector ? coll[k] : coll
+      push!(rows, (table_name = tbl, index_name = idx, is_unique = unique, contype = missing,
+                   is_deferrable = missing, is_valid = true, has_include = false, nulls_not_distinct = false,
+                   column_name = e ? missing : c, opt = opt isa Vector ? opt[k] : opt,
+                   idx_coll = cc[1], col_coll = e ? missing : cc[2], opc_default = true,
+                   opc_name = "text_ops", method = method, has_reloptions = false, index_comment = comment,
+                   is_expression = e, index_def = def, predicate = pred))
+    end
+  # Read.
+  add("ix_lower", ["?"]; expr = true, coll = (100, 0),
+      def = "CREATE INDEX ix_lower ON public.driver USING btree (lower(surname::text))")
+  add("ix_coll", ["surname"]; coll = (950, 100),
+      def = "CREATE INDEX ix_coll ON public.driver USING btree (surname COLLATE \"C\")")
+  add("ix_literal", ["?", "dob"]; expr = [true, false], coll = (100, 0),
+      def = "CREATE INDEX ix_literal ON public.driver USING btree (replace(surname::text, ',', ''::text), dob)")
+  add("ix_gin_text", ["?"]; method = "gin", expr = true, coll = (100, 0),
+      comment = "pormg:index:0123456789abcdef",
+      def = "CREATE INDEX ix_gin_text ON public.driver USING gin (to_tsvector('simple'::regconfig, forename::text))")
+  add("ix_nulls_text", ["?"]; expr = true, opt = 1, coll = (100, 0),
+      def = "CREATE INDEX ix_nulls_text ON public.driver USING btree (lower(surname::text) DESC NULLS LAST)")
+  add("ix_part", ["raceid", "points"]; tbl = "result", opt = [0, 3], pred = "\"position\" IS NOT NULL",
+      def = "CREATE INDEX ix_part ON public.result USING btree (raceid, points DESC) WHERE \"position\" IS NOT NULL")
+  add("ix_part_one", ["raceid"]; tbl = "result", pred = "grid > 0",
+      def = "CREATE INDEX ix_part_one ON public.result USING btree (raceid) WHERE grid > 0")
+  # A NULLS placement on a plain column is words a text member carries (`expressions = ("… NULLS LAST",)`).
+  add("ix_part_nulls", ["raceid", "points"]; tbl = "result", opt = [0, 1], pred = "grid > 0",
+      def = "CREATE INDEX ix_part_nulls ON public.result USING btree (raceid, points DESC NULLS LAST) WHERE grid > 0")
+  add("ix_nulls_first", ["grid"]; tbl = "result", opt = 2,
+      def = "CREATE INDEX ix_nulls_first ON public.result USING btree (grid NULLS FIRST)")
+  # Refused.
+  add("ux_part", ["raceid", "driverid"]; tbl = "result", unique = true, pred = "grid > 0",
+      def = "CREATE UNIQUE INDEX ux_part ON public.result USING btree (raceid, driverid) WHERE grid > 0")
+  add("ux_lower", ["?"]; unique = true, expr = true, coll = (100, 0),
+      def = "CREATE UNIQUE INDEX ux_lower ON public.driver USING btree (lower(surname::text))")
+  add("ix_misread", ["?", "dob"]; expr = [true, false], coll = (100, 0),
+      def = "CREATE INDEX ix_misread ON public.driver USING btree (lower(surname::text))")
+  PG161_ROWS[] = DataFrame(rows)
+
+  out = Migrations._pg_composite_indexes(CompositeMockPg161())
+  driver = Dict(lc.name => lc for lc in out["driver"])
+  result = Dict(lc.name => lc for lc in out["result"])
+  @test sort(collect(keys(driver))) == ["ix_coll", "ix_gin_text", "ix_literal", "ix_lower", "ix_nulls_text"]
+  @test sort(collect(keys(result))) == ["ix_nulls_first", "ix_part", "ix_part_nulls", "ix_part_one"]
+
+  @test driver["ix_lower"].expressions == ["lower(surname::text)"] && isempty(driver["ix_lower"].columns)
+  @test driver["ix_coll"].expressions == ["surname COLLATE \"C\""]
+  @test driver["ix_literal"].expressions == ["replace(surname::text, ',', ''::text)", "dob"]
+  @test driver["ix_gin_text"].method == "gin"
+  @test driver["ix_gin_text"].expressions == ["to_tsvector('simple'::regconfig, forename::text)"]
+  @test driver["ix_gin_text"].marker == "pormg:index:0123456789abcdef"
+  @test driver["ix_nulls_text"].expressions == ["lower(surname::text) DESC NULLS LAST"]
+  @test (result["ix_part"].columns, result["ix_part"].descending) == (["raceid", "points"], [false, true])
+  @test result["ix_part"].condition == "\"position\" IS NOT NULL" && isempty(result["ix_part"].expressions)
+  @test result["ix_part_one"].condition == "grid > 0"
+  @test (result["ix_part_nulls"].expressions, result["ix_part_nulls"].condition) ==
+        (["raceid", "points DESC NULLS LAST"], "grid > 0")
+  @test result["ix_nulls_first"].expressions == ["grid NULLS FIRST"]
+
+  # Hand-made unless marked.
+  @test !Migrations.composite_is_owned(driver["ix_lower"])
+  @test !Migrations.composite_is_owned(result["ix_part"])
+  @test Migrations.composite_is_owned(driver["ix_gin_text"])
+
+  # The query admits them at arity 1, and the db_index CTE still refuses a partial index.
+  sql = PG161_SQL[]
+  @test occursin("OR i.indexprs IS NOT NULL OR i.indpred IS NOT NULL", sql)
+  @test occursin("pg_get_expr(i.indpred, i.indrelid, true) AS predicate", sql)
+  @test !occursin("AND i.indpred IS NULL\n      AND (i.indisunique", sql)
 end
 
 @testset "the pormg:index marker pattern means the same thing in Julia and in PostgreSQL (#29)" begin

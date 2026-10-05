@@ -477,14 +477,18 @@ end
       fetch(pool, "CREATE INDEX ix_expr ON t347(lower(c), d);")
       fetch(pool, "CREATE INDEX ix_desc ON t347(c DESC, d);")
       fetch(pool, "CREATE INDEX ix_coll ON t347(c COLLATE NOCASE, d);")
+      # #29 part 2: a UNIQUE partial or functional index is still never read — `UniqueConstraint`
+      # declares neither a condition nor an expression.
+      fetch(pool, "CREATE UNIQUE INDEX ux_part ON t347(e, f) WHERE e IS NOT NULL;")
+      fetch(pool, "CREATE UNIQUE INDEX ux_expr ON t347(lower(e), f);")
 
       idx = _sqlite_composite_indexes(pool, :t347)
       byname = Dict(lc.name => lc for lc in idx)
       names = collect(keys(byname))
 
-      # Exactly five survive every filter. The table-level UNIQUE's name is SQLite's, not ours.
+      # Exactly eight survive every filter. The table-level UNIQUE's name is SQLite's, not ours.
       auto = only(filter(n -> startswith(n, "sqlite_autoindex_t347_"), names))
-      @test sort(names) == sort(["ix_ba", "ix_desc", "ux_cd", "ux_solo", auto])
+      @test sort(names) == sort(["ix_ba", "ix_coll", "ix_desc", "ix_expr", "ix_part", "ux_cd", "ux_solo", auto])
 
       # Column ORDER is the index's identity, and it is DECLARED order, not table order. `b` comes
       # after `a` in the table, so a reader aggregating by attribute would return ["a","b"] here —
@@ -505,17 +509,22 @@ end
       @test !("ix_solo" in names)   # arity-1 non-unique is db_index — read by the sibling above
       @test !any(lc -> lc.columns == ["uc"], idx)   # arity-1 UNIQUE clause is the field's `unique`
                                                     #   — read by `_sqlite_single_column_unique_columns`
-      @test !("ix_part" in names)   # drop `il.partial = 0` and a partial index leaks in; PormG
-                                    #   cannot declare one, so reading it would be permanent churn
-      @test !("ix_expr" in names)   # an expression member has a NULL name — emitting the remaining
-                                    #   columns would declare a DIFFERENT index (functional: #29)
+      # #29 part 2: a partial index keeps its columns and gains its WHERE text; a functional one is
+      # read as its member texts, exactly as the stored DDL writes them. Both unmarked, so hand-made.
+      @test (byname["ix_part"].columns, byname["ix_part"].condition) == (["c", "d"], "c IS NOT NULL")
+      @test byname["ix_expr"].expressions == ["lower(c)", "d"] && isempty(byname["ix_expr"].columns)
+      @test !PormG.Migrations.composite_is_owned(byname["ix_part"])
+      @test !PormG.Migrations.composite_is_owned(byname["ix_expr"])
+      @test !("ux_part" in names) && !("ux_expr" in names)
       # The two shapes `pragma_index_info` cannot even see, which is why this reader uses `xinfo`.
       # Read through `info`, both would come back as a plain ascending BINARY index and regenerate as
       # one. Since #29 a DESC key is declarable (`Models.Index(fields = ["-c", "d"])`), so it is read
-      # WITH its direction — unmarked, so hand-made: never planned away. A collation still is not.
+      # WITH its direction — unmarked, so hand-made: never planned away. Since #29 part 2 an explicit
+      # collation is too, as text: `COLLATE NOCASE` is a different comparison, so the member's own
+      # words are what a declaration has to repeat.
       @test byname["ix_desc"].descending == [true, false]
       @test byname["ix_desc"].marker === nothing && !PormG.Migrations.composite_is_owned(byname["ix_desc"])
-      @test !("ix_coll" in names)   # COLLATE NOCASE: a different comparison, so a different index
+      @test byname["ix_coll"].expressions == ["c COLLATE NOCASE", "d"]
 
       # An unknown table yields an empty vector rather than throwing — convert_schema_to_models calls
       # this per table and must survive a race with a concurrent DROP.
@@ -526,7 +535,9 @@ end
       m = convertSQLToModel(pool, "t347")
       @test haskey(m.cache, "composite_indexes")
       ixs = Dict(ix.name => ix for ix in m.cache["composite_indexes"]["indexes"])
-      @test sort(collect(keys(ixs))) == ["ix_ba", "ix_desc"]   # the LIVE names, so a re-migration reproduces them
+      @test sort(collect(keys(ixs))) == ["ix_ba", "ix_coll", "ix_desc", "ix_expr", "ix_part"]   # the LIVE names, so a re-migration reproduces them
+      @test (ixs["ix_part"].fields, ixs["ix_part"].condition) == (["c", "d"], "c IS NOT NULL")
+      @test ixs["ix_expr"].expressions == ["lower(c)", "d"]
       @test ixs["ix_ba"].fields == ["b", "a"]
       @test (ixs["ix_desc"].fields, ixs["ix_desc"].descending) == (["c", "d"], [true, false])
       # The hand-made DESC index's ownership rides along, so reading this model back as a live table

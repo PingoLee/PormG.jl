@@ -546,10 +546,17 @@ not: `rebuild_table` renders no table-level constraint). It does NOT change iden
 duplicated by a second index over the same columns.
 
 What reaches this struct is exactly what PormG can re-emit — a readers' contract, stated on
-[`_pg_composite_indexes`](@ref) and [`_sqlite_composite_indexes`](@ref). A partial, functional,
-`INCLUDE` or explicitly-collated index is never read, so it is never matched, never dropped and
-never renamed; nor is an access method outside [`INDEX_METHODS`](@ref), a `NULLS` placement other
-than the direction's default, or a unique index that is not plain b-tree.
+[`_pg_composite_indexes`](@ref) and [`_sqlite_composite_indexes`](@ref). An `INCLUDE` index is never
+read, so it is never matched, never dropped and never renamed; nor is an access method outside
+[`INDEX_METHODS`](@ref), or a unique index that is not plain b-tree — a unique partial or
+functional one included.
+
+Since #29 part 2 a functional, partial, explicitly-collated or `NULLS`-placed index IS read, as
+SQL text: its `expressions` are the catalog's own element texts (when any member is an expression or
+carries a `COLLATE` or a `NULLS` placement other than its direction's default — on SQLite also when
+the stored members hash to the index's own marker; `columns` is then empty) and its `condition` is the `WHERE` text. Such an index is matched
+by the hash in its `pormg:index:<hash>` marker or by canonical text, never by comparing PostgreSQL's
+rewritten text with a declaration.
 
 Since #29 a non-unique index may also be ADVANCED — another access `method`, a `descending` member,
 or an operator class other than the column's default. Each member's class is recorded by name in
@@ -577,7 +584,22 @@ struct LiveComposite
   opclass_default::Vector{Bool}
   marker::Union{String, Nothing}
   comment::Union{String, Nothing}
+  # #29 part 2. `expressions`: the catalog's own element texts, when a member is an expression or
+  # carries an explicit `COLLATE` — `columns`, `descending`, `opclasses` and `opclass_default` are then
+  # empty, because the text holds all of it. `condition`: a partial index's `WHERE` text.
+  expressions::Vector{String}
+  condition::Union{String, Nothing}
 end
+# Every reader before #29 part 2, and most test fixtures: no SQL text unless given by keyword.
+LiveComposite(name::AbstractString, columns::Vector{String}, unique::Bool, constraint::Bool,
+              method::AbstractString, descending::Vector{Bool}, opclasses::Vector{Union{String, Nothing}},
+              opclass_default::Vector{Bool}, marker::Union{AbstractString, Nothing},
+              comment::Union{AbstractString, Nothing};
+              expressions::Vector{String} = String[], condition::Union{AbstractString, Nothing} = nothing) =
+  LiveComposite(String(name), columns, unique, constraint, String(method), descending, opclasses,
+                opclass_default, marker === nothing ? nothing : String(marker),
+                comment === nothing ? nothing : String(comment), expressions,
+                condition === nothing ? nothing : String(condition))
 # A plain b-tree composite — every reader before #29, and most test fixtures.
 LiveComposite(name::AbstractString, columns::Vector{String}, unique::Bool, constraint::Bool) =
   LiveComposite(String(name), columns, unique, constraint, "btree", fill(false, length(columns)),
@@ -585,14 +607,23 @@ LiveComposite(name::AbstractString, columns::Vector{String}, unique::Bool, const
                 nothing, nothing)
 
 """
+    composite_holds_text(c) -> Bool
+
+Whether a live or declared composite's definition holds SQL text — an expression member or a
+`WHERE` condition (#29 part 2). Such an index is owned through the hashed marker
+`pormg:index:<hash>` ([`index_text_marker`](@ref)), and matched by it.
+"""
+composite_holds_text(c)::Bool = !isempty(c.expressions) || c.condition !== nothing
+
+"""
     composite_is_advanced(c) -> Bool
 
 Whether a live or declared composite is more than plain b-tree: another access method, a descending
-member, or a non-default operator class (#29). Advanced indexes are owned through the
-`pormg:index` marker; plain ones through the models file alone.
+member, a non-default operator class (#29), an expression or a condition (#29 part 2). Advanced
+indexes are owned through the `pormg:index` marker; plain ones through the models file alone.
 """
 composite_is_advanced(c::LiveComposite)::Bool =
-  c.method != "btree" || any(c.descending) || !all(c.opclass_default)
+  c.method != "btree" || any(c.descending) || !all(c.opclass_default) || composite_holds_text(c)
 
 """
     composite_is_owned(c::LiveComposite) -> Bool
@@ -691,14 +722,32 @@ struct DeclaredComposite
   method::String
   descending::Vector{Bool}
   opclasses::Vector{Union{String, Nothing}}
+  # #29 part 2: the declared SQL text — see `Models.Index`. `columns` is empty beside `expressions`.
+  expressions::Vector{String}
+  condition::Union{String, Nothing}
 end
+DeclaredComposite(name::AbstractString, columns::Vector{String}, unique::Bool, explicit::Bool, auto::Bool,
+                  method::AbstractString, descending::Vector{Bool}, opclasses::Vector{Union{String, Nothing}}) =
+  DeclaredComposite(String(name), columns, unique, explicit, auto, String(method), descending, opclasses,
+                    String[], nothing)
 # A plain b-tree composite: every `UniqueConstraint`, the join-table index, a plain `Index`.
 DeclaredComposite(name::AbstractString, columns::Vector{String}, unique::Bool, explicit::Bool, auto::Bool) =
   DeclaredComposite(String(name), columns, unique, explicit, auto, "btree", fill(false, length(columns)),
                     Union{String, Nothing}[nothing for _ in columns])
 
 composite_is_advanced(d::DeclaredComposite)::Bool =
-  d.method != "btree" || any(d.descending) || any(!isnothing, d.opclasses)
+  d.method != "btree" || any(d.descending) || any(!isnothing, d.opclasses) || composite_holds_text(d)
+
+"""
+    composite_marker(d::DeclaredComposite) -> Union{String, Nothing}
+
+The ownership marker PormG writes beside the index `d` declares: the hashed
+`pormg:index:<hash>` when its definition holds SQL text, the bare `pormg:index` when it is otherwise
+advanced, `nothing` for a plain composite (#29).
+"""
+composite_marker(d::DeclaredComposite)::Union{String, Nothing} =
+  composite_holds_text(d) ? index_text_marker(d.expressions, d.condition) :
+  composite_is_advanced(d) ? INDEX_MARKER : nothing
 
 """
     composite_shape_matches(live::LiveComposite, d::DeclaredComposite; columns = live.columns) -> Bool
@@ -712,14 +761,35 @@ is the live side in the declared model's terms — the planner maps a renamed co
 """
 function composite_shape_matches(live::LiveComposite, d::DeclaredComposite;
                                  columns::Vector{String} = live.columns)::Bool
-  (live.unique == d.unique && columns == d.columns && live.method == d.method &&
-   live.descending == d.descending) || return false
+  (live.unique == d.unique && live.method == d.method) || return false
+  if !isempty(d.expressions)
+    # The members are text, so only the text can say whether they match. A live index that happens
+    # to read as plain columns (`expressions = ("a", "b DESC")`) is still matched by its marker.
+    return _composite_text_matches(live, d)
+  end
+  # A declaration over fields never claims an expression index, and a plain one never a partial one.
+  isempty(live.expressions) || return false
+  (live.condition === nothing) == (d.condition === nothing) || return false
+  (columns == d.columns && live.descending == d.descending) || return false
   for (k, want) in enumerate(d.opclasses)
     ok = want === nothing ? live.opclass_default[k] : live.opclasses[k] == want
     ok || return false
   end
-  return true
+  return d.condition === nothing || _composite_text_matches(live, d)
 end
+
+# #29 part 2: SQL text is matched by the hash in the live marker — PostgreSQL stores a rewritten form,
+# so the text cannot be compared with the declaration — or, failing that, by canonical text: the
+# adoption case, where `inspectdb` wrote the declaration from the catalog's own text. The
+# `_diff_checks` rule, applied to an index.
+_composite_text_matches(live::LiveComposite, d::DeclaredComposite)::Bool =
+  (live.marker !== nothing && live.marker == index_text_marker(d.expressions, d.condition)) ||
+  (_canonical_texts(live.expressions) == _canonical_texts(d.expressions) &&
+   _canonical_text(live.condition) == _canonical_text(d.condition))
+
+_canonical_text(::Nothing) = nothing
+_canonical_text(s::AbstractString)::String = canonical_check_condition(s)
+_canonical_texts(v::AbstractVector{<:AbstractString})::Vector{String} = String[canonical_check_condition(s) for s in v]
 
 """
     composite_index_name(table, columns, unique) -> String
@@ -757,11 +827,13 @@ function declared_composites(model::PormGModel)::Vector{DeclaredComposite}
     for decl in get(get(model.cache, cache_key, Dict{String, Any}()), list_key, Any[])
       cols = String[Models.model_column(model, f) for f in decl.fields]
       if decl isa Models.Index
+        # A text-holding Index always has a name (its constructor requires one).
         name = decl.name === nothing ?
           composite_index_name(table, cols, unique; descending = decl.descending, method = decl.method) :
           String(decl.name)
         push!(out, DeclaredComposite(name, cols, unique, decl.name !== nothing, false, decl.method,
-                                     copy(decl.descending), copy(decl.opclasses)))
+                                     copy(decl.descending), copy(decl.opclasses),
+                                     copy(decl.expressions), decl.condition))
       else
         name = decl.name === nothing ? composite_index_name(table, cols, unique) : String(decl.name)
         push!(out, DeclaredComposite(name, cols, unique, decl.name !== nothing, false))
@@ -816,10 +888,12 @@ function live_table(model::PormGModel, conn::Union{PormGPostgres, PormGSQLite}):
   # hand-made index read back as marked would be planned away the moment its declaration went.
   owners = get(model.cache, "composite_index_owners", nothing)
   ownership(d) = !composite_is_advanced(d) ? (nothing, nothing) :
-                 owners !== nothing && haskey(owners, d.name) ? owners[d.name] : (INDEX_MARKER, INDEX_MARKER)
+                 owners !== nothing && haskey(owners, d.name) ? owners[d.name] :
+                 (composite_marker(d), composite_marker(d))
   composites = LiveComposite[
     LiveComposite(d.name, d.columns, d.unique, false, d.method, copy(d.descending), copy(d.opclasses),
-                  Bool[o === nothing for o in d.opclasses], ownership(d)...)
+                  Bool[o === nothing for o in d.opclasses], ownership(d)...;
+                  expressions = copy(d.expressions), condition = d.condition)
     for d in declared_composites(model)]
   # #742: a model read as a live table holds its declared CHECKs as PormG created them — owned, with
   # the marker of their own condition — so a model diffed against itself plans nothing.

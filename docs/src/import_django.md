@@ -518,6 +518,19 @@ Django parameters are automatically converted to PormG equivalents:
 | `indexes = [Index(fields=['a'])]` | **imported** as `a = …(db_index=true)` | A plain one-column index *is* `db_index`, and is the only spelling that round-trips, so nothing is reported. Two exceptions: on the **primary key** it is redundant (already indexed) and skipped, and on a field type with no `db_index` option (`PasswordField`) it is dropped **and** reported. A one-column index with a `-`, a PostgreSQL index class or `opclasses=` is a different index and stays a `Models.Index`. |
 | `indexes = [Index(fields=['a', '-b'])]` | **imported** as `Models.Index(fields = ("a", "-b"))` | A descending column keeps its `-`. |
 | `indexes = [GinIndex(fields=['a'], opclasses=['gin_trgm_ops'], name=…)]` | **imported** as `Models.Index(fields = ("a",), name = …, method = "gin", opclasses = ("gin_trgm_ops",))` | Likewise `BTreeIndex`, `HashIndex`, `GistIndex`, `SpGistIndex` and `BrinIndex` from `django.contrib.postgres.indexes`, each as its `method`. These are PostgreSQL-only: `makemigrations` on SQLite refuses the model. |
+| `indexes = [Index(Lower('name'), name=…)]` | **imported** as `Models.Index(expressions = ("LOWER(\"name\")",), name = …)` | A functional index, in Django's own spelling of the SQL. Translated: `F('a')`, `Lower(…)` and `Upper(…)` over a text field or an `F()`, each optionally `.desc()` / `.asc()`. Anything else is reported (below). |
+| `indexes = [Index(fields=['a', 'b'], condition=Q(…), name=…)]` | **imported** as `Models.Index(fields = ("a", "b"), name = …, condition = "<SQL>")` | A partial index. The `Q(...)` goes through the same translator as a `CheckConstraint`'s, with the same whitelist; one it cannot translate drops the index and reports why. |
+
+!!! note "A functional or partial index on a database Django already built"
+    The SQL the importer writes is Django's own spelling, which is what Django sends to the database
+    — but PostgreSQL stores a rewritten form of it (`lower(apelido::text)`), and SQLite stores
+    whatever Django rendered for the predicate (`WHERE "ativo"` for `Q(ativo=True)`). Against a
+    database Django already built, `makemigrations` then reads the live index as hand-made and refuses
+    to take its name for the importer's text, with `InvalidMigrationError` — printing the declaration,
+    in the database's own text, that adopts the index instead. Replace the imported declaration with
+    that one, or generate the models with `generate_models_from_db`, which writes the database's text
+    from the start. The generated file says so beside every such index. On a database PormG creates
+    from the imported models, nothing changes: the declaration is the index.
 | `index_together = (('a','b'), …)` | **imported** as one `Models.Index` per group | The legacy spelling; the non-unique twin of `unique_together`. |
 | `ordering`, `get_latest_by` | **dropped**, reported | PormG orders per query, not per model. |
 | `verbose_name*`, `permissions`, `default_related_name`, `app_label`, … | **dropped**, reported | No PormG equivalent. |
@@ -553,14 +566,19 @@ class, an enum, a field — stays verbatim: only the class a report is *about* i
 
 !!! warning "`Meta.indexes` acceptance is a whitelist too"
     An entry is imported only when it is a `models.Index` or one of the `django.contrib.postgres`
-    index classes above, and its arguments are within `fields`, `name` and `opclasses` (a list of
-    string literals). A `-` in `fields` is a descending column. Everything else causes **that one
-    index** to be dropped and reported, leaving its siblings alone:
+    index classes above, and its arguments are within `fields`, `name`, `opclasses` (a list of
+    string literals) and `condition`, plus positional expressions. A `-` in `fields` is a descending
+    column. Everything else causes **that one index** to be dropped and reported, leaving its
+    siblings alone:
 
-    - `condition=` — a partial index, and a positional expression, `models.Index(Lower("name"), …)` —
-      a functional index. PormG cannot declare either yet; importing the columns alone would build a
-      different index under the developer's name;
-    - `include=`, `expressions=`, `db_tablespace=`, and an index class's storage parameters
+    - a positional expression other than `F()`, `Lower()` and `Upper()` over a field — `Collate`,
+      `OpClass`, arithmetic, any other function — and a `condition=Q(...)` outside the
+      `CheckConstraint` translator's whitelist. Importing the columns alone would build a different
+      index under the developer's name; the report names `Models.Index(expressions = …)`, so the
+      index can be declared by hand;
+    - a functional or partial index without a string-literal `name=`, and one mixing expressions
+      with `fields=` or `opclasses=` — Django refuses all of these itself;
+    - `include=`, `db_tablespace=`, and an index class's storage parameters
       (`fastupdate=`, `gin_pending_list_limit=`, `pages_per_range=`, `fillfactor=`, …) — each
       changes *what* is indexed, how, or where it lives;
     - any other class, such as `BloomIndex` (an extension's access method) or a project's own

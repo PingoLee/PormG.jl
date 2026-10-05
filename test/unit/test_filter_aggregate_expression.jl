@@ -476,3 +476,128 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A non-boolean FUNCTION used as a `When` condition is refused (#942)
+# `When(Lower("surname"), then = 1)` rendered `CASE WHEN LOWER("Tb"."surname") THEN …`: PostgreSQL
+# rejects it, SQLite coerces the text to a number and reads it for truthiness, so every row silently
+# took the default. A function's node type cannot decide it the way #931 decides arithmetic — a
+# `Cast(…, "boolean")` is a legitimate condition — so the RESULT type does: fixed by the name or a
+# declared type at construction, read from the operands at render. Each refused function is asked in
+# every `When` spelling; a function whose type cannot be named keeps building, unchecked, by design.
+# ─────────────────────────────────────────────────────────────────────────────
+using PormG.Functions: Length, Cast, Coalesce, Lag, Concat, NullIf, Greatest
+using PormG.QueryBuilder: MONTH, OP
+using PormG.QueryBuilder: Avg
+using PormG.Models: DateField
+
+for (key, name) in (("f_agg_pg", :FAggPgFn), ("f_agg_sl", :FAggSlFn))
+  m = Model("f_agg_fn", id = IDField(), lap = IntegerField(), points = IntegerField(),
+            surname = CharField(), recorded = DateField(), finished = BooleanField())
+  m.connect_key = key
+  @eval const $name = $m
+end
+
+@testset "#942: a non-boolean function as a When condition is refused" begin
+  order = WindowOver(order_by = ["lap"])
+  # (label, the condition, :construct when the node alone decides / :render when the operands do,
+  #  whether it may sit in a WHERE at all — an aggregate or window there is #895's refusal, not this one)
+  refused = (
+    ("Lower (text by name)", () -> Lower("surname"), :construct, true),
+    ("Concat (text by name)", () -> Concat(["surname", "surname"]), :construct, true),
+    ("Length (number formatter)", () -> Length("surname"), :construct, true),
+    ("MONTH (number formatter)", () -> MONTH("recorded"), :construct, true),
+    ("Sum (number by name)", () -> Sum("points"), :construct, true),
+    ("Avg (number by name)", () -> Avg("points"), :construct, true),
+    ("Count (PormGTypeField)", () -> Count("id"), :construct, true),
+    ("Rank (window, number by name)", () -> Rank(over = order), :construct, true),
+    ("Cast to integer (declared)", () -> Cast("finished", "integer"), :construct, true),
+    # A declared type PormG has no field for is still a declared type, and not boolean (review of #942).
+    ("Cast to timestamp (declared, no field)", () -> Cast("recorded", "timestamp"), :construct, true),
+    ("Case with an integer output_field", () -> Case([When("lap" => 1, then = 1)], default = 0, output_field = "integer"), :construct, true),
+    ("Coalesce over an integer column", () -> Coalesce("lap", 0), :render, true),
+    ("NullIf over a text column", () -> NullIf("surname", Lower("surname")), :render, true),
+    ("Max over an integer column", () -> Max("points"), :render, false),
+  )
+  positions = (
+    ("Case([When(fn)])", (q, c) -> q.values("c" => Case([When(c, then = 1)], default = 0))),
+    ("When(fn; otherwise)", (q, c) -> q.values("c" => When(c, then = 1, otherwise = 0))),
+    ("a Case on a filter's right-hand side", (q, c) -> q.filter("lap" => Case([When(c, then = 1)], default = 0))),
+  )
+  # Every refused function in every spelling, except an aggregate in the WHERE spelling.
+  cases = [(plabel, place, label, cond, phase) for (plabel, place) in positions
+           for (label, cond, phase, in_where) in refused if in_where || !occursin("filter", plabel)]
+  for (backend, Model_) in ((:postgres, FAggPgFn), (:sqlite, FAggSlFn))
+    @testset "$backend: $plabel / $label" for (plabel, place, label, cond, phase) in cases
+      # The construction-time half raises from `When` itself, before any query exists; the render half
+      # only once `inspect_query` resolves the operand's column.
+      if phase === :construct
+        @test_throws QueryBuildError When(cond(), then = 1)
+      else
+        @test When(cond(), then = 1) isa PormG.QueryBuilder.SQLTypeFunction
+      end
+      err = _f_cond_error(Model_, q -> place(q, cond()))
+      @test err isa QueryBuildError
+      msg = sprint(showerror, err)
+      @test occursin("used as a condition", msg)
+      @test occursin("When(Lower(\"surname\") == \"senna\")", msg)
+      @test occursin("#942", msg)
+    end
+
+    # A boolean-valued function, a comparison over the refused one, and a function whose type cannot
+    # be named all build — the exact SQL is the proof the condition reaches the CASE untouched.
+    @testset "$backend: boolean and untyped function conditions still build" begin
+      pg = backend === :postgres
+      # PostgreSQL types each bound value (`$1::bigint`); SQLite binds a bare `?`.
+      ph(n, t) = pg ? "\$$(n)::$(t)" : "?"
+      built = (
+        # Boolean by its declared type: PostgreSQL renders the `::boolean` shorthand.
+        (() -> Cast("lap", "boolean"),
+          pg ? "WHEN (\"Tb\".\"lap\")::boolean THEN \$1::bigint" : "WHEN CAST(\"Tb\".\"lap\" AS BOOLEAN) THEN ?"),
+        # Boolean through its operand: the first operand is the BooleanField.
+        (() -> Coalesce(F("finished"), false),
+          "WHEN COALESCE(\"Tb\".\"finished\", $(ph(1, "boolean"))) THEN $(ph(2, "bigint"))"),
+        # Boolean by `output_field`: the inner CASE is cast to it.
+        (() -> Case([When("lap" => 1, then = true)], default = false, output_field = "boolean"),
+          pg ? "WHEN (CASE\nWHEN \"Tb\".\"lap\" = \$1 THEN \$2::boolean\nELSE \$3::boolean\nEND)::boolean\n THEN \$4::bigint" :
+               "WHEN CAST(CASE\nWHEN \"Tb\".\"lap\" = ? THEN ?\nELSE ?\nEND\n AS BOOLEAN) THEN ?"),
+        # Untyped: `LAG` names no type, so it is not checked — it builds as written.
+        (() -> Lag("finished", over = order),
+          "WHEN LAG(\"Tb\".\"finished\", $(ph(1, "integer"))) OVER (ORDER BY \"Tb\".\"lap\" ASC) THEN $(ph(2, "bigint"))"),
+        # A comparison over the refused function is an `F` comparison node (#895), not a function.
+        (() -> Lower("surname") == "senna",
+          "WHEN ((LOWER(\"Tb\".\"surname\") = $(ph(1, "text")))) THEN $(ph(2, "bigint"))"),
+      )
+      for (cond, needle) in built
+        q = Model_.objects
+        q.values("c" => Case([When(cond(), then = 1)], default = 0))
+        @test occursin(needle, inspect_query(q)[:sql_text])
+      end
+      # A comparison is boolean whatever it compares, so a function over comparisons is boolean too.
+      # These typed as numbers before the review of #942 (`F("lap") > 0` took the arithmetic rule).
+      for cond in (() -> Coalesce(F("lap") > 0, false), () -> Greatest(F("lap") > 0, F("points") > 0),
+                   () -> NullIf(F("lap") > 0, false), () -> Coalesce(F("lap") == F("points"), false))
+        @test _f_cond_error(Model_, q -> q.values("c" => Case([When(cond(), then = 1)], default = 0))) === nothing
+      end
+      # The same typing reaches an alias filter: a projected comparison is no longer read as a number,
+      # so `true` binds as itself. As a number it bound `1`, which PostgreSQL cannot compare with a
+      # boolean. It keeps no type, so a value that is not a boolean is not rewritten into one either.
+      q = Model_.objects
+      q.values("ahead" => F("lap") > F("points"))
+      q.filter("ahead" => true)
+      insp = inspect_query(q)
+      @test occursin(pg ? r"WHERE \(+\"Tb\"\.\"lap\" > \"Tb\"\.\"points\"\)+ = \$1" : r"WHERE \(+\"Tb\"\.\"lap\" > \"Tb\"\.\"points\"\)+ = \?",
+                     insp[:sql_text])
+      @test insp[:parameters] == Any[true]
+      q = Model_.objects
+      q.values("ahead" => F("lap") > F("points"))
+      q.filter("ahead" => 5)
+      @test inspect_query(q)[:parameters] == Any[5]
+      # `OP` is a comparison node, not a function: the internal `Y_Q` path builds `When(OP(MONTH(…), …))`.
+      q = Model_.objects
+      q.values("c" => Case([When(OP(MONTH("recorded"), "<=", 4), then = 1)], default = 0))
+      @test occursin(pg ? "WHEN EXTRACT(MONTH FROM \"Tb\".\"recorded\")::integer <= \$1 THEN" :
+                          "WHEN CAST(strftime('%m', \"Tb\".\"recorded\") AS INTEGER) <= ? THEN", inspect_query(q)[:sql_text])
+    end
+  end
+end

@@ -778,7 +778,12 @@ One `WHEN condition THEN value` branch of a SQL `CASE`.
   expression is a value, not a condition, so `When(F("laps") + 1)` raises `QueryBuildError`:
   compare it, as in `When((F("laps") + 1) > 0)` (#931). A bare boolean column, `When(F("is_active"))`,
   is a condition.
-- an operator or function object
+- a function whose result is boolean — `When(Cast("grid", "boolean"), then = 1)`, a
+  `Coalesce`/`Case` with `output_field = "boolean"`, `When(Coalesce(F("is_active"), false))` over a
+  `BooleanField`. A function whose result is known not to be boolean (`Lower`, `Length`, `Sum`,
+  `Rank`, a `Cast` to a non-boolean type, a `Coalesce` over a number column) raises
+  `QueryBuildError`: compare it, as in `When(Lower("surname") == "senna")` (#942). A function whose
+  type cannot be named (`Lag` over a column, a `Case` with no `output_field`) is not checked.
 
 `then` defaults to `0`. A plain value in `then` or the `CASE` `ELSE` is bound as a query
 parameter; a column expression — `F("points")`, `F("points") * 2`, `Joined(…)`, a function —
@@ -821,7 +826,14 @@ end
 function When(x::Union{SQLTypeQ, SQLTypeQor}; then::Any = 0, otherwise::Any = missing)
   return _make_when(x, then, otherwise)
 end
-function When(x::Union{SQLTypeOper, SQLTypeFunction}; then::Any = 0, otherwise::Any = missing)
+function When(x::SQLTypeOper; then::Any = 0, otherwise::Any = missing)
+  return _make_when(x, then, otherwise)
+end
+# #942: a function is a condition only when its result is boolean. One whose name or declared type
+# already says otherwise (`Lower`, `Length`, `Sum`, a `Cast` to integer) is refused here; one typed by
+# its operands (`Coalesce`, `Max`) is checked at render, where the columns are known.
+function When(x::SQLTypeFunction; then::Any = 0, otherwise::Any = missing)
+  _function_condition_kind(x) === :non_boolean && throw(_non_boolean_function_condition(x))
   return _make_when(x, then, otherwise)
 end
 # #921: an `F` comparison — and since #895 a function or window comparison, which builds the same node —

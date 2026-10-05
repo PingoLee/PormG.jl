@@ -1022,3 +1022,35 @@ end
   @test !isempty(df.raceid)
   @test df.raceid == sort(spread[spread.spread .> 3_600_000, :raceid])
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A boolean function as a When condition returns rows; a non-boolean one is refused (#942)
+# `When(Cast("laps", "boolean"))` is a condition on both engines (non-zero laps reads true), so it must
+# keep returning the same rows PostgreSQL and SQLite agree on. `When(Lower("driverid__surname"))` is
+# not: PostgreSQL rejected it and SQLite took the default on every row, so PormG refuses it before
+# anything is sent — and the comparison the refusal suggests returns exactly the rows Julia finds.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "A boolean function is a When condition; a non-boolean one is refused (#942)" begin
+  FN = PormG.Functions
+  query = M.Result.objects
+  query.filter("raceid__year" => 2009)
+  query.values("resultid", "laps",
+               "started" => FN.Case([FN.When(FN.Cast("laps", "boolean"), then = 1)], default = 0))
+  df = query |> DataFrame
+  @test nrow(df) > 0
+  @test df.started == Int.(df.laps .> 0)
+  @test 0 < sum(df.started) < nrow(df)            # both branches are taken in 2009
+
+  @test_throws PormG.QueryBuildError FN.When(FN.Lower("driverid__surname"), then = 1)
+  # The render-time half: a `Coalesce` over two joined text columns is typed once they resolve.
+  refused = M.Result.objects
+  refused.values("c" => FN.Case([FN.When(FN.Coalesce("driverid__surname", "driverid__forename"), then = 1)], default = 0))
+  @test_throws PormG.QueryBuildError refused |> DataFrame
+
+  query = M.Result.objects
+  query.filter("raceid__year" => 2009)
+  query.values("driverid__surname",
+               "button" => FN.Case([FN.When(FN.Lower("driverid__surname") == "button", then = 1)], default = 0))
+  df = query |> DataFrame
+  @test sum(df.button) == count(==("Button"), df.driverid__surname) > 0
+end

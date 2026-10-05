@@ -885,9 +885,47 @@ function _non_boolean_condition(op::String)
     "combine conditions with \e[4m\e[32mQ(…)\e[0m / \e[4m\e[32mQor(…)\e[0m, or compare the bitwise value, " *
     "e.g. \e[4m\e[32m(F(\"points\") & 4) > 0\e[0m"
   end
-  return QueryBuildError(
-    "\e[4m\e[31m$(written) used as a condition\e[0m — a condition must be boolean. PostgreSQL rejects " *
-    "a number there and SQLite reads it for truthiness, so the two engines disagree; $(fix) (#931).")
+  return _condition_not_boolean(written, "a number", fix, 931)
+end
+# The sentence #931 and #942 share: what was written, why the engines disagree, and how to fix it.
+_condition_not_boolean(written::String, value::String, fix::String, issue::Int) = QueryBuildError(
+  "\e[4m\e[31m$(written) used as a condition\e[0m — a condition must be boolean. PostgreSQL rejects " *
+  "$(value) there and SQLite reads it for truthiness, so the two engines disagree; $(fix) (#$(issue)).")
+
+# #942 — a FUNCTION used as a `When` condition. `When(Lower("chassis"))` rendered
+# `CASE WHEN LOWER(…) THEN …`: PostgreSQL rejects it, SQLite coerces the text to a number and reads it
+# for truthiness, so the query silently took the default on every row. `When` is the only condition
+# position that admits a bare function — `filter`/`Q`/`on` refuse one by type (`FilterType`) — but
+# #931's node-type rule cannot decide it, because a function CAN be boolean (`Cast(x, "boolean")`,
+# `output_field = "boolean"`, `Coalesce` over a `BooleanField`). The result type decides instead:
+#
+# - `:boolean` / `:non_boolean` when the node alone names its type — a declared `Cast` type or
+#   `output_field`, a formatter the constructor set, or a name whose result type is fixed;
+# - `:unknown` when only the operands can say (`Coalesce`, `Max`, `Lag`, an untyped `Case`). `When`
+#   builds those, and `_render_function_body` asks `_expression_formatter` once the columns resolve.
+#
+# Only a type that is KNOWN to be non-boolean is refused, as `_expression_formatter` only answers a
+# known type: an expression whose type cannot be named builds, unchecked, as it did before.
+const _NUMBER_RESULT_FUNCTIONS = ("SUM", "AVG", "RANK", "DENSE_RANK", "ROW_NUMBER")
+function _function_condition_kind(v::SQLTypeFunction)
+  name = v.function_name
+  # A declared type names the result outright, including one `_sql_type_field` has no field for
+  # (`jsonb`, `timestamp`, an array): only `boolean` itself is a condition.
+  declared = get(v.kwargs, name == "CAST" ? "type" : "output_field", nothing)
+  if declared isa AbstractString
+    base = Base.endswith(strip(declared), "]") ? "" : lowercase(strip(first(split(declared, '('))))
+    return base in ("boolean", "bool") ? :boolean : :non_boolean
+  end
+  v.formatter === nothing || return v.formatter === Models.format_bool_sql ? :boolean : :non_boolean
+  # A `WHEN` branch is not a value at all; the rest have one fixed result type.
+  (name == "WHEN" || name in _NUMBER_RESULT_FUNCTIONS || name in _TEXT_OUTPUT_FUNCTIONS ||
+    haskey(PormGTypeField, name)) && return :non_boolean
+  return :unknown
+end
+function _non_boolean_function_condition(v::SQLTypeFunction)
+  _condition_not_boolean("`$(v.function_name)(…)`", "a non-boolean value",
+    "compare it, e.g. \e[4m\e[32mWhen(Lower(\"surname\") == \"senna\")\e[0m — a function whose result is " *
+    "boolean (\e[4m\e[32mCast(…, \"boolean\")\e[0m, \e[4m\e[32moutput_field = \"boolean\"\e[0m) is accepted", 942)
 end
 
 function _check_filter(x::Pair)
@@ -1618,6 +1656,13 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     end
   else
     resolved_column = _get_select_query(_null_skipping_operands(v, instruc), instruc, _as=_as)
+  end
+  # #942: the half of the `When` condition check construction could not do. Read after the condition
+  # renders, so a joined path's field memo exists for `_expression_formatter` to find.
+  if v.function_name == "WHEN" && v.column isa SQLTypeFunction && _function_condition_kind(v.column) === :unknown
+    formatter = _expression_formatter(v.column, instruc)
+    (formatter === nothing || formatter === Models.format_bool_sql) ||
+      throw(_non_boolean_function_condition(v.column))
   end
 
   # #74 fan-out guard: record COUNT/SUM/AVG and the source alias of their column so build() can

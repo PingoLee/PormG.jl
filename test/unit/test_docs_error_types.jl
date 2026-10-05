@@ -845,6 +845,21 @@ const DOCERR_CASES = [
         QueryBuildError,
         () -> DOCERR_RACE_PG.objects.filter(F("raceid") & 4).list(show_query = :dict),
     ),
+    # #942 — the same section and the `When` docstring say a function whose result is not boolean is
+    # refused as a `When` condition. Every refused function and spelling is pinned in
+    # `test/unit/test_filter_aggregate_expression.jl`.
+    (
+        "read/field_expressions.md + src/querybuilder/functions.jl — When docstring: a non-boolean function condition is refused (#942)",
+        QueryBuildError,
+        () -> DOCERR_RACE_PG.objects.values("name",
+            "c" => PormG.Functions.Case([PormG.Functions.When(PormG.Functions.Lower("name"), then = 1)], default = 0)).list(show_query = :dict),
+    ),
+    (
+        "read/field_expressions.md — a Coalesce over a number column is refused as a When condition (#942)",
+        QueryBuildError,
+        () -> DOCERR_RACE_PG.objects.values("name",
+            "c" => PormG.Functions.Case([PormG.Functions.When(PormG.Functions.Coalesce("raceid", 0), then = 1)], default = 0)).list(show_query = :dict),
+    ),
     # Intentional PG/SQLite divergence: these pages tell the reader the lookup is PostgreSQL-only
     # and raises on SQLite. Asserting it on the SQLite mock keeps the documented divergence honest.
     (

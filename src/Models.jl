@@ -3649,6 +3649,28 @@ function format_json_sql(value::Union{Missing, Nothing})
   return missing
 end
 
+# #954 — a NUL in a JSON value is refused on every backend, the way #951 refuses one in text. JSON
+# writes it as the escape `\u0000`, so no NUL character is bound and the #951 checks never see it,
+# but PostgreSQL `jsonb` cannot store that escape (SQLSTATE 22P05): the statement failed as a
+# `StatementError`, while SQLite stored it. Refusing it everywhere keeps the engines aligned.
+#
+# Checked on the SERIALIZED text — what would actually bind — so a key, a nested value and a struct
+# JSON.jl lowers are all covered. The escape counts only when an even number of backslashes precede
+# it: `"\\u0000"` is an escaped backslash followed by the text `u0000`, six legitimate characters.
+const _JSON_NUL_ESCAPE = r"(?<!\\)(?:\\\\)*\\u0000"
+_json_has_nul_escape(s::AbstractString) = occursin("u0000", s) && occursin(_JSON_NUL_ESCAPE, s)
+
+# Never the value itself, as for #951: a JSON document can carry a secret. The write path re-raises
+# this naming its field (`QueryBuilder._json_nul_field_refusal`), so the reason is shared.
+const JSON_NUL_REASON = "PostgreSQL jsonb cannot store one, so PormG refuses it on every backend, " *
+  "before the statement is sent. Remove or replace the NUL."
+const JSON_NUL_REFUSAL = "A JSONField value contains a NUL character (\\0, written \\u0000 in JSON). " * JSON_NUL_REASON
+
+function _refuse_json_nul(json::AbstractString)
+  _json_has_nul_escape(json) && throw(InvalidValueError(JSON_NUL_REFUSAL))
+  return json
+end
+
 function format_json_sql(value::AbstractString)
   try
     JSON.parse(value)
@@ -3659,11 +3681,11 @@ function format_json_sql(value::AbstractString)
     (e isa InterruptException || e isa StackOverflowError) && rethrow()
     throw(InvalidValueError("Invalid JSON string: $(sprint(showerror, e))"))
   end
-  return value
+  return _refuse_json_nul(value)
 end
 
 function format_json_sql(value::Union{AbstractDict, AbstractVector, NamedTuple})
-  return JSON.json(value)
+  return _refuse_json_nul(JSON.json(value))
 end
 
 function format_json_sql(value::Union{Bool, Integer, AbstractFloat})

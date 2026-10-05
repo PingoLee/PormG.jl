@@ -2347,11 +2347,19 @@ function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
   # sync `fetch` — including its reconnect retry — all land here), so normalize manual-params
   # NULLs once, here. Guarded to ManualParams: ORM collectors (AbstractPormGParam) and the
   # `nothing` sentinel are untouched (collectors already ran nothing→missing via format_*_sql).
-  if params isa ManualParams
-    params = _normalize_manual_params(params, connection)
+  # #951: both checks run before a connection is leased, so a refusal costs nothing and sends
+  # nothing. A caller's own `conn` is already leased, though, and this call owns it from here on
+  # (released after the statement, or in the `catch` below when the driver throws), so a refusal
+  # hands it back too — before #960 it leaked one lease per refusal.
+  try
+    if params isa ManualParams
+      params = _normalize_manual_params(params, connection)
+    end
+    _refuse_nul(sql, params)
+  catch
+    conn === nothing || release_connection(connection, conn)
+    rethrow()
   end
-  # #951: before a connection is leased, so a refusal costs nothing and sends nothing.
-  _refuse_nul(sql, params)
 
   # Check for transaction context first — on THIS pool only (#831). A transaction open on another
   # database is not this statement's transaction: reusing its connection would run the statement on
@@ -2543,7 +2551,11 @@ function with_transaction_async(pool::Union{PormGPostgres, PormGSQLite}, sql::St
   params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing)
 
   # Raw values are normalized as `fetch_async` does it (#218/#721), and before the acquire, so a
-  # value SQLite refuses to bind raises without leasing a connection.
+  # value SQLite refuses to bind raises without leasing a connection. A caller's own `conn` stays
+  # the caller's on a refusal (#960): this function hands it back on success too, so it is not a
+  # leak, and it may carry an open `BEGIN` the caller still has to roll back — released here, it
+  # would go back to the pool mid-transaction. `fetch_async` is the opposite case: it releases a
+  # caller's `conn` after every statement, so it releases it on a refusal as well.
   params isa ManualParams && (params = _normalize_manual_params(params, pool))
   _refuse_nul(sql, params)   # #951, before the acquire for the same reason
   if conn === nothing

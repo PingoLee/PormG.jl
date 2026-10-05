@@ -6,6 +6,7 @@ row with a nested payload, then exercises:
   - JSON path lookups (BOTH backends): equality, array-index, numeric comparison, `.values()`
     projection, `__@isnull` on a missing key, and a non-matching negative.
   - JSON containment operators (PostgreSQL ONLY — SQLite has no equivalent): @>, ?, ?|, ?&.
+  - A NUL in a JSON value (#954): refused on both backends before the statement is sent.
 
 Result-driven: every assertion checks that the right row is (or is not) returned, so a wrong
 extraction path or operator fails the test rather than silently returning nothing.
@@ -102,6 +103,34 @@ _json_backend_is_pg() = PormG.config[PORMG_DB_FOLDER].connections isa PormG.Porm
             row, created = M.Field_validation_scratch.objects.get_or_create("payload" => seeded)
             @test created == false
             @test row.slug == slug
+        end
+
+        # #954: a NUL in a JSON value is refused before the statement is sent, on both engines.
+        # Before, PostgreSQL's jsonb rejected the `\u0000` escape on the server (a StatementError,
+        # under LibPQ and Postgres.jl alike) while SQLite stored it — so this is the one place a real
+        # server proves the refusal comes first. Every refused write leaves the seeded row alone.
+        @testset "a NUL in a JSON value is refused on both engines (#954)" begin
+            nul = Dict("driver" => "hamilton\0box")
+            @test_throws PormG.InvalidValueError M.Field_validation_scratch.objects.create(
+                "uuid_token" => string(UUIDs.uuid4()), "canonical_url" => "https://example.com/json954",
+                "slug" => "json954-scratch", "payload" => nul)
+            q = base()
+            @test_throws PormG.InvalidValueError q.update("payload" => nul)
+            @test_throws PormG.InvalidValueError M.Field_validation_scratch.objects.get_or_create("payload" => nul)
+            # A JSON string carrying the escape, on the filter path (a plain lookup and get_or_create's).
+            nul_text = raw"""{"driver":"hamilton\u0000box"}"""
+            @test_throws PormG.InvalidValueError (q = base(); q.filter("payload" => nul_text); q.list())
+            @test_throws PormG.InvalidValueError M.Field_validation_scratch.objects.get_or_create("payload" => nul_text)
+            if _json_backend_is_pg()
+                # Refused at `filter()` itself: the document is serialized when the filter is parsed.
+                q = base()
+                @test_throws PormG.InvalidValueError q.filter("payload__@jcontains" => nul)
+            end
+            # Nothing was written: no new row, and the seeded document is untouched.
+            q = M.Field_validation_scratch.objects; q.filter("slug" => "json954-scratch")
+            @test q.count() == 0
+            q = base(); q.filter("payload__driver" => "hamilton")
+            @test q.count() == 1
         end
 
         # ── JSON containment operators (PostgreSQL only) ─────────────────────

@@ -3556,8 +3556,10 @@ function JSONField(; kwargs...)
   default = get(kwargs, :default, nothing)
 
   # Validate JSON format for string defaults (validate_default won't invoke the
-  # converter when the value already matches Union{String, Nothing})
-  if default isa AbstractString
+  # converter when the value already matches Union{String, Nothing}). A collection default takes the
+  # same arm (#954), so a NUL is reported with its reason: `validate_default`'s bare `catch` would
+  # call it "Expected type: …", a reason the caller cannot act on.
+  if default isa Union{AbstractString, AbstractDict, AbstractVector, NamedTuple}
     # `format_json_sql` raises InvalidValueError — correct on the insert/update path, but here the
     # caller's mistake is the `default=` kwarg at model-definition time. Re-raise as
     # FieldValidationError so every field constructor reports the same category (#239);
@@ -3565,8 +3567,13 @@ function JSONField(; kwargs...)
     default = try
       format_json_sql(default)
     catch e
-      e isa InvalidValueError || rethrow(e)
-      throw(FieldValidationError("Invalid default value for JSONField: $(e.msg)"))
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()   # #472
+      e isa InvalidValueError && throw(FieldValidationError("Invalid default value for JSONField: $(e.msg)"))
+      default isa AbstractString && rethrow()
+      # Any other failure serializing a collection (`JSON.json` refuses `NaN`, for one) keeps the
+      # report it had before #954: `validate_default` raises it as a FieldValidationError.
+      validate_default(default, Union{String, Nothing}, "JSONField", x -> format_json_sql(x))
+      rethrow()
     end
   else
     default = validate_default(default, Union{String, Nothing}, "JSONField", x -> format_json_sql(x))

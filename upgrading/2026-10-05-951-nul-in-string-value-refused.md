@@ -21,8 +21,8 @@ with one:
 The message names the parameter position or the field, never the value. Binary values
 (`BinaryField`, `Vector{UInt8}`) are not affected: a NUL byte is valid data there and still
 round-trips. A `JSONField` value is not affected either: JSON escapes a NUL as `\u0000`, so no NUL
-character reaches the driver (PostgreSQL `jsonb` refuses that escape on its own, which this change
-does not address).
+character reaches the driver. PostgreSQL `jsonb` refuses that escape on its own, which #954 handles
+in its own entry: *A NUL in a JSONField value raises*.
 
 ### Who this affects
 

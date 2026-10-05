@@ -1222,6 +1222,8 @@ non-binary field is refused as an operator-less vector value.
 
 **Handling**: In Julia, this field accepts and returns `Dict` or `Vector` types, automatically handling the serialization/deserialization.
 
+**NUL characters**: a value containing a NUL (`'\0'`) anywhere — a string value, a key, a nested element, or a JSON string carrying the escape `\u0000` — raises `InvalidValueError` before the statement is sent, on every backend (a `default=` carrying one raises `FieldValidationError` when the model is defined). PostgreSQL `jsonb` cannot store that escape, so SQLite refuses it too and the engines stay aligned. The literal text `\u0000` (a backslash followed by `u0000`) is ordinary data and is stored as written.
+
 ```julia
 Car_setup = Models.Model(
     id = Models.IDField(),

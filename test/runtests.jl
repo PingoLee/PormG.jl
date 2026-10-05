@@ -169,6 +169,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Bulk Copy Cell Errors (#869)" include("unit/test_bulk_copy_cell_errors.jl")
     @testset "Bulk Write Cell Errors (#875)" include("unit/test_bulk_write_cell_errors.jl")
     @testset "A NUL in a String Value Is Refused (#951)" include("unit/test_nul_in_string_values.jl")
+    @testset "Refusal Releases an Explicit conn (#960)" include("unit/test_fetch_explicit_conn_refusal.jl")
     @testset "bulk_insert returning= (#671)" include("unit/test_bulk_returning.jl")
     @testset "PostgreSQL Bulk Column Arrays (#672)" include("unit/test_bulk_pg_unnest.jl")
     @testset "Single-row Writers Refuse a Collection (#712)" include("unit/test_single_row_collection_value.jl")

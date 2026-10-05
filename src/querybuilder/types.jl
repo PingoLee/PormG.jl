@@ -1481,7 +1481,9 @@ name the column: `filter("driverid" => OuterRef("pk"))` against an outer `M.Driv
 It binds to the **immediately enclosing** query, as Django's does. A subquery nested inside another
 subquery — in a filter, a projection, a `When` or a join condition — correlates to the subquery
 around it, never further out (#938). Reaching two levels up (Django's `OuterRef(OuterRef(…))`) is
-not supported, and raises `QueryBuildError`.
+not supported, and raises `QueryBuildError`. That holds when both enclosing levels have the column,
+without a warning (#952): to use the outer value further in, correlate the middle query on it, and
+the inner reference carries it down.
 
 Used outside an `Exists`/`Subquery` build there is no outer query to bind to, so an `OuterRef`
 there raises `QueryBuildError` — wrapped in a function or not.

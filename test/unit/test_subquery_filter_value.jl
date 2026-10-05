@@ -659,3 +659,33 @@ end
   @test err isa QueryBuildError
   @test occursin("immediately enclosing query", sprint(showerror, err))
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #952: the nearer level wins even when both enclosing levels have the column — and it does not warn
+# Decided as Django's rule, kept as is: a warning or a refusal would fire on this exact shape, which is
+# also the ordinary one (each counted result's own race), with no spelling to say "the middle" instead.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#952: a nested OuterRef binds the middle query, silently, when both levels share the name" begin
+  # (label, outer model, the middle's correlation column)
+  outers = (
+    ("both levels have raceid", mod -> mod.Result, "raceid"),
+    ("only the middle has raceid", mod -> mod.Driver, "driverid"),
+  )
+  for (backend, mod) in _SQ_MODELS
+    @testset "$backend: $label" for (label, outer, corr) in outers
+      middle = mod.Result.objects
+      middle.filter(corr => OuterRef(corr), "grid" => _sq_best(mod))
+      middle.values("n" => Count("resultid"))
+      q = outer(mod).objects
+      q.values("x" => Subquery(middle))
+      # No message at Warn or above: an aggregate subquery triggers no multirow warning either, so any
+      # warning here would be one about the binding.
+      insp = @test_logs min_level = Logging.Warn inspect_query(q)
+      sql = _sq_flat(insp[:sql_text])
+      @test occursin("\"R2\".\"raceid\" = \"R1\".\"raceid\"", sql)
+      @test occursin("\"R1\".\"$corr\" = \"Tb\".\"$corr\"", sql)
+      @test !occursin("\"R2\".\"raceid\" = \"Tb\"", sql)
+      assert_marker_count(insp, backend)
+    end
+  end
+end

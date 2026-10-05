@@ -581,10 +581,10 @@ fetch(::CompositeMockPg161, sql::String; conn = nothing, params = nothing, ignor
   rows = NamedTuple[]
   # One row per key column. Every flag defaults to the value a plain PormG-created index carries.
   add(idx, cols; unique = false, contype = missing, deferrable = missing, valid = true,
-      include = false, nnd = false, opt = 0, tbl = "lap") =
+      include = false, nnd = false, opt = 0, tbl = "lap", payload = missing) =
     for c in cols
       push!(rows, (table_name = tbl, index_name = idx, is_unique = unique, contype = contype,
-                   is_deferrable = deferrable, is_valid = valid, has_include = include,
+                   is_deferrable = deferrable, is_valid = valid, has_include = include, include_columns = payload,
                    nulls_not_distinct = nnd, column_name = c, opt = opt, idx_coll = 0,
                    col_coll = 0, opc_default = true, opc_name = "int4_ops", method = "btree",
                    has_reloptions = false, index_comment = missing,
@@ -596,18 +596,26 @@ fetch(::CompositeMockPg161, sql::String; conn = nothing, params = nothing, ignor
   add("ux_g",    ["g"];      unique = true)                             # one-field UniqueConstraint
   add("uq_fe",   ["f", "e"]; unique = true, contype = "u", deferrable = false)   # Django's UNIQUE (f, e)
   add("uq_h",    ["h"];      unique = true, contype = "u", deferrable = false)   # the field's `unique`
-  add("ux_incl", ["c", "d"]; unique = true, include = true)             # INCLUDE payload
+  add("ux_incl", ["c", "d"]; unique = true, include = true, payload = "[\"e\"]")   # INCLUDE on a UNIQUE: still refused
   add("ux_bad",  ["c", "d"]; unique = true, valid = false)              # failed CONCURRENTLY build
   add("uq_def",  ["c", "d"]; unique = true, contype = "u", deferrable = true)    # DEFERRABLE
   add("ux_nnd",  ["c", "d"]; unique = true, nnd = true)                 # NULLS NOT DISTINCT
   add("ix_desc", ["c", "d"]; opt = 3)                                   # DESC keys: read since #29
+  # #934: a non-unique covering index is read, its payload in catalog order — at one key column
+  # too, since the payload makes it advanced (the `db_index` CTE refuses `indnatts <> indnkeyatts`).
+  add("ix_cov",  ["c", "d"]; include = true, payload = "[\"f\", \"e\"]")
+  add("ix_cov1", ["c"];      include = true, payload = "[\"e\"]")
   add("ux_other", ["x", "y"]; unique = true, tbl = "pit")               # keyed by its own table
   PG161_ROWS[] = DataFrame(rows)
 
   out = Migrations._pg_composite_indexes(CompositeMockPg161())
   lap = Dict(lc.name => lc for lc in out["lap"])
-  @test sort(collect(keys(lap))) == ["ix_ba", "ix_desc", "uq_fe", "ux_cd", "ux_g"]
+  @test sort(collect(keys(lap))) == ["ix_ba", "ix_cov", "ix_cov1", "ix_desc", "uq_fe", "ux_cd", "ux_g"]
   @test lap["ix_desc"].descending == [true, true]
+  @test (lap["ix_cov"].columns, lap["ix_cov"].include) == (["c", "d"], ["f", "e"])
+  @test (lap["ix_cov1"].columns, lap["ix_cov1"].include) == (["c"], ["e"])
+  @test Migrations.composite_is_advanced(lap["ix_cov1"]) && !Migrations.composite_is_owned(lap["ix_cov1"])   # unmarked: hand-made
+  @test isempty(lap["ix_ba"].include)
   @test lap["ix_ba"].descending == [false, false] && lap["ix_ba"].method == "btree"
   @test (lap["ix_ba"].columns, lap["ix_ba"].unique, lap["ix_ba"].constraint) == (["b", "a"], false, false)
   @test (lap["ux_cd"].unique, lap["ux_cd"].constraint) == (true, false)
@@ -641,7 +649,7 @@ end
       reloptions = false, comment = missing) =
     for (k, c) in enumerate(cols)
       push!(rows, (table_name = "result", index_name = idx, is_unique = unique, contype = missing,
-                   is_deferrable = missing, is_valid = true, has_include = false,
+                   is_deferrable = missing, is_valid = true, has_include = false, include_columns = missing,
                    nulls_not_distinct = false, column_name = c, opt = opt isa Vector ? opt[k] : opt,
                    idx_coll = 0, col_coll = 0, opc_default = opc_default isa Vector ? opc_default[k] : opc_default,
                    opc_name = opc isa Vector ? opc[k] : opc, method = method, has_reloptions = reloptions,
@@ -703,7 +711,8 @@ end
 # `,` inside a literal splitting nothing. A partial index over plain columns keeps its columns and
 # carries `pg_get_expr(indpred)` as its condition. A NULLS placement is part of a text
 # member's words, so it makes the index a text one too (`expressions = ("grid NULLS FIRST",)`). A UNIQUE partial or functional
-# index stays unread (UniqueConstraint declares neither), and so does a definition whose split
+# index is read too since #934 (UniqueConstraint declares both; until then they were the refused
+# rows), while a unique one over a DESC column stays unread, and so does a definition whose split
 # disagrees with the key-column count. The query admits the shapes at arity 1 and keeps the db_index
 # CTE's `indpred IS NULL`.
 # Mutation gate: make `_index_definition_elements` return `nothing` and every text index vanishes
@@ -717,7 +726,7 @@ end
       e = expr isa Vector ? expr[k] : expr
       cc = coll isa Vector ? coll[k] : coll
       push!(rows, (table_name = tbl, index_name = idx, is_unique = unique, contype = missing,
-                   is_deferrable = missing, is_valid = true, has_include = false, nulls_not_distinct = false,
+                   is_deferrable = missing, is_valid = true, has_include = false, include_columns = missing, nulls_not_distinct = false,
                    column_name = e ? missing : c, opt = opt isa Vector ? opt[k] : opt,
                    idx_coll = cc[1], col_coll = e ? missing : cc[2], opc_default = true,
                    opc_name = "text_ops", method = method, has_reloptions = false, index_comment = comment,
@@ -744,20 +753,28 @@ end
       def = "CREATE INDEX ix_part_nulls ON public.result USING btree (raceid, points DESC NULLS LAST) WHERE grid > 0")
   add("ix_nulls_first", ["grid"]; tbl = "result", opt = 2,
       def = "CREATE INDEX ix_nulls_first ON public.result USING btree (grid NULLS FIRST)")
-  # Refused.
+  # Read since #934: a unique partial and a unique functional index are `UniqueConstraint(condition =
+  # …)` / `UniqueConstraint(expressions = …)`. They were the refused rows until then.
   add("ux_part", ["raceid", "driverid"]; tbl = "result", unique = true, pred = "grid > 0",
       def = "CREATE UNIQUE INDEX ux_part ON public.result USING btree (raceid, driverid) WHERE grid > 0")
   add("ux_lower", ["?"]; unique = true, expr = true, coll = (100, 0),
       def = "CREATE UNIQUE INDEX ux_lower ON public.driver USING btree (lower(surname::text))")
+  # Refused.
   add("ix_misread", ["?", "dob"]; expr = [true, false], coll = (100, 0),
       def = "CREATE INDEX ix_misread ON public.driver USING btree (lower(surname::text))")
+  # A UNIQUE partial index over a DESC column: `UniqueConstraint(fields = …)` has no direction.
+  add("ux_desc_part", ["raceid"]; tbl = "result", unique = true, opt = 3, pred = "grid > 0",
+      def = "CREATE UNIQUE INDEX ux_desc_part ON public.result USING btree (raceid DESC) WHERE grid > 0")
   PG161_ROWS[] = DataFrame(rows)
 
   out = Migrations._pg_composite_indexes(CompositeMockPg161())
   driver = Dict(lc.name => lc for lc in out["driver"])
   result = Dict(lc.name => lc for lc in out["result"])
-  @test sort(collect(keys(driver))) == ["ix_coll", "ix_gin_text", "ix_literal", "ix_lower", "ix_nulls_text"]
-  @test sort(collect(keys(result))) == ["ix_nulls_first", "ix_part", "ix_part_nulls", "ix_part_one"]
+  @test sort(collect(keys(driver))) == ["ix_coll", "ix_gin_text", "ix_literal", "ix_lower", "ix_nulls_text", "ux_lower"]
+  @test sort(collect(keys(result))) == ["ix_nulls_first", "ix_part", "ix_part_nulls", "ix_part_one", "ux_part"]
+  @test driver["ux_lower"].unique && driver["ux_lower"].expressions == ["lower(surname::text)"]
+  @test result["ux_part"].unique && result["ux_part"].columns == ["raceid", "driverid"] &&
+        result["ux_part"].condition == "grid > 0"
 
   @test driver["ix_lower"].expressions == ["lower(surname::text)"] && isempty(driver["ix_lower"].columns)
   @test driver["ix_coll"].expressions == ["surname COLLATE \"C\""]
@@ -802,6 +819,31 @@ end
   @test !occursin(r"\\K|\(\?P?<[A-Za-z]|\+\+|\*\+", re.pattern)
   # The `db_index` CTE carries the complement, COALESCEd so an index without a comment still reads.
   @test occursin("COALESCE(obj_description(i.indexrelid, 'pg_class'), '') !~", Migrations._PG_UNMARKED_INDEX)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The pormg:check marker is bounded on both sides, like pormg:index (#934)
+# #909's review gave `INDEX_MARKER_RE` a look-behind; `CHECK_MARKER_RE` (#742) had neither boundary,
+# so `xpormg:check:<hash>` in a DBA's comment — or a 17-digit hash — read as PormG's own, and only the
+# marker stands between a hand-made CHECK and a planned DROP.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the pormg:check marker pattern is bounded on both sides (#934)" begin
+  re = PormG.CHECK_MARKER_RE
+  h = PormG.check_marker("laps >= 0")                    # `pormg:check:` + 16 hex digits
+  @test occursin(re, h)
+  @test occursin(re, "FIA's lap rule $(h)")              # the adoption form: the DBA's note, a space, the marker
+  @test occursin(re, "($(h))")
+  @test !occursin(re, "x" * h)                           # no leading boundary before #934
+  @test !occursin(re, "my:" * h)
+  @test !occursin(re, h * "0")                           # a 17th hex digit is not the reserved form
+  @test !occursin(re, h * "_x")
+  # The same PostgreSQL/PCRE subset as the index marker: `_PG_UNMARKED_CHECK` interpolates it into SQL.
+  @test !occursin(r"\\K|\(\?P?<[A-Za-z]|\+\+|\*\+", re.pattern)
+  @test occursin(re.pattern, Migrations._PG_UNMARKED_CHECK)
+  # The SQLite reader embeds it after `/*\s*`; the boundary changes nothing for the comment PormG writes.
+  @test Migrations._sqlite_check_clause_marker("CHECK (laps >= 0 /* $(h) */)") == h
+  @test Migrations._sqlite_check_clause_marker("CHECK (laps >= 0 /* x$(h) */)") === nothing
+  @test Migrations._sqlite_check_clause_marker("CHECK (laps >= 0 /* $(h)0 */)") === nothing
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

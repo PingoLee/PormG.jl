@@ -774,7 +774,10 @@ One `WHEN condition THEN value` branch of a SQL `CASE`.
 - a `Q(...)` / `Qor(...)` object, for OR and nested boolean logic
 - a comparison over an `F`, function or window expression —
   `When(F("grid") < F("positionorder"), then = 1)`, `When(Lower("surname") == "senna", then = 1)`.
-  It renders exactly as the same expression wrapped in `Q(...)`.
+  It renders exactly as the same expression wrapped in `Q(...)`. An arithmetic or bitwise
+  expression is a value, not a condition, so `When(F("laps") + 1)` raises `QueryBuildError`:
+  compare it, as in `When((F("laps") + 1) > 0)` (#931). A bare boolean column, `When(F("is_active"))`,
+  is a condition.
 - an operator or function object
 
 `then` defaults to `0`. A plain value in `then` or the `CASE` `ELSE` is bound as a query

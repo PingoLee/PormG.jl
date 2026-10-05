@@ -84,6 +84,21 @@ An **aggregate** on the left (`Count("resultid") > 10`) builds an expression too
 
 A **window function** on the left (`Rank(over = w) <= 3`) builds one as well, and `filter` refuses it for the same reason: SQL evaluates windows after `WHERE`. The comparison is still useful inside a projection, as the condition of a `Case`/`When`. To filter on a window, see [Filtering on a Window Result](window_functions.md#Filtering-on-a-Window-Result).
 
+### Arithmetic is not a condition
+
+An arithmetic or bitwise expression is a **value**, not a condition. Wherever PormG expects a condition — `filter(...)`, `Q(...)`/`Qor(...)`, a `When(...)` branch, `on(...)` — it refuses `F("laps") + 1`, `F("points") & 4` or `~F(...)` at construction with a `QueryBuildError`. Compare the value instead:
+
+```julia
+using PormG.Functions: Case, When
+
+query = M.Result.objects
+query.filter("raceid__year" => 2009)
+query.values("driverid__surname", "laps",
+             "past_50" => Case([When((F("laps") - 50) > 0, then = 1)], default = 0))
+```
+
+The refusal is there because the two engines disagree about the bare form: PostgreSQL rejects a number used as a condition, and SQLite reads it as true when it is non-zero, so the same query would return rows on one engine and fail on the other. A bare **boolean column** is a condition already and keeps working, for example `filter(F("is_active"))` or `When(F("is_active"), then = 1)`. Arithmetic stays legal anywhere a value goes: in a projection, in `then`, and on the right of a comparison.
+
 ### Expressions are values, not builders
 
 Every operator — comparison and arithmetic alike — returns a **new** expression and leaves its operands untouched. So an `F()` handle can be bound to a name and reused across as many predicates, queries and projections as you like:

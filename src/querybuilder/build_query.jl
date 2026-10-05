@@ -168,44 +168,55 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       # value (`_function_projection_kind`, #800). Everything else — other functions, an `Exists` —
       # answers `nothing`, which means "no representation this table owns", and the read path then
       # leaves the column exactly as the driver delivered it.
-      original = v_copy.field
-      kind = nothing
-      if original isa FExpression
-        # #881: one of the renderer's two doors out — an interval it held in milliseconds on SQLite
-        # arrives here as the stored text, typed `CInterval`.
-        v_copy.field, kind = _set_update_query_typed(original, instruc)
-        # #824: a bare `F("ts__@date")` is the transform's result, which the column lookup cannot
-        # name. Since #814 `_set_update_query_typed` names it too (`_side_kind`), because the same
-        # call types the sides of date arithmetic, and a transformed side has to be typed there. This
-        # fallback stays for whatever else `_operand_kind` resolves on a bare `F` and that does not.
-        kind === nothing && original.operation === nothing && (kind = _operand_kind(original, instruc))
-      else
-        # #894: `Max`/`Min` over an interval are computed on SQLite milliseconds and leave as the
-        # interval text — the second door #881 describes, and typed the way a difference is, on
-        # both engines. `_operand_kind` cannot type `Max(F("start_at") - F("date"))` (arithmetic
-        # answers `nothing`), so the kind is taken from the same call that renders, as above.
-        interval = false
-        if original isa FObject
-          sql, interval_ms, interval = _render_function_typed(original, instruc; _as = v_copy._as)
-          v_copy.field = interval_ms ? Dialect._sqlite_interval_text(sql) : sql
+      # #932: the projection renders in the SELECT list's `:group` phase, under its own output name —
+      # what the #194 message calls it. When the outer query groups by this projection's POSITION (the
+      # push above, decided before the render), the whole expression is a GROUP BY key, so a correlated
+      # subquery inside it is evaluated per input row to form the key and needs no grouped column.
+      # Only while the position is TRUE: a `"*"` projection ahead of it expands to the model's columns
+      # before the ordinals resolve, so `GROUP BY 3` would name some other column (review of #932).
+      kind = with_scope(instruc; label = _projection_output_name(v_copy),
+                        group_key = string(i) in instruc.group &&
+                                    !any(_is_wildcard_projection, view(values, 1:i-1))) do
+        original = v_copy.field
+        kind = nothing
+        if original isa FExpression
+          # #881: one of the renderer's two doors out — an interval it held in milliseconds on SQLite
+          # arrives here as the stored text, typed `CInterval`.
+          v_copy.field, kind = _set_update_query_typed(original, instruc)
+          # #824: a bare `F("ts__@date")` is the transform's result, which the column lookup cannot
+          # name. Since #814 `_set_update_query_typed` names it too (`_side_kind`), because the same
+          # call types the sides of date arithmetic, and a transformed side has to be typed there. This
+          # fallback stays for whatever else `_operand_kind` resolves on a bare `F` and that does not.
+          kind === nothing && original.operation === nothing && (kind = _operand_kind(original, instruc))
         else
-          v_copy.field = _get_select_query(original, instruc, _as=v_copy._as)
+          # #894: `Max`/`Min` over an interval are computed on SQLite milliseconds and leave as the
+          # interval text — the second door #881 describes, and typed the way a difference is, on
+          # both engines. `_operand_kind` cannot type `Max(F("start_at") - F("date"))` (arithmetic
+          # answers `nothing`), so the kind is taken from the same call that renders, as above.
+          interval = false
+          if original isa FObject
+            sql, interval_ms, interval = _render_function_typed(original, instruc; _as = v_copy._as)
+            v_copy.field = interval_ms ? Dialect._sqlite_interval_text(sql) : sql
+          else
+            v_copy.field = _get_select_query(original, instruc, _as=v_copy._as)
+          end
+          # A plain path: render first (above), THEN type — the memo ordering `_render_left_typed`
+          # documents. A dotted join key cannot be typed before it has been resolved.
+          # `_projection_column_kind`, not the arithmetic-narrowed `_operand_column_kind`: a projected
+          # `TimeField` or `DurationField` has a representation to undo even though neither can be the
+          # left of date arithmetic.
+          original isa String && (kind = _projection_column_kind(original, instruc))
+          # #800: an extremum or a window value function has its operand's kind. Same order: render,
+          # then type.
+          original isa SQLTypeFunction &&
+            (kind = interval ? CInterval() : _function_projection_kind(original, instruc))
+          # #824: a `Joined(...)` / `CTE(...)` handle (and a `"cte__col"` path, retagged to one before
+          # this loop) reads as `Max` over it does — one rule, `_operand_kind`. #888: so does a
+          # `Subquery(...)`, as its one column — rendered above, which is what recorded its kind.
+          original isa Union{JoinedReference,CTEReference,SubqueryObject} &&
+            (kind = _operand_kind(original, instruc))
         end
-        # A plain path: render first (above), THEN type — the memo ordering `_render_left_typed`
-        # documents. A dotted join key cannot be typed before it has been resolved.
-        # `_projection_column_kind`, not the arithmetic-narrowed `_operand_column_kind`: a projected
-        # `TimeField` or `DurationField` has a representation to undo even though neither can be the
-        # left of date arithmetic.
-        original isa String && (kind = _projection_column_kind(original, instruc))
-        # #800: an extremum or a window value function has its operand's kind. Same order: render,
-        # then type.
-        original isa SQLTypeFunction &&
-          (kind = interval ? CInterval() : _function_projection_kind(original, instruc))
-        # #824: a `Joined(...)` / `CTE(...)` handle (and a `"cte__col"` path, retagged to one before
-        # this loop) reads as `Max` over it does — one rule, `_operand_kind`. #888: so does a
-        # `Subquery(...)`, as its one column — rendered above, which is what recorded its kind.
-        original isa Union{JoinedReference,CTEReference,SubqueryObject} &&
-          (kind = _operand_kind(original, instruc))
+        kind
       end
       instruc.select[i] = v_copy
       if v_copy._as === nothing
@@ -457,7 +468,14 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
       # a re-rendered aggregate term appears there twice — harmless to `_check_aggregate_fanout`,
       # which reasons per entry and reaches the same verdict for a duplicate.
       mark = parameter_mark(instruc)
-      v_field_copy.field = _get_select_query(v_field_copy.field, instruc)
+      # #932: a term rendered here is not projected, so it is pushed into GROUP BY whole below
+      # (`push!(instruc.group, v_field_copy.field)`) — a GROUP BY key, like a grouped projection.
+      # Not when it holds an aggregate or a window: neither is a valid grouping key (both engines
+      # reject the statement), so the term keeps the clause's checked phase (review of #932). Resolved,
+      # so an aggregate read through an alias (`When("n__@gt" => 1, …)` over `"n" => Count(…)`) counts.
+      order_node = v_field_copy.field
+      v_field_copy.field = with_scope(() -> _get_select_query(order_node, instruc), instruc;
+                                      group_key = !_resolved_contains_agg(order_node, instruc) && !_is_window_expr(order_node))
       order_params = bound_since(mark)
     end
     # #540: no render-time re-validation. `SQLOrder` is an immutable struct whose inner constructor
@@ -1327,13 +1345,11 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
           _guard_window_alias_predicate(source, having_key[2], instruc)   # #685, as the typed path does
           clause === :where && _guard_where_operand(v, instruc)   # #895: a row alias against an aggregate
           set_context!(instruc, clause)
-          prev_having = instruc.post_group_predicate
-          clause === :having && (instruc.post_group_predicate = _post_group_predicate_label(having_key[2]))
           try
-            push!(clause === :having ? instruc.having : instruc._where, _get_filter_query(v, instruc))
+            push!(clause === :having ? instruc.having : instruc._where,
+                  _in_clause_phase(() -> _get_filter_query(v, instruc), instruc, clause, having_key[2]))
           finally
             set_context!(instruc, :where)
-            instruc.post_group_predicate = prev_having
           end
           continue
         end
@@ -1346,12 +1362,13 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         # `BackendCapabilityError` (#618). Leaving the clause's context active would file a later
         # clause's values in the wrong bucket. Harmless today — every such throw escapes `build()` and the
         # instruction is discarded — but it matches what `_get_select_query(::ExistsObject)` already
-        # does for `correlated_projection`, and it stops the next caller who catches one of these
+        # does for its `RenderScope`, and it stops the next caller who catches one of these
         # from inheriting a wrong context.
         set_context!(instruc, clause)
         try
           push!(clause === :having ? instruc.having : instruc._where,
-                _render_alias_predicate(v, having_key, having_cached, instruc))
+                _in_clause_phase(() -> _render_alias_predicate(v, having_key, having_cached, instruc),
+                                 instruc, clause, having_key[2]))
         finally
           set_context!(instruc, :where)
         end
@@ -1369,7 +1386,8 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
       if having_part !== nothing
         set_context!(instruc, :having)
         try
-          push!(instruc.having, _get_having_query(having_part, instruc))
+          push!(instruc.having, with_scope(() -> _get_having_query(having_part, instruc), instruc;
+                                           phase = :group, label = _having_subquery_label(string(_having_leaf_label(having_part)))))
         finally
           set_context!(instruc, :where)
         end
@@ -1822,20 +1840,20 @@ _having_leaf_label(q::SQLTypeQor) = _having_leaf_label(first(q.or))
 function _get_having_query(v::SQLTypeOper, instruc::SQLInstruction)::String
   # #707: an expression on the right is a comparison, not a value to type — see the top-level branch.
   if _expression_operand(v.values)
-    # #926 (review): a subquery on the right is evaluated after GROUP BY here — see `post_group_predicate`.
-    prev_having = instruc.post_group_predicate
-    instruc.post_group_predicate = _post_group_predicate_label(something(_plain_filter_key(v.column), "?"))
-    try
-      return _get_filter_query(v, instruc)
-    finally
-      instruc.post_group_predicate = prev_having
-    end
+    # #926 (review): a subquery on the right is evaluated after GROUP BY here — see `RenderScope`. The
+    # caller set the `:group` phase; this names the alias the predicate compares.
+    return with_scope(() -> _get_filter_query(v, instruc), instruc;
+                      phase = :group, label = _having_subquery_label(something(_plain_filter_key(v.column), "?")))
   end
   having_key, having_cached = _aggregate_alias_leaf(v, instruc)
   return _render_alias_predicate(v, having_key, having_cached, instruc)
 end
 # What the #194 message calls the correlated subquery of a HAVING predicate on `alias`.
-_post_group_predicate_label(alias::AbstractString) = "Subquery(…) in the HAVING filter on \"$(alias)\""
+_having_subquery_label(alias::AbstractString) = "Subquery(…) in the HAVING filter on \"$(alias)\""
+# #932: an alias predicate renders in the phase of the clause it was routed to — HAVING is evaluated
+# after GROUP BY, a row alias's WHERE before it (the caller's `:row` phase stands).
+_in_clause_phase(f, instruc::SQLInstruction, clause::Symbol, alias::AbstractString) =
+  clause === :having ? with_scope(f, instruc; phase = :group, label = _having_subquery_label(alias)) : f()
 _get_having_query(q::SQLTypeQ, instruc::SQLInstruction)::String =
   "(" * join([_get_having_query(v, instruc) for v in q.filters], " AND ") * ")"
 _get_having_query(q::SQLTypeQor, instruc::SQLInstruction)::String =
@@ -2335,17 +2353,15 @@ function build(object::SQLObject;
   # (SQLite) push values into the correct bucket.
   # Subqueries skip this to inherit the parent's current bucket.
   set_contexts && set_context!(instruct, :select)
-  # #926 (review): a subquery compared inside a projection is evaluated after GROUP BY.
-  instruct.post_group_predicate = "Subquery(…) compared in a projection"
-  try
-    get_select_query(object.values, instruct)
-  finally
-    instruct.post_group_predicate = nothing
-  end
+  # #932 — the evaluation phase of each clause, for the #194 guard. Only clauses set it (see
+  # `RenderScope`): the SELECT list and ORDER BY are evaluated after GROUP BY, WHERE and ON before it.
+  # HAVING sets its own inside `get_filter_query`, and a grouping aggregate's argument in
+  # `_render_function_typed`.
+  with_scope(() -> get_select_query(object.values, instruct), instruct; phase = :group)
   _record_wildcard_projection_kinds!(instruct)
 
   set_contexts && set_context!(instruct, :where)
-  get_filter_query(object, instruct)
+  with_scope(() -> get_filter_query(object, instruct), instruct; phase = :row, label = "a filter")
 
   # #404: ORDER BY resolves HERE, before build_row_join_sql_text renders row_join into SQL. A path
   # named ONLY by order_by() is resolved through _get_select_query → _build_row_join, which APPENDS
@@ -2373,7 +2389,7 @@ function build(object::SQLObject;
   # nested render passes `own_contexts=true` (#432), and the `:order` values it files are lifted
   # into text order by `detach_nested_run!` like any other clause.
   set_contexts && set_context!(instruct, :order)
-  get_order_query(object, instruct)
+  with_scope(() -> get_order_query(object, instruct), instruct; phase = :group, label = "an order_by term")
   set_contexts && set_context!(instruct, :where)
   _group_window_terms!(instruct)   # #789: after ORDER BY, which also extends GROUP BY
 
@@ -2381,31 +2397,34 @@ function build(object::SQLObject;
   # cjoin filters are applied even in UPDATE/DELETE without explicit field paths. `row_path` is the
   # membership test that avoids materializing one twice; an `on()`-only entry has no `field` to link
   # through and decorates whatever join traversal built for that path.
-  for (path, config) in object.custom_join
-    if path ∉ instruct.row_path && config.field !== nothing
-      array = split(path, "__")
-      push!(array, config.field.pk_field)
-      _build_row_join(array, instruct)
+  # #932: join conditions — a `cjoin` filter, an `on()`, a `cjoin_on` ON — are evaluated per row.
+  with_scope(instruct; phase = :row, label = "a join condition") do
+    for (path, config) in object.custom_join
+      if path ∉ instruct.row_path && config.field !== nothing
+        array = split(path, "__")
+        push!(array, config.field.pk_field)
+        _build_row_join(array, instruct)
+      end
     end
-  end
 
-  # ALIAS loop (#45) — materialize the anchor-less `cjoin_on` joins: no equi-anchor, explicit alias,
-  # user-supplied ON.
-  #
-  # It does NOT consult `row_path` (#484). `row_path` records JOIN PATHS, and an alias is not one —
-  # while both namespaces shared `custom_join`, an alias equal to a traversed ForeignKey path was
-  # found there and the join was skipped entirely, leaving the statement naming a range variable it
-  # never declared. The path loop above still needs the test, because a `cjoin` path IS what
-  # traversal records. Two loops rather than one because the two namespaces materialize differently
-  # — and the alias loop runs second, which is what keeps a `cjoin_on` join's generated-alias
-  # numbering behind the joins traversal built (#480 reserves the declared aliases so they cannot
-  # collide in either direction).
-  for (user_alias, config) in object.alias_join
-    _build_cjoin_on_row_join(config, user_alias, instruct)
-  end
+    # ALIAS loop (#45) — materialize the anchor-less `cjoin_on` joins: no equi-anchor, explicit alias,
+    # user-supplied ON.
+    #
+    # It does NOT consult `row_path` (#484). `row_path` records JOIN PATHS, and an alias is not one —
+    # while both namespaces shared `custom_join`, an alias equal to a traversed ForeignKey path was
+    # found there and the join was skipped entirely, leaving the statement naming a range variable it
+    # never declared. The path loop above still needs the test, because a `cjoin` path IS what
+    # traversal records. Two loops rather than one because the two namespaces materialize differently
+    # — and the alias loop runs second, which is what keeps a `cjoin_on` join's generated-alias
+    # numbering behind the joins traversal built (#480 reserves the declared aliases so they cannot
+    # collide in either direction).
+    for (user_alias, config) in object.alias_join
+      _build_cjoin_on_row_join(config, user_alias, instruct)
+    end
 
-  set_contexts && set_context!(instruct, :join)
-  build_row_join_sql_text(instruct)
+    set_contexts && set_context!(instruct, :join)
+    build_row_join_sql_text(instruct)
+  end
 
   _check_aggregate_fanout(instruct)      # #74: refuse silently-inflated aggregates over to-many joins
   _check_grouped_correlation(instruct)   # #194: refuse a correlated projection on an ungrouped column
@@ -2476,12 +2495,19 @@ end
 # (`values("n" => Count(...), "s" => Subquery(...))`) renders with no GROUP BY at all and is the most
 # broken shape of the lot — PostgreSQL rejects it outright (measured) — yet the old warn, which
 # tested `!isempty(group)`, never fired on it.
+#
+# WHICH refs it checks (#932): the recorder keeps every rendered OuterRef with the phase of the clause
+# it was evaluated in, and only those read AFTER grouping need a grouped column. It used to decide by
+# which render entry point the subquery reached — a different question that agreed most of the time,
+# and each disagreement had become a patch (#194's projected arms, #926's split, its HAVING fix).
 function _check_grouped_correlation(instruct::SQLInstruction)
   instruct.aggregate || return nothing        # no aggregate ⇒ one output row per input row ⇒ safe
   isempty(instruct.outer_refs) && return nothing
   grouped = _grouped_expressions(instruct)
   for c in instruct.outer_refs
-    c.expr in grouped && continue
+    c.phase === :row && continue              # WHERE, ON, an aggregate's argument: before GROUP BY
+    c.group_key && continue                   # inside an expression grouped whole: evaluated per row
+    c.expr in grouped && continue             # the correlated column is grouped
     throw(QueryBuildError(_ungrouped_correlation_error_msg(c, grouped)))
   end
   return nothing

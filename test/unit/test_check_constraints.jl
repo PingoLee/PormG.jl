@@ -135,7 +135,9 @@ const CK_LAPS = Models.CheckConstraint(condition = "laps >= 0", name = "result_l
   # The typos that change the statement silently: a comment, a statement break, an injected clause,
   # an unterminated literal. Each is legal inside a literal.
   for bad in ("grid >= 0 -- all good", "grid >= 0 /* x */", "grid >= 0); DROP TABLE result; (",
-              "grid >= 0, CHECK (1 = 1)", "status <> 'x")
+              "grid >= 0, CHECK (1 = 1)", "status <> 'x",
+              # #934: one literal to a `'…'`-only walk, three statements to PostgreSQL.
+              "status <> E'\\'' ; DROP TABLE result ; SELECT E'\\''")
     err = refused(condition = bad, name = "c")
     @test err isa PormG.ModelDefinitionError
     @test occursin("not well-formed SQL", sprint(showerror, err))

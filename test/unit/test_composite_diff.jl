@@ -368,10 +368,11 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SQLite: a create collides loudly, and names are checked once per plan (#161)
-# Without IF NOT EXISTS a name another object holds fails the migration — here a UNIQUE partial index
-# the readers refuse (so the diff never sees it) already owns the derived name. (A plain partial index
-# was the fixture until #29 part 2 made it readable; its name clash is now refused at plan time — see
-# the expression and partial index testset below.) Before, the CREATE was a
+# Without IF NOT EXISTS a name another object holds fails the migration — here a UNIQUE descending
+# index the readers refuse (so the diff never sees it) already owns the derived name. (A plain partial
+# index was the fixture until #29 part 2 made it readable, and a UNIQUE partial one until #934 did;
+# each clash is now refused at plan time — see the expression and partial index testsets below.)
+# Before, the CREATE was a
 # silent no-op and the next makemigrations planned it again, forever. Collisions the plan CAN see —
 # one name created twice on any tables, SQLite's reserved `sqlite_` prefix, a name that differs only
 # in case on SQLite (which folds identifiers) — are refused before anything runs.
@@ -381,7 +382,7 @@ end
     pool = SQLiteConnectionPool(joinpath(dir, "cd_collide.sqlite"); pool_size = 1)
     try
       _cd_apply!(pool, _cd_plan(pool, LiveTable[], _cd_result()))
-      fetch(pool, """CREATE UNIQUE INDEX "result_raceid_driverid_uniq" ON "result" ("grid") WHERE "grid" > 0;""")
+      fetch(pool, """CREATE UNIQUE INDEX "result_raceid_driverid_uniq" ON "result" ("grid" DESC);""")
       p = _cd_plan(pool, _cd_live(pool, "result"),
                    _cd_result(constraints = [Models.UniqueConstraint(fields = ("raceid", "driverid"))]))
       # The database's own refusal, naming the index — not some unrelated failure of the harness.
@@ -837,6 +838,13 @@ end
       @test err isa PormG.InvalidMigrationError
       @test occursin("does not own", err.msg)
       @test occursin("Models.Index(expressions = (\"abs(driverid)\",), condition = \"grid > 1\", name = \"hand_abs\")", err.msg)
+      # #934: catalog text the declaration validator refuses is never pasted as advice — the
+      # declaration would throw. A literal ending in a backslash is one PostgreSQL's deparser prints.
+      odd = PormG.Migrations.LiveComposite("hand_path", String[], false, false, "btree", Bool[],
+                                            Union{String, Nothing}[], Bool[], nothing, nothing;
+                                            expressions = ["(path || 'C:\\')"])
+      hint = PormG.Migrations._adoption_hint(odd)
+      @test occursin("cannot adopt it", hint) && !occursin("Models.Index(", hint)
 
       # A column the declared text names cannot be renamed under it, nor removed.
       renamed(text) = Models.Model("result"; id = Models.IDField(), raceid = Models.IntegerField(),
@@ -976,4 +984,265 @@ end
       end
     end
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite: a partial or marked index over a column does not satisfy its db_index (#934)
+# The `index_actions` `:create` flush asks `get_constraints_index` whether a plain index already
+# covers the column, so it does not queue a CREATE beside one a rebuild re-creates. That probe used
+# to answer with ANY non-unique index listing the column — a declared partial index and a marked
+# DESC one included — so `db_index = true` planned nothing and the column never got its own index.
+# Mutation gate: drop the `il.partial = 0` and marker filters from `get_constraints_index` and
+# neither `Create index on grid` is planned.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: a partial or marked index over a column does not satisfy its db_index (#934)" begin
+  for (label, ix) in (("partial", Models.Index(fields = ("grid", "raceid"), condition = "grid > 0", name = "result_grid_part_idx")),
+                      ("marked",  Models.Index(fields = ("grid", "-raceid"), name = "result_grid_desc_idx")))
+    @testset "$label" begin
+      mktempdir() do dir
+        pool = SQLiteConnectionPool(joinpath(dir, "cd_934_$(label).sqlite"); pool_size = 1)
+        try
+          v1 = _cd_result(indexes = [ix])
+          _cd_apply!(pool, _cd_plan(pool, LiveTable[], v1))
+          @test _cd_converged(pool, ("result",), v1)
+          # v2 asks for a plain index on `grid` as well. The composite above lists `grid`, but it is
+          # not a plain index on it, so the plan must create one.
+          v2 = Models.Model("result"; id = Models.IDField(), raceid = Models.IntegerField(),
+                            driverid = Models.IntegerField(), grid = Models.IntegerField(null = true, db_index = true),
+                            indexes = [ix])
+          p2 = _cd_plan(pool, _cd_live(pool, "result"), v2)
+          @test "Create index on grid" in _cd_keys(p2, :result)
+          _cd_apply!(pool, p2)
+          live = only(_cd_live(pool, "result"))
+          @test haskey(live.indexes, "grid")
+          @test live.indexes["grid"] != ix.name
+          @test _cd_converged(pool, ("result",), v2)
+        finally
+          close_pool!(pool)
+        end
+      end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite: an imported Q(bool=True) partial index matches the one Django built (#934)
+# Django's `Exact.as_sql` renders a boolean field against True as the bare column, so a Django-built
+# SQLite database stores `WHERE "ativo"`. The importer's translator wrote `"ativo" = TRUE`, which no
+# canonical comparison equates with it, so `makemigrations` refused the index's name as hand-made.
+# Now the translator writes Django's spelling and the imported declaration simply matches — no
+# statement, no refusal. PostgreSQL stores its own deparse (`ativo`, unquoted), which still differs;
+# that half stays the documented adoption hint.
+# Mutation gate: restore `"col = TRUE"` in `_q_leaf_sql` and the plan is an InvalidMigrationError.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: an imported Q(bool=True) partial index matches the one Django built (#934)" begin
+  fields = Dict{Symbol, Any}(:raceid => Models.IntegerField(), :ativo => Models.BooleanField())
+  cond_true = PormG.Migrations._q_expression("Q(ativo=True)", fields).sql
+  cond_false = PormG.Migrations._q_expression("Q(ativo=False)", fields).sql
+  @test cond_true == "\"ativo\""
+  @test cond_false == "NOT \"ativo\""
+  for (label, cond) in (("True", cond_true), ("False", cond_false))
+    @testset "Q(ativo=$label)" begin
+      mktempdir() do dir
+        pool = SQLiteConnectionPool(joinpath(dir, "cd_934_django_$(label).sqlite"); pool_size = 1)
+        try
+          declared = _cd_result(ativo = Models.BooleanField(default = true),
+                                indexes = [Models.Index(fields = ("raceid", "grid"), condition = cond, name = "idx_ativos")])
+          # The table as PormG would make it, minus the index — then the index exactly as Django's
+          # SQLite schema editor writes it, so it carries no PormG marker.
+          plan = _cd_plan(pool, LiveTable[], _cd_result(ativo = Models.BooleanField(default = true)))
+          _cd_apply!(pool, plan)
+          fetch(pool, "CREATE INDEX \"idx_ativos\" ON \"result\" (\"raceid\", \"grid\") WHERE $(cond);")
+          live = only(c for c in only(_cd_live(pool, "result")).composites if c.name == "idx_ativos")
+          @test live.marker === nothing && live.condition == cond
+          @test _cd_converged(pool, ("result",), declared)
+        finally
+          close_pool!(pool)
+        end
+      end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: a covering index over a hand-built live side (#934)
+# Plan shape only — the catalog half (`indkey` past `indnkeyatts`) is test_importers_introspection.jl.
+# The payload is part of the index: the same payload converges, another one (or another order) is a
+# drop and a create, and a renamed payload column maps through `column_renames` like a key column.
+# A hand-made covering index is read and adopted, never planned away undeclared.
+# Mutation gate: drop the `include == d.include` line from `composite_shape_matches` and the drift
+# case plans nothing.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: a covering index over a hand-built live side (#934)" begin
+  with_live(model, composites...) = begin
+    t = live_table(model, CD_PG)
+    LiveTable[LiveTable(t.name, t.columns, t.indexes, collect(LiveComposite, composites), t.checks)]
+  end
+  cov(inc; marker = "pormg:index", comment = marker, name = "result_race_cov") =
+    LiveComposite(name, ["raceid"], false, false, "btree", [false], Union{String, Nothing}["int4_ops"], [true],
+                  marker, comment; include = inc)
+  base = _cd_result()
+  declared = _cd_result(indexes = [Models.Index(fields = ("raceid",), include = ("grid", "driverid"), name = "result_race_cov")])
+
+  p = _cd_plan(CD_PG, with_live(base), declared)
+  @test p[:result]["Create index: result_race_cov"] ==
+        "CREATE INDEX \"result_race_cov\" ON \"result\" (\"raceid\") INCLUDE (\"grid\", \"driverid\");\n" *
+        "COMMENT ON INDEX \"result_race_cov\" IS 'pormg:index';"
+  # The same payload, marked: unchanged.
+  @test all(isempty, values(_cd_plan(CD_PG, with_live(declared, cov(["grid", "driverid"])), declared)))
+  # Another payload, or the same one in another order: a drop and a create of the one name.
+  for other in (["grid"], ["driverid", "grid"])
+    @test _cd_keys(_cd_plan(CD_PG, with_live(declared, cov(other)), declared), :result) ==
+          ["Remove composite index: result_race_cov", "Create index: result_race_cov"]
+  end
+  # A renamed payload column maps through `column_renames`, as a key column does: `RENAME COLUMN`
+  # carries the index, so nothing else is planned for it. Unmapped, the live index read as one over a
+  # column going away, and the declaration planned a second CREATE under its name (found in review).
+  renamed = Models.Model("result"; id = Models.IDField(), raceid = Models.IntegerField(),
+                         driverid = Models.IntegerField(), start_grid = Models.IntegerField(null = true),
+                         indexes = [Models.Index(fields = ("raceid",), include = ("start_grid", "driverid"),
+                                                 name = "result_race_cov")])
+  p = _cd_plan(CD_PG, with_live(declared, cov(["grid", "driverid"])), renamed; answers = "1\n")
+  @test any(k -> occursin("Rename", k), _cd_keys(p, :result))
+  @test !any(k -> occursin("composite index", k) || startswith(k, "Create index"), _cd_keys(p, :result))
+  # A plain declaration over the same key never claims the covering one.
+  plain = _cd_result(indexes = [Models.Index(fields = ("raceid", "driverid"), name = "result_race_cov")])
+  @test "Remove composite index: result_race_cov" in
+        _cd_keys(_cd_plan(CD_PG, with_live(plain, cov(["grid", "driverid"])), plain), :result)
+  # Hand-made: adopted under the bare marker, the DBA's note kept; undeclared, never dropped.
+  hand = cov(["grid", "driverid"]; marker = nothing, comment = "ops note")
+  p = _cd_plan(CD_PG, with_live(declared, hand), declared)
+  @test _cd_keys(p, :result) == ["Adopt index: result_race_cov"]
+  @test p[:result]["Adopt index: result_race_cov"] == "COMMENT ON INDEX \"result_race_cov\" IS 'ops note pormg:index';"
+  @test all(isempty, values(_cd_plan(CD_PG, with_live(base, hand), base)))
+  # PormG's own, undeclared: dropped.
+  @test _cd_keys(_cd_plan(CD_PG, with_live(base, cov(["grid", "driverid"])), base), :result) ==
+        ["Remove composite index: result_race_cov"]
+  # A refused name shows the payload in the message, and in the declaration that adopts the index.
+  taker = _cd_result(indexes = [Models.Index(fields = ("raceid", "grid"), condition = "grid > 1", name = "result_race_cov")])
+  hand_part = LiveComposite("result_race_cov", ["raceid"], false, false, "btree", [false],
+                            Union{String, Nothing}["int4_ops"], [true], nothing, nothing;
+                            condition = "grid > 0", include = ["driverid"])
+  err = try; _cd_plan(CD_PG, with_live(taker, hand_part), taker); nothing; catch e; e; end
+  @test err isa PormG.InvalidMigrationError
+  @test occursin("INCLUDE (driverid)", err.msg)
+  @test occursin("include = (\"driverid\",)", err.msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite: a partial or functional UniqueConstraint is PormG's by its hashed marker (#934)
+# The `Index` part-2 rules, applied to a unique index: created with the hashed marker, read back and
+# converged; a changed condition is a destructive drop and create; a hand-made unique partial index is
+# read (it used to be invisible), never planned away, adopted by its own text, and refuses its name to
+# other text with the adopting `UniqueConstraint` in the message; a column the text names cannot be
+# removed under it; a table rebuild re-creates the marked index verbatim; undeclared, PormG's goes.
+# Mutation gate: drop the `expressions`/`condition` from `declared_composites`' UniqueConstraint arm
+# and the created index is plain, so the read-back partial one re-plans forever.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "SQLite: a partial or functional UniqueConstraint is PormG's by its hashed marker (#934)" begin
+  mktempdir() do dir
+    pool = SQLiteConnectionPool(joinpath(dir, "cd_934_uc.sqlite"); pool_size = 1)
+    try
+      _cd_apply!(pool, _cd_plan(pool, LiveTable[], _cd_result()))
+      one_per(cond) = Models.UniqueConstraint(fields = ("raceid", "grid"), condition = cond, name = "result_one_per_grid")
+      driver_ci = Models.UniqueConstraint(expressions = ("abs(driverid)",), name = "result_driver_abs_uq")
+      v2 = _cd_result(constraints = [one_per("grid > 0"), driver_ci])
+      p2 = _cd_plan(pool, _cd_live(pool, "result"), v2)
+      @test sort(_cd_keys(p2, :result)) == ["Create unique constraint: result_driver_abs_uq",
+                                            "Create unique constraint: result_one_per_grid"]
+      _cd_apply!(pool, p2)
+      byname = Dict(c.name => c for c in only(_cd_live(pool, "result")).composites)
+      @test byname["result_one_per_grid"].unique && byname["result_one_per_grid"].condition == "grid > 0"
+      @test byname["result_one_per_grid"].marker == PormG.index_text_marker(String[], "grid > 0")
+      @test byname["result_driver_abs_uq"].unique && byname["result_driver_abs_uq"].expressions == ["abs(driverid)"]
+      @test _cd_converged(pool, ("result",), v2)
+      # It is enforced, and only where the condition says.
+      fetch(pool, "INSERT INTO result (raceid, driverid, grid) VALUES (1, 1, 0), (1, 2, 0), (1, 3, 5);")
+      @test (try fetch(pool, "INSERT INTO result (raceid, driverid, grid) VALUES (1, 4, 5);"); true catch; false end) == false
+      fetch(pool, "DELETE FROM result;")
+
+      # A changed condition: drop and create the one name, destructive.
+      v3 = _cd_result(constraints = [one_per("grid > 1"), driver_ci])
+      p3 = _cd_plan(pool, _cd_live(pool, "result"), v3)
+      @test _cd_keys(p3, :result) == ["Remove composite index: result_one_per_grid", "Create unique constraint: result_one_per_grid"]
+      @test is_destructive(p3[:result]["Remove composite index: result_one_per_grid"])
+      _cd_apply!(pool, p3)
+      @test _cd_converged(pool, ("result",), v3)
+
+      # A rebuild (a retyped column) re-creates the marked unique indexes, and the table converges.
+      v4 = Models.Model("result"; id = Models.IDField(), raceid = Models.IntegerField(), driverid = Models.IntegerField(),
+                        grid = Models.BigIntegerField(null = true), points = Models.FloatField(null = true),
+                        constraints = [one_per("grid > 1"), driver_ci])
+      _cd_apply!(pool, _cd_plan(pool, _cd_live(pool, "result"), v4))
+      @test _cd_converged(pool, ("result",), v4)
+
+      # Hand-made, unique and partial: read, unmarked, never planned away.
+      fetch(pool, "CREATE UNIQUE INDEX hand_uq ON result(driverid) WHERE points > 10;")
+      hand = only(c for c in only(_cd_live(pool, "result")).composites if c.name == "hand_uq")
+      @test hand.unique && hand.condition == "points > 10" && hand.marker === nothing
+      @test _cd_converged(pool, ("result",), v4)
+      # Its name for other text is refused, and the message carries the UniqueConstraint that adopts it.
+      clash = Models.Model("result"; id = Models.IDField(), raceid = Models.IntegerField(), driverid = Models.IntegerField(),
+                           grid = Models.BigIntegerField(null = true), points = Models.FloatField(null = true),
+                           constraints = [one_per("grid > 1"), driver_ci,
+                                          Models.UniqueConstraint(fields = ("driverid",), condition = "points > 20", name = "hand_uq")])
+      err = try; _cd_plan(pool, _cd_live(pool, "result"), clash); nothing; catch e; e; end
+      @test err isa PormG.InvalidMigrationError
+      @test occursin("Models.UniqueConstraint(fields = (\"driverid\",), condition = \"points > 10\", name = \"hand_uq\")", err.msg)
+      # Declared under its own text, it is adopted — on SQLite with no statement.
+      adopt = Models.Model("result"; id = Models.IDField(), raceid = Models.IntegerField(), driverid = Models.IntegerField(),
+                           grid = Models.BigIntegerField(null = true), points = Models.FloatField(null = true),
+                           constraints = [one_per("grid > 1"), driver_ci,
+                                          Models.UniqueConstraint(fields = ("driverid",), condition = "points > 10", name = "hand_uq")])
+      @test _cd_converged(pool, ("result",), adopt)
+
+      # A column only the declared text names cannot be removed under it.
+      gone = Models.Model("result"; id = Models.IDField(), raceid = Models.IntegerField(),
+                          grid = Models.BigIntegerField(null = true), points = Models.FloatField(null = true),
+                          constraints = [driver_ci, one_per("grid > 1")])
+      err = try; _cd_plan(pool, _cd_live(pool, "result"), gone); nothing; catch e; e; end
+      @test err isa PormG.InvalidMigrationError && occursin("UniqueConstraint 'result_driver_abs_uq'", err.msg) &&
+            occursin("which this migration removes", err.msg)
+
+      # Undeclared: PormG's own go; the hand-made one stays.
+      bare = Models.Model("result"; id = Models.IDField(), raceid = Models.IntegerField(), driverid = Models.IntegerField(),
+                          grid = Models.BigIntegerField(null = true), points = Models.FloatField(null = true))
+      @test sort(_cd_keys(_cd_plan(pool, _cd_live(pool, "result"), bare), :result)) ==
+            ["Remove composite index: result_driver_abs_uq", "Remove composite index: result_one_per_grid"]
+    finally
+      close_pool!(pool)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL: a partial UniqueConstraint over a hand-built live side (#934)
+# Plan shape only. The create carries the WHERE and the hashed marker as the index's comment; a live
+# index under that marker converges whatever text PostgreSQL stored; a hand-made one declared under
+# its catalog text is adopted with the HASHED marker.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL: a partial UniqueConstraint over a hand-built live side (#934)" begin
+  with_live(model, composites...) = begin
+    t = live_table(model, CD_PG)
+    LiveTable[LiveTable(t.name, t.columns, t.indexes, collect(LiveComposite, composites), t.checks)]
+  end
+  uc = Models.UniqueConstraint(fields = ("raceid", "grid"), condition = "grid > 0", name = "result_one_per_grid")
+  base = _cd_result()
+  declared = _cd_result(constraints = [uc])
+  m = PormG.index_text_marker(String[], "grid > 0")
+  p = _cd_plan(CD_PG, with_live(base), declared)
+  @test p[:result]["Create unique constraint: result_one_per_grid"] ==
+        "CREATE UNIQUE INDEX \"result_one_per_grid\" ON \"result\" (\"raceid\", \"grid\") WHERE grid > 0;\n" *
+        "COMMENT ON INDEX \"result_one_per_grid\" IS '$(m)';"
+  live(cond; marker = m, comment = marker) =
+    LiveComposite("result_one_per_grid", ["raceid", "grid"], true, false, "btree", [false, false],
+                  Union{String, Nothing}["int4_ops", "int4_ops"], [true, true], marker, comment; condition = cond)
+  @test all(isempty, values(_cd_plan(CD_PG, with_live(declared, live("(grid > 0)")), declared)))
+  hand = live("(grid > 0)"; marker = nothing, comment = "ops note")
+  p = _cd_plan(CD_PG, with_live(declared, hand), declared)
+  @test _cd_keys(p, :result) == ["Adopt index: result_one_per_grid"]
+  @test p[:result]["Adopt index: result_one_per_grid"] == "COMMENT ON INDEX \"result_one_per_grid\" IS 'ops note $(m)';"
+  # A plain UniqueConstraint over the same columns never claims the partial one.
+  plain = _cd_result(constraints = [Models.UniqueConstraint(fields = ("raceid", "grid"), name = "result_one_per_grid")])
+  @test "Remove composite index: result_one_per_grid" in _cd_keys(_cd_plan(CD_PG, with_live(plain, live("grid > 0")), plain), :result)
 end

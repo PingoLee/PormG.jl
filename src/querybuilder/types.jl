@@ -84,13 +84,15 @@ It is also a **filter value** (#926), as in Django's `filter(grid=Subquery(...))
 `@in`/`@nin` take the query itself instead, unwrapped.
 
 !!! note "Outer `GROUP BY` — guarded (#194)"
-    Combining a *projected* correlated `Subquery` with an outer aggregate is only well-defined when
-    the correlated column is itself grouped. When it is not, PormG raises a `QueryBuildError` naming
-    the ungrouped column, on both backends and before any SQL runs — left to the database,
-    PostgreSQL refuses it while SQLite evaluates the subquery against an *arbitrary* row of each
-    group and returns a plausible-looking wrong number. A filter value in `WHERE` or a join
-    condition is not checked, because it is evaluated before grouping. One compared in `HAVING` or
-    in a projection's `When` is checked. See [Subqueries and CTEs](read/subqueries_and_ctes.md).
+    A correlated subquery that is evaluated *after* the outer query groups — in the `SELECT` list or
+    in `HAVING` — is only well-defined when its correlated column is grouped. When it is not, PormG
+    raises a `QueryBuildError` naming the ungrouped column, on both backends and before any SQL
+    runs — left to the database, PostgreSQL refuses it while SQLite evaluates the subquery against
+    an *arbitrary* row of each group and returns a plausible-looking wrong number. A subquery
+    evaluated *before* grouping is not checked: one in `WHERE` or a join condition, one inside an
+    aggregate's argument (`Sum(Case([When("grid" => Subquery(…), then = 1)], default = 0))`), and
+    one inside a projection that is itself a `GROUP BY` key. See
+    [Subqueries and CTEs](read/subqueries_and_ctes.md).
 
 See also [`Exists`](@ref) for the boolean form and [`OuterRef`](@ref) for the correlation.
 """
@@ -352,7 +354,8 @@ _with_config(row::Union{CteJoin,CrossJoin}, ::Nothing, ::Nothing) = row
 end
 
 """
-One `OuterRef` that rendered inside a projected correlated `Subquery`/`Exists` (#194).
+One `OuterRef` that rendered inside a correlated `Subquery`/`Exists` (#194), with the phase it was
+evaluated in (#932).
 
 Spelled once, as a named type, because two places have to agree on it exactly: the recorder in
 `_get_filter_query(::OuterRefObject, …)` writes it, and `_ungrouped_correlation_error_msg` reads it.
@@ -362,12 +365,74 @@ Written out twice as an anonymous `NamedTuple` they could drift without a type e
 - `ref` — what the user WROTE (`"driverid"`, or the literal `"pk"`)
 - `column` — the RESOLVED outer column name (`OuterRef("pk")` → `"driverid"`)
 - `expr` — the rendered outer SQL (`"Tb"."driverid"`), comparable to the group set
+- `phase` — `:row` when the outer query reads it before GROUP BY, `:group` after (see `RenderScope`)
+- `group_key` — whether it sits inside an expression the outer query groups by whole
 
 `ref` and `column` differ only for `OuterRef("pk")`, and the distinction is load-bearing in the error
 message: a fix line that echoes `ref` would tell the user to add `"pk"` to `values(...)`, which is a
 second error rather than a fix.
 """
-const CorrelatedRef = NamedTuple{(:label, :ref, :column, :expr),NTuple{4,String}}
+const CorrelatedRef = NamedTuple{(:label, :ref, :column, :expr, :phase, :group_key),
+                                 Tuple{String,String,String,String,Symbol,Bool}}
+
+"""
+    RenderScope
+
+The dynamic render state the #194 grouped-correlation guard reads, as one immutable value on
+`InstructionObject.scope` (#932). The guard needs one fact about a correlated subquery: is the outer
+column read **before** GROUP BY (once per row) or **after** it (once per group)? Only a CLAUSE
+answers that, so only clause entry points set it; a node inherits it, however it is spelled. That is
+the whole design: SQL has a fixed set of clauses, while the node types a subquery can hide in keep
+growing (`Coalesce(Subquery)`, `F(...) == Subquery`, a `When` condition, …), and classifying by node
+— by which render entry point a subquery reached — had to be patched for each new one.
+
+- `phase` — `:row` in WHERE, ON and the argument of a grouping aggregate (`Sum(…)`, `Max(…)`: its
+  argument is evaluated per input row); `:group` in the SELECT list, HAVING and ORDER BY. A window
+  is not a grouping aggregate and keeps `:group`: it runs after GROUP BY. `:group` is also the
+  default, so a clause entry that forgets to set the phase over-refuses rather than letting an
+  ungrouped correlation through — a loud error instead of wrong rows.
+- `label` — what the #194 message calls the column being rendered: the projection's output name,
+  the HAVING alias.
+- `group_key` — the expression rendering now is itself a GROUP BY key, whole: a projection the
+  outer query groups by position, or an ORDER BY term it groups by text. A subquery inside it is
+  evaluated per input row to form the key, so its correlation needs no grouped column.
+
+Prior art: PostgreSQL's parser tracks the same thing (`ParseState.p_expr_kind`), and its
+`check_ungrouped_columns` does not descend into same-level aggregate arguments.
+
+**Change it only through `with_scope`**, which restores the previous value on return and on
+throw. A writer that resets to a constant instead of restoring is right only until two renders nest.
+
+Per instruction, not per task, which is why this is not a `Base.ScopedValue`: a subquery runs its own
+`build()` on its own instruction, with its own clauses, while the OuterRef it renders must read the
+OUTER instruction's scope — the clause the outer render is suspended in. A task-scoped value would
+hand it the inner query's.
+"""
+@kwdef struct RenderScope
+  phase::Symbol = :group
+  label::OptionalString = nothing
+  group_key::Bool = false
+end
+
+_with_scope(s::RenderScope; kw...) =
+  RenderScope(; (k => getfield(s, k) for k in fieldnames(RenderScope))..., kw...)
+
+"""
+    with_scope(f, instruc; kw...)
+
+Run `f()` with `instruc.scope` updated by the keyword fields `kw`, then restore the previous scope —
+on return and on throw, so a render that throws (the one-column rule, the nested-CTE guard, an inner
+build) never leaves its state behind for the next one. The only writer of `scope`.
+"""
+function with_scope(f, instruc::SQLInstruction; kw...)
+  prev = instruc.scope
+  instruc.scope = _with_scope(prev; kw...)
+  try
+    return f()
+  finally
+    instruc.scope = prev
+  end
+end
 
 #
 # SQLInstruction Objects (instructions to build a query)
@@ -446,25 +511,12 @@ const CorrelatedRef = NamedTuple{(:label, :ref, :column, :expr),NTuple{4,String}
   # #194 grouped-correlation guard — same evidence-plumbing shape as `agg_sources` above, and for
   # the same reason: what the guard needs cannot be read back off the rendered state.
   #
-  # `correlated_projection` is the output name of the projected correlated Subquery/Exists currently
-  # rendering, or `nothing` outside one. It is set ONLY by the two PROJECTED entry points
-  # (`_get_select_query(::SubqueryObject)` / `(::ExistsObject)`), which is what keeps a
-  # FILTER-position `Exists` out of the guard: a WHERE predicate is evaluated before GROUP BY, so
-  # correlating one on an ungrouped column is legal and both backends run it.
-  #
-  # **Set and restore it with `try`/`finally`.** A projected render throws routinely (the
-  # one-column rule, the nested-CTE guard, the inner build), and a flag left set would make the NEXT
-  # ref recorded against a projection that is no longer rendering.
-  correlated_projection::OptionalString = nothing
-  # #926 (review) — the clause evaluated AFTER GROUP BY that is rendering right now, as the label the
-  # #194 message names, or `nothing` outside one. A filter-position `Subquery(...)` is outside the
-  # guard because a WHERE or ON predicate is evaluated before GROUP BY — but a HAVING predicate and
-  # the SELECT list (a `When` condition in a projection) are evaluated after it, so a subquery
-  # compared there is recorded like a projected one. That is how an `Exists` in a projected `When`
-  # already behaves; it over-refuses one legal shape, a subquery inside an aggregate's argument
-  # (#932). Set with `finally` by the two HAVING expression sites and around the SELECT render.
-  post_group_predicate::OptionalString = nothing
-  # One entry per OuterRef actually RENDERED inside a projected correlated subquery of this query.
+  # The render state the #194 recorder reads — see `RenderScope`. Written ONLY through `with_scope`,
+  # which restores the previous scope in a `finally`; `test/unit/test_render_scope.jl` scans for any
+  # other write.
+  scope::RenderScope = RenderScope()
+  # One entry per OuterRef actually RENDERED inside a correlated subquery of this query, whatever
+  # clause it sits in — the guard, not the recorder, decides which ones matter (#932).
   # Written at resolution time rather than collected by walking the inner query's AST, because the
   # two have opposite failure modes: a walker must enumerate every node type an OuterRef can hide in
   # and every miss is a silent wrong number, while a recorder's invariant — "a ref that was not
@@ -474,7 +526,8 @@ const CorrelatedRef = NamedTuple{(:label, :ref, :column, :expr),NTuple{4,String}
   # a collector reading `.values` would refuse a correct query.
   #
   # `expr` is the resolved outer SQL (`"Tb"."driverid"`), directly comparable to the group set —
-  # which is why the guard needs no parallel semantic bookkeeping on the group side.
+  # which is why the guard needs no parallel semantic bookkeeping on the group side. `phase` and
+  # `group_key` are the scope at the moment of rendering — the two facts a walker could not know.
   outer_refs::Vector{CorrelatedRef} = CorrelatedRef[]
 end
 

@@ -515,7 +515,8 @@ Django parameters are automatically converted to PormG equivalents:
 | `db_table = "x"` | **imported** as `db_table = "x"` | The physical table. Absolute, as in Django: it overrides the derived name *and* a configured `django_prefix`. The positional slot keeps the derived logical name (`"matricula"`) either way — see [The app prefix](#The-app-prefix). |
 | `unique_together = ('a', 'b')` | **imported** as `constraints = [Models.UniqueConstraint(fields = ("a", "b"))]` | A tuple-of-tuples (several composite keys) becomes one `UniqueConstraint` per group. |
 | `constraints = [UniqueConstraint(fields=…, name=…)]` | **imported** | The modern spelling. See the acceptance rule below — it is narrower than Django's. |
-| `constraints = [CheckConstraint(…)]` | **converted** when the `Q(...)` is simple; otherwise **reported**, as a stub | The condition becomes SQL over the table's physical columns, double-quoted as Django renders them: `check=Q(laps__gte=0) & Q(grid__lte=F("laps"))` imports as `Models.CheckConstraint(condition = "\"laps\" >= 0 AND \"grid\" <= \"laps\"", name = "…")`. Converted: `exact` and `in` on text, number and boolean fields; `gt`, `gte`, `lt`, `lte` and `range` on number fields, with whole-number values on an integer field (Django runs `int()` on the value, so `laps__gt=1.5` there means `> 1`); `isnull=True/False` and `=None` on any field; `F("field")` against a field of the same kind; all combined with `&`, `|`, `~` and parentheses. Anything else stays a stub, because a mistranslated condition would accept or refuse the wrong rows without a word: ordering comparisons on text (the collation differs between PostgreSQL and SQLite), dates, times and decimals (SQLite stores them in more than one representation), other lookups (`regex`, `startswith`, …), a string with an escape such as `\x41` or `\u00e9`, traversal through a relation, `F()` arithmetic, and a name with a `%(class)s` placeholder. The stub's marker says why, names `Models.CheckConstraint(condition = "<SQL>", name = "…")` with the constraint's own name, and is followed by the original `Q(...)`; write the condition and add it to `constraints = [...]`. `violation_error_message` / `violation_error_code` are dropped with a marker — they only change Django's Python-side error. |
+| `constraints = [UniqueConstraint(fields=…, condition=Q(…), name=…)]`, `UniqueConstraint(Lower('x'), name=…)` | **imported** as `Models.UniqueConstraint(fields = …, name = …, condition = "<SQL>")` / `Models.UniqueConstraint(expressions = (…,), name = …)` | A partial or functional unique constraint, translated exactly as a partial or functional `Index` is; the generated file notes it carries Django's SQL (see the note below the table). |
+| `constraints = [CheckConstraint(…)]` | **converted** when the `Q(...)` is simple; otherwise **reported**, as a stub | The condition becomes SQL over the table's physical columns, double-quoted as Django renders them: `check=Q(laps__gte=0) & Q(grid__lte=F("laps"))` imports as `Models.CheckConstraint(condition = "\"laps\" >= 0 AND \"grid\" <= \"laps\"", name = "…")`. Converted: `exact` and `in` on text, number and boolean fields; `gt`, `gte`, `lt`, `lte` and `range` on number fields, with whole-number values on an integer field (Django runs `int()` on the value, so `laps__gt=1.5` there means `> 1`); `isnull=True/False` and `=None` on any field; `F("field")` against a field of the same kind; a boolean field compared to `True` / `False` is written as Django renders it, `"ativo"` / `NOT "ativo"`; all combined with `&`, `|`, `~` and parentheses. Anything else stays a stub, because a mistranslated condition would accept or refuse the wrong rows without a word: ordering comparisons on text (the collation differs between PostgreSQL and SQLite), dates, times and decimals (SQLite stores them in more than one representation), other lookups (`regex`, `startswith`, …), a string with an escape such as `\x41` or `\u00e9`, traversal through a relation, `F()` arithmetic, and a name with a `%(class)s` placeholder. The stub's marker says why, names `Models.CheckConstraint(condition = "<SQL>", name = "…")` with the constraint's own name, and is followed by the original `Q(...)`; write the condition and add it to `constraints = [...]`. `violation_error_message` / `violation_error_code` are dropped with a marker — they only change Django's Python-side error. |
 | `abstract = True` | **no table** | The class becomes a base: its fields merge into every child. See [Model inheritance](#Model-inheritance). |
 | `proxy = True` | **no table** | A proxy shares its parent's table; emitting one would declare that table twice. |
 | `managed = False` | **imported** as `managed = false` | A model PormG queries but never migrates — see [Unmanaged models](@ref). Inherited from an abstract base, as in Django. A value other than `True`/`False` (a setting, an expression) is reported and the model stays managed. A managed model's `ForeignKey` into an unmanaged one is imported with `db_constraint = false`, and reported: PormG refuses a constrained key into a table it does not migrate, which may be a view. |
@@ -525,21 +526,27 @@ Django parameters are automatically converted to PormG equivalents:
 | `indexes = [GinIndex(fields=['a'], opclasses=['gin_trgm_ops'], name=…)]` | **imported** as `Models.Index(fields = ("a",), name = …, method = "gin", opclasses = ("gin_trgm_ops",))` | Likewise `BTreeIndex`, `HashIndex`, `GistIndex`, `SpGistIndex` and `BrinIndex` from `django.contrib.postgres.indexes`, each as its `method`. These are PostgreSQL-only: `makemigrations` on SQLite refuses the model. |
 | `indexes = [Index(Lower('name'), name=…)]` | **imported** as `Models.Index(expressions = ("LOWER(\"name\")",), name = …)` | A functional index, in Django's own spelling of the SQL. Translated: `F('a')`, `Lower(…)` and `Upper(…)` over a text field or an `F()`, each optionally `.desc()` / `.asc()`. Anything else is reported (below). |
 | `indexes = [Index(fields=['a', 'b'], condition=Q(…), name=…)]` | **imported** as `Models.Index(fields = ("a", "b"), name = …, condition = "<SQL>")` | A partial index. The `Q(...)` goes through the same translator as a `CheckConstraint`'s, with the same whitelist; one it cannot translate drops the index and reports why. |
-
-!!! note "A functional or partial index on a database Django already built"
-    The SQL the importer writes is Django's own spelling, which is what Django sends to the database
-    — but PostgreSQL stores a rewritten form of it (`lower(apelido::text)`), and SQLite stores
-    whatever Django rendered for the predicate (`WHERE "ativo"` for `Q(ativo=True)`). Against a
-    database Django already built, `makemigrations` then reads the live index as hand-made and refuses
-    to take its name for the importer's text, with `InvalidMigrationError` — printing the declaration,
-    in the database's own text, that adopts the index instead. Replace the imported declaration with
-    that one, or generate the models with `generate_models_from_db`, which writes the database's text
-    from the start. The generated file says so beside every such index. On a database PormG creates
-    from the imported models, nothing changes: the declaration is the index.
+| `indexes = [Index(fields=['a'], include=['b'], name=…)]` | **imported** as `Models.Index(fields = ("a",), name = …, include = ("b",))` | A covering index: `include=` carries over as field names. PostgreSQL-only, like the `contrib.postgres` classes: `makemigrations` on SQLite refuses the model. |
 | `index_together = (('a','b'), …)` | **imported** as one `Models.Index` per group | The legacy spelling; the non-unique twin of `unique_together`. |
 | `ordering`, `get_latest_by` | **dropped**, reported | PormG orders per query, not per model. |
 | `verbose_name*`, `permissions`, `default_related_name`, `app_label`, … | **dropped**, reported | No PormG equivalent. |
 | anything unrecognised | **dropped**, reported | A typo or a Django option this importer has not met. Neither is safe to pass over quietly. |
+
+!!! note "A functional or partial index on a database Django already built"
+    The SQL the importer writes is Django's own spelling, which is what Django sends to the database.
+    A boolean field compared to `True` or `False` is written the way Django renders it — the bare
+    column, `"ativo"`, or `NOT "ativo"` — never `= TRUE`, in a `CheckConstraint` and a partial index
+    alike. SQLite stores that text as it was sent, so on a SQLite database Django built, such a CHECK
+    or partial index matches the imported declaration outright.
+
+    PostgreSQL, though, stores a rewritten form of the text (`lower(apelido::text)` for
+    `LOWER("apelido")`, `ativo` for `"ativo"`). Against a PostgreSQL database Django already built,
+    `makemigrations` reads such an index as hand-made and refuses to take its name for the importer's
+    text, with `InvalidMigrationError` — printing the declaration, in the database's own text, that
+    adopts the index instead. Replace the imported declaration with that one, or generate the models
+    with `generate_models_from_db`, which writes the database's text from the start. The generated
+    file says so beside every such index. On a database PormG creates from the imported models,
+    nothing changes on either engine: the declaration is the index.
 
 "Reported" means two things at once: a `@warn` at import time **and** a `# PormG:` comment on the
 line above the model in the generated file. The console warning scrolls away; the comment is still
@@ -558,16 +565,18 @@ the name its `models.py` actually uses. And a name quoted because the source *wr
 class, an enum, a field — stays verbatim: only the class a report is *about* is qualified.
 
 !!! warning "`Meta.constraints` acceptance is a whitelist"
-    A `UniqueConstraint` is imported only when its arguments are within
-    `fields`, `name`, `violation_error_message`, `violation_error_code`. Anything else — `condition`,
-    `expressions`, `nulls_distinct`, `deferrable`, or a positional expression such as
-    `UniqueConstraint(Lower("name"), …)` — causes **that one constraint** to be dropped and reported;
-    its siblings on the same model are unaffected.
+    A `UniqueConstraint` is imported only when its arguments are within `fields`, `name`,
+    `condition`, `violation_error_message`, `violation_error_code`, plus positional expressions.
+    A `condition=Q(...)` goes through the `CheckConstraint` translator and a positional expression
+    (`UniqueConstraint(Lower("name"), …)`) through the functional-index one, each only when it
+    translates exactly, and both need a `name=` string literal. Anything else — `nulls_distinct`,
+    `deferrable`, `include`, `opclasses`, a `Q(...)` or an expression outside those whitelists —
+    causes **that one constraint** to be dropped and reported; its siblings on the same model are
+    unaffected.
 
-    The direction is deliberate. `Models.UniqueConstraint` is exactly `(fields, name)`, so a Django
-    *partial* index (`condition=Q(active=True)`) imported as an unconditional one would start
-    silently rejecting rows the live database accepts. Refusing an option is recoverable;
-    reinterpreting one is not.
+    The direction is deliberate. A Django *partial* index (`condition=Q(active=True)`) imported as an
+    unconditional one would start silently rejecting rows the live database accepts. Refusing an
+    option is recoverable; reinterpreting one is not.
 
 !!! warning "`Meta.indexes` acceptance is a whitelist too"
     An entry is imported only when it is a `models.Index` or one of the `django.contrib.postgres`
@@ -581,9 +590,9 @@ class, an enum, a field — stays verbatim: only the class a report is *about* i
       `CheckConstraint` translator's whitelist. Importing the columns alone would build a different
       index under the developer's name; the report names `Models.Index(expressions = …)`, so the
       index can be declared by hand;
-    - a functional or partial index without a string-literal `name=`, and one mixing expressions
-      with `fields=` or `opclasses=` — Django refuses all of these itself;
-    - `include=`, `db_tablespace=`, and an index class's storage parameters
+    - a functional, partial or covering index without a string-literal `name=`, and one mixing
+      expressions with `fields=` or `opclasses=` — Django refuses all of these itself;
+    - `db_tablespace=`, and an index class's storage parameters
       (`fastupdate=`, `gin_pending_list_limit=`, `pages_per_range=`, `fillfactor=`, …) — each
       changes *what* is indexed, how, or where it lives;
     - any other class, such as `BloomIndex` (an extension's access method) or a project's own

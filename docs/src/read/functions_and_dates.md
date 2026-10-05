@@ -665,7 +665,7 @@ Output:
 
 ### Case with Q() and F() Logic
 
-For more complex conditions, combine `Case`/`When` with `Q()` for boolean logic and `F()` for field references:
+For more complex conditions, combine `Case`/`When` with `Q()` for boolean logic and `F()` for field references. An arithmetic `F` expression is not a `When` condition: `When(F("laps") - 50, …)` is refused, and `When((F("laps") - 50) > 0, …)` is the spelling (see [Arithmetic is not a condition](field_expressions.md#Arithmetic-is-not-a-condition)).
 
 ```julia
 using PormG: Q, F

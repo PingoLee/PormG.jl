@@ -357,6 +357,75 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Index(include = …): a covering index, PostgreSQL-only (#934)
+# Django's `include=`: payload columns stored in the index but not part of its key. The constructor
+# takes field names, refuses what PostgreSQL would refuse at migrate (a method without INCLUDE
+# support, a key field repeated as payload) and requires a name (Django's rule). The payload makes
+# the index advanced, so one key field is accepted and the index is owned through `pormg:index`. The
+# planner renders `INCLUDE` between the member list and the `WHERE`, over PHYSICAL columns; SQLite is
+# refused at both sites (the #648 pattern). `Model_to_str` and inspectdb round-trip it.
+# Mutation gate: drop the `include` arm of `_refuse_postgres_only_indexes` and the planner half of
+# the SQLite refusal fails; drop `_index_include` from the PostgreSQL renderer and the render fails.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Index(include = …) is a PostgreSQL covering index (#934)" begin
+  msg(f) = try; f(); ""; catch e; e isa PormG.ModelDefinitionError ? sprint(showerror, e) : rethrow(); end
+  ix = Models.Index(fields = ("raceid",), include = ("points", "position"), name = "result_race_cov")
+  @test ix.include == ["points", "position"] && ix.fields == ["raceid"]
+  @test Models._index_is_advanced(ix)                                         # one key field is fine
+  @test Models.Index(fields = ("raceid", "lap"), include = "position", name = "x").include == ["position"]   # a lone name
+  @test Models.Index(fields = ("raceid", "lap"), include = (), name = "x").include == String[]              # empty: none
+  @test isempty(Models.Index(fields = ("raceid", "lap")).include)
+  @test Models.Index(expressions = ("lower(code)",), include = ("surname",), name = "x").include == ["surname"]
+  @test Models.Index(fields = ("raceid",), include = ("points",), method = "gist", name = "x").method == "gist"
+  @test occursin("needs an explicit name", msg(() -> Models.Index(fields = ("raceid", "lap"), include = ("points",))))
+  @test occursin("duplicate fields", msg(() -> Models.Index(fields = ("raceid",), include = ("points", "points"), name = "x")))
+  @test occursin("part of the key or included", msg(() -> Models.Index(fields = ("raceid", "lap"), include = ("lap",), name = "x")))
+  @test occursin("does not support include", msg(() -> Models.Index(fields = ("raceid",), include = ("points",), method = "gin", name = "x")))
+  @test occursin("does not support include", msg(() -> Models.Index(fields = ("raceid",), include = ("points",), method = "brin", name = "x")))
+  # The payload names fields of the model, checked when the model is built.
+  @test_throws PormG.ModelDefinitionError Models.Model("result_cov", id = Models.IDField(),
+    raceid = Models.IntegerField(), indexes = [Models.Index(fields = ("raceid",), include = ("nope",), name = "x")])
+
+  # Planner, PostgreSQL: INCLUDE over the PHYSICAL column, then the bare ownership marker.
+  cov = Models.Model("result_cov", id = Models.IDField(), raceid = Models.IntegerField(),
+                     points = Models.FloatField(db_column = "pts"), grid = Models.IntegerField(),
+                     indexes = [Models.Index(fields = ("raceid",), include = ("points",), condition = "grid > 0",
+                                             name = "result_cov_race")])
+  pg = _ix_plan_one(IXMockPostgres(), :result_cov, cov)
+  @test pg[:result_cov]["Create index: result_cov_race"] ==
+        "CREATE INDEX \"result_cov_race\" ON \"result_cov\" (\"raceid\") INCLUDE (\"pts\") WHERE grid > 0;\n" *
+        "COMMENT ON INDEX \"result_cov_race\" IS '$(PormG.index_text_marker(String[], "grid > 0"))';"
+  @test PormG.Dialect.create_index(IXMockPostgres(), "\"i\"", "\"t\"", ["\"a\""]; if_not_exists = false,
+                                   method = "gist", include = ["\"b\""]) ==
+        "CREATE INDEX \"i\" ON \"t\" USING gist (\"a\") INCLUDE (\"b\");"
+
+  # SQLite: refused at the planner, before anything is diffed, and at the renderer.
+  e = try; _ix_plan_one(IXMockSQLite(), :result_cov, cov); nothing; catch x; x; end
+  @test e isa PormG.BackendCapabilityError
+  @test occursin("include = (\"points\",)", sprint(showerror, e)) && occursin("PostgreSQL-only", sprint(showerror, e))
+  e_r = try; PormG.Dialect.create_index(IXMockSQLite(), "\"i\"", "\"t\"", ["\"a\""]; include = ["\"b\""]); nothing; catch x; x; end
+  @test e_r isa PormG.BackendCapabilityError && occursin("no covering indexes", sprint(showerror, e_r))
+
+  # Model_to_str writes the payload under the field's (possibly re-spelled) name, and it reloads.
+  src = Models.Model_to_str(cov)
+  @test occursin("Models.Index(fields = (\"raceid\",), name = \"result_cov_race\", condition = \"grid > 0\", " *
+                 "include = (\"points\",))", src)
+  back = _ix_reload(src)
+  @test only(back.cache["composite_indexes"]["indexes"]).include == ["points"]
+
+  # inspectdb: a live covering index is written as declared, payload included.
+  m = Models.Model("result_cov", id = Models.IDField(), raceid = Models.IntegerField(), pts = Models.FloatField())
+  live = LiveComposite("result_cov_race", ["raceid"], false, false, "btree", [false],
+                       Union{String, Nothing}["int4_ops"], [true], nothing, nothing; include = ["pts"])
+  _attach_composite_indexes!(m, [live])
+  @test only(m.cache["composite_indexes"]["indexes"]).include == ["pts"]
+  # …and one whose payload column the model lacks is skipped, not half-declared.
+  m2 = Models.Model("result_cov", id = Models.IDField(), raceid = Models.IntegerField())
+  _attach_composite_indexes!(m2, [live])
+  @test !haskey(m2.cache, "composite_indexes")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # `indexes` is a model-level option, so a COLUMN of that name is unreachable
 # Adding "indexes" to MODEL_OPTION_KWARGS means the kwarg is peeled before the field
 # slurp. A consuming app that declared a column called `indexes` must now pin it with
@@ -543,6 +612,9 @@ end
     @test occursin("not well-formed SQL", msg(() -> Models.Index(expressions = (bad,), name = "x")))
   end
   @test occursin("not well-formed SQL", msg(() -> Models.Index(fields = ("a", "b"), condition = "a > 0; DROP TABLE t", name = "x")))
+  # #934: quoting whose end only one engine can find, through the same validator.
+  @test occursin("not well-formed SQL", msg(() -> Models.Index(fields = ("a", "b"), condition = "a <> \$\$;\$\$", name = "x")))
+  @test occursin("not well-formed SQL", msg(() -> Models.Index(expressions = ("lower(`a`)",), name = "x")))
   # A model that declares two text indexes under one name is refused when it is built.
   @test_throws PormG.ModelDefinitionError Models.Model("dup_text_ix", id = Models.IDField(), a = Models.IntegerField(),
     indexes = [Models.Index(expressions = ("abs(a)",), name = "same"), Models.Index(fields = ("a",), condition = "a > 0", name = "same")])
@@ -899,6 +971,7 @@ end
               BloomIndex(fields=['cpf', 'apelido'], name='bloom_idx'),
               GinIndex(fields=['apelido'], fastupdate=False, name='slow_gin_idx'),
               models.Index(fields=['cpf'], include=['apelido'], name='covering_idx'),
+              models.Index(fields=['cpf', 'ativo'], include=['apelido']),
           ]
   """
   config_key = mktempdir()
@@ -912,12 +985,14 @@ end
     # one in Django's own spelling, the partial one's Q() through the CheckConstraint translator.
     @test occursin("Models.Index(fields = (\"cpf\", \"apelido\",), name = \"ok_idx\")", generated)
     @test occursin("Models.Index(expressions = (\"LOWER(\\\"apelido\\\")\",), name = \"lower_idx\")", generated)
-    @test occursin("Models.Index(fields = (\"cpf\", \"ativo\",), name = \"ativo_idx\", condition = \"\\\"ativo\\\" = TRUE\")", generated)
+    @test occursin("Models.Index(fields = (\"cpf\", \"ativo\",), name = \"ativo_idx\", condition = \"\\\"ativo\\\"\")", generated)
     # A bare positional string is Django's shorthand for F().
     @test occursin("Models.Index(expressions = (\"\\\"cpf\\\"\", \"LOWER(\\\"apelido\\\") DESC\",), name = \"str_idx\")", generated)
     # Members that are only fields — `F()` or a bare string — are a column index: `fields`, exactly.
     @test occursin("Models.Index(fields = (\"cpf\", \"-ativo\",), name = \"f_idx\")", generated)
-    @test count(r"Models\.Index\((fields|expressions) = \(", generated) == 5   # declarations, not the hint in a marker
+    # #934: a covering index carries its payload — one field is fine, since `include` makes it advanced.
+    @test occursin("Models.Index(fields = (\"cpf\",), name = \"covering_idx\", include = (\"apelido\",))", generated)
+    @test count(r"Models\.Index\((fields|expressions) = \(", generated) == 6   # declarations, not the hint in a marker
     # Each translated text index carries a note: its SQL is Django's, which a database Django already
     # built may store rewritten — so makemigrations may refuse it there and print the adopting text.
     # One per index that LANDED: the repeated `lower_idx` collapses, and so does its note.
@@ -934,7 +1009,7 @@ end
     @test occursin("its name uses a %(…)s placeholder", generated)
     @test occursin("BloomIndex has no PormG equivalent", generated)
     @test occursin("`fastupdate=` changes what the index means", generated)
-    @test occursin("`include=` changes what the index means", generated)
+    @test occursin("a covering index needs a `name=`", generated)   # Django's rule; a named one translates (#934)
     # Eight dropped indexes, eight markers — a blanket "report something" would pass a count of 1.
     @test count("an index on 'Servidor' was dropped", generated) == 8
   finally
@@ -1218,6 +1293,110 @@ end
     @test count("is claimed by another declaration in this import", generated) == 1
     @test !occursin("LOST its name", generated)
     @test count("carries Django's SQL", generated) == 1      # the note rides only on the one that landed
+  finally
+    delete!(PormG.config, config_key)
+    isdir(config_key) && rm(config_key; recursive = true)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UniqueConstraint(condition = …, expressions = …): a unique partial or functional index (#934)
+# Django's UniqueConstraint takes both; PormG's did not, so such an index was never read and never
+# dropped. Construction follows `Index`'s text rules — fields XOR expressions, a required name, the
+# validator, bare-column expressions refused — and a plain constraint is unchanged. The renderer writes
+# `CREATE UNIQUE INDEX … WHERE …` with the hashed marker (PostgreSQL: the comment; SQLite: inside the
+# list). `Model_to_str` and inspectdb round-trip both.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "UniqueConstraint(condition = …, expressions = …) is a unique partial or functional index (#934)" begin
+  msg(f) = try; f(); ""; catch e; e isa PormG.ModelDefinitionError ? sprint(showerror, e) : rethrow(); end
+  part = Models.UniqueConstraint(fields = ("raceid", "position"), condition = "position IS NOT NULL", name = "result_one_per_place")
+  @test (part.fields, part.condition, part.expressions) == (["raceid", "position"], "position IS NOT NULL", String[])
+  fn = Models.UniqueConstraint(expressions = ("lower(code)",), name = "driver_code_ci")
+  @test (fn.fields, fn.expressions, fn.condition) == (String[], ["lower(code)"], nothing)
+  plain = Models.UniqueConstraint(fields = ("raceid", "driverid"))
+  @test (plain.expressions, plain.condition, plain.name) == (String[], nothing, nothing)   # unchanged
+  @test occursin("fields or expressions, not both", msg(() -> Models.UniqueConstraint(fields = ("a",), expressions = ("lower(a)",), name = "x")))
+  @test occursin("requires fields or expressions", msg(() -> Models.UniqueConstraint(name = "x")))
+  @test occursin("needs an explicit name", msg(() -> Models.UniqueConstraint(fields = ("a",), condition = "a > 0")))
+  @test occursin("needs an explicit name", msg(() -> Models.UniqueConstraint(expressions = ("lower(a)",))))
+  @test occursin("name only columns", msg(() -> Models.UniqueConstraint(expressions = ("a", "b"), name = "x")))
+  @test occursin("UniqueConstraint condition is not well-formed SQL", msg(() -> Models.UniqueConstraint(fields = ("a",), condition = "a > 0; DROP TABLE t", name = "x")))
+  @test occursin("UniqueConstraint expression is not well-formed SQL", msg(() -> Models.UniqueConstraint(expressions = ("lower(`a`)",), name = "x")))
+
+  # Render: the plain form is byte-identical; the text forms carry the WHERE and the hashed marker.
+  @test PormG.Dialect.create_unique_index(IXMockPostgres(), "\"u\"", "\"t\"", ["\"a\"", "\"b\""]; if_not_exists = false) ==
+        "CREATE UNIQUE INDEX \"u\" ON \"t\" (\"a\", \"b\");"
+  m = PormG.index_text_marker(String[], "position IS NOT NULL")
+  @test PormG.Dialect.create_unique_index(IXMockPostgres(), "\"u\"", "\"t\"", ["\"a\""]; if_not_exists = false,
+                                          condition = "position IS NOT NULL", marker = m) ==
+        "CREATE UNIQUE INDEX \"u\" ON \"t\" (\"a\") WHERE position IS NOT NULL;\nCOMMENT ON INDEX \"u\" IS '$(m)';"
+  @test PormG.Dialect.create_unique_index(IXMockSQLite(), "\"u\"", "\"t\"", String[]; if_not_exists = false,
+                                          expressions = ["lower(code)"], marker = "pormg:index:0123456789abcdef") ==
+        "CREATE UNIQUE INDEX \"u\" ON \"t\" (lower(code) /* pormg:index:0123456789abcdef */);"
+  @test_throws PormG.InvalidValueError PormG.Dialect.create_unique_index(IXMockSQLite(), "\"u\"", "\"t\"", String[];
+                                                                         expressions = ["a); DROP TABLE t; --"])
+
+  # Planner, at table creation: the text forms carry their marker; a plain one renders as it always did.
+  model = Models.Model("result_uc", id = Models.IDField(), raceid = Models.IntegerField(),
+                       position = Models.IntegerField(null = true), code = Models.CharField(max_length = 3),
+                       constraints = [part, Models.UniqueConstraint(expressions = ("lower(code)",), name = "result_uc_code_ci")])
+  p = _ix_plan_one(IXMockSQLite(), :result_uc, model)
+  @test p[:result_uc]["Create unique constraint: result_one_per_place"] ==
+        "CREATE UNIQUE INDEX \"result_one_per_place\" ON \"result_uc\" (\"raceid\", \"position\" /* $(m) */) WHERE position IS NOT NULL;"
+  @test p[:result_uc]["Create unique constraint: result_uc_code_ci"] ==
+        "CREATE UNIQUE INDEX \"result_uc_code_ci\" ON \"result_uc\" (lower(code) /* $(PormG.index_text_marker(["lower(code)"], nothing)) */);"
+
+  # Model_to_str round trip.
+  src = Models.Model_to_str(model)
+  @test occursin("Models.UniqueConstraint(fields = (\"raceid\", \"position\",), name = \"result_one_per_place\", " *
+                 "condition = \"position IS NOT NULL\")", src)
+  @test occursin("Models.UniqueConstraint(expressions = (\"lower(code)\",), name = \"result_uc_code_ci\")", src)
+  back = _ix_reload(src)
+  ucs = back.cache["unique_constraints"]["constraints"]
+  @test [(u.fields, u.expressions, u.condition) for u in ucs] ==
+        [(["raceid", "position"], String[], "position IS NOT NULL"), (String[], ["lower(code)"], nothing)]
+
+  # inspectdb: a live unique text index comes back as a UniqueConstraint carrying the text.
+  live = Models.Model("result_uc", id = Models.IDField(), raceid = Models.IntegerField(), position = Models.IntegerField())
+  _attach_composite_indexes!(live, [
+    LiveComposite("ux_part", ["raceid", "position"], true, false, "btree", [false, false],
+                  Union{String, Nothing}[nothing, nothing], [true, true], nothing, nothing; condition = "position > 0"),
+    LiveComposite("ux_fn", String[], true, false, "btree", Bool[], Union{String, Nothing}[], Bool[], nothing, nothing;
+                  expressions = ["abs(raceid)"])])
+  read_back = live.cache["unique_constraints"]["constraints"]
+  @test [(u.name, u.fields, u.expressions, u.condition) for u in read_back] ==
+        [("ux_part", ["raceid", "position"], String[], "position > 0"), ("ux_fn", String[], ["abs(raceid)"], nothing)]
+  @test live.cache["composite_index_owners"]["ux_part"] == (nothing, nothing)   # hand-made stays hand-made
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django importer: a UniqueConstraint's positional members (#934)
+# All-field members (`F("a")`, `"b"`) are a constraint over `fields`, exactly — but a DESCENDING one
+# (`F("a").desc()`) is not: `UniqueConstraint(fields = …)` has no direction, so rewriting it into
+# `fields = ("-a", …)` named a field that does not exist and dropped the constraint. It stays an
+# expression in Django's own spelling. Found in the security review.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer: a UniqueConstraint over F() members, ascending and descending (#934)" begin
+  django = """
+  class Lap(models.Model):
+      raceid = models.IntegerField()
+      lap = models.IntegerField()
+
+      class Meta:
+          constraints = [
+              models.UniqueConstraint(F('raceid'), 'lap', name='lap_race_lap_uq'),
+              models.UniqueConstraint(F('raceid').desc(), F('lap'), name='lap_race_desc_uq'),
+          ]
+  """
+  config_key = mktempdir()
+  PormG.config[config_key] = PormG.Configuration.Settings(db_def_folder = config_key, django_prefix = nothing)
+  try
+    import_models_from_django(django; db = config_key, file = "uc_members_unit.jl", force_replace = true)
+    generated = read(joinpath(config_key, "uc_members_unit.jl"), String)
+    @test occursin("Models.UniqueConstraint(fields = (\"raceid\", \"lap\",), name = \"lap_race_lap_uq\")", generated)
+    @test occursin("Models.UniqueConstraint(expressions = (\"\\\"raceid\\\" DESC\", \"\\\"lap\\\"\",), " *
+                   "name = \"lap_race_desc_uq\")", generated)
+    @test !occursin("was dropped", generated)
   finally
     delete!(PormG.config, config_key)
     isdir(config_key) && rm(config_key; recursive = true)

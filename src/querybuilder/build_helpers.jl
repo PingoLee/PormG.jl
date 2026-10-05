@@ -856,8 +856,39 @@ end
 # `OP(Max("ts__@date"), …)`) is walked like a pair's right-hand side. A `Q`/`Qor` container is not
 # re-entered: its pairs were resolved when it was built, and a container can hold itself
 # (`push!(q, q)`, pinned by test_cte_reference.jl). `Exists` resolves its own inner query.
-_check_filter_node(v::Union{SQLTypeOper,FExpression}) = _check_function(v)
+_check_filter_node(v::SQLTypeOper) = _check_function(v)
+function _check_filter_node(v::FExpression)
+  _guard_boolean_condition(v)   # #931
+  return _check_function(v)
+end
 _check_filter_node(v) = v
+
+# #931 — an expression used as a CONDITION must be boolean. A top-level arithmetic or bitwise node
+# (`F("lap") + 1`, `~F("flag")`, `F("a") & 4`) rendered as written: PostgreSQL rejects it ("argument of
+# WHERE/CASE must be type boolean"), SQLite reads the number for truthiness and returns rows. Refused
+# here, at construction, because every condition position funnels through `_check_filter_node` —
+# `filter`, `Q`/`Qor` and their `push!`, `When(expr)` (via `Q`), `on`/`cjoin`/`cjoin_on` — while a
+# projection or a right-hand side never does. A bare handle (`operation === nothing`) is left alone: it
+# is how a `BooleanField` is tested (`filter(F("flag"))`), and no column type is known at this point.
+function _guard_boolean_condition(v::FExpression)
+  op = v.operation
+  (op === nothing || op in _COMPARISON_OPERATIONS) && return nothing
+  throw(_non_boolean_condition(op))
+end
+function _non_boolean_condition(op::String)
+  written, fix = if op in _ARITHMETIC_OPERATIONS
+    "an arithmetic expression (`$(op)`)", "compare it, e.g. \e[4m\e[32m(F(\"lap\") + 1) > 0\e[0m"
+  elseif op == "~"
+    "a bitwise NOT (`~`)", "compare the column instead, e.g. \e[4m\e[32mF(\"flag\") == false\e[0m"
+  else
+    "a bitwise expression (`$(op)`)",
+    "combine conditions with \e[4m\e[32mQ(…)\e[0m / \e[4m\e[32mQor(…)\e[0m, or compare the bitwise value, " *
+    "e.g. \e[4m\e[32m(F(\"points\") & 4) > 0\e[0m"
+  end
+  return QueryBuildError(
+    "\e[4m\e[31m$(written) used as a condition\e[0m — a condition must be boolean. PostgreSQL rejects " *
+    "a number there and SQLite reads it for truthiness, so the two engines disagree; $(fix) (#931).")
+end
 
 function _check_filter(x::Pair)
   # #444: a CTE-scoped LHS. Delegate on `ref.path` so the whole String pipeline runs — the `__@`
@@ -1491,8 +1522,20 @@ end
 # `Max(F("start_at") - F("date"))`, because arithmetic answers `nothing` there, and it types no
 # `Sum` at all (a computed value is not the column) — only the render knows. Every other function
 # renders exactly as before and answers `false, false`.
+#
+# #932: a grouping aggregate's argument is evaluated per input row, before GROUP BY, so it renders in
+# the `:row` phase — `Sum(Case([When("grid" => Subquery(…), then = 1)], default = 0))` correlates on
+# whatever column it likes. This is the one site every aggregate call renders through (projection,
+# HAVING and ORDER BY re-renders, `F` arithmetic over an aggregate). A window is a `WindowFunction`,
+# never `_is_aggregate_call`, so its arguments keep the clause's phase; the `Sum` inside
+# `Lag(Sum(…))` is a real grouping aggregate and takes `:row` for its own argument.
 function _render_function_typed(v::SQLTypeFunction, instruc::SQLInstruction;
                                 _as::Union{Nothing,String}=nothing)::Tuple{String,Bool,Bool}
+  _is_aggregate_call(v) || return _render_function_body(v, instruc; _as = _as)
+  return with_scope(() -> _render_function_body(v, instruc; _as = _as), instruc; phase = :row)
+end
+function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
+                               _as::Union{Nothing,String}=nothing)::Tuple{String,Bool,Bool}
   # Parameterize scalar kwargs instead of rendering them as SQL literals.
   # IMPORTANT: these must be parameterized AFTER the column is resolved, because the SQL text order
   # places condition params first positionally (e.g., WHEN cond THEN ? ... ELSE ? END).
@@ -1696,17 +1739,9 @@ end
 
 function _get_select_query(v::ExistsObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   _guard_no_nested_projection(instruc, "Exists")   # #92
-  # #194: mark this as a PROJECTED correlation for the duration of the render, so the OuterRefs it
-  # resolves are recorded. The filter-position arm, `_get_filter_query(::ExistsObject)`, is
-  # deliberately NOT bracketed — a WHERE predicate is evaluated before GROUP BY, so correlating it
-  # on an ungrouped column is legal on both backends.
-  prev = instruc.correlated_projection
-  instruc.correlated_projection = _as === nothing ? "Exists(…)" : _as
-  try
-    return _get_filter_query(v, instruc)
-  finally
-    instruc.correlated_projection = prev
-  end
+  # #194 needs nothing here (#932): the clause this renders in set the evaluation phase, and the
+  # OuterRef recorder reads it. The projected/filter split survives only for #92 above.
+  return _get_filter_query(v, instruc)
 end
 function _get_select_query(v::OuterRefObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   return _get_filter_query(v, instruc)
@@ -1722,31 +1757,16 @@ end
 function _get_select_query(v::SubqueryObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   # #92: scalar single-column correlated subquery projected as a SELECT-list column.
   _guard_no_nested_projection(instruc, "Subquery")
-  # #194: a PROJECTED correlation — see `_get_select_query(::ExistsObject)`. `finally` because the
-  # inner build throws routinely (the one-column rule is one of several).
-  prev_correlated = instruc.correlated_projection
-  instruc.correlated_projection = _as === nothing ? "Subquery(…)" : _as
-  try
-    return _render_scalar_subquery(v, instruc)
-  finally
-    instruc.correlated_projection = prev_correlated
-  end
+  # #194: decided by the clause's phase, not here — see `_get_select_query(::ExistsObject)`.
+  return _render_scalar_subquery(v, instruc)
 end
 # #926: the FILTER-position arm — `filter("grid" => Subquery(…))`, `F("grid") == Subquery(…)`, an ON
-# pair. Not bracketed in WHERE or ON, exactly as `_get_filter_query(::ExistsObject)` is not: those
-# predicates are evaluated before GROUP BY, so correlating on an ungrouped column is legal on both
-# backends. A HAVING predicate and a projection's `When` condition are evaluated after it, so there
-# the #194 recorder sees its OuterRefs (`post_group_predicate`, review of #926). Its values bind into whatever clause bucket
-# the caller switched to (`:where`, `:join`, `:having`), as the membership arm's subquery does.
+# pair, a `When` condition. Whether its correlation needs a grouped column is the #194 guard's call,
+# from the phase of the clause it renders in (#932): WHERE and ON are evaluated before GROUP BY, HAVING
+# and the SELECT list after. Its values bind into whatever clause bucket the caller switched to
+# (`:where`, `:join`, `:having`), as the membership arm's subquery does.
 function _get_filter_query(v::SubqueryObject, instruc::SQLInstruction)
-  instruc.post_group_predicate === nothing && return _render_scalar_subquery(v, instruc)
-  prev_correlated = instruc.correlated_projection
-  instruc.correlated_projection = instruc.post_group_predicate
-  try
-    return _render_scalar_subquery(v, instruc)
-  finally
-    instruc.correlated_projection = prev_correlated
-  end
+  return _render_scalar_subquery(v, instruc)
 end
 
 # The render both arms share: `(SELECT …)` for exactly one projected column, its values bound as one
@@ -1982,9 +2002,14 @@ function _get_filter_query(v::OuterRefObject, instruc::SQLInstruction)
   #
   # A second caller of `_resolve_outer_ref_field_name` must record here too, or the guard in
   # `_check_grouped_correlation` (`build_query.jl`) silently stops seeing that reference.
-  outer.correlated_projection !== nothing &&
-    push!(outer.outer_refs, (label = outer.correlated_projection, ref = v.field_name,
-                             column = column, expr = sql))
+  #
+  # EVERY rendered ref is recorded, with the outer's scope at this moment — the clause the outer
+  # render is suspended in, which is where this subquery is evaluated (#932). Recording is
+  # unconditional so no spelling can slip past by reaching a different render entry point; whether
+  # the ref needs a grouped column is decided once, in the guard, from `phase` and `group_key`.
+  scope = outer.scope
+  push!(outer.outer_refs, (label = something(scope.label, "a correlated subquery"), ref = v.field_name,
+                           column = column, expr = sql, phase = scope.phase, group_key = scope.group_key))
   return sql
 end
 function _get_filter_query(v::CTEReference, instruc::SQLInstruction)

@@ -282,7 +282,8 @@ function _db_default_kwarg(field_type::AbstractString, value)
     is_valid_db_default_sql(sql) || throw(_fielderr(
       "$field_type: 'db_default' for `$engine` is not a well-formed column default expression: " *
       "$(repr(String(sql))). It is rendered verbatim into DDL, so it may not contain a bare `;` or " *
-      "`,`, a `--` or `/*` comment, an unterminated quote, or unbalanced parentheses or brackets " *
+      "`,`, a `--` or `/*` comment, an unterminated quote, unbalanced parentheses or brackets, an " *
+      "`E'…'` string, a backslash right before a quote, a dollar quote or a backtick " *
       "— each of those silently changes the statement around it rather than failing. Quote them " *
       "if they are data (`'a;b'` and `'a,b'` are both fine)."))
     return canonical_db_default(sql)

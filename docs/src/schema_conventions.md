@@ -651,10 +651,21 @@ the catalog's own re-printing of a **parsed** expression, so it cannot smuggle a
 terminator or an unterminated literal.
 
 PormG does apply one cheap well-formedness check, and it is a guard against typos rather than a
-security boundary: an expression containing a bare `;`, a `--` or `/*` comment marker, an
-unterminated quote, or unbalanced parentheses is refused, because each of those silently changes the
-statement *around* it — a `--` comments out every column after this one. All of them remain legal
-inside a string literal, so `db_default=(postgres="'a;b'",)` is fine.
+security boundary: an expression containing a bare `;`, a top-level `,`, a `--` or `/*` comment
+marker, an unterminated quote, or unbalanced parentheses or brackets is refused, because each of
+those silently changes the statement *around* it — a `--` comments out every column after this one,
+and a `,` adds a column of its own. All of them remain legal inside a string literal, so
+`db_default=(postgres="'a;b'",)` is fine.
+
+The same check refuses quoting whose end the two engines would find in different places, because
+there a `;` that looks quoted is not: an `E'…'` escape string, a backslash right before a quote
+inside a literal, a dollar quote (`$$…$$`, `$tag$…$tag$`) and a backtick. It also reads the
+text a second time the way SQLite does, where `[…]` is a quoted identifier rather than an array
+subscript, and accepts it only when both readings do. A backslash anywhere else in a literal is fine
+(`code ~ '^\d{3}$'`), and so is an array constructor (`ARRAY['a'::text, 'b'::text]`); a
+two-dimensional one (`ARRAY[ARRAY[1, 2], ARRAY[3, 4]]`) is refused, since SQLite's reading sees a
+top-level `,` in it. The same check applies to a [`CheckConstraint`](models.md#Check-Constraints)
+condition, to an `Index`'s `expressions` and `condition`, and to a `UniqueConstraint`'s.
 
 ### Literal or expression is decided by the DDL, not by the column type
 

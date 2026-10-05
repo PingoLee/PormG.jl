@@ -167,6 +167,53 @@ CREATE UNIQUE INDEX "uniq_constructor_year"
 Adding, removing or changing a constraint later is planned like any other schema change — see
 [Changing composites on an existing table](#Changing-composites-on-an-existing-table).
 
+### Partial and functional unique constraints
+
+Django's `UniqueConstraint` also takes a `condition` and expressions, and so does PormG's — the SQL
+text of an [expression or partial index](#Expression-and-partial-indexes), made unique:
+
+```julia
+Sprint_result = Models.Model("sprint_results",
+  sprintid = Models.IDField(),
+  raceid   = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+  position = Models.IntegerField(null=true),
+  constraints = [
+    # one classified finisher per position in a sprint — a retirement has no position
+    Models.UniqueConstraint(fields=("raceid", "position"), condition="position IS NOT NULL",
+                            name="sprint_one_per_position"),
+  ],
+)
+
+Driver = Models.Model("driver",
+  driverid  = Models.IDField(),
+  driverref = Models.CharField(),
+  constraints = [
+    # "hamilton" and "Hamilton" are the same driver reference
+    Models.UniqueConstraint(expressions=("lower(driverref)",), name="driver_ref_ci_uniq"),
+  ],
+)
+```
+
+```sql
+CREATE UNIQUE INDEX "sprint_one_per_position" ON "sprint_results" ("raceid", "position") WHERE position IS NOT NULL;
+COMMENT ON INDEX "sprint_one_per_position" IS 'pormg:index:837d515127295d74';
+
+CREATE UNIQUE INDEX "driver_ref_ci_uniq" ON "driver" (lower(driverref));
+COMMENT ON INDEX "driver_ref_ci_uniq" IS 'pormg:index:35ba2c95a4f30f95';
+```
+
+The text follows the `Index` rules exactly: `fields` or `expressions`, not both; a **`name`** is
+required; the SQL is checked only for what would change the statement it lands in; both engines
+support both kinds. It is owned the same way too — through the hash of its text in the
+`pormg:index:<hash>` marker — so changing the condition or an expression is a drop and a create,
+and a hand-made unique partial or functional index is adopted by a declaration of its own text and
+never planned away undeclared.
+
+`migrate` counts a new partial constraint's duplicates **among the rows its condition matches** before
+it runs, as it does for a plain one. A functional one is not counted ahead of time — it has no
+columns to group by — so duplicates surface as the database's own error when the plan runs, which
+rolls the migration back.
+
 ## Composite Indexes (`Meta.indexes`)
 
 A plain single-column index is a field option (`db_index=true`). To index a combination of **two or
@@ -331,7 +378,9 @@ Result = Models.Model("result",
 The text is **SQL, sent to both engines as written** — over the table's physical, unqualified column
 names, and never a `Q(...)`, because DDL takes no bind parameters. PormG checks it only for what would
 silently change the statement it lands in: a `--` or `/*` comment, an unterminated quote, a top-level
-`;` — or a top-level `,`, so each entry of `expressions` is exactly one member. Both engines have
+`;` — or a top-level `,`, so each entry of `expressions` is exactly one member — and an `E'…'` string,
+a backslash right before a quote, a dollar quote or a backtick, whose end only one engine can find.
+Both engines have
 expression and partial indexes; write SQL both understand when a model runs on both.
 
 ```sql
@@ -358,6 +407,42 @@ is what `makemigrations` compares instead. So:
 declarations it writes match the live indexes — adopting a database plans nothing. A hand-made one
 follows the ownership rule below: declared under its catalog text, it is adopted; undeclared, it is
 never planned away.
+
+### Covering indexes (`include`)
+
+`include` names fields whose values the index **carries** without sorting by them — Django's
+`Index(include=...)`, PostgreSQL's `INCLUDE (…)`. A query that filters on the key and reads only the
+carried columns is answered from the index alone, without visiting the table:
+
+```julia
+Result = Models.Model("result",
+  resultid = Models.IDField(),
+  raceid   = Models.ForeignKey(Race, pk_field="raceid", on_delete="CASCADE"),
+  points   = Models.FloatField(),
+  position = Models.IntegerField(null=true),
+  indexes = [
+    # a race's points table, read from the index alone — PostgreSQL only
+    Models.Index(fields=("raceid",), include=("points", "position"), name="result_race_points_cov"),
+  ],
+)
+```
+
+```sql
+CREATE INDEX "result_race_points_cov" ON "result" ("raceid") INCLUDE ("points", "position");
+COMMENT ON INDEX "result_race_points_cov" IS 'pormg:index';
+```
+
+- It needs a **`name`** (Django's rule), and combines with `fields` or `expressions` and with a
+  `condition`. One key field is enough: the payload makes it a different index from `db_index`.
+- A field is either part of the key or included, not both. `include` works with the `btree`, `gist`
+  and `spgist` methods (`spgist` from PostgreSQL 14); `hash`, `gin` and `brin` refuse it.
+- The payload is part of the index: changing it, or its order, is a drop and a create.
+- It is **PostgreSQL-only**: SQLite has no covering indexes, so `makemigrations` refuses a model that
+  declares one there with `BackendCapabilityError`, as it does a `method` or an operator class.
+
+A covering index is owned the way an index with a `method` is: PormG marks the ones it creates, a
+hand-made one is adopted by its declaration and never planned away undeclared, and `inspectdb` writes
+`include` back. A *unique* covering index stays unread — `UniqueConstraint` has no `include`.
 
 ## Changing composites on an existing table
 
@@ -411,9 +496,9 @@ matches a live index built with that default.
     a declaration adopts it again.
 
     Indexes PormG cannot reproduce are never read, so they are never dropped either: an access
-    method other than the six above, `INCLUDE (…)`, storage parameters on an advanced index (`WITH (fastupdate = off)`),
-    `NULLS NOT DISTINCT`, a `DEFERRABLE` constraint, a unique index with a method, direction,
-    operator class, expression or condition, and an invalid index (which
+    method other than the six above, `INCLUDE (…)` on a unique index, storage parameters on an advanced index (`WITH (fastupdate = off)`),
+    `NULLS NOT DISTINCT`, a `DEFERRABLE` constraint, a unique index with a method, direction or
+    operator class (a unique expression or condition is a `UniqueConstraint`, read like any other), and an invalid index (which
     [`check`](migrations/workflow.md#Finding-Invalid-Indexes) reports). The
     [PostgreSQL guide](postgres.md#Production-notes) lists them. A **one-column non-unique** index
     with one of those properties is skipped the same way, rather than read as a `db_index`, so it is
@@ -464,7 +549,10 @@ Result = Models.Model(
   does not survive a SQLite table rebuild. It is not a `Q(...)` — a CHECK is DDL, which takes no bind
   parameters. Write SQL both engines accept, as you would for `db_default`. PormG checks it only for
   the typos that would silently change the statement it lands in: a `--` or `/*` comment, an
-  unterminated quote, a `;` or a `,` outside parentheses.
+  unterminated quote, a `;` or a `,` outside parentheses — and for quoting whose end only one engine
+  can find: an `E'…'` string, a backslash right before a quote, a dollar quote or a backtick. The
+  rules are the `db_default` ones, spelled out in
+  [Schema Conventions](schema_conventions.md#db_default-is-rendered-verbatim,-and-that-is-a-deliberate-exception).
 - **`name` is required** — it is the constraint's identity — and at most 63 bytes, PostgreSQL's limit.
   Names are unique within a model across `UniqueConstraint` and `CheckConstraint`. On PostgreSQL a
   constraint name is also unique per *table*, so `makemigrations` refuses one that another constraint

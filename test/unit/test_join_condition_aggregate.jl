@@ -232,3 +232,34 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A non-boolean expression is not a join condition either (#931)
+# The three join spellings take their predicates through the same construction-time check `filter`
+# does, so `on(…, F("number") + 1)` is refused before it can render `ON … AND ("Tb_1"."number" + ?)`,
+# which PostgreSQL rejects and SQLite reads for truthiness. Pinned here because the funnel is shared:
+# a join spelling that stopped calling it would otherwise lose the refusal silently.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#931: a join condition must be boolean" begin
+  cases = (
+    ("on(): arithmetic", (q, mod) -> q.on("driverid", F("number") + 1)),
+    ("on(): inside Q", (q, mod) -> q.on("driverid", Q(F("number") & 4))),
+    ("cjoin(filters = …): arithmetic",
+     (q, mod) -> q.cjoin("driverid" => "Driver", warn = false, filters = [F("number") * 2])),
+    ("cjoin_on(on = …): arithmetic",
+     (q, mod) -> q.cjoin_on(mod.Result; alias = "r2", on = [Joined("r2", "raceid") == F("raceid"), F("grid") - 1])),
+  )
+  for (backend, mod) in _JOIN_AGG_MODELS
+    @testset "$backend: $label" for (label, setup) in cases
+      err = _join_agg_build(mod, (q, m) -> (setup(q, m); q.values("resultid", "driverid__code")))
+      @test err isa QueryBuildError
+      @test occursin("used as a condition", sprint(showerror, err))
+    end
+    # The comparison over the same arithmetic is a condition, and joins.
+    @testset "$backend: a comparison still joins" begin
+      sql = _join_agg_build(mod, _ja_self_join((F("grid") - 1) > 0))
+      @test sql isa String
+      sql isa String && @test occursin(r"ON .+\(\(\"Tb\"\.\"grid\" - \S+\) > \S+\)", sql)
+    end
+  end
+end

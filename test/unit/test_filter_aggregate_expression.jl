@@ -581,7 +581,7 @@ end
       end
       # The same typing reaches an alias filter: a projected comparison is no longer read as a number,
       # so `true` binds as itself. As a number it bound `1`, which PostgreSQL cannot compare with a
-      # boolean. It keeps no type, so a value that is not a boolean is not rewritten into one either.
+      # boolean.
       q = Model_.objects
       q.values("ahead" => F("lap") > F("points"))
       q.filter("ahead" => true)
@@ -589,10 +589,18 @@ end
       @test occursin(pg ? r"WHERE \(+\"Tb\"\.\"lap\" > \"Tb\"\.\"points\"\)+ = \$1" : r"WHERE \(+\"Tb\"\.\"lap\" > \"Tb\"\.\"points\"\)+ = \?",
                      insp[:sql_text])
       @test insp[:parameters] == Any[true]
+      # #949: the comparison is typed as a boolean now that `format_bool_sql` refuses an integer other
+      # than 0/1. Until then it was left untyped and `5` bound as written. #942 pinned that here on
+      # purpose, so this assertion is the deliberate reversal, not a goalpost moved: a boolean alias
+      # compared with 5 is a mistake to report.
       q = Model_.objects
       q.values("ahead" => F("lap") > F("points"))
       q.filter("ahead" => 5)
-      @test inspect_query(q)[:parameters] == Any[5]
+      @test_throws PormG.FilterError inspect_query(q)
+      q = Model_.objects
+      q.values("ahead" => F("lap") > F("points"))
+      q.filter("ahead" => 1)
+      @test inspect_query(q)[:parameters] == Any[pg ? true : 1]
       # `OP` is a comparison node, not a function: the internal `Y_Q` path builds `When(OP(MONTH(…), …))`.
       q = Model_.objects
       q.values("c" => Case([When(OP(MONTH("recorded"), "<=", 4), then = 1)], default = 0))

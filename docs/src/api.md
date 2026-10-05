@@ -412,6 +412,10 @@ query.values("resultid", "driverid__surname", "points")
 own `how`, else `LEFT` for a nullable ForeignKey and `INNER` for a `NOT NULL` one — unless you pass
 `join_type` yourself, which then stays in effect for later `on()` calls on the same path.
 
+A condition's key names the joined row, and a right-side `F` names the base row in every spelling
+(`"number" => F("number")`, `Q(...)`, `OP(...)`, `F(...) == F(...)`). See
+[Which row each side of a condition names](read/custom_joins.md#Which-row-each-side-of-a-condition-names).
+
 ---
 
 ## Bulk Operations

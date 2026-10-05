@@ -159,18 +159,21 @@ _fi_params(q; conn = _FI_SL) = inspect_query(q; connection = conn)[:parameters]
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # `f == f` is not a cycle any more, and renders as an ordinary tautology.
+  # `f == f` is not a cycle any more, and renders on every route.
   # THE test for this issue. Pre-#457 each of these three routes was a StackOverflowError that took
   # the session down with it — so a regression here does not fail politely, it kills the process.
-  # `sku = sku` is what SQLAlchemy and Django emit for the same input; PormG matches them.
+  # In `filter()` it is the tautology `id = id`, which is what SQLAlchemy and Django emit for the same
+  # input. In a join condition it is NOT: since #958 the right side names the base row, so it compares
+  # the two tables. The handle is `F("id")` because both models have that column; it was `F("sku")`,
+  # which only the parent has, when this testset pinned the pre-#958 `"Tb_1"."sku" = "Tb_1"."sku"`.
   #
   # Every route below is handed the SAME `g` built from ONE handle compared with ITSELF. That is
-  # load-bearing and easy to get wrong: spelling it `F("sku") == F("sku")` inline builds TWO distinct
+  # load-bearing and easy to get wrong: spelling it `F("id") == F("id")` inline builds TWO distinct
   # handles, which never cycled even under the old mutating overloads (the left one simply stored the
   # right one), so those assertions would pass against the very bug this testset exists to catch.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "a self-comparison builds no cycle and renders on every route" begin
-    f = F("sku")
+    f = F("id")
     g = (f == f)
 
     # The structural claim, without which the routes below prove nothing about cycles.
@@ -185,26 +188,26 @@ _fi_params(q; conn = _FI_SL) = inspect_query(q; connection = conn)[:parameters]
     @test g.operand isa FExpression
     @test f.operation === nothing    # and the handle came through the comparison unchanged
 
-    # Route 1 — `on()`, the spelling the issue reports. The predicate is forced onto the joined
-    # model, so BOTH sides resolve to the FK's alias.
+    # Route 1 — `on()`, the spelling the issue reports. The left side is forced onto the joined
+    # model; the right side names the base row (#958).
     q_on = FI.Fi_child.objects
     q_on.on("parent", g)
     q_on.values("id", "parent__sku")
     sql_on = _fi_sql(q_on)
     @test occursin("JOIN \"fi_parent\"", sql_on)
-    @test occursin(r"\"Tb_1\"\.\"sku\" = \"Tb_1\"\.\"sku\"", sql_on)
+    @test occursin(r"\"Tb_1\"\.\"id\" = \"Tb\"\.\"id\"", sql_on)
 
     # Route 2 — `cjoin()`, the issue's second acceptance item. Same helper, same refusal surface.
     q_cj = FI.Fi_child.objects
     q_cj.cjoin("parent" => "Fi_parent", filters = [g], warn = false)
     q_cj.values("id")
-    @test occursin(r"\"Tb_1\"\.\"sku\" = \"Tb_1\"\.\"sku\"", _fi_sql(q_cj))
+    @test occursin(r"\"Tb_1\"\.\"id\" = \"Tb\"\.\"id\"", _fi_sql(q_cj))
 
     # Route 3 — `filter()`. Not named in the issue, but it accepted the cycle and overflowed at
     # RENDER time, which is why the fix had to be in the expression rather than in the join guards.
     q_fl = FI.Fi_parent.objects
     q_fl.filter(g)
-    @test occursin(r"\"Tb\"\.\"sku\" = \"Tb\"\.\"sku\"", _fi_sql(q_fl))
+    @test occursin(r"\"Tb\"\.\"id\" = \"Tb\"\.\"id\"", _fi_sql(q_fl))
 
     # One `g` went through all three builds and came out unchanged — the routes consume the
     # expression, they do not claim it.

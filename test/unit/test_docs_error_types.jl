@@ -845,6 +845,13 @@ const DOCERR_CASES = [
         QueryBuildError,
         () -> DOCERR_RACE_PG.objects.filter(F("raceid") & 4).list(show_query = :dict),
     ),
+    # #938 — `subqueries_and_ctes.md` and the `OuterRef` docstring say Django's two-levels-up spelling
+    # raises.
+    (
+        "read/subqueries_and_ctes.md + src/querybuilder/types.jl — OuterRef docstring: OuterRef(OuterRef(…)) is refused (#938)",
+        QueryBuildError,
+        () -> PormG.QueryBuilder.OuterRef(PormG.QueryBuilder.OuterRef("raceid")),
+    ),
     # #942 — the same section and the `When` docstring say a function whose result is not boolean is
     # refused as a `When` condition. Every refused function and spelling is pinned in
     # `test/unit/test_filter_aggregate_expression.jl`.

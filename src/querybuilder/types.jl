@@ -1478,12 +1478,15 @@ query = M.Result.objects.filter(Exists(fast_laps))
 `OuterRef("pk")` resolves to the outer model's primary key, so a correlation does not have to
 name the column: `filter("driverid" => OuterRef("pk"))` against an outer `M.Driver` query.
 
-Two limits, both enforced with a `QueryBuildError`:
+It binds to the **immediately enclosing** query, as Django's does. A subquery nested inside another
+subquery — in a filter, a projection, a `When` or a join condition — correlates to the subquery
+around it, never further out (#938). Reaching two levels up (Django's `OuterRef(OuterRef(…))`) is
+not supported, and raises `QueryBuildError`. One known exception: inside a `Subquery` in a
+**deep-hop** `on()` condition (`on("driverid__results", …)`), the reference is retargeted to the
+hop's left alias (#946).
 
-- **One level only.** It binds to the immediately enclosing query, so a projected subquery nested
-  inside another projected subquery is rejected rather than silently correlated to the wrong level.
-- **Correlated context required.** Used outside an `Exists`/`Subquery` build there is no outer
-  query to bind to — wrapped in a function or not.
+Used outside an `Exists`/`Subquery` build there is no outer query to bind to, so an `OuterRef`
+there raises `QueryBuildError` — wrapped in a function or not.
 
 An outer column may be wrapped in a scalar function or a window column inside the correlated query
 — `Lower(OuterRef("surname"))`, `Cast(OuterRef("driverid"), "text")`, `Lag(OuterRef("driverid"),
@@ -1497,6 +1500,11 @@ function OuterRef(field_name::AbstractString)
   isempty(normalized) && throw(QueryBuildError("OuterRef requires a non-empty field name"))
   return OuterRefObject(field_name=normalized)
 end
+# #938: Django's two-levels-up spelling. Without this arm it was a raw `MethodError`; the docs name the
+# spelling, so a reader arriving from Django will try it.
+OuterRef(::OuterRefObject) = throw(QueryBuildError(
+  "OuterRef(OuterRef(…)) is not supported: an OuterRef binds the immediately enclosing query only, so a " *
+  "nested subquery correlates to the subquery around it (#938). Correlate each level on the one around it."))
 
 # #444 — a CTE column reference. `SQLTypeCTE` (Kernel.jl) was declared with zero subtypes and zero
 # uses; this is what it was reserved for. Deliberately NOT `<: SQLTypeF`: that would auto-admit the

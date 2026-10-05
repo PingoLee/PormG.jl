@@ -653,13 +653,15 @@ end
     @test occursin("correlated column p correlates", msg)   # the alias, not "Subquery(…)"
   end
 
-  # Inside another subquery it is refused like a bare nested `Subquery`: `OuterRef` resolves one level.
+  # Inside another subquery it builds, like a bare nested `Subquery` (#938): the window's subquery
+  # correlates to the child row around it, never past it to the parent.
   outer_sub = AD.Adm_child.objects
   outer_sub.filter("parent" => OuterRef("id"))
   outer_sub.values("t" => Lag(Subquery(nsub()), over = over))
   q = AD.Adm_parent.objects
   q.values("id", "x" => Subquery(outer_sub))
-  @test occursin("projected inside another subquery", something(_adm_867_msg(() -> _adm_render(q)), ""))
+  @test _adm_867_msg(() -> _adm_render(q)) === nothing
+  @test occursin(r"\"R2\"\.\"parent(_id)?\" = \"R1\"\.\"id\"", _adm_render(q))
 
   # A CTE body cannot type a window over a bare subquery (#878's reason), and says how to: a `Cast`
   # inside the window, which builds, and whose filter binds after the body's own parameters.

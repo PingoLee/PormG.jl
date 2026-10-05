@@ -354,12 +354,15 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Subquery (#92): fail-loud nesting boundary. A Subquery projected inside
-# another subquery raises — OuterRef resolves one level only, so a nested
-# projection could silently correlate to the wrong outer query. Locks in the
-# error rather than a wrong number (the #74 philosophy).
+# Subquery (#92, #938): a subquery nested inside another subquery, against live rows.
+# #92 refused a nested projected subquery ("OuterRef resolves one level only"); #938 lifted it,
+# because each OuterRef binds the query immediately around it. Proven here by value, on both
+# engines: each nested query's rows are checked against an answer computed in Julia from plain
+# fetches, in the projected, the bare-filter and the Coalesce-in-WHERE spellings (the last two used
+# to disagree: the bare one built, the wrapped one was refused).
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "Subquery (#92) - nested projected subquery raises" begin
+@testset "Subquery (#92, #938) - nested correlated subqueries return the right rows" begin
+    # Projected inside a projected subquery: the innermost count correlates to the middle row.
     innermost = M.Driver_standings.objects
     innermost.filter("driverid" => OuterRef("driverid"))
     innermost.values("t" => Count("driverstandingsid"))
@@ -367,14 +370,45 @@ end
     middle = M.Driver_standings.objects
     middle.filter("driverid" => OuterRef("driverid"))
     middle.values("nested" => Subquery(innermost))
-    middle.limit(1)                       # single column + LIMIT: passes every other check
+    middle.limit(1)                       # single column + LIMIT: a scalar per outer row
 
     q = M.Driver.objects.
         filter("driverid" => 1).
         values("x" => Subquery(middle))
+    @test (q |> DataFrame)[1, :x] == M.Driver_standings.objects.filter("driverid" => 1).count()
 
-    err = try; q |> DataFrame; nothing; catch e; e; end
-    @test err isa PormGError && occursin("one level", err.msg)
+    # A driver's pole positions: the results whose grid is their race's best positive grid. The
+    # innermost subquery binds the RESULT row around it (its race), the middle one the driver.
+    best_grid() = M.Result.objects.
+        filter("raceid" => OuterRef("raceid"), "grid__@gt" => 0).
+        values("g" => Min("grid"))
+    poles(cond) = M.Result.objects.
+        filter("driverid" => OuterRef("driverid"), "grid" => cond).
+        values("n" => Count("resultid"))
+
+    # The independent answer, from plain rows: per race the best positive grid (none → missing).
+    rows = M.Result.objects.values("raceid", "driverid", "grid") |> DataFrame
+    best = Dict{Int,Int}()
+    for r in eachrow(rows)
+        (ismissing(r.grid) || r.grid <= 0) && continue
+        best[r.raceid] = min(get(best, r.raceid, typemax(Int)), r.grid)
+    end
+    expected(driver, fallback) = count(r -> r.driverid == driver && !ismissing(r.grid) &&
+                                           r.grid == something(get(best, r.raceid, nothing), fallback), eachrow(rows))
+    drivers = M.Driver.objects.filter("surname" => "Senna").values("driverid", "surname") |> DataFrame
+    @test nrow(drivers) >= 2
+
+    # Bare `Subquery` in the middle WHERE — a race with no positive grid compares with NULL: no match.
+    q = M.Driver.objects.filter("surname" => "Senna").values("driverid", "poles" => Subquery(poles(Subquery(best_grid()))))
+    got = Dict(r.driverid => r.poles for r in eachrow(q |> DataFrame))
+    @test got == Dict(d => expected(d, nothing) for d in drivers.driverid)
+    @test sum(values(got)) > 0                       # Ayrton Senna has poles in the fixture
+
+    # `Coalesce(Subquery, 0)` in the same WHERE — refused by #92 before #938. A race with no positive
+    # grid now compares with 0.
+    q = M.Driver.objects.filter("surname" => "Senna").values("driverid", "poles" => Subquery(poles(Coalesce(Subquery(best_grid()), 0))))
+    got = Dict(r.driverid => r.poles for r in eachrow(q |> DataFrame))
+    @test got == Dict(d => expected(d, 0) for d in drivers.driverid)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

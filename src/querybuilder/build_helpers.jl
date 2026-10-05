@@ -1712,16 +1712,16 @@ function _get_select_query(q::SQLTypeQ, instruc::SQLInstruction; _as::Union{Noth
   end
   return "(" * join(resp, " AND ") * ")"
 end
-# #92: fail loud rather than silently mis-correlate a projected subquery nested inside another one —
-# OuterRef resolves only one level, so nesting could bind to the wrong outer query and return a wrong
-# value. `instruc.outer !== nothing` means the current build is itself a subquery.
-function _guard_no_nested_projection(instruc::SQLInstruction, what::AbstractString)
-  instruc.outer === nothing || throw(QueryBuildError(
-    "$what(...) projected inside another subquery is not supported yet: OuterRef resolves one level " *
-    "only, so a nested projected subquery could correlate to the wrong level. Keep projected subqueries " *
-    "to a single level of correlation."))
-  return nothing
-end
+# #938: a Subquery/Exists nested inside another subquery builds in every position. #92 refused the
+# PROJECTED spelling only ("OuterRef resolves one level, so a nested projected subquery could correlate
+# to the wrong level"), which left the filter spelling of the same predicate open (#926) and refused
+# `Coalesce(Subquery(…))` in a nested WHERE while the bare `Subquery(…)` built. Neither level can
+# mis-bind: every nested render passes `outer = instruc`, so `OuterRef` resolves against the
+# IMMEDIATELY enclosing query — Django's rule — and the shared `SQLTbAlias` counter gives each level
+# its own alias (`Tb`, `R1`, `R2`, …), so an inner `OuterRef` cannot be captured by a deeper scope.
+# Correlating two levels up (Django's `OuterRef(OuterRef(…))`) is not expressible; it is not
+# mis-resolved either. The guard's other premise, the nested parameter order, is #432's
+# `nested_parameter_mark` / `detach_nested_run!` since.
 
 # #433: a `.with(...)` declared INSIDE a Subquery / Exists / `__@in` subquery is refused, because
 # no backend renders it correctly today. The three call sites fail in two different ways, and the
@@ -1783,9 +1783,9 @@ function _warn_if_possible_multirow(handler::SQLObjectHandler)
 end
 
 function _get_select_query(v::ExistsObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
-  _guard_no_nested_projection(instruc, "Exists")   # #92
   # #194 needs nothing here (#932): the clause this renders in set the evaluation phase, and the
-  # OuterRef recorder reads it. The projected/filter split survives only for #92 above.
+  # OuterRef recorder reads it. Nesting needs nothing either (#938, above): the projected and the
+  # filter spelling render the same `EXISTS (…)`.
   return _get_filter_query(v, instruc)
 end
 function _get_select_query(v::OuterRefObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
@@ -1800,9 +1800,8 @@ function _get_select_query(v::JoinedReference, instruc::SQLInstruction; _as::Uni
   return _resolve_joined(v, instruc)
 end
 function _get_select_query(v::SubqueryObject, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
-  # #92: scalar single-column correlated subquery projected as a SELECT-list column.
-  _guard_no_nested_projection(instruc, "Subquery")
-  # #194: decided by the clause's phase, not here — see `_get_select_query(::ExistsObject)`.
+  # #92: scalar single-column correlated subquery projected as a SELECT-list column. #194 is decided
+  # by the clause's phase and nesting is legal (#938) — see `_get_select_query(::ExistsObject)`.
   return _render_scalar_subquery(v, instruc)
 end
 # #926: the FILTER-position arm — `filter("grid" => Subquery(…))`, `F("grid") == Subquery(…)`, an ON
@@ -2029,7 +2028,10 @@ function _resolve_joined(ref::JoinedReference, instruc::SQLInstruction)::String
                 safe_column_identifier(Models.field_db_column(target_model.fields[ref.path], ref.path), instruc.connection))
 end
 function _get_filter_query(v::SQLTypeFunction, instruc::SQLInstruction)
-  return _get_select_query(v, instruc) # Does this have any coletaral efect?
+  # A function in a condition renders as it does projected: a filter-position function is an operand
+  # (`Coalesce(Subquery(…), 0)`), and its arguments render through the same arms either way. #938
+  # removed the one difference the two entry points used to make, the #92 nesting refusal.
+  return _get_select_query(v, instruc)
 end
 function _get_filter_query(v::ExistsObject, instruc::SQLInstruction)
   return _build_exists_query(v.query, instruc)

@@ -174,6 +174,7 @@ This distinction matters:
 - `.cjoin(filters=...)` is for joined-model predicates that belong in `ON`
 - `.filter(...)` is for base-query predicates that belong in `WHERE`
 - Passing base-table fields to `.cjoin(filters=...)` is not a good API contract and should be treated as unsupported usage
+- A base-table value on the **right** side is supported: a right-side `F` names the base row, exactly as in `on()` (see [Which row each side of a condition names](#Which-row-each-side-of-a-condition-names))
 
 ### Dedicated `on()` API for Existing Join Paths
 
@@ -226,6 +227,33 @@ The reverse join is `LEFT` here because that is what PormG derives for it, not b
 - an explicit `join_type` on any `on()` call for a path stays in effect for later `on()` calls on
   that same path
 - `.filter(...)` keeps its existing `WHERE` semantics and is not silently rewritten into `ON`
+
+### Which row each side of a condition names
+
+In an `on()` or `cjoin(filters = …)` condition:
+
+- **The key, and every `F` on the left side, names the joined row.** PormG prefixes it with the join
+  path, so `"number"` in `on("driverid", …)` is the driver's `number`.
+- **A right-side `F` names the base row**, the query's own model, in every spelling: a bare pair,
+  `Q(...)`, `Qor(...)`, `OP(...)` or `F(...) == F(...)`, and at any hop depth. On a deep hop, a table
+  earlier on the same path is reached through its path from the base model: in
+  `on("driverid__results", …)`, `F("driverid__number")` is the driver's `number`.
+
+That is what lets a join condition compare the two tables. For example, these are the results where
+the car number is the driver's permanent number:
+
+```julia
+df = M.Result.objects.
+    on("driverid", "number" => F("number"), join_type = "INNER").
+    values("resultid", "number", "driverid__code", "driverid__number") |> DataFrame
+# INNER JOIN "driver" AS "Tb_1" ON "Tb"."driverid" = "Tb_1"."driverid"
+#                               AND "Tb_1"."number" = "Tb"."number"
+```
+
+`Q("number" => F("number"))` and `F("number") == F("number")` render the same predicate. Before
+[#958](https://github.com/PingoLee/PormG.jl/issues/958), every spelling except the bare pair also
+prefixed the right side. That rendered `"Tb_1"."number" = "Tb_1"."number"`, which is true on every
+row, so the condition was silently dropped.
 
 ### When `.cjoin()` is Applied
 
@@ -632,7 +660,7 @@ query.cjoin(main_join; filters=[], field=nothing, join_type="LEFT")
 - **Q filters**: `Q("field1" => val1, "field2" => val2)` - AND logic; plain field names are prefixed recursively
 - **Qor filters**: `Qor("field1" => val1, "field2" => val2)` - OR logic; plain field names are prefixed recursively
 - **Operator suffix filters**: Complex operator-based filters using the suffix operator system (e.g., `"nationality__@ne" => "British"`)
-- **F expressions**: Field-to-field comparisons (e.g., `F("field1") == F("field2")`)
+- **F expressions**: Field-to-field comparisons (e.g., `F("field1") == F("field2")`). In `on()` / `cjoin(filters = …)` the left `F` names the joined row and the right one the base row; see [Which row each side of a condition names](#Which-row-each-side-of-a-condition-names)
 
 ## Important Notes
 

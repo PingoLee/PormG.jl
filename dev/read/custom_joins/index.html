@@ -34,11 +34,13 @@ Use `join_type=&quot;INNER&quot;` to only return rows that match the join condit
 #  Row | result__statusid__status  description  result 
 #      | String?                   String?      Int32?
 # -----+------------------------------------------------
-#    1 | Finished                  teste 1           1</code></pre><p>Only the row joined to <code>Result.resultid = 1</code> is returned because the INNER JOIN excludes non-matching rows.</p><h3 id="Join-with-Q/Qor-Filters-(AND/OR-Logic)"><a class="docs-heading-anchor" href="#Join-with-Q/Qor-Filters-(AND/OR-Logic)">Join with Q/Qor Filters (AND/OR Logic)</a><a id="Join-with-Q/Qor-Filters-(AND/OR-Logic)-1"></a><a class="docs-heading-anchor-permalink" href="#Join-with-Q/Qor-Filters-(AND/OR-Logic)" title="Permalink"></a></h3><p>Use <code>Q()</code> for AND logic and <code>Qor()</code> for OR logic in join conditions. Plain field names are automatically prefixed with the join path:</p><pre><code class="language-julia hljs"># Plain fields are auto-prefixed: &quot;statusid__status&quot; and nested fields work too
+#    1 | Finished                  teste 1           1</code></pre><p>Only the row joined to <code>Result.resultid = 1</code> is returned because the INNER JOIN excludes non-matching rows.</p><h3 id="Join-with-Q/Qor-Filters-(AND/OR-Logic)"><a class="docs-heading-anchor" href="#Join-with-Q/Qor-Filters-(AND/OR-Logic)">Join with Q/Qor Filters (AND/OR Logic)</a><a id="Join-with-Q/Qor-Filters-(AND/OR-Logic)-1"></a><a class="docs-heading-anchor-permalink" href="#Join-with-Q/Qor-Filters-(AND/OR-Logic)" title="Permalink"></a></h3><p>Use <code>Q()</code> for AND logic and <code>Qor()</code> for OR logic in join conditions. Plain field names are automatically prefixed with the join path. A column of a further relation — the result&#39;s status — goes on that relation&#39;s own join, with <code>on()</code>:</p><pre><code class="language-julia hljs"># &quot;positionorder&quot; is auto-prefixed onto the result join; the status predicate rides on the
+# result__statusid join, which on() builds since values() already reaches it
 df = M.New_join_position.objects.
     cjoin(&quot;result&quot; =&gt; &quot;Result&quot;, filters=[
-        Q(&quot;statusid__status&quot; =&gt; &quot;Finished&quot;, Qor(&quot;positionorder&quot; =&gt; 1, &quot;positionorder&quot; =&gt; 2))
+        Q(&quot;grid__@gte&quot; =&gt; 1, Qor(&quot;positionorder&quot; =&gt; 1, &quot;positionorder&quot; =&gt; 2))
     ]).
+    on(&quot;result__statusid&quot;, &quot;status&quot; =&gt; &quot;Finished&quot;).
     values(&quot;result__statusid__status&quot;, &quot;description&quot;) |&gt; DataFrame</code></pre><h3 id="Join-with-Driver-Model-(Q/Qor-Example)"><a class="docs-heading-anchor" href="#Join-with-Driver-Model-(Q/Qor-Example)">Join with Driver Model (Q/Qor Example)</a><a id="Join-with-Driver-Model-(Q/Qor-Example)-1"></a><a class="docs-heading-anchor-permalink" href="#Join-with-Driver-Model-(Q/Qor-Example)" title="Permalink"></a></h3><p>Here&#39;s a complete example joining Result to Driver with complex filter logic:</p><pre><code class="language-julia hljs"># Add custom join with recursive Q/Qor filters + WHERE clause filter
 # Plain field names (&quot;nationality&quot;, &quot;forename&quot;) are automatically prefixed
 df = M.Result.objects.
@@ -83,11 +85,28 @@ Reverse joins are the main use case for the dedicated API because they let you p
 The reverse join is `LEFT` here because that is what PormG derives for it, not because `on()` chose it — `on()` only adds the predicate. All three `Result` rows remain and only the matching reverse rows are attached. If you want only the matched base rows, pass `join_type=&quot;INNER&quot;` on the same `on()` call.
 
 !!! tip
-    **Chained Reverse Paths**: You can also use `on()` through chained reverse paths. For example, `query.on(&quot;test_deletion&quot;, &quot;just_a_nested_roll_back__description&quot; =&gt; &quot;nested-value&quot;)` will correctly apply the `ON`-clause predicate deep within the reversed relationship traversal chain.
+    **Chained Reverse Paths**: `on()` takes a chained reverse path too. Name the hop whose row the
+    predicate is about — `query.on(&quot;test_deletion__just_a_nested_roll_back&quot;, &quot;description&quot; =&gt;
+    &quot;nested-value&quot;)` puts the predicate in the nested table&#39;s `ON` clause, and builds that join if
+    nothing else in the query reaches it. Writing the column past the hop instead,
+    `on(&quot;test_deletion&quot;, &quot;just_a_nested_roll_back__description&quot; =&gt; …)`, raises `FilterError`
+    ([#973](https://github.com/PingoLee/PormG.jl/issues/973)); see
+    [Which row each side of a condition names](#Which-row-each-side-of-a-condition-names).
 
 ### Contract of `on()`
 
-- `query.on(&quot;path&quot;, ...)` targets an existing join path, including reverse joins such as `&quot;test_deletion&quot;` and nested paths such as `&quot;raceid__circuitid&quot;`
+- `query.on(&quot;path&quot;, ...)` targets a join path, including reverse joins such as `&quot;test_deletion&quot;` and nested paths such as `&quot;raceid__circuitid&quot;`
+- **`on()` builds its join when nothing else in the query reaches the path** — no `values()`,
+  `filter()` or `order_by()` through it. Before [#977](https://github.com/PingoLee/PormG.jl/issues/977)
+  such an `on()` was dropped from the statement with no error, `join_type=&quot;INNER&quot;` included, so a
+  predicate meant to restrict rows restricted nothing. The join it builds is the one traversal would
+  build, with the type PormG derives for it: a reverse path repeats a base row once per matching child,
+  as `values(&quot;test_deletion__name&quot;)` would, and where that join is `INNER` (a `NOT NULL` ForeignKey) a
+  base row with no matching child is dropped. A query that aggregates over such a to-many join now
+  meets the [#74](https://github.com/PingoLee/PormG.jl/issues/74) fan-out guard
+- a path that crosses a `ManyToManyField` raises `QueryBuildError`: that join goes through a link
+  table PormG does not attach an `ON` predicate or a `join_type` to, and it used to drop them
+  silently. Put the predicate in `.filter(...)` instead
 - multiple predicates are combined with `AND` unless you use `Qor(...)`
 - repeated `on()` calls for the same path merge additional predicates into the same `ON` clause
 - **`on()` does not change the join type unless you pass `join_type=`.** Without it the join keeps
@@ -111,6 +130,20 @@ In an `on()` or `cjoin(filters = …)` condition:
   `Q(...)`, `Qor(...)`, `OP(...)` or `F(...) == F(...)`, and at any hop depth. On a deep hop, a table
   earlier on the same path is reached through its path from the base model: in
   `on(&quot;driverid__results&quot;, …)`, `F(&quot;driverid__number&quot;)` is the driver&#39;s `number`.
+- **A left side stays on its hop.** A key whose relation part goes past the join path —
+  `on(&quot;driverid&quot;, &quot;results__grid&quot; =&gt; 1)`, or `cjoin(&quot;raceid&quot; =&gt; &quot;Race&quot;, filters =
+  [&quot;circuitid__country&quot; =&gt; &quot;Italy&quot;])` — raises `FilterError`, at the call (or, for a path through a
+  `cjoin(field = …)` link, when the query is built). It names a row of a further
+  relation, and PormG used to add that relation&#39;s join silently, with the predicate in its `ON`
+  clause; for a reverse relation that join repeated base rows. Write the predicate on the hop that
+  owns the column, `on(&quot;raceid__circuitid&quot;, &quot;country&quot; =&gt; &quot;Italy&quot;)` (`on()` builds that join when
+  nothing else reaches it), or put it in `.filter(...)` to restrict rows. Before
+  [#973](https://github.com/PingoLee/PormG.jl/issues/973) the deep key was accepted.
+- **A right side stays on the path.** A right-side column — an `F`, a column string, a subquery&#39;s
+  `OuterRef`, an `Exists(...)`&#39;s `OuterRef` — may name the base row, the joined row or a table earlier
+  on the same path. One that reaches any other relation raises `FilterError` when the query is built
+  ([#962](https://github.com/PingoLee/PormG.jl/issues/962)): that relation&#39;s join is not in scope at
+  this `ON` clause, so put the predicate in `.filter(...)`.
 
 That is what lets a join condition compare the two tables. For example, these are the results where
 the car number is the driver&#39;s permanent number:
@@ -494,4 +527,4 @@ mermaid.initialize({
     startOnLoad: true,
     theme: "neutral"
 });
-</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Tuesday 6 October 2026 10:18">Tuesday 6 October 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Tuesday 6 October 2026 14:08">Tuesday 6 October 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

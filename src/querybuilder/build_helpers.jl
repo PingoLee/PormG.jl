@@ -1203,12 +1203,6 @@ function _get_join_field(q::SQLObject, join_path::String)
   return config.field
 end
 
-function _get_join_filters(q::SQLObject, join_path::String)
-  config = _get_join_config(q, join_path)
-  config === nothing && return nothing
-  return config.filters
-end
-
 function _get_join_type_override(q::SQLObject, join_path::String)
   config = _get_join_config(q, join_path)
   config === nothing && return nothing

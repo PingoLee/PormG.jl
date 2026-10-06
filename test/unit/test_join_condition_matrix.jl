@@ -174,6 +174,10 @@ const _JCM_SINGLE_CELLS = (
   ("P5b on() then cjoin/bare pair (#974)",
    (q, mod) -> (q.on("grid", "code" => "X"); q.cjoin("grid" => "Driver", warn = false, field = _jcm_link(mod));
                 q.values("resultid", "grid__code"))),
+  # A plain column no `cjoin` ever links: not a relation, refused — at build, since a later `cjoin`
+  # could have linked it (#974).
+  ("P5c on() plain column, no cjoin/bare pair",
+   (q, mod) -> (q.on("grid", "code" => "X"); q.values("resultid"))),
   # An `on()` on a path nothing else in the query reaches.
   ("P6 on() unreached path/bare pair",
    (q, mod) -> (q.on("constructorid", "name" => "X"); q.values("resultid"))),

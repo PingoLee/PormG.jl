@@ -216,9 +216,13 @@ end
 
     @testset "on() on a non-relational field is rejected" begin
         # on() requires the first segment of the join path to be a FK or reverse relation.
-        # Scalars like `points` (FloatField) cannot be traversed.
+        # Scalars like `points` (FloatField) cannot be traversed. #977: refused when the query is
+        # BUILT, not at the call — a `cjoin("points" => …, field = …)` declared later could have
+        # linked the column, and declaration order must not decide that (#974, #434).
         q = M.Result.objects
-        @test_throws PormGError q.on("points", "points__@gt" => 0)
+        q.on("points", "points__@gt" => 0)
+        q.values("resultid")
+        @test_throws QueryBuildError q.list(show_query = :dict)
     end
 
     @testset "on() with no filters and no join_type is rejected" begin

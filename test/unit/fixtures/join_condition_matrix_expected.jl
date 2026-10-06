@@ -226,9 +226,13 @@ const _JCM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("P5a cjoin then on()/bare pair (#974)", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"grid__code\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"grid\" = \"Tb_1\".\"number\" AND \"Tb_1\".\"code\" = ?", params = Any["X"], join = Any["X"]),
   ("P5b on() then cjoin/bare pair (#974)", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Join path 'grid' stops at base field 'grid', which is not a relation. Use .cjoin(..., field=...) first if this path depe"),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"grid__code\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"grid\" = \"Tb_1\".\"number\" AND \"Tb_1\".\"code\" = \$1", params = Any["X"], join = nothing),
   ("P5b on() then cjoin/bare pair (#974)", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Join path 'grid' stops at base field 'grid', which is not a relation. Use .cjoin(..., field=...) first if this path depe"),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"grid__code\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"grid\" = \"Tb_1\".\"number\" AND \"Tb_1\".\"code\" = ?", params = Any["X"], join = Any["X"]),
+  ("P5c on() plain column, no cjoin/bare pair", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Join path 'grid' stops at base field 'grid', which is not a relation. Use .cjoin(..., field=...) first if this path depe"),
+  ("P5c on() plain column, no cjoin/bare pair", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Join path 'grid' stops at base field 'grid', which is not a relation. Use .cjoin(..., field=...) first if this path depe"),
   ("P6 on() unreached path/bare pair", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" LEFT JOIN \"constructor\" AS \"Tb_1\" ON \"Tb\".\"constructorid\" = \"Tb_1\".\"constructorid\" AND \"Tb_1\".\"name\" = \$1", params = Any["X"], join = nothing),
   ("P6 on() unreached path/bare pair", :sqlite) =>

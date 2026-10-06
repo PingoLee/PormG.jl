@@ -144,3 +144,70 @@ function _refuse_many_to_many_join_path(q::SQLObject, path::String)
   end
   return nothing
 end
+
+# ── Binding conditions (#977) ───────────────────────────────────────────────────────────────────
+# A condition is written against the HOP (`on("driverid", "number" => 5)` names the driver's
+# `number`) and rendered through the base model's field-path namespace, so binding it means lowering
+# every left-side column onto the path (`"driverid__number"`) — `_prefix_join_filter`'s rule, #958's
+# and #961's — and then checking it as a filter. That used to happen at the `.on()` / `.cjoin()` call,
+# against whatever was declared so far; it now happens once per build, against the final query, so a
+# `cjoin` link declared after the `on()` that needs it is seen (#974).
+
+# The conditions as the caller wrote them, with the checks that need no model: a handle refused (#444,
+# #481) and a shape that is not a condition at all.
+function _join_conditions_as_written(filters)::Vector{JoinCondition}
+  out = JoinCondition[]
+  for f in filters
+    _guard_no_join_handles(f, "a join ON clause (on(...) / cjoin(...))")
+    f isa JoinCondition ||
+      throw(FilterError("Invalid filter type: $(typeof(f)). Use Pair, Q, Qor, OP, or F expressions."))
+    push!(out, f)
+  end
+  return out
+end
+
+# Does this path's target depend on a `cjoin` link not declared yet? Only a first segment that is a
+# plain field of the base model can become a join later — `cjoin` links a base field and nothing
+# else — so every other path can be bound the moment it is written.
+function _join_path_awaits_link(q::SQLObject, path::String)
+  seg = String(first(split(path, "__")))
+  return _relation_step(q, q.model, seg, true) === nothing && _segment_field(q, q.model, seg, true) !== nothing
+end
+
+# One path's conditions, bound: each left side lowered onto `path` (whose model is `target`), then
+# checked into the node the renderer reads.
+function _lower_join_conditions(q::SQLObject, path::String, target::PormGModel, conditions)::Vector{FilterType}
+  out = FilterType[]
+  for c in conditions
+    lowered = _prefix_join_filter(c, path, target; base = q.model)
+    if lowered isa Pair
+      push!(out, _check_filter(lowered))
+    elseif lowered isa FilterType
+      push!(out, _check_filter_node(lowered))   # #863
+    else
+      throw(FilterError("Invalid filter type: $(typeof(lowered)). Use Pair, Q, Qor, OP, or F expressions."))
+    end
+  end
+  return out
+end
+
+# The build pass: bind every path's conditions into `instruct.join_conditions`, and refuse what no ON
+# clause can hold — a CTE-rooted string (#492) and a right side reaching a relation off the path
+# (#962). Runs where the CTE pass does, after the instruction exists and before anything renders, and
+# never touches the query object, so a nested or repeated build binds the same way.
+function _bind_join_conditions!(instruct::SQLInstruction)
+  q = instruct.object
+  for (path, cfg) in q.custom_join
+    bound = _lower_join_conditions(q, path, _join_path_target(q, path), cfg.filters)
+    if !isempty(q.ctes)
+      for f in bound
+        _refuse_cte_string_in_join(f, q, "a join ON clause (on(...) / cjoin(...))")
+      end
+    end
+    for f in bound
+      _off_path_rhs_condition(f, q, path, 0)
+    end
+    instruct.join_conditions[path] = bound
+  end
+  return instruct
+end

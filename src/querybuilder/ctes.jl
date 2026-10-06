@@ -738,11 +738,8 @@ function _resolve_cte_string_paths!(q::SQLObject)
   end
 
   # Opposite policy, same registry: a CTE reached from a join's ON clause is refused, not resolved.
-  for (path, cfg) in q.custom_join
-    for f in cfg.filters
-      _refuse_cte_string_in_join(f, q, "a join ON clause (on(...) / cjoin(...))")
-    end
-  end
+  # `custom_join` conditions are refused where they are bound (`_bind_join_conditions!`, #977): stored
+  # as written, they are not yet lowered onto their path here.
   for (alias, cfg) in q.alias_join
     for f in cfg.filters
       _refuse_cte_string_in_join(f, q, "a cjoin_on `on` expression")
@@ -760,18 +757,10 @@ end
 # INNER JOIN, dropping rows instead of nulling columns. Refused, as Django's `FilteredRelation` refuses
 # "relations outside" its own path.
 #
-# A pass at `build()` rather than a check at `.on()` time: a relation `cjoin` declares later is still a
-# relation, so the answer cannot depend on call order (the #434 lesson `_on` records). Only the RIGHT
-# side is walked: the left side was prefixed onto the path at declaration (`_prefix_join_filter`).
-function _refuse_off_path_join_rhs!(q::SQLObject)
-  isempty(q.custom_join) && return q
-  for (path, cfg) in q.custom_join
-    for f in cfg.filters
-      _off_path_rhs_condition(f, q, path, 0)
-    end
-  end
-  return q
-end
+# Checked at `build()` rather than at `.on()` time: a relation `cjoin` declares later is still a
+# relation, so the answer cannot depend on call order (the #434 lesson `_on` records). The walk below
+# runs over each path's BOUND conditions (`_bind_join_conditions!`, #977). Only the RIGHT side is
+# walked: binding lowered the left side onto the path (`_prefix_join_filter`).
 
 # One condition: find its right side. A `Q`/`Qor` holds conditions; an `OperObject` keeps its right side
 # in `values`; a comparison `FExpression` in `operand`. An `Exists(...)` contributes its `OuterRef`s.
@@ -1157,19 +1146,14 @@ function _collect_join_filters(filters)
 end
 
 function _on(q::SQLObject, join_path::String, filters::AbstractVector; join_type::Union{String,Nothing}=nothing)
-  target_model = _join_path_target(q, join_path)
-  parsed_filters = Vector{FilterType}()
-
-  for filter in filters
-    prefixed = _prefix_join_filter(filter, join_path, target_model; base = q.model)
-
-    if isa(prefixed, Pair)
-      push!(parsed_filters, _check_filter(prefixed))
-    elseif isa(prefixed, FilterType)
-      push!(parsed_filters, _check_filter_node(prefixed))   # #863
-    else
-      throw(FilterError("Invalid filter type: $(typeof(prefixed)). Use Pair, Q, Qor, OP, or F expressions."))
-    end
+  # #977: stored as written and bound onto the path at build (`_bind_join_conditions!`). Bound now
+  # too, result discarded, whenever the path's target cannot change — so a bad path or key still
+  # fails at this call. It can change only when the first segment is a plain column a `cjoin(field
+  # = …)` declared LATER turns into a join (#974, in the order #434 says must not matter): that one
+  # waits for build, where the same checks run with every link known.
+  parsed_filters = _join_conditions_as_written(filters)
+  if !_join_path_awaits_link(q, join_path)
+    _lower_join_conditions(q, join_path, _join_path_target(q, join_path), parsed_filters)
   end
 
   if isempty(parsed_filters) && join_type === nothing
@@ -1317,33 +1301,27 @@ function _cjoin(
     end
   end
 
-  # Parse filters into proper FilterType objects and apply recursive join-field prefixing.
-  # This "mixing logic" ensures that keys in Q (AND) or Qor (OR) objects belonging to the 
-  # joined model correctly map through the join path (e.g. "nationality" -> "driverid__nationality")
-  # before being converted into OperObjects.
-  parsed_filters = Vector{FilterType}()
-  for filter in filters
-    # Call recursive helper before converting pairs into full FilterTypes
-    prefixed = _prefix_join_filter(filter, main_join.first, foreign_model; base = q.model)
-
-    if isa(prefixed, Pair)
-      push!(parsed_filters, _check_filter(prefixed))
-    elseif isa(prefixed, FilterType)
-      push!(parsed_filters, _check_filter_node(prefixed))   # #863
-    else
-      throw(FilterError("Invalid filter type: $(typeof(prefixed)). Use Pair, Q, Qor, OP, or F expressions."))
-    end
-  end
-
+  # #977: the conditions are STORED as written and bound onto the path at build
+  # (`_bind_join_conditions!`), once every link is declared. Binding them now as well, and discarding
+  # the result, keeps their errors at this call: the target here is `foreign_model` whatever is
+  # declared later, so the answer cannot change.
+  conditions = _join_conditions_as_written(filters)
+  _lower_join_conditions(q, main_join.first, foreign_model, conditions)
 
   # Store in the PATH namespace (#484). A `cjoin_on` alias spelled the same sits in `q.alias_join`
   # and does not trip this guard — before #484 it did, with a message naming a join path the caller
   # never declared.
   #
   # No join type of its own: `_cjoin` folded it into `field.how` above, which is why `PathJoin`'s
-  # `join_type` (the `on(join_type = …)` override) stays `nothing` here.
-  if !haskey(q.custom_join, main_join.first)
-    q.custom_join[main_join.first] = PathJoin(parsed_filters, field, nothing)
+  # `join_type` (the `on(join_type = …)` override) is carried over from an earlier `on()`, never set.
+  #
+  # #974/#434: an `on()` on this path declared FIRST left an entry with no link. The `cjoin` supplies
+  # it, after that entry's conditions — declaration order does not decide whether the two meet.
+  existing = get(q.custom_join, main_join.first, nothing)
+  if existing === nothing
+    q.custom_join[main_join.first] = PathJoin(conditions, field, nothing)
+  elseif existing.field === nothing
+    q.custom_join[main_join.first] = PathJoin(vcat(existing.filters, conditions), field, existing.join_type)
   else
     throw(QueryBuildError("Join path '$(main_join.first)' already exists"))
   end

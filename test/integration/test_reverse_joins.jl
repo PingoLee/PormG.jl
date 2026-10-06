@@ -216,9 +216,13 @@ end
 
     @testset "on() on a non-relational field is rejected" begin
         # on() requires the first segment of the join path to be a FK or reverse relation.
-        # Scalars like `points` (FloatField) cannot be traversed.
+        # Scalars like `points` (FloatField) cannot be traversed. #977: refused when the query is
+        # BUILT, not at the call — a `cjoin("points" => …, field = …)` declared later could have
+        # linked the column, and declaration order must not decide that (#974, #434).
         q = M.Result.objects
-        @test_throws PormGError q.on("points", "points__@gt" => 0)
+        q.on("points", "points__@gt" => 0)
+        q.values("resultid")
+        @test_throws QueryBuildError q.list(show_query = :dict)
     end
 
     @testset "on() with no filters and no join_type is rejected" begin
@@ -345,20 +349,29 @@ end
     end
 
     @testset "on() through chained reverse path" begin
-        # on() with a filter that traverses the chained reverse relation.
-        # Only Result rows whose test_deletion child has a matching nested grandchild
-        # should get the test_deletion columns populated.
+        # #973: a key reaching past its hop — `on("test_deletion", "just_a_nested_roll_back__description"
+        # => …)` — is refused at the call; the predicate is written on the nested hop that owns it.
+        @test_throws FilterError M.Result.objects.on("test_deletion",
+            "just_a_nested_roll_back__description" => "chain-nested-a")
+
+        # on() on the chained reverse path: both reverse joins are LEFT, so every Result row stays and
+        # only a nested grandchild matching the predicate is attached. Projecting the nested column is
+        # what makes the predicate observable — the test_deletion columns are the same with or without it.
         query_on = M.Result.objects
-        query_on.on("test_deletion", "just_a_nested_roll_back__description" => "chain-nested-a")
+        query_on.on("test_deletion__just_a_nested_roll_back", "description" => "chain-nested-a")
         query_on.filter("resultid__@in" => [matched_result_id, other_result_id])
-        query_on.values("resultid", "test_deletion__name")
+        query_on.values("resultid", "test_deletion__name", "test_deletion__just_a_nested_roll_back__description")
         df_on = query_on |> DataFrame
 
         @test nrow(df_on) == 2
-        # The first live Result id has the matching chain → name is populated
-        @test df_on[df_on.resultid.==matched_result_id, :test_deletion__name][1] == "chain-parent"
-        # The second live Result id has no matching nested record → name is missing
-        @test df_on[df_on.resultid.==other_result_id, :test_deletion__name][1] === missing
+        matched = df_on[df_on.resultid .== matched_result_id, :]
+        other = df_on[df_on.resultid .== other_result_id, :]
+        # The first live Result id has the matching chain → its parent and the matching grandchild attach
+        @test matched.test_deletion__name[1] == "chain-parent"
+        @test matched.test_deletion__just_a_nested_roll_back__description[1] == "chain-nested-a"
+        # The second live Result id has no matching nested record → both are missing
+        @test other.test_deletion__name[1] === missing
+        @test other.test_deletion__just_a_nested_roll_back__description[1] === missing
     end
 
     # Cleanup

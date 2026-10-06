@@ -105,6 +105,8 @@ import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, PROTECT
 include("querybuilder/deletion.jl")
 
 include("querybuilder/ctes.jl")
+# #977: what a join condition refers to — the one relation resolver, and the binding of conditions.
+include("querybuilder/join_conditions.jl")
 
 
 #

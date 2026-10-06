@@ -584,8 +584,12 @@ end
 # gate covers a MODEL hop whose path equals a declared alias — the third instance of this family.
 # `track_path = !cte` for the same reason: a CTE hop must not claim its name in `row_path`.
 function _finish_hop!(instruct::SQLInstruction, row::JoinRow, join_path::String; cte::Bool)
-  join_type_override = cte ? nothing : _get_join_type_override(instruct.object, join_path)
-  join_filters = cte ? nothing : _get_join_filters(instruct.object, join_path)
+  # #977: the conditions and join type as bound at the start of this build, not as stored on the
+  # query — under the canonical path, so the spelling this traversal used does not decide whether
+  # they are found.
+  key = cte ? "" : _join_key(instruct, join_path)
+  join_type_override = cte ? nothing : get(instruct.join_type_overrides, key, nothing)
+  join_filters = cte ? nothing : get(instruct.join_conditions, key, nothing)
   row = _with_config(row, join_type_override, join_filters)
   alias = _insert_join(instruct.row_join, row, instruct.row_path, join_path; track_path = !cte)
   return (alias, row)
@@ -794,10 +798,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     )
     foreign_table_name = foreign_model
     inserted = true
-  elseif first_column in instruct.object.model.field_names || _get_join_field(instruct.object, join_path) !== nothing
+  elseif (first_field = _segment_field(instruct.object, instruct.object.model, join_path, true)) !== nothing
     # A `cjoin(field = …)` entry on this path supplies the link field itself; the first hop is the
-    # only one that can carry such an override, which is why the choice stays here.
-    first_field = _get_join_field(instruct.object, join_path) !== nothing ? _get_join_field(instruct.object, join_path) : instruct.object.model.fields[first_column]
+    # only one that can carry such an override. `_segment_field` is the one place that reads it
+    # (#977), so `on()`, the #962 check and this hop agree on which relation a segment is.
     row_join, foreign_table_name, last_field = _forward_fk_hop(
       instruct, instruct.object.model, Models.model_table_name(instruct.object.model), instruct.alias,
       first_column, first_field, vector; prev_how = nothing,

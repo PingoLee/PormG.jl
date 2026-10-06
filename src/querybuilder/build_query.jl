@@ -2079,9 +2079,14 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         # `OnExtra` carries that run faithfully, preserving whatever order it arrived in.
         _guard_no_aggregate_on_condition(condition, value, instruc)   # #917
         mark = parameter_mark(instruc)
+        rows_before = length(instruc.row_join)
         condition_sql = _get_filter_query(condition, instruc)
+        # #977: a path join's condition was bound onto its hop before anything rendered, so it can
+        # only name rows already here. A row appearing now is a binding gap, not a query to emit.
+        value isa ModelJoin && _assert_condition_added_no_join(instruc, value, rows_before)
         condition_params = detach_parameters!(mark)
-        # #946: no alias remap here. `_on`/`_cjoin` prefix every key with the join path, so the
+        # #946: no alias remap here. Binding (`_bind_join_conditions!`, #977) prefixed every key with
+        # the join path, so the
         # condition's own columns already render under the joined alias, at any hop depth. What is
         # still under the base alias genuinely names the base row — above all an `OuterRef` in a
         # nested `Subquery`, which binds the query that owns the join. A text rewrite of the base
@@ -2145,6 +2150,10 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   relocated_self_ref = Set{Int}()
   for idx in 1:length(instruc.row_join)
     haskey(on_clause_extras, idx) || continue
+    # #977: in practice only a `cjoin_on` predicate still relocates. A path join's conditions are
+    # bound onto their hop — the left side on the hop (#973), the right side on the base row, an
+    # ancestor or the hop itself (#962) — and every one of those is emitted at or before it. Moving
+    # `cjoin_on` onto the same binding is the follow-up that retires this phase.
     extras = on_clause_extras[idx]
     relocated = falses(length(extras))
 
@@ -2440,8 +2449,9 @@ function build(object::SQLObject;
   # which is precisely the #434 defect whose call-time check `_on` records removing. Read entry
   # points deepcopy the handler before `build()`, so this mutates a per-call copy.
   _resolve_cte_string_paths!(object)
-  # #962: same moment, same reason — every relation the join conditions could name is declared now.
-  _refuse_off_path_join_rhs!(object)
+  # #977: same moment, same reason — every relation and `cjoin` link the join conditions could name
+  # is declared now, so this is where they are bound onto their paths and checked (#962, #974).
+  _bind_join_conditions!(instruct)
 
   # Switch context for each SQL section so positional-parameter backends
   # (SQLite) push values into the correct bucket.
@@ -2487,18 +2497,23 @@ function build(object::SQLObject;
   set_contexts && set_context!(instruct, :where)
   _group_window_terms!(instruct)   # #789: after ORDER BY, which also extends GROUP BY
 
-  # PATH loop — materialize `cjoin` joins that traversal did not already discover. This ensures
-  # cjoin filters are applied even in UPDATE/DELETE without explicit field paths. `row_path` is the
-  # membership test that avoids materializing one twice; an `on()`-only entry has no `field` to link
-  # through and decorates whatever join traversal built for that path.
+  # PATH loop — materialize the `cjoin` and `on()` joins that traversal did not already discover. This
+  # ensures their conditions apply even in UPDATE/DELETE without explicit field paths. `row_path` is the
+  # membership test that avoids materializing one twice.
+  #
+  # #977: an `on()`-only entry is built too. It used to only decorate whatever join traversal built
+  # for the path, so with nothing else reaching it the predicate — and an explicit `join_type =
+  # "INNER"` — vanished from the statement with no error. `on(path, …)` names its join; it now
+  # declares it.
   # #932: join conditions — a `cjoin` filter, an `on()`, a `cjoin_on` ON — are evaluated per row.
   with_scope(instruct; phase = :row, label = "a join condition") do
     for (path, config) in object.custom_join
-      if path ∉ instruct.row_path && config.field !== nothing
-        array = split(path, "__")
-        push!(array, config.field.pk_field)
-        _build_row_join(array, instruct)
-      end
+      _refuse_many_to_many_join_path(object, path)
+      # Membership by CANONICAL path (#977): `row_path` holds each traversal's own spelling, so
+      # `on("status", …)` must recognise a join `values("status_id__name")` built.
+      key = _join_key(instruct, path)
+      any(p -> _join_key(instruct, p) == key, instruct.row_path) && continue
+      _build_row_join(_join_path_columns(object, path, config), instruct)
     end
 
     # ALIAS loop (#45) — materialize the anchor-less `cjoin_on` joins: no equi-anchor, explicit alias,

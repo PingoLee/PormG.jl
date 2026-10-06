@@ -1943,9 +1943,10 @@ end
 end
 
 @testset "Related Objects - on() with chained reverse path" begin
-    # on() through a chained reverse path: Result → test_deletion → nested
+    # on() through a chained reverse path: Result → test_deletion → nested. #973: written on the hop
+    # that owns `description` (a key reaching past `test_deletion` is refused); on() builds that hop.
     q = M.Result.objects
-    q.on("test_deletion", "just_a_nested_roll_back__description" => "chain-on-value")
+    q.on("test_deletion__just_a_nested_roll_back", "description" => "chain-on-value")
     q.filter("resultid" => 1)
     q.values("resultid", "test_deletion__name")
 
@@ -3246,17 +3247,23 @@ end
 # than hiding behind two interchangeable strings. On a live SQLite a swap does not even error
 # (SQLite is dynamically typed); it just returns nothing, which is why this shipped unnoticed.
 #
-# Rendering coverage for the same defect, on mock models and both backends, is in
+# #973 refused the key that relocated (a cjoin filter reaching past its hop), so the deeper predicate
+# is now written on its own hop with `on()` and binds where its join is emitted; the deep-first
+# declaration is kept as the original bug's order. Rendering coverage for the same defect, on mock models and both backends, is in
 # `test/unit/test_order_by_joins.jl`; execution coverage is in `test/integration/test_cjoin.jl`.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Alignment Verification - cjoin ON filters across two join depths (#421)" begin
+    # #973: the original shape — `circuitid__country` inside the race cjoin's filters — reaches past
+    # the hop and is refused; the deeper predicate is written on its own hop instead.
+    @test_throws FilterError M.Result.objects.cjoin("raceid" => "Race",
+        filters = ["circuitid__country" => "Italy", "year" => 2009], warn = false)
+
     q = M.Result.objects
     q.values("points")
-    # `circuitid__country` is one hop deeper than `year`, so its fragment forward-references the
-    # circuit join and Phase 1b relocates it. Listing it FIRST is what makes binding order differ
-    # from emission order — reversed, this same pair was always correct.
-    q.cjoin("raceid" => "Race",
-            filters = ["circuitid__country" => "Italy", "year" => 2009], warn = false)
+    # The circuit predicate is declared FIRST — the original bug's order. Reversed (the control
+    # below), this same pair must render and bind identically.
+    q.on("raceid__circuitid", "country" => "Italy")
+    q.cjoin("raceid" => "Race", filters = ["year" => 2009], warn = false)
 
     insp = q |> inspect_query
     sql = insp[:sql_text]
@@ -3272,12 +3279,11 @@ end
     @test count(==('?'), sql) == 2
     @test insp[:parameter_buckets][:where] == []   # ON predicates stay in :join, never leak to WHERE
 
-    # Control: the same two filters listed the other way round. Binding order already matched
-    # emission order, so this was correct before the fix and must be identical after it.
+    # Control: the same two predicates declared the other way round — identical text and bucket.
     rev = M.Result.objects
     rev.values("points")
-    rev.cjoin("raceid" => "Race",
-              filters = ["year" => 2009, "circuitid__country" => "Italy"], warn = false)
+    rev.cjoin("raceid" => "Race", filters = ["year" => 2009], warn = false)
+    rev.on("raceid__circuitid", "country" => "Italy")
     rev_insp = rev |> inspect_query
     @test rev_insp[:parameter_buckets][:join] == [2009, "Italy"]
     @test rev_insp[:sql_text] == sql

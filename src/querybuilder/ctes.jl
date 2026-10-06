@@ -259,8 +259,9 @@ function _guard_no_handle(filter, ::Type{T}, reject::Function, context::String, 
   # `g.operand = g` on an internal `FExpression` is no longer one assignment away — that route is
   # closed by the type. What survives is the same container cycle arriving INDIRECTLY: `FObject.column`
   # admits `SQLTypeQ`/`SQLTypeQor` (`types.jl`), so a cyclic `Q` nested inside a function still reaches
-  # this walk. Be precise about what it buys, though: it protects **`cjoin_on`**, the
-  # one caller that reaches this sweep WITHOUT going through `_prefix_join_filter`. It does NOT make
+  # this walk. Be precise about what it buys, though: it protects **`cjoin_on`**, and the `on()` /
+  # `cjoin()` call-time sweep in `_join_conditions_as_written` (#977), the callers that reach it
+  # WITHOUT going through `_prefix_join_filter`. It does NOT make
   # the `on()` / `cjoin()` route cycle-safe, and the three arms of `_prefix_join_filter` fail
   # differently, so do not read a uniform rule into it:
   #
@@ -738,11 +739,8 @@ function _resolve_cte_string_paths!(q::SQLObject)
   end
 
   # Opposite policy, same registry: a CTE reached from a join's ON clause is refused, not resolved.
-  for (path, cfg) in q.custom_join
-    for f in cfg.filters
-      _refuse_cte_string_in_join(f, q, "a join ON clause (on(...) / cjoin(...))")
-    end
-  end
+  # `custom_join` conditions are refused where they are bound (`_bind_join_conditions!`, #977): stored
+  # as written, they are not yet lowered onto their path here.
   for (alias, cfg) in q.alias_join
     for f in cfg.filters
       _refuse_cte_string_in_join(f, q, "a cjoin_on `on` expression")
@@ -760,21 +758,13 @@ end
 # INNER JOIN, dropping rows instead of nulling columns. Refused, as Django's `FilteredRelation` refuses
 # "relations outside" its own path.
 #
-# A pass at `build()` rather than a check at `.on()` time: a relation `cjoin` declares later is still a
-# relation, so the answer cannot depend on call order (the #434 lesson `_on` records). Only the RIGHT
-# side is walked: the left side was prefixed onto the path at declaration (`_prefix_join_filter`).
-function _refuse_off_path_join_rhs!(q::SQLObject)
-  isempty(q.custom_join) && return q
-  for (path, cfg) in q.custom_join
-    for f in cfg.filters
-      _off_path_rhs_condition(f, q, path, 0)
-    end
-  end
-  return q
-end
+# Checked at `build()` rather than at `.on()` time: a relation `cjoin` declares later is still a
+# relation, so the answer cannot depend on call order (the #434 lesson `_on` records). The walk below
+# runs over each path's BOUND conditions (`_bind_join_conditions!`, #977). Only the RIGHT side is
+# walked: binding lowered the left side onto the path (`_prefix_join_filter`).
 
 # One condition: find its right side. A `Q`/`Qor` holds conditions; an `OperObject` keeps its right side
-# in `values`; a comparison `FExpression` in `operand`. An `Exists(...)` is its own statement.
+# in `values`; a comparison `FExpression` in `operand`. An `Exists(...)` contributes its `OuterRef`s.
 function _off_path_rhs_condition(f, q::SQLObject, path::String, depth::Int)
   depth > 32 && return nothing
   if f isa QObject
@@ -790,6 +780,10 @@ function _off_path_rhs_condition(f, q::SQLObject, path::String, depth::Int)
     # A String operand of an `F` comparison is read as a column first (see `_refuse_cte_string_in_join`).
     _off_path_rhs_paths(f.operand, q, path, depth + 1)
     _off_path_nested_rhs(f.field_name, q, path, depth + 1)
+  elseif f isa ExistsObject
+    # #977: `Q(Exists(…))` is a condition of its own, and its `OuterRef`s resolve in this statement —
+    # unwalked, an off-path one was relocated onto a later join like any other right side.
+    _off_path_outer_refs(getfield(f.query, :object), q, path)
   end
   return nothing
 end
@@ -803,7 +797,8 @@ end
 # join landed in the constructor's LEFT JOIN when `values()` built the driver first.
 #
 # The left side's columns themselves are not checked here: a left side that reaches BEYOND the hop
-# (`on("driverid", "results__code" => "x")`) is a separate question, not a right side.
+# (`on("driverid", "results__code" => "x")`) is refused by #973's own walk (`_refuse_lhs_past_hop`,
+# `join_conditions.jl`), with a remedy that names the hop the column belongs to.
 function _off_path_nested_rhs(x, q::SQLObject, path::String, depth::Int)
   depth > 32 && return nothing
   if x isa FExpression
@@ -830,6 +825,8 @@ function _off_path_nested_rhs(x, q::SQLObject, path::String, depth::Int)
     _off_path_outer_refs(getfield(x.query, :object), q, path)
   elseif x isa SQLObjectHandler
     _off_path_outer_refs(getfield(x, :object), q, path)
+  elseif x isa ExistsObject
+    _off_path_outer_refs(getfield(x.query, :object), q, path)
   elseif x isa AbstractVector && !(x isa AbstractVector{UInt8})
     for v in x; _off_path_nested_rhs(v, q, path, depth + 1); end
   end
@@ -858,8 +855,16 @@ function _off_path_rhs_paths(x, q::SQLObject, path::String, depth::Int; f_slot::
     x.aggregate && return nothing
     _off_path_rhs_paths(x.column, q, path, depth + 1)
     for v in values(x.kwargs)
-      v isa Union{SQLTypeFunction,FExpression} && _off_path_rhs_paths(v, q, path, depth + 1)
+      # #977: a subquery in a `then`/`else` too — `_off_path_nested_rhs` already read it there, and
+      # its `OuterRef` escaped this walk only.
+      v isa Union{SQLTypeFunction,FExpression,SubqueryObject} && _off_path_rhs_paths(v, q, path, depth + 1)
     end
+  elseif x isa Union{QObject,QorObject}
+    # #977: a `When` over a `Q(...)` holds its conditions here. Inside a right-side value every column
+    # is a right-side column, whichever side of its own comparison it sits on.
+    for v in (x isa QObject ? x.filters : x.or); _off_path_rhs_paths(v, q, path, depth + 1); end
+  elseif x isa ExistsObject
+    _off_path_outer_refs(getfield(x.query, :object), q, path)
   elseif x isa SQLField
     _off_path_rhs_paths(x.field, q, path, depth + 1)
   elseif x isa OperObject
@@ -915,56 +920,20 @@ function _collect_outer_refs!(refs::Vector{String}, x, depth::Int)
   return refs
 end
 
+# Both sides in canonical spelling (#977's one resolver): `F("status__name")` is the FK short form of
+# `status_id`, so it is the same relation the renderer joins, and is judged as that relation.
 function _check_rhs_relation(column::String, q::SQLObject, path::String;
                              spelled::AbstractString = "F(\"$(column)\")")
   isempty(column) && return nothing
-  rel = _rhs_relation_prefix(q, column)
-  (isempty(rel) || rel == path || startswith(path, rel * "__")) && return nothing
+  rel = _relation_prefix(q, column)
+  canonical = _canonical_join_path(q, path)
+  (isempty(rel) || rel == canonical || startswith(canonical, rel * "__")) && return nothing
   throw(FilterError(
     "\e[4m\e[31m$(spelled)\e[0m reaches '$(rel)', a relation outside the join path " *
     "'$(path)', so it cannot appear in that join's ON clause. A condition in on(...) / cjoin(...) " *
     "compares the joined row with the base row or with a table earlier on the same path; PormG will " *
     "not move it onto another join's ON clause.\n  " *
     "Put the predicate in \e[4m\e[32m.filter(...)\e[0m instead (#962)."))
-end
-
-# The relation part of a column path: the longest leading run of segments that are relations from
-# the base model, `__@` transforms stripped first. `"driverid__nationality"` → `"driverid"`; a base
-# column, a JSON key path (`"payload__key"`) or a literal → `""`. The last segment is the column, so
-# it is never part of the prefix, even when it is itself a ForeignKey column.
-function _rhs_relation_prefix(q::SQLObject, column::String)
-  segments = split(String(first(split(column, "__@"))), "__")
-  prefix = ""
-  model = q.model
-  for (i, seg) in enumerate(segments[1:end-1])
-    model = _relation_hop(q, model, String(seg), i == 1)
-    model === nothing && break
-    prefix = isempty(prefix) ? String(seg) : string(prefix, "__", seg)
-  end
-  return prefix
-end
-
-# The model one relation segment reaches, or `nothing` when `seg` is not a relation. The relations are
-# `_resolve_join_target_model`'s — ForeignKey, reverse relation (M2M included) — plus a `cjoin` link on
-# the first segment, consulted FIRST: `cjoin("grid" => "Driver", field = …)` turns the plain column
-# `grid` into a join, and the renderer resolves `grid__…` through it. (`_resolve_join_target_model`
-# reads the base field first and so refuses `on("grid", …)` after such a cjoin — a separate defect,
-# and the reason this does not reuse it.)
-function _relation_hop(q::SQLObject, model::PormGModel, seg::String, first_segment::Bool)
-  field = first_segment ? _get_join_field(q, seg) : nothing
-  if field === nothing && seg in model.field_names
-    field = model.fields[seg]
-  end
-  if field !== nothing
-    to = hasproperty(field, :to) ? field.to : nothing
-    to === nothing && return nothing
-    return to isa PormGModel ? to : getfield(model._module, Symbol(String(to)))
-  end
-  haskey(model.related_objects, seg) || return nothing
-  related = model.related_objects[seg]
-  related isa Models.ManyToManyRelation &&
-    return getfield(model._module, Symbol(related.related_binding))
-  return (related::Models.ReverseRelation).model_resolved
 end
 
 # Filter elements are containers, not `SQLField`s, so they get their own shallow walk down to the
@@ -1186,80 +1155,15 @@ function _collect_join_filters(filters)
   return _filters
 end
 
-function _resolve_join_target_model(q::SQLObject, join_path::String)
-  parts = split(join_path, "__")
-  isempty(parts) && throw(QueryBuildError("on() requires a non-empty join path."))
-
-  current_model = q.model
-  current_module = q.model._module
-
-  for (index, part) in enumerate(parts)
-    current_path = join(parts[1:index], "__")
-
-    # #434 was here: `if index == 1 && haskey(q.ctes, part) throw(…) end`. It read the CTE registry
-    # as it stood at `.on()` time, so `.with()` then `.on()` was refused while `.on()` then `.with()`
-    # sailed past — order-dependent where every other fluent method is order-independent.
-    #
-    # #444 dissolves it rather than moving it. `join_path` is now unambiguously a FIELD path: a CTE
-    # is reachable only through `CTE(name, path)`, which `on()` refuses outright (see
-    # `_prefix_join_filter`). So a segment naming a CTE is simply a segment that is not a relation,
-    # and the generic error below is both correct and order-independent. The CTE-aware hint lives
-    # there, where it can be best-effort without any of this being conditional on it.
-
-    field = if part in current_model.field_names
-      current_model.fields[part]
-    elseif index == 1 && _get_join_field(q, current_path) !== nothing
-      _get_join_field(q, current_path)
-    else
-      nothing
-    end
-
-    if field !== nothing
-      if !hasproperty(field, :to) || field.to === nothing
-        throw(QueryBuildError("Join path '$(join_path)' stops at base field '$(part)', which is not a relation. Use .cjoin(..., field=...) first if this path depends on a custom link."))
-      end
-
-      current_model = field.to isa PormGModel ? field.to : getfield(current_module, Symbol(String(field.to)))
-    elseif haskey(current_model.related_objects, part)
-      related_value = current_model.related_objects[part]
-      if related_value isa Models.ManyToManyRelation
-        # ManyToMany reverse traversal in cjoin path: hop directly to the
-        # related model, the through table is materialized later by the
-        # query builder when emitting joins.
-        current_model = getfield(current_module, Symbol(related_value.related_binding))
-      else
-        # #343: hop to the resolved child. This arm used to respell the binding as
-        # `uppercasefirst(lowercased_name)` — the mirror of the M2M arm above, except that one reads
-        # a STORED binding and therefore worked, while this one could not reach `Dim_CNES`.
-        current_model = (related_value::Models.ReverseRelation).model_resolved
-      end
-    else
-      # #434/#444: best-effort hint. Both `.on()`-then-`.with()` and `.with()`-then-`.on()` reach
-      # this same throw with the same wording; only the parenthetical depends on whether the CTE has
-      # been declared yet, and it adds information rather than deciding the outcome.
-      hint = haskey(q.ctes, part) ?
-        " ('$(part)' is a CTE declared on this query — on() targets model relations only; set a CTE's join type with with(..., join_type=...).)" : ""
-      throw(QueryBuildError("Join path '$(join_path)' is invalid. The segment '$(part)' is not a relation on model '$(current_model.name)'.$(hint)"))
-    end
-  end
-
-  return current_model
-end
-
 function _on(q::SQLObject, join_path::String, filters::AbstractVector; join_type::Union{String,Nothing}=nothing)
-  target_model = _resolve_join_target_model(q, join_path)
-  parsed_filters = Vector{FilterType}()
-
-  for filter in filters
-    prefixed = _prefix_join_filter(filter, join_path, target_model; base = q.model)
-
-    if isa(prefixed, Pair)
-      push!(parsed_filters, _check_filter(prefixed))
-    elseif isa(prefixed, FilterType)
-      push!(parsed_filters, _check_filter_node(prefixed))   # #863
-    else
-      throw(FilterError("Invalid filter type: $(typeof(prefixed)). Use Pair, Q, Qor, OP, or F expressions."))
-    end
+  # #977: stored as written and bound onto the path at build (`_bind_join_conditions!`). Bound now
+  # too, result discarded, whenever the path's target cannot change — so a bad path or key still
+  # fails at this call. It can change only when the first segment is a plain column a `cjoin(field
+  # = …)` declared LATER turns into a join (#974, in the order #434 says must not matter): that one
+  # waits for build, where the same checks run with every link known.
+  parsed_filters = _join_conditions_as_written(filters)
+  if !_join_path_awaits_link(q, join_path)
+    _lower_join_conditions(q, join_path, _join_path_target(q, join_path), parsed_filters)
   end
 
   if isempty(parsed_filters) && join_type === nothing
@@ -1407,33 +1311,27 @@ function _cjoin(
     end
   end
 
-  # Parse filters into proper FilterType objects and apply recursive join-field prefixing.
-  # This "mixing logic" ensures that keys in Q (AND) or Qor (OR) objects belonging to the 
-  # joined model correctly map through the join path (e.g. "nationality" -> "driverid__nationality")
-  # before being converted into OperObjects.
-  parsed_filters = Vector{FilterType}()
-  for filter in filters
-    # Call recursive helper before converting pairs into full FilterTypes
-    prefixed = _prefix_join_filter(filter, main_join.first, foreign_model; base = q.model)
-
-    if isa(prefixed, Pair)
-      push!(parsed_filters, _check_filter(prefixed))
-    elseif isa(prefixed, FilterType)
-      push!(parsed_filters, _check_filter_node(prefixed))   # #863
-    else
-      throw(FilterError("Invalid filter type: $(typeof(prefixed)). Use Pair, Q, Qor, OP, or F expressions."))
-    end
-  end
-
+  # #977: the conditions are STORED as written and bound onto the path at build
+  # (`_bind_join_conditions!`), once every link is declared. Binding them now as well, and discarding
+  # the result, keeps their errors at this call: the target here is `foreign_model` whatever is
+  # declared later, so the answer cannot change.
+  conditions = _join_conditions_as_written(filters)
+  _lower_join_conditions(q, main_join.first, foreign_model, conditions)
 
   # Store in the PATH namespace (#484). A `cjoin_on` alias spelled the same sits in `q.alias_join`
   # and does not trip this guard — before #484 it did, with a message naming a join path the caller
   # never declared.
   #
   # No join type of its own: `_cjoin` folded it into `field.how` above, which is why `PathJoin`'s
-  # `join_type` (the `on(join_type = …)` override) stays `nothing` here.
-  if !haskey(q.custom_join, main_join.first)
-    q.custom_join[main_join.first] = PathJoin(parsed_filters, field, nothing)
+  # `join_type` (the `on(join_type = …)` override) is carried over from an earlier `on()`, never set.
+  #
+  # #974/#434: an `on()` on this path declared FIRST left an entry with no link. The `cjoin` supplies
+  # it, after that entry's conditions — declaration order does not decide whether the two meet.
+  existing = get(q.custom_join, main_join.first, nothing)
+  if existing === nothing
+    q.custom_join[main_join.first] = PathJoin(conditions, field, nothing)
+  elseif existing.field === nothing
+    q.custom_join[main_join.first] = PathJoin(vcat(existing.filters, conditions), field, existing.join_type)
   else
     throw(QueryBuildError("Join path '$(main_join.first)' already exists"))
   end

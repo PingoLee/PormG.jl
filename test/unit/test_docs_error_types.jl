@@ -110,6 +110,26 @@ const DOCERR_STATUS_SL, DOCERR_DRIVER_SL, DOCERR_RESULT_SL = _docerr_models("doc
 
 # #331 — a model of its own rather than a `default` bolted onto DOCERR_RESULT_*: a defaulted field
 # there would silently change what every other case's model injects on a write.
+# #973 — a forward chain Result → Driver → Team, for the custom-joins page's "a left side stays on its
+# hop" claim. Forward ForeignKeys, because these unregistered models carry no reverse relations.
+const DOCERR_RESULT973_PG = let team = Model("docerr_team973_docerr_pg", teamid = IDField(), name = CharField())
+    team.connect_key = "docerr_pg"; team._module = Main
+    drv = Model("docerr_driver973_docerr_pg", driverid = IDField(),
+                teamid = ForeignKey(team, pk_field = "teamid", null = true))
+    drv.connect_key = "docerr_pg"; drv._module = Main
+    m = Model("docerr_result973_docerr_pg", resultid = IDField(),
+              driverid = ForeignKey(drv, pk_field = "driverid", null = true))
+    m.connect_key = "docerr_pg"; m._module = Main; m
+end
+
+# #977 — a ManyToMany relation for the custom-joins page's on() refusal. Built like the stint model:
+# the refusal fires while resolving the path, before any link table would be joined.
+const DOCERR_TEAM_PG = let sponsor = Model("docerr_sponsor_docerr_pg", sponsorid = IDField(), name = CharField())
+    sponsor.connect_key = "docerr_pg"; sponsor._module = Main
+    m = Model("docerr_team_docerr_pg", teamid = IDField(), sponsors = PormG.Models.ManyToManyField(sponsor))
+    m.connect_key = "docerr_pg"; m._module = Main; m
+end
+
 const DOCERR_STINT_PG = let m = Model("docerr_stint_docerr_pg",
         id = IDField(), driver = CharField(), laps = IntegerField(default = 0))
     m.connect_key = "docerr_pg"; m._module = Main; m
@@ -619,6 +639,30 @@ const DOCERR_CASES = [
             q = DOCERR_RESULT_PG.objects
             q.on("statusid", "status" => F("driverid__nationality"))
             q.values("resultid", "statusid__status")
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #973. The doc's `cjoin("raceid" => …, filters = ["circuitid__country" => …])` shape: from
+        # the driver hop, `teamid__name` is a column of the team, one relation past the hop.
+        "read/custom_joins.md — a join-condition key reaching past its hop is refused",
+        FilterError,
+        () -> begin
+            q = DOCERR_RESULT973_PG.objects
+            q.on("driverid", "teamid__name" => "X")
+            q.values("resultid")
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #977. A ManyToMany join goes through a link table that never received an `on()` predicate
+        # or `join_type`, so both vanished from the statement; refused instead.
+        "read/custom_joins.md — an on() path crossing a ManyToManyField is refused",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_TEAM_PG.objects
+            q.on("sponsors", "name" => "X")
+            q.values("teamid")
             q.list(show_query = :dict)
         end,
     ),

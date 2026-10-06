@@ -457,6 +457,13 @@ end
   # df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
   row_join::Vector{JoinRow} = JoinRow[] # the materialized joins, one typed row each (#487)
   row_path::Vector{String} = [] # array of path to map the row_join (model__model__ etc)
+  # #977: each `on()` / `cjoin(filters = …)` path's conditions, BOUND — every left-side column lowered
+  # onto the path, every check run — by `_bind_join_conditions!` before anything renders, and its
+  # explicit `join_type`. Both keyed by the CANONICAL path (`_canonical_join_path`: the FK short form
+  # resolved), so `on("status", …)` and a traversal spelled `status_id__…` find each other. The query
+  # object keeps them as written; a hop reads them from here (`_finish_hop!`).
+  join_conditions::Dict{String,Vector{FilterType}} = Dict{String,Vector{FilterType}}()
+  join_type_overrides::Dict{String,String} = Dict{String,String}()
   # array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
   tab_field_cache::Dict{MemoKey,PormGField} = sizehint!(Dict{MemoKey,PormGField}(), 12) # cache to be used in join query (#474: keyed by MemoKey)
   # #27: the membership set of resolved JSON-lookup paths (e.g. "payload__driver"). Added when the
@@ -694,8 +701,15 @@ end
 # one in place, which is what #112 was about. Note the limit of that — `filters` is a `Vector`, so an
 # entry is only as immutable as what it points at, and `Base.deepcopy(::SQLObjectQuery)` copies that
 # vector rather than relying on every future writer to remember not to mutate it.
+#
+# #977: `filters` holds the conditions AS WRITTEN — guarded, but not prefixed onto the path and not
+# `_check_filter`ed. Binding them needs the model the path reaches, which a `cjoin` declared later can
+# change (#974), so it happens at build (`_bind_join_conditions!`), never here. A `Pair` is therefore
+# a legal element, which `FilterType` (the CHECKED shapes) does not admit.
+const JoinCondition = Union{Pair,FilterType}
+
 struct PathJoin
-  filters::Vector{FilterType}          # ON predicates, already prefixed onto the path
+  filters::Vector{JoinCondition}       # ON predicates as written; bound onto the path at build
   field::Union{PormGField,Nothing}     # `cjoin`'s link (its join type folded into `field.how`); `nothing` for an `on()`-only entry
   join_type::Union{String,Nothing}     # explicit `on(join_type = …)` override; `nothing` = derived from the relation (#474)
 end
@@ -2291,7 +2305,8 @@ Each mutates the handler and returns it, so calls can be chained or accumulated 
   `.limit(...)` / `.offset(...)` (#272)
 - `.distinct()` — add `DISTINCT`
 - `.db("key")` — route the query to another connection pool
-- `.on(path, pairs...; join_type)` — add predicates to the `ON` clause of an existing join path.
+- `.on(path, pairs...; join_type)` — add predicates to the `ON` clause of a join path, joining it if
+  nothing else in the query does.
   Adds predicates only: without `join_type` the join keeps the type derived from the relation
   itself, and an explicit one stays in effect for later `on()` calls on that path (#474)
 - `.cjoin("field" => "Model"; filters, join_type)` — custom join at query time

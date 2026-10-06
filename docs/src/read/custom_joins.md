@@ -116,14 +116,16 @@ Only the row joined to `Result.resultid = 1` is returned because the INNER JOIN 
 
 ### Join with Q/Qor Filters (AND/OR Logic)
 
-Use `Q()` for AND logic and `Qor()` for OR logic in join conditions. Plain field names are automatically prefixed with the join path:
+Use `Q()` for AND logic and `Qor()` for OR logic in join conditions. Plain field names are automatically prefixed with the join path. A column of a further relation — the result's status — goes on that relation's own join, with `on()`:
 
 ```julia
-# Plain fields are auto-prefixed: "statusid__status" and nested fields work too
+# "positionorder" is auto-prefixed onto the result join; the status predicate rides on the
+# result__statusid join, which on() builds since values() already reaches it
 df = M.New_join_position.objects.
     cjoin("result" => "Result", filters=[
-        Q("statusid__status" => "Finished", Qor("positionorder" => 1, "positionorder" => 2))
+        Q("grid__@gte" => 1, Qor("positionorder" => 1, "positionorder" => 2))
     ]).
+    on("result__statusid", "status" => "Finished").
     values("result__statusid__status", "description") |> DataFrame
 ```
 
@@ -212,11 +214,28 @@ df = M.Result.objects.
 The reverse join is `LEFT` here because that is what PormG derives for it, not because `on()` chose it — `on()` only adds the predicate. All three `Result` rows remain and only the matching reverse rows are attached. If you want only the matched base rows, pass `join_type="INNER"` on the same `on()` call.
 
 !!! tip
-    **Chained Reverse Paths**: You can also use `on()` through chained reverse paths. For example, `query.on("test_deletion", "just_a_nested_roll_back__description" => "nested-value")` will correctly apply the `ON`-clause predicate deep within the reversed relationship traversal chain.
+    **Chained Reverse Paths**: `on()` takes a chained reverse path too. Name the hop whose row the
+    predicate is about — `query.on("test_deletion__just_a_nested_roll_back", "description" =>
+    "nested-value")` puts the predicate in the nested table's `ON` clause, and builds that join if
+    nothing else in the query reaches it. Writing the column past the hop instead,
+    `on("test_deletion", "just_a_nested_roll_back__description" => …)`, raises `FilterError`
+    ([#973](https://github.com/PingoLee/PormG.jl/issues/973)); see
+    [Which row each side of a condition names](#Which-row-each-side-of-a-condition-names).
 
 ### Contract of `on()`
 
-- `query.on("path", ...)` targets an existing join path, including reverse joins such as `"test_deletion"` and nested paths such as `"raceid__circuitid"`
+- `query.on("path", ...)` targets a join path, including reverse joins such as `"test_deletion"` and nested paths such as `"raceid__circuitid"`
+- **`on()` builds its join when nothing else in the query reaches the path** — no `values()`,
+  `filter()` or `order_by()` through it. Before [#977](https://github.com/PingoLee/PormG.jl/issues/977)
+  such an `on()` was dropped from the statement with no error, `join_type="INNER"` included, so a
+  predicate meant to restrict rows restricted nothing. The join it builds is the one traversal would
+  build, with the type PormG derives for it: a reverse path repeats a base row once per matching child,
+  as `values("test_deletion__name")` would, and where that join is `INNER` (a `NOT NULL` ForeignKey) a
+  base row with no matching child is dropped. A query that aggregates over such a to-many join now
+  meets the [#74](https://github.com/PingoLee/PormG.jl/issues/74) fan-out guard
+- a path that crosses a `ManyToManyField` raises `QueryBuildError`: that join goes through a link
+  table PormG does not attach an `ON` predicate or a `join_type` to, and it used to drop them
+  silently. Put the predicate in `.filter(...)` instead
 - multiple predicates are combined with `AND` unless you use `Qor(...)`
 - repeated `on()` calls for the same path merge additional predicates into the same `ON` clause
 - **`on()` does not change the join type unless you pass `join_type=`.** Without it the join keeps
@@ -240,6 +259,20 @@ In an `on()` or `cjoin(filters = …)` condition:
   `Q(...)`, `Qor(...)`, `OP(...)` or `F(...) == F(...)`, and at any hop depth. On a deep hop, a table
   earlier on the same path is reached through its path from the base model: in
   `on("driverid__results", …)`, `F("driverid__number")` is the driver's `number`.
+- **A left side stays on its hop.** A key whose relation part goes past the join path —
+  `on("driverid", "results__grid" => 1)`, or `cjoin("raceid" => "Race", filters =
+  ["circuitid__country" => "Italy"])` — raises `FilterError`, at the call (or, for a path through a
+  `cjoin(field = …)` link, when the query is built). It names a row of a further
+  relation, and PormG used to add that relation's join silently, with the predicate in its `ON`
+  clause; for a reverse relation that join repeated base rows. Write the predicate on the hop that
+  owns the column, `on("raceid__circuitid", "country" => "Italy")` (`on()` builds that join when
+  nothing else reaches it), or put it in `.filter(...)` to restrict rows. Before
+  [#973](https://github.com/PingoLee/PormG.jl/issues/973) the deep key was accepted.
+- **A right side stays on the path.** A right-side column — an `F`, a column string, a subquery's
+  `OuterRef`, an `Exists(...)`'s `OuterRef` — may name the base row, the joined row or a table earlier
+  on the same path. One that reaches any other relation raises `FilterError` when the query is built
+  ([#962](https://github.com/PingoLee/PormG.jl/issues/962)): that relation's join is not in scope at
+  this `ON` clause, so put the predicate in `.filter(...)`.
 
 That is what lets a join condition compare the two tables. For example, these are the results where
 the car number is the driver's permanent number:

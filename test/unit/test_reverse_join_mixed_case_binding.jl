@@ -18,8 +18,8 @@
 # The fixture below is the shape the Django importer actually emits — a lowercase positional name
 # (#300-legal) under a mixed-case binding — pinned by test_import_django_models.jl's
 # `Dim_CNES = Models.Model("dim_cnes"` assertion. Each testset targets one of the four sites that
-# used to reconstruct: build_joins.jl first-hop, build_joins.jl multi-hop loop, ctes.jl
-# `_resolve_join_target_model`, and deletion.jl `find_related_objects!`.
+# used to reconstruct: build_joins.jl first-hop, build_joins.jl multi-hop loop, the on() path
+# resolver (`_relation_step` in join_conditions.jl since #977), and deletion.jl `find_related_objects!`.
 #
 # Everything here renders against a mock backend — no database. The pre-#343 failure was an
 # `UndefVarError` at query-BUILD time, so `inspect_query` traverses the identical code path a
@@ -160,7 +160,7 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ctes.jl — `_resolve_join_target_model`, reached through on(). Sibling coverage for the
+# join_conditions.jl — `_relation_step` (#977), reached through on(). Sibling coverage for the
 # lowercase-binding case lives in test_alignment_sqlite.jl "Related Objects - on() ...".
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Mixed-case binding - on() resolves the reverse target (ctes)" begin
@@ -186,7 +186,10 @@ end
 
 @testset "Mixed-case binding - on() through a chained reverse path (ctes)" begin
     q = MC.Dim_Unidade.objects
-    q.on("dim_cnes", "usuarios__login" => "chain-value")
+    # #973: the predicate is written on the hop that owns `login` — `on("dim_cnes", "usuarios__login"
+    # => …)` reached past its hop and is refused. Resolving this path is what crosses the mixed-case
+    # binding, and `on()` builds the second hop itself since nothing else reaches it (#977).
+    q.on("dim_cnes__usuarios", "login" => "chain-value")
     q.values("nome", "dim_cnes__nome")
 
     insp = inspect_query(q)

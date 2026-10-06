@@ -2760,6 +2760,17 @@ function _get_join_condition_list(row_join::Vector{JoinRow}, connection)
                     "no WITH clause, so the CTE it references is never declared. Scope the mutation with " *
                     "a filter or a subquery instead."))
     end
+    # #977: the same rule, for an `on(...)` / `cjoin(filters = ...)` condition on a path join. The
+    # loop below renders equi-anchors only, so the condition was dropped from the statement — while
+    # its values were still bound by the join render, so since `on()` builds its own join the
+    # statement carried more values than markers and the driver refused it. Before that the
+    # predicate was simply ignored: an UPDATE wider than the query that described it.
+    if row isa ModelJoin && !isempty(row.on_conditions)
+      throw(QueryBuildError("An on(...) / cjoin(filters = ...) condition cannot be carried into a correlated " *
+                    "UPDATE ... FROM (setting a column from a joined table): that statement joins in its WHERE " *
+                    "clause on the key columns only, so the condition would be dropped. Scope the mutation " *
+                    "with a filter instead (#977)."))
+    end
   end
   conditions = String[]
   for row in row_join

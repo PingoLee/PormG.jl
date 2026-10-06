@@ -815,17 +815,22 @@ _resolved_contains_agg(node, instruc::SQLInstruction)::Bool =
 #
 # Callers must have switched to the clause the text prints in — the fresh render binds, and it must
 # bind there.
-function _alias_lhs(alias::MemoKey, cached, instruc::SQLInstruction)
-  alias[1] === :base || return cached.field
-  _projection_output_name(cached) == alias[2] || return cached.field
+#
+# #985: `fresh = true` is the ON-clause reading. A projection alias renders its source afresh whatever
+# its kind, so every column in it reaches `_record_join_column`; anything that is not an alias answers
+# `nothing`, and the caller renders the column itself.
+function _alias_lhs(alias::MemoKey, cached, instruc::SQLInstruction; fresh::Bool = false)
+  not_alias = fresh ? nothing : cached.field
+  alias[1] === :base || return not_alias
+  _projection_output_name(cached) == alias[2] || return not_alias
   source = _projected_source(alias, instruc)
   # No source (the memo was written by a non-projection path) or a kind that binds nothing: the
   # memoized text is safe, and reusing it keeps the common case byte-identical.
-  source === nothing && return cached.field
+  source === nothing && return not_alias
   # #707: a `Value(...)` alias IS a binding — its memoized text is the SELECT's own `?`. Render the
   # literal again, so it binds in the clause it prints in (`WHERE ? = ?`, two values for two markers).
   source isa SQLTypeText && return _get_select_query(source, instruc)
-  source.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject} && return cached.field
+  !fresh && source.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject} && return cached.field
   return _get_select_query(source.field, instruc, _as = source._as)
 end
 
@@ -2034,7 +2039,9 @@ function build_row_join_sql_text(instruc::SQLInstruction)
       continue
     end
 
-    conditions = _render_on_conditions(instruc, value)
+    # #985: under the row's join scope, so every column the conditions render is checked against the
+    # rows this ON clause may name (`_record_join_column`).
+    conditions = _join_scope(() -> _render_on_conditions(instruc, value), instruc, idx, value)
     if value isa AnchorlessJoin
       # #45: anchor-less join — the ON clause is entirely the caller's conditions (no equi-anchor).
       # Never empty: binding refuses an ON clause that never names this alias (#448), which an empty

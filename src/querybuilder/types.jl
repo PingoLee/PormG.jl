@@ -397,6 +397,12 @@ growing (`Coalesce(Subquery)`, `F(...) == Subquery`, a `When` condition, …), a
 - `group_key` — the expression rendering now is itself a GROUP BY key, whole: a projection the
   outer query groups by position, or an ORDER BY term it groups by text. A subquery inside it is
   evaluated per input row to form the key, so its correlation needs no grouped column.
+- `join_hop`, `join_side`, `join_left`, `join_right` (#985) — the same move for a different
+  question: while a join's ON clause renders, which rows may each column it names belong to. The
+  row being joined sets the hop and both alias sets; each comparison sets the side its operands
+  render on, and a comparison nested inside a right side stays right (#975). Every column reaches
+  `_column_sql`, which checks it — so a node type the build-time walkers do not know is caught here
+  instead of naming the wrong row in valid SQL.
 
 Prior art: PostgreSQL's parser tracks the same thing (`ParseState.p_expr_kind`), and its
 `check_ungrouped_columns` does not descend into same-level aggregate arguments.
@@ -413,6 +419,17 @@ hand it the inner query's.
   phase::Symbol = :group
   label::OptionalString = nothing
   group_key::Bool = false
+  # #985 — set only while a join's ON clause renders (`build_row_join_sql_text`): the alias of the
+  # row the clause belongs to, the side of the comparison being rendered (`:left`, `:right`, or
+  # `:none` outside any comparison), and the aliases each side may name. `_record_join_column` reads
+  # them where a model column becomes `"alias"."col"` (`_column_sql`), which is #194's move applied to
+  # "which row does this column name": recorded at resolution, not walked.
+  # Tuples, not vectors: a scope is a VALUE (`with_scope` restores by identity, and two default
+  # scopes must compare equal), and a vector field would make every fresh one distinct.
+  join_hop::OptionalString = nothing
+  join_side::Symbol = :none
+  join_left::Tuple{Vararg{String}} = ()
+  join_right::Tuple{Vararg{String}} = ()
 end
 
 _with_scope(s::RenderScope; kw...) =

@@ -1576,6 +1576,10 @@ _difference_result_kind(_, _) = nothing
 # becomes `nothing` — on PostgreSQL that is `timestamptz + bigint`, a hard error; on SQLite it is a
 # `date()` truncation nobody sees.
 function _render_left_typed(value::Any, operation::String, instruc::SQLInstruction)::Tuple{String,_RenderKind}
+  # #985: a comparison's left side, inside an ON clause; arithmetic inherits the side it sits on.
+  if operation in _COMPARISON_OPERATIONS && (side = _join_side_change(instruc, :left)) !== nothing
+    return with_scope(() -> _render_left_typed(value, operation, instruc), instruc; join_side = side)
+  end
   value isa FExpression && return _render_expr_typed(value, instruc)
   value isa FObject && return _render_function_operand_typed(value, instruc)
   sql = _set_update_query_left(value, operation, instruc)
@@ -2064,6 +2068,11 @@ _sqlite_interval_error(what::AbstractString) =
 # (`date - date`, `date - integer`, `date - interval`) and an uncast parameter is ambiguous among them.
 function _render_operand_typed(operand::Any, field_name::Any, operation::String, instruc::SQLInstruction;
                                left_kind::TemporalKind = nothing)::Tuple{String,_RenderKind}
+  # #985: a comparison's right side, inside an ON clause; arithmetic inherits the side it sits on.
+  if operation in _COMPARISON_OPERATIONS && _join_side_change(instruc, :right) !== nothing
+    return _on_join_right(() -> _render_operand_typed(operand, field_name, operation, instruc;
+                                                      left_kind = left_kind), instruc)
+  end
   operand isa FExpression && return _render_expr_typed(operand, instruc)
   operand isa FObject && return _render_function_operand_typed(operand, instruc)   # #907
   if operand isa String && _is_field_path(operand, instruc)
@@ -2311,6 +2320,11 @@ end
 # literal arm reads it — the `xor` call sites legitimately have no temporal left and pass nothing.
 function _set_update_query_operand(operand::Any, field_name::Any, operation::String, instruc::SQLInstruction;
                                    left_kind::TemporalKind = nothing)
+  # #985: the same right side as `_render_operand_typed`, for the operands that bind or render plainly.
+  if operation in _COMPARISON_OPERATIONS && _join_side_change(instruc, :right) !== nothing
+    return _on_join_right(() -> _set_update_query_operand(operand, field_name, operation, instruc;
+                                                          left_kind = left_kind), instruc)
+  end
   if isa(operand, FExpression)
     return _set_update_query(operand, instruc)
   elseif isa(operand, SQLTypeFunction)

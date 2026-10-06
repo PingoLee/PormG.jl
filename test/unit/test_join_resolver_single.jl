@@ -15,7 +15,8 @@ but a deletion, so the rule is mechanical:
 4. **Binding a condition has no render side effects.** `join_conditions.jl` never calls the field-path
    walker, a render entry point or a memo: the walker ADDS joins as it resolves, which is #973.
 5. **The render-time backstop holds.** A path join's condition that appends a row while rendering is
-   an internal error, never an emitted join.
+   refused, never an emitted join: by #985's column recorder when the condition names a column of the
+   added row (it is never among the rows the ON clause may name), and by the backstop otherwise.
 
 Static text scan plus a live check — no database.
 """
@@ -218,12 +219,15 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Join conditions: the backstop is wired into the ON-clause render
+# Join conditions: the ON-clause render refuses a condition that adds a join
 # End to end through `build_row_join_sql_text`: a built query's driver row is handed a condition that
-# was never bound — it names the team, one relation past the hop — and re-rendered. Without the check
-# the render would add the team's join and carry the predicate there (#973); with it, an internal error.
+# was never bound — it names the team, one relation past the hop — and re-rendered. Unchecked, the
+# render would add the team's join and carry the predicate there (#973). Since #985 the first refusal
+# is the column recorder's: the team's column renders while the team's row is not among the rows the
+# driver's ON clause may name, so it is refused before the backstop counts the row (tested directly
+# above). Either way the join is never emitted.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "Join conditions: the ON render raises on an added join (#977)" begin
+@testset "Join conditions: the ON render refuses a condition that adds a join (#977, #985)" begin
     QB = PormG.QueryBuilder
     q = JrsModels.Result.objects
     q.values("resultid", "driverid__number")
@@ -238,7 +242,9 @@ end
     catch e
         e
     end
-    @test err isa ErrorException
-    @test occursin("PormG internal error", err.msg)
-    @test occursin("\"jrs_team\"", err.msg)
+    @test err isa PormG.FilterError
+    msg = replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
+    @test occursin("is on the left side of a condition in the ON clause of \"Tb_1\"", msg)
+    @test occursin("#985", msg)
+    @test isempty(instruc.join)   # nothing emitted
 end

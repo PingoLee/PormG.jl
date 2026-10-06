@@ -353,6 +353,10 @@ _join_key(instruct::SQLInstruction, join_path::AbstractString) = _canonical_join
 # at the hop that owns the column — `on("driverid__results", …)` joins it if nothing else does — or at
 # `.filter(...)`. Walks the LOWERED condition, where every left-side column is a base-rooted path; the
 # shapes are `_prefix_join_column`'s, the right side (#958) is left to #962's walk.
+#
+# #985 made this walk the HINT, not the guarantee: a node type it misses still renders through
+# `_column_sql`, and the recorder refuses the column there. It stays because it refuses before any
+# join is appended, with the spelling the caller wrote and the `on(...)` that would join it.
 function _refuse_lhs_past_hop(x, q::SQLObject, path::String, hop::String, depth::Int)
   depth > 32 && return nothing
   if x isa Pair
@@ -414,4 +418,90 @@ function _assert_condition_added_no_join(instruc::SQLInstruction, row::JoinRow, 
   error(_emsg("PormG internal error: rendering an ON condition of the join to \"$(row.b)\" AS " *
               "\"$(row.alias_b)\" added $(added) — a join condition must name only its own hop, an " *
               "earlier table on its path or the base row (#977). This should not happen; please report it."))
+end
+
+# ── #985: which row each column names, recorded where it renders ────────────────────────────────
+# The backstop above closes "a condition silently ADDED a join". Its neighbour is "a column silently
+# names the WRONG row, and no join is added" (#961's shape): a left-side node the lowering does not
+# descend into stays on the base alias, renders as valid SQL, and compares the wrong column. The
+# defence used to be walkers alone — `_prefix_join_column`, `_refuse_lhs_past_hop`, the `_off_path_*`
+# family — each of which must enumerate every node type a column can hide in. #981 closed four gaps in
+# one of them a day after it merged.
+#
+# So the check moved to the one place a model column becomes `"alias"."col"`: `_column_sql`, which
+# every emitting site calls (`test/unit/test_join_column_recorder.jl` scans for any that does not). A
+# column that renders is checked; one that does not render cannot name a row. That is #194's
+# `outer_refs` invariant, and it is why the recorder needs no list of node types.
+#
+# The walkers stay, deliberately: they run at binding, before anything renders, so they refuse with
+# the condition as WRITTEN (`"results__grid"`, the hop it reaches past, the `on(...)` that would join
+# it) and before a join could be appended. This is the net under them: a gap in a walker is now a
+# loud refusal with a plainer message instead of a wrong row.
+
+# A model column as SQL text: `"alias"."col"`. `column_sql` is already quoted.
+function _column_sql(instruc::SQLInstruction, alias::AbstractString, column_sql::AbstractString)::String
+  _record_join_column(instruc, alias, column_sql)
+  return string(quote_identifier(alias, instruc.connection), ".", column_sql)
+end
+
+# The check. Outside an ON clause there is nothing to check; inside one, the left side of a comparison
+# names the row the join adds (#961), and everything else — the right side, and a column outside any
+# comparison — the base row, an earlier table on the join's path, or the joined row itself (#958,
+# #962). For a `cjoin_on` row both sets are "every row emitted before it, and itself".
+function _record_join_column(instruc::SQLInstruction, alias::AbstractString, column_sql::AbstractString)
+  s = instruc.scope
+  s.join_hop === nothing && return nothing
+  allowed = s.join_side === :left ? s.join_left : s.join_right
+  alias in allowed && return nothing
+  hop = s.join_hop
+  written = "\"$(alias)\".$(column_sql)"
+  if s.join_side === :left
+    throw(FilterError(
+      "\e[4m\e[31m$(written)\e[0m is on the left side of a condition in the ON clause of \"$(hop)\", but " *
+      "it names \"$(alias)\". A condition's left side names the row its join adds; compare another " *
+      "row's column on the right, or put the predicate in \e[4m\e[32m.filter(...)\e[0m (#985)."))
+  end
+  throw(FilterError(
+    "\e[4m\e[31m$(written)\e[0m in the ON clause of \"$(hop)\" names \"$(alias)\", which is not the base " *
+    "row, a table joined before it on its path, or the joined row itself, so it cannot appear in that " *
+    "ON clause.\n  Put the predicate in \e[4m\e[32m.filter(...)\e[0m instead (#985)."))
+end
+
+# The side a comparison's operand renders on, or `nothing` when the scope already says it: no ON
+# clause is rendering, the side is already that one, or the operand sits inside a RIGHT side, where
+# every column is a right-side column whichever side of its own comparison it is on (#975). A
+# comparison nested inside a LEFT side splits again: its own column left, its values right.
+function _join_side_change(instruc::SQLInstruction, side::Symbol)::Union{Nothing,Symbol}
+  s = instruc.scope
+  (s.join_hop === nothing || s.join_side === :right || s.join_side === side) && return nothing
+  return side
+end
+
+# Render `f()` as a comparison's right side.
+function _on_join_right(f, instruc::SQLInstruction)
+  side = _join_side_change(instruc, :right)
+  side === nothing && return f()
+  return with_scope(f, instruc; join_side = side)
+end
+
+# The scope one row's ON clause renders under: the hop, and the aliases each side may name. A path
+# join's right side may name the base row, every table on its own path, and itself; its left side
+# only itself. A `cjoin_on` row has no hop to bind a side to, so both sides may name the base row and
+# every row emitted before it — binding built every row it names there (#982) — and itself.
+function _join_scope(f, instruc::SQLInstruction, idx::Int, value::JoinRow)
+  hop = value.alias_b
+  if value isa AnchorlessJoin
+    rows = (instruc.alias, (r.alias_b for r in instruc.row_join[1:idx-1])..., hop)
+    return with_scope(f, instruc; join_hop = hop, join_side = :none, join_left = rows, join_right = rows)
+  end
+  path = String[instruc.alias, hop]
+  parent = value.alias_a
+  for _ in 1:length(instruc.row_join)
+    parent == instruc.alias && break
+    push!(path, parent)
+    i = findfirst(r -> r.alias_b == parent, instruc.row_join)
+    i === nothing && break
+    parent = instruc.row_join[i].alias_a
+  end
+  return with_scope(f, instruc; join_hop = hop, join_side = :none, join_left = (hop,), join_right = Tuple(path))
 end

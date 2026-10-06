@@ -420,8 +420,8 @@ function _render_json_lookup(instruct::SQLInstruction, alias::String, json_field
     field_name::String, key_segments::Vector{String}, full_field::Vector{String};
     cte::Bool=false)::String
   segs = _validate_json_key_segments(key_segments)
-  col = string(quote_identifier(alias, instruct.connection), ".",
-               safe_column_identifier(Models.field_db_column(json_field, field_name), instruct.connection))
+  col = _column_sql(instruct, alias,   # #985
+                    safe_column_identifier(Models.field_db_column(json_field, field_name), instruct.connection))
   # #474: both caches below are keyed by the resolved path, so a CTE-rooted lookup namespaces it for
   # the same reason `row_path` does — `CTE("ev", "meta__driver")` and a model path `ev__meta__driver`
   # produce the same string and must not share an entry.
@@ -460,8 +460,8 @@ function _render_array_subscript(instruct::SQLInstruction, alias::String, array_
     "named parts, and its lookups take an `@`: `$(field_name)__@acontains`."))
   lower = _array_subscript_bound(m.captures[1], path)
   conn = instruct.connection
-  col = string(quote_identifier(alias, conn), ".",
-               safe_column_identifier(Models.field_db_column(array_field, field_name), conn))
+  col = _column_sql(instruct, alias,   # #985
+                    safe_column_identifier(Models.field_db_column(array_field, field_name), conn))
   key = memo_key(cte ? :cte : :base, path)
   if m.captures[2] === nothing
     memo_field!(instruct, key, array_field.base_field)
@@ -961,6 +961,6 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # return without it, so a model built by `Models.Model(...)` and never registered through
   # `set_models` — no `_module` — can still take a key path or an index.
   foreing_table_module = instruct.object.model._module::Module
-  return string(quote_identifier(tb_alias, instruct.connection), ".", _solve_field(vector[end], foreing_table_module, foreign_table_name, instruct))
+  return _column_sql(instruct, tb_alias, _solve_field(vector[end], foreing_table_module, foreign_table_name, instruct))   # #985
   
 end

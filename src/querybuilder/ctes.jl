@@ -762,6 +762,10 @@ end
 # relation, so the answer cannot depend on call order (the #434 lesson `_on` records). The walk below
 # runs over each path's BOUND conditions (`_bind_join_conditions!`, #977). Only the RIGHT side is
 # walked: binding lowered the left side onto the path (`_prefix_join_filter`).
+#
+# #985 made this walk the HINT, not the guarantee: a right side it misses still renders through
+# `_column_sql`, and the recorder refuses the column there (`_record_join_column`). It stays because
+# it refuses at binding, naming the relation the caller wrote — before that relation's join exists.
 
 # One condition: find its right side. A `Q`/`Qor` holds conditions; an `OperObject` keeps its right side
 # in `values`; a comparison `FExpression` in `operand`. An `Exists(...)` contributes its `OuterRef`s.

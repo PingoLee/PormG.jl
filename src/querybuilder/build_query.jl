@@ -2079,7 +2079,11 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         # `OnExtra` carries that run faithfully, preserving whatever order it arrived in.
         _guard_no_aggregate_on_condition(condition, value, instruc)   # #917
         mark = parameter_mark(instruc)
+        rows_before = length(instruc.row_join)
         condition_sql = _get_filter_query(condition, instruc)
+        # #977: a path join's condition was bound onto its hop before anything rendered, so it can
+        # only name rows already here. A row appearing now is a binding gap, not a query to emit.
+        value isa ModelJoin && _assert_condition_added_no_join(instruc, value, rows_before)
         condition_params = detach_parameters!(mark)
         # #946: no alias remap here. `_on`/`_cjoin` prefix every key with the join path, so the
         # condition's own columns already render under the joined alias, at any hop depth. What is
@@ -2145,6 +2149,13 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   relocated_self_ref = Set{Int}()
   for idx in 1:length(instruc.row_join)
     haskey(on_clause_extras, idx) || continue
+    # #977: only a `cjoin_on` predicate can still name a join emitted after its own. A path join's
+    # conditions are bound onto their hop — the left side on the hop (#973), the right side on the
+    # base row, an ancestor or the hop itself (#962) — and every one of those is emitted at or before
+    # it, so there is nothing to relocate, and a text match there could only be a false one (an alias
+    # spelled inside a nested subquery). Moving `cjoin_on` onto the same binding is the follow-up
+    # that retires this phase.
+    instruc.row_join[idx] isa AnchorlessJoin || continue
     extras = on_clause_extras[idx]
     relocated = falses(length(extras))
 

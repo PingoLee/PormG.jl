@@ -12,6 +12,10 @@ but a deletion, so the rule is mechanical:
 2. **The retired resolvers stay retired.** A line of code naming one is a second copy of the rule.
 3. **The resolver agrees with the renderer** on the model every path reaches — forward, short form,
    reverse, ManyToMany, a deep hop and a `cjoin` link.
+4. **Binding a condition has no render side effects.** `join_conditions.jl` never calls the field-path
+   walker, a render entry point or a memo: the walker ADDS joins as it resolves, which is #973.
+5. **The render-time backstop holds.** A path join's condition that appends a row while rendering is
+   an internal error, never an emitted join.
 
 Static text scan plus a live check — no database.
 """
@@ -168,4 +172,47 @@ _jrs_last_join_table(sql) = last(collect(eachmatch(r"JOIN \"(\w+)\" AS", sql))).
     @test PormG.QueryBuilder._canonical_join_path(q.object, "grid") == ""
     q.cjoin("grid" => "Jrs_driver", warn = false, field = link())
     @test PormG.QueryBuilder._canonical_join_path(q.object, "grid") == "grid"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Join conditions: binding never resolves through the renderer
+# `join_conditions.jl` binds a condition by rewriting strings against the model graph — it must never
+# call the field-path walker (which ADDS joins as it resolves, #973), a render entry point, or a memo.
+# A call to any of them there would make binding a render with side effects again.
+# ─────────────────────────────────────────────────────────────────────────────
+const JRS_RENDER_CALL = r"\b(_build_row_join|_insert_join|_get_filter_query|_get_select_query|memo_[a-z_]+!?)\("
+
+@testset "Join conditions: binding has no render side effects (#977)" begin
+    offenders = [(lineno, String(strip(line))) for (lineno, line) in _jrs_code_lines(JRS_RESOLVER_FILE)
+                 if occursin(JRS_RENDER_CALL, line)]
+    @test isempty(offenders)
+    # Guard the guard.
+    @test occursin(JRS_RENDER_CALL, "  _build_row_join(array, instruct)")
+    @test occursin(JRS_RENDER_CALL, "x = memo_field!(instruc, k, f)")
+    @test !occursin(JRS_RENDER_CALL, "  _join_path_columns(q, path, config)")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Join conditions: the render-time backstop raises on an added join
+# `build_row_join_sql_text` checks that rendering a path join's condition appended no row. Exercised
+# directly: a built query's own rows, with one counted as "added during the render".
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Join conditions: an added join is an internal error (#977)" begin
+    q = JrsModels.Result.objects
+    q.values("resultid", "driverid__teamid__name")
+    instruc = PormG.QueryBuilder.build(q.object; connection = JrsMockSQLite())
+    rows = instruc.row_join
+    @test length(rows) == 2
+    # No row added: silent.
+    @test PormG.QueryBuilder._assert_condition_added_no_join(instruc, rows[1], length(rows)) === nothing
+    # One row added: an internal error naming it.
+    err = try
+        PormG.QueryBuilder._assert_condition_added_no_join(instruc, rows[1], length(rows) - 1)
+        nothing
+    catch e
+        e
+    end
+    @test err isa ErrorException
+    @test occursin("PormG internal error", err.msg)
+    @test occursin("\"jrs_team\"", err.msg)
 end

@@ -270,3 +270,17 @@ function _check_lhs_on_hop(column::String, q::SQLObject, path::String, hop::Stri
     "Write it on that relation's join: \e[4m\e[32mon(\"$(rel)\", \"$(rest)\" => …)\e[0m, which joins it if " *
     "nothing else does — or put it in \e[4m\e[32m.filter(\"$(column)\" => …)\e[0m to restrict rows (#973)."))
 end
+
+# ── The render-time backstop (#977) ────────────────────────────────────────────────────────────
+# Binding is what makes "resolving a condition adds no join" true: every column a path join's
+# condition names is on its hop, an ancestor of it, or the base row, and all of those are
+# materialized before the ON clauses render. This checks it where it would break — a row appended
+# while one condition rendered. Raised, not emitted: the old renderer did emit it, and an
+# unwritten join with the predicate in its ON clause is #973 itself.
+function _assert_condition_added_no_join(instruc::SQLInstruction, row::JoinRow, rows_before::Int)
+  length(instruc.row_join) == rows_before && return nothing
+  added = join(("\"$(r.b)\" AS \"$(r.alias_b)\"" for r in instruc.row_join[rows_before+1:end]), ", ")
+  error(_emsg("PormG internal error: rendering an ON condition of the join to \"$(row.b)\" AS " *
+              "\"$(row.alias_b)\" added $(added) — a join condition must name only its own hop, an " *
+              "earlier table on its path or the base row (#977). This should not happen; please report it."))
+end

@@ -601,7 +601,7 @@ Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as, x.custom_as, x.root)
 # (_normalize_window_orientation, build_helpers.jl) delegates here with its own context label.
 function _normalize_order_orientation(orientation::AbstractString; context::String="ORDER BY")::String
   normalized = uppercase(strip(String(orientation)))
-  normalized in ("ASC", "DESC") || throw(QueryBuildError("$(context) orientation must be ASC or DESC, got $(repr(orientation))"))
+  normalized in ("ASC", "DESC") || throw(QueryBuildError("$(context) orientation must be ASC or DESC, got $(repr(orientation))"))  # refusal-value-ok: an orientation keyword argument
   return normalized
 end
 
@@ -2198,7 +2198,7 @@ function Base.setproperty!(row::PormGRow, sym::Symbol, value)
       throw(UnknownFieldError("$(model.name) row has no writable field '$(sym)'."))
     end
     if model.fields[normalized_string].primary_key
-      throw(QueryBuildError("Cannot mutate primary key field '$(normalized)' on a PormGRow."))
+      throw(QueryBuildError("Cannot mutate primary key field '$(normalized)' on a PormGRow."))  # refusal-value-ok: a field name on a row
     end
   end
 

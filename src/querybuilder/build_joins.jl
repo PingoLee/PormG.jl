@@ -454,7 +454,7 @@ function _render_array_subscript(instruct::SQLInstruction, alias::String, array_
   m = match(r"\A([0-9]+)(?:_([0-9]+))?\z", segments[1])
   # `tags__isnull` is a lookup missing its `@`; the shared hint names the fix, as it does for any column.
   m === nothing && _check_if_field_is_a_operator(segments[1])
-  m === nothing && throw(QueryBuildError(
+  m === nothing && throw(QueryBuildError(  # refusal-value-ok: a segment of the field path the developer wrote
     "Invalid field path \e[31m$(path)\e[0m: \e[31m$(repr(segments[1]))\e[0m is neither an index " *
     "(`$(field_name)__0`, 0-based) nor a slice (`$(field_name)__0_2`, half-open). An ArrayField has no " *
     "named parts, and its lookups take an `@`: `$(field_name)__@acontains`."))

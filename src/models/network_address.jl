@@ -213,7 +213,7 @@ catalog stores a column default in. A `/prefix` raises `InvalidValueError`: a ne
 format_inet_sql(value::Union{Missing, Nothing}) = missing
 format_inet_sql(value::Union{AbstractString, Sockets.IPAddr})::String = _inet_text(value, false)
 format_inet_sql(value) =
-  throw(InvalidValueError("An IP address must be $(_NETWORK_VALUE_TYPES), got $(typeof(value))."))
+  throw(InvalidValueError("An IP address must be $(_NETWORK_VALUE_TYPES), got $(typeof(value)).", :type))
 
 """
     format_inet_unpacked_sql(value) -> Union{String, Missing}
@@ -247,7 +247,7 @@ function format_cidr_sql(value::Union{AbstractString, Sockets.IPAddr})::String
   return "$(_render_ip(p.family, p.addr))/$bits"
 end
 format_cidr_sql(value) =
-  throw(InvalidValueError("A CIDR network must be $(_NETWORK_VALUE_TYPES), got $(typeof(value))."))
+  throw(InvalidValueError("A CIDR network must be $(_NETWORK_VALUE_TYPES), got $(typeof(value)).", :type))
 
 """
     format_inet_network_sql(value) -> Union{String, Missing}
@@ -267,7 +267,7 @@ function format_inet_network_sql(value::Union{AbstractString, Sockets.IPAddr})::
   return "$text/$(p.bits)"
 end
 format_inet_network_sql(value) =
-  throw(InvalidValueError("A network lookup value must be $(_NETWORK_VALUE_TYPES), got $(typeof(value))."))
+  throw(InvalidValueError("A network lookup value must be $(_NETWORK_VALUE_TYPES), got $(typeof(value)).", :type))
 
 """
     check_ip_protocol(protocol, text) -> String

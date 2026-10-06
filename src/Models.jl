@@ -3434,7 +3434,7 @@ end
 # `default = true` is already a `FieldValidationError`, for the same reason. Its own method, because
 # `Bool <: Integer` would otherwise reach the base-10 method above and be written as `"true"`.
 function format_text_sql(value::Bool)
-  throw(InvalidValueError("A text value must be a String, an integer, a date, or a time. Got a Bool, which has no single text (\"true\", \"1\", \"t\"): pass the text the column holds explicitly, e.g. `string(x)`."))
+  throw(InvalidValueError("A text value must be a String, an integer, a date, or a time. Got a Bool, which has no single text (\"true\", \"1\", \"t\"): pass the text the column holds explicitly, e.g. `string(x)`.", :type))
 end
 function format_text_sql(value::AbstractString)
   return value
@@ -3458,7 +3458,7 @@ end
 # value escaped `_guarded_format` as a raw `MethodError`; an `InvalidValueError` is what that guard
 # reports as a `FilterError` naming the field, and what the write path raises as is.
 function format_text_sql(value)
-  throw(InvalidValueError("A text value must be a String, an integer, a date, or a time. Got a $(typeof(value)): pass its text explicitly, e.g. `string(x)`."))
+  throw(InvalidValueError("A text value must be a String, an integer, a date, or a time. Got a $(typeof(value)): pass its text explicitly, e.g. `string(x)`.", :type))
 end
 
 """
@@ -3494,7 +3494,7 @@ function format_binary_sql(value::Union{Missing, Nothing})
   return missing
 end
 function format_binary_sql(value)
-  throw(InvalidValueError("A BinaryField value must be raw bytes (`Vector{UInt8}`) or a String, which is stored as its UTF-8 code units. Got: $(typeof(value)). For a hex or Base64 string, decode it first — e.g. `hex2bytes(s)` or `base64decode(s)`."))
+  throw(InvalidValueError("A BinaryField value must be raw bytes (`Vector{UInt8}`) or a String, which is stored as its UTF-8 code units. Got: $(typeof(value)). For a hex or Base64 string, decode it first — e.g. `hex2bytes(s)` or `base64decode(s)`.", :type))
 end
 
 function _duration_to_nanoseconds(value::Period)::Int64
@@ -3516,7 +3516,7 @@ function _duration_to_nanoseconds(value::Period)::Int64
     return Int64(Dates.value(value))
   end
 
-  throw(InvalidValueError("DurationField only supports week/day/time-based periods. Months and years are ambiguous for SQL intervals."))
+  throw(InvalidValueError("DurationField only supports week/day/time-based periods. Months and years are ambiguous for SQL intervals.", :type))
 end
 
 function _duration_to_nanoseconds(value::Dates.CompoundPeriod)::Int64
@@ -3551,7 +3551,7 @@ const _DURATION_FORMATS_MSG = "Accepted formats: HH:MM:SS(.sss), M:SS(.sss), or 
 # recommends the `string` spelling, and it does not hold.
 function _duration_string_nanoseconds(value::AbstractString)::Int64
   stripped = strip(String(value))
-  isempty(stripped) && throw(InvalidValueError("The duration cannot be empty"))
+  isempty(stripped) && throw(InvalidValueError("The duration cannot be empty", :format))
   m = match(r"^([+-]?)(?:(?:(\d+):)?(\d+):)?(\d+)(?:\.(\d+))?$", stripped)
   invalid() = InvalidValueError("The duration is invalid. $(_DURATION_FORMATS_MSG)", :format)
   m === nothing && throw(invalid())
@@ -3610,7 +3610,7 @@ function format_duration_sql(value::Dates.CompoundPeriod)
 end
 
 function format_duration_sql(value)
-  throw(InvalidValueError("The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), M:SS(.sss), or SS(.sss) format"))
+  throw(InvalidValueError("The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), M:SS(.sss), or SS(.sss) format", :type))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3638,7 +3638,7 @@ function format_uuid_sql(value::AbstractString)
 end
 
 function format_uuid_sql(value)
-  throw(InvalidValueError("The value must be a UUID or a string in the format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"))
+  throw(InvalidValueError("The value must be a UUID or a string in the format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", :type))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3693,7 +3693,7 @@ function format_json_sql(value::Union{Bool, Integer, AbstractFloat})
 end
 
 function format_json_sql(value)
-  throw(InvalidValueError("JSONField value must be a valid JSON string, Dict, Vector, NamedTuple, or scalar. Got: $(typeof(value))"))
+  throw(InvalidValueError("JSONField value must be a valid JSON string, Dict, Vector, NamedTuple, or scalar. Got: $(typeof(value))", :type))
 end
 
 # The spellings a numeric String may take (#773): an optional sign, base-10 digits with at most one
@@ -3727,10 +3727,10 @@ function format_number_sql(value::AbstractString)
   # `String`, not `string` — same reason as `format_uuid_sql` (#598). Safe either way today, since
   # everything below is `occursin`/`tryparse`; normalised so the family has one spelling.
   value = value |> String |> strip
-  isempty(value) && throw(InvalidValueError("The value is empty and cannot be used as a number"))
+  isempty(value) && throw(InvalidValueError("The value is empty and cannot be used as a number", :format))
 
   if occursin(r"^[+-]?\d+,\d+$", value)
-    throw(InvalidValueError("Does you want to use ',' as decimal separator? Please use '.' instead."))
+    throw(InvalidValueError("Does you want to use ',' as decimal separator? Please use '.' instead.", :format))
   end
   # Base 10 only (#773). The parsers below take `0x`/`0b`/`0o` (and `Float64` hex floats), and this
   # formatter returns the TEXT, not the parsed value — so `"0x10"` was validated as 16 and bound as
@@ -3745,7 +3745,7 @@ function format_number_sql(value::AbstractString)
     return value
   # then float
   elseif (f = tryparse(Float64, value)) !== nothing
-    isfinite(f) || throw(InvalidValueError("Non-finite numeric values are not supported. Please use a finite numeric value instead."))
+    isfinite(f) || throw(InvalidValueError("Non-finite numeric values are not supported. Please use a finite numeric value instead.", :range))
     return value
   else
     throw(InvalidValueError("The value is not a valid number", :format))
@@ -3831,7 +3831,7 @@ function format_date_sql(value::AbstractString)
   end  
 end
 function format_date_sql(value)
-  throw(InvalidValueError("The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM-DD"))
+  throw(InvalidValueError("The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM-DD", :type))
 end
 
 
@@ -3881,7 +3881,7 @@ end
 # The keyword is declared so `format_timezone_sql(x; format = …)` lands here too rather than being a
 # `MethodError` again — nothing passes `format=` today, which is exactly why it would be missed.
 function format_timezone_sql(value; format::AbstractString=DATETIME_FORMAT)
-  throw(InvalidValueError("The datetime must be a ZonedDateTime, DateTime, or a string in the format $(format)"))
+  throw(InvalidValueError("The datetime must be a ZonedDateTime, DateTime, or a string in the format $(format)", :type))
 end
 
 function format_yyyy_mm(value::AbstractString)
@@ -3908,7 +3908,7 @@ function format_yyyy_mm(value::Integer)
   end
 end
 function format_yyyy_mm(value)
-  throw(InvalidValueError("The value must be a string or Integer in the format YYYY-MM or YYYYMM"))
+  throw(InvalidValueError("The value must be a string or Integer in the format YYYY-MM or YYYYMM", :type))
 end    
 
 # #579 — the right-hand side of a `__@quarter` / `__@quadrimester` comparison.

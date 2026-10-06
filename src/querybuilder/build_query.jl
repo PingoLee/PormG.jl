@@ -277,7 +277,7 @@ const SQLITE_NULLS_ORDER_MIN_VERSION = 3030000
 function _nulls_placement(orientation::AbstractString, nulls::Union{Symbol,Nothing})
   nulls === :first && return :first
   nulls === :last  && return :last
-  nulls === nothing || throw(QueryBuildError("Invalid nulls placement $(repr(nulls)); use :first or :last"))
+  nulls === nothing || throw(QueryBuildError("Invalid nulls placement $(repr(nulls)); use :first or :last"))  # refusal-value-ok: an order_by keyword argument
   return uppercase(strip(String(orientation))) == "DESC" ? :first : :last
 end
 

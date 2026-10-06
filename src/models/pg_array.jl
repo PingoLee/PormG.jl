@@ -308,7 +308,7 @@ function pg_array_element_value(k::CDateTime, x)
 end
 
 pg_array_element_value(k::CanonicalType, x) =
-  throw(InvalidValueError("an ArrayField cannot hold $(k) elements."))
+  throw(InvalidValueError("an ArrayField cannot hold $(k) elements.", :type))
 
 """
     pg_array_element_text(kind, value) -> String
@@ -361,9 +361,9 @@ function _pg_array_elements(value)
   value isa Tuple && return collect(Any, value)
   value isa AbstractVector && return value
   value isa AbstractArray &&
-    throw(InvalidValueError("an ArrayField holds a one-dimensional array; got a $(ndims(value))-dimensional $(typeof(value))."))
+    throw(InvalidValueError("an ArrayField holds a one-dimensional array; got a $(ndims(value))-dimensional $(typeof(value)).", :type))
   throw(InvalidValueError("an ArrayField value must be a Vector (or a Tuple), got $(typeof(value)). " *
-                          "Wrap a single element as a one-element vector: [x]."))
+                          "Wrap a single element as a one-element vector: [x].", :type))
 end
 
 """

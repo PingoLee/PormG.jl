@@ -11,7 +11,9 @@
 malformed UUID or date, an integer other than 0/1 on a boolean — raises `InvalidValueError` in a
 `filter()` as it already did on a write. It used to be re-raised as `FilterError`. `FilterError`
 stays for what is wrong with the filter itself: an unknown lookup, an operator misused, a list where
-one value belongs, a `@family` / `@year` value outside its range.
+one value belongs, and a few range checks the filter makes itself rather than the field's formatter:
+a `@family` / `@prefixlen` value, a `@year` outside 1–9999, and a `@yyyy_mm` month that is not a
+calendar month on a `DateField` (`"1991-13"`).
 
 | `M.Result.objects.filter(…)` | before | after |
 |---|---|---|
@@ -38,7 +40,8 @@ after:  Error in insert for model result, field `grid`: expected Int64 or an int
 **3. The reason is data.** `InvalidValueError` keeps its `msg`, and gains `kind` (`:type`,
 `:format`, `:range`, `:nul`, `:json_nul`, `:other`), `reason`, and the location `op`, `model`,
 `field`, `field_type`, `row` (`nothing` where unknown). Branch on `e.kind` or `e.field` rather
-than on the message text. `InvalidValueError("…")` still builds one from a message alone.
+than on the message text. A refusal on a projection alias or a transform carries its location in `op`
+(`"filter on the `best` projection alias"`), so `e.field` is `nothing` there. `InvalidValueError("…")` still builds one from a message alone.
 
 ### Who this affects
 
@@ -68,7 +71,8 @@ end
 try
     M.Result.objects.filter("points" => params["points"]).list()
 catch e
-    e isa InvalidValueError && return json(Dict("error" => "invalid $(e.field)"), status = 400)
+    # `e.field` is `nothing` for a projection alias or a transform; the message names those.
+    e isa InvalidValueError && return json(Dict("error" => error_message(e)), status = 400)
     e isa FilterError && return json(Dict("error" => error_message(e)), status = 400)
     rethrow()
 end

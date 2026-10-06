@@ -592,7 +592,7 @@ _function_operand(x::Union{SQLType,SQLObject}) = throw(QueryBuildError(
   "A `$(nameof(typeof(x)))` is not a function operand. An operand is a column path (a string), a " *
   "literal, or an expression (`F(...)`, a function, `Subquery(...)`, `CTE(...)`) (#867)."))
 _function_operand(x) = throw(QueryBuildError(
-  "\e[4m\e[31m$(repr(x))\e[0m (::$(typeof(x))) is not a function operand. An operand is a column " *
+  "A \e[4m\e[31m$(typeof(x))\e[0m is not a function operand. An operand is a column " *
   "path (a string), a number, a `Bool`, a `Date`/`DateTime`/`ZonedDateTime`/`Time`, or an expression " *
   "(a duration is not one); wrap any other literal as " *
   "\e[4m\e[32mValue(x)\e[0m (#705)."))
@@ -601,8 +601,8 @@ _function_operand(x) = throw(QueryBuildError(
 # `"1"` would be a guess the caller can spell for themselves.
 _text_operand(x::AbstractString) = Value(String(x))
 _text_operand(x::Union{Integer,Float16,Float32,Float64}) = throw(QueryBuildError(
-  "\e[4m\e[31mReplace\e[0m searches and replaces TEXT, and $(repr(x)) (::$(typeof(x))) is a number. " *
-  "Write it as a string: \e[4m\e[32m\"$(x)\"\e[0m (#705)."))
+  "\e[4m\e[31mReplace\e[0m searches and replaces TEXT, and a $(typeof(x)) is a number. " *
+  "Write it as a string: \e[4m\e[32mstring(x)\e[0m (#705)."))
 _text_operand(x) = _function_operand(x)
 
 # #878 — the operand of the one-argument scalar functions (`Lower`, `Upper`, `Trim`, `LTrim`,
@@ -1418,5 +1418,5 @@ function _page!(object::SQLObject, v::Tuple{Integer, Integer})
   object.offset = v[2]
 end
 function _page!(object::SQLObject, v)
-  throw(QueryBuildError("Invalid page() arguments: $(v) (::$(typeof(v))) — page() takes one Integer (limit) or two Integers (limit, offset), e.g. page(20) or page(20, 40)."))
+  throw(QueryBuildError("Invalid page() arguments: a $(typeof(v)) — page() takes one Integer (limit) or two Integers (limit, offset), e.g. page(20) or page(20, 40)."))
 end

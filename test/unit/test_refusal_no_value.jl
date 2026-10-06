@@ -9,7 +9,7 @@ refusal's text to locate it.
 
 Pinned here, with no server:
 
-  1. **The source scan** — no `InvalidValueError(` or `FilterError(` in `src/` or `ext/`
+  1. **The source scan** — no `InvalidValueError(`, `FilterError(` or `QueryBuildError(` in `src/` or `ext/`
      interpolates a value-shaped name (`value`, `v`, `x`, `raw`, `operand`, `row[…]`, …), a
      `repr(…)`, an exception's own text (`\$(e)`, `sprint(showerror, e)`, `e.msg`). A reviewed
      exception carries `# refusal-value-ok: <why>` on its line.
@@ -81,7 +81,7 @@ end
 function _refusal_sites971(path)
   text = read(path, String)
   sites = Tuple{Int, String}[]
-  for m in eachmatch(r"\b(?:InvalidValueError|FilterError)\(", text)
+  for m in eachmatch(r"\b(?:InvalidValueError|FilterError|QueryBuildError)\(", text)
     start = m.offset + ncodeunits(m.match)
     depth, i = 1, start
     while i <= ncodeunits(text) && depth > 0
@@ -96,7 +96,7 @@ function _refusal_sites971(path)
   return sites, split(text, '\n')
 end
 
-@testset "#971: no refusal in src/ or ext/ interpolates a value" begin
+@testset "#971: no refusal in src/ or ext/ interpolates a value" begin   # InvalidValueError, FilterError, QueryBuildError
   root = pkgdir(PormG)
   offenders = String[]
   nsites = 0

@@ -944,7 +944,7 @@ function _non_boolean_condition(op::String)
   return _condition_not_boolean(written, "a number", fix, 931)
 end
 # The sentence #931 and #942 share: what was written, why the engines disagree, and how to fix it.
-_condition_not_boolean(written::String, value::String, fix::String, issue::Int) = QueryBuildError(
+_condition_not_boolean(written::String, value::String, fix::String, issue::Int) = QueryBuildError(  # refusal-value-ok: `value` here is explanatory text, not a bound value
   "\e[4m\e[31m$(written) used as a condition\e[0m — a condition must be boolean. PostgreSQL rejects " *
   "$(value) there and SQLite reads it for truthiness, so the two engines disagree; $(fix) (#$(issue)).")
 
@@ -1412,7 +1412,7 @@ function _resolve_window_expression(v, instruc::SQLInstruction)
   elseif v isa SQLType
     return _get_select_query(v, instruc)
   else
-    throw(QueryBuildError("Unsupported window expression $(repr(v)) of type $(typeof(v))"))
+    throw(QueryBuildError("Unsupported window expression $(repr(v)) of type $(typeof(v))"))  # refusal-value-ok: an expression object the query was built from
   end
 end
 
@@ -2757,7 +2757,10 @@ _format_filter_value(formatter, values, operator::AbstractString) =
 # `string` is a struct dump, operands included.
 function _locate_filter_refusal(e, label, type_label; subject::AbstractString = "field")
   e isa InvalidValueError || rethrow(e)
-  named = label isa AbstractString ? String(label) : label isa Symbol ? string(label) : nothing
+  named = label isa AbstractString ? String(label) : label isa Symbol ? string(label) :
+          # A CTE or `Joined` handle holds names only, so it is quoted as the caller wrote it.
+          label isa CTEReference ? "CTE(\"$(label.name)\", \"$(label.path)\")" :
+          label isa JoinedReference ? sprint(show, label) : nothing
   throw(subject == "field" && named !== nothing ?
           with_location(e; op = "filter", field = named, field_type = _opt_label(type_label)) :
         subject == "field" ?

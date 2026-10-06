@@ -900,7 +900,8 @@ function _ensure_unique_bulk_update_keys!(df::DataFrames.DataFrame,
     key = Tuple(row[mapping[field]] for field in dynamic_filters)
     if haskey(seen_keys, key)
       filters_text = join(dynamic_filters, ", ")
-      throw(QueryBuildError("Error in bulk_update, duplicate dynamic filter key values detected for filters [$filters_text] at rows $(seen_keys[key]) and $(index): $(collect(key))"))
+      # The rows and the key fields, never the key values (#971): a match key can be an email or a token.
+      throw(QueryBuildError("Error in bulk_update, duplicate dynamic filter key values detected for filters [$filters_text] at rows $(seen_keys[key]) and $(index)."))
     end
     seen_keys[key] = index
   end

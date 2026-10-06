@@ -194,7 +194,7 @@ Access_token = Models.Model(
 - `unique::Bool = false`: Enforce uniqueness.
 
 **Querying**: equality and `@in` take a whole UUID in any case (`"550E8400-…"` matches
-`"550e8400-…"`); a malformed one raises `FilterError`. The pattern lookups (`@contains`, `@startswith`,
+`"550e8400-…"`); a malformed one raises `InvalidValueError`. The pattern lookups (`@contains`, `@startswith`,
 `@endswith`, their `i`/`n` variants and `@regex`) take a **fragment** and match it against the UUID's
 lowercase, hyphenated text, the form both engines store or print. On PostgreSQL the column is read as
 `CAST(token AS text)`.
@@ -316,7 +316,7 @@ M.Pit_wall_session.objects.
 - **Ordering lookups** (`@gt`, `@gte`, `@lt`, `@lte`, `@range`) and `order_by` compare by network, as
   PostgreSQL does: `10.0.0.9` comes before `10.0.0.10`.
 - A filter value may be a `Sockets.IPv4` / `Sockets.IPv6` too; a value that is not a valid address
-  raises `FilterError`.
+  raises `InvalidValueError`.
 - A **projection alias** over a network column filters the same way. A pattern lookup on
   `"top_ip" => Max("client_ip")` reads `HOST(MAX(…))`, and the fragment is bound as text.
 - `Value(ip"…")` binds on PostgreSQL as an `inet`, in the text PostgreSQL prints for it
@@ -370,7 +370,7 @@ M.Pit_wall_session.objects.
   `Sockets.IPv4` / `Sockets.IPv6`. It may carry a prefix, and its host bits may be set:
   `"10.20.0.9/16"` means the network `10.20.0.0/16`, as it does in PostgreSQL. It works on a
   `GenericIPAddressField` and a `CIDRField` alike. A value that is not an address raises
-  `FilterError`.
+  `InvalidValueError`.
 - A **column on the right** (`F("garage_lan")`) is compared directly.
 - `@family` takes `4` or `6`, and `@prefixlen` a whole number from `0` to `128`. Anything else raises
   `FilterError`.
@@ -379,7 +379,7 @@ M.Pit_wall_session.objects.
   column, on a projection alias, or with a list of values, they raise `FilterError`.
 - **PostgreSQL only.** On SQLite, a lookup that is otherwise valid raises `BackendCapabilityError`,
   as the fields themselves do. The value checks above come first, so an invalid one still raises
-  `FilterError` there.
+  its own error there (`InvalidValueError`, or `FilterError` for `@family` and `@prefixlen`).
 
 ---
 
@@ -579,15 +579,15 @@ values the new element type cannot read are counted before anything runs. See
 float or a `Decimal` has no single text: `1.5` and `1.50` are the same number, and Julia prints
 `1e10` as `"1.0e10"`. Neither has a `Bool`, although Julia counts it as an integer: `true` could be
 `"true"`, `"1"` or `"t"`, and before this was refused the two engines each picked a different one.
-Each of these raises `InvalidValueError` on a write and `FilterError` in a filter,
+Each of these raises `InvalidValueError`, on a write and in a filter alike,
 instead of comparing against a text that matches nothing. Pass the text you mean. A text field's
 `default = true` is refused the same way, as a `FieldValidationError` when the model is defined.
 
 ```julia
 M.Result.objects.filter("positiontext" => 1)      # compared as "1"
 M.Result.objects.filter("positiontext" => "1")    # the same
-M.Result.objects.filter("positiontext" => 1.0)    # FilterError: pass the text, "1"
-M.Result.objects.filter("positiontext" => true)   # FilterError: pass the text the column holds
+M.Result.objects.filter("positiontext" => 1.0)    # InvalidValueError: pass the text, "1"
+M.Result.objects.filter("positiontext" => true)   # InvalidValueError: pass the text the column holds
 ```
 
 `max_length` counts the characters of the text that is written, whatever the value was: `12345` in a
@@ -775,7 +775,7 @@ If migrating from Django, password hashes are **fully compatible**. Users can co
 **Numeric strings are base 10.** Every numeric field also takes its value as a string, such as
 `"44"` for `laps` or `"12.5"` for `points` read from a CSV. The string must be written in base 10:
 an optional sign, digits, at most one `.`, and an optional exponent (`"1.2e3"`). A `0x`, `0b` or `0o`
-prefix (`"0x10"`) raises `InvalidValueError` on a write and `FilterError` in a filter, as Django's
+prefix (`"0x10"`) raises `InvalidValueError`, on a write and in a filter alike, as Django's
 `int(str)` / `Decimal(str)` refuse it. PormG never converts these strings: pass the number, or its
 base-10 text.
 

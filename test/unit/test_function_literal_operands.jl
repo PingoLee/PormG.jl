@@ -114,11 +114,11 @@ end
                                  ("a BigFloat", () -> Power("points", big(2.0)), "Value(x)"),
                                  # A bare duration has no single reading as an operand (#721).
                                  ("a Period", () -> Coalesce("points", Day(1)), "Value(x)"),
-                                 ("a number in Replace's find", () -> Replace("surname", 1, "x"), "\"1\""),
-                                 ("a number in Replace's replacement", () -> Replace("surname", "a", 2), "\"2\""),
+                                 ("a number in Replace's find", () -> Replace("surname", 1, "x"), "string(x)"),
+                                 ("a number in Replace's replacement", () -> Replace("surname", "a", 2), "string(x)"),
                                  # Every integer type gets the string hint there, not `Int64(x)`,
                                  # which the same slot would refuse (found in the delta review).
-                                 ("an Int16 in Replace's find", () -> Replace("surname", Int16(1), "x"), "\"1\""))
+                                 ("an Int16 in Replace's find", () -> Replace("surname", Int16(1), "x"), "string(x)"))
     @testset "$label" begin
       err = @test_throws PormG.QueryBuildError build()
       @test occursin(needle, err.value.msg)

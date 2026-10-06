@@ -66,7 +66,7 @@ end
     for field in ("laps", "millis", "amount", "speed"), v in ("+ 1", "- 5", "+\t9")
         err = try validate_field_data(Lap773, field, v, "create"); nothing catch e; e end
         @test err isa InvalidValueError
-        @test occursin("field \"$field\"", err.msg)
+        @test occursin("field `$field`", err.msg)
     end
 end
 
@@ -124,12 +124,14 @@ end
     ok.filter("laps" => "16")
     @test ok.list(show_query = :dict)[:parameters] == ["16"]
 
-    # The filter path reports any formatter refusal as `FilterError` naming the field and the value.
+    # The filter path reports any formatter refusal as `InvalidValueError` naming the field — never
+    # the value (#971; it was a `FilterError` that printed it).
     # Before #773 the formatter returned the text, so nothing was raised and '0x10' was bound.
     for (field, v) in (("laps", "0x10"), ("amount", "0b101"), ("speed", "0x1p4"))
         q = Lap773.objects
         q.filter(field => v)
-        @test_throws FilterError q.list(show_query = :dict)
+        err = @test_throws InvalidValueError q.list(show_query = :dict)
+        @test err.value.field == field && !occursin(v, err.value.msg)
     end
 end
 

@@ -397,13 +397,13 @@ end
 # acquire, so a refusal leases nothing.
 function _refuse_nul_key(key::AbstractString)
   '\0' in key && throw(InvalidValueError(
-    "with_advisory_lock: the key contains a NUL character (\\0). " * NUL_REFUSAL_REASON))
+    "with_advisory_lock: the key contains a NUL character (\\0). " * NUL_REFUSAL_REASON, :nul))
   return nothing
 end
 
 function _validate_on_missing_lock(on_missing_lock::Symbol)
   on_missing_lock in (:warn, :ignore, :error) && return nothing
-  throw(InvalidValueError(
+  throw(InvalidValueError(  # refusal-value-ok: a keyword argument the developer passed, not a bound value
     "Invalid on_missing_lock: $(repr(on_missing_lock)). Expected :warn (default), :ignore or :error."))
 end
 

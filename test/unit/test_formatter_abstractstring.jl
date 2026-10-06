@@ -226,10 +226,11 @@ _lazy(s::String) = LazyString(s)
       # REASON: a `SubString` used to be told it was "a String or Integer" problem, i.e. that its
       # TYPE was wrong, when the type was fine and only the shape was not.
       #
-      # The discriminator is that the shape arm INTERPOLATES THE VALUE ("The value 1991 is
-      # invalid…") and the type arm cannot, because it never looked at one. Naive substring checks
-      # do not work here and were tried first: both messages contain the literal "format YYYY-MM",
-      # since the generic one reads "…in the format YYYY-MM or YYYYMM".
+      # The discriminator is the shape arm's own sentence, "The value is invalid, it must be in the
+      # format YYYY-MM" — the type arm reads "The value must be a string or Integer in the format
+      # YYYY-MM or YYYYMM". (It used to be that the shape arm interpolated the value; since #971 no
+      # refusal does.) Naive substring checks do not work here and were tried first: both messages
+      # contain the literal "format YYYY-MM".
       for bad in ("1991", "199110", " 1991-10 ")   # the last: the fix widened the accepted TYPE,
                                                    # never the accepted SHAPE
         err = try
@@ -241,8 +242,8 @@ _lazy(s::String) = LazyString(s)
         @test err isa PormG.InvalidValueError
         msg = sprint(showerror, err)
         # Mutation gate: re-narrow to `::String` and these two rows fail — the generic arm's
-        # message names neither the value nor a bare "YYYY-MM" without "YYYYMM" beside it.
-        @test occursin("The value $(bad) is invalid", msg)
+        # message is not the YYYY-MM-only one. Neither names the value (#971).
+        @test occursin("The value is invalid, it must be in the format YYYY-MM", msg) && !occursin(string(bad), msg)
         @test !occursin("YYYYMM", msg)
       end
     end
@@ -323,8 +324,8 @@ _lazy(s::String) = LazyString(s)
   # the new generic `format_timezone_sql` arm actually earns its keep. `querybuilder/sanitization.jl`
   # guards the WRITE path with `value isa AbstractString` before it ever calls a formatter, so a
   # non-string never reached one on an insert; `_format_filter_value` has no such guard and hands
-  # the raw value straight over, with `_rethrow_as_filter_error` converting `InvalidValueError`
-  # into `FilterError` and rethrowing anything else untouched.
+  # the raw value straight over, with `_locate_filter_refusal` locating an `InvalidValueError`
+  # (converting it into `FilterError` until #971) and rethrowing anything else untouched.
   #
   # A mock Postgres connection under its OWN key — never `config["default"]`, which several other
   # unit files write to and which `runtests.jl` shares one process across.
@@ -368,16 +369,16 @@ _lazy(s::String) = LazyString(s)
     @test ym_split[:parameters] == ym_baseline[:parameters] == ["1991-10-01", "1991-11-01"]
 
     # The generic arm's real payoff: a value the DateTimeField cannot bind is now reported inside
-    # the #231 taxonomy. `_rethrow_as_filter_error` converts `InvalidValueError` to `FilterError`
-    # and rethrows everything else untouched, so before the arm existed the formatter's bare
+    # the #231 taxonomy. `_locate_filter_refusal` locates an `InvalidValueError` (it converted it to
+    # `FilterError` until #971) and rethrows everything else untouched, so before the arm existed the formatter's bare
     # `MethodError` escaped the filter path verbatim.
     #
     # `42` and not a `Date`: the filter path resolves `Date` against a DateTimeField ITSELF, before
     # any formatter runs (it binds "2020-01-01T00:00:00.000+00:00" quite happily), so a `Date` never
     # reaches the arm and would make this row assert nothing. Measured, having first written it the
     # other way.
-    @test_throws PormG.FilterError laps.objects.filter("logged_at" => 42).list(show_query = :dict)
-    @test_throws PormG.FilterError laps.objects.filter("logged_at" => 1.5).list(show_query = :dict)
+    @test_throws PormG.InvalidValueError laps.objects.filter("logged_at" => 42).list(show_query = :dict)
+    @test_throws PormG.InvalidValueError laps.objects.filter("logged_at" => 1.5).list(show_query = :dict)
 
     delete!(PormG.config, "fmt_abstractstring_598")
   end

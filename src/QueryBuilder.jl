@@ -31,6 +31,8 @@ import PormG: PormGError, FieldAccessError, UnknownFieldError, AmbiguousFieldErr
   # Also CAUGHT, not thrown (#344): the two abstract roots `_update_sequence` allowlists when it
   # decides whether a failed sequence repair is tolerable. Everything outside them propagates.
   DatabaseError, PoolError
+# Locates a formatter's refusal — op, model, field, row — without re-reading its text (#971).
+import PormG: with_location
 import PormG: PormGsuffix, PormGtransform, JSON_CONTAINMENT_OPERATORS, ARRAY_CONTAINMENT_OPERATORS,
               run_in_transaction,
               NETWORK_CONTAINMENT_OPERATORS, NETWORK_LOOKUP_OPERATORS   # #904

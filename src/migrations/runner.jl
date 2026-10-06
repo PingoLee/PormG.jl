@@ -1005,8 +1005,9 @@ function _precheck_lossy_alters(conn::PormGPostgres, findings::Vector{LossyAlter
     timeouts.statement_timeout_ms === nothing ||
       with_transaction(conn, "SET LOCAL statement_timeout = '$(timeouts.statement_timeout_ms)ms';", conn = leased)
     # Under the transaction context, so every `fetch` below runs on `leased` and leaves it leased.
-    # A `fetch(...; conn = leased)` would not: an explicit `conn` is treated as outside any
-    # transaction and handed back to the pool when the statement finishes — mid-transaction (#139).
+    # The context, not `fetch(...; conn = leased)`, because the helpers called below take no `conn`.
+    # (Before #970 an explicit `conn` was also handed back to the pool when the statement finished —
+    # mid-transaction, #139; it is borrowed now.)
     Configuration.with_tx_context(conn, leased) do
       # #828: the `:text_cast` count depends on the server's version; read once, and only for one.
       version = any(f -> f.kind === :text_cast, findings) ?
@@ -1279,9 +1280,9 @@ end
 
 # A history read, optionally on a connection the caller already holds — the migration transaction's
 # own, which is how the SQLite #81 guard reads inside `BEGIN IMMEDIATE` (#737). Through
-# `with_transaction(…; conn)`, the idiom `sqlite_foreign_keys_enabled` uses, and NOT `fetch(…; conn)`:
-# outside a `run_in_transaction` context `fetch` releases the connection it ran on when it finishes
-# (`await_result`'s `finally`), so it would hand the open transaction's handle back to the pool.
+# `with_transaction(…; conn)`, the idiom `sqlite_foreign_keys_enabled` uses. (`fetch(…; conn)` used
+# to release the connection it ran on, which would have handed the open transaction's handle back
+# to the pool; a passed `conn` is borrowed since #970, but this keeps the one idiom.)
 function _history_rows(connection::Union{PormGPostgres, PormGSQLite}, sql::String; conn = nothing)::DataFrame
   conn === nothing && return DataFrame(fetch(connection, sql))
   rows, _ = with_transaction(connection, sql; conn = conn)
@@ -1936,7 +1937,7 @@ struct MigrationResult
   n_statements::Int
 
   function MigrationResult(outcome::Symbol, version::Union{AbstractString, Nothing}, n_statements::Integer)
-    outcome in _MIGRATION_OUTCOMES || throw(InvalidValueError(
+    outcome in _MIGRATION_OUTCOMES || throw(InvalidValueError(  # refusal-value-ok: an internal outcome symbol
       "Unknown migrate() outcome $(repr(outcome)). Expected one of: $(join(repr.(_MIGRATION_OUTCOMES), ", "))."))
     n_statements >= 0 || throw(InvalidValueError(
       "MigrationResult n_statements must not be negative, got $(n_statements)."))
@@ -1971,7 +1972,7 @@ _migration_timeout_ms(::String, ::Nothing) = nothing
 function _migration_timeout_ms(name::String, seconds::Real)::Int
   ms = seconds * 1000
   (seconds isa Bool || !isfinite(ms) || ms <= 0 || ms > _MAX_MIGRATION_TIMEOUT_MS) &&
-    throw(InvalidValueError(
+    throw(InvalidValueError(  # refusal-value-ok: a migrate() keyword argument
       "migrate(...; $(name) = $(repr(seconds))): expected a positive number of seconds, at most " *
       "$(_MAX_MIGRATION_TIMEOUT_MS ÷ 1000) (PostgreSQL's limit for a timeout)."))
   return max(1, round(Int, ms))
@@ -2297,7 +2298,7 @@ function _validate_check_kinds(kinds::AbstractVector{Symbol}, models_file)
     "check(...; kinds = []) would report nothing whatever the database holds, so a gate built on " *
     "it could never fail. Name at least one of: $(join(repr.(_CHECK_KINDS), ", "))."))
   for kind in kinds
-    kind in _CHECK_KINDS || throw(InvalidValueError(
+    kind in _CHECK_KINDS || throw(InvalidValueError(  # refusal-value-ok: a check() argument, a finding class
       "Unknown check() finding class $(repr(kind)). Expected one of: $(join(repr.(_CHECK_KINDS), ", "))."))
   end
   # Refused rather than ignored: a caller who passed a models file expects it to be read.
@@ -3534,8 +3535,8 @@ function _execute_migration_lifecycle(connection::PormGSQLite, settings::PormGSe
         # #739: the schema precondition, after the #81 guard for the reason given in the PostgreSQL
         # lifecycle, and inside `BEGIN IMMEDIATE` — the only mutual exclusion SQLite has — so no other
         # process can change these tables before our COMMIT. The read runs on this transaction's own
-        # connection through `with_tx_context`: a `fetch(...; conn = conn)` would hand the connection
-        # back to the pool mid-transaction (#139). A refusal leaves `attempted` false, so it rolls
+        # connection through `with_tx_context`, which reaches every `fetch` inside the precondition
+        # check without threading a `conn` through it. A refusal leaves `attempted` false, so it rolls
         # back without a `failed` row.
         schema_tables === nothing || Configuration.with_tx_context(connection, conn) do
           _check_schema_precondition(connection, settings, schema_tables)
@@ -3849,7 +3850,7 @@ the advanced migrations guide.
 function run_once(f::Function, connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
                   name::AbstractString; transaction::Bool = true, lock_wait::Real = 30)::Symbol
   step = String(name)
-  isempty(strip(step)) && throw(InvalidValueError("run_once needs a step name; got $(repr(step))."))
+  isempty(strip(step)) && throw(InvalidValueError("run_once needs a step name; got $(repr(step))."))  # refusal-value-ok: a run_once step name the developer wrote
   length(step) <= 255 || throw(InvalidValueError(
     "run_once step names are at most 255 characters (pormg_migrations_data.name); got $(length(step))."))
   # Validated before the change_db return, as `migrate` does: a bad value fails on every instance.
@@ -3924,8 +3925,7 @@ function _run_once_locked(f::Function, connection::PormGSQLite, settings::PormGS
   return :applied
 end
 
-# `fetch` with no `conn`, so inside `run_in_transaction` both run on the transaction's connection:
-# an explicit `conn` would hand it back to the pool mid-transaction (#139).
+# `fetch` with no `conn`, so inside `run_in_transaction` both run on the transaction's connection.
 _data_step_recorded(connection::Union{PormGPostgres, PormGSQLite}, step::String)::Bool =
   nrow(DataFrame(fetch(connection, Dialect.select_data_step_sql(connection); params = Any[step]))) > 0
 

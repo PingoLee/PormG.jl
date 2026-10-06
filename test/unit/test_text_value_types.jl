@@ -89,18 +89,19 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Filter: a float or a Decimal compared with text is a `FilterError` naming the field or alias, on
+# Filter: a float or a Decimal compared with text is an `InvalidValueError` (a `FilterError` until
+# #971) naming the field or alias, on
 # both engines and through every route — never the raw `MethodError` it was. The `ToChar` route is
 # the one the #851 work opened (`values("y" => ToChar(...)).filter("y" => 20.5)`).
 # `Decimal` skips the `F` route: `F("surname") == Decimal(…)` is refused before any formatter, by a
 # different check this issue does not touch.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#860: a float or Decimal compared with text raises FilterError" begin
+@testset "#860: a float or Decimal compared with text raises InvalidValueError (#971)" begin
   for (backend, M) in TEXTVAL860_MODELS, r in TEXTVAL860_ROUTES, v in (1.5, Float32(20.5), Decimal(1.5))
     v isa Decimal && r.route == "F operand" && continue
     @testset "$backend · $(r.route) · $(typeof(v))" begin
       err = textval860_refusal(() -> r.build(M, v))
-      @test err isa PormG.FilterError
+      @test err isa PormG.InvalidValueError
       msg = err === nothing ? "" : sprint(showerror, err)
       @test occursin(r.label, msg)
     end
@@ -164,11 +165,11 @@ textval868_msg(err) = err === nothing ? "" : sprint(showerror, err)
       @test err isa PormG.InvalidValueError
       msg = textval868_msg(err)
       # The same refusal an over-length String gets: the field, the bound, the measured length.
-      @test occursin("\"code\"", msg)
+      @test occursin("field `code`", msg)
       @test occursin("max_length is 3", msg)
       @test occursin("has length $(length(PormG.Models.format_text_sql(v)))", msg)
-      # A value that is not a String says what text it was measured as.
-      @test occursin(repr(PormG.Models.format_text_sql(v)), msg)
+      # A value that is not a String says it was measured as text — and never prints that text (#971).
+      @test occursin("written as text", msg) && !occursin(PormG.Models.format_text_sql(v), msg)
     end
   end
 end
@@ -221,11 +222,11 @@ end
   end
 end
 
-@testset "#876: a Bool compared with text raises FilterError" begin
+@testset "#876: a Bool compared with text raises InvalidValueError (#971)" begin
   for (backend, M) in TEXTVAL860_MODELS, r in TEXTVAL860_ROUTES, v in (true, false)
     @testset "$backend · $(r.route) · $v" begin
       err = textval860_refusal(() -> r.build(M, v))
-      @test err isa PormG.FilterError
+      @test err isa PormG.InvalidValueError
       @test occursin(r.label, textval868_msg(err))
     end
   end
@@ -283,11 +284,11 @@ textval876_lap(key) = begin
   m.connect_key = key
   m
 end
-@testset "#876: a Bool compared with a TimeField raises FilterError" begin
+@testset "#876: a Bool compared with a TimeField raises InvalidValueError (#971)" begin
   for key in ("textval860_pg", "textval860_sl")
     M = textval876_lap(key)
     err = textval860_refusal(() -> (q = M.objects; q.filter("lap_time" => true); inspect_query(q)))
-    @test err isa PormG.FilterError
+    @test err isa PormG.InvalidValueError
     @test occursin("lap_time", textval868_msg(err))
   end
 end

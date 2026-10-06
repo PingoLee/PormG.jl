@@ -321,7 +321,7 @@ end
       bad = Model_.objects
       bad.values("resultid", "pts" => F("points"))
       bad.filter("pts" => "not-a-number")
-      err = @test_throws PormG.FilterError inspect_query(bad)
+      err = @test_throws PormG.InvalidValueError inspect_query(bad)
       @test occursin("projection alias", err.value.msg)
 
       ok = Model_.objects
@@ -802,7 +802,7 @@ end
 # `_render_alias_predicate` the top-level key does, so each case raises the SAME error either way.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#707: a Q alias leaf is typed and guarded like the top-level key" begin
-  cases = (("a wrong-typed value", "pts" => "not-a-number", PormG.FilterError, "projection alias"),
+  cases = (("a wrong-typed value", "pts" => "not-a-number", PormG.InvalidValueError, "projection alias"),
            ("a byte payload (#596)", "pts" => UInt8[0x01, 0x02], PormG.FilterError, "vector value but no operator"),
            ("a JSON operator (#618)", "pts__@has_key" => "a", PormG.FilterError, "@has_key"))
   for (backend, Model_) in _Q_AGG_MODELS, (clabel, pair, errtype, needle) in cases
@@ -869,7 +869,7 @@ end
       q = Model_.objects
       q.values("resultid", "pi" => PormG.Functions.Cast("points", IntegerField()))
       q.filter(pred)
-      err = @test_throws PormG.FilterError inspect_query(q)
+      err = @test_throws PormG.InvalidValueError inspect_query(q)
       @test occursin("projection alias", err.value.msg)
     end
     # A `Value` alias holds a literal, never a column: `Value("points")` is the text "points", so

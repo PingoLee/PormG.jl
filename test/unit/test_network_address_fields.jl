@@ -135,9 +135,10 @@ const NET28_CIDR_CORPUS = [
     # A prefix makes it a network, which this field does not hold — and the message says where to go.
     e = try NA.format_inet_sql("10.0.0.0/8"); nothing catch err; err end
     @test e isa PormG.InvalidValueError && occursin("CIDRField", e.msg)
-    # A CIDR network with host bits set is refused as PostgreSQL refuses it, naming the network.
+    # A CIDR network with host bits set is refused as PostgreSQL refuses it — without echoing the
+    # address or the network it implies (#971).
     e = try NA.format_cidr_sql("10.0.0.1/24"); nothing catch err; err end
-    @test e isa PormG.InvalidValueError && occursin("10.0.0.0/24", e.msg)
+    @test e isa PormG.InvalidValueError && occursin("host bits", e.msg) && !occursin("10.0.0", e.msg)
     @test_throws PormG.InvalidValueError NA.format_cidr_sql("2001:db8::1/32")
     @test_throws PormG.InvalidValueError NA.format_cidr_sql("10.0.0.0/33")
     @test_throws PormG.InvalidValueError NA.format_cidr_sql("::/129")
@@ -356,8 +357,8 @@ const NET28_CIDR_CORPUS = [
     q_ips.values("id")
     @test q_ips.list(show_query = :dict)[:parameters] == [["10.0.0.1", "2001:db8::1"]]
 
-    # A malformed value is a filter error, not a silent no-match.
-    @test_throws PormG.FilterError _NS.objects.filter("client_ip" => "10.1").list(show_query = :dict)
+    # A malformed value is refused (an `InvalidValueError` since #971), not a silent no-match.
+    @test_throws PormG.InvalidValueError _NS.objects.filter("client_ip" => "10.1").list(show_query = :dict)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -441,7 +442,7 @@ const NET28_CIDR_CORPUS = [
     q_bad = _NS.objects
     q_bad.values("team", "top_ip" => Max("client_ip"))
     q_bad.filter("top_ip" => "10.")
-    @test_throws PormG.FilterError q_bad.list(show_query = :dict)
+    @test_throws PormG.InvalidValueError q_bad.list(show_query = :dict)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -600,7 +601,7 @@ using PormG.QueryBuilder: Subquery, OuterRef
     bad = _NS.objects
     bad.values("team", "a" => Cast("team", "inet"))
     bad.filter("a" => "10.")
-    @test_throws PormG.FilterError bad.list(show_query = :dict)
+    @test_throws PormG.InvalidValueError bad.list(show_query = :dict)
   end
 
   @testset "SQLite: the cast is text, and the value binds as written" begin
@@ -793,14 +794,14 @@ _err904(f) = try; f(); nothing; catch e; e; end
     @test occursin("Error in filter: the @net_contained lookup", msg(e))
     @test occursin("and seen, under a transform, is not one", msg(e)) && !occursin("EXTRACT", msg(e))
     # A value that is not an address.
-    @test _err904(() -> _q904("client_ip__@net_contained" => "10.0.0.0/33").list(show_query = :dict)) isa PormG.FilterError
-    @test _err904(() -> _q904("client_ip__@net_contained" => 10).list(show_query = :dict)) isa PormG.FilterError
+    @test _err904(() -> _q904("client_ip__@net_contained" => "10.0.0.0/33").list(show_query = :dict)) isa PormG.InvalidValueError
+    @test _err904(() -> _q904("client_ip__@net_contained" => 10).list(show_query = :dict)) isa PormG.InvalidValueError
     # `@family` takes 4 or 6. (`true` is refused by the set alone; the `Bool` guard is what refuses
     # `@prefixlen => false` below, since `false in 0:128`.)
     for bad in (5, true, "4", 4.0)
       e = _err904(() -> _q904("client_ip__@family" => bad).list(show_query = :dict))
       @test e isa PormG.FilterError
-      @test occursin("takes 4 or 6, got $(repr(bad))", msg(e))
+      @test occursin("takes 4 or 6, got another $(typeof(bad))", msg(e))
     end
     for bad in (-1, 129, false)
       e = _err904(() -> _q904("garage_lan__@prefixlen" => bad).list(show_query = :dict))

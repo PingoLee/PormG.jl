@@ -3,7 +3,7 @@
 - **Version**: Unreleased
 - **PormG ref**: #949 ; `src/Models.jl` (`format_bool_sql(::Integer)`), `src/querybuilder/build_query.jl` (`_expression_formatter(::FExpression)`)
 - **Recorded**: 2026-10-05
-- **Severity**: breaking (narrow). Any integer but 1 used to be written and filtered as `false`. It now raises `InvalidValueError` on a write and `FilterError` in a filter.
+- **Severity**: breaking (narrow). Any integer but 1 used to be written and filtered as `false`. It now raises `InvalidValueError` on a write and in a filter (a filter raised `FilterError` until #971).
 
 ### What changed
 
@@ -13,10 +13,10 @@ became `false`, silently and on both engines:
 
 | call | before, both engines | after, both engines |
 |---|---|---|
-| `filter("is_active" => 5)` | matched the `false` rows | raises `FilterError` |
+| `filter("is_active" => 5)` | matched the `false` rows | raises `InvalidValueError` |
 | `update("is_active" => 2)`, `create(…)`, `bulk_insert`, `bulk_update` | wrote `false` | raises `InvalidValueError` |
 | `ArrayField(BooleanField())` given `[true, 2]` | wrote `{t,f}` | raises `InvalidValueError` |
-| `values("ahead" => F("lap") > F("points"))` then `filter("ahead" => 5)` | bound `5` as written | raises `FilterError` |
+| `values("ahead" => F("lap") > F("points"))` then `filter("ahead" => 5)` | bound `5` as written | raises `InvalidValueError` |
 
 `0`, `1`, `true`, `false` and `missing` behave exactly as before. The last row comes from the same
 change: a projected comparison is now typed as a boolean, so its alias filter goes through the same
@@ -33,16 +33,11 @@ the `9` was stored as `false` too, which was wrong. The consuming apps have **0*
 
 ### How to find the calls to migrate
 
-Run the app's tests and the imports. Every remaining write raises with this message:
+Run the app's tests and the imports. Every remaining write and filter raises `InvalidValueError`
+with this message (since #971 a filter raises that type too, and no refusal prints the value):
 
 ```
-A boolean value must be true, false, 0 or 1. Got the integer
-```
-
-and every remaining filter with:
-
-```
-field is the type BOOLEAN. Please check the value:
+A boolean value must be true, false, 0 or 1.
 ```
 
 Then check where integer codes reach a boolean column:

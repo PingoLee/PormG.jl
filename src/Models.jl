@@ -3434,7 +3434,7 @@ end
 # `default = true` is already a `FieldValidationError`, for the same reason. Its own method, because
 # `Bool <: Integer` would otherwise reach the base-10 method above and be written as `"true"`.
 function format_text_sql(value::Bool)
-  throw(InvalidValueError("A text value must be a String, an integer, a date, or a time. Got a Bool, which has no single text (\"true\", \"1\", \"t\"): pass the text the column holds explicitly, e.g. `string(x)`."))
+  throw(InvalidValueError("A text value must be a String, an integer, a date, or a time. Got a Bool, which has no single text (\"true\", \"1\", \"t\"): pass the text the column holds explicitly, e.g. `string(x)`.", :type))
 end
 function format_text_sql(value::AbstractString)
   return value
@@ -3458,7 +3458,7 @@ end
 # value escaped `_guarded_format` as a raw `MethodError`; an `InvalidValueError` is what that guard
 # reports as a `FilterError` naming the field, and what the write path raises as is.
 function format_text_sql(value)
-  throw(InvalidValueError("A text value must be a String, an integer, a date, or a time. Got a $(typeof(value)): pass its text explicitly, e.g. `string(x)`."))
+  throw(InvalidValueError("A text value must be a String, an integer, a date, or a time. Got a $(typeof(value)): pass its text explicitly, e.g. `string(x)`.", :type))
 end
 
 """
@@ -3494,7 +3494,7 @@ function format_binary_sql(value::Union{Missing, Nothing})
   return missing
 end
 function format_binary_sql(value)
-  throw(InvalidValueError("A BinaryField value must be raw bytes (`Vector{UInt8}`) or a String, which is stored as its UTF-8 code units. Got: $(typeof(value)). For a hex or Base64 string, decode it first — e.g. `hex2bytes(s)` or `base64decode(s)`."))
+  throw(InvalidValueError("A BinaryField value must be raw bytes (`Vector{UInt8}`) or a String, which is stored as its UTF-8 code units. Got: $(typeof(value)). For a hex or Base64 string, decode it first — e.g. `hex2bytes(s)` or `base64decode(s)`.", :type))
 end
 
 function _duration_to_nanoseconds(value::Period)::Int64
@@ -3516,7 +3516,7 @@ function _duration_to_nanoseconds(value::Period)::Int64
     return Int64(Dates.value(value))
   end
 
-  throw(InvalidValueError("DurationField only supports week/day/time-based periods. Months and years are ambiguous for SQL intervals."))
+  throw(InvalidValueError("DurationField only supports week/day/time-based periods. Months and years are ambiguous for SQL intervals.", :type))
 end
 
 function _duration_to_nanoseconds(value::Dates.CompoundPeriod)::Int64
@@ -3551,9 +3551,9 @@ const _DURATION_FORMATS_MSG = "Accepted formats: HH:MM:SS(.sss), M:SS(.sss), or 
 # recommends the `string` spelling, and it does not hold.
 function _duration_string_nanoseconds(value::AbstractString)::Int64
   stripped = strip(String(value))
-  isempty(stripped) && throw(InvalidValueError("The duration cannot be empty"))
+  isempty(stripped) && throw(InvalidValueError("The duration cannot be empty", :format))
   m = match(r"^([+-]?)(?:(?:(\d+):)?(\d+):)?(\d+)(?:\.(\d+))?$", stripped)
-  invalid() = InvalidValueError("The duration $value is invalid. $(_DURATION_FORMATS_MSG)")
+  invalid() = InvalidValueError("The duration is invalid. $(_DURATION_FORMATS_MSG)", :format)
   m === nothing && throw(invalid())
   sign, hours, minutes, seconds, fraction = m.captures
   # The two-digit rule for every field after the leading one.
@@ -3569,7 +3569,7 @@ function _duration_string_nanoseconds(value::AbstractString)::Int64
     Base.Checked.checked_add(Base.Checked.checked_mul(whole, Int64(1_000_000_000)), nanos)
   catch e
     e isa OverflowError || rethrow()
-    throw(InvalidValueError("The duration $value is out of range. $(_DURATION_FORMATS_MSG)"))
+    throw(InvalidValueError("The duration is out of range. $(_DURATION_FORMATS_MSG)", :range))
   end
   return sign == "-" ? -total : total
 end
@@ -3610,7 +3610,7 @@ function format_duration_sql(value::Dates.CompoundPeriod)
 end
 
 function format_duration_sql(value)
-  throw(InvalidValueError("The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), M:SS(.sss), or SS(.sss) format"))
+  throw(InvalidValueError("The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), M:SS(.sss), or SS(.sss) format", :type))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3633,12 +3633,12 @@ function format_uuid_sql(value::AbstractString)
   # written against, and `string(::LazyString)` is the identity, so modelling `string` here is how
   # the defect gets copied into the next regex-bearing formatter.
   s = strip(String(value))
-  occursin(_UUID_REGEX, s) || throw(InvalidValueError("Invalid UUID format: '$s'. Expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"))
+  occursin(_UUID_REGEX, s) || throw(InvalidValueError("The value is not a UUID. Expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", :format))
   return lowercase(s)
 end
 
 function format_uuid_sql(value)
-  throw(InvalidValueError("The value must be a UUID or a string in the format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"))
+  throw(InvalidValueError("The value must be a UUID or a string in the format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", :type))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3660,14 +3660,14 @@ end
 const _JSON_NUL_ESCAPE = r"(?<!\\)(?:\\\\)*\\u0000"
 _json_has_nul_escape(s::AbstractString) = occursin("u0000", s) && occursin(_JSON_NUL_ESCAPE, s)
 
-# Never the value itself, as for #951: a JSON document can carry a secret. The write path re-raises
-# this naming its field (`QueryBuilder._json_nul_field_refusal`), so the reason is shared.
+# Never the value itself, as for #951: a JSON document can carry a secret. Raised with kind
+# `:json_nul` and no location; the funnel that knows the field and row attaches them (#971).
 const JSON_NUL_REASON = "PostgreSQL jsonb cannot store one, so PormG refuses it on every backend, " *
   "before the statement is sent. Remove or replace the NUL."
 const JSON_NUL_REFUSAL = "A JSONField value contains a NUL character (\\0, written \\u0000 in JSON). " * JSON_NUL_REASON
 
 function _refuse_json_nul(json::AbstractString)
-  _json_has_nul_escape(json) && throw(InvalidValueError(JSON_NUL_REFUSAL))
+  _json_has_nul_escape(json) && throw(InvalidValueError(JSON_NUL_REFUSAL, :json_nul))
   return json
 end
 
@@ -3679,7 +3679,7 @@ function format_json_sql(value::AbstractString)
     # window, and this converter is handed to `validate_default`, so without the carve-out a Ctrl-C
     # arrived at introspection's warn-and-drop guard disguised as a bad column default.
     (e isa InterruptException || e isa StackOverflowError) && rethrow()
-    throw(InvalidValueError("Invalid JSON string: $(sprint(showerror, e))"))
+    throw(InvalidValueError("The text is not valid JSON.", :format))
   end
   return _refuse_json_nul(value)
 end
@@ -3693,7 +3693,7 @@ function format_json_sql(value::Union{Bool, Integer, AbstractFloat})
 end
 
 function format_json_sql(value)
-  throw(InvalidValueError("JSONField value must be a valid JSON string, Dict, Vector, NamedTuple, or scalar. Got: $(typeof(value))"))
+  throw(InvalidValueError("JSONField value must be a valid JSON string, Dict, Vector, NamedTuple, or scalar. Got: $(typeof(value))", :type))
 end
 
 # The spellings a numeric String may take (#773): an optional sign, base-10 digits with at most one
@@ -3727,28 +3727,28 @@ function format_number_sql(value::AbstractString)
   # `String`, not `string` — same reason as `format_uuid_sql` (#598). Safe either way today, since
   # everything below is `occursin`/`tryparse`; normalised so the family has one spelling.
   value = value |> String |> strip
-  isempty(value) && throw(InvalidValueError("The value is empty and cannot be used as a number"))
+  isempty(value) && throw(InvalidValueError("The value is empty and cannot be used as a number", :format))
 
   if occursin(r"^[+-]?\d+,\d+$", value)
-    throw(InvalidValueError("Does you want to use ',' as decimal separator? Please use '.' instead."))
+    throw(InvalidValueError("Does you want to use ',' as decimal separator? Please use '.' instead.", :format))
   end
   # Base 10 only (#773). The parsers below take `0x`/`0b`/`0o` (and `Float64` hex floats), and this
   # formatter returns the TEXT, not the parsed value — so `"0x10"` was validated as 16 and bound as
   # the string '0x10'. Django's `int(str)` / `Decimal(str)` refuse the prefixes; so does PormG.
   if has_non_decimal_prefix(value)
-    throw(InvalidValueError("The value '$value' uses a non-decimal prefix (0x, 0b or 0o). Write the number in base 10."))
+    throw(InvalidValueError("The value uses a non-decimal prefix (0x, 0b or 0o). Write the number in base 10.", :format))
   end
-  is_base10_number(value) || throw(InvalidValueError("The value '$value' is not a valid number"))
+  is_base10_number(value) || throw(InvalidValueError("The value is not a valid number", :format))
 
   # try integer first
   if (i = tryparse(Int64, value)) !== nothing
     return value
   # then float
   elseif (f = tryparse(Float64, value)) !== nothing
-    isfinite(f) || throw(InvalidValueError("Non-finite numeric values are not supported. Please use a finite numeric value instead."))
+    isfinite(f) || throw(InvalidValueError("Non-finite numeric values are not supported. Please use a finite numeric value instead.", :range))
     return value
   else
-    throw(InvalidValueError("The value '$value' is not a valid number"))
+    throw(InvalidValueError("The value is not a valid number", :format))
   end
 end
 function format_number_sql(value::AbstractArray)
@@ -3769,7 +3769,7 @@ function format_number_sql(value::Decimals.Decimal)
   try
     return string(value)
   catch e
-    @error("Failed to format Decimals.Decimal value: $(e)", value=value)
+    @error "Failed to format a Decimals.Decimal value" exception=e
     throw(e)
   end
 end
@@ -3778,7 +3778,7 @@ end
 # precedence level) whose second link is always false — so it never fired, and every integer but 1
 # bound `false`: `filter("is_active" => 5)` silently returned the inactive rows.
 function format_bool_sql(value::Integer)
-    value in (0, 1) || throw(InvalidValueError("A boolean value must be true, false, 0 or 1. Got the integer $(value)."))
+    value in (0, 1) || throw(InvalidValueError("A boolean value must be true, false, 0 or 1. Got another integer.", :range))
     return value == 1
 end
 function format_bool_sql(value::Union{Missing, Nothing})
@@ -3824,14 +3824,14 @@ function format_date_sql(value::AbstractString)
         # fixture (`d DATE DEFAULT CURRENT_DATE`), so this is squarely on the path the guard
         # depends on not disguising a cancelled import.
         (e isa InterruptException || e isa StackOverflowError) && rethrow()
-        throw(InvalidValueError("The date $value is invalid: $(sprint(showerror, e))"))
+        throw(InvalidValueError("The date is invalid: it is not a calendar date in the format YYYY-MM-DD", :format))
     end
   else
-    throw(InvalidValueError("The date $value is invalid"))
+    throw(InvalidValueError("The date is invalid", :format))
   end  
 end
 function format_date_sql(value)
-  throw(InvalidValueError("The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM-DD"))
+  throw(InvalidValueError("The date must be a Date, DateTime, ZonedDateTime or a string in the format YYYY-MM-DD", :type))
 end
 
 
@@ -3873,15 +3873,15 @@ end
 # tests `value isa AbstractString` before it calls the formatter and sends everything else to
 # `_type_mismatch_error`, so a non-string never reached here on an insert or update. The arm earns
 # its keep on the READ path, which has no such guard: `_format_filter_value` hands the raw filter
-# value straight to the formatter, and `_rethrow_as_filter_error` converts `InvalidValueError` into
-# `FilterError` while rethrowing everything else untouched. So `filter("start_at" => Date(2020,1,1))`
-# on a DateTimeField used to surface a raw `MethodError` and now surfaces a `FilterError`. Same for
+# value straight to the formatter, and `_locate_filter_refusal` locates an `InvalidValueError` while
+# rethrowing everything else untouched. So `filter("start_at" => Date(2020,1,1))` on a DateTimeField
+# used to surface a raw `MethodError` and now surfaces an `InvalidValueError` (#971). Same for
 # `deletion.jl` and `many_to_many.jl`, which call `field.formatter` with no sanitization in front.
 #
 # The keyword is declared so `format_timezone_sql(x; format = …)` lands here too rather than being a
 # `MethodError` again — nothing passes `format=` today, which is exactly why it would be missed.
 function format_timezone_sql(value; format::AbstractString=DATETIME_FORMAT)
-  throw(InvalidValueError("The datetime must be a ZonedDateTime, DateTime, or a string in the format $(format)"))
+  throw(InvalidValueError("The datetime must be a ZonedDateTime, DateTime, or a string in the format $(format)", :type))
 end
 
 function format_yyyy_mm(value::AbstractString)
@@ -3895,7 +3895,7 @@ function format_yyyy_mm(value::AbstractString)
   if occursin(r"^\d{4}-\d{2}$", s)
     return s
   else
-    throw(InvalidValueError("The value $value is invalid, it must be in the format YYYY-MM"))
+    throw(InvalidValueError("The value is invalid, it must be in the format YYYY-MM", :format))
   end  
 end
 function format_yyyy_mm(value::Integer)
@@ -3904,11 +3904,11 @@ function format_yyyy_mm(value::Integer)
     # Format as YYYY-MM
     return string(value[1:4], "-", value[5:6])
   else
-    throw(InvalidValueError("The value $value must be a 6-digit integer in the format YYYYMM or a string in the format YYYY-MM"))
+    throw(InvalidValueError("The value must be a 6-digit integer in the format YYYYMM or a string in the format YYYY-MM", :format))
   end
 end
 function format_yyyy_mm(value)
-  throw(InvalidValueError("The value must be a string or Integer in the format YYYY-MM or YYYYMM"))
+  throw(InvalidValueError("The value must be a string or Integer in the format YYYY-MM or YYYYMM", :type))
 end    
 
 # #579 — the right-hand side of a `__@quarter` / `__@quadrimester` comparison.
@@ -3930,7 +3930,7 @@ function _format_period_sql(value, lo::Int, hi::Int, label::String)
   (formatted === missing || formatted === nothing) && return formatted
   n = formatted isa Integer ? Int(formatted) : tryparse(Int, string(formatted))
   (n === nothing || n < lo || n > hi) &&
-    throw(InvalidValueError("The value $(value) is not a valid $(label); it must be an integer from $(lo) to $(hi)"))
+    throw(InvalidValueError("The value is not a valid $(label); it must be an integer from $(lo) to $(hi)", :range))
   return n
 end
 
@@ -4871,7 +4871,7 @@ function validate_timezone(value::AbstractString, format::AbstractString)
     # cannot denote a real instant, so treat it as invalid (Z has no digits and is skipped).
     local off = match(r"[+-](\d{2}):(\d{2})$", s)
     if off !== nothing && (parse(Int, off[1]) > 23 || parse(Int, off[2]) > 59)
-      throw(InvalidValueError("Invalid UTC offset (out of range) in datetime value: $value"))
+      throw(InvalidValueError("Invalid UTC offset (out of range) in the datetime value", :range))
     end
     # Offset-bearing: pad sub-seconds to exactly 3 digits (normalize_sqlite_datetime_string),
     # then parse — the `zzzz` token consumes both `Z` and `±HH:MM`.
@@ -4879,14 +4879,14 @@ function validate_timezone(value::AbstractString, format::AbstractString)
       zdt = ZonedDateTime(normalize_sqlite_datetime_string(s), _DATETIME_DATEFORMAT)
       return _canonicalize_datetime_utc(zdt)
     catch
-      throw(InvalidValueError("Invalid timezone format. Expected format: $format, got: $value"))
+      throw(InvalidValueError("Invalid timezone format. Expected format: $format", :format))
     end
   else
     # Naive (no offset) is assumed UTC; Julia's default ISO parser handles `.s`/no-subsecond.
     try
       return _canonicalize_datetime_utc(ZonedDateTime(DateTime(s), _DATETIME_UTC_TZ))
     catch
-      throw(InvalidValueError("Invalid timezone format. Expected format: $format, got: $value"))
+      throw(InvalidValueError("Invalid timezone format. Expected format: $format", :format))
     end
   end
 end

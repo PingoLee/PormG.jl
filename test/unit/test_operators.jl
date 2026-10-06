@@ -1323,36 +1323,40 @@ end
 #
 # This is a deliberate behavior change and is pinned as one: both remain `PormGError`, so an app
 # catching the root is unaffected, but one catching `InvalidValueError` specifically will notice.
+#
+# #971 reversed the TYPE on the maintainer's decision: a refused value is an `InvalidValueError` on
+# the filter path as on a write, located on the field, and the message never prints the value. What
+# #411 fixed stays fixed — every arm reports the SAME type, which is still what this pins.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "a wrong-typed filter value raises FilterError, not InvalidValueError (#411)" begin
+@testset "a wrong-typed filter value raises a located InvalidValueError (#411, #971)" begin
   # Scalar, non-Date field — the case that leaked before. Asserting the CAUSE as well as the type:
   # `FilterError` is the filter path's long-tail bucket, so a bare `@test_throws` would also pass on
   # an operator-validity error or the binary refusal, neither of which is what this pins.
-  scalar_err = @test_throws PormG.FilterError _IN411.objects.filter("n" => "abc").list(show_query = :dict)
-  @test occursin("field is the type", scalar_err.value.msg)
+  scalar_err = @test_throws PormG.InvalidValueError _IN411.objects.filter("n" => "abc").list(show_query = :dict)
+  @test occursin("Error in filter, field `n`", scalar_err.value.msg)
   # And inside a membership list, where the map applies the formatter per element.
-  list_err = @test_throws PormG.FilterError _IN411.objects.filter("n__@in" => ["abc"]).list(show_query = :dict)
-  @test occursin("field is the type", list_err.value.msg)
+  list_err = @test_throws PormG.InvalidValueError _IN411.objects.filter("n__@in" => ["abc"]).list(show_query = :dict)
+  @test occursin("Error in filter, field `n`", list_err.value.msg)
   # A Date field was already converted by the old substring match; it must stay converted.
-  @test_throws PormG.FilterError _IN411.objects.filter("happened" => "not-a-date").list(show_query = :dict)
+  @test_throws PormG.InvalidValueError _IN411.objects.filter("happened" => "not-a-date").list(show_query = :dict)
 
   # #467: `@range`/`@nrange` were the one arm left out — `BETWEEN` formats its two operands in a
   # branch of its own, which sat outside the guard, so the SAME mistake reported a different type
-  # depending on which operator was used. Both branches now go through `_rethrow_as_filter_error`.
+  # depending on which operator was used. Both branches now go through `_locate_filter_refusal`.
   # Asserting the cause as well as the type, for the reason stated above.
-  range_err = @test_throws PormG.FilterError _IN411.objects.filter(
+  range_err = @test_throws PormG.InvalidValueError _IN411.objects.filter(
     "happened__@range" => ["x", "y"]).list(show_query = :dict)
-  @test occursin("field is the type", range_err.value.msg)
+  @test occursin("Error in filter, field `happened`", range_err.value.msg)
 
   # `@nrange` was untested either way before #467. It shares the branch but not the operator
   # string, and a fix written against `BETWEEN` alone would be easy to scope to one of them.
-  nrange_err = @test_throws PormG.FilterError _IN411.objects.filter(
+  nrange_err = @test_throws PormG.InvalidValueError _IN411.objects.filter(
     "happened__@nrange" => ["x", "y"]).list(show_query = :dict)
-  @test occursin("field is the type", nrange_err.value.msg)
+  @test occursin("Error in filter, field `happened`", nrange_err.value.msg)
 
   # Non-Date too: the leak was never about dates, and `n` is the field the scalar case above uses,
   # so a BETWEEN-specific regression cannot hide behind the Date formatter's own arms.
-  @test_throws PormG.FilterError _IN411.objects.filter(
+  @test_throws PormG.InvalidValueError _IN411.objects.filter(
     "n__@range" => ["abc", "def"]).list(show_query = :dict)
 end
 
@@ -1463,50 +1467,50 @@ end
 # as well as the type: `FilterError` is the filter path's long-tail bucket, so a bare `@test_throws`
 # would pass on an operator-validity error too, which is not what this pins.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "every read path reports FilterError, not InvalidValueError (#576)" begin
+@testset "every read path reports a located InvalidValueError (#576, #971)" begin
   # ── The HAVING / aggregate-alias ladder (`_resolve_having_filter_value`) ──
   # This is the documented alias spelling, and all seven of its arms formatted unguarded. The
   # message is alias-shaped: there is no field here, only a name the caller invented in `values()`.
   sum_q = _IN411.objects
   sum_q.values("code", "tot" => PormG.Functions.Sum("n"))
-  sum_err = @test_throws PormG.FilterError sum_q.filter(
+  sum_err = @test_throws PormG.InvalidValueError sum_q.filter(
     "tot__@gt" => "abc").list(show_query = :dict)
-  @test occursin("projection alias is the type", sum_err.value.msg)
+  @test occursin("filter on the `tot` projection alias", sum_err.value.msg)
   @test occursin("tot", sum_err.value.msg)
 
   # `MAX`/`MIN` resolve the formatter from the aggregated COLUMN, a different arm from `SUM`'s.
   max_q = _IN411.objects
   max_q.values("code", "mx" => PormG.Functions.Max("happened"))
-  max_err = @test_throws PormG.FilterError max_q.filter(
+  max_err = @test_throws PormG.InvalidValueError max_q.filter(
     "mx__@gt" => "not-a-date").list(show_query = :dict)
-  @test occursin("projection alias is the type", max_err.value.msg)
+  @test occursin("filter on the `mx` projection alias", max_err.value.msg)
 
   # ── The transform ladder (`SQLTypeFunction` branches in `_get_filter_query`) ──
   # `@month`/`@day` extract a number, so a non-numeric value is the mistake. These reached
   # `format_number_sql` with no `try` around it at all.
-  month_err = @test_throws PormG.FilterError _IN411.objects.filter(
+  month_err = @test_throws PormG.InvalidValueError _IN411.objects.filter(
     "happened__@month" => "abc").list(show_query = :dict)
-  @test occursin("transform is the type", month_err.value.msg)
-  @test_throws PormG.FilterError _IN411.objects.filter(
+  @test occursin(" transform (", month_err.value.msg)
+  @test_throws PormG.InvalidValueError _IN411.objects.filter(
     "happened__@day" => "abc").list(show_query = :dict)
 
   # `@quarter` validates a RANGE rather than a type, through `format_quarter_sql`. Same leak, and
   # it is the one the docs named by error type, so both doc pages moved with this commit.
-  quarter_err = @test_throws PormG.FilterError _IN411.objects.filter(
+  quarter_err = @test_throws PormG.InvalidValueError _IN411.objects.filter(
     "happened__@quarter" => 9).list(show_query = :dict)
-  @test occursin("transform is the type", quarter_err.value.msg)
+  @test occursin(" transform (", quarter_err.value.msg)
 
   # ── The sargable rewrite (`_render_sargable_date_range`) ──
   # Not named by the issue, and the one that actually fires for these spellings: on a plain
   # `DateField` the rewrite short-circuits AHEAD of the ladder above, so guarding the ladder alone
   # would have left `@date` and `@yyyy_mm` leaking while the tests for `@month` went green.
-  date_err = @test_throws PormG.FilterError _IN411.objects.filter(
+  date_err = @test_throws PormG.InvalidValueError _IN411.objects.filter(
     "happened__@date" => "not-a-date").list(show_query = :dict)
-  @test occursin("field is the type", date_err.value.msg)
+  @test occursin("Error in filter, field `happened`", date_err.value.msg)
   # `@yyyy_mm` leaks one call deeper — `_yyyy_mm_bucket_bounds` opens with `Models.format_yyyy_mm`,
   # whose `InvalidValueError` escaped before the bounds guard. Its sibling `_year_bucket_bounds`
   # already raised `FilterError` throughout, which is why `@year` was never on the leak list.
-  @test_throws PormG.FilterError _IN411.objects.filter(
+  @test_throws PormG.InvalidValueError _IN411.objects.filter(
     "happened__@yyyy_mm" => "nonsense").list(show_query = :dict)
 
   # ── The #474 memo arm: an ordinary JOINED-PATH filter ──
@@ -1515,14 +1519,14 @@ end
   # reachable shape is any FK traversal: `"eventid__happened"` is not a key of `model.fields`, so
   # every joined filter resolves through the memo. That makes this plausibly the MOST common
   # wrong-typed filter in a consuming app, and it was leaking `InvalidValueError` like the rest.
-  fk_err = @test_throws PormG.FilterError _IN411R.objects.filter(
+  fk_err = @test_throws PormG.InvalidValueError _IN411R.objects.filter(
     "eventid__happened" => "not-a-date").list(show_query = :dict)
-  @test occursin("field is the type", fk_err.value.msg)
+  @test occursin("Error in filter, field `eventid__happened`", fk_err.value.msg)
   @test occursin("eventid__happened", fk_err.value.msg)
-  @test_throws PormG.FilterError _IN411R.objects.filter(
+  @test_throws PormG.InvalidValueError _IN411R.objects.filter(
     "eventid__n" => "abc").list(show_query = :dict)
   # Through a pattern operator too, which reaches the same arm by a different branch of the caller.
-  @test_throws PormG.FilterError _IN411R.objects.filter(
+  @test_throws PormG.InvalidValueError _IN411R.objects.filter(
     "eventid__n__@contains" => "x").list(show_query = :dict)
 
   # ── Controls: the conversion must not swallow a well-typed value ──
@@ -1543,7 +1547,7 @@ end
 
   # ── The guard converts InvalidValueError and NOTHING else ──
   # `format_bool_sql` has no generic arm, so a wrong-typed value on a BooleanField raises a bare
-  # `MethodError`. `_rethrow_as_filter_error`'s non-`InvalidValueError` arm is `rethrow(e)`, and
+  # `MethodError`. `_locate_filter_refusal`'s non-`InvalidValueError` arm is `rethrow(e)`, and
   # this pins that it stays that way: a guard that converted everything would hide real bugs.
   @test_throws MethodError _IN411.objects.filter(
     "ok" => Date("1991-10-01")).list(show_query = :dict)
@@ -1571,13 +1575,14 @@ end
   for conn in (nothing, sl)
     inspect(q) = conn === nothing ? q.list(show_query = :dict) :
                                     PormG.QueryBuilder.inspect_query(q; connection = conn)
-    # The filter path reports the filter's type, as #411 made every wrong-typed value do.
-    err = @test_throws PormG.FilterError inspect(_IN411.objects.filter("ok" => 5))
-    @test occursin("The ok field is the type BOOLEAN. Please check the value: 5", _plain(err.value.msg))
-    @test_throws PormG.FilterError inspect(_IN411.objects.filter("ok" => -1))
-    @test_throws PormG.FilterError inspect(_IN411.objects.filter("ok__@in" => [1, 2]))
+    # The filter path reports one type for every wrong-typed value (#411) — `InvalidValueError`,
+    # located on the field, since #971 — and never the value.
+    err = @test_throws PormG.InvalidValueError inspect(_IN411.objects.filter("ok" => 5))
+    @test occursin("Error in filter, field `ok` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got another integer.", _plain(err.value.msg))
+    @test_throws PormG.InvalidValueError inspect(_IN411.objects.filter("ok" => -1))
+    @test_throws PormG.InvalidValueError inspect(_IN411.objects.filter("ok__@in" => [1, 2]))
     # Across a join, which resolves the field through the memo rather than `model.fields`.
-    @test_throws PormG.FilterError inspect(_IN411R.objects.filter("eventid__ok" => 5))
+    @test_throws PormG.InvalidValueError inspect(_IN411R.objects.filter("eventid__ok" => 5))
     # Controls: 0 and 1 still bind, as the boolean on PostgreSQL and the native 0/1 on SQLite.
     @test inspect(_IN411.objects.filter("ok" => 1))[:parameters] == Any[conn === nothing ? true : 1]
     @test inspect(_IN411.objects.filter("ok" => 0))[:parameters] == Any[conn === nothing ? false : 0]
@@ -1597,7 +1602,7 @@ end
   # An `ArrayField(BooleanField())` formats each element through the same formatter, so `[true, 2]`
   # was written as `{t,f}`.
   arr_err = @test_throws PormG.InvalidValueError PormG.Models.ArrayField(PormG.Models.BooleanField()).formatter([true, 2])
-  @test occursin("Got the integer 2", _plain(sprint(showerror, arr_err.value)))
+  @test occursin("element 2 of the array: A boolean value must be true, false, 0 or 1.", _plain(sprint(showerror, arr_err.value)))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1624,9 +1629,9 @@ end
   # And a genuinely wrong value on the same alias now reports the filter path's type.
   bad = _IN411.objects
   bad.values("id", "d2" => F("happened"))
-  bad_err = @test_throws PormG.FilterError bad.filter(
+  bad_err = @test_throws PormG.InvalidValueError bad.filter(
     "d2" => "not-a-date").list(show_query = :dict)
-  @test occursin("projection alias is the type", bad_err.value.msg)
+  @test occursin("filter on the `d2` projection alias", bad_err.value.msg)
 
   # The BOUND VALUE changes for every non-numeric column, not just for the ones that used to raise
   # — the old fallback coerced through `format_number_sql` whatever the alias projected. These two
@@ -1719,8 +1724,8 @@ end
       qbad = _IN411R.objects
       qbad.values("points", "last" => PormG.Functions.Max("eventid__happened"))
       qbad.filter("last__@gt" => "not-a-date")
-      bad = @test_throws PormG.FilterError _inspect(qbad)
-      @test occursin("projection alias is the type date", _plain(bad.value.msg))
+      bad = @test_throws PormG.InvalidValueError _inspect(qbad)
+      @test occursin("projection alias (date)", _plain(bad.value.msg))
 
       # #576's other declared-narrow case, same root: a bare `F` over a joined path. The oracle is
       # the ordinary WHERE filter on the same joined column — the alias must bind what the column
@@ -1763,7 +1768,7 @@ end
       @test occursin(r"\"Tb_1\"\.\"happened\" BETWEEN", ok[:sql_text])
 
       # A wrong-typed pair now refuses at build time, naming the path the caller wrote.
-      bad = @test_throws PormG.FilterError _inspect(_IN411R.objects.filter(
+      bad = @test_throws PormG.InvalidValueError _inspect(_IN411R.objects.filter(
         "eventid__happened__@nrange" => ["x", "y"]))
       @test occursin("eventid__happened", _plain(bad.value.msg))
     end
@@ -1864,13 +1869,13 @@ end
   # each and refuses a bare `UInt8` — verified byte-for-byte identical on the unpatched code. The
   # new method delegates whenever the last segment is a `PormGsuffix` key precisely so this reading
   # is untouched; a binary membership filter is spelled `blob__@in => [bytes_a, bytes_b]` (#466).
-  suffixed = @test_throws PormG.FilterError _IN411.objects.filter(
+  suffixed = @test_throws PormG.InvalidValueError _IN411.objects.filter(
     "blob__@in" => UInt8[0x01, 0x02]).list(show_query = :dict)
   # `_plain` because this phrase spans a COLORIZED token — the message is
   # "is the type \e[4m\e[32mBLOB\e[0m". `_emsg` keeps the escapes when `Base.have_color` is true and
   # strips them otherwise, so a local run (non-TTY, color off) matches and CI (color on) does not.
   # This assertion shipped green locally and failed on all five CI jobs; match the plain text.
-  @test occursin("is the type BLOB", _plain(suffixed.value.msg))
+  @test occursin("(BLOB)", _plain(suffixed.value.msg))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

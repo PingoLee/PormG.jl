@@ -3568,7 +3568,7 @@ function JSONField(; kwargs...)
       format_json_sql(default)
     catch e
       (e isa InterruptException || e isa StackOverflowError) && rethrow()   # #472
-      e isa InvalidValueError && throw(FieldValidationError("Invalid default value for JSONField: $(e.msg)"))
+      e isa InvalidValueError && throw(FieldValidationError("Invalid default value for JSONField: $(e.reason)"))
       default isa AbstractString && rethrow()
       # Any other failure serializing a collection (`JSON.json` refuses `NaN`, for one) keeps the
       # report it had before #954: `validate_default` raises it as a FieldValidationError.
@@ -3657,17 +3657,17 @@ function (f::ArrayFormatter)(value)
     Any[e === nothing ? nothing : pg_array_element_value(f.kind, e) for e in parse_pg_array_literal(value)] :
     _pg_array_elements(value)
   f.size !== nothing && length(elems) > f.size &&
-    throw(InvalidValueError("this ArrayField holds at most $(f.size) elements (size = $(f.size)), got $(length(elems))."))
+    throw(InvalidValueError("this ArrayField holds at most $(f.size) elements (size = $(f.size)), got $(length(elems)).", :range))
   texts = Vector{Union{Nothing, String}}(undef, length(elems))
   for (i, el) in enumerate(elems)
     if el === nothing || el === missing
       f.base.null ||
-        throw(InvalidValueError("element $i is null, and this ArrayField's base field does not allow null elements (declare it with null = true)."))
+        throw(InvalidValueError("element $i is null, and this ArrayField's base field does not allow null elements (declare it with null = true).", :other))
       texts[i] = nothing
       continue
     end
     (el isa Union{AbstractArray, Tuple} && !(el isa AbstractString)) &&
-      throw(InvalidValueError("element $i is a $(typeof(el)): an ArrayField holds a one-dimensional array, so an element cannot be a collection."))
+      throw(InvalidValueError("element $i is a $(typeof(el)): an ArrayField holds a one-dimensional array, so an element cannot be a collection.", :type))
     texts[i] = try
       formatted = f.base.formatter(el)
       # A float into a numeric element converts through its shortest text (`string`, `1.1`), not the
@@ -3682,9 +3682,10 @@ function (f::ArrayFormatter)(value)
       (e isa InterruptException || e isa StackOverflowError) && rethrow()   # #472
       # The base formatters cover their own types; one handed another type (`format_bool_sql("t")`)
       # has no method for it. Either way the reason belongs to the element, so say which one.
-      reason = e isa InvalidValueError ? e.msg :
-               e isa MethodError ? "$(repr(el)) is not a valid $(_pg_kind_label(f.kind)) value" : rethrow()
-      throw(InvalidValueError("element $i of the array: $(rstrip(reason, '.'))."))
+      reason = e isa InvalidValueError ? e.reason :
+               e isa MethodError ? "a $(typeof(el)) is not a valid $(_pg_kind_label(f.kind)) value" : rethrow()
+      throw(InvalidValueError("element $i of the array: $(rstrip(reason, '.')).",
+                              e isa InvalidValueError ? e.kind : :type))
     end
   end
   return PormGArrayLiteral(print_pg_array_literal(texts))

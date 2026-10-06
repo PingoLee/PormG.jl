@@ -3878,13 +3878,13 @@ end
 
     # ── Both operands format through the alias's type, in ONE guard (#467) ───────
     # A `Max` over a date column is typed as a date (#652), so each operand binds as its text form and
-    # a wrong-typed pair refuses as a FilterError naming the alias — never a raw InvalidValueError.
+    # a wrong-typed pair refuses naming the alias — an InvalidValueError located on it since #971.
     date_q() = (q = M.Race.objects; q.values("year", "last" => Max("date"));
                 q.filter("last__@range" => [Date("1991-01-01"), Date("1991-12-31")]); q)
     @test _assert_order_by_aligned(date_q)[:parameters] == ["1991-01-01", "1991-12-31"]
-    bad_err = @test_throws PormG.FilterError (q = M.Race.objects; q.values("year", "last" => Max("date"));
+    bad_err = @test_throws PormG.InvalidValueError (q = M.Race.objects; q.values("year", "last" => Max("date"));
                                              q.filter("last__@range" => ["x", "y"]); inspect_query(q))
-    @test occursin("projection alias is the type", bad_err.value.msg)
+    @test occursin("filter on the `last` projection alias", bad_err.value.msg)
 
     # ── Arity survives: still enforced where the filter is parsed ────────────────
     # A PIN, not a regression test: the vector cases pass on the pre-#654 code too, because the

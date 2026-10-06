@@ -73,13 +73,13 @@ bcce869_msg(err) = err === nothing ? "" : sprint(showerror, err)
 # ─────────────────────────────────────────────────────────────────────────────
 const BCCE869_CASES = (
   (source = "format_text_sql refuses a float", column = :code, bad = 1.5,
-   reason = "A text value must be a String", named = "field \"code\""),
+   reason = "A text value must be a String", named = "field `code`"),
   (source = "max_length on an integer written as text (#868)", column = :code, bad = 12345,
-   reason = "max_length is 3", named = "field \"code\""),
+   reason = "max_length is 3", named = "field `code`"),
   (source = "max_length on a String", column = :code, bad = "SENNA",
-   reason = "max_length is 3", named = "field \"code\""),
+   reason = "max_length is 3", named = "field `code`"),
   (source = "an integer field refuses text", column = :year, bad = "nineteen",
-   reason = "expected", named = "field \"year\""),
+   reason = "expected", named = "field `year`"),
   (source = "a collection in one cell", column = :code, bad = ["A", "B"],
    reason = "a column holds a single value", named = "field `code`"),
 )
@@ -123,8 +123,10 @@ end
   msg = bcce869_msg(err)
   @test occursin("row 1", msg)
   @test occursin("model bcce869_hooked", msg)
-  @test occursin("field \"code\"", msg)
-  @test occursin("formatter exploded", msg)
+  @test occursin("field `code`", msg)
+  # Its type, never its text: an untyped error's message can quote the value (#971).
+  @test occursin("ErrorException", msg)
+  @test !occursin("formatter exploded", msg)
 
   # The very object raised, untouched: not wrapped into an `InvalidValueError`.
   capability = PormG.BackendCapabilityError("not on this backend")

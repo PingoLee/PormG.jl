@@ -91,14 +91,14 @@ function _order_field(raw::AbstractString)
   # A leading `-` is the FLUENT spelling's direction marker. `SQLOrder` carries `orientation` of its
   # own, so consuming it here would mean two ways to say one thing and a silent winner when they
   # disagree — the first-match precedence #492/#509 exist to remove. One direction, one slot.
-  startswith(v, "-") && throw(QueryBuildError(
+  startswith(v, "-") && throw(QueryBuildError(  # refusal-value-ok: an order_by field name
     "\e[4m\e[31m\"$(v)\"\e[0m: a leading \e[4m\e[31m-\e[0m is the fluent " *
     "\e[4m\e[32morder_by(\"-column\")\e[0m spelling and has no meaning inside " *
     "\e[4m\e[32mSQLOrder\e[0m, which carries the direction in its own " *
     "\e[4m\e[32morientation\e[0m. Write " *
     "\e[4m\e[32mSQLOrder(\"$(v[2:end])\"; orientation = \"DESC\")\e[0m (#533)."))
   check = String.(split(v, "__@"))
-  size(check, 1) > 1 && haskey(PormGsuffix, check[end]) && throw(QueryBuildError(
+  size(check, 1) > 1 && haskey(PormGsuffix, check[end]) && throw(QueryBuildError(  # refusal-value-ok: an order_by field name
     "Invalid SQLOrder field \e[4m\e[31m\"$(v)\"\e[0m: operator suffixes (__@lte, __@gte, " *
     "__@contains, …) are not allowed in ordering."))
   size(check, 1) == 1 && return SQLField(v, v)
@@ -468,7 +468,7 @@ function _filter!(q::SQLObject, filter)
     else
       # FilterError (a PormGError) so filter() misuse matches the values()/order_by() siblings —
       # this call site was the two-era inconsistency #197 called out (now typed via #231).
-      throw(FilterError("Invalid filter argument: $(v) (::$(typeof(v))) — use a \"field\" => value pair, a Q(key => value, …), or a Qor(key => value, …)."))
+      throw(FilterError("Invalid filter argument: a $(typeof(v)) — use a \"field\" => value pair, a Q(key => value, …), or a Qor(key => value, …)."))
     end
   end
   return q
@@ -489,7 +489,7 @@ end
 _distinct!(q::SQLObject, value::Tuple{}) = _distinct!(q, true) # if no value is passed, distinct is true
 _distinct!(q::SQLObject, value::Tuple{Bool}) = _distinct!(q, value[1]) # if a value is passed, distinct is the value
 function _distinct!(q::SQLObject, value)
-  throw(QueryBuildError("Invalid distinct() argument: $(value) (::$(typeof(value))) — use a Bool (true or false)."))
+  throw(QueryBuildError("Invalid distinct() argument: a $(typeof(value)) — use a Bool (true or false)."))
 end
 
 # #26: mark the query for row-level locking. Renders `FOR [NO KEY] UPDATE [NOWAIT|SKIP LOCKED]`
@@ -559,7 +559,7 @@ function _order_by!(q::SQLObject, values::NTuple{N,Union{AbstractString,SQLTypeO
       if size(check, 1) == 1
         push!(q.order, SQLOrder(SQLField(v, v), orientation=orientation))
       elseif haskey(PormGsuffix, check[end])
-        throw(QueryBuildError("Invalid order_by() field \"$(v)\": operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in ordering."))
+        throw(QueryBuildError("Invalid order_by() field \"$(v)\": operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in ordering."))  # refusal-value-ok: an order_by field name
       else
         push!(q.order, SQLOrder(SQLField(_check_function(check), join(check, "__")), orientation=orientation))
       end
@@ -582,7 +582,7 @@ function _order_by!(q::SQLObject, values::NTuple{N,Union{AbstractString,SQLTypeO
   return q
 end
 function _order_by!(q::SQLObject, values)
-  throw(QueryBuildError("Invalid order_by() argument: $(values) (::$(typeof(values))) — use field-name Strings (\"-field\" for DESC), CTE(\"name\", \"path\"; desc = true) or Joined(\"alias\", \"column\"; desc = true) references, or SQLTypeOrder values."))
+  throw(QueryBuildError("Invalid order_by() argument: a $(typeof(values)) — use field-name Strings (\"-field\" for DESC), CTE(\"name\", \"path\"; desc = true) or Joined(\"alias\", \"column\"; desc = true) references, or SQLTypeOrder values."))
 end
 
 

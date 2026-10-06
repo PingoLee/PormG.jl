@@ -148,8 +148,8 @@ _sql902(q) = q.list(show_query = :dict)
     res = _sql902(q)
     @test occursin("WHERE \"Tb\".\"token\" = \$1", res[:sql_text]) && !occursin("CAST(", res[:sql_text])
     @test res[:parameters] == [_TOKEN902]
-    @test_throws PormG.FilterError _sql902(_CAR_PG.objects.filter("token" => "550e"))
-    @test_throws PormG.FilterError _sql902(_CAR_SL.objects.filter("token" => "550e"))
+    @test_throws PormG.InvalidValueError _sql902(_CAR_PG.objects.filter("token" => "550e"))
+    @test_throws PormG.InvalidValueError _sql902(_CAR_SL.objects.filter("token" => "550e"))
   end
 end
 
@@ -207,8 +207,8 @@ using PormG.QueryBuilder: Subquery, OuterRef
     bad.values("id", "t" => proj)
     bad.filter("t" => "not-a-uuid")
     err = try; _sql902(bad); nothing; catch e; e; end
-    @test err isa PormG.FilterError
-    @test occursin("is the type uuid", replace(sprint(showerror, err), r"\e\[[0-9;]*m" => ""))
+    @test err isa PormG.InvalidValueError
+    @test occursin("projection alias (uuid)", replace(sprint(showerror, err), r"\e\[[0-9;]*m" => ""))
   end
   @testset "equality validates the value" begin
     check_uuid(_CAR_PG, Cast("chassis", "uuid"))
@@ -217,7 +217,7 @@ using PormG.QueryBuilder: Subquery, OuterRef
     num = _CAR_PG.objects
     num.values("chassis", "top" => Subquery(_CAR_PG.objects.filter("id" => OuterRef("id")).values("m" => Max("id"))))
     num.filter("top" => "abc")
-    @test_throws PormG.FilterError _sql902(num)
+    @test_throws PormG.InvalidValueError _sql902(num)
   end
 
   # On SQLite `Cast(x, "uuid")` is `CAST(x AS TEXT)`: the SQL normalizes nothing, so neither does the

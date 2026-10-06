@@ -211,8 +211,8 @@ sqlite_bind_value(x::Union{Missing, Nothing}, ::PormGSQLite = _SQLiteBindEngine(
 sqlite_bind_value(x::AbstractVector{UInt8}, ::PormGSQLite = _SQLiteBindEngine()) = Vector{UInt8}(x)
 function sqlite_bind_value(x::Integer, ::PormGSQLite = _SQLiteBindEngine())
   typemin(Int64) <= x <= typemax(Int64) && return Int64(x)
-  throw(InvalidValueError("$(repr(x)) (::$(typeof(x))) does not fit a 64-bit integer, the widest " *
-                          "integer SQLite stores. Bind it as text instead: string($(repr(x))) (#721)."))
+  throw(InvalidValueError("A $(typeof(x)) value does not fit a 64-bit integer, the widest " *
+                          "integer SQLite stores. Bind it as text instead, e.g. `string(x)` (#721).", :range))
 end
 function sqlite_bind_value(x::Union{Dates.Date, Dates.DateTime, TimeZones.ZonedDateTime, Dates.Time,
                                     Dates.Period, Dates.CompoundPeriod},
@@ -221,16 +221,17 @@ function sqlite_bind_value(x::Union{Dates.Date, Dates.DateTime, TimeZones.ZonedD
     return value_formatter(literal_canonical_kind(x), backend)(x)
   catch e
     # The formatter's own message names `DurationField` for a `Month`/`Year`, a field the caller of
-    # `Value(Month(1))` never used. Say which value was being bound, keep the formatter's reason.
+    # `Value(Month(1))` never used. Say which type was being bound, keep the formatter's reason —
+    # never the value (#971).
     e isa InvalidValueError || rethrow()
-    throw(InvalidValueError("$(repr(x)) (::$(typeof(x))) cannot be bound as a SQLite parameter: " *
-                            "$(rstrip(e.msg, '.')) (#721)."))
+    throw(InvalidValueError("A $(typeof(x)) value cannot be bound as a SQLite parameter: " *
+                            "$(rstrip(e.reason, '.')) (#721).", e.kind))
   end
 end
 sqlite_bind_value(x::UUIDs.UUID, ::PormGSQLite = _SQLiteBindEngine()) = Models.format_uuid_sql(x)
 sqlite_bind_value(x, ::PormGSQLite = _SQLiteBindEngine()) = throw(InvalidValueError(
-  "$(repr(x)) (::$(typeof(x))) cannot be bound as a SQLite parameter: SQLite.jl would store it as a " *
-  "serialized Julia object. Convert it to a string, number, Bool, date or time first (#721)."))
+  "A $(typeof(x)) value cannot be bound as a SQLite parameter: SQLite.jl would store it as a " *
+  "serialized Julia object. Convert it to a string, number, Bool, date or time first (#721).", :type))
 
 
 # ── Slot 2: a SQL expression -> the stored text ─────────────────────────────────────────────────

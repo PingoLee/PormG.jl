@@ -624,6 +624,7 @@ function _parse_cast_type(type::AbstractString, context::AbstractString)
     end
   end
   # The caller's text may be request input: `repr` escapes it, and a long one is cut to its start.
+  # It is SQL grammar the query is built from, not a bound value, so it is shown (#971 reviewed it).
   shown = ncodeunits(s) <= 64 ? repr(s) : repr(first(s, 48)) * "… ($(length(s)) characters)"
   throw(InvalidValueError("$(context): $(shown) is not an accepted SQL type name. Accepted: a single " *
                           "identifier (integer, bigint, text, timestamptz, …) or one of " *
@@ -777,6 +778,7 @@ function window_frame_sql(frame::AbstractString; context::AbstractString = "fram
   s = String(frame)
   function fail(why::AbstractString)
     # The caller's text may be request input: `repr` escapes it, and a long one is cut to its start.
+    # It is SQL grammar the query is built from, not a bound value, so it is shown (#971 reviewed it).
     shown = ncodeunits(s) <= 64 ? repr(s) : repr(first(s, 48)) * "… ($(length(s)) characters)"
     throw(InvalidValueError("$(context): $(shown) is not an accepted window frame ($(why)). Accepted: " *
                             "ROWS, RANGE or GROUPS, then one bound or BETWEEN <bound> AND <bound>, " *
@@ -902,7 +904,7 @@ cannot spell reaches its `BackendCapabilityError`.
 function extract_part(part::AbstractString)
   up = isascii(part) ? uppercase(part) : String(part)
   up in PG_EXTRACT_FIELDS && return up
-  throw(InvalidValueError("Extract: $(repr(part)) is not a date/time field. Valid fields (any case, no plural or " *
+  throw(InvalidValueError("Extract: $(repr(part)) is not a date/time field. Valid fields (any case, no plural or " *  # refusal-value-ok: an Extract part the developer wrote in the query
                           "abbreviated synonyms such as \"years\" or \"hr\"): " *
                           join(PG_EXTRACT_FIELDS, ", ")))
 end
@@ -1932,7 +1934,7 @@ function _index_members(columns::Vector{String}, descending::AbstractVector{Bool
     oc = get(opclasses, k, nothing)
     if oc !== nothing
       occursin(INDEX_OPCLASS_RE, oc) ||
-        throw(InvalidValueError("operator class $(repr(oc)) is not a lower-case, unqualified identifier"))
+        throw(InvalidValueError("operator class $(repr(oc)) is not a lower-case, unqualified identifier"))  # refusal-value-ok: an index operator class from the model definition
       c *= " " * oc
     end
     get(descending, k, false) && (c *= " DESC")
@@ -1950,7 +1952,7 @@ function _index_text_members(columns::Vector{String}, descending::AbstractVector
   isempty(expressions) && return _index_members(columns, descending, opclasses)
   isempty(columns) || throw(InvalidValueError("an index takes columns or expressions, not both"))
   for e in expressions
-    is_valid_db_default_sql(e) || throw(InvalidValueError("index expression $(repr(e)) is not well-formed SQL"))
+    is_valid_db_default_sql(e) || throw(InvalidValueError("index expression $(repr(e)) is not well-formed SQL"))  # refusal-value-ok: an index expression from the model definition (DDL)
   end
   return String[String(e) for e in expressions]
 end
@@ -1963,7 +1965,7 @@ _index_include(include::AbstractVector)::String = isempty(include) ? "" : " INCL
 function _index_where(condition::Union{AbstractString, Nothing})::String
   condition === nothing && return ""
   is_valid_db_default_sql(condition) ||
-    throw(InvalidValueError("index condition $(repr(condition)) is not well-formed SQL"))
+    throw(InvalidValueError("index condition $(repr(condition)) is not well-formed SQL"))  # refusal-value-ok: an index condition from the model definition (DDL)
   return " WHERE $(condition)"
 end
 
@@ -1972,7 +1974,7 @@ function create_index(conn::PormGPostgres, index_name::String, table_name::Strin
                       descending::AbstractVector{Bool} = Bool[], opclasses::AbstractVector = Union{String, Nothing}[],
                       expressions::AbstractVector = String[], condition::Union{AbstractString, Nothing} = nothing,
                       marker::Union{String, Nothing} = nothing, include::AbstractVector = String[])
-  method in INDEX_METHODS || throw(InvalidValueError("index method $(repr(method)) is not one of $(INDEX_METHODS)"))
+  method in INDEX_METHODS || throw(InvalidValueError("index method $(repr(method)) is not one of $(INDEX_METHODS)"))  # refusal-value-ok: an index method from the model definition
   using_ = method == "btree" ? "" : "USING $(method) "
   members = join(_index_text_members(columns, descending, opclasses, expressions), ", ")
   stmt = """CREATE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) $(using_)($(members))$(_index_include(include))$(_index_where(condition));"""

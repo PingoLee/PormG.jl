@@ -578,7 +578,7 @@ end
     err = try _io_sql(q; conn = conn); nothing catch e; e end
     # "duration" alone: the message colorizes the type name, so a needle spanning "type " and the name
     # passes only off a TTY, and CI runs with color on.
-    @test err isa PormG.FilterError && occursin("duration", sprint(showerror, err))
+    @test err isa PormG.InvalidValueError && occursin("duration", sprint(showerror, err))
   end
 end
 

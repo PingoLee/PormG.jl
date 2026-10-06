@@ -407,7 +407,7 @@ function _validate_json_key_segments(segments::Vector{String})::Vector{String}
       continue
     end
     # `repr`, so a refused newline or other control character is visible in the message (#794).
-    throw(InvalidValueError("Invalid JSON key segment \e[31m$(repr(seg))\e[0m in a JSON path lookup. Segments must be ASCII digits (an array index) or a simple key (a letter or underscore, then letters, digits or underscores). Keys with spaces, line breaks, dots, or quotes are not addressable via the `__` path syntax."))
+    throw(InvalidValueError("Invalid JSON key segment \e[31m$(repr(seg))\e[0m in a JSON path lookup. Segments must be ASCII digits (an array index) or a simple key (a letter or underscore, then letters, digits or underscores). Keys with spaces, line breaks, dots, or quotes are not addressable via the `__` path syntax."))  # refusal-value-ok: a segment of the lookup key the developer wrote (#794)
   end
   return segments
 end
@@ -454,7 +454,7 @@ function _render_array_subscript(instruct::SQLInstruction, alias::String, array_
   m = match(r"\A([0-9]+)(?:_([0-9]+))?\z", segments[1])
   # `tags__isnull` is a lookup missing its `@`; the shared hint names the fix, as it does for any column.
   m === nothing && _check_if_field_is_a_operator(segments[1])
-  m === nothing && throw(QueryBuildError(
+  m === nothing && throw(QueryBuildError(  # refusal-value-ok: a segment of the field path the developer wrote
     "Invalid field path \e[31m$(path)\e[0m: \e[31m$(repr(segments[1]))\e[0m is neither an index " *
     "(`$(field_name)__0`, 0-based) nor a slice (`$(field_name)__0_2`, half-open). An ArrayField has no " *
     "named parts, and its lookups take an `@`: `$(field_name)__@acontains`."))

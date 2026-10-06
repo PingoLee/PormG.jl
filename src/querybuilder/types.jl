@@ -608,7 +608,7 @@ Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as, x.custom_as, x.root)
 # (_normalize_window_orientation, build_helpers.jl) delegates here with its own context label.
 function _normalize_order_orientation(orientation::AbstractString; context::String="ORDER BY")::String
   normalized = uppercase(strip(String(orientation)))
-  normalized in ("ASC", "DESC") || throw(QueryBuildError("$(context) orientation must be ASC or DESC, got $(repr(orientation))"))
+  normalized in ("ASC", "DESC") || throw(QueryBuildError("$(context) orientation must be ASC or DESC, got $(repr(orientation))"))  # refusal-value-ok: an orientation keyword argument
   return normalized
 end
 
@@ -958,7 +958,7 @@ function Base.push!(q::SQLTypeQ, x...)
     elseif isa(v, FilterType)
       push!(q.filters, _check_filter_node(v))   # #863
     else
-      throw(FilterError("Invalid argument: $(v); please use a pair (key => value) or a Q/Qor/OP object."))
+      throw(FilterError("Invalid argument: a $(typeof(v)); please use a pair (key => value) or a Q/Qor/OP object."))
     end
   end
   return q
@@ -971,7 +971,7 @@ function Base.push!(q::SQLTypeQor, x...)
     elseif isa(v, FilterType)
       push!(q.or, _check_filter_node(v))   # #863
     else
-      throw(FilterError("Invalid argument: $(v); please use a pair (key => value) or a Q/Qor/OP object."))
+      throw(FilterError("Invalid argument: a $(typeof(v)); please use a pair (key => value) or a Q/Qor/OP object."))
     end
   end
   return q
@@ -1005,7 +1005,7 @@ function _parse_time_string_to_compoundperiod(s::AbstractString)::Dates.Compound
   normalized = Models._normalize_duration_string(s)  # -> "±HH:MM:SS(.fff)", minutes and seconds folded
                                                      # (#891: bare "120" is "00:02:00"); hours may exceed 2 digits
   m = match(r"^(-?)(\d+):(\d+):(\d+)(?:\.(\d+))?$", normalized)
-  m === nothing && throw(InvalidValueError("Interval: could not parse normalized duration '$(normalized)'"))
+  m === nothing && throw(InvalidValueError("Interval: could not parse the duration", :format))
   sign = m.captures[1] == "-" ? -1 : 1
   parts = Dates.Period[Hour(sign * parse(Int, m.captures[2])),
                        Minute(sign * parse(Int, m.captures[3])),
@@ -2212,7 +2212,7 @@ function Base.setproperty!(row::PormGRow, sym::Symbol, value)
       throw(UnknownFieldError("$(model.name) row has no writable field '$(sym)'."))
     end
     if model.fields[normalized_string].primary_key
-      throw(QueryBuildError("Cannot mutate primary key field '$(normalized)' on a PormGRow."))
+      throw(QueryBuildError("Cannot mutate primary key field '$(normalized)' on a PormGRow."))  # refusal-value-ok: a field name on a row
     end
   end
 

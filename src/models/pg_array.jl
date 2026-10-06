@@ -33,7 +33,7 @@ const _PG_ARRAY_BOUNDS = r"^\s*(?:\[\s*[+-]?\d+\s*:\s*[+-]?\d+\s*\])+\s*="
 _pg_array_space(c::Char)::Bool = c in (' ', '\t', '\n', '\r', '\v', '\f')
 
 _pg_array_invalid(raw, why::AbstractString) =
-  throw(InvalidValueError("Invalid PostgreSQL array literal $(repr(String(raw))): $why."))
+  throw(InvalidValueError("Invalid PostgreSQL array literal: $why.", :format))
 
 """
     parse_pg_array_literal(s) -> Vector{Union{Nothing, String}}
@@ -169,7 +169,7 @@ pg_array_element_type(::CDate) = Date
 pg_array_element_type(k::CDateTime) = k.with_timezone ? ZonedDateTime : DateTime
 
 _pg_element_invalid(kind, x) =
-  throw(InvalidValueError("$(repr(x)) is not a valid $(_pg_kind_label(kind)) array element."))
+  throw(InvalidValueError("A $(typeof(x)) value is not a valid $(_pg_kind_label(kind)) array element.", :format))
 
 _pg_kind_label(::CInt32) = "integer"
 _pg_kind_label(::CInt64) = "bigint"
@@ -194,7 +194,7 @@ function _pg_integer_element(T::Type, kind, x)
   n = x isa Integer ? x : x isa AbstractString ? tryparse(Int64, strip(x)) : nothing
   n === nothing && _pg_element_invalid(kind, x)
   typemin(T) <= n <= typemax(T) ||
-    throw(InvalidValueError("$(n) is out of range for a $(_pg_kind_label(kind)) array element ($(typemin(T)) to $(typemax(T)))."))
+    throw(InvalidValueError("The value is out of range for a $(_pg_kind_label(kind)) array element ($(typemin(T)) to $(typemax(T))).", :range))
   return T(n)
 end
 pg_array_element_value(k::CInt32, x) = _pg_integer_element(Int32, k, x)
@@ -213,7 +213,7 @@ function pg_array_element_value(k::CDecimal, x)
   x isa Decimals.Decimal && return x
   (x isa Bool || !(x isa Union{Real, AbstractString})) && _pg_element_invalid(k, x)
   x isa AbstractFloat && !isfinite(x) &&
-    throw(InvalidValueError("$(x) cannot be stored in a numeric array element: PormG reads numeric arrays as Decimal, which has no NaN or infinity."))
+    throw(InvalidValueError("A NaN or infinite value cannot be stored in a numeric array element: PormG reads numeric arrays as Decimal, which has no NaN or infinity.", :range))
   text = x isa AbstractString ? String(strip(x)) : string(x)
   occursin(r"^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$", text) || _pg_element_invalid(k, x)
   return try
@@ -308,7 +308,7 @@ function pg_array_element_value(k::CDateTime, x)
 end
 
 pg_array_element_value(k::CanonicalType, x) =
-  throw(InvalidValueError("an ArrayField cannot hold $(k) elements."))
+  throw(InvalidValueError("an ArrayField cannot hold $(k) elements.", :type))
 
 """
     pg_array_element_text(kind, value) -> String
@@ -361,9 +361,9 @@ function _pg_array_elements(value)
   value isa Tuple && return collect(Any, value)
   value isa AbstractVector && return value
   value isa AbstractArray &&
-    throw(InvalidValueError("an ArrayField holds a one-dimensional array; got a $(ndims(value))-dimensional $(typeof(value))."))
+    throw(InvalidValueError("an ArrayField holds a one-dimensional array; got a $(ndims(value))-dimensional $(typeof(value)).", :type))
   throw(InvalidValueError("an ArrayField value must be a Vector (or a Tuple), got $(typeof(value)). " *
-                          "Wrap a single element as a one-element vector: [x]."))
+                          "Wrap a single element as a one-element vector: [x].", :type))
 end
 
 """

@@ -2358,10 +2358,9 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
       _format_date_operand(operand, field_name, instruc; left_kind = left_kind)
     catch e
       _kind = left_kind === nothing ? _operand_column_kind(field_name, instruc) : left_kind
-      _rethrow_as_filter_error(e, field_name,
-                               _kind isa CDateTime ? _formatter_type_label(Models.format_timezone_sql) :
-                                                     _formatter_type_label(Models.format_date_sql),
-                               operand)
+      _locate_filter_refusal(e, field_name,
+                             _kind isa CDateTime ? _formatter_type_label(Models.format_timezone_sql) :
+                                                   _formatter_type_label(Models.format_date_sql))
     end
     return add_parameter!(instruc, formatted_date)
   elseif operation in _COMPARISON_OPERATIONS &&
@@ -2411,11 +2410,11 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
                    instruc.connection isa PormGPostgres
     decided_kind = left_kind !== nothing ? left_kind : root_decides ? rooted_kind : nothing
     if operand isa Union{Dates.Period,Dates.CompoundPeriod} && !(decided_kind isa CInterval)
-      throw(QueryBuildError("A duration ($(operand)) compares only against an interval — a DurationField, " *
+      throw(QueryBuildError("A duration (a $(typeof(operand))) compares only against an interval — a DurationField, " *
                             "or the difference of two timestamps. To compare dates, shift one instead: " *
                             "F(\"date\") + Day(30) > F(\"other_date\")."))
     elseif operand isa Dates.Time && (decided_kind isa CInterval || rooted_kind isa CInterval)
-      throw(QueryBuildError("A Time ($(operand)) is a time of day, not a duration, so it does not compare " *
+      throw(QueryBuildError("A Time is a time of day, not a duration, so it does not compare " *
                             "against an interval. Write the duration instead: Hour(1), Minute(90), " *
                             "Hour(1) + Minute(30)."))
     end
@@ -2440,9 +2439,9 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # #576: this arm was unguarded, and the issue listed it as SUSPECTED. Guarded since, and the guard
     # became load-bearing with #860: `format_text_sql` now refuses anything it cannot render as text
     # with `InvalidValueError`, so `F("surname") == 1.5` (a float or a UUID against a text column)
-    # reaches it and reports a `FilterError`. The pairs this arm can still form against
+    # reaches it and reports an `InvalidValueError` (a `FilterError` until #971). The pairs this arm can still form against
     # `format_number_sql` (`::UUID`, `::Time`) have no method, so they raise `MethodError`, which
-    # `_rethrow_as_filter_error` rethrows untouched by design.
+    # `_locate_filter_refusal` rethrows untouched by design.
     #
     # `field_name` is in scope, but `f` may be `nothing` (a nested expression, an unresolvable
     # path) — there the formatter came from the OPERAND's own type above, so the type label comes
@@ -2617,7 +2616,7 @@ function _render_expr_typed(v::FExpression, instruc::SQLInstruction)::Tuple{Stri
       # no `date - text` and failed at execution, and SQLite subtracted the leading years of the two
       # strings, silently. The literal it meant is a `Date`, which is typed and bound as one.
       if v.operand isa String && !_is_field_path(v.operand, instruc)
-        throw(QueryBuildError("`F(...) $(v.operation) \"$(v.operand)\"`: a String on the right of date " *
+        throw(QueryBuildError("`F(...) $(v.operation) \"…\"`: a String on the right of date " *
                               "arithmetic is text, not a date. Pass a date instead — " *
                               "F(\"date\") - Date(2009, 3, 1) — or a field name, F(\"date\") - \"dob\"."))
       end
@@ -2689,7 +2688,7 @@ function _render_expr_typed(v::FExpression, instruc::SQLInstruction)::Tuple{Stri
     # instead, naming the sides that are typed. `-` only: a date literal is also a COMPARISON operand
     # (#494), and `F("seen") > Date(…)` arrives here too.
     if v.operation == "-" && v.operand isa _TemporalLiteral
-      throw(QueryBuildError("Subtracting a date ($(v.operand)) needs a date or timestamp on the left: a " *
+      throw(QueryBuildError("Subtracting a date (a $(typeof(v.operand))) needs a date or timestamp on the left: a " *
                             "DateField or DateTimeField, a shift of one (F(\"date\") + Day(1)), " *
                             "Max/Min of one, or a `__@date` path. The left side here is none of those."))
     end

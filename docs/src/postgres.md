@@ -173,6 +173,13 @@ returns a different answer, so a test suite running on SQLite fails where produc
   ```julia
   M.Driver.objects.filter("surname__@regex" => "^Ver")   # surnames starting with "Ver"
   ```
+- **Network containment** — `@net_contained` (`<<`), `@net_contained_or_equal` (`<<=`),
+  `@net_contains` (`>>`), `@net_contains_or_equals` (`>>=`), `@net_overlaps` (`&&`), `@family` and
+  `@prefixlen`, on a `GenericIPAddressField` or `CIDRField` column. See
+  [Fields → Network containment lookups](fields.md#Network-containment-lookups).
+  ```julia
+  M.Pit_wall_session.objects.filter("client_ip__@net_contained" => "10.20.0.0/16")
+  ```
 - **`ToChar` templates beyond the portable table.** The formats listed in
   [Functions and Dates → ToChar](read/functions_and_dates.md#ToChar-—-Format-as-String) render the
   same text on both engines. Any other template (`"HH12:MI AM"`) goes to PostgreSQL's `to_char`
@@ -222,6 +229,7 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 | **Window frames** | explicit `frame=` clauses | default frame only |
 | **JSONB lookups** (`@jcontains`, `@has_key`, `@has_any_keys`, `@has_keys`) | JSONB operators | `BackendCapabilityError` — `__` key paths still work |
 | **Array lookups** (`@acontains`, `@contained_by`, `@overlap`, `@len`, index, slice) | array operators and subscripts | `BackendCapabilityError` |
+| **Network lookups** (`@net_contained`, `@net_contains`, `@net_overlaps`, …, `@family`, `@prefixlen`) | `inet` operators | `BackendCapabilityError` |
 | **Accent-insensitive lookups** (`@iunaccent_*`, `@niunaccent_*`) | `unaccent` extension | `BackendCapabilityError` |
 | **Regex lookups** (`@regex`, `@iregex`, `@nregex`, `@niregex`) | POSIX `~` / `~*` | `BackendCapabilityError` |
 | **`Cast` to a time type** | `::date`, `::timestamp`, `::time`, `::interval` | `date` renders `date(x)`; the others raise `BackendCapabilityError` |

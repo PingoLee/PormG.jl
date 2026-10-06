@@ -260,6 +260,41 @@ _na28_err(f) = try f(); nothing catch e; e end
                 @test S().filter("relay_ip__@gt" => "10.9.8.10").count() == 0
                 @test S().filter("relay_ip__@lt" => "10.9.8.10").count() == 1
             end
+
+            # ─────────────────────────────────────────────────────────────────────
+            # Network containment lookups (#904): the server's answer for each operator
+            # The unit file pins the SQL; only PostgreSQL can say `<<` on a cidr column takes the `$1::inet`
+            # operand, that the host bits of that operand are ignored past its mask, and which rows each
+            # operator selects. The rows are the ones the testsets above wrote, plus two whose address and
+            # network are related, for the column-to-column comparison.
+            # ─────────────────────────────────────────────────────────────────────
+            @testset "network containment lookups (#904)" begin
+                S().create("label" => "lan-1", "client_ip" => "10.20.0.7", "garage_lan" => "10.20.0.0/16")
+                S().create("label" => "lan-2", "client_ip" => "10.21.0.7", "garage_lan" => "10.20.0.0/16")
+                labels(pair) = sort([r["label"] for r in S().filter(pair).values("label").list()])
+
+                # `<<` is strict and `<<=` is not; a host bit set in the operand is ignored past its mask.
+                @test labels("client_ip__@net_contained" => "10.40.0.0/16") == ["bulk-1"]
+                @test labels("client_ip__@net_contained" => "10.40.0.9/16") == ["bulk-1"]
+                @test labels("client_ip__@net_contained" => "10.40.0.1") == String[]
+                @test labels("client_ip__@net_contained_or_equal" => "10.40.0.1") == ["bulk-1"]
+                @test labels("client_ip__@net_contained_or_equal" => Sockets.IPv4("10.20.0.7")) == ["lan-1"]
+
+                # On a cidr column, against a host and against a network. A different family never matches:
+                # `::/0` (cidr-7) contains no IPv4 address.
+                @test labels("garage_lan__@net_contains" => "10.30.0.5") == ["bulk-1", "cidr-1", "cidr-4"]
+                @test labels("garage_lan__@net_contains" => "10.30.0.0/16") == ["cidr-1", "cidr-4"]
+                @test labels("garage_lan__@net_contains_or_equals" => "10.30.0.0/16") == ["bulk-1", "cidr-1", "cidr-4"]
+                @test labels("garage_lan__@net_overlaps" => "10.31.255.0/24") == ["bulk-2", "cidr-1", "cidr-4"]
+                @test labels("garage_lan__@net_contained" => "2001:DB8::/32") == ["copy-1"]
+                @test labels("garage_lan__@net_contained_or_equal" => "2001:DB8::/32") == ["cidr-5", "copy-1"]
+
+                @test labels("garage_lan__@family" => 6) == ["cidr-5", "cidr-6", "cidr-7", "cidr-8", "copy-1"]
+                @test labels("garage_lan__@prefixlen" => 16) == ["bulk-1", "bulk-2", "lan-1", "lan-2"]
+
+                # A column on the right: each pit-wall client inside its own garage network.
+                @test labels("client_ip__@net_contained" => F("garage_lan")) == ["lan-1"]
+            end
         finally
             drop()
         end

@@ -32,7 +32,8 @@ import PormG: PormGError, FieldAccessError, UnknownFieldError, AmbiguousFieldErr
   # decides whether a failed sequence repair is tolerable. Everything outside them propagates.
   DatabaseError, PoolError
 import PormG: PormGsuffix, PormGtransform, JSON_CONTAINMENT_OPERATORS, ARRAY_CONTAINMENT_OPERATORS,
-              run_in_transaction
+              run_in_transaction,
+              NETWORK_CONTAINMENT_OPERATORS, NETWORK_LOOKUP_OPERATORS   # #904
 # #604: the LIKE-family operator sets. Exporting them from `Kernel` is not enough — this explicit
 # import is what binds them inside `QueryBuilder`, where `_apply_like_wildcards` (parameters.jl) and
 # the render dispatch (build_helpers.jl) read them.

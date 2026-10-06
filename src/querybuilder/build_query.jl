@@ -828,13 +828,15 @@ end
 # operator over an aggregate has no obvious meaning, so refuse in the caller's own vocabulary.
 #
 # #28 adds the array three for the same reason: their renderer reads an `ArrayField` off the column,
-# and a projection alias has none to read.
+# and a projection alias has none to read. #904 adds the network operators: their operand is a
+# network column, and an alias has no field to say it projects one.
 const _ALIAS_UNSUPPORTED_OPERATORS = Dict("jcontains" => "@jcontains", "has_key" => "@has_key",
                                           "has_any_keys" => "@has_any_keys",
                                           "has_keys" => "@has_keys",
                                           "acontains" => "@acontains",
                                           "contained_by" => "@contained_by",
-                                          "overlap" => "@overlap")
+                                          "overlap" => "@overlap",
+                                          (op => "@$(op)" for op in NETWORK_LOOKUP_OPERATORS)...)
 function _guard_alias_clause_operator(v::SQLTypeOper, label::AbstractString)
   spelling = get(_ALIAS_UNSUPPORTED_OPERATORS, v.operator, nothing)
   spelling === nothing && return nothing
@@ -1213,8 +1215,9 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   # formatter test is as tight as the WHERE side's `_is_binary_field` struct test.)
   _guard_alias_vector_equality(v, _having_alias_formatter(having_key, instruc), having_key[2])
   # #618: refuse, in this clause, the operators `_render_predicate` has no arm for — since #654
-  # only the JSON four. Naming the user's own spelling matters here: the internal token is
-  # `jcontains`, but nobody types that — they type `@jcontains`.
+  # the JSON four, joined by the array three (#28) and the network operators (#904). Naming the
+  # user's own spelling matters here: the internal token is `jcontains`, but nobody types that —
+  # they type `@jcontains`.
   _guard_alias_clause_operator(v, having_key[2])
   # #654: `@isnull` on a COUNT alias refuses here, ahead of any render, for the reason above.
   isnull_aggregate = v.operator == "ISNULL" && _alias_isnull_aggregate(having_key, instruc)

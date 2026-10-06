@@ -13,7 +13,8 @@
 #     `{…}` text, Postgres.jl as typed vectors, and an array with a lower bound other than 1 as an
 #     offset-indexed one);
 #   * the bulk writers' `text[]`-of-literals source casts back to the column's array type;
-#   * the catalog's defaults and types compile to the declaration, so `makemigrations` converges.
+#   * the catalog's defaults and types compile to the declaration, so `makemigrations` converges;
+#   * the array lookups' one untyped literal is read as the column's array type, on both drivers.
 #
 # Run it under both PostgreSQL drivers — `PORMG_POSTGRES_DRIVER=Postgres` selects Postgres.jl (#788):
 #
@@ -232,6 +233,72 @@ _af28_utc(y, mo, d, h, mi, s, ms = 0) = TimeZones.ZonedDateTime(DateTime(y, mo, 
                 @test _af28_err(() -> S().create("label" => "bad", "compounds" => ["INTERMEDIATE!"])) isa PormG.InvalidValueError
                 @test _af28_err(() -> S().create("label" => "bad", "sectors" => [1, nothing])) isa PormG.InvalidValueError
                 @test !S().filter("label" => "bad").exists()
+            end
+
+            # ─────────────────────────────────────────────────────────────────────
+            # The array lookups (#28, part 2)
+            # What only the server can say: that the one untyped array literal each containment lookup
+            # binds is read as the COLUMN's array type on this driver — text, numeric, date and uuid
+            # elements alike — that `cardinality` is 0 for `{}` and NULL for NULL, and that an index or
+            # a slice selects what the docs say, including past the end. Rows of their own, `lk-*`.
+            # ─────────────────────────────────────────────────────────────────────
+            @testset "lookups: containment, @len, index and slice" begin
+                u1 = UUIDs.UUID("550e8400-e29b-41d4-a716-446655440000")
+                S().create("label" => "lk-a", "compounds" => ["SOFT", "HARD"], "laps" => [12, 30, 45],
+                           "notes" => ["a b", "x"], "days" => [Date(2024, 3, 2)], "targets" => ["81.5"],
+                           "ids" => [u1])
+                S().create("label" => "lk-b", "compounds" => ["MEDIUM"], "laps" => Int[])
+                S().create("label" => "lk-c")                                    # NULL arrays
+                S().create("label" => "lk-d", "compounds" => ["SOFT", "MEDIUM", "HARD"], "laps" => [30])
+                # The labels a filter matches among the `lk-*` rows, sorted.
+                lk(pairs...) = sort([r["label"] for r in S().filter("label__@startswith" => "lk-", pairs...).
+                                                     values("label").list()])
+
+                # Containment, overlap, and their empty-list answers.
+                @test lk("compounds__@acontains" => ["SOFT"]) == ["lk-a", "lk-d"]
+                @test lk("compounds__@acontains" => ["HARD", "SOFT"]) == ["lk-a", "lk-d"]   # any order
+                @test lk("compounds__@acontains" => String[]) == ["lk-a", "lk-b", "lk-d"]   # not NULL
+                @test lk("compounds__@contained_by" => ["SOFT", "MEDIUM"]) == ["lk-b"]
+                @test lk("compounds__@contained_by" => ["SOFT", "MEDIUM", "HARD", "INTERMEDIATE", "WET"]) ==
+                      ["lk-a", "lk-b", "lk-d"]
+                @test lk("laps__@overlap" => [30, 99]) == ["lk-a", "lk-d"]
+                @test isempty(lk("laps__@overlap" => Int[]))
+                # The element kinds whose literal the server must type from the column: text with a
+                # space, numeric (81.5 matches the stored 81.500), date and uuid.
+                @test lk("notes__@acontains" => ["a b"]) == ["lk-a"]
+                @test lk("targets__@acontains" => [Decimals.Decimal(0, 815, -1)]) == ["lk-a"]
+                @test lk("days__@overlap" => [Date(2024, 3, 2), Date(2025, 1, 1)]) == ["lk-a"]
+                @test lk("ids__@acontains" => [u1]) == ["lk-a"]
+
+                # `@len`: 0 for the empty array, NULL for the NULL one, and a number in `values()`.
+                @test lk("laps__@len" => 0) == ["lk-b"]
+                @test lk("laps__@len__@gte" => 2) == ["lk-a"]
+                n = S().filter("label" => "lk-a").values("n" => "laps__@len").list()[1]["n"]
+                @test n == 3 && n isa Integer
+                @test ismissing(S().filter("label" => "lk-c").values("n" => "laps__@len").list()[1]["n"])
+
+                # Index: 0-based, an element of the element field's type, and NULL past the end.
+                @test lk("laps__0" => 12) == ["lk-a"]
+                @test lk("compounds__0" => "SOFT") == ["lk-a", "lk-d"]
+                @test lk("compounds__0__@icontains" => "med") == ["lk-b"]
+                @test lk("laps__2__@gt" => 40) == ["lk-a"]
+                @test lk("laps__1__@isnull" => true) == ["lk-b", "lk-c", "lk-d"]
+                row = S().filter("label" => "lk-a").values("compounds__0", "laps__1", "laps__0_2").list()[1]
+                @test row["compounds__0"] == "SOFT"
+                @test row["laps__1"] == 30 && row["laps__1"] isa Integer
+                @test row["laps__0_2"] == [12, 30]
+                ordered = S().filter("label__@in" => ["lk-a", "lk-d"]).order_by("-laps__0").values("label").list()
+                @test [r["label"] for r in ordered] == ["lk-d", "lk-a"]                   # 30 before 12
+
+                # Slice: an array, half-open, `{}` past the end.
+                @test lk("laps__0_2" => [12, 30]) == ["lk-a"]
+                @test lk("laps__1_3__@len" => 2) == ["lk-a"]
+                @test lk("laps__5_9" => Int[]) == ["lk-a", "lk-b", "lk-d"]
+                @test lk("compounds__0_2__@acontains" => ["HARD"]) == ["lk-a"]            # lk-d's HARD is third
+
+                # A subscript is absolute: "tricky" holds `[0:2]={7,8,9}` (written above, outside PormG),
+                # which reads back as [7, 8, 9], but its `__0` is subscript 1 — the 8.
+                @test S().filter("label" => "tricky", "laps__0" => 8).exists()
             end
 
             # ─────────────────────────────────────────────────────────────────────

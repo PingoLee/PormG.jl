@@ -31,7 +31,8 @@ import PormG: PormGError, FieldAccessError, UnknownFieldError, AmbiguousFieldErr
   # Also CAUGHT, not thrown (#344): the two abstract roots `_update_sequence` allowlists when it
   # decides whether a failed sequence repair is tolerable. Everything outside them propagates.
   DatabaseError, PoolError
-import PormG: PormGsuffix, PormGtransform, JSON_CONTAINMENT_OPERATORS, run_in_transaction
+import PormG: PormGsuffix, PormGtransform, JSON_CONTAINMENT_OPERATORS, ARRAY_CONTAINMENT_OPERATORS,
+              run_in_transaction
 # #604: the LIKE-family operator sets. Exporting them from `Kernel` is not enough — this explicit
 # import is what binds them inside `QueryBuilder`, where `_apply_like_wildcards` (parameters.jl) and
 # the render dispatch (build_helpers.jl) read them.
@@ -48,6 +49,7 @@ import PormG: value_parser, value_formatter, sql_canonicalize, field_canonical_k
 import PormG: sqlite_bind_value, literal_canonical_kind
 import PormG: CanonicalType, CDate, CDateTime, CTime, CInterval, CBool
 import PormG: CInt32   # #801 — the kind of a DATE - DATE difference (a whole number of days)
+import PormG: CText, CVarChar   # #28 — an ArrayField's text element kinds, for the pattern refusal's index hint
 import PormG: CInt64   # #882 — a BigIntegerField used as a day count beside a date
 import PormG: CDecimal # #881 — a number an interval may be multiplied or divided by
 import PormG: _emsg, _suggest_name  # shared helpers (Kernel)

@@ -72,6 +72,13 @@ _tlp_params(q; conn) = inspect_query(q; connection = conn)[:parameters]
 
 const _TLP_BACKENDS = (("PostgreSQL", _TLP_PG), ("SQLite", _TLP_SL))
 
+# The transforms the parity loops run over this model's date and time columns: every
+# `PormGtransform` key but `@len` (#28), which counts an ArrayField's elements and refuses a date
+# column by design — there is no date row for it to agree on. Its two-spelling parity is asserted on
+# an array column, in `test_array_lookups.jl`. Still computed from the registry, so a new date
+# transform joins the loops by itself.
+const _TLP_DATE_TRANSFORMS = sort(filter(!=("len"), collect(keys(PormG.PormGtransform))))
+
 # The projection through each spelling, aliased identically so only the EXPRESSION can differ.
 _tlp_string_route(col, key, conn) =
   _tlp_sql((q = TLP.Tlp_row.objects; q.values("x" => "$(col)__@$(key)"); q); conn = conn)
@@ -85,7 +92,7 @@ _tlp_f_route(col, key, conn) =
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#562: both spellings of a transform render the same SQL" begin
   for (backend, conn) in _TLP_BACKENDS
-    for key in sort(collect(keys(PormG.PormGtransform)))
+    for key in _TLP_DATE_TRANSFORMS
       for col in ("seen", "ts")
         string_sql = _tlp_string_route(col, key, conn)
         f_sql      = _tlp_f_route(col, key, conn)
@@ -420,7 +427,7 @@ const _TLP_843_CTORS = (
 
 @testset "#843: a transform in a function's string operand renders like its F spelling" begin
   for (backend, conn) in _TLP_BACKENDS, (name, ctor) in _TLP_843_CTORS
-    for key in sort(collect(keys(PormG.PormGtransform))), col in ("seen", "ts")
+    for key in _TLP_DATE_TRANSFORMS, col in ("seen", "ts")
       path = "$(col)__@$(key)"
       a = TLP.Tlp_row.objects; a.values("x" => ctor(path))
       b = TLP.Tlp_row.objects; b.values("x" => ctor(F(path)))

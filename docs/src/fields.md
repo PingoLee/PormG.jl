@@ -383,8 +383,8 @@ and on the element field it raises `FieldValidationError`.
 **Values.** Write a `Vector` (or a `Tuple`). Each element is validated as the element field
 validates a value, so `ArrayField(CharField(max_length = 12))` refuses `["INTERMEDIATE!"]` with
 `CharField`'s `max_length` message, naming the element. PostgreSQL's own array text (`"{1,2}"`) is
-accepted too. A `default=` is held to the same element rules when the model is defined. In a filter,
-pass a `Vector`, and write a NULL element there as `missing`.
+accepted too. A `default=` is held to the same element rules when the model is defined. In an
+equality filter, pass a `Vector`, and write a NULL element there as `missing`.
 
 A read returns a `Vector{T}`, where `T` is what a scalar read of the element field returns, on both
 PostgreSQL drivers:
@@ -424,13 +424,87 @@ M.Race_strategy.objects.
 
 - **Equality** compares the whole array, and `@isnull` the whole column. A vector on any other
   column still needs an operator (`"surname__@in" => [...]`).
-- **Containment is not available yet.** Django's array lookups — `contains`, `contained_by`,
-  `overlap`, `len`, and index and slice transforms — are the next part of #28. PormG will spell array
-  containment `@acontains`, because `@contains` is a `LIKE` on every other field (JSON containment is
-  `@jcontains` for the same reason). Until then a pattern lookup on an `ArrayField`
-  (`"tyre_compounds__@contains" => "SOFT"`) raises `FilterError` instead of matching the array's text.
 - A membership list of whole arrays (`"pit_laps__@in" => [[12], [12, 30]]`) raises `FilterError`;
   combine the equalities with `Qor`.
+
+#### Containment, overlap and length
+
+```julia
+# Teams that brought both dry compounds, in any order and among any others.
+M.Race_strategy.objects.
+  filter("tyre_compounds__@acontains" => ["SOFT", "HARD"]).
+  values("team").
+  list()
+
+# Teams that brought nothing but slicks.
+M.Race_strategy.objects.
+  filter("tyre_compounds__@contained_by" => ["SOFT", "MEDIUM", "HARD"]).
+  values("team").
+  list()
+
+# Teams that pitted on lap 12 or lap 30.
+M.Race_strategy.objects.
+  filter("pit_laps__@overlap" => [12, 30]).
+  values("team").
+  list()
+
+# Two-stop strategies or longer. `@len` chains like `@year` does.
+M.Race_strategy.objects.
+  filter("pit_laps__@len__@gte" => 2).
+  values("team", "stops" => "pit_laps__@len").
+  list()
+```
+
+| Lookup | PostgreSQL | Matches when the array… | Django |
+|---|---|---|---|
+| `@acontains` | `@>` | holds every given element | `contains` |
+| `@contained_by` | `<@` | holds only given elements | `contained_by` |
+| `@overlap` | `&&` | holds at least one given element | `overlap` |
+| `@len` | `cardinality(…)` | has that many elements (a transform: compare it) | `len` |
+
+- Array containment is spelled `@acontains`, because `@contains` is a `LIKE` on every other field. JSON
+  containment is `@jcontains` for the same reason. A pattern lookup on an `ArrayField`
+  (`"tyre_compounds__@contains" => "SOFT"`) raises `FilterError` instead of matching the array's text.
+- The value is a `Vector`, even for one element (`["SOFT"]`): a single value raises `FilterError`.
+  Each element is checked by the element field. `size` does not apply, so `@contained_by` and
+  `@overlap` may name more elements than the column holds.
+- An element cannot be NULL (`missing` or `nothing`) and raises `FilterError`. PostgreSQL compares
+  elements with `=`, so a NULL element never matches. Test the whole column with `@isnull` instead.
+- An empty list is allowed, with PostgreSQL's meaning: every array contains it, and nothing overlaps it.
+- `@len` is `0` for an empty array and NULL for a NULL one. On a column that is not an `ArrayField` it
+  raises `FilterError`.
+- The other side must be a list of values: another column (`F("…")`) raises `FilterError`.
+
+#### Index and slice
+
+```julia
+# The compound each team started on: the first element, index 0.
+M.Race_strategy.objects.
+  filter("tyre_compounds__0" => "SOFT").
+  values("team").
+  list()
+
+# The first two pit stops were on laps 12 and 30, in that order.
+M.Race_strategy.objects.
+  filter("pit_laps__0_2" => [12, 30]).
+  values("team", "tyre_compounds__0").
+  list()
+```
+
+- `field__n` is the element at index `n`, **0-based** as in Django and as a JSON path's array index
+  (`payload__0`). It is compared, projected and ordered as one element: its value is checked by the
+  element field, and the element's own lookups apply (`"tyre_compounds__0__@icontains" => "soft"`).
+- `field__a_b` is the slice from index `a` up to, not including, `b` (Python's `[a:b]`). It is an
+  array, so it takes equality and the array lookups, including `@len`.
+- An index past the end is NULL in PostgreSQL, so `=` never matches it. `"pit_laps__5__@isnull" =>
+  true` matches every row whose sixth element is NULL: an array shorter than six, a NULL array, and
+  an array whose sixth element is itself NULL. A slice past the end is the empty array.
+- One segment only. Another segment after an index or a slice, a segment that is not an index or a
+  slice, an empty slice (`2_2`) or a reversed one (`2_1`) raises `QueryBuildError`.
+- `__n` renders PostgreSQL's subscript `n + 1`, which is absolute. Arrays PormG writes start at
+  subscript 1, so `__0` is their first element. An array another client stored with a different
+  lower bound (`'[0:2]={…}'`) reads back 1-based, but there `__0` is the element at subscript 1, the
+  second one.
 
 ### Arrays in bulk writes and migrations
 

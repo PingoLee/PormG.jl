@@ -97,12 +97,16 @@ struct _MockSl602 <: PormG.PormGSQLite end
            # #635: the POSIX regex four — PostgreSQL-only, refused on SQLite like the unaccent four.
            :regex, :iregex, :nregex, :niregex,
            # #634: case-insensitive equality and its twin — emit on both engines (pormg_lower on SQLite).
-           :iexact, :niexact]
-    json_ops = Set([:jcontains, :has_key, :has_any_keys, :has_keys])
+           :iexact, :niexact,
+           # #28: the array containment three — PostgreSQL-only, shaped exactly like the JSONB four.
+           :acontains, :contained_by, :overlap]
+    # The JSONB four and the array three share one arrangement: PG-only, and a generic arm that
+    # refuses with `BackendCapabilityError`.
+    json_ops = Set([:jcontains, :has_key, :has_any_keys, :has_keys, :acontains, :contained_by, :overlap])
     sqlite_pg_only = union(json_ops, Set([:iunaccent_contains, :iunaccent_exact,
                                           :niunaccent_contains, :niunaccent_exact,
                                           :regex, :iregex, :nregex, :niregex]))
-    @test length(ops) == 26
+    @test length(ops) == 29
 
     col = "\"drivers\".\"surname\""
     for op in ops
@@ -118,7 +122,7 @@ struct _MockSl602 <: PormG.PormGSQLite end
       @test f(_MockPg602(), _sub602(col), "\$1") == pg_base
       @test f(_MockPg602(), col, _sub602("\$1")) == pg_base
 
-      # SQLite: the PG-only twelve throw the SAME capability error on every spelling; the rest emit.
+      # SQLite: the PG-only fifteen throw the SAME capability error on every spelling; the rest emit.
       if op in sqlite_pg_only
         @test_throws PormG.BackendCapabilityError f(_MockSl602(), col, "?")
         @test_throws PormG.BackendCapabilityError f(_MockSl602(), _sub602(col), _sub602("?"))
@@ -133,7 +137,7 @@ struct _MockSl602 <: PormG.PormGSQLite end
 
       # The generic sibling is still the guard for a non-string placeholder — on BOTH backends,
       # which is the shape the fix must not lose: a `PormGPostgres` mock is a `PormGAbstractType`.
-      # Exact type per family: the four JSONB generics refuse with `BackendCapabilityError`, every
+      # Exact type per family: the JSONB and array generics refuse with `BackendCapabilityError`, every
       # other generic (the unaccent and regex fours included) with `InvalidValueError`.
       generic_err = op in json_ops ? PormG.BackendCapabilityError : PormG.InvalidValueError
       @test_throws generic_err f(_MockPg602(), col, 42)

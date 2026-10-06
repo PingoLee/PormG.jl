@@ -3804,13 +3804,16 @@ end
     @test sl_tr[:parameters] == ["1991-03%"]   # before #618: "1991-03", undecorated and unescaped
     @test !occursin("istartswith", sl_tr[:sql_text])
 
-    # The JSONB four are refused on an alias, and the refusal must name the LOOKUP THE USER TYPED.
+    # The JSONB four (and #28's array three) are refused on an alias, and the refusal must name the
+    # LOOKUP THE USER TYPED.
     # They never reached `_render_predicate` (`_resolve_having_filter_value` refused first), so nothing
     # leaked — but the message blamed the VALUE's type ("the c projection alias is the type number.
     # Please check the value: {…}") for what is really "this lookup has no alias renderer". (#618 also
     # refused `@range` / `@nrange` / `@isnull` here; #654 supports them — see the next testset.)
     for (spelling, value) in (("jcontains", Dict("a" => 1)), ("has_key", "a"),
-                              ("has_any_keys", ["a", "b"]), ("has_keys", ["a", "b"]))
+                              ("has_any_keys", ["a", "b"]), ("has_keys", ["a", "b"]),
+                              # #28: the array three, for the same reason — no alias renderer.
+                              ("acontains", [1]), ("contained_by", [1]), ("overlap", [1]))
         err = @test_throws PormG.FilterError (q = M.Race.objects;
                                              q.values("n2" => Count("raceid"));
                                              q.filter("n2__@$(spelling)" => value);

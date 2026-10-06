@@ -95,6 +95,11 @@ M.Result.objects.
 the POSIX regex `@regex`/`@iregex` (+ `@nregex`/`@niregex`; the pattern is a `String`, never a Julia
 `Regex`) and the JSONB `@jcontains`/`@has_key` family — raise `BackendCapabilityError` on SQLite.
 
+An `ArrayField` (PostgreSQL only) takes `@acontains` (`@>`, holds every element), `@contained_by`
+(`<@`) and `@overlap` (`&&`) with a `Vector` value even for one element, the `@len` transform
+(`"pit_laps__@len__@gte" => 2`), a 0-based index (`"tyre_compounds__0" => "SOFT"`) and a half-open
+slice (`"pit_laps__0_2" => [12, 30]`). `@contains` on an array is a `FilterError`, not containment.
+
 ### Date transforms
 
 They work in `values()`, `filter()` and `order_by()`:

@@ -335,8 +335,9 @@ value_parser(::CDateTime, ::PormGSQLite) = Dialect._parse_sqlite_timestamp
 value_parser(::CDate,     ::PormGSQLite) = Dialect._parse_sqlite_date
 value_parser(::CTime,     ::PormGSQLite) = Dialect._parse_sqlite_time
 value_parser(::CInterval, ::PormGSQLite) = Dialect._parse_sqlite_interval
-# #953: a boolean `MAX`/`MIN` (`_function_projection_kind`) has no declared type for the driver to
-# map, so its 0/1 arrived as an integer where a column read and PostgreSQL both deliver a `Bool`.
+# #953, #965: SQLite hands back a boolean, column or expression, as the 0/1 it stores, where
+# PostgreSQL delivers a `Bool`. Recorded for a boolean read by `_field_read_kind` and
+# `_function_projection_kind`.
 value_parser(::CBool,     ::PormGSQLite) = Dialect._parse_sqlite_bool
 # #648: exact only for a column narrow enough that SQLite stored every accepted value exactly — the
 # width `Dialect.field_to_column` refuses to exceed. A wider or width-less kind (a column created

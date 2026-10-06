@@ -2297,6 +2297,13 @@ const DOCERR_CASES = [
         QueryBuildError,
         () -> DOCERR_ENTRY953_PG.objects.values("raceid", "n" => Avg("is_rookie")).list(show_query = :dict),
     ),
+    # #965 — the same section says a `Case` whose branches are all booleans is a boolean for that rule.
+    (
+        "read/filters_and_aggregates.md — `Sum` over a Case of booleans raises QueryBuildError (#965)",
+        QueryBuildError,
+        () -> DOCERR_ENTRY953_SL.objects.values("raceid", "n" => Sum(PormG.Functions.Case(
+            [PormG.Functions.When("raceid" => 1, then = true)], default = false))).list(show_query = :dict),
+    ),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

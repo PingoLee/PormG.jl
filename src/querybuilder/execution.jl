@@ -564,7 +564,7 @@ end
 # twin of `_projection_parsers`: a row a write hands back carries no projection record, but its
 # columns are the model's own, so the field says what each one is. `_pg_bulk_returned!` shares it.
 function _field_value_parser(f::PormGField, connection)::Union{Function,Nothing}
-  kind = field_canonical_kind(f)
+  kind = _field_read_kind(f)   # #965: a boolean reads as a `Bool` on SQLite too
   return kind === nothing ? nothing : value_parser(kind, connection)
 end
 
@@ -1593,7 +1593,7 @@ end
 function _render_function_operand_typed(v::FObject, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   sql, interval_ms, interval = _render_function_typed(v, instruc)
   interval_ms && return sql, _IntervalMs()
-  return sql, interval ? CInterval() : _function_projection_kind(v, instruc)
+  return sql, interval ? CInterval() : _side_function_kind(v, instruc)
 end
 
 # #814 — the kind of an ALREADY-RENDERED side that is not itself an expression: a column, a
@@ -1609,7 +1609,20 @@ end
 _side_kind(value::Any, instruc::SQLInstruction) = _projection_column_kind(value, instruc)
 _side_kind(value::String, instruc::SQLInstruction) =
   occursin("__@", value) ? _operand_kind(value, instruc) : _projection_column_kind(value, instruc)
-_side_kind(value::SQLTypeFunction, instruc::SQLInstruction) = _function_projection_kind(value, instruc)
+_side_kind(value::SQLTypeFunction, instruc::SQLInstruction) = _side_function_kind(value, instruc)
+
+# #965 — a function SIDE's kind is its projection kind, except a boolean #965 typed. `CBool` is a READ
+# kind: it tells SQLite's parser to turn the 0/1 back into a `Bool`. A side's kind types the arithmetic
+# and the comparison around it, and there a kind decides what the side IS: `_is_number_side` reads any
+# kind as "not a number", so `F("dur") * Cast("lap", "boolean")` turned from the multiplication it was
+# into a refusal naming an interval. Such a side stays untyped here, as it was before #965. The #953
+# extremum keeps the kind it has had since #953, so `Max("dur") * Max("is_active")` is still refused
+# on SQLite rather than multiplying the milliseconds by 0/1, which PostgreSQL has no operator for.
+function _side_function_kind(v::SQLTypeFunction, instruc::SQLInstruction)
+  kind = _function_projection_kind(v, instruc)
+  kind isa CBool || return kind
+  return v isa FObject && v.function_name in ("MAX", "MIN") ? kind : nothing
+end
 
 # #882 — AN INTEGER COLUMN BESIDE A DATE IS A WHOLE NUMBER OF DAYS. An integer literal already is
 # (#568), and so is a `DATE - DATE` count (#814); an integer COLUMN was untyped, because

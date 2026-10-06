@@ -20,6 +20,17 @@ _projection_output_name(v::SQLTypeText) = v.custom_as !== nothing ? v.custom_as 
 # column names: the predecessor of this code keyed only on the field name, so a
 # `DateTimeField(db_column = "created")` was silently never coerced. A key the row does not carry
 # costs nothing — the read loop only visits keys the row has.
+# #965 — the kind a model FIELD's values are READ as: its canonical kind, or `CBool` for a boolean.
+# SQLite stores a boolean as 0/1 and its driver hands back the integer, while PostgreSQL's hands back a
+# `Bool`; `value_parser(::CBool, ::PormGSQLite)` turns the one into the other. Read path only: the
+# boolean stays out of `field_canonical_kind`, because that table also feeds the comparison binder and
+# the CTE kind records (#882's reason), and none of them has a boolean representation to undo.
+function _field_read_kind(f::PormGField)::Union{CanonicalType,Nothing}
+  kind = field_canonical_kind(f)
+  kind === nothing && f.formatter === Models.format_bool_sql && return CBool()
+  return kind
+end
+
 function _record_wildcard_projection_kinds!(instruc::SQLInstruction)
   # An EXPLICIT `"*"` counts too, not only an empty projection list. `values("*")` and
   # `values("*", "team__founded")` both put every model column in the result under its own name, and
@@ -47,7 +58,7 @@ function _record_wildcard_projection_kinds!(instruc::SQLInstruction)
     name === nothing || push!(claimed, Symbol(name))
   end
   for (fname, fmeta) in instruc.object.model.fields
-    kind = field_canonical_kind(fmeta)
+    kind = _field_read_kind(fmeta)
     kind === nothing && continue
     for key in unique((Symbol(fname), Symbol(Models.field_db_column(fmeta, fname))))
       key in claimed || get!(instruc.projection_kinds, key, kind)
@@ -188,6 +199,11 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
           # call types the sides of date arithmetic, and a transformed side has to be typed there. This
           # fallback stays for whatever else `_operand_kind` resolves on a bare `F` and that does not.
           kind === nothing && original.operation === nothing && (kind = _operand_kind(original, instruc))
+          # #965: a comparison is a boolean (`_expression_formatter` has typed it so since #949), and so
+          # is a bare boolean `F`. On SQLite the 0/1 it evaluates to reads back as a `Bool` only when the
+          # projection says so. The kind is recorded here, never returned by `_render_expr_typed`, whose
+          # kind is the comparison binder's `left_kind`.
+          kind === nothing && _expression_formatter(original, instruc) === Models.format_bool_sql && (kind = CBool())
         else
           # #894: `Max`/`Min` over an interval are computed on SQLite milliseconds and leave as the
           # interval text — the second door #881 describes, and typed the way a difference is, on
@@ -215,6 +231,14 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
           # `Subquery(...)`, as its one column — rendered above, which is what recorded its kind.
           original isa Union{JoinedReference,CTEReference,SubqueryObject} &&
             (kind = _operand_kind(original, instruc))
+          # #965: a boolean column (a path, a `Joined`/`CTE` handle, a `Subquery` of one) reads as a
+          # `Bool`, as `_field_read_kind` types it for a wildcard read. A transformed path is the
+          # transform's result, not the column, so it keeps the kind `_projection_column_kind` gave it.
+          # A function has answered already, through `_function_projection_kind`, whose rule for one
+          # is stricter than its formatter's (`_is_boolean_valued`).
+          kind === nothing && !(original isa SQLTypeFunction) &&
+            !(original isa AbstractString && occursin("__@", original)) &&
+            _expression_formatter(original, instruc) === Models.format_bool_sql && (kind = CBool())
         end
         kind
       end
@@ -917,6 +941,10 @@ function _expression_formatter(p::SQLTypeFunction, instruc::SQLInstruction)
     formatter = _declared_type_formatter(declared, instruc)
     formatter === nothing || return formatter
   end
+  # #965: an untyped `Case` over booleans is a boolean. PostgreSQL already reads it as one (the render
+  # binds a `Bool` branch `::boolean`), so `Max` of it failed there as `max(boolean)` did before #953,
+  # and `Sum` of it added up SQLite's 0/1.
+  name == "CASE" && declared === nothing && _boolean_case(p, instruc) && return Models.format_bool_sql
   if name in _OPERAND_TYPED_FUNCTIONS
     for operand in (p.column isa AbstractVector ? p.column : (p.column,))
       formatter = _expression_formatter(operand, instruc)
@@ -947,7 +975,42 @@ end
 # a node this build did not render answers `nothing`, the untyped default.
 _expression_formatter(p::SubqueryObject, instruc::SQLInstruction) =
   instruc.subquery_formatters === nothing ? nothing : get(instruc.subquery_formatters, p, nothing)
+# #965: `EXISTS (…)` is a boolean on both engines; SQLite evaluates it to 0/1, which a projection reads
+# back as a `Bool` once this types it.
+_expression_formatter(::ExistsObject, ::SQLInstruction) = Models.format_bool_sql
 _expression_formatter(::Any, ::SQLInstruction) = nothing
+
+# #965 — whether a `Case` is a boolean: every branch value (each `When`'s `then`, and the `ELSE`) is
+# one. A string `then` is a literal, never a column path, so it is not looked up.
+function _boolean_case(p::SQLTypeFunction, instruc::SQLInstruction)::Bool
+  values = Any[]
+  for branch in (p.column isa AbstractVector ? p.column : (p.column,))
+    (branch isa SQLTypeFunction && branch.function_name == "WHEN") || return false
+    push!(values, get(branch.kwargs, "then", nothing))
+  end
+  push!(values, get(p.kwargs, "else", nothing))
+  return _all_boolean(values, instruc; paths = false)
+end
+
+# #965 — whether a value is a boolean only when ALL of its candidate values are: a `Bool` literal, or
+# an expression `_expression_formatter` types as one. A NULL is no value and is skipped; NULLs alone
+# are untyped. Every value must agree, as `_multi_operand_kind` requires: PostgreSQL refuses a CASE or
+# COALESCE mixing boolean and integer, and on SQLite the result would be a boolean on some rows and an
+# integer on others, so a mixed one is no boolean to type. `paths`: whether a string is a column path
+# (a `Coalesce` operand) or a literal (a `Case` branch).
+function _all_boolean(values, instruc::SQLInstruction; paths::Bool)::Bool
+  typed = false
+  for value in values
+    literal = value isa SQLText ? value.field : value
+    _is_null_literal(literal) && continue
+    boolean = literal isa Bool ||
+      ((value isa Union{SQLObject,SQLType} || (paths && value isa AbstractString)) && !(value isa SQLText) &&
+       _expression_formatter(value, instruc) === Models.format_bool_sql)
+    boolean || return false
+    typed = true
+  end
+  return typed
+end
 
 # #800 — the canonical kind a FUNCTION projection's value is stored as, for the #564 read path, or
 # `nothing` when it is not one the representation table owns or cannot be named.
@@ -979,17 +1042,30 @@ function _function_projection_kind(p::Union{FObject,WindowFunction}, instruc::SQ
     declared isa AbstractString && _sql_type_field(declared) isa Models.sDateField && return CDate()
   end
   p isa FObject && p.function_name == "DATE" && return CDate()
+  # #953, #965: a boolean value is typed a boolean, whichever function produced it. PostgreSQL's
+  # driver types it already; SQLite delivers the 0/1 it stores, which `value_parser(::CBool, …)` turns
+  # back into a `Bool`. `field_canonical_kind` names no boolean kind (the table also feeds the
+  # comparison binder: #882's reason), so the formatter the build already gives the value decides: an
+  # extremum over a boolean, a `Cast`/`output_field` naming one, `Coalesce` or `Case` over booleans. A
+  # window value function returns its operand's own value, so its operand decides.
+  _is_boolean_valued(p, instruc) && return CBool()
   p isa FObject && p.function_name in _AGREEING_OPERAND_FUNCTIONS && return _multi_operand_kind(p, instruc)
   p isa FObject && p.function_name == "NULLIF" && return _operand_kind(first(p.column), instruc)
-  # #953: a boolean extremum is a boolean — `BOOL_OR`/`BOOL_AND` on PostgreSQL, which the driver
-  # types, and `MAX`/`MIN` over SQLite's 0/1, which it does not. `field_canonical_kind` names no
-  # boolean kind (a column read is typed by the driver), so the operand's formatter decides here.
-  p isa FObject && p.function_name in ("MAX", "MIN") &&
-    _expression_formatter(p.column, instruc) === Models.format_bool_sql && return CBool()
   p.function_name in _KIND_PRESERVING_FUNCTIONS || return nothing
   return _operand_kind(p.column, instruc)
 end
 _function_projection_kind(::Any, ::SQLInstruction) = nothing
+function _is_boolean_valued(p::FObject, instruc::SQLInstruction)
+  # `_expression_formatter` takes the FIRST operand that names a type, which is right for a filter
+  # value but would type `Coalesce("is_active", "points")` a boolean. A declared `output_field` is
+  # the cast's type and decides alone.
+  if p.function_name in _AGREEING_OPERAND_FUNCTIONS && !(get(p.kwargs, "output_field", nothing) isa AbstractString)
+    return _all_boolean(p.column isa AbstractVector ? p.column : (p.column,), instruc; paths = true)
+  end
+  return _expression_formatter(p, instruc) === Models.format_bool_sql
+end
+_is_boolean_valued(p::WindowFunction, instruc::SQLInstruction) =
+  p.function_name in _KIND_PRESERVING_FUNCTIONS && _expression_formatter(p.column, instruc) === Models.format_bool_sql
 
 # #824 — the kind of a function whose value is one of several operands' own values. Typed only on
 # agreement: every operand names the SAME kind (a `CDecimal` of the same width, a `CDateTime` of the

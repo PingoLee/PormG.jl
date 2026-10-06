@@ -197,7 +197,7 @@ LIMIT 1) as "has_standings"
 FROM "driver" as "Tb"
 ```
 
-`OuterRef("driverid")` binds the inner query's filter to the **outer** query's column — that is the correlation. `Exists(...)` (already familiar from [filters](filters_and_aggregates.md)) can likewise be projected as a per-row boolean column (SQLite returns `0`/`1` integers, PostgreSQL booleans).
+`OuterRef("driverid")` binds the inner query's filter to the **outer** query's column — that is the correlation. `Exists(...)` (already familiar from [filters](filters_and_aggregates.md)) can likewise be projected as a per-row boolean column, which reads back as a `Bool` on both engines.
 
 ### Why: the fan-out-safe aggregate
 

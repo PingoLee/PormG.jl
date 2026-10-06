@@ -248,11 +248,9 @@ end
 """
     _parse_sqlite_bool(v) -> Union{Bool, typeof(v)}
 
-The READ half of `Models.format_bool_sql` on SQLite, where a boolean is stored as `0`/`1`. A column
-read reaches PormG as a `Bool` already — the driver maps the declared `BOOLEAN` type — but an
-expression has no declared type, so `MAX(flag)` came back as the integer while PostgreSQL's
-`BOOL_OR(flag)` came back as a `Bool` (#953). Only `0` and `1` are read; any other value is returned
-as it is.
+The READ half of `Models.format_bool_sql` on SQLite, where a boolean is stored as `0`/`1` and the
+driver hands back the integer, for a `BOOLEAN` column as for an expression, while PostgreSQL's driver
+delivers a `Bool` (#953, #965). Only `0` and `1` are read; any other value is returned as it is.
 """
 _parse_sqlite_bool(v::Integer) = (v === true || v === false) ? v : v == 1 ? true : v == 0 ? false : v
 _parse_sqlite_bool(v::Any) = v

@@ -2915,6 +2915,66 @@ function has_keys(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @has_keys lookup (JSONB ?&) requires PostgreSQL"))
 end
 
+# #28: PostgreSQL array containment/overlap, the `ArrayField` lookups. `value` is the placeholder of
+# ONE bound array literal (`add_parameter!(::PormGArrayLiteral)`), which the server reads as the
+# column's own array type — the operator is polymorphic, so its other operand types it. SQLite has no
+# array type; an `ArrayField` cannot exist there, and these refuse like the JSON four above.
+function acontains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "$(column) @> $(value)"                    # the array holds every given element
+end
+function acontains(conn::PormGSQLite, column::AbstractString, value::AbstractString)
+  throw(BackendCapabilityError("The @acontains lookup (array @>) requires PostgreSQL"))
+end
+function acontains(conn::PormGAbstractType, column::AbstractString, value)
+  throw(BackendCapabilityError("The @acontains lookup (array @>) requires PostgreSQL"))
+end
+
+function contained_by(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "$(column) <@ $(value)"                    # every element is among the given ones
+end
+function contained_by(conn::PormGSQLite, column::AbstractString, value::AbstractString)
+  throw(BackendCapabilityError("The @contained_by lookup (array <@) requires PostgreSQL"))
+end
+function contained_by(conn::PormGAbstractType, column::AbstractString, value)
+  throw(BackendCapabilityError("The @contained_by lookup (array <@) requires PostgreSQL"))
+end
+
+function overlap(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "$(column) && $(value)"                    # at least one element in common
+end
+function overlap(conn::PormGSQLite, column::AbstractString, value::AbstractString)
+  throw(BackendCapabilityError("The @overlap lookup (array &&) requires PostgreSQL"))
+end
+function overlap(conn::PormGAbstractType, column::AbstractString, value)
+  throw(BackendCapabilityError("The @overlap lookup (array &&) requires PostgreSQL"))
+end
+
+# #28: the `@len` transform. `cardinality`, not `array_length(col, 1)`: the latter is NULL for an
+# empty array, so `"pit_laps__@len" => 0` could never match one, while `cardinality('{}')` is 0. A
+# NULL array is NULL under both — Django's `len` gives the same pair of answers (it wraps
+# `array_length` in a `COALESCE(…, 0)` guarded by an `IS NULL` test to get there).
+function ARRAY_LEN(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+  return "cardinality($(column))"
+end
+function ARRAY_LEN(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+  throw(BackendCapabilityError("The @len transform (array cardinality) requires PostgreSQL: SQLite has no array type."))
+end
+
+# #28: an index (`tags__0`) and a slice (`tags__0_2`) into an `ArrayField`. The bounds are 1-based
+# PostgreSQL subscripts, already converted from the 0-based path segment, range-checked and parsed to
+# integers by the caller (`_render_array_subscript`), so printing them is injection-safe: an `Int`
+# prints only digits. A literal rather than a bound parameter, as a JSON path's index is: the
+# rendered text of a String path is memoized and re-used on the assumption that it binds nothing
+# (#586).
+_array_index_expr(::PormGPostgres, column::AbstractString, index::Int)::String =
+  string(column, "[", index, "]")
+_array_slice_expr(::PormGPostgres, column::AbstractString, lower::Int, upper::Int)::String =
+  string(column, "[", lower, ":", upper, "]")
+_array_index_expr(::PormGSQLite, column::AbstractString, index::Int) =
+  throw(BackendCapabilityError("An ArrayField index (`__$(index - 1)`) requires PostgreSQL: SQLite has no array type."))
+_array_slice_expr(::PormGSQLite, column::AbstractString, lower::Int, upper::Int) =
+  throw(BackendCapabilityError("An ArrayField slice (`__$(lower - 1)_$(upper)`) requires PostgreSQL: SQLite has no array type."))
+
 # #28: the operand a pattern lookup (`@contains`, `@startswith`, `@regex`, …) reads from a network
 # column. PostgreSQL has no `LIKE` for `inet`/`cidr`, so the column is turned into the text it PRINTS
 # — Django's backend makes the same choice (`HOST(%s)` for a `GenericIPAddressField`). `HOST`, not a

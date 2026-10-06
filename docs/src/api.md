@@ -195,6 +195,10 @@ the POSIX regular-expression `@regex` / `@iregex`. Each has a negated twin as we
 with NULL semantics and indexing notes, is in
 [Filters and Aggregates](read/filters_and_aggregates.md#Comparison-Operators).
 
+An `ArrayField` (PostgreSQL only) takes `@acontains` (`@>`), `@contained_by` (`<@`) and `@overlap`
+(`&&`) with a `Vector` value, an index (`"tyre_compounds__0"`, 0-based) and a slice
+(`"pit_laps__0_2"`). See [Filters and Aggregates](read/filters_and_aggregates.md) → *Array Lookups*.
+
 ### Transform Functions
 
 | Transform | Description | Example |
@@ -210,6 +214,7 @@ with NULL semantics and indexing notes, is in
 | `field__@hour` | Extract hour (0-23) | `"start_at__@hour" => 13` |
 | `field__@minute` | Extract minute (0-59) | `"start_at__@minute" => 30` |
 | `field__@second` | Extract whole second (0-59) | `"time__@second" => 0` |
+| `field__@len` | Element count of an `ArrayField` (PostgreSQL only) | `"pit_laps__@len__@gte" => 2` |
 
 For the full list of operators and transforms, see [Filters and Aggregates](read/filters_and_aggregates.md).
 

@@ -175,10 +175,12 @@ if ccall(:jl_generating_output, Cint, ()) == 1
     let fbody = try Base.bodyfunction(which(QB.add_parameter!, (QB.SQLiteParameterizedQuery, Int64,))) catch; missing end
       ismissing(fbody) || precompile(fbody, (Bool, String, Nothing, typeof(QB.add_parameter!), QB.SQLiteParameterizedQuery, Int64,))
     end
-    # _determine_join_type bodyfunction forms (0.018s combined)
+    # _determine_join_type bodyfunction forms (0.018s combined). The body function takes the keywords
+    # in declaration order — `previus_how`, `second_fild_name`, `column_name` (#28) — then the function
+    # and the field; the forward-FK hop passes all three.
     let fbody = try Base.bodyfunction(which(QB._determine_join_type, (QB.sForeignKey,))) catch; missing end
-      ismissing(fbody) || precompile(fbody, (Nothing, String, typeof(QB._determine_join_type), QB.sForeignKey,))
-      ismissing(fbody) || precompile(fbody, (String,  String, typeof(QB._determine_join_type), QB.sForeignKey,))
+      ismissing(fbody) || precompile(fbody, (Nothing, String, String, typeof(QB._determine_join_type), QB.sForeignKey,))
+      ismissing(fbody) || precompile(fbody, (String,  String, String, typeof(QB._determine_join_type), QB.sForeignKey,))
     end
   end
 

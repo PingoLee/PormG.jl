@@ -814,8 +814,7 @@ function _guard_alias_vector_equality(v::SQLTypeOper, formatter, label::Abstract
   (v.operator == "=" && v.values isa AbstractVector) || return nothing
   formatter isa Models.ArrayFormatter && return nothing
   (v.values isa Vector{UInt8} && formatter === Models.format_binary_sql) && return nothing
-  _raise_invalid_filter_operator([String(label)], "vector",
-                                 ["in", "nin", "range", "nrange", "has_any_keys", "has_keys", "jcontains"])
+  _raise_invalid_filter_operator([String(label)], "vector", _VECTOR_VALUE_OPERATORS)
 end
 
 # The operators `_render_predicate` has no arm for, refused in the clause that cannot serve them (#618).
@@ -827,9 +826,15 @@ end
 # first), but the message blamed the VALUE's type ("the c projection alias is the type number.
 # Please check the value: {"a":1}") for what is really "this lookup has no alias renderer" — a JSONB
 # operator over an aggregate has no obvious meaning, so refuse in the caller's own vocabulary.
+#
+# #28 adds the array three for the same reason: their renderer reads an `ArrayField` off the column,
+# and a projection alias has none to read.
 const _ALIAS_UNSUPPORTED_OPERATORS = Dict("jcontains" => "@jcontains", "has_key" => "@has_key",
                                           "has_any_keys" => "@has_any_keys",
-                                          "has_keys" => "@has_keys")
+                                          "has_keys" => "@has_keys",
+                                          "acontains" => "@acontains",
+                                          "contained_by" => "@contained_by",
+                                          "overlap" => "@overlap")
 function _guard_alias_clause_operator(v::SQLTypeOper, label::AbstractString)
   spelling = get(_ALIAS_UNSUPPORTED_OPERATORS, v.operator, nothing)
   spelling === nothing && return nothing

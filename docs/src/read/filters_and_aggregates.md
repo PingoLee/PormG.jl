@@ -94,6 +94,7 @@ without inverting the logic by hand.
 | `@yyyy_mm` | Year-month string | `"date__@yyyy_mm" => "1991-10"` | `"date__@yyyy_mm"` |
 | `@yyyy_q` | Year-quarter label | `"date__@yyyy_q" => "1991-Q1"` | `"date__@yyyy_q"` |
 | `@yyyy_quad` | Year-quadrimester label | `"date__@yyyy_quad" => "1991-Q1"` | `"date__@yyyy_quad"` |
+| `@len` | Element count of an [`ArrayField`](../fields.md) (PostgreSQL only) | `"pit_laps__@len" => 2` | `"pit_laps__@len"` |
 
 The period transforms come in two shapes, and which one you want depends on whether the year should
 be part of the answer. `@quarter` and `@quadrimester` extract the period **number** — `1` through `4`
@@ -393,6 +394,34 @@ M.Constructor.objects.filter("metadata__@has_keys" => ["principal", "wins"])
 time). `@has_any_keys` / `@has_keys` take a vector of keys. All values are sent as bound
 parameters. A column expression on the right (`"metadata__@has_key" => F("name")`) raises a
 `FilterError` on both backends.
+
+---
+
+## Array Lookups (PostgreSQL only)
+
+An [`ArrayField`](../fields.md) takes Django's array lookups. Like the JSON operators they are
+PostgreSQL only, and on SQLite they raise a `BackendCapabilityError`:
+
+| Lookup | SQL | Meaning | Example |
+| :--- | :--- | :--- | :--- |
+| `@acontains` | `@>` | Holds every given element | `"tyre_compounds__@acontains" => ["SOFT", "HARD"]` |
+| `@contained_by` | `<@` | Holds only given elements | `"tyre_compounds__@contained_by" => ["SOFT", "MEDIUM", "HARD"]` |
+| `@overlap` | `&&` | Holds at least one given element | `"pit_laps__@overlap" => [12, 30]` |
+| `@len` | `cardinality(col)` | Element count, a transform | `"pit_laps__@len__@gte" => 2` |
+| `field__n` | `col[n+1]` | The element at index `n`, 0-based | `"tyre_compounds__0" => "SOFT"` |
+| `field__a_b` | `col[a+1:b]` | The slice `[a, b)`, an array | `"pit_laps__0_2" => [12, 30]` |
+
+```julia
+# Two-stop strategies or longer that started on the soft tyre.
+M.Race_strategy.objects.
+  filter("pit_laps__@len__@gte" => 2, "tyre_compounds__0" => "SOFT").
+  values("team", "pit_laps").
+  list()
+```
+
+The containment value is a `Vector`, even for one element. An index is compared as one element of
+the element field's type, and a slice as an array. The value rules, the NULL semantics and the
+refusals are in [Querying array fields](../fields.md).
 
 ---
 

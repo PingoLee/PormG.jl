@@ -686,9 +686,11 @@ end
   # the documented convention in constants.jl. Every such entry is therefore either a pattern lookup
   # or a JSON containment operator, and nothing else. This is the bidirectional check: it catches a
   # suffix with no renderer AND a renderer reachable from no suffix.
-  @testset "PormGsuffix self-mapping keys == pattern ∪ JSON operators" begin
+  @testset "PormGsuffix self-mapping keys == pattern ∪ JSON ∪ array operators" begin
     self_mapping = Set(k for (k, v) in PormG.PormGsuffix if v == k)
-    declared = union(Set(PormG.PATTERN_LOOKUP_OPERATORS), Set(PormG.JSON_CONTAINMENT_OPERATORS))
+    # #28 added the third family, the array containment operators, on the JSON four's arrangement.
+    declared = union(Set(PormG.PATTERN_LOOKUP_OPERATORS), Set(PormG.JSON_CONTAINMENT_OPERATORS),
+                     Set(PormG.ARRAY_CONTAINMENT_OPERATORS))
     # Report the asymmetry explicitly — a bare set comparison prints two 16-element sets and makes
     # the reader diff them by eye.
     @test setdiff(self_mapping, declared) == Set{String}()   # suffix with no declared renderer
@@ -719,7 +721,8 @@ end
       f isa Function || continue
       hasmethod(f, sig) && push!(reflected, String(n))
     end
-    declared = union(Set(PormG.PATTERN_LOOKUP_OPERATORS), Set(PormG.JSON_CONTAINMENT_OPERATORS))
+    declared = union(Set(PormG.PATTERN_LOOKUP_OPERATORS), Set(PormG.JSON_CONTAINMENT_OPERATORS),
+                     Set(PormG.ARRAY_CONTAINMENT_OPERATORS))
     # A renderer nothing declares — the #604 shape, and the half no constants-only check can see.
     @test setdiff(reflected, declared) == Set{String}()
     # A declared name whose renderer does not exist — a typo in a constant.
@@ -728,8 +731,8 @@ end
 
   # Every operator the render branch dispatches to must actually have a method for all three
   # connection arms, or `getfield(Dialect, Symbol(op))(conn, col, ph)` is a MethodError at query time.
-  @testset "Every PATTERN_LOOKUP_OPERATORS name has all three Dialect arms" begin
-    for op in PormG.PATTERN_LOOKUP_OPERATORS
+  @testset "Every PATTERN_LOOKUP_OPERATORS and ARRAY_CONTAINMENT_OPERATORS name has all three Dialect arms" begin
+    for op in (PormG.PATTERN_LOOKUP_OPERATORS..., PormG.ARRAY_CONTAINMENT_OPERATORS...)
       @test isdefined(PormG.Dialect, Symbol(op))
       f = getfield(PormG.Dialect, Symbol(op))
       @test hasmethod(f, Tuple{PormG.PormGPostgres, AbstractString, AbstractString})
@@ -895,12 +898,13 @@ end
 
     # Asserted POSITIVELY as well, and this is the half that matters: three negative assertions
     # certify whatever the current message happens to be, so they would still pass if the
-    # fall-through error were junk. It currently IS junk — `QueryBuildError: The field 'CharField()'
-    # does not have a 'how' property` names the field's type object and an internal property, and
-    # never mentions `notalookup`. That is a pre-existing defect outside this cluster's scope and is
-    # filed as a follow-up; pinning the OFFENDING NAME is the minimum this test can demand without
-    # freezing the bad wording, and it fails the day the message stops naming what the user typed.
-    @test occursin("notalookup", msg) broken = true
+    # fall-through error were junk. It WAS junk — `QueryBuildError: The field 'CharField()' does not
+    # have a 'how' property` named the field's type object and an internal property, and never
+    # mentioned `notalookup` — and this line was `broken = true` until #28 rewrote that message
+    # (`_determine_join_type`), because an `ArrayField` index reached the same dead end. It now names
+    # the column and the segment, which is what this asserts; the wording itself is not pinned.
+    @test occursin("notalookup", msg)
+    @test occursin("forename", msg)
   end
 end
 

@@ -1323,6 +1323,12 @@ QUARTER(x) = (y = _transform_operand("QUARTER", x);
               FObject(function_name = "QUARTER", column = y, aggregate = _any_agg(y), formatter = Models.format_quarter_sql))
 QUADRIMESTER(x) = (y = _transform_operand("QUADRIMESTER", x);
                    FObject(function_name = "QUADRIMESTER", column = y, aggregate = _any_agg(y), formatter = Models.format_quadrimester_sql))
+# #28: `@len`, an `ArrayField`'s element count (`Dialect.ARRAY_LEN`). A count, so its right-hand side
+# is a number. Unlike the date parts it is checked against its operand's type when it renders
+# (`_get_select_query(::FObject)`): `cardinality` over a column that is not an array is an error only
+# the server would report, so the build refuses it first, naming the path.
+ARRAY_LEN(x) = (y = _transform_operand("LEN", x);
+                FObject(function_name = "ARRAY_LEN", column = y, aggregate = _any_agg(y), formatter = Models.format_number_sql))
 
 
 function ISNULL(v::AbstractString, value::Bool; aggregate::Bool = false)

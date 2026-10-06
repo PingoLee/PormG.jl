@@ -529,7 +529,9 @@ For every `PormGtransform` key, project `F("col__@key")` (the `Dialect` ladder) 
 exists, that both equal it.
 """
 function vr_run_ladder_parity(base::Function, col::String, stored, engine::Symbol)
-  for key in sort!(collect(keys(PormG.PormGtransform)))
+  # `@len` (#28) counts an ArrayField's elements and refuses every column this ladder runs over (a
+  # date, a time, a timestamp); its two-spelling parity is asserted in `test_array_lookups.jl`.
+  for key in sort!(filter(!=("len"), collect(keys(PormG.PormGtransform))))
     @testset "ladder parity · @$(key)" begin
       via_f = base(); via_f.values("x" => F("$(col)__@$(key)"))
       via_s = base(); via_s.values("x" => "$(col)__@$(key)")

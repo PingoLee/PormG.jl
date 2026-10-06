@@ -409,6 +409,13 @@ function _check_fixed_shape_lookup(suffix::AbstractString, value)
     throw(FilterError("Error in filter, '$(suffix)' operator requires exactly 2 values, got 1"))
   suffix == "isnull" && !(value isa Bool) &&
     throw(FilterError("Error in filter, 'isnull' takes true or false, got $(value isa SQLType ? "a column expression" : repr(value))"))
+  # #28: an array lookup compares two arrays, so its value is a list even for one element. A scalar is
+  # refused rather than wrapped — and a bare String would otherwise be read as array-literal text
+  # (`"SOFT"` is not one). A column expression is left to `_check_column_rhs_lookup`, which owns that
+  # message on the column arms.
+  suffix in ARRAY_CONTAINMENT_OPERATORS && !(value isa SQLType) &&
+    throw(FilterError("Error in filter, '$(suffix)' takes a list of elements, even for one: " *
+                      "\e[4m\e[32m[$(repr(value))]\e[0m, got a single value"))
   return nothing
 end
 
@@ -441,6 +448,12 @@ function _check_column_rhs_lookup(path::Vector{String})
   # zero rows on PostgreSQL. Each takes a key, a key list or a document, never a column.
   suffix in JSON_CONTAINMENT_OPERATORS &&
     throw(FilterError("Error in filter '$(lookup)': '$(suffix)' takes a JSON key or document value, " *
+                      "not a column expression"))
+  # #28: the array lookups bind their value as one array literal (`_render_array_operator`), which a
+  # column cannot become. Comparing two array COLUMNS (`@>` against another `ArrayField`) is valid SQL
+  # and Django has it; PormG does not render it yet, so it is refused here rather than bound as a value.
+  suffix in ARRAY_CONTAINMENT_OPERATORS &&
+    throw(FilterError("Error in filter '$(lookup)': '$(suffix)' takes a list of element values, " *
                       "not a column expression"))
   return nothing
 end
@@ -696,7 +709,9 @@ function _get_pair_to_oper(x::Pair{Vector{String},<:AbstractVector})
   lookup = join(x.first, "__@")
   path = join(haskey(PormGsuffix, x.first[end]) ? x.first[1:end-1] : x.first, "__")
   # A `nothing` among values is the other shape that lands here (`["SOFT", nothing]` is a
-  # `Vector{Union{Nothing, String}}`). In a filter value a NULL element is spelled `missing`.
+  # `Vector{Union{Nothing, String}}`). In a filter value a NULL element is spelled `missing` — except
+  # in an array lookup, which takes no NULL element in either spelling (`_refuse_null_array_element`).
+  x.first[end] in ARRAY_CONTAINMENT_OPERATORS && _refuse_null_array_element(x.second, lookup)
   any(isnothing, x.second) && throw(FilterError(
     "Error in filter '$(lookup)': a filter value cannot hold `nothing`; write a NULL element as " *
     "`missing` — \e[4m\e[32m\"$(path)\" => [\"SOFT\", missing]\e[0m."))
@@ -744,9 +759,30 @@ function _vector_oper_from_suffix(x::Pair{Vector{String},<:AbstractVector})
     # #27: JSONB array containment (@>) with a vector RHS — serialize to a JSON document string at
     # parse time so OperObject.values stays a String (no downstream type-union change).
     return OperObject(operator="jcontains", values=Models.format_json_sql(x.second), column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  elseif suffix in ARRAY_CONTAINMENT_OPERATORS
+    # #28: the vector stays as written — formatting it needs the ELEMENT field, which only the render
+    # knows (`_render_array_operator`). A NULL element is refused now, while the lookup is in hand.
+    _refuse_null_array_element(x.second, join(x.first, "__@"))
+    return OperObject(operator=suffix, values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
-    _raise_invalid_filter_operator(x.first, "vector", ["in", "nin", "range", "nrange", "has_any_keys", "has_keys", "jcontains"])
+    _raise_invalid_filter_operator(x.first, "vector", _VECTOR_VALUE_OPERATORS)
   end
+end
+
+# The lookups that take a vector right-hand side — the `allowed` list every "a vector needs one of
+# these operators" refusal names. One list, because it was restated as a literal at three sites (here,
+# `_guard_vector_equality`, and its alias twin in `build_query.jl`) and #28 had to grow all three.
+const _VECTOR_VALUE_OPERATORS = ["in", "nin", "range", "nrange", "has_any_keys", "has_keys", "jcontains",
+                                 ARRAY_CONTAINMENT_OPERATORS...]
+
+# #28: a NULL element in an array lookup's value. PostgreSQL's `@>`, `<@` and `&&` compare elements
+# with `=`, so a NULL never matches anything — not even a NULL element of the column. Rendering it
+# would be a filter that silently drops what the caller asked for; `@isnull` is the NULL test.
+function _refuse_null_array_element(values::AbstractVector, lookup::AbstractString)
+  any(v -> v === missing || v === nothing, values) || return nothing
+  throw(FilterError("Error in filter '$(lookup)': an array lookup cannot match a NULL element " *
+                    "(`missing`/`nothing`) — PostgreSQL compares elements with `=`, so a NULL never " *
+                    "matches. Remove it from the list."))
 end
 # #27: JSONB document containment (@>) with a Dict / NamedTuple RHS — serialize at parse time so
 # OperObject.values stays a String.
@@ -761,9 +797,29 @@ end
 function _get_pair_to_oper(x::Pair{Vector{String},Tuple{T,T}}) where T
   if x.first[end] in ("range", "nrange")   # #207: nrange = NOT BETWEEN, same 2-value shape
     return OperObject(operator=PormGsuffix[x.first[end]], values=[x.second[1], x.second[2]], column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  elseif x.first[end] in ARRAY_CONTAINMENT_OPERATORS
+    _refuse_array_lookup_tuple(x)
   else
     _raise_invalid_filter_operator(x.first, "tuple", ["range", "nrange"])
   end
+end
+# #28: every other Tuple — three elements, one, mixed types (`("SOFT", "MEDIUM", "HARD")`, `(12,)`,
+# `("S", 1)`). None matched a method, so each leaked a raw `MethodError` naming this function. Strictly
+# less specific than the 2-tuple arm above, so it only catches what that arm does not.
+function _get_pair_to_oper(x::Pair{Vector{String},<:Tuple})
+  suffix = x.first[end]
+  suffix in ARRAY_CONTAINMENT_OPERATORS && _refuse_array_lookup_tuple(x)
+  suffix in ("range", "nrange") &&
+    throw(FilterError("Error in filter, '$(suffix)' operator requires exactly 2 values, got $(length(x.second))"))
+  _raise_invalid_filter_operator(x.first, "tuple", ["range", "nrange"])
+end
+# #28: an `ArrayField` WRITE takes a Tuple, so a caller reaches for one in an array lookup too. In a
+# filter a 2-tuple is `@range`'s pair (#944 kept that meaning), so the refusal names the Vector
+# spelling the lookup takes rather than pointing at `@range`.
+function _refuse_array_lookup_tuple(x::Pair{Vector{String},<:Tuple})
+  lookup = join(x.first, "__@")
+  throw(FilterError("Error in filter '$(lookup)': '$(x.first[end])' takes a Vector of elements, not a " *
+                    "Tuple — \e[4m\e[32m\"$(lookup)\" => [$(join(repr.(x.second), ", "))]\e[0m."))
 end
 function _get_pair_to_oper(x::Pair{Vector{String},Date})
   _get_pair_to_oper(x.first => x.second |> string)
@@ -1673,6 +1729,13 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     (formatter === nothing || formatter === Models.format_bool_sql) ||
       throw(_non_boolean_function_condition(v.column))
   end
+  # #28: `@len` counts an array's elements, so its operand must be an `ArrayField` — a column, a
+  # joined or CTE path, or a slice (`tags__0_2`), whose memo entry is the array field itself. Read
+  # after the operand renders, like the check above: rendering a path is what fills the memo. Fails
+  # closed — an operand whose type cannot be named (an expression) is refused too.
+  v.function_name == "ARRAY_LEN" && !(_expression_formatter(v.column, instruc) isa Models.ArrayFormatter) &&
+    throw(FilterError("The \e[31m@len\e[0m transform counts the elements of an ArrayField, and " *
+                      "\e[31m$(_len_operand_label(v.column))\e[0m is not one."))
   # #953: an aggregate over a boolean, read once its column resolves (as the check above is).
   # PostgreSQL has none of `max/min/sum/avg(boolean)`, so each failed there when it ran, while SQLite
   # answered over its stored 0/1. An extremum keeps its meaning — any true, all true — so it renders
@@ -1716,6 +1779,11 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   interval_ms && v.function_name == "AVG" && (sql = "CAST(round($(sql)) AS INTEGER)")
   return sql, interval_ms, interval
 end
+# The operand `@len` refused, as the caller spelled it (#28).
+_len_operand_label(c::AbstractString) = String(c)
+_len_operand_label(c::CTEReference) = "CTE(\"$(c.name)\", \"$(c.path)\")"
+_len_operand_label(c::JoinedReference) = "Joined(\"$(c.alias)\", \"$(c.path)\")"
+_len_operand_label(::Any) = "this expression"
 function _get_select_query(q::SQLTypeQor, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   resp = []
   for v in q.or
@@ -2245,6 +2313,42 @@ function _resolve_json_operator_field(v::SQLTypeOper, instruc::SQLInstruction)
   return memo_field(instruc, memo_key(v.column))
 end
 
+# #28: render an array containment/overlap lookup (`@acontains` @>, `@contained_by` <@, `@overlap` &&)
+# on an `ArrayField` column — a bare one, one reached through a ForeignKey or a CTE, or a slice
+# (`tags__0_2`), whose memo entry is the array field itself. Read AFTER `column` renders, which is
+# what fills the memo for a joined path.
+#
+# The value goes through the column's `ArrayFormatter`, so every element is checked and converted by
+# the ELEMENT field's own formatter and the whole list binds as ONE array literal — exactly what an
+# equality binds — but with the field's `size` lifted: `size` bounds what the column may STORE, and
+# `@contained_by`/`@overlap` legitimately ask about a longer list (`"tyre_compounds__@contained_by"
+# => [all five compounds]` against a `size = 3` column). No cast: the operators are polymorphic, so
+# the server types the parameter from the column, as it does for `=` (measured on both drivers).
+function _render_array_operator(v::SQLTypeOper, column::String, instruc::SQLInstruction)::String
+  field, _ = _operand_field(v, instruc)
+  (field !== nothing && _is_array_field(field)) ||
+    throw(FilterError("The \e[31m@$(v.operator)\e[0m lookup requires an ArrayField column; " *
+                      "\e[31m$(_array_lookup_label(v))\e[0m is not one."))
+  # The parse ladder admits only a vector here (`_check_fixed_shape_lookup` refuses a scalar, and
+  # `_check_column_rhs_lookup` a column); this is the fail-safe for a spelling that bypasses it.
+  v.values isa AbstractVector ||
+    throw(FilterError("The \e[31m@$(v.operator)\e[0m lookup takes a list of elements."))
+  formatter = field.formatter::Models.ArrayFormatter
+  unbounded = Models.ArrayFormatter(formatter.base, formatter.kind, nothing)
+  literal = _guarded_format(unbounded, v.values, v.operator, _array_lookup_label(v), field.type)
+  placeholder = add_parameter!(instruc, literal)
+  return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, placeholder)
+end
+
+# The path an array lookup names, for its messages: the field path the caller wrote, or the memo
+# key's path for a joined or CTE column. `"this expression"` for an operand with neither (`@len`).
+function _array_lookup_label(v::SQLTypeOper)::String
+  c = v.column
+  c isa SQLField && c.field isa String && return c.field
+  k = c isa Union{SQLField,CTEReference,JoinedReference} ? memo_key(c) : nothing
+  return k === nothing ? "this expression" : k[2]
+end
+
 # #352: sargable rewrite for `col__@yyyy_mm` / `col__@year` / `col__@date` comparisons.
 #
 # `to_char(col, 'YYYY-MM') <= $1` (and the EXTRACT(YEAR ...) equivalent) puts a function call on
@@ -2717,8 +2821,7 @@ function _guard_vector_equality(v::SQLTypeOper, f_meta, label::AbstractString)
   (v.operator == "=" && v.values isa AbstractVector) || return nothing
   (f_meta !== nothing && _is_array_field(f_meta)) && return nothing
   (v.values isa Vector{UInt8} && f_meta !== nothing && _is_binary_field(f_meta)) && return nothing
-  _raise_invalid_filter_operator([String(label)], "vector",
-                                 ["in", "nin", "range", "nrange", "has_any_keys", "has_keys", "jcontains"])
+  _raise_invalid_filter_operator([String(label)], "vector", _VECTOR_VALUE_OPERATORS)
 end
 # Label-deriving form, for the arms that have no field name of their own to pass (the JSON-path
 # lookup).
@@ -2913,10 +3016,16 @@ function _pattern_operand(column::AbstractString, formatter, operator::AbstractS
   # #28. Django spells array containment `contains`, and PormG's `@contains` is a LIKE. Reading the
   # array as text and matching a fragment of `{a,b}` would answer a different question than the one
   # either spelling asks, so it is refused — the `@jcontains` precedent: one operator, one meaning.
-  kind === :array && throw(FilterError(
-    "Error in filter '$(label)': a pattern lookup (`@contains`, `@startswith`, `@regex`, …) matches " *
-    "text, and this is an ArrayField. Array containment is a separate lookup, `@acontains`, which " *
-    "is not available yet (#28). Compare the whole array instead: \"$(label)\" => [ … ]."))
+  if kind === :array
+    # The index hint only where it is a valid spelling that reads text: after a slice a second
+    # subscript is refused (`_render_array_subscript`), and an element of a number array has no LIKE.
+    by_index = formatter.kind isa Union{CText, CVarChar} && !occursin(r"__[0-9]+_[0-9]+\z", label) ?
+      ", or match one element's text by index, \"$(label)__0__@contains\" => \"…\"" : ""
+    throw(FilterError(
+      "Error in filter '$(label)': a pattern lookup (`@contains`, `@startswith`, `@regex`, …) matches " *
+      "text, and this is an ArrayField. Test its elements with the array lookups instead: " *
+      "\"$(label)__@acontains\" => [ … ] (it holds them all), `@overlap` (it holds any of them)$(by_index)."))
+  end
   return Dialect._pattern_text_operand(instruc.connection, Val(kind), column)
 end
 
@@ -2959,6 +3068,10 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   # #27: JSONB containment/overlap operators (@>, ?, ?|, ?&) — dedicated binding + PG-only render.
   if v.operator in JSON_CONTAINMENT_OPERATORS
     return _render_json_operator(v, column, instruc)
+  end
+  # #28: the array containment/overlap operators (@>, <@, &&) — the same shape as the JSON branch.
+  if v.operator in ARRAY_CONTAINMENT_OPERATORS
+    return _render_array_operator(v, column, instruc)
   end
   # #27: comparison against a JSON path lookup (payload__key). Resolving `column` above populated
   # json_lookup_paths; the dedicated branch binds the RHS as plain text (the generic path would run

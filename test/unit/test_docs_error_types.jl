@@ -1456,6 +1456,98 @@ const DOCERR_CASES = [
         BackendCapabilityError,
         () -> PormG.Dialect.field_to_column("pit_laps", ArrayField(IntegerField()), DocErrMockSQLite()),
     ),
+    # #28, part 2. `fields.md` → *Containment, overlap and length* and *Index and slice* name the type
+    # each array-lookup refusal raises; `filters_and_aggregates.md` → *Array Lookups* and `postgres.md`
+    # the SQLite refusal. The SQL each lookup renders is pinned in `test_array_lookups.jl`.
+    (
+        "fields.md — a single value for an array lookup raises (#28)",
+        FilterError,
+        () -> let m = Model("docerr_strategy_28d", id = IDField(), tyre_compounds = ArrayField(CharField(max_length = 12)))
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("tyre_compounds__@acontains" => "SOFT"); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — a NULL element in an array lookup raises (#28)",
+        FilterError,
+        () -> let m = Model("docerr_strategy_28e", id = IDField(), pit_laps = ArrayField(IntegerField(null = true)))
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("pit_laps__@overlap" => [12, missing]); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — @len on a column that is not an ArrayField raises (#28)",
+        FilterError,
+        () -> let m = Model("docerr_strategy_28f", id = IDField(), team = CharField(max_length = 100))
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("team__@len" => 2); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — another column as an array lookup's value raises (#28)",
+        FilterError,
+        () -> let m = Model("docerr_strategy_28g", id = IDField(), pit_laps = ArrayField(IntegerField()),
+                            stops = ArrayField(IntegerField()))
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("pit_laps__@acontains" => PormG.F("stops")); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — a second segment after an array index raises (#28)",
+        QueryBuildError,
+        () -> let m = Model("docerr_strategy_28h", id = IDField(), pit_laps = ArrayField(IntegerField()))
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("pit_laps__0__1" => 12); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — an array path segment that is not an index or a slice raises (#28)",
+        QueryBuildError,
+        () -> let m = Model("docerr_strategy_28i", id = IDField(), pit_laps = ArrayField(IntegerField()))
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("pit_laps__first" => 12); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — an empty array slice raises (#28)",
+        QueryBuildError,
+        () -> let m = Model("docerr_strategy_28j", id = IDField(), pit_laps = ArrayField(IntegerField()))
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("pit_laps__2_2" => [12]); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — a reversed array slice raises (#28)",
+        QueryBuildError,
+        () -> let m = Model("docerr_strategy_28k", id = IDField(), pit_laps = ArrayField(IntegerField()))
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("pit_laps__2_1" => [12]); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "filters_and_aggregates.md + postgres.md — an array containment lookup raises on SQLite (#28)",
+        BackendCapabilityError,
+        () -> let m = Model("docerr_strategy_28l", id = IDField(), tyre_compounds = ArrayField(CharField(max_length = 12)))
+            m.connect_key = "docerr_sl"; m._module = Main
+            q = m.objects; q.filter("tyre_compounds__@acontains" => ["SOFT"]); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "filters_and_aggregates.md + postgres.md — @len raises on SQLite (#28)",
+        BackendCapabilityError,
+        () -> let m = Model("docerr_strategy_28m", id = IDField(), pit_laps = ArrayField(IntegerField()))
+            m.connect_key = "docerr_sl"; m._module = Main
+            q = m.objects; q.filter("pit_laps__@len__@gte" => 2); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "filters_and_aggregates.md + postgres.md — an array index raises on SQLite (#28)",
+        BackendCapabilityError,
+        () -> let m = Model("docerr_strategy_28n", id = IDField(), tyre_compounds = ArrayField(CharField(max_length = 12)))
+            m.connect_key = "docerr_sl"; m._module = Main
+            q = m.objects; q.filter("tyre_compounds__0" => "SOFT"); q.list(show_query = :dict)
+        end,
+    ),
     # #902. `fields.md` → *UUID Fields* names the type a malformed UUID raises in an equality filter —
     # the half of the paragraph the pattern lookups (which take a fragment) do not change. The
     # rendering is pinned in `test_uuid_pattern_lookups.jl`.

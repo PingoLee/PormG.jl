@@ -109,11 +109,22 @@ const PormGsuffix = Dict{String,Union{Int64, String}}(
   "has_key" => "has_key",             # ?   (top-level key exists)
   "has_any_keys" => "has_any_keys",   # ?|  (any of the given keys exists)
   "has_keys" => "has_keys",           # ?&  (all of the given keys exist)
+  # #28: PostgreSQL array containment/overlap, Django's `ArrayField` lookups. `acontains` rather than
+  # `contains` because `@contains` is a LIKE on every other column — the `@jcontains` precedent. Each
+  # maps to a Dialect renderer of the same name (PG emits the operator; SQLite/abstract refuse).
+  "acontains" => "acontains",         # @>  (the array holds every given element)
+  "contained_by" => "contained_by",   # <@  (every element of the array is among the given ones)
+  "overlap" => "overlap",             # &&  (the array shares at least one element with the given)
 )
 
 # #27: the JSON containment/overlap operators, routed to a dedicated render branch in
 # _get_filter_query(::SQLTypeOper) and gated PostgreSQL-only.
 const JSON_CONTAINMENT_OPERATORS = ("jcontains", "has_key", "has_any_keys", "has_keys")
+
+# #28: the array containment/overlap operators — the same arrangement as the JSON four: a dedicated
+# render branch (`_render_array_operator`), a vector right-hand side bound as ONE array literal, and
+# PostgreSQL only (SQLite has no array type, and PormG does not emulate one).
+const ARRAY_CONTAINMENT_OPERATORS = ("acontains", "contained_by", "overlap")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # The LIKE-family pattern lookups (#604)
@@ -180,6 +191,9 @@ const PormGtransform = Dict{String,Union{Int64, String}}(
   "hour" => "HOUR",
   "minute" => "MINUTE",
   "second" => "SECOND",
+  # #28: an `ArrayField`'s element count, Django's `len`. A transform rather than an operator, so it
+  # chains like the date parts do: `"pit_laps__@len__@gte" => 2`. PostgreSQL only.
+  "len" => "ARRAY_LEN",
 )
 
 # dictionary from function to type of the field

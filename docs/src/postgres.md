@@ -126,8 +126,9 @@ Race_strategy = Models.Model("race_strategy",
   reads back as `Vector{T}` with `T` the element field's scalar read type, on both PostgreSQL drivers.
 - `size` is checked by PormG on write. PostgreSQL neither enforces nor keeps it, so it is not part of
   the schema.
-- A vector filter value is an equality against the whole array. The array lookups (`@acontains`,
-  `@contained_by`, `@overlap`, `@len`, index and slice transforms) are not available yet (#28).
+- A vector filter value is an equality against the whole array. The array lookups are
+  `@acontains` (`@>`), `@contained_by` (`<@`), `@overlap` (`&&`), the `@len` transform
+  (`cardinality`), an index (`"tyre_compounds__0"`, 0-based) and a slice (`"pit_laps__0_2"`).
 - A text → array retype parses each value as an array literal and counts the rows that do not parse.
   An array whose elements only widen (`integer[]` → `bigint[]`) is a plain `ALTER`; any other element
   change converts through text, and the rows with an element that no longer fits are counted first.
@@ -148,6 +149,14 @@ returns a different answer, so a test suite running on SQLite fails where produc
   [Filters and Aggregates → JSON](read/filters_and_aggregates.md#Containment-and-key-existence-operators-(PostgreSQL-only)).
   ```julia
   M.Constructor.objects.filter("metadata__@has_keys" => ["principal", "wins"])
+  ```
+- **Array lookups** — `@acontains` (`@>`), `@contained_by` (`<@`), `@overlap` (`&&`), the `@len`
+  transform, and an index or slice (`"tyre_compounds__0"`, `"pit_laps__0_2"`) on an `ArrayField`
+  column. The column itself cannot exist on SQLite, so these refuse there for completeness: a build
+  against an unmanaged SQLite table that declares one still raises `BackendCapabilityError`. See
+  [Fields → Array Fields](fields.md#Array-Fields).
+  ```julia
+  M.Race_strategy.objects.filter("tyre_compounds__@acontains" => ["SOFT", "HARD"])
   ```
 - **Accent-insensitive matching** — `@iunaccent_contains`, `@iunaccent_exact` and their negated
   twins `@niunaccent_contains`, `@niunaccent_exact`. They need the `unaccent` extension, declared
@@ -212,6 +221,7 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 | **`DecimalField` width** | `numeric`, exact at any `max_digits` | `NUMERIC` affinity, exact up to `max_digits = 15`; a wider declaration raises `BackendCapabilityError` at `makemigrations` |
 | **Window frames** | explicit `frame=` clauses | default frame only |
 | **JSONB lookups** (`@jcontains`, `@has_key`, `@has_any_keys`, `@has_keys`) | JSONB operators | `BackendCapabilityError` — `__` key paths still work |
+| **Array lookups** (`@acontains`, `@contained_by`, `@overlap`, `@len`, index, slice) | array operators and subscripts | `BackendCapabilityError` |
 | **Accent-insensitive lookups** (`@iunaccent_*`, `@niunaccent_*`) | `unaccent` extension | `BackendCapabilityError` |
 | **Regex lookups** (`@regex`, `@iregex`, `@nregex`, `@niregex`) | POSIX `~` / `~*` | `BackendCapabilityError` |
 | **`Cast` to a time type** | `::date`, `::timestamp`, `::time`, `::interval` | `date` renders `date(x)`; the others raise `BackendCapabilityError` |

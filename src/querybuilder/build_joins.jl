@@ -1,17 +1,28 @@
 
 "build a row to join"
-function _determine_join_type(field::PormGField; previus_how::Union{String, Nothing} = nothing, second_fild_name::Union{String, Nothing}=nothing)
+function _determine_join_type(field::PormGField; previus_how::Union{String, Nothing} = nothing, second_fild_name::Union{String, Nothing}=nothing,
+                              column_name::Union{String, Nothing}=nothing)
   if previus_how !== nothing && previus_how == "LEFT"
     # if the previous join was a LEFT JOIN, the current join must be a LEFT JOIN
     return "LEFT"
   end
-  
+
   @pormg_debug false
   if !hasproperty(field, :how)
     if second_fild_name !== nothing
       _check_if_field_is_a_operator(second_fild_name)
     end
-    throw(QueryBuildError("The field '$(field)' does not have a 'how' property"))
+    # #28: this used to read "The field 'CharField()' does not have a 'how' property" — the field's
+    # display and an internal slot, never the path the caller wrote (`test_operators.jl` pinned the
+    # omission as `broken`). An `ArrayField` landed here too before its own gate in `_build_row_join`,
+    # so the message names the two kinds of column a path CAN continue past besides a relation.
+    column = column_name === nothing ? "this column" : "\e[31m$(column_name)\e[0m"
+    next = second_fild_name === nothing ? "" : " with \e[31m$(second_fild_name)\e[0m"
+    throw(QueryBuildError(
+      "Invalid field path: $(column) is not a relation, so the path cannot continue past it$(next). " *
+      "Only a ForeignKey, OneToOneField or ManyToManyField leads to another model; an ArrayField " *
+      "takes an index or slice (`__0`, `__0_2`) and a JSONField a key path. A lookup takes an `@` " *
+      "(`__@gte`)."))
   elseif field.how !== nothing && !isempty(field.how)
     return _normalize_join_type(field.how)
   end
@@ -420,6 +431,64 @@ function _render_json_lookup(instruct::SQLInstruction, alias::String, json_field
   return Dialect._json_extract_expr(instruct.connection, col, segs)
 end
 
+# #28: render an index (`tags__0`) or a slice (`tags__0_2`) into an `ArrayField`, Django's spelling.
+# The segment is 0-based, as Django's is and as a JSON path's array index already is in PormG
+# (`payload__0`); a slice is half-open, `a_b` taking the elements `a` up to but not including `b`.
+# PostgreSQL subscripts are 1-based and inclusive, so `__0` renders `[1]` and `__0_2` renders `[1:2]`.
+#
+# Exactly ONE segment. After an index the path is an element, which has no further path; after a
+# slice PostgreSQL would read a second subscript as a second DIMENSION (`tags[1:2][1]` is a 2-D slice
+# of a 1-D array, empty), so neither is extended — a transform (`__@len`) or an operator still follows.
+#
+# The memo records what the expression IS, which every reader downstream follows: the ELEMENT field
+# for an index — so its value is checked by the element's formatter, a pattern lookup on a text
+# element works, and `values()` reads it as one element — and the array field for a slice, which is an
+# array. The bounds are parsed to `Int` and printed back, so nothing the caller wrote reaches the SQL.
+function _render_array_subscript(instruct::SQLInstruction, alias::String, array_field::PormGField,
+    field_name::String, segments::Vector{String}, full_field::Vector{String};
+    cte::Bool=false)::String
+  path = join(full_field, "__")
+  length(segments) == 1 || throw(QueryBuildError(
+    "Invalid field path \e[31m$(path)\e[0m: an ArrayField takes ONE index (`$(field_name)__0`) or slice " *
+    "(`$(field_name)__0_2`) after it, and an element has no further path."))
+  m = match(r"\A([0-9]+)(?:_([0-9]+))?\z", segments[1])
+  # `tags__isnull` is a lookup missing its `@`; the shared hint names the fix, as it does for any column.
+  m === nothing && _check_if_field_is_a_operator(segments[1])
+  m === nothing && throw(QueryBuildError(
+    "Invalid field path \e[31m$(path)\e[0m: \e[31m$(repr(segments[1]))\e[0m is neither an index " *
+    "(`$(field_name)__0`, 0-based) nor a slice (`$(field_name)__0_2`, half-open). An ArrayField has no " *
+    "named parts, and its lookups take an `@`: `$(field_name)__@acontains`."))
+  lower = _array_subscript_bound(m.captures[1], path)
+  conn = instruct.connection
+  col = string(quote_identifier(alias, conn), ".",
+               safe_column_identifier(Models.field_db_column(array_field, field_name), conn))
+  key = memo_key(cte ? :cte : :base, path)
+  if m.captures[2] === nothing
+    memo_field!(instruct, key, array_field.base_field)
+    return Dialect._array_index_expr(conn, col, lower + 1)
+  end
+  upper = _array_subscript_bound(m.captures[2], path; upper = true)
+  # An empty or reversed slice selects nothing on PostgreSQL (`'{}'`), whatever the array holds — a
+  # filter that can only ever compare an empty array is a typo, not a question.
+  upper > lower || throw(QueryBuildError(
+    "Invalid field path \e[31m$(path)\e[0m: the slice `$(lower)_$(upper)` is empty. A slice `a_b` takes " *
+    "the elements from index a up to, not including, b, so b must be greater than a."))
+  memo_field!(instruct, key, array_field)
+  return Dialect._array_slice_expr(conn, col, lower + 1, upper)
+end
+
+# One bound of an array subscript, as written. PostgreSQL subscripts are `integer`, so a bound whose
+# rendered form exceeds that type would be a server error; it is refused here, by name, instead. An
+# index or a slice's lower bound renders as `n + 1`; a slice's (exclusive) upper bound renders as `n`.
+function _array_subscript_bound(digits::AbstractString, path::AbstractString; upper::Bool = false)::Int
+  limit = upper ? Int(typemax(Int32)) : Int(typemax(Int32)) - 1
+  n = tryparse(Int, digits)
+  (n === nothing || n > limit) && throw(QueryBuildError(
+    "Invalid field path \e[31m$(path)\e[0m: the array index $(digits) is out of range " *
+    "(at most $(limit))."))
+  return n
+end
+
 # #68 — ONE forward ForeignKey / OneToOne hop, shared by the first hop and the loop of
 # `_build_row_join`. Before this the two sites carried near-identical copies of the same resolution,
 # and the `db_column` key half (#50/#64) had to be hand-applied to each — `test_db_column_deep_joins.jl`
@@ -441,7 +510,8 @@ function _forward_fk_hop(instruct::SQLInstruction, src_model::PormGModel, src_ta
   # Resolved BEFORE the `.to` check below, on purpose: `_determine_join_type` is what turns
   # `name__contains` into the "did you mean an operator?" hint, and it has to fire first.
   how = _determine_join_type(field, previus_how = prev_how,
-                             second_fild_name = size(vector, 1) > 1 ? vector[2] : nothing)
+                             second_fild_name = size(vector, 1) > 1 ? vector[2] : nothing,
+                             column_name = column)
   target = field.to
   target === nothing && throw(QueryBuildError(no_target_message))
   # #388: the two arms are ONE arm now. A String `.to` is the target's binding, so resolving it
@@ -528,7 +598,6 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # join integration slice, which this one did), so the `getfield(module, …)` fallback the loop kept
   # for it is gone with it.
   foreign_table_name::Union{PormGModel, Nothing} = nothing
-  foreing_table_module::Module = instruct.object.model._module::Module
   # `row_join` is assigned by exactly one arm below — a fresh `JoinRow` per hop (#487).
 
   @pormg_debug false
@@ -552,6 +621,16 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
      Models.is_json_field(instruct.object.model.fields[first_column]) &&
      length(vector) > 1
     return _render_json_lookup(instruct, instruct.alias,
+      instruct.object.model.fields[first_column], first_column, String.(vector[2:end]), field)
+  end
+  # #28: the same arrangement for an `ArrayField` — a non-terminal array column is an index or a slice
+  # (`tags__0`, `tags__0_2`), not a join hop. Without it the column took the forward-FK arm below and
+  # died in `_determine_join_type`, because an `ArrayField` has no `.how` either. `!cte` for the JSON
+  # gate's reason.
+  if !cte && haskey(instruct.object.model.fields, first_column) &&
+     instruct.object.model.fields[first_column] isa sArrayField &&
+     length(vector) > 1
+    return _render_array_subscript(instruct, instruct.alias,
       instruct.object.model.fields[first_column], first_column, String.(vector[2:end]), field)
   end
 
@@ -798,6 +877,11 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     if haskey(new_object.fields, first_column) && Models.is_json_field(new_object.fields[first_column])
       return _render_json_lookup(instruct, tb_alias, new_object.fields[first_column], first_column, String.(vector[2:end]), field; cte=cte)
     end
+    # #28: an `ArrayField` reached through a ForeignKey or rooted in a CTE (`fk__tags__0`,
+    # `CTE("ev", "tags__0")`) — the first-hop gate's twin, as the JSON one above is.
+    if haskey(new_object.fields, first_column) && new_object.fields[first_column] isa sArrayField
+      return _render_array_subscript(instruct, tb_alias, new_object.fields[first_column], first_column, String.(vector[2:end]), field; cte=cte)
+    end
 
     # Read the hop we came from before the arms below construct the next row (#487: a fresh
     # `JoinRow` per hop, so nothing previously inserted is ever edited).
@@ -869,6 +953,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # typed error. Nothing depends on the entry existing: every reader tolerates a miss.
   # #474: namespaced for a CTE-rooted path — same argument as `row_path` and `instruct.cache`.
   last_field !== nothing && memo_field!(instruct, memo_key(cte ? :cte : :base, join(field, "__")), last_field)
+  # Read here, where the one reader is, rather than on entry (#28): the JSON and array gates above
+  # return without it, so a model built by `Models.Model(...)` and never registered through
+  # `set_models` — no `_module` — can still take a key path or an index.
+  foreing_table_module = instruct.object.model._module::Module
   return string(quote_identifier(tb_alias, instruct.connection), ".", _solve_field(vector[end], foreing_table_module, foreign_table_name, instruct))
   
 end

@@ -706,3 +706,60 @@ _f953_plain(s) = replace(s, r"\e\[[0-9;]*m" => "")
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #964: a bare When outside a Case
+#
+# `When(cond; then = x)` with no `otherwise` is a Case branch: `WHEN … THEN …`, with no ELSE and no END.
+# Used as a value, it rendered exactly that, so `Count(When("lap" => 1, then = 1))` became
+# `COUNT(WHEN … THEN …)`, which no engine parses, and the failure came from the driver. The build
+# refuses it now, in every value position. The branch spellings render the SQL they always did.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#964: a bare When outside a Case is refused at build" begin
+  bare() = When("lap" => 1, then = 1)
+  positions = (
+    ("a projection", q -> q.values("lap", "c" => bare())),
+    ("Count's operand", q -> q.values("lap", "c" => Count(bare()))),
+    ("Sum's operand", q -> q.values("lap", "c" => Sum(bare()))),
+    ("a function argument", q -> q.values("lap", "c" => Coalesce(bare(), 0))),
+    ("F arithmetic", q -> q.values("lap", "c" => F("points") + bare())),
+    ("a window's operand", q -> q.values("lap", "c" => Lag(bare(), over = WindowOver(order_by = ["lap"])))),
+    ("a Case branch's then", q -> q.values("lap", "c" => Case([When("points" => 2, then = bare())], default = 0))),
+    ("a Case's default", q -> q.values("lap", "c" => Case([When("points" => 2, then = 2)], default = bare()))),
+    ("a filter value", q -> q.filter("points" => bare())),
+    ("a lookup's value", q -> q.filter("points__@gt" => bare())),
+    ("a Subquery's projection", q -> (s = q.object.model.objects; s.values("c" => bare()); s.limit(1);
+                                      q.values("lap", "c" => PormG.QueryBuilder.Subquery(s)))),
+  )
+  for (backend, Model_) in ((:postgres, FAggPgFn), (:sqlite, FAggSlFn))
+    pg = backend === :postgres
+    @testset "$backend: refused as $label" for (label, setup) in positions
+      err = _f_agg_build_error(Model_, setup)
+      @test err isa QueryBuildError
+      msg = _f953_plain(sprint(showerror, err))
+      @test occursin("When with no `otherwise` is a branch of a Case", msg)
+      @test occursin("When(…, then = x, otherwise = y)", msg)
+      @test occursin("Case([When(…, then = x)], default = y)", msg)
+    end
+
+    # The branch spellings, by exact SQL and parameters: a vector of branches, the single bare
+    # `Case(When(…))`, and `When(…; otherwise)`, which is a CASE holding one branch.
+    @testset "$backend: a When as a Case branch renders as before" begin
+      m(n) = pg ? "\$$n" : "?"
+      t(n) = pg ? "\$$n::bigint" : "?"
+      insp(setup) = (q = Model_.objects; setup(q); inspect_query(q))
+      i = insp(q -> q.values("lap", "c" => Case([When("lap" => 1, then = 1), When("points" => 2, then = 2)], default = 0)))
+      @test occursin("CASE\nWHEN \"Tb\".\"lap\" = $(m(1)) THEN $(t(2))\nWHEN \"Tb\".\"points\" = $(m(3)) THEN $(t(4))\nELSE $(t(5))\nEND\n as \"c\"", i[:sql_text])
+      @test i[:parameters] == Any[1, 1, 2, 2, 0]
+      single = "CASE WHEN \"Tb\".\"lap\" = $(m(1)) THEN $(t(2)) ELSE $(t(3)) END as \"c\""
+      for (label, value) in (("Case(When(…))", () -> Case(When("lap" => 1, then = 1), default = 0)),
+                             ("When(…; otherwise)", () -> When("lap" => 1, then = 1, otherwise = 0)))
+        i = insp(q -> q.values("lap", "c" => value()))
+        @test occursin(single, i[:sql_text])
+        @test i[:parameters] == Any[1, 1, 0]
+      end
+      i = insp(q -> q.values("lap", "c" => Count(When("lap" => 1, then = 1, otherwise = nothing))))
+      @test occursin("COUNT(CASE WHEN \"Tb\".\"lap\" = $(m(1)) THEN $(t(2)) ELSE NULL END)", i[:sql_text])
+    end
+  end
+end

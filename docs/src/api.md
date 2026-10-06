@@ -364,6 +364,8 @@ An operand of `Coalesce`, `Greatest`, `Least`, `NullIf`, `Power`, `Mod` and `Con
 ], default = "Other")
 ```
 
+A `When` with no `otherwise` is only a `Case` branch: used alone as a value, as in `Count(When(…))`, it raises `QueryBuildError`.
+
 Plain strings and numbers work as `then`, `otherwise`, and `default` values without `Value()`.
 
 See [Functions and Dates](read/functions_and_dates.md) for more details.

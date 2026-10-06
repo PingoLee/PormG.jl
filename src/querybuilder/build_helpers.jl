@@ -1554,6 +1554,29 @@ function _null_skipping_operands(v::SQLTypeFunction, instruc::SQLInstruction)
                      aggregate = _any_agg(cols)) for k in 1:length(cols)]
 end
 
+# #964: a `When` with no `otherwise` is a `CASE` branch: `WHEN … THEN …`, no `ELSE`, no `END`. Only
+# `Case` renders one as such (`_render_case_branches`), so a `When` that reaches the typed renderer
+# stands as a value (a projection, an aggregate's operand, a function argument), where it printed
+# `COUNT(WHEN … THEN …)` and the driver refused it on both engines. Refused at build instead, naming
+# the two complete spellings rather than supplying an `ELSE NULL` the caller never wrote.
+function _bare_when_refusal()
+  return QueryBuildError(
+    "A \e[4m\e[31mWhen\e[0m with no `otherwise` is a branch of a Case, not a value: alone it renders " *
+    "`WHEN … THEN …` with no ELSE and no END, which no engine parses. Give it its own ELSE, " *
+    "\e[4m\e[32mWhen(…, then = x, otherwise = y)\e[0m, or put it in a Case, " *
+    "\e[4m\e[32mCase([When(…, then = x)], default = y)\e[0m (#964).")
+end
+# A `Case`'s branches, a vector of them or the single node `Case(When(…))` and `When(…; otherwise)`
+# hold. A `WHEN` renders through its body, past the #964 refusal in `_render_function_typed`, because
+# here it is a branch. Anything else renders as a value, as it did before.
+_render_case_branch(b::SQLTypeFunction, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing) =
+  b.function_name == "WHEN" ? _render_function_body(b, instruc; _as = _as)[1] : _get_select_query(b, instruc; _as = _as)
+_render_case_branch(b, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing) = _get_select_query(b, instruc; _as = _as)
+_render_case_branches(col::AbstractVector, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing) =
+  Any[_render_case_branch(b, instruc; _as = _as) for b in col]
+_render_case_branches(col, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing) =
+  _render_case_branch(col, instruc; _as = _as)
+
 function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   sql, interval_ms, _ = _render_function_typed(v, instruc; _as = _as)
   # #894: an interval held in milliseconds leaves as the interval text, as a difference does (#881).
@@ -1578,6 +1601,7 @@ end
 # `Lag(Sum(…))` is a real grouping aggregate and takes `:row` for its own argument.
 function _render_function_typed(v::SQLTypeFunction, instruc::SQLInstruction;
                                 _as::Union{Nothing,String}=nothing)::Tuple{String,Bool,Bool}
+  v.function_name == "WHEN" && throw(_bare_when_refusal())
   _is_aggregate_call(v) || return _render_function_body(v, instruc; _as = _as)
   return with_scope(() -> _render_function_body(v, instruc; _as = _as), instruc; phase = :row)
 end
@@ -1663,6 +1687,8 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
         resolved_column, interval = fanout_column, !sqlite && operand_interval
       end
     end
+  elseif v.function_name == "CASE"
+    resolved_column = _render_case_branches(v.column, instruc; _as = _as)
   else
     resolved_column = _get_select_query(_null_skipping_operands(v, instruc), instruc, _as=_as)
   end

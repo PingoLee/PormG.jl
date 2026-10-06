@@ -45,17 +45,22 @@ mutable struct MockPG970 <: PormG.PormGPostgres
   nid::Int
   outcome::Symbol
   releases::Int
+  cancels::Int
   sent::Vector{String}
 end
 MockPG970(outcome::Symbol) =
-  MockPG970(Any[nothing, nothing], [true, true], "mock://pg", 2, ReentrantLock(), 0, outcome, 0, String[])
+  MockPG970(Any[nothing, nothing], [true, true], "mock://pg", 2, ReentrantLock(), 0, outcome, 0, 0, String[])
 
 PormG.backend_connect(p::MockPG970; kwargs...) = FakeConn970(p.nid += 1, false)
 PormG.backend_is_alive(::MockPG970, c) = c isa FakeConn970 && !c.closed
 PormG.backend_is_connection_error(::MockPG970, e) = false   # never a retryable drop
+# The abandoned-await recovery's driver calls (#315): counted, so the test sees whether it ran.
+PormG.backend_cancel_query!(p::MockPG970, c) = (p.cancels += 1; nothing)
+PormG.backend_drain_connection!(::MockPG970, c) = true
 function PormG.backend_execute_async(p::MockPG970, conn, sql::String, params)
   push!(p.sent, sql)
   p.outcome === :dispatch && error("mock: dispatch refused")
+  p.outcome === :interrupt && return @async throw(InterruptException())   # a Ctrl-C mid-await
   return @async begin
     p.outcome === :async && error("mock: statement failed")
     [(n = 1,)]
@@ -167,4 +172,37 @@ end
   CP.release_connection(p, other)
   @test CP.release_connection(p, c) === true
   @test CP.pool_stats(p).in_use == 0
+end
+
+# A cancelled await (`Ctrl+C`) leaves the driver possibly still on the connection, so an ACQUIRED one
+# goes to the detached recovery — cancel, settle, then release or renew (#315). A BORROWED one is the
+# caller's: the recovery would hand its slot back under the caller's lease, so it is left alone and
+# the caller settles it (`finalize_transaction_connection!(…; renew = true)`), as `with_transaction`
+# already leaves a caller's connection after an interrupt.
+@testset "#970: a cancelled await leaves a borrowed conn with the caller" begin
+  for passed in (true, false), via_async in (true, false)
+    @testset "$(via_async ? "fetch_async" : "fetch") / $(passed ? "caller's conn" : "no conn")" begin
+      p = MockPG970(:interrupt)
+      c = passed ? CP.acquire_connection(p) : nothing
+      err = Logging.with_logger(Logging.NullLogger()) do
+        try
+          via_async ? CP.await_result(CP.fetch_async(p, "SELECT 1"; conn = c)) :
+                      CP.fetch(p, "SELECT 1"; conn = c)
+          nothing
+        catch e
+          e
+        end
+      end
+      @test err !== nothing
+      if passed
+        sleep(0.5)                                   # room for a recovery that must not run
+        @test p.cancels == 0 && p.releases == 0
+        @test CP.pool_stats(p).in_use == 1
+        @test CP.release_connection(p, c) === true
+      else
+        # The recovery is detached; it cancels, then hands the slot back.
+        @test timedwait(() -> p.cancels == 1 && CP.pool_stats(p).in_use == 0, 10.0) === :ok
+      end
+    end
+  end
 end

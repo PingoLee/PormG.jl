@@ -34,8 +34,11 @@ app does, and nothing inside PormG does. The four sites that could have done so 
 ### How to find the calls to migrate
 
 ```bash
-grep -rnP '\bfetch(_async)?\(.*\bconn\s*=' --include=*.jl .
+grep -rnP -A4 '\bfetch(_async)?\(' --include=*.jl . | grep -P '\bconn\s*='
 ```
+
+The `-A4` catches a `conn =` keyword written on a continuation line of a multi-line call; read each
+hit in context.
 
 A call that relied on the release now holds a lease the pool never gets back. With
 `leak_detection_threshold` set, that shows up as *"Pool connection held past

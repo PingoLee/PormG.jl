@@ -232,8 +232,10 @@ The reverse join is `LEFT` here because that is what PormG derives for it, not b
 
 In an `on()` or `cjoin(filters = …)` condition:
 
-- **The key, and every `F` on the left side, names the joined row.** PormG prefixes it with the join
-  path, so `"number"` in `on("driverid", …)` is the driver's `number`.
+- **The key, and every column on the left side, names the joined row.** PormG prefixes it with the
+  join path, so `"number"` in `on("driverid", …)` is the driver's `number`. That holds for a key
+  inside `Q(...)`/`Qor(...)`, for a key with a transform (`"dob__@year"`), and for every column inside
+  a left-side expression or function (`Abs(F("number")) > 0`), whatever `values()` selects.
 - **A right-side `F` names the base row**, the query's own model, in every spelling: a bare pair,
   `Q(...)`, `Qor(...)`, `OP(...)` or `F(...) == F(...)`, and at any hop depth. On a deep hop, a table
   earlier on the same path is reached through its path from the base model: in
@@ -253,7 +255,25 @@ df = M.Result.objects.
 `Q("number" => F("number"))` and `F("number") == F("number")` render the same predicate. Before
 [#958](https://github.com/PingoLee/PormG.jl/issues/958), every spelling except the bare pair also
 prefixed the right side. That rendered `"Tb_1"."number" = "Tb_1"."number"`, which is true on every
-row, so the condition was silently dropped.
+row, so the condition was silently dropped. Before
+[#961](https://github.com/PingoLee/PormG.jl/issues/961), the left side had the mirror-image gap: a key
+inside `Q(...)` named the base row when `values()` also selected a base column of the same name, or
+when the key carried a transform, and so did a function on the left of an `F` comparison.
+
+A right side may not reach any **other** relation. On `on("constructorid", …)`, the right side
+`F("driverid__nationality")` names the driver, a relation beside the constructor rather than on its
+path. That raises `FilterError` when the query is built, wherever the column sits on a right side:
+in an `F`, inside a function or a `Case` branch, as a subquery's `OuterRef`, or on the right of a
+comparison nested in the left side, such as a `When` condition. SQL can only hold such a
+predicate in the constructor's `ON` clause if the driver's join comes first. PormG would have to move
+it onto another join, and which one would depend on the order of `values()`. Compare the two
+relations in `.filter(...)` instead:
+
+```julia
+df = M.Result.objects.
+    filter(F("constructorid__nationality") == F("driverid__nationality")).
+    values("resultid", "constructorid__name", "driverid__surname") |> DataFrame
+```
 
 ### When `.cjoin()` is Applied
 

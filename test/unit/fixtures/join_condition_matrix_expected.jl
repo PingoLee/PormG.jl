@@ -194,25 +194,25 @@ const _JCM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("P1 on first hop/Joined handle", :sqlite) =>
     (stage = :call, error = "FilterError", message = "Joined(\"d2\", \"number\") cannot be used in a join ON clause (on(...) / cjoin(...)). That clause adds predicates to a join "),
   ("P1 on first hop/lhs past hop, reverse (#973)", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"result\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" AND \"Tb_2\".\"grid\" = \$1", params = Any[1], join = nothing),
+    (stage = :call, error = "FilterError", message = "\"results__grid\" in on(\"driverid\", …) / cjoin(filters = …) reaches 'driverid__results', past the join path 'driverid'. A "),
   ("P1 on first hop/lhs past hop, reverse (#973)", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"result\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" AND \"Tb_2\".\"grid\" = ?", params = Any[1], join = Any[1]),
+    (stage = :call, error = "FilterError", message = "\"results__grid\" in on(\"driverid\", …) / cjoin(filters = …) reaches 'driverid__results', past the join path 'driverid'. A "),
   ("P1 on first hop/lhs past hop, reverse in Q (#973)", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"result\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" AND (\"Tb_2\".\"grid\" = \$1)", params = Any[1], join = nothing),
+    (stage = :call, error = "FilterError", message = "\"results__grid\" in on(\"driverid\", …) / cjoin(filters = …) reaches 'driverid__results', past the join path 'driverid'. A "),
   ("P1 on first hop/lhs past hop, reverse in Q (#973)", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"result\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" AND (\"Tb_2\".\"grid\" = ?)", params = Any[1], join = Any[1]),
+    (stage = :call, error = "FilterError", message = "\"results__grid\" in on(\"driverid\", …) / cjoin(filters = …) reaches 'driverid__results', past the join path 'driverid'. A "),
   ("P1 on first hop/lhs past hop, forward (#973)", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"team\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" AND \"Tb_2\".\"name\" = \$1", params = Any["X"], join = nothing),
+    (stage = :call, error = "FilterError", message = "\"teamid__name\" in on(\"driverid\", …) / cjoin(filters = …) reaches 'driverid__teamid', past the join path 'driverid'. A co"),
   ("P1 on first hop/lhs past hop, forward (#973)", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"team\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" AND \"Tb_2\".\"name\" = ?", params = Any["X"], join = Any["X"]),
+    (stage = :call, error = "FilterError", message = "\"teamid__name\" in on(\"driverid\", …) / cjoin(filters = …) reaches 'driverid__teamid', past the join path 'driverid'. A co"),
   ("P3 cjoin filters/lhs past hop, forward (#973)", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"team\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" AND \"Tb_2\".\"name\" = \$1", params = Any["X"], join = nothing),
+    (stage = :call, error = "FilterError", message = "\"teamid__name\" in on(\"driverid\", …) / cjoin(filters = …) reaches 'driverid__teamid', past the join path 'driverid'. A co"),
   ("P3 cjoin filters/lhs past hop, forward (#973)", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"team\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" AND \"Tb_2\".\"name\" = ?", params = Any["X"], join = Any["X"]),
+    (stage = :call, error = "FilterError", message = "\"teamid__name\" in on(\"driverid\", …) / cjoin(filters = …) reaches 'driverid__teamid', past the join path 'driverid'. A co"),
   ("P3 cjoin filters/two depths, deep first (#421)", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"code\" = \$2 LEFT JOIN \"team\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" AND \"Tb_2\".\"name\" = \$1", params = Any["ZZZ", "SSS"], join = nothing),
+    (stage = :call, error = "FilterError", message = "\"teamid__name\" in on(\"driverid\", …) / cjoin(filters = …) reaches 'driverid__teamid', past the join path 'driverid'. A co"),
   ("P3 cjoin filters/two depths, deep first (#421)", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"code\" = ? LEFT JOIN \"team\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" AND \"Tb_2\".\"name\" = ?", params = Any["SSS", "ZZZ"], join = Any["SSS", "ZZZ"]),
+    (stage = :call, error = "FilterError", message = "\"teamid__name\" in on(\"driverid\", …) / cjoin(filters = …) reaches 'driverid__teamid', past the join path 'driverid'. A co"),
   ("P1 on first hop/two depths, one on() per hop", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_2\".\"name\" as \"driverid__teamid__name\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"code\" = \$1 LEFT JOIN \"team\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" AND \"Tb_2\".\"name\" = \$2", params = Any["SSS", "ZZZ"], join = nothing),
   ("P1 on first hop/two depths, one on() per hop", :sqlite) =>

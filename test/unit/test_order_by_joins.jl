@@ -286,17 +286,23 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # cjoin + order_by: a deep ON condition must not forward-reference a later join (#404)
 # Phase 2 emits joins in `row_join` order, so an ON extra naming a join emitted LATER is invalid SQL
-# ("invalid reference to FROM-clause entry"). Phase 1b relocates such extras — but it used to scope
-# the search to entries created DURING Phase 1 (`dep_idx > n_before`). Once order_by resolves the
-# deep path up front, Phase 1 dedups onto the existing entry instead of creating one, the window is
-# empty, and the extra stays on the wrong join. Phase 1b now keys on index order, which covers this
-# and the pre-existing `values()` shape below identically.
+# ("invalid reference to FROM-clause entry"). #404 met it with Phase 1b relocation, for a cjoin filter
+# keyed past its hop (`cjoin("parent" => …, filters = ["grandparent__code" => "Z"])`). #973 refuses that
+# key — it named a further relation, and resolving it added that join silently — so the deep predicate
+# is written on its own hop, `on("parent__grandparent", "code" => "Z")`, and lands on cj_grand's ON by
+# construction. What #404 pinned still holds and is still pinned: the predicate sits on the join it
+# names, reached via order_by() (the shape #404's reordering exposed) and via values().
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a deep cjoin ON condition lands on the join it references (#404)" begin
+  # #973: the old spelling — a cjoin filter keyed past its hop — is refused at the call.
+  @test_throws FilterError OBJ.Cj_child.objects.cjoin("parent" => "Cj_parent",
+    filters = ["grandparent__code" => "Z"], warn = false)
+
   # (a) reached via order_by — the shape #404's reordering exposed.
   ordered = OBJ.Cj_child.objects
   ordered.values("note")
-  ordered.cjoin("parent" => "Cj_parent", filters = ["grandparent__code" => "Z"], warn = false)
+  ordered.cjoin("parent" => "Cj_parent", warn = false)
+  ordered.on("parent__grandparent", "code" => "Z")
   ordered.order_by("parent__grandparent__code")
 
   sql = inspect_query(ordered)[:sql_text]
@@ -308,11 +314,11 @@ end
   @test _obj_joins(sql) == 2
 
   # (b) reached via values() — the same forward reference, and it pre-dates #404: projecting the
-  # deep path builds the deeper join up front just as ordering by it now does. Fixed by the same
-  # Phase 1b change, so it is pinned here rather than left to regress silently.
+  # deep path builds the deeper join up front just as ordering by it now does.
   projected = OBJ.Cj_child.objects
   projected.values("note", "parent__grandparent__code")
-  projected.cjoin("parent" => "Cj_parent", filters = ["grandparent__code" => "Z"], warn = false)
+  projected.cjoin("parent" => "Cj_parent", warn = false)
+  projected.on("parent__grandparent", "code" => "Z")
 
   psql = inspect_query(projected)[:sql_text]
 
@@ -322,27 +328,30 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 1b settles an ON extra on the last join it references, however many hops away (#404)
-# One `Q(...)` extra can name several joins emitted after the one carrying it, and it has to end up
-# on the last of them or the rest stay forward-referenced. This shape is broken on origin/main —
-# it emits `"Tb_3"` inside `Tb_2`'s ON clause — so this is a pre-existing fix, not just a guard on
-# #404's own change. What it pins is the FIXED POINT, not the search direction: the relocation loop
-# searches descending to get there in one move, but ascending would cascade to the same place via
-# the outer loop's revisit, so no test can tell the two apart. Do not read this as pinning "descending".
+# Predicates two and three hops deep each ride on their own join (#404, #973)
+# #404 pinned Phase 1b moving one `Q(...)` that named Tb_2 and Tb_3 onto Tb_3, the later of the two,
+# so neither reference pointed forward. #973 refuses that `Q`: both keys reach past the cjoin's hop.
+# Written per hop instead, each predicate sits on the join it names and no ON clause refers to a later
+# join — the property #404 cared about, now true by construction rather than by relocation.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "an ON extra relocates onto the last join it references (#404)" begin
+@testset "predicates at two depths ride on their own joins (#404, #973)" begin
+  # #973: a `Q` whose keys reach past the hop is refused at the call.
+  @test_throws FilterError OBJ.Cj_child.objects.cjoin("parent" => "Cj_parent",
+    filters = [Q("grandparent__code" => "Z", "grandparent__great__tag" => "T")], warn = false)
+
   q = OBJ.Cj_child.objects
   q.values("note")
-  q.cjoin("parent" => "Cj_parent",
-          filters = [Q("grandparent__code" => "Z", "grandparent__great__tag" => "T")], warn = false)
+  q.cjoin("parent" => "Cj_parent", warn = false)
+  q.on("parent__grandparent", "code" => "Z")
+  q.on("parent__grandparent__great", "tag" => "T")
 
   sql = inspect_query(q)[:sql_text]
 
-  # The extra names Tb_2 and Tb_3; it must ride on Tb_3, the later of the two.
-  @test occursin("LEFT JOIN \"cj_great\" AS \"Tb_3\" ON \"Tb_2\".\"great\" = \"Tb_3\".\"id\" AND (\"Tb_2\".\"code\" = \$1 AND \"Tb_3\".\"tag\" = \$2)", sql)
-  # ...and Tb_2's own ON clause must be left bare, with no forward reference to Tb_3.
-  @test occursin("LEFT JOIN \"cj_grand\" AS \"Tb_2\" ON \"Tb_1\".\"grandparent\" = \"Tb_2\".\"id\" \n", sql)
-  @test !occursin("\"Tb_1\".\"grandparent\" = \"Tb_2\".\"id\" AND", sql)
+  # Each predicate on the join it names, in emission order...
+  @test occursin("LEFT JOIN \"cj_grand\" AS \"Tb_2\" ON \"Tb_1\".\"grandparent\" = \"Tb_2\".\"id\" AND \"Tb_2\".\"code\" = \$1", sql)
+  @test occursin("LEFT JOIN \"cj_great\" AS \"Tb_3\" ON \"Tb_2\".\"great\" = \"Tb_3\".\"id\" AND \"Tb_3\".\"tag\" = \$2", sql)
+  # ...and the grand join's ON clause names no later join.
+  @test !occursin("\"Tb_2\".\"id\" AND \"Tb_3\"", sql)
   @test _obj_joins(sql) == 3
 end
 
@@ -358,7 +367,9 @@ end
   build(alias) = begin
     q = OBJ.Cj_child.objects
     q.values("note", "parent__grandparent__code")
-    q.cjoin("parent" => "Cj_parent", filters = ["grandparent__code" => "Z"], warn = false)
+    # #973: the deep predicate on its own hop (it used to be a cjoin filter keyed past the hop).
+    q.cjoin("parent" => "Cj_parent", warn = false)
+    q.on("parent__grandparent", "code" => "Z")
     q.cjoin_on("Cj_grand", alias = alias, join_type = "INNER", on = [Q(Joined(alias, "id") == F("id"))])
     inspect_query(q)[:sql_text]
   end
@@ -383,28 +394,34 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A relocated ON extra binds its OWN value (#421)
-# Phase 1 walks `row_join` in index order and binds as it resolves; Phase 1b then moves a fragment
-# onto a later join, changing EMISSION order. Nothing reconciled the two. PostgreSQL never noticed —
-# `$N` numbering travels with the text — but SQLite flattens the `:join` bucket in BINDING order, so
-# the first `?` took the relocated fragment's value and the two conditions swapped. Valid SQL, wrong
-# rows, no error, and on one backend only.
+# ON predicates at two join depths bind their OWN values (#421)
+# #421: Phase 1 bound every ON condition in `row_join` order, and Phase 1b then moved a forward-
+# referencing fragment onto a later join, changing EMISSION order. PostgreSQL never noticed — `$N`
+# numbering travels with the text — but SQLite flattens the `:join` bucket in BINDING order, so the
+# first `?` took the relocated fragment's value and the two conditions swapped. Valid SQL, wrong rows.
 #
-# The control pair is what earns this testset its length: the SAME two filters, only their order in
-# the `filters` vector swapped. The deep one relocates and the shallow one does not, so pre-fix (a)
-# was wrong while (b) was already right — a "fix" that reversed the bucket wholesale would trade one
-# failure for the other and still pass a single-case test.
+# #973 refuses the key that relocated (a cjoin filter reaching past its hop); the deep predicate is now
+# written on its own hop, `on("parent__grandparent", …)`. The swap stays pinned, because declaration
+# order is now the way to make declaring and emitting disagree: (a) declares the DEEP predicate first.
+# The control pair is what earns this testset its length — the same two predicates, declared the other
+# way round, must render the same text and bind the same bucket.
 # ─────────────────────────────────────────────────────────────────────────────
-_cj_two_depth(filters) = begin
+_cj_two_depth(sku, code; deep_first = true) = begin
   q = OBJ.Cj_child.objects
   q.values("note")
-  q.cjoin("parent" => "Cj_parent", filters = filters, warn = false)
+  deep_first && q.on("parent__grandparent", code)
+  q.cjoin("parent" => "Cj_parent", filters = [sku], warn = false)
+  deep_first || q.on("parent__grandparent", code)
   q
 end
 
-@testset "a relocated ON extra binds its own value (#421)" begin
-  # (a) the issue's shape — the deep filter is listed FIRST, so it binds first and emits last.
-  sl = inspect_query(_cj_two_depth(["grandparent__code" => "ZZZ", "sku" => "SSS"]); connection = _OBJ_SL)
+@testset "ON predicates at two depths bind their own values (#421)" begin
+  # #973: the issue's original spelling — the deep filter inside the cjoin — is refused at the call.
+  @test_throws FilterError OBJ.Cj_child.objects.cjoin("parent" => "Cj_parent",
+    filters = ["grandparent__code" => "ZZZ", "sku" => "SSS"], warn = false)
+
+  # (a) the deep predicate is declared FIRST, so declaration order and emission order differ.
+  sl = inspect_query(_cj_two_depth("sku" => "SSS", "code" => "ZZZ"); connection = _OBJ_SL)
   sql = sl[:sql_text]
 
   # Pin the emission order the bucket has to match rather than trusting it: cj_parent's ON carries
@@ -413,52 +430,48 @@ end
   @test occursin("\"Tb_2\".\"code\" = ?", sql)
   @test first(findfirst("\"Tb_1\".\"sku\" = ?", sql)) < first(findfirst("\"Tb_2\".\"code\" = ?", sql))
 
-  # ...so the bucket must read the sku value first. Pre-fix it was ["ZZZ", "SSS"] — swapped.
+  # ...so the bucket must read the sku value first.
   @test sl[:parameter_buckets][:join] == ["SSS", "ZZZ"]
   @test count(==('?'), sql) == 2                     # no orphan marker, no orphan value
 
-  # (b) control: the same two filters the other way round. Binding order already matched emission
-  # order here, so this was correct BEFORE the fix and must be byte-identical after it.
-  rev = inspect_query(_cj_two_depth(["sku" => "SSS", "grandparent__code" => "ZZZ"]); connection = _OBJ_SL)
+  # (b) control: the same two predicates declared the other way round — byte-identical.
+  rev = inspect_query(_cj_two_depth("sku" => "SSS", "code" => "ZZZ"; deep_first = false); connection = _OBJ_SL)
   @test rev[:parameter_buckets][:join] == ["SSS", "ZZZ"]
-  @test rev[:sql_text] == sql        # the rendered text never depended on the filter order
+  @test rev[:sql_text] == sql        # the rendered text never depends on declaration order
 
-  # (c) PostgreSQL is the oracle: it was always right and must not move. The values stay in BIND
-  # order and the explicit numbering carries the mapping — which is why $2 lands on sku, not $1.
-  pg = inspect_query(_cj_two_depth(["grandparent__code" => "ZZZ", "sku" => "SSS"]); connection = _OBJ_PG)
-  @test occursin("\"Tb_1\".\"sku\" = \$2", pg[:sql_text])
-  @test occursin("\"Tb_2\".\"code\" = \$1", pg[:sql_text])
-  @test pg[:parameters] == ["ZZZ", "SSS"]
+  # (c) PostgreSQL is the oracle: its `$N` markers, read in text order, give the order SQLite must bind
+  # in. Each predicate binds where it is emitted, so the numbering follows the text.
+  pg = inspect_query(_cj_two_depth("sku" => "SSS", "code" => "ZZZ"); connection = _OBJ_PG)
+  @test occursin("\"Tb_1\".\"sku\" = \$1", pg[:sql_text])
+  @test occursin("\"Tb_2\".\"code\" = \$2", pg[:sql_text])
+  @test pg[:parameters] == ["SSS", "ZZZ"]
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A relocated ON extra carries ALL of its values, in order (#421)
-# One fragment can bind more than one value, so "move the fragment's parameter" is not the same
-# invariant as "move the fragment's parameter RUN". `@in` over three codes beside a single-valued
-# `sku` makes the split 3-and-1: pre-fix the bucket read [Z,Y,X,SSS] against markers emitted
-# sku-first, so all four misbound. A fix that relocated only the first value of a run would still
-# satisfy the one-value-each testset above.
+# A deep ON predicate carries ALL of its values, in order (#421)
+# One fragment can bind more than one value, so "bind the fragment's parameter" is not the same
+# invariant as "bind the fragment's parameter RUN". `@in` over three codes beside a single-valued
+# `sku` makes the split 3-and-1: pre-#421 the bucket read [Z,Y,X,SSS] against markers emitted
+# sku-first, so all four misbound. Declared deep-first, as in the testset above.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "a relocated ON extra carries its whole parameter run (#421)" begin
-  r = inspect_query(_cj_two_depth(["grandparent__code__@in" => ["Z", "Y", "X"], "sku" => "SSS"]);
-                    connection = _OBJ_SL)
+@testset "a deep ON predicate carries its whole parameter run (#421)" begin
+  r = inspect_query(_cj_two_depth("sku" => "SSS", "code__@in" => ["Z", "Y", "X"]); connection = _OBJ_SL)
   @test r[:parameter_buckets][:join] == ["SSS", "Z", "Y", "X"]
   @test count(==('?'), r[:sql_text]) == 4
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# The fix reorders BETWEEN fragments, never WITHIN one (#421 control)
-# A single `Q(...)` spanning two depths is ONE fragment: Phase 1b relocates it whole, so its two
-# values were always adjacent and in the right order. Splitting the same predicates into two `Q`s
-# makes them two fragments, and only then does one relocate past the other. Both are pinned because
-# they are the pair that tells "reordered the runs" apart from "reordered the values".
+# A `Q` spanning two depths is refused; one `Q` per hop binds in emission order (#421, #973)
+# #421's control pinned a single `Q(...)` spanning two depths as ONE fragment that Phase 1b moved
+# whole. #973 refuses that `Q` — it names a relation past the cjoin's hop — so the two depths are two
+# predicates on two joins, and their values bind in the order those joins are emitted.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "relocation reorders fragments, not values within one (#421 control)" begin
-  one_q = inspect_query(_cj_two_depth([Q("grandparent__code" => "Z", "sku" => "S")]); connection = _OBJ_SL)
-  @test one_q[:parameter_buckets][:join] == ["Z", "S"]      # unchanged by the fix
+@testset "a Q spanning two depths is refused; per-hop Qs bind in emission order (#421, #973)" begin
+  @test_throws FilterError OBJ.Cj_child.objects.cjoin("parent" => "Cj_parent",
+    filters = [Q("grandparent__code" => "Z", "sku" => "S")], warn = false)
 
-  two_q = inspect_query(_cj_two_depth([Q("grandparent__code" => "Z"), Q("sku" => "S")]); connection = _OBJ_SL)
-  @test two_q[:parameter_buckets][:join] == ["S", "Z"]      # two fragments, so the deep one moves
+  two_q = inspect_query(_cj_two_depth(Q("sku" => "S"), Q("code" => "Z")); connection = _OBJ_SL)
+  @test two_q[:parameter_buckets][:join] == ["S", "Z"]
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

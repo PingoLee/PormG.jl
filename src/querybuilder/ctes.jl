@@ -796,7 +796,8 @@ end
 # join landed in the constructor's LEFT JOIN when `values()` built the driver first.
 #
 # The left side's columns themselves are not checked here: a left side that reaches BEYOND the hop
-# (`on("driverid", "results__code" => "x")`) is a separate question, not a right side.
+# (`on("driverid", "results__code" => "x")`) is refused by #973's own walk (`_refuse_lhs_past_hop`,
+# `join_conditions.jl`), with a remedy that names the hop the column belongs to.
 function _off_path_nested_rhs(x, q::SQLObject, path::String, depth::Int)
   depth > 32 && return nothing
   if x isa FExpression

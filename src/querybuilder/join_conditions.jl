@@ -178,8 +178,10 @@ end
 # checked into the node the renderer reads.
 function _lower_join_conditions(q::SQLObject, path::String, target::PormGModel, conditions)::Vector{FilterType}
   out = FilterType[]
+  hop = _canonical_join_path(q, path)
   for c in conditions
     lowered = _prefix_join_filter(c, path, target; base = q.model)
+    _refuse_lhs_past_hop(lowered, q, path, hop, 0)
     if lowered isa Pair
       push!(out, _check_filter(lowered))
     elseif lowered isa FilterType
@@ -210,4 +212,61 @@ function _bind_join_conditions!(instruct::SQLInstruction)
     instruct.join_conditions[path] = bound
   end
   return instruct
+end
+
+# ── #973: a left side stays on its hop ──────────────────────────────────────────────────────────
+# A condition's left side names the joined row. A key whose RELATION part goes past the hop —
+# `on("driverid", "results__grid" => 1)`, lowered to `"driverid__results__grid"` — names a row of a
+# further relation instead, and resolving it used to ADD that join, silently: an unwritten INNER JOIN
+# (row-multiplying, for a reverse relation) carrying the predicate in its ON clause. Refused, pointing
+# at the hop that owns the column — `on("driverid__results", …)` joins it if nothing else does — or at
+# `.filter(...)`. Walks the LOWERED condition, where every left-side column is a base-rooted path; the
+# shapes are `_prefix_join_column`'s, the right side (#958) is left to #962's walk.
+function _refuse_lhs_past_hop(x, q::SQLObject, path::String, hop::String, depth::Int)
+  depth > 32 && return nothing
+  if x isa Pair
+    x.first isa String && _check_lhs_on_hop(x.first, q, path, hop)
+  elseif x isa String
+    _check_lhs_on_hop(x, q, path, hop)
+  elseif x isa QObject
+    for f in x.filters; _refuse_lhs_past_hop(f, q, path, hop, depth + 1); end
+  elseif x isa QorObject
+    for f in x.or; _refuse_lhs_past_hop(f, q, path, hop, depth + 1); end
+  elseif x isa OperObject
+    _refuse_lhs_past_hop(x.column, q, path, hop, depth + 1)
+  elseif x isa SQLField
+    _refuse_lhs_past_hop(x.field, q, path, hop, depth + 1)
+  elseif x isa FObject
+    x.aggregate && return nothing   # left as written; #917 refuses it with its own message
+    _refuse_lhs_past_hop(x.column, q, path, hop, depth + 1)
+    for v in values(x.kwargs)
+      v isa Union{SQLTypeFunction,FExpression} && _refuse_lhs_past_hop(v, q, path, hop, depth + 1)
+    end
+  elseif x isa FExpression
+    _refuse_lhs_past_hop(x.field_name, q, path, hop, depth + 1)
+    _refuse_lhs_past_hop(x.column, q, path, hop, depth + 1)
+    # An arithmetic operand is the left side too; a comparison's is the right side (#958).
+    x.operation in _COMPARISON_OPERATIONS || _refuse_lhs_past_hop(x.operand, q, path, hop, depth + 1)
+  elseif x isa AbstractVector && !(x isa AbstractVector{UInt8})
+    for v in x; _refuse_lhs_past_hop(v, q, path, hop, depth + 1); end
+  end
+  return nothing
+end
+
+function _check_lhs_on_hop(column::String, q::SQLObject, path::String, hop::String)
+  (isempty(column) || isempty(hop)) && return nothing
+  rel = _relation_prefix(q, column)
+  startswith(rel, hop * "__") || return nothing
+  # Split by SEGMENT COUNT, not by text: `rel` is canonical and `column` as lowered, and the FK short
+  # form spells the same relation two ways.
+  segments = split(column, "__")
+  n_rel = length(split(rel, "__"))
+  written = join(segments[length(split(path, "__"))+1:end], "__")
+  rest = join(segments[n_rel+1:end], "__")
+  throw(FilterError(
+    "\e[4m\e[31m\"$(written)\"\e[0m in on(\"$(path)\", …) / cjoin(filters = …) reaches '$(rel)', past the " *
+    "join path '$(path)'. A condition's left side names the joined row; a column of a relation beyond " *
+    "it needs a join of its own, which PormG used to add silently.\n  " *
+    "Write it on that relation's join: \e[4m\e[32mon(\"$(rel)\", \"$(rest)\" => …)\e[0m, which joins it if " *
+    "nothing else does — or put it in \e[4m\e[32m.filter(\"$(column)\" => …)\e[0m to restrict rows (#973)."))
 end

@@ -186,7 +186,10 @@ end
 
 @testset "Mixed-case binding - on() through a chained reverse path (ctes)" begin
     q = MC.Dim_Unidade.objects
-    q.on("dim_cnes", "usuarios__login" => "chain-value")
+    # #973: the predicate is written on the hop that owns `login` — `on("dim_cnes", "usuarios__login"
+    # => …)` reached past its hop and is refused. Resolving this path is what crosses the mixed-case
+    # binding, and `on()` builds the second hop itself since nothing else reaches it (#977).
+    q.on("dim_cnes__usuarios", "login" => "chain-value")
     q.values("nome", "dim_cnes__nome")
 
     insp = inspect_query(q)

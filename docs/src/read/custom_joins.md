@@ -212,7 +212,13 @@ df = M.Result.objects.
 The reverse join is `LEFT` here because that is what PormG derives for it, not because `on()` chose it — `on()` only adds the predicate. All three `Result` rows remain and only the matching reverse rows are attached. If you want only the matched base rows, pass `join_type="INNER"` on the same `on()` call.
 
 !!! tip
-    **Chained Reverse Paths**: You can also use `on()` through chained reverse paths. For example, `query.on("test_deletion", "just_a_nested_roll_back__description" => "nested-value")` will correctly apply the `ON`-clause predicate deep within the reversed relationship traversal chain.
+    **Chained Reverse Paths**: `on()` takes a chained reverse path too. Name the hop whose row the
+    predicate is about — `query.on("test_deletion__just_a_nested_roll_back", "description" =>
+    "nested-value")` puts the predicate in the nested table's `ON` clause, and builds that join if
+    nothing else in the query reaches it. Writing the column past the hop instead,
+    `on("test_deletion", "just_a_nested_roll_back__description" => …)`, raises `FilterError`
+    ([#973](https://github.com/PingoLee/PormG.jl/issues/973)); see
+    [Which row each side of a condition names](#Which-row-each-side-of-a-condition-names).
 
 ### Contract of `on()`
 
@@ -249,6 +255,19 @@ In an `on()` or `cjoin(filters = …)` condition:
   `Q(...)`, `Qor(...)`, `OP(...)` or `F(...) == F(...)`, and at any hop depth. On a deep hop, a table
   earlier on the same path is reached through its path from the base model: in
   `on("driverid__results", …)`, `F("driverid__number")` is the driver's `number`.
+- **A left side stays on its hop.** A key whose relation part goes past the join path —
+  `on("driverid", "results__grid" => 1)`, or `cjoin("raceid" => "Race", filters =
+  ["circuitid__country" => "Italy"])` — raises `FilterError` at the call. It names a row of a further
+  relation, and PormG used to add that relation's join silently, with the predicate in its `ON`
+  clause; for a reverse relation that join repeated base rows. Write the predicate on the hop that
+  owns the column, `on("raceid__circuitid", "country" => "Italy")` (`on()` builds that join when
+  nothing else reaches it), or put it in `.filter(...)` to restrict rows. Before
+  [#973](https://github.com/PingoLee/PormG.jl/issues/973) the deep key was accepted.
+- **A right side stays on the path.** A right-side column — an `F`, a column string, a subquery's
+  `OuterRef`, an `Exists(...)`'s `OuterRef` — may name the base row, the joined row or a table earlier
+  on the same path. One that reaches any other relation raises `FilterError` when the query is built
+  ([#962](https://github.com/PingoLee/PormG.jl/issues/962)): that relation's join is not in scope at
+  this `ON` clause, so put the predicate in `.filter(...)`.
 
 That is what lets a join condition compare the two tables. For example, these are the results where
 the car number is the driver's permanent number:

@@ -294,17 +294,23 @@ end
 #
 # This runs on BOTH engines on purpose. `db_2` is the control that was always correct, and the two
 # must agree — which is the assertion that would have caught the divergence in the first place.
+#
+# #973 refused the original shape — `circuitid__country` inside the race cjoin's filters reaches past
+# the hop — so the circuit predicate is written on its own hop, `on("raceid__circuitid", …)`, INNER so it
+# restricts rows the way the cjoin's did. Declared FIRST, so declaration and emission order differ.
 # Rendering/bucket coverage is in `test/unit/test_order_by_joins.jl` and
 # `test/unit/test_alignment_sqlite.jl`.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "cjoin ON filters across two join depths bind correctly (#421)" begin
-    # `circuitid__country` is one hop deeper than `year`, so its ON fragment forward-references the
-    # circuit join and gets relocated onto it. Listing it FIRST is what made binding order differ
-    # from emission order. INNER so the ON predicate actually restricts the returned rows.
+    @test_throws FilterError M.Result.objects.cjoin("raceid" => "Race", join_type = "INNER",
+        filters = ["circuitid__country" => "Italy", "year" => 2009], warn = false)
+
+    # The circuit predicate on its own hop, declared before the race cjoin. INNER on both, so each ON
+    # predicate actually restricts the returned rows.
     deep_first = M.Result.objects
     deep_first.values("resultid")
-    deep_first.cjoin("raceid" => "Race", join_type = "INNER",
-                     filters = ["circuitid__country" => "Italy", "year" => 2009], warn = false)
+    deep_first.on("raceid__circuitid", "country" => "Italy", join_type = "INNER")
+    deep_first.cjoin("raceid" => "Race", join_type = "INNER", filters = ["year" => 2009], warn = false)
     got = Set((deep_first |> DataFrame).resultid)
 
     # Oracle: the same restriction written as WHERE predicates, which never relocate and so were
@@ -320,12 +326,11 @@ end
     @test !isempty(expected)
     @test got == expected
 
-    # Control: the same two filters listed the other way round. Binding order already matched
-    # emission order for this ordering, so it was correct before the fix too — and must stay so.
+    # Control: the same two predicates declared the other way round — the same rows.
     shallow_first = M.Result.objects
     shallow_first.values("resultid")
-    shallow_first.cjoin("raceid" => "Race", join_type = "INNER",
-                        filters = ["year" => 2009, "circuitid__country" => "Italy"], warn = false)
+    shallow_first.cjoin("raceid" => "Race", join_type = "INNER", filters = ["year" => 2009], warn = false)
+    shallow_first.on("raceid__circuitid", "country" => "Italy", join_type = "INNER")
     @test Set((shallow_first |> DataFrame).resultid) == expected
 
     # A fragment can bind more than one value: `@in` over three countries beside a single-valued
@@ -333,9 +338,8 @@ end
     # pass everything above. The set must widen to exactly the three countries' 2009 races.
     multi = M.Result.objects
     multi.values("resultid")
-    multi.cjoin("raceid" => "Race", join_type = "INNER",
-                filters = ["circuitid__country__@in" => ["Italy", "Monaco", "Brazil"], "year" => 2009],
-                warn = false)
+    multi.on("raceid__circuitid", "country__@in" => ["Italy", "Monaco", "Brazil"], join_type = "INNER")
+    multi.cjoin("raceid" => "Race", join_type = "INNER", filters = ["year" => 2009], warn = false)
     multi_oracle = M.Result.objects
     multi_oracle.values("resultid")
     multi_oracle.filter("raceid__circuitid__country__@in" => ["Italy", "Monaco", "Brazil"],

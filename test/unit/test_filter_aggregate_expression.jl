@@ -706,3 +706,211 @@ _f953_plain(s) = replace(s, r"\e\[[0-9;]*m" => "")
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #964: a bare When outside a Case
+#
+# `When(cond; then = x)` with no `otherwise` is a Case branch: `WHEN … THEN …`, with no ELSE and no END.
+# Used as a value, it rendered exactly that, so `Count(When("lap" => 1, then = 1))` became
+# `COUNT(WHEN … THEN …)`, which no engine parses, and the failure came from the driver. The build
+# refuses it now, in every value position. The branch spellings render the SQL they always did.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#964: a bare When outside a Case is refused at build" begin
+  bare() = When("lap" => 1, then = 1)
+  positions = (
+    ("a projection", q -> q.values("lap", "c" => bare())),
+    ("Count's operand", q -> q.values("lap", "c" => Count(bare()))),
+    ("Sum's operand", q -> q.values("lap", "c" => Sum(bare()))),
+    ("a function argument", q -> q.values("lap", "c" => Coalesce(bare(), 0))),
+    ("F arithmetic", q -> q.values("lap", "c" => F("points") + bare())),
+    ("a window's operand", q -> q.values("lap", "c" => Lag(bare(), over = WindowOver(order_by = ["lap"])))),
+    ("a Case branch's then", q -> q.values("lap", "c" => Case([When("points" => 2, then = bare())], default = 0))),
+    ("a Case's default", q -> q.values("lap", "c" => Case([When("points" => 2, then = 2)], default = bare()))),
+    ("a filter value", q -> q.filter("points" => bare())),
+    ("a lookup's value", q -> q.filter("points__@gt" => bare())),
+    ("a Subquery's projection", q -> (s = q.object.model.objects; s.values("c" => bare()); s.limit(1);
+                                      q.values("lap", "c" => PormG.QueryBuilder.Subquery(s)))),
+  )
+  for (backend, Model_) in ((:postgres, FAggPgFn), (:sqlite, FAggSlFn))
+    pg = backend === :postgres
+    @testset "$backend: refused as $label" for (label, setup) in positions
+      err = _f_agg_build_error(Model_, setup)
+      @test err isa QueryBuildError
+      msg = _f953_plain(sprint(showerror, err))
+      @test occursin("When with no `otherwise` is a branch of a Case", msg)
+      @test occursin("When(…, then = x, otherwise = y)", msg)
+      @test occursin("Case([When(…, then = x)], default = y)", msg)
+    end
+
+    # The branch spellings, by exact SQL and parameters: a vector of branches, the single bare
+    # `Case(When(…))`, and `When(…; otherwise)`, which is a CASE holding one branch.
+    @testset "$backend: a When as a Case branch renders as before" begin
+      m(n) = pg ? "\$$n" : "?"
+      t(n) = pg ? "\$$n::bigint" : "?"
+      insp(setup) = (q = Model_.objects; setup(q); inspect_query(q))
+      i = insp(q -> q.values("lap", "c" => Case([When("lap" => 1, then = 1), When("points" => 2, then = 2)], default = 0)))
+      @test occursin("CASE\nWHEN \"Tb\".\"lap\" = $(m(1)) THEN $(t(2))\nWHEN \"Tb\".\"points\" = $(m(3)) THEN $(t(4))\nELSE $(t(5))\nEND\n as \"c\"", i[:sql_text])
+      @test i[:parameters] == Any[1, 1, 2, 2, 0]
+      single = "CASE WHEN \"Tb\".\"lap\" = $(m(1)) THEN $(t(2)) ELSE $(t(3)) END as \"c\""
+      for (label, value) in (("Case(When(…))", () -> Case(When("lap" => 1, then = 1), default = 0)),
+                             ("When(…; otherwise)", () -> When("lap" => 1, then = 1, otherwise = 0)))
+        i = insp(q -> q.values("lap", "c" => value()))
+        @test occursin(single, i[:sql_text])
+        @test i[:parameters] == Any[1, 1, 0]
+      end
+      i = insp(q -> q.values("lap", "c" => Count(When("lap" => 1, then = 1, otherwise = nothing))))
+      @test occursin("COUNT(CASE WHEN \"Tb\".\"lap\" = $(m(1)) THEN $(t(2)) ELSE NULL END)", i[:sql_text])
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #965: a boolean-valued expression is typed a boolean
+#
+# #953 typed `Max`/`Min` over a boolean as `CBool`, so SQLite's 0/1 reads back as a `Bool`, as
+# PostgreSQL's value does. Other boolean values carried no kind and read 0/1 on SQLite: `Coalesce`,
+# a comparison, `Cast(…, "boolean")`, `Lag`/`Lead`/`FirstValue` over a boolean, and a `Case` whose
+# branches are all booleans. That `Case` also escaped #953's aggregate rule: `Max` of it rendered
+# `MAX(CASE …)`, which PostgreSQL rejects, and `Sum` of it added up 0/1 on SQLite. One rule now: a
+# value the build types as a boolean (`_expression_formatter`) projects as `CBool`.
+# ─────────────────────────────────────────────────────────────────────────────
+using PormG.Functions: Lead, FirstValue
+
+for (key, name) in (("f_agg_pg", :FAggPgDur), ("f_agg_sl", :FAggSlDur))
+  m = Model("f_agg_dur", id = IDField(), lap = IntegerField(), finished = BooleanField(),
+            dur = PormG.Models.DurationField())
+  m.connect_key = key
+  @eval const $name = $m
+end
+
+@testset "#965: a boolean-valued expression is typed a boolean" begin
+  w = WindowOver(order_by = ["lap"])
+  bool_case() = Case([When("lap" => 1, then = true)], default = false)
+  typed = (
+    ("the column, aliased", () -> "finished"),
+    ("a bare F of the column", () -> F("finished")),
+    ("Coalesce(Max(flag), false)", () -> Coalesce(Max("finished"), false)),
+    ("Coalesce(flag, false)", () -> Coalesce("finished", false)),
+    ("a comparison of two columns", () -> F("lap") > F("points")),
+    ("a comparison with a literal", () -> F("lap") > 3),
+    ("Cast(…, \"boolean\")", () -> Cast("lap", "boolean")),
+    ("Lag over a boolean", () -> Lag("finished", over = w)),
+    ("Lead over a boolean", () -> Lead("finished", over = w)),
+    ("FirstValue over a boolean", () -> FirstValue("finished", over = w)),
+    ("a Case of Bool branches", bool_case),
+    ("a Case with a NULL default", () -> Case([When("lap" => 1, then = true)])),
+    ("a single-branch Case(When(…))", () -> Case(When("lap" => 1, then = true), default = false)),
+    ("When(…; otherwise) over Bools", () -> When("lap" => 1, then = true, otherwise = false)),
+    ("a Case whose branch is a comparison", () -> Case([When("lap" => 1, then = F("lap") > F("points"))], default = false)),
+    ("Max over a boolean Case", () -> Max(bool_case())),
+    ("Greatest over a boolean", () -> Greatest("finished", false)),
+    ("NullIf over a boolean", () -> NullIf("finished", false)),
+  )
+  # Controls: no boolean value, so no kind. The integer `Case` is the `Sum(Case(When(…, then = 1),
+  # default = 0))` count, which must stay summable; a mixed `Case` is not a boolean on PostgreSQL either.
+  untyped = (
+    ("a Case of integers", () -> Case([When("lap" => 1, then = 1)], default = 0)),
+    ("a Case mixing a Bool and an integer", () -> Case([When("lap" => 1, then = true)], default = 0)),
+    ("a Case of strings (a string then is no column path)", () -> Case([When("lap" => 1, then = "finished")], default = "x")),
+    ("a Case of NULLs alone", () -> Case([When("lap" => 1, then = missing)])),
+    ("Lag over an integer", () -> Lag("lap", over = w)),
+    ("Sum of an integer Case", () -> Sum(Case([When("lap" => 1, then = 1)], default = 0))),
+    ("arithmetic", () -> F("lap") + 1),
+    ("an integer column", () -> "lap"),
+    # Every operand must be a boolean, not only the first one that names a type: on SQLite the value
+    # would be a boolean on some rows and an integer on others (review of #965).
+    ("Coalesce of a boolean and an integer column", () -> Coalesce("finished", "points")),
+    ("Coalesce of a boolean and an integer literal", () -> Coalesce("finished", 5)),
+    ("Greatest of a boolean and an integer column", () -> Greatest("finished", "points")),
+  )
+  kind_of(Model_, value) = (q = Model_.objects; q.values("lap", "x" => value());
+                           PormG.QueryBuilder.query(q; show_query = :sql);
+                           get(q.object.projection_kinds, :x, nothing))
+  for (backend, Model_) in ((:postgres, FAggPgFn), (:sqlite, FAggSlFn))
+    pg = backend === :postgres
+    @testset "$backend: $label reads back as a Bool" for (label, value) in typed
+      @test kind_of(Model_, value) == PormG.CBool()
+    end
+    @testset "$backend: $label keeps no kind" for (label, value) in untyped
+      @test kind_of(Model_, value) === nothing
+    end
+
+    # A plain boolean column reads as a `Bool` too, however it is read: by name, across a join, in a
+    # wildcard read, and in the row `create` hands back (`_field_value_parser`).
+    @testset "$backend: the column itself is typed a boolean on the read path" begin
+      q = Model_.objects
+      q.values("lap", "finished")
+      PormG.QueryBuilder.query(q; show_query = :sql)
+      @test q.object.projection_kinds[:finished] == PormG.CBool()
+      @test !haskey(q.object.projection_kinds, :lap)
+      e = (pg ? FAggPgEntry : FAggSlEntry).objects
+      e.values("grid", "fnid__finished")
+      PormG.QueryBuilder.query(e; show_query = :sql)
+      @test e.object.projection_kinds[:fnid__finished] == PormG.CBool()
+      star = Model_.objects
+      PormG.QueryBuilder.query(star; show_query = :sql)
+      @test star.object.projection_kinds[:finished] == PormG.CBool()
+      # A projected `Exists(...)` is a boolean too: SQLite evaluates it to 0/1.
+      sub = Model_.objects
+      sub.filter("lap" => PormG.QueryBuilder.OuterRef("points"))
+      ex = Model_.objects
+      ex.values("lap", "has" => PormG.QueryBuilder.Exists(sub))
+      PormG.QueryBuilder.query(ex; show_query = :sql)
+      @test ex.object.projection_kinds[:has] == PormG.CBool()
+      parser = PormG.QueryBuilder._field_value_parser(Model_.fields["finished"], PormG.config[Model_.connect_key].connections)
+      pg ? (@test parser === nothing) : (@test parser(1) === true && parser(0) === false && parser(missing) === missing)
+    end
+
+    @testset "$backend: an aggregate over a boolean Case follows #953" begin
+      sql(setup) = (q = Model_.objects; setup(q); replace(inspect_query(q)[:sql_text], r"\s+" => " "))
+      s = sql(q -> q.values("lap", "a" => Max(bool_case()), "b" => Min(bool_case())))
+      @test occursin(pg ? "BOOL_OR(CASE WHEN" : "MAX(CASE WHEN", s)
+      @test occursin(pg ? "BOOL_AND(CASE WHEN" : "MIN(CASE WHEN", s)
+      for agg in (Sum, Avg)
+        err = _f_agg_build_error(Model_, q -> q.values("lap", "s" => agg(bool_case())))
+        @test err isa QueryBuildError
+        @test occursin("over a boolean is not supported", _f953_plain(sprint(showerror, err)))
+      end
+      # The count over integer branches still sums, on both engines.
+      @test occursin("SUM(CASE WHEN", sql(q -> q.values("lap", "n" => Sum(Case([When("lap" => 1, then = 1)], default = 0)))))
+    end
+
+    # The boolean kind is a READ kind. A function as a side of arithmetic keeps the kind it had: an
+    # untyped side multiplies an interval, where a typed one read as "not a number" and was refused on
+    # SQLite with a message about intervals (review of #965).
+    @testset "$backend: a boolean function beside an interval is untyped, as before" begin
+      Dur_ = pg ? FAggPgDur : FAggSlDur
+      for (label, value) in (("interval * Cast(…, \"boolean\")", () -> F("dur") * Cast("lap", "boolean")),
+                             ("Coalesce(flag, false) * interval", () -> Coalesce("finished", false) * F("dur")))
+        q = Dur_.objects
+        q.values("lap", "x" => value())
+        PormG.QueryBuilder.query(q; show_query = :sql)
+        @test q.object.projection_kinds[:x] == PormG.CInterval()
+      end
+      # The #953 extremum keeps its kind beside an interval, as before #965: refused on SQLite, where
+      # it would multiply milliseconds by 0/1, and untyped on PostgreSQL (review of #965).
+      for value in (() -> Max("dur") * Max("finished"), () -> Max("finished") * Max("dur"))
+        q = Dur_.objects
+        q.values("lap", "x" => value())
+        if pg
+          PormG.QueryBuilder.query(q; show_query = :sql)
+          @test get(q.object.projection_kinds, :x, nothing) === nothing
+        else
+          @test_throws QueryBuildError PormG.QueryBuilder.query(q; show_query = :sql)
+        end
+      end
+    end
+
+    @testset "$backend: a boolean Case alias filters as a boolean" begin
+      # Through the boolean formatter now: `1` binds PostgreSQL's `true` (it bound the integer before),
+      # and SQLite's stored `1`.
+      q = Model_.objects
+      q.values("lap", "c" => bool_case())
+      q.filter("c" => 1)
+      @test last(inspect_query(q)[:parameters]) === (pg ? true : 1)
+      # #949's rule now reaches it: an integer other than 0/1 is refused rather than bound.
+      err = _f_agg_build_error(Model_, q -> (q.values("lap", "c" => bool_case()); q.filter("c" => 5)))
+      @test err isa PormG.FilterError
+    end
+  end
+end

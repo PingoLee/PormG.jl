@@ -38,7 +38,8 @@ query = M.Driver.objects
 query.values("surname", "has_standings" => Exists(standings))
 ```
 
-SQLite returns `0`/`1` integers for a projected `Exists`; PostgreSQL returns booleans.
+A projected `Exists` reads back as a `Bool` on both engines; SQLite evaluates it to `0`/`1`, which
+PormG reads back as a `Bool` (#965).
 
 See also [`Subquery`](@ref) for the scalar (single-value) form and
 [Subqueries and CTEs](read/subqueries_and_ctes.md).

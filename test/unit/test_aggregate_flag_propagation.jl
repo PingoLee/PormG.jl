@@ -96,7 +96,10 @@ const _AGG_WRAPPERS = Dict{Symbol,Function}(
   :Ln       => inner -> Ln(inner),
   :Power    => inner -> Power(inner, Value(2)),
   :Mod      => inner -> Mod(inner, Value(2)),
-  :When     => inner -> When("raceid" => 1, then = inner),
+  # #964: with its own `otherwise`, since a bare `When` is a Case branch and the GROUP BY testset
+  # below renders each wrapper as a value. The flag still comes from the WHEN node, through the
+  # CASE `_make_when` wraps it in.
+  :When     => inner -> When("raceid" => 1, then = inner, otherwise = 0),
   :Case     => inner -> Case([When("raceid" => 1, then = inner)]),
 )
 

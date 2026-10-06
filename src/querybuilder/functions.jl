@@ -812,7 +812,10 @@ renders as SQL, so `When("positionorder" => 1, then = F("points"))` returns that
     "scored" => When("points__@gt" => 0, then = 1, otherwise = 0)
     ```
 
-    Inside `Case([...])`, leave `otherwise` unset — `Case` owns the `ELSE` branch.
+    Inside `Case([...])`, leave `otherwise` unset — `Case` owns the `ELSE` branch. Outside one, a
+    `When` with no `otherwise` raises `QueryBuildError` wherever it stands as a value (a projection,
+    an aggregate's operand such as `Count(When(…))`, a function argument), because alone it renders
+    `WHEN … THEN …` with no `ELSE` and no `END`, which no engine parses (#964).
 
 See also [`Case`](@ref), [Functions and Dates](@ref).
 """

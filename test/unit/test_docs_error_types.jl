@@ -889,6 +889,20 @@ const DOCERR_CASES = [
         () -> DOCERR_RACE_PG.objects.values("name",
             "c" => PormG.Functions.Case([PormG.Functions.When(PormG.Functions.Coalesce("raceid", 0), then = 1)], default = 0)).list(show_query = :dict),
     ),
+    # #964 — *Case / When Expressions* (functions_and_dates.md), api.md and the `When` docstring say a
+    # `When` with no `otherwise` raises when it stands as a value. Every value position is pinned in
+    # `test/unit/test_filter_aggregate_expression.jl`.
+    (
+        "read/functions_and_dates.md + api.md + src/querybuilder/functions.jl — When docstring: a bare When as Count's operand is refused (#964)",
+        QueryBuildError,
+        () -> DOCERR_RACE_PG.objects.values("name",
+            "c" => PormG.QueryBuilder.Count(PormG.Functions.When("raceid" => 1, then = 1))).list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md — a bare When projected in values is refused (#964)",
+        QueryBuildError,
+        () -> DOCERR_RACE_PG.objects.values("name", "c" => PormG.Functions.When("raceid" => 1, then = 1)).list(show_query = :dict),
+    ),
     # Intentional PG/SQLite divergence: these pages tell the reader the lookup is PostgreSQL-only
     # and raises on SQLite. Asserting it on the SQLite mock keeps the documented divergence honest.
     (
@@ -2386,6 +2400,13 @@ const DOCERR_CASES = [
         "src/querybuilder/functions.jl — Avg docstring: an `Avg` over a `BooleanField` is refused (#953)",
         QueryBuildError,
         () -> DOCERR_ENTRY953_PG.objects.values("raceid", "n" => Avg("is_rookie")).list(show_query = :dict),
+    ),
+    # #965 — the same section says a `Case` whose branches are all booleans is a boolean for that rule.
+    (
+        "read/filters_and_aggregates.md — `Sum` over a Case of booleans raises QueryBuildError (#965)",
+        QueryBuildError,
+        () -> DOCERR_ENTRY953_SL.objects.values("raceid", "n" => Sum(PormG.Functions.Case(
+            [PormG.Functions.When("raceid" => 1, then = true)], default = false))).list(show_query = :dict),
     ),
 ]
 

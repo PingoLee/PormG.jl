@@ -1565,3 +1565,88 @@ end
         purge()
     end
 end
+
+@testset "Boolean-valued expressions read back as a Bool (#965)" begin
+    # Logic: a BooleanField column, and every expression the build types as a boolean, reads back as
+    # a `Bool` on both engines: the column itself (`values`, a wildcard read, `DataFrame`, the row
+    # `create` returns), a comparison, `Cast(…, "boolean")`, `Coalesce`, `Lag` over a boolean, a `Case`
+    # of Bool branches, and `Coalesce(Max(flag), false)` per group. `Max` of a boolean `Case` renders
+    # `BOOL_OR` on PostgreSQL.
+    # Why: before #965 only #953's `Max`/`Min` carried the boolean kind, so SQLite returned the 0/1 it
+    # stores, even for the plain column, while PostgreSQL returned a `Bool`; and `Max` of a boolean
+    # `Case` failed on PostgreSQL as `max(boolean)`. Each assertion is `===` or an `isa Bool`, so a
+    # 0/1 fails it.
+    # Its own rows, under a marker, so the shared New_join_position fixture (test_cjoin.jl) is untouched.
+    # `result` is 0/1/NULL only: SQLite's CAST AS BOOLEAN keeps any other integer as it is.
+    rows = (("s189-a", true, 1), ("s189-a", false, 0), ("s189-b", missing, 1), ("s189-b", false, missing))
+    purge() = (q = M.New_join_position.objects; q.filter("description__@startswith" => "s189-"); q.exists() && q.delete())
+    purge()
+    try
+        created = [M.New_join_position.objects.create("description" => label, "boolean_field" => flag, "result" => result)
+                   for (label, flag, result) in rows]
+        # The row `create` hands back is read through the same table.
+        @test [c[:boolean_field] for c in created] isa Vector{<:Union{Bool,Missing}}
+        @test isequal([c[:boolean_field] for c in created], [r[2] for r in rows])
+
+        # The column itself, against the flags written: projected, wildcard, and as a DataFrame column.
+        written = [r[2] for r in rows]
+        base = () -> (b = M.New_join_position.objects; b.filter("description__@startswith" => "s189-"); b.order_by("id"); b)
+        p = base(); p.values("boolean_field")
+        @test all(r -> r[:boolean_field] === missing || r[:boolean_field] isa Bool, p.list())
+        @test isequal([r[:boolean_field] for r in p.list()], written)
+        @test isequal([r[:boolean_field] for r in base().list()], written)
+        @test all(r -> r[:boolean_field] === missing || r[:boolean_field] isa Bool, base().list())
+        @test all(v -> v === missing || v isa Bool, (base() |> DataFrame).boolean_field)
+        bool_case = () -> Case([When("result" => 1, then = true)], default = false)
+        q = M.New_join_position.objects
+        q.filter("description__@startswith" => "s189-")
+        q.values(
+            "id", "boolean_field", "result",
+            "positive" => F("result") > 0,
+            "cast"     => Cast("result", "boolean"),
+            "flag_or"  => Coalesce("boolean_field", false),
+            "previous" => Lag("boolean_field", over = WindowOver(order_by = ["id"])),
+            "case_b"   => bool_case(),
+        )
+        q.order_by("id")
+        got = q.list()
+        @test length(got) == length(rows)
+        # Independent answer: Julia's own value of each expression over the row's stored columns.
+        for (i, r) in enumerate(got)
+            res, flag = r[:result], r[:boolean_field]
+            @test r[:positive] === (ismissing(res) ? missing : res > 0)
+            @test r[:cast] === (ismissing(res) ? missing : res != 0)
+            @test flag === written[i]
+            @test r[:flag_or] === coalesce(written[i], false)
+            @test r[:previous] === (i == 1 ? missing : written[i - 1])
+            @test r[:case_b] === coalesce(res == 1, false)
+        end
+
+        g = M.New_join_position.objects
+        g.filter("description__@startswith" => "s189-")
+        g.values("description", "any_b" => Coalesce(Max("boolean_field"), false), "any_case" => Max(bool_case()))
+        grouped = Dict(r[:description] => r for r in g.list())
+        @test grouped["s189-a"][:any_b] === true
+        @test grouped["s189-b"][:any_b] === false
+        @test grouped["s189-a"][:any_case] === true
+        @test grouped["s189-b"][:any_case] === true
+
+        # A projected `Exists(...)`: does the row's group hold a true flag?
+        flagged = M.New_join_position.objects
+        flagged.filter("description" => PormG.QueryBuilder.OuterRef("description"), "boolean_field" => true)
+        e = base()
+        e.values("description", "has_true" => PormG.QueryBuilder.Exists(flagged))
+        @test [(r[:description], r[:has_true]) for r in e.list()] ==
+              [(label, label == "s189-a") for (label, _, _) in rows]
+        @test all(r -> r[:has_true] isa Bool, e.list())
+
+        # A sum of a boolean `Case` is refused at build on both engines, as #953 refuses `Sum(flag)`.
+        s = M.New_join_position.objects
+        s.filter("description__@startswith" => "s189-")
+        s.values("description", "n" => Sum(bool_case()))
+        err = @test_throws PormG.QueryBuildError s.list()
+        @test occursin("over a boolean is not supported", sprint(showerror, err.value))
+    finally
+        purge()
+    end
+end

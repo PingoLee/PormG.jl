@@ -615,8 +615,13 @@ Plain Julia values — including strings — can be passed to `then`, `otherwise
 No `Value()` wrapper is required.
 
 !!! note
-    If no branch matches and neither `otherwise` nor `default` is set, the expression returns `NULL`.
+    If no branch of a `Case` matches and it has no `default`, the expression returns `NULL`.
     Always provide a fallback when the column must be non-null.
+
+A `When` with no `otherwise` is a `Case` branch, not a value. Used on its own, for example
+`Count(When("positionorder" => 1, then = 1))` or `"c" => When(…)` in `values`, it raises
+`QueryBuildError` when the query is built: alone it would render `WHEN … THEN …` with no `ELSE` and no
+`END`, which neither engine parses. Give it its own `otherwise`, or put it in a `Case` with a `default`.
 
 ### Binary When (single condition, two outcomes)
 

@@ -949,6 +949,8 @@ df = query |> DataFrame
 
 `Sum("is_rookie")` is refused rather than answered differently on the two engines. A `NULL` flag counts as not true in `rookies` and `share`, while `Max`/`Min` skip it.
 
+These boolean values read back as a `Bool` on both engines: the column itself, a comparison projected as a value (`"gained" => F("grid") > F("positionorder")`), `Cast(x, "boolean")`, `Coalesce(Max("is_rookie"), false)`, `Lag`/`Lead`/`FirstValue` over a boolean, a projected `Exists(...)`, and a `Case` whose branches are all `true`/`false`. A `Coalesce`, `Greatest` or `Least` is a boolean only when every operand is. SQLite stores each of them as `0`/`1`, and PormG reads that back as a `Bool`. Such a `Case` is a boolean for the rules above too: `Max` of it renders `BOOL_OR` on PostgreSQL, and `Sum`/`Avg` of it raise `QueryBuildError`. A `Case` that mixes `true` with a number is not a boolean, and PostgreSQL rejects it.
+
 ### Aggregating Across To-Many Relations (Fan-Out Guard)
 
 Joining a **to-many** relation — a reverse foreign key (one parent → many children) or a many-to-many — repeats each parent row once per related row *before* aggregation. An aggregate over a **parent/base** column would therefore be silently multiplied. PormG refuses this at build time rather than return a confidently-wrong number:

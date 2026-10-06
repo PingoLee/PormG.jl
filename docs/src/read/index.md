@@ -331,7 +331,7 @@ These methods modify the query builder and return the handler for further chaini
 | `.db("key")` | Route the query to a different connection pool. | Last value wins |
 | `.with("name" => subquery)` | Attach a Common Table Expression (CTE); reference its columns as `"name__column"`, or with `CTE(name, path)` when the name collides with a model field. | Adds another CTE |
 | `.cjoin("field" => "Model")` | Add a custom join at query time. | Adds another join |
-| `.on("path", key => value)` | Add predicates to the ON clause of an existing join. | Adds more predicates |
+| `.on("path", key => value)` | Add predicates to the ON clause of a join, building it if nothing else does. | Adds more predicates |
 | `.copy()` | Deep-copy the query object for reuse. | — |
 
 ---

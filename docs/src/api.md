@@ -34,7 +34,7 @@ These methods modify the query builder and return the handler for further chaini
 | `.page(limit)` / `.page(limit, offset)` | Limit, or limit and offset in one call. The one-argument form leaves any `.offset()` already set untouched. | `.page(20, 40)` / `.page(20)` |
 | `.distinct()` | Add `DISTINCT` to the SELECT. | `.distinct()` |
 | `.db("key")` | Route the query to a different connection pool. | `.db("tenant_42")` |
-| `.on("path", key => value; join_type)` | Add predicates to the ON clause of an existing join path. Does **not** change the join type unless `join_type` is passed. | `.on("driverid", "nationality" => "British")` |
+| `.on("path", key => value; join_type)` | Add predicates to the ON clause of a join path, joining it if nothing else in the query does. Does **not** change the join type unless `join_type` is passed. | `.on("driverid", "nationality" => "British")` |
 | `.cjoin("field" => "Model", ...)` | Add a custom join at query time. | `.cjoin("driverid" => "Driver")` |
 | `.cjoin_on(model; alias, on, join_type)` | Anchor-less join: `on` is the **entire** ON clause. `model` is the model object, or its name as a `String`. | `.cjoin_on(M.Driver; alias = "d", on = [...])` |
 | `.with("name" => subquery; join_field, join_type)` | Define one CTE on the query; call again for a second. Its columns are then reached with [`CTE(name, path)`](@ref CTE). | `.with("fast" => sub)` |
@@ -407,7 +407,8 @@ See [Custom Joins](read/custom_joins.md) for the full documentation.
 
 ### `on()`
 
-Adds ON-clause predicates to existing join paths (including reverse joins) without redefining them:
+Adds ON-clause predicates to a join path (including reverse joins) without redefining it. When nothing
+else in the query reaches the path, `on()` builds the join itself, so the predicate is never dropped:
 
 ```julia
 query = M.Result.objects

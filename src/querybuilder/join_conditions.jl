@@ -31,9 +31,10 @@ end
 # The model a target slot names: a model, or a binding name in the model's module.
 _relation_target(model::PormGModel, to) = to isa PormGModel ? to : getfield(model._module, Symbol(String(to)))
 
-# One relation hop: `(canonical segment, model reached)`, or `nothing` when `seg` is not a relation from
-# `model` — a plain column, a JSON/array value lookup, an unknown name. The canonical segment is the
+# One relation hop: `(canonical segment, model reached, kind)`, or `nothing` when `seg` is not a relation
+# from `model` — a plain column, a JSON/array value lookup, an unknown name. The canonical segment is the
 # spelling `row_path` records for a forward hop (the short form resolved); a reverse hop keeps its name.
+# `kind` is `:forward`, `:reverse` or `:many_to_many` (either direction: two rows through a link table).
 function _relation_step(q::SQLObject, model::PormGModel, seg::AbstractString, first_segment::Bool)
   seg = String(seg)
   col = _resolve_fk_short_form(model, seg)
@@ -41,7 +42,7 @@ function _relation_step(q::SQLObject, model::PormGModel, seg::AbstractString, fi
   if own !== nothing
     (Models.is_json_field(own) || own isa sArrayField) && return nothing
     if Models.is_many_to_many_field(own)
-      return (col, _relation_target(model, own.to))
+      return (col, _relation_target(model, own.to), :many_to_many)
     end
   end
   field = _segment_field(q, model, seg, first_segment)
@@ -49,13 +50,13 @@ function _relation_step(q::SQLObject, model::PormGModel, seg::AbstractString, fi
     to = hasproperty(field, :to) ? field.to : nothing
     to === nothing && return nothing
     # A `cjoin` link is keyed by the segment as written; the model's own field by its resolved name.
-    return (field === own ? col : seg, _relation_target(model, to))
+    return (field === own ? col : seg, _relation_target(model, to), :forward)
   end
   haskey(model.related_objects, seg) || return nothing
   related = model.related_objects[seg]
   related isa Models.ManyToManyRelation &&
-    return (seg, getfield(model._module, Symbol(related.related_binding)))
-  return (seg, (related::Models.ReverseRelation).model_resolved)
+    return (seg, getfield(model._module, Symbol(related.related_binding)), :many_to_many)
+  return (seg, (related::Models.ReverseRelation).model_resolved, :reverse)
 end
 
 # The relation part of a column path, in canonical spelling: the longest leading run of segments that are
@@ -105,4 +106,41 @@ function _join_path_target(q::SQLObject, join_path::String)
     throw(QueryBuildError("Join path '$(join_path)' is invalid. The segment '$(part)' is not a relation on model '$(model.name)'.$(hint)"))
   end
   return model
+end
+
+# ── `on()` declares its join (#977) ──────────────────────────────────────────────────────────────
+# The path `build()` materializes for a `custom_join` entry nothing else reached: its segments, plus a
+# column of the model at the end to stop on (the last segment of a path is always a column, never a
+# hop). A `cjoin` names its link's target column; an `on()`-only entry the target's primary key, or its
+# first field when it declares none.
+function _join_path_columns(q::SQLObject, path::String, config::PathJoin)
+  segments = String.(split(path, "__"))
+  if config.field !== nothing
+    push!(segments, config.field.pk_field)
+  else
+    target = _join_path_target(q, path)
+    pk = Models.get_model_pk_field(target)
+    push!(segments, pk === nothing ? first(target.field_names) : String(pk))
+  end
+  return segments
+end
+
+# A ManyToMany hop is two joins through a link table, built by `_apply_many_to_many_branch`, which never
+# reads the `custom_join` entry for its path — so an `on()` predicate or `join_type` on one was dropped
+# from the statement, silently, traversed or not. Refused until it is supported, rather than ignored.
+function _refuse_many_to_many_join_path(q::SQLObject, path::String)
+  model = q.model
+  for (i, seg) in enumerate(split(path, "__"))
+    step = _relation_step(q, model, seg, i == 1)
+    step === nothing && return nothing   # not a relation path; `_join_path_target` reports it
+    if step[3] === :many_to_many
+      hop = join(split(path, "__")[1:i], "__")
+      throw(QueryBuildError(
+        "on(\"$(path)\", …) crosses the ManyToMany relation '$(hop)', whose join goes through a link " *
+        "table that an ON predicate or join_type is not attached to. PormG would drop the condition " *
+        "from the statement, so it refuses it instead.\n  Put the predicate in .filter(...) instead (#977)."))
+    end
+    model = step[2]
+  end
+  return nothing
 end

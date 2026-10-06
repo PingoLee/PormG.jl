@@ -2487,18 +2487,20 @@ function build(object::SQLObject;
   set_contexts && set_context!(instruct, :where)
   _group_window_terms!(instruct)   # #789: after ORDER BY, which also extends GROUP BY
 
-  # PATH loop — materialize `cjoin` joins that traversal did not already discover. This ensures
-  # cjoin filters are applied even in UPDATE/DELETE without explicit field paths. `row_path` is the
-  # membership test that avoids materializing one twice; an `on()`-only entry has no `field` to link
-  # through and decorates whatever join traversal built for that path.
+  # PATH loop — materialize the `cjoin` and `on()` joins that traversal did not already discover. This
+  # ensures their conditions apply even in UPDATE/DELETE without explicit field paths. `row_path` is the
+  # membership test that avoids materializing one twice.
+  #
+  # #977: an `on()`-only entry is built too. It used to only decorate whatever join traversal built
+  # for the path, so with nothing else reaching it the predicate — and an explicit `join_type =
+  # "INNER"` — vanished from the statement with no error. `on(path, …)` names its join; it now
+  # declares it.
   # #932: join conditions — a `cjoin` filter, an `on()`, a `cjoin_on` ON — are evaluated per row.
   with_scope(instruct; phase = :row, label = "a join condition") do
     for (path, config) in object.custom_join
-      if path ∉ instruct.row_path && config.field !== nothing
-        array = split(path, "__")
-        push!(array, config.field.pk_field)
-        _build_row_join(array, instruct)
-      end
+      _refuse_many_to_many_join_path(object, path)
+      path ∈ instruct.row_path && continue
+      _build_row_join(_join_path_columns(object, path, config), instruct)
     end
 
     # ALIAS loop (#45) — materialize the anchor-less `cjoin_on` joins: no equi-anchor, explicit alias,

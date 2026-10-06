@@ -2291,7 +2291,8 @@ Each mutates the handler and returns it, so calls can be chained or accumulated 
   `.limit(...)` / `.offset(...)` (#272)
 - `.distinct()` — add `DISTINCT`
 - `.db("key")` — route the query to another connection pool
-- `.on(path, pairs...; join_type)` — add predicates to the `ON` clause of an existing join path.
+- `.on(path, pairs...; join_type)` — add predicates to the `ON` clause of a join path, joining it if
+  nothing else in the query does.
   Adds predicates only: without `join_type` the join keeps the type derived from the relation
   itself, and an explicit one stays in effect for later `on()` calls on that path (#474)
 - `.cjoin("field" => "Model"; filters, join_type)` — custom join at query time

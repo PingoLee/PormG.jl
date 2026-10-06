@@ -9,7 +9,7 @@
 #
 # Positions: `on()` on a first hop and on a deep hop; `cjoin(filters = …)`; `cjoin` on a plain column with
 # a custom link (`field = …`), and `on()` against such a link in both declaration orders (#974, #434); an
-# `on()` whose path nothing else in the query reaches; `cjoin_on`. Spellings: bare and already-prefixed
+# `on()` whose path nothing else in the query reaches; an `on()` across a ManyToMany hop; `cjoin_on`. Spellings: bare and already-prefixed
 # pairs, a lookup, `Q`/`Qor`/`OP`, `F` comparisons and arithmetic, a function and a `Case` on the left, a
 # right side naming the base row / the hop / an ancestor / a relation off the path (#962), subqueries and
 # `Exists` with `OuterRef`s, handles, and a left-side key reaching past the hop (#973).
@@ -39,7 +39,8 @@ PormG.config["jcm_sl"] = PormG.Configuration.Settings(
 
 # One model set per engine, identical. `Result` and `Driver` both carry `number`, so a column landing on
 # the wrong row is visible in the SQL. `Driver → Team` is a forward relation one hop past `driverid`
-# (#973's forward shape), `Driver.results` the reverse one (#973's own repro). `status_id` is spelled
+# (#973's forward shape), `Driver.results` the reverse one (#973's own repro), `Driver.sponsors` a
+# ManyToMany one. `status_id` is spelled
 # with the `_id` suffix so the FK short form `status__…` exists. `grid` is a plain column a `cjoin` can
 # link to `Driver.number` (#974).
 for (modname, key) in ((:JcmPGModels, "jcm_pg"), (:JcmSLModels, "jcm_sl"))
@@ -50,12 +51,17 @@ for (modname, key) in ((:JcmPGModels, "jcm_pg"), (:JcmSLModels, "jcm_sl"))
     teamid = Models.IDField(),
     name = Models.CharField(),
   )
+  Sponsor = Models.Model("sponsor",
+    sponsorid = Models.IDField(),
+    name = Models.CharField(),
+  )
   Driver = Models.Model("driver",
     driverid = Models.IDField(),
     code = Models.CharField(),
     number = Models.IntegerField(),
     nationality = Models.CharField(),
     teamid = Models.ForeignKey(Team, on_delete = "CASCADE", null = true, related_name = "drivers"),
+    sponsors = Models.ManyToManyField(Sponsor, related_name = "drivers"),
   )
   Constructor = Models.Model("constructor",
     constructorid = Models.IDField(),
@@ -173,6 +179,11 @@ const _JCM_SINGLE_CELLS = (
    (q, mod) -> (q.on("constructorid", "name" => "X"); q.values("resultid"))),
   ("P6 on() unreached path/INNER",
    (q, mod) -> (q.on("constructorid", "name" => "X", join_type = "INNER"); q.values("resultid"))),
+  # A ManyToMany hop: its join goes through a link table the ON predicate was never attached to.
+  ("P8 on() ManyToMany hop/traversed",
+   (q, mod) -> (q.on("driverid__sponsors", "name" => "X"); q.values("resultid", "driverid__sponsors__name"))),
+  ("P8 on() ManyToMany hop/unreached",
+   (q, mod) -> (q.on("driverid__sponsors", "name" => "X"); q.values("resultid"))),
   # `cjoin_on` is recorded, not changed, by #977.
   ("P7 cjoin_on/Joined anchor + predicate",
    (q, mod) -> (q.cjoin_on("Driver", alias = "d2", on = [Joined("d2", "driverid") == F("driverid"), Joined("d2", "code") => "X"]);

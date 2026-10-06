@@ -230,13 +230,21 @@ const _JCM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("P5b on() then cjoin/bare pair (#974)", :sqlite) =>
     (stage = :call, error = "QueryBuildError", message = "Join path 'grid' stops at base field 'grid', which is not a relation. Use .cjoin(..., field=...) first if this path depe"),
   ("P6 on() unreached path/bare pair", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\"", params = Any[], join = nothing),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" LEFT JOIN \"constructor\" AS \"Tb_1\" ON \"Tb\".\"constructorid\" = \"Tb_1\".\"constructorid\" AND \"Tb_1\".\"name\" = \$1", params = Any["X"], join = nothing),
   ("P6 on() unreached path/bare pair", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\"", params = Any[], join = Any[]),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" LEFT JOIN \"constructor\" AS \"Tb_1\" ON \"Tb\".\"constructorid\" = \"Tb_1\".\"constructorid\" AND \"Tb_1\".\"name\" = ?", params = Any["X"], join = Any["X"]),
   ("P6 on() unreached path/INNER", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\"", params = Any[], join = nothing),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"constructor\" AS \"Tb_1\" ON \"Tb\".\"constructorid\" = \"Tb_1\".\"constructorid\" AND \"Tb_1\".\"name\" = \$1", params = Any["X"], join = nothing),
   ("P6 on() unreached path/INNER", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\"", params = Any[], join = Any[]),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"constructor\" AS \"Tb_1\" ON \"Tb\".\"constructorid\" = \"Tb_1\".\"constructorid\" AND \"Tb_1\".\"name\" = ?", params = Any["X"], join = Any["X"]),
+  ("P8 on() ManyToMany hop/traversed", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "on(\"driverid__sponsors\", …) crosses the ManyToMany relation 'driverid__sponsors', whose join goes through a link table t"),
+  ("P8 on() ManyToMany hop/traversed", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "on(\"driverid__sponsors\", …) crosses the ManyToMany relation 'driverid__sponsors', whose join goes through a link table t"),
+  ("P8 on() ManyToMany hop/unreached", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "on(\"driverid__sponsors\", …) crosses the ManyToMany relation 'driverid__sponsors', whose join goes through a link table t"),
+  ("P8 on() ManyToMany hop/unreached", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "on(\"driverid__sponsors\", …) crosses the ManyToMany relation 'driverid__sponsors', whose join goes through a link table t"),
   ("P7 cjoin_on/Joined anchor + predicate", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") AND \"d2\".\"code\" = \$1", params = Any["X"], join = nothing),
   ("P7 cjoin_on/Joined anchor + predicate", :sqlite) =>

@@ -216,7 +216,16 @@ The reverse join is `LEFT` here because that is what PormG derives for it, not b
 
 ### Contract of `on()`
 
-- `query.on("path", ...)` targets an existing join path, including reverse joins such as `"test_deletion"` and nested paths such as `"raceid__circuitid"`
+- `query.on("path", ...)` targets a join path, including reverse joins such as `"test_deletion"` and nested paths such as `"raceid__circuitid"`
+- **`on()` builds its join when nothing else in the query reaches the path** — no `values()`,
+  `filter()` or `order_by()` through it. Before [#977](https://github.com/PingoLee/PormG.jl/issues/977)
+  such an `on()` was dropped from the statement with no error, `join_type="INNER"` included, so a
+  predicate meant to restrict rows restricted nothing. The join it builds is the one traversal would
+  build, so a reverse path (`on("test_deletion", …)`) repeats a base row once per matching child, as
+  `values("test_deletion__name")` would
+- a path that crosses a `ManyToManyField` raises `QueryBuildError`: that join goes through a link
+  table PormG does not attach an `ON` predicate or a `join_type` to, and it used to drop them
+  silently. Put the predicate in `.filter(...)` instead
 - multiple predicates are combined with `AND` unless you use `Qor(...)`
 - repeated `on()` calls for the same path merge additional predicates into the same `ON` clause
 - **`on()` does not change the join type unless you pass `join_type=`.** Without it the join keeps

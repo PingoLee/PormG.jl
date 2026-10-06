@@ -200,6 +200,17 @@ const _JCM_SINGLE_CELLS = (
    (q, mod) -> (q.on("status", "name" => "X", join_type = "INNER"); q.values("resultid", "status_id__name"))),
   ("P9 on() field name, traversed by short form/bare pair",
    (q, mod) -> (q.on("status_id", "name" => "X"); q.values("resultid", "status__name"))),
+  # The same, with a `cjoin` keyed on the FK field: its filters, and an `on()` in the short form, must
+  # reach the join a short-form traversal builds, in either declaration order.
+  ("P9 cjoin on FK field, traversed by short form/filters",
+   (q, mod) -> (q.cjoin("status_id" => "Status", warn = false, join_type = "INNER", filters = ["name" => "X"]);
+                q.values("resultid", "status__name"))),
+  ("P9 cjoin on FK field, then on() short form/both conditions",
+   (q, mod) -> (q.cjoin("status_id" => "Status", warn = false, filters = ["name" => "Y"]);
+                q.on("status", "statusid" => 3); q.values("resultid", "status__name"))),
+  ("P9 on() short form, then cjoin on FK field/both conditions",
+   (q, mod) -> (q.on("status", "statusid" => 3);
+                q.cjoin("status_id" => "Status", warn = false, filters = ["name" => "Y"]); q.values("resultid", "status__name"))),
   # A ManyToMany hop: its join goes through a link table the ON predicate was never attached to.
   ("P8 on() ManyToMany hop/traversed",
    (q, mod) -> (q.on("driverid__sponsors", "name" => "X"); q.values("resultid", "driverid__sponsors__name"))),

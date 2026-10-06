@@ -257,6 +257,18 @@ const _JCM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"name\" as \"status__name\" FROM \"result\" as \"Tb\" LEFT JOIN \"status\" AS \"Tb_1\" ON \"Tb\".\"status_id\" = \"Tb_1\".\"statusid\" AND \"Tb_1\".\"name\" = \$1", params = Any["X"], join = nothing),
   ("P9 on() field name, traversed by short form/bare pair", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"name\" as \"status__name\" FROM \"result\" as \"Tb\" LEFT JOIN \"status\" AS \"Tb_1\" ON \"Tb\".\"status_id\" = \"Tb_1\".\"statusid\" AND \"Tb_1\".\"name\" = ?", params = Any["X"], join = Any["X"]),
+  ("P9 cjoin on FK field, traversed by short form/filters", :postgres) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"name\" as \"status__name\" FROM \"result\" as \"Tb\" INNER JOIN \"status\" AS \"Tb_1\" ON \"Tb\".\"status_id\" = \"Tb_1\".\"statusid\" AND \"Tb_1\".\"name\" = \$1", params = Any["X"], join = nothing),
+  ("P9 cjoin on FK field, traversed by short form/filters", :sqlite) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"name\" as \"status__name\" FROM \"result\" as \"Tb\" INNER JOIN \"status\" AS \"Tb_1\" ON \"Tb\".\"status_id\" = \"Tb_1\".\"statusid\" AND \"Tb_1\".\"name\" = ?", params = Any["X"], join = Any["X"]),
+  ("P9 cjoin on FK field, then on() short form/both conditions", :postgres) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"name\" as \"status__name\" FROM \"result\" as \"Tb\" LEFT JOIN \"status\" AS \"Tb_1\" ON \"Tb\".\"status_id\" = \"Tb_1\".\"statusid\" AND \"Tb_1\".\"name\" = \$1 AND \"Tb_1\".\"statusid\" = \$2", params = Any["Y", 3], join = nothing),
+  ("P9 cjoin on FK field, then on() short form/both conditions", :sqlite) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"name\" as \"status__name\" FROM \"result\" as \"Tb\" LEFT JOIN \"status\" AS \"Tb_1\" ON \"Tb\".\"status_id\" = \"Tb_1\".\"statusid\" AND \"Tb_1\".\"name\" = ? AND \"Tb_1\".\"statusid\" = ?", params = Any["Y", 3], join = Any["Y", 3]),
+  ("P9 on() short form, then cjoin on FK field/both conditions", :postgres) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"name\" as \"status__name\" FROM \"result\" as \"Tb\" LEFT JOIN \"status\" AS \"Tb_1\" ON \"Tb\".\"status_id\" = \"Tb_1\".\"statusid\" AND \"Tb_1\".\"statusid\" = \$1 AND \"Tb_1\".\"name\" = \$2", params = Any[3, "Y"], join = nothing),
+  ("P9 on() short form, then cjoin on FK field/both conditions", :sqlite) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"name\" as \"status__name\" FROM \"result\" as \"Tb\" LEFT JOIN \"status\" AS \"Tb_1\" ON \"Tb\".\"status_id\" = \"Tb_1\".\"statusid\" AND \"Tb_1\".\"statusid\" = ? AND \"Tb_1\".\"name\" = ?", params = Any[3, "Y"], join = Any[3, "Y"]),
   ("P8 on() ManyToMany hop/traversed", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "on(\"driverid__sponsors\", …) crosses the ManyToMany relation 'driverid__sponsors', whose join goes through a link table t"),
   ("P8 on() ManyToMany hop/traversed", :sqlite) =>

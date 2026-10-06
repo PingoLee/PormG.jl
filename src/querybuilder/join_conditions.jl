@@ -52,8 +52,10 @@ function _relation_step(q::SQLObject, model::PormGModel, seg::AbstractString, fi
   if field !== nothing
     to = hasproperty(field, :to) ? field.to : nothing
     to === nothing && return nothing
-    # A `cjoin` link is keyed by the segment as written; the model's own field by its resolved name.
-    return (field === own ? col : seg, _relation_target(model, to), :forward)
+    # The resolved name either way: a `cjoin` link is keyed by the base field it links, which is that
+    # field's own name, so `status` and `status_id` canonicalize alike with or without a link (#977
+    # review). A plain-column link (`grid`) resolves to itself.
+    return (col, _relation_target(model, to), :forward)
   end
   haskey(model.related_objects, seg) || return nothing
   related = model.related_objects[seg]

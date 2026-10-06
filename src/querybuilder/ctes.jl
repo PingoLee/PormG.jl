@@ -751,6 +751,222 @@ function _resolve_cte_string_paths!(q::SQLObject)
   return q
 end
 
+# #962 — a condition in `on(path, …)` / `cjoin(filters = …)` may compare the joined row with the base
+# row, or with a table earlier on the same path (an ancestor of `path`). A right side that names any
+# OTHER relation — `on("constructorid", "nationality" => F("driverid__nationality"))` — cannot sit in
+# the ON clause `on()` named, because that relation's join may not exist yet at that point in FROM;
+# the renderer then relocated the predicate onto whichever join came later (`build_row_join_sql_text`,
+# Phase 1b), so the result depended on `values()` order and could move a LEFT JOIN's predicate into an
+# INNER JOIN, dropping rows instead of nulling columns. Refused, as Django's `FilteredRelation` refuses
+# "relations outside" its own path.
+#
+# A pass at `build()` rather than a check at `.on()` time: a relation `cjoin` declares later is still a
+# relation, so the answer cannot depend on call order (the #434 lesson `_on` records). Only the RIGHT
+# side is walked: the left side was prefixed onto the path at declaration (`_prefix_join_filter`).
+function _refuse_off_path_join_rhs!(q::SQLObject)
+  isempty(q.custom_join) && return q
+  for (path, cfg) in q.custom_join
+    for f in cfg.filters
+      _off_path_rhs_condition(f, q, path, 0)
+    end
+  end
+  return q
+end
+
+# One condition: find its right side. A `Q`/`Qor` holds conditions; an `OperObject` keeps its right side
+# in `values`; a comparison `FExpression` in `operand`. An `Exists(...)` is its own statement.
+function _off_path_rhs_condition(f, q::SQLObject, path::String, depth::Int)
+  depth > 32 && return nothing
+  if f isa QObject
+    for x in f.filters; _off_path_rhs_condition(x, q, path, depth + 1); end
+  elseif f isa QorObject
+    for x in f.or; _off_path_rhs_condition(x, q, path, depth + 1); end
+  elseif f isa OperObject
+    # A String (or a list of them) here is a bound literal — `"nationality" => "Brazilian"` — never a
+    # column, so only an expression node is walked.
+    _is_rhs_expression(f.values) && _off_path_rhs_paths(f.values, q, path, depth + 1)
+    _off_path_nested_rhs(f.column, q, path, depth + 1)
+  elseif f isa FExpression && f.operation in _COMPARISON_OPERATIONS
+    # A String operand of an `F` comparison is read as a column first (see `_refuse_cte_string_in_join`).
+    _off_path_rhs_paths(f.operand, q, path, depth + 1)
+    _off_path_nested_rhs(f.field_name, q, path, depth + 1)
+  end
+  return nothing
+end
+
+# The right sides NESTED inside a left side. The left side's own columns were prefixed onto the path
+# (#961), but two things inside it were not, by the same #958 rule: the right side of a comparison
+# nested there — a `When` condition, `When(F("number") > F("x"))` — names the base row, and a
+# subquery's `OuterRef` resolves in this statement. Either can reach an off-path relation, and was
+# then relocated exactly like a top-level right side:
+# `Case(When("number" => F("constructorid__constructorid"), then = 1), default = 0) > 0` on the driver
+# join landed in the constructor's LEFT JOIN when `values()` built the driver first.
+#
+# The left side's columns themselves are not checked here: a left side that reaches BEYOND the hop
+# (`on("driverid", "results__code" => "x")`) is a separate question, not a right side.
+function _off_path_nested_rhs(x, q::SQLObject, path::String, depth::Int)
+  depth > 32 && return nothing
+  if x isa FExpression
+    if x.operation in _COMPARISON_OPERATIONS
+      _off_path_rhs_paths(x.operand, q, path, depth + 1)
+    else
+      _off_path_nested_rhs(x.operand, q, path, depth + 1)   # arithmetic: still the left side
+    end
+    _off_path_nested_rhs(x.field_name, q, path, depth + 1)
+  elseif x isa OperObject   # a `When` condition: column on the left, `values` its right side
+    _is_rhs_expression(x.values) && _off_path_rhs_paths(x.values, q, path, depth + 1)
+    _off_path_nested_rhs(x.column, q, path, depth + 1)
+  elseif x isa Union{QObject,QorObject}
+    _off_path_rhs_condition(x, q, path, depth + 1)
+  elseif x isa FObject
+    x.aggregate && return nothing   # #917 refuses it, with its own message
+    _off_path_nested_rhs(x.column, q, path, depth + 1)
+    for v in values(x.kwargs)
+      v isa Union{SQLTypeFunction,FExpression,SubqueryObject} && _off_path_nested_rhs(v, q, path, depth + 1)
+    end
+  elseif x isa SQLField
+    _off_path_nested_rhs(x.field, q, path, depth + 1)
+  elseif x isa SubqueryObject
+    _off_path_outer_refs(getfield(x.query, :object), q, path)
+  elseif x isa SQLObjectHandler
+    _off_path_outer_refs(getfield(x, :object), q, path)
+  elseif x isa AbstractVector && !(x isa AbstractVector{UInt8})
+    for v in x; _off_path_nested_rhs(v, q, path, depth + 1); end
+  end
+  return nothing
+end
+
+_is_rhs_expression(x) = x isa Union{FExpression,FObject,SQLField,OperObject,SubqueryObject,SQLObjectHandler}
+
+# Every column path inside a right-side value. Same boundary as `_prefix_join_column`: `.column` /
+# `.field`, and a `kwargs` entry only when it holds an expression (a `Case`/`When`'s `then`/`else`;
+# a String kwarg is a literal). An aggregate or window is skipped so #917's refusal keeps its own
+# message; a literal names no relation. A subquery's own columns resolve in its own statement, but
+# its `OuterRef`s resolve in THIS one, so those are checked like any right-side column.
+#
+# `f_slot` says the String came from an `F(...)`, so the error can show the caller the token they
+# wrote — `F("driverid__x")` or a bare `"driverid__x"` (#492's "spelled" convention).
+function _off_path_rhs_paths(x, q::SQLObject, path::String, depth::Int; f_slot::Bool = false)
+  depth > 32 && return nothing
+  if x isa String
+    _check_rhs_relation(x, q, path; spelled = f_slot ? "F(\"$(x)\")" : "\"$(x)\"")
+  elseif x isa FExpression
+    _off_path_rhs_paths(x.field_name, q, path, depth + 1; f_slot = true)
+    _off_path_rhs_paths(x.column, q, path, depth + 1; f_slot = true)
+    _off_path_rhs_paths(x.operand, q, path, depth + 1)
+  elseif x isa FObject
+    x.aggregate && return nothing
+    _off_path_rhs_paths(x.column, q, path, depth + 1)
+    for v in values(x.kwargs)
+      v isa Union{SQLTypeFunction,FExpression} && _off_path_rhs_paths(v, q, path, depth + 1)
+    end
+  elseif x isa SQLField
+    _off_path_rhs_paths(x.field, q, path, depth + 1)
+  elseif x isa OperObject
+    # A `When` inside a function: its column is a column, its `values` literals unless an expression.
+    _off_path_rhs_paths(x.column, q, path, depth + 1)
+    _is_rhs_expression(x.values) && _off_path_rhs_paths(x.values, q, path, depth + 1)
+  elseif x isa SubqueryObject
+    _off_path_outer_refs(getfield(x.query, :object), q, path)
+  elseif x isa SQLObjectHandler   # an `@in` subquery, passed as the query itself
+    _off_path_outer_refs(getfield(x, :object), q, path)
+  elseif x isa AbstractVector && !(x isa AbstractVector{UInt8})
+    for v in x; _off_path_rhs_paths(v, q, path, depth + 1); end
+  end
+  return nothing
+end
+
+# The `OuterRef`s of one subquery, from every slot that can hold an expression. Not descended: a nested
+# subquery, whose own `OuterRef`s name ITS enclosing query (the inner one), not this statement.
+function _off_path_outer_refs(inner::SQLObject, q::SQLObject, path::String)
+  refs = String[]
+  slots = Any[inner.values, inner.filter, [o.field for o in inner.order]]
+  for cfg in values(inner.custom_join); push!(slots, cfg.filters); end
+  for cfg in values(inner.alias_join); push!(slots, cfg.filters); end
+  for s in slots; _collect_outer_refs!(refs, s, 0); end
+  for r in refs
+    _check_rhs_relation(r, q, path; spelled = "OuterRef(\"$(r)\")")
+  end
+  return nothing
+end
+
+function _collect_outer_refs!(refs::Vector{String}, x, depth::Int)
+  depth > 32 && return refs
+  if x isa OuterRefObject
+    push!(refs, x.field_name)
+  elseif x isa Pair
+    _collect_outer_refs!(refs, x.first, depth + 1); _collect_outer_refs!(refs, x.second, depth + 1)
+  elseif x isa QObject
+    for v in x.filters; _collect_outer_refs!(refs, v, depth + 1); end
+  elseif x isa QorObject
+    for v in x.or; _collect_outer_refs!(refs, v, depth + 1); end
+  elseif x isa OperObject
+    _collect_outer_refs!(refs, x.column, depth + 1); _collect_outer_refs!(refs, x.values, depth + 1)
+  elseif x isa FExpression
+    for s in (x.field_name, x.column, x.operand); _collect_outer_refs!(refs, s, depth + 1); end
+  elseif x isa Union{FObject,WindowFunction}
+    _collect_outer_refs!(refs, x.column, depth + 1)
+    for v in values(x.kwargs); _collect_outer_refs!(refs, v, depth + 1); end
+  elseif x isa SQLField
+    _collect_outer_refs!(refs, x.field, depth + 1)
+  elseif x isa AbstractVector && !(x isa AbstractVector{UInt8})
+    for v in x; _collect_outer_refs!(refs, v, depth + 1); end
+  end
+  return refs
+end
+
+function _check_rhs_relation(column::String, q::SQLObject, path::String;
+                             spelled::AbstractString = "F(\"$(column)\")")
+  isempty(column) && return nothing
+  rel = _rhs_relation_prefix(q, column)
+  (isempty(rel) || rel == path || startswith(path, rel * "__")) && return nothing
+  throw(FilterError(
+    "\e[4m\e[31m$(spelled)\e[0m reaches '$(rel)', a relation outside the join path " *
+    "'$(path)', so it cannot appear in that join's ON clause. A condition in on(...) / cjoin(...) " *
+    "compares the joined row with the base row or with a table earlier on the same path; PormG will " *
+    "not move it onto another join's ON clause.\n  " *
+    "Put the predicate in \e[4m\e[32m.filter(...)\e[0m instead (#962)."))
+end
+
+# The relation part of a column path: the longest leading run of segments that are relations from
+# the base model, `__@` transforms stripped first. `"driverid__nationality"` → `"driverid"`; a base
+# column, a JSON key path (`"payload__key"`) or a literal → `""`. The last segment is the column, so
+# it is never part of the prefix, even when it is itself a ForeignKey column.
+function _rhs_relation_prefix(q::SQLObject, column::String)
+  segments = split(String(first(split(column, "__@"))), "__")
+  prefix = ""
+  model = q.model
+  for (i, seg) in enumerate(segments[1:end-1])
+    model = _relation_hop(q, model, String(seg), i == 1)
+    model === nothing && break
+    prefix = isempty(prefix) ? String(seg) : string(prefix, "__", seg)
+  end
+  return prefix
+end
+
+# The model one relation segment reaches, or `nothing` when `seg` is not a relation. The relations are
+# `_resolve_join_target_model`'s — ForeignKey, reverse relation (M2M included) — plus a `cjoin` link on
+# the first segment, consulted FIRST: `cjoin("grid" => "Driver", field = …)` turns the plain column
+# `grid` into a join, and the renderer resolves `grid__…` through it. (`_resolve_join_target_model`
+# reads the base field first and so refuses `on("grid", …)` after such a cjoin — a separate defect,
+# and the reason this does not reuse it.)
+function _relation_hop(q::SQLObject, model::PormGModel, seg::String, first_segment::Bool)
+  field = first_segment ? _get_join_field(q, seg) : nothing
+  if field === nothing && seg in model.field_names
+    field = model.fields[seg]
+  end
+  if field !== nothing
+    to = hasproperty(field, :to) ? field.to : nothing
+    to === nothing && return nothing
+    return to isa PormGModel ? to : getfield(model._module, Symbol(String(to)))
+  end
+  haskey(model.related_objects, seg) || return nothing
+  related = model.related_objects[seg]
+  related isa Models.ManyToManyRelation &&
+    return getfield(model._module, Symbol(related.related_binding))
+  return (related::Models.ReverseRelation).model_resolved
+end
+
 # Filter elements are containers, not `SQLField`s, so they get their own shallow walk down to the
 # fields that carry a column. A handle on the RHS (`filter("x" => CTE("ev","sku"))`) is already legal
 # and already typed, so only the LHS positions need testing.

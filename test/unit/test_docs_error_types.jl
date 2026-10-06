@@ -610,6 +610,18 @@ const DOCERR_CASES = [
             q.list(show_query = :dict)
         end,
     ),
+    (
+        # #962. The doc's constructor/driver shape, on this file's two sibling relations: a right
+        # side on the status join that reaches the driver, which landed in whichever join was later.
+        "read/custom_joins.md — a right side reaching a relation off the join path is refused",
+        FilterError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.on("statusid", "status" => F("driverid__nationality"))
+            q.values("resultid", "statusid__status")
+            q.list(show_query = :dict)
+        end,
+    ),
     # #474 removed TWO cases that stood here, and the removals are the point rather than a
     # tidy-up. Both pinned doc sentences about a CTE name colliding with a join key:
     #

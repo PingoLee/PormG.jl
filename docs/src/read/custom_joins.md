@@ -260,6 +260,21 @@ row, so the condition was silently dropped. Before
 inside `Q(...)` named the base row when `values()` also selected a base column of the same name, or
 when the key carried a transform, and so did a function on the left of an `F` comparison.
 
+A right side may not reach any **other** relation. On `on("constructorid", …)`, the right side
+`F("driverid__nationality")` names the driver, a relation beside the constructor rather than on its
+path. That raises `FilterError` when the query is built, wherever the column sits on a right side:
+in an `F`, inside a function or a `Case` branch, as a subquery's `OuterRef`, or on the right of a
+comparison nested in the left side, such as a `When` condition. SQL can only hold such a
+predicate in the constructor's `ON` clause if the driver's join comes first. PormG would have to move
+it onto another join, and which one would depend on the order of `values()`. Compare the two
+relations in `.filter(...)` instead:
+
+```julia
+df = M.Result.objects.
+    filter(F("constructorid__nationality") == F("driverid__nationality")).
+    values("resultid", "constructorid__name", "driverid__surname") |> DataFrame
+```
+
 ### When `.cjoin()` is Applied
 
 The `.cjoin()` configuration is only applied when you access fields through the join path:

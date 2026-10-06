@@ -2356,6 +2356,8 @@ function build(object::SQLObject;
   # which is precisely the #434 defect whose call-time check `_on` records removing. Read entry
   # points deepcopy the handler before `build()`, so this mutates a per-call copy.
   _resolve_cte_string_paths!(object)
+  # #962: same moment, same reason — every relation the join conditions could name is declared now.
+  _refuse_off_path_join_rhs!(object)
 
   # Switch context for each SQL section so positional-parameter backends
   # (SQLite) push values into the correct bucket.

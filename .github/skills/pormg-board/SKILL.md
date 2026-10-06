@@ -133,6 +133,7 @@ Then, for every item:
 | `OPEN` | `Done` | clear it — the issue was reopened, or the wrong item was marked |
 | `OPEN` | `In Progress` you did not set | **leave it.** Another session is working it. A status you did not write is a signal, not an error |
 | `OPEN`, superseded — see [`pormg-issue-management`](../pormg-issue-management/SKILL.md) → *Superseding an open issue* | on any session | take it off the session — a superseded issue is not work; it closes when the superseding change lands |
+| `OPEN`, in the area of an open design umbrella — see [`pormg-issue-management`](../pormg-issue-management/SKILL.md) → *Design (umbrella) issues* | on its own session | move it into the umbrella's session (attach it as a sub-issue, or a row of the umbrella's matrix) — narrow fixes in that area pause until the umbrella closes. #977 paused join-condition fixes this way |
 
 **An `In Progress` with no branch, PR, or worktree behind it is stale, not live.** Check before
 leaving it alone — `git worktree list`, `gh pr list --state open`, and the issue's own assignees. Say
@@ -200,6 +201,13 @@ order is not, and neither the field nor the item ordering can say "run Session 1
 **`priority:*` is severity in isolation, not blast radius.** Overriding it is normal — #430, #438,
 #442 and #460 all needed it. State the override and the reason in the same line; an unexplained
 override reads as an error.
+
+**Three issues from one mechanism are a design issue, not three sessions.** When ranking turns up
+a third open bug whose root cause is the same mechanism as two others (the same proxy, the same
+string-prefixing, the same side-effect resolution), say so in the plan and propose a design issue
+instead of a session of narrow fixes. #977 came after about 20 join-condition issues that were each
+fixed correctly and each filed follow-ups. Proposing the issue is the whole action; the user decides
+([`pormg-issue-management`](../pormg-issue-management/SKILL.md) → *Design (umbrella) issues*).
 
 **Say when you override the order itself.** The list above is descending priority, not a formula:
 criterion 1 is an argument about *cost*, and a live rung-1 defect is an argument about *harm*. Those
@@ -385,6 +393,8 @@ fetching them on purpose to do it. Receipt: [`reference.md`](reference.md) §G.
 - Do not treat a user's answer about ranking, or their agreement with a recommendation, as
   authorization to start the work
 - Do not plan on an unreconciled board — closed and superseded issues get scheduled at full cost
+- Do not schedule a narrow fix as its own session in an area an open design umbrella covers — it
+  joins the umbrella's session, or it re-opens the cycle the umbrella exists to end
 - Do not change an issue to agree with the board; the board is the derived view, always
 - Do not overwrite an `In Progress` you did not set — but do check whether it is stale, and say so
 - Do not run the membership sweep through a label filter — it cannot see an unlabelled issue, and

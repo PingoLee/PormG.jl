@@ -146,6 +146,39 @@ When you file (or notice) one issue superseding another:
    They close when the superseding work actually lands — with `Closes #A` in that PR — or they come
    back if the user rejects the design.
 
+## Design (umbrella) issues
+
+Some areas stop yielding to narrow fixes. Each fix is correct, files one or two follow-ups, and the
+follow-ups keep coming from the **same mechanism**. The precedent is "third strike → a design issue,
+not another arm": #932 for #194's position rule, and #977 for join conditions, after about 20 issues.
+When you see three issues with one root mechanism, propose a design issue instead of a fourth fix.
+That proposal is a `discussion` issue, and the user decides (see *Superseding an open issue* above
+for the issues it would replace).
+
+A redesign rarely lands in one PR, so once it is adopted the design issue becomes an **umbrella**.
+#977 is the receipt: its first PR said `Closes #977` while landing only part of the invariants, and
+the merge would have closed the only record of what was still owed.
+
+1. **State the design as invariants, and keep a status table at the top of the body.** Use one row per
+   invariant, with its state (done / partial and why / open) and where it is being worked (a PR or a
+   sub-issue). This table is the umbrella's whole contract. A reader, or the board, must be able to
+   tell from it alone what is left. Update it with `gh issue edit <N> --body-file …` when a PR lands.
+   That is an edit to the maintainer's issue, so it follows the gated-edit rule above: do it when
+   the user asks, or ask.
+2. **One sub-issue per remaining phase**, attached as a GitHub sub-issue so the relationship can be
+   queried rather than only read. A gap a PR leaves open (#981 left the "wrong row, no join" class
+   open) gets its own sub-issue, not a comment: comments are not scheduled.
+3. **A PR that lands part of it writes `Part of #N`, never `Closes #N`.** `Closes` stays for the
+   sub-issues and superseded issues it actually completes. A closing keyword is the only thing that
+   closes the umbrella, so one written too early closes it with work outstanding. If GitHub has
+   already linked the PR (its *Development* sidebar), unlink it there; editing the body does not
+   always clear the link.
+4. **The umbrella closes only when every invariant holds**, or when the user decides one is not
+   worth its cost. Record that decision in the table, not only in a comment.
+5. **While it is open, narrow fixes in its area pause.** A new bug in the area becomes a sub-issue,
+   or a row in the umbrella's matrix, not a standalone fix. The board enforces this
+   ([`pormg-board`](../pormg-board/SKILL.md) → §1).
+
 ## Closing a resolved issue
 
 1. **Link the fix.** Prefer letting GitHub auto-close: put `Closes #N` (or `Fixes #N`) in the PR
@@ -163,6 +196,8 @@ When you file (or notice) one issue superseding another:
 
 - Bulk-create issues without showing a draft and getting confirmation first.
 - Close an issue that still has unfinished task-list items — check them off or split them out first.
+- Let a partial PR close an umbrella issue — `Part of #N`, and `Closes` only for what it completes.
+- Park a gap a PR left open in a comment — give it a sub-issue of its umbrella, or it is not scheduled.
 - Close an issue without a comment/PR/commit reference saying what resolved it.
 - Recreate a `TODO.md` backlog mirror — the `pre-publish` label query is the only gating tracker.
 - Put draft/placeholder numbers in issue bodies and leave them — resolve to real `#numbers`.

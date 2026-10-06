@@ -25,6 +25,7 @@ This skill is for implementation and regression analysis inside `src/querybuilde
 
 - `src/QueryBuilder.jl` is the builder entry point and includes the specialized querybuilder modules
 - `build_helpers.jl`, `build_joins.jl`, `build_query.jl`, `ctes.jl`, `deletion.jl`, `execution.jl`, and `functions.jl` are the main internal coordination surfaces
+- `join_conditions.jl` owns what a condition in `on(path, …)` / `cjoin(filters = …)` refers to: the one relation resolver and the build-time binding pass (#977). See *Join conditions: bound at build* below before touching any join-condition code
 - Keep user-facing behavior expressed through `M.Model.objects`; reach into builder internals only for implementation work or deterministic unit coverage
 
 ## Boundary With Public API Work
@@ -82,7 +83,7 @@ Query-building context rules:
 
 - context changes belong in query-build modules, not in execution code
 - HAVING alias promotion must switch context to `:having` before `add_parameter!`
-- join `on` conditions from `cjoin` must run with `:join` context
+- join `on` conditions from `cjoin` must run with `:join` context. That context is set where the ON clause renders (`build_query.jl`). Binding (`_bind_join_conditions!`) only resolves and checks the conditions earlier in the build and adds no parameters
 - subqueries and CTEs must inherit the parent collector and context when required
 
 Canonical unit files:
@@ -335,8 +336,53 @@ Focus on:
 - `build_joins.jl`
 - `build_query.jl`
 - `ctes.jl`
+- `join_conditions.jl`
 - `execution.jl`
 - `deletion.jl`
+
+### Join conditions: bound at build (#977)
+
+Join conditions produced about 20 issues, each fixed correctly at its own call site. They kept
+coming because a condition was resolved by proxies: string-prefixed at the call, checked against
+whatever had been declared so far, and resolved with side effects that could add a join. #977
+replaced the proxies with these rules. They are invariants, not style. Its status table lists which
+invariants hold today and where the rest are tracked (#982, #985).
+
+- **One relation resolver.** "Which model does segment `s` reach from model `m`?" has exactly one
+  answer: `_relation_step`, whose precedence is the renderer's first hop (JSON/array value lookup,
+  ManyToMany, a `cjoin(field = …)` link on the first segment, the model field after the FK short
+  form, a reverse relation). `_segment_field` is the **only** reader of a `cjoin` link
+  (`_get_join_field`). Three resolvers disagreeing was #974. `test/unit/test_join_resolver_single.jl`
+  scans the source and fails if a second resolver or link reader appears, so ask `_relation_step` or
+  `_relation_prefix`; do not write a local walk.
+- **Store as written, bind at build.** `.on()` and `.cjoin()` store the conditions exactly as the
+  caller wrote them (`PathJoin.filters::Vector{JoinCondition}`), after only the checks that need no
+  model (`_join_conditions_as_written`). Lowering each left side onto its hop, resolving it, and
+  every refusal happen once per build in `_bind_join_conditions!`, against the final query. A `cjoin`
+  link declared after the `on()` that needs it is therefore seen. The result goes into
+  `instruct.join_conditions` / `instruct.join_type_overrides`, keyed by the **canonical** path
+  (`_canonical_join_path`), and the pass never mutates the query object, so a nested or repeated
+  build binds the same way. Never resolve, prefix, or validate at the call: the answer depends on
+  calls that have not happened yet.
+- **Resolving a condition adds no join.** A left side whose relation part reaches past its hop is
+  refused (`_refuse_lhs_past_hop`, #973), not joined. `_assert_condition_added_no_join` is the
+  render-time backstop and **raises** when a row appears while an ON clause renders. Never relax it
+  into a warning: an unwritten INNER JOIN carrying the predicate in its ON clause is #973 itself.
+- **`on(path)` declares its own join.** An `on()` entry nothing else reaches is materialized by
+  `build()` (`_join_path_columns`). A ManyToMany path is refused (`_refuse_many_to_many_join_path`)
+  until it is supported, rather than silently dropped.
+- **Not there yet.** Conditions are lowered to canonical base-rooted path strings, not typed column
+  references (I1). The ON-vs-WHERE placement of a `cjoin_on` predicate is still read from SQL text
+  (I4/I5, #982). A condition that renders against the wrong row without adding a join is caught by
+  neither the binder nor the backstop (#985). New work in this area goes into #977's sub-issues,
+  not a standalone fix ([`pormg-issue-management`](../pormg-issue-management/SKILL.md) →
+  *Design (umbrella) issues*).
+
+Coverage: `test/unit/test_join_condition_matrix.jl` records the SQL of every path × condition shape
+as data, in `test/unit/fixtures/join_condition_matrix_expected.jl`. A behavior change shows up as a
+fixture diff. Regenerate it with `PORMG_JCM_RECORD=1` (the command is in the test file's header) and
+review the diff row by row, because regenerating to make the test pass is exactly the anti-pattern
+below.
 
 Gotcha — `_count` (`execution.jl`): it clears `.values`/`.order` before rendering, so `count()` cannot reuse a `.values()` select. `COUNT(DISTINCT *)` is **invalid SQL on both PostgreSQL and SQLite**, so the count forms diverge:
 
@@ -415,6 +461,7 @@ julia -t auto --project=test/integration test/integration/test_cte.jl     # rung
 
 - Do not duplicate the full parameter bucket matrix in integration tests
 - Do not fix SQL shape bugs only by changing test expectations without validating semantics
+- Do not resolve, prefix, or validate a join condition at the `.on()` / `.cjoin()` call, and do not write a second relation walk next to `_relation_step`. Conditions are stored as written and bound once per build (#977)
 - Do not bypass public API regressions when the failure is visible to package users
 - Do not mix unrelated SQL formatting changes into a targeted regression fix
 - Do not revert to silent identifier stripping (e.g. `replace(id, r"[^a-zA-Z0-9_]" => "")`) — an alias is fail-closed (`quote_identifier`), a physical table or column is escape-only (`safe_table_identifier` / `safe_column_identifier`), and neither ever silently rewrites an identifier

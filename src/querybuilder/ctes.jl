@@ -770,13 +770,95 @@ function _bind_cte_filter!(f, q::SQLObject, depth::Int = 0)
   return nothing
 end
 
+# #961 — the left side of a join condition, walked to every column it holds. Shape and boundary are
+# `_check_function`'s (build_helpers.jl): descend `.column` / `.field`, and a `kwargs` entry only when
+# it holds an EXPRESSION (`_walk_kwargs`'s rule) — `Case`/`When` keep `then`/`else` there, while a
+# String kwarg is a literal (`ToChar`'s format for `@yyyy_mm`, a `then = "x"` value) and stays
+# untouched; so does an `SQLTypeText` literal (the `"-Q"` separator of `@yyyy_q`). Before this only a
+# `String` column was rewritten, so a key inside `Q(...)` that carried a transform, and a function on
+# the left of an `F` comparison, named the base row.
+#
+# `base` is the query's own model, which only the bare-string arithmetic operand needs (see the
+# `FExpression` arm of `_prefix_join_filter`); every arm passes it along.
+_prefix_join_column(x::String, prefix::String, foreign_model; base = nothing) =
+  _normalize_cjoin_filter_key(x, prefix, foreign_model)
+_prefix_join_column(x::SQLTypeText, ::String, _; base = nothing) = x
+_prefix_join_column(x::Union{FExpression,SQLTypeQ,SQLTypeQor}, prefix::String, foreign_model; base = nothing) =
+  _prefix_join_filter(x, prefix, foreign_model; base = base)
+# The stale `_as` is half of #961: `Q("number" => 5)` builds `SQLField("number", _as = "number")`, and
+# the renderer resolves that `_as` against the `values()` aliases, where a selected base `number`
+# claimed it — so a rewritten `field` with the old `_as` still named the base row. Rewritten the same
+# way, the node is the one the `Pair` arm builds from the prefixed key (`_as = "driverid__number"`).
+function _prefix_join_column(x::SQLField, prefix::String, foreign_model; base = nothing)
+  return SQLField(
+    _prefix_join_column(x.field, prefix, foreign_model; base = base),
+    x._as === nothing ? nothing : _normalize_cjoin_filter_key(x._as, prefix, foreign_model),
+    x.custom_as,
+    x.root   # #474: carry the namespace tag through the rewrite
+  )
+end
+# An aggregate or a window function is left exactly as written. No ON clause can hold one, whatever
+# row it names — #917 refuses it at render (`build_query.jl`, "cannot appear in a join's ON clause")
+# with the CTE remedy. Prefixing its column first would only swap that refusal for a less useful one:
+# `OP(Count("grid"), ">", 1)` on the driver join would die as "Invalid cjoin filter field 'grid'".
+function _prefix_join_column(x::FObject, prefix::String, foreign_model; base = nothing)
+  x.aggregate && return x
+  return FObject(function_name=x.function_name,
+                 column=_prefix_join_column(x.column, prefix, foreign_model; base = base),
+                 aggregate=x.aggregate, formatter=x.formatter, _as=x._as,
+                 kwargs=_prefix_join_kwargs(x.kwargs, prefix, foreign_model, base))
+end
+_prefix_join_column(x::WindowFunction, ::String, _; base = nothing) = x
+# The `When` inside a composite transform: its column is part of the left side, its `values` literals.
+function _prefix_join_column(x::SQLTypeOper, prefix::String, foreign_model; base = nothing)
+  return OperObject(operator=x.operator, values=x.values,
+                    column=_prefix_join_column(x.column, prefix, foreign_model; base = base))
+end
+_prefix_join_column(x::Vector, prefix::String, foreign_model; base = nothing) =
+  Any[_prefix_join_column(v, prefix, foreign_model; base = base) for v in x]
+# A handle was refused by `_guard_no_join_handles` before any walk; a subquery, an `OuterRef` or a
+# literal carries no column of the joined row.
+_prefix_join_column(x, ::String, _; base = nothing) = x
+
+# The expression-valued kwargs, prefixed; the Dict itself is returned when there are none, so a
+# function with only literal kwargs comes back exactly as it was. A fresh Dict otherwise, because the
+# caller's handle shares this one (#112).
+function _prefix_join_kwargs(kwargs::Dict{String,Any}, prefix::String, foreign_model, base)
+  any(v -> v isa Union{SQLTypeFunction,FExpression}, values(kwargs)) || return kwargs
+  out = copy(kwargs)
+  for (k, v) in out
+    v isa Union{SQLTypeFunction,FExpression} &&
+      (out[k] = _prefix_join_column(v, prefix, foreign_model; base = base))
+  end
+  return out
+end
+
+# Does `key` name a column or relation of `model` (`__@` transforms stripped)? Used for the base model,
+# where it tells a column-reading string from a literal one.
+function _model_has_key(model, key::String)
+  model === nothing && return false
+  first_segment = String(split(String(first(split(key, "__@"))), "__")[1])
+  return first_segment in model.field_names || haskey(model.related_objects, first_segment)
+end
+
+# Does `key` name a field (or relation) of the joined model, with or without the join-path prefix?
+# The test `_normalize_cjoin_filter_key` applies before it throws, asked without throwing.
+function _joined_model_has_key(key::String, prefix::String, foreign_model)
+  foreign_model === nothing && return false
+  rest = startswith(key, prefix * "__") ? key[length(prefix) + 3:end] : key
+  isempty(rest) && return false
+  base_field = String(split(rest, "__")[1])
+  return base_field in foreign_model.field_names || haskey(foreign_model.related_objects, base_field)
+end
+
 # #958 — one rule for every spelling: a condition's KEY / left side is prefixed with the join path, so
 # it names the joined row; a comparison's RIGHT side is never prefixed, so a bare `F` there names the
 # base row (the joined row stays reachable through its path, `F("driverid__number")`). The `Pair` arm
 # always left `filter.second` alone, but the `OperObject` arm (what `Q`/`Qor`/`OP` build) and the
 # `FExpression` arm prefixed the right side too — so `Q("number" => F("number"))` rendered
 # `"Tb_1"."number" = "Tb_1"."number"`, a tautology that silently dropped the predicate.
-function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGModel,Nothing})
+function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGModel,Nothing};
+                             base::Union{PormGModel,Nothing} = nothing)
   if filter isa Pair
     key = filter.first
     # Refuse BEFORE the `return filter` fall-through below: without this a CTE-keyed pair passes
@@ -793,9 +875,9 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
     end
     return filter
   elseif filter isa QObject
-    return QObject(filters=[_prefix_join_filter(f, prefix, foreign_model) for f in filter.filters])
+    return QObject(filters=[_prefix_join_filter(f, prefix, foreign_model; base = base) for f in filter.filters])
   elseif filter isa QorObject
-    return QorObject(or=[_prefix_join_filter(f, prefix, foreign_model) for f in filter.or])
+    return QorObject(or=[_prefix_join_filter(f, prefix, foreign_model; base = base) for f in filter.or])
   elseif filter isa OperObject
     new_oper = deepcopy(filter)
 
@@ -806,17 +888,10 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
     # #508 phase 2 — `OperObject` is immutable, so the rewritten slots are computed here and the node
     # is built ONCE at the end. The `deepcopy` above stays exactly where it was: it is what the guard
     # walks, and `values` may hold a nested handler it must not share.
-    column = new_oper.column
-    if column isa SQLField && column.field isa String
-      column = SQLField(
-        _normalize_cjoin_filter_key(column.field, prefix, foreign_model),
-        column._as,
-        column.custom_as,
-        column.root   # #474: carry the namespace tag through the rewrite
-      )
-    elseif column isa String
-      column = _normalize_cjoin_filter_key(column, prefix, foreign_model)
-    end
+    # #961: the whole column is the left side, so every column inside it is prefixed — including one
+    # wrapped in a transform (`Q("dob__@year" => …)` arrives as `SQLField(EXTRACT(dob))`), which the
+    # old `column.field isa String` test let through onto the base row.
+    column = _prefix_join_column(new_oper.column, prefix, foreign_model; base = base)
 
     # #958: `values` is the right-hand side — never prefixed, as in the `Pair` arm.
     return OperObject(operator=new_oper.operator, values=new_oper.values, column=column)
@@ -829,12 +904,9 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
     new_filter = deepcopy(filter)
 
     # #508 phase 2 — as in the `OperObject` arm above: compute each rewritten slot, build one node.
-    field_name = new_filter.field_name
-    if field_name isa String
-      field_name = _normalize_cjoin_filter_key(field_name, prefix, foreign_model)
-    elseif field_name isa FExpression
-      field_name = _prefix_join_filter(field_name, prefix, foreign_model)
-    end
+    # #961: `field_name` is the left side whatever it holds — a String, a nested expression, or a
+    # function (`Abs(F("number")) > 0`), which used to pass through and name the base row.
+    field_name = _prefix_join_column(new_filter.field_name, prefix, foreign_model; base = base)
 
     column = new_filter.column
     # #958: `""` is the placeholder `_compare` writes when it nests a comparison over an expression
@@ -843,20 +915,29 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
       column = _normalize_cjoin_filter_key(column, prefix, foreign_model)
     elseif column isa Vector{String}
       column = [_normalize_cjoin_filter_key(v, prefix, foreign_model) for v in column]
-    elseif column isa SQLField && column.field isa String
-      column = SQLField(
-        _normalize_cjoin_filter_key(column.field, prefix, foreign_model),
-        column._as,
-        column.custom_as,
-        column.root   # #474: carry the namespace tag through the rewrite
-      )
+    elseif column isa SQLField
+      column = _prefix_join_column(column, prefix, foreign_model; base = base)   # #961: `_as` too
     end
 
     # #958: a comparison's operand is its right-hand side, which names the base row — not prefixed.
-    # An arithmetic/bitwise operand is part of the same side as `field_name`, so it is.
+    # An arithmetic/bitwise operand is part of the same side as `field_name`, so it is (#961: every
+    # column-bearing operand, not just a nested `FExpression` — `F("number") + Abs(F("number"))`
+    # prefixed the first `number` and left the `ABS` argument on the base row).
+    #
+    # A bare `String` operand is a column that FALLS BACK to a literal (the resolver tries the column
+    # reading first — see `_refuse_cte_string_in_join`). So it is a column when it names a field of
+    # the joined model OR of the base model, and is prefixed either way: a base-only column then
+    # raises the same "Invalid cjoin filter field" a bare `F("grid")` does, instead of rendering on
+    # the base row (`"Tb_1"."number" + "Tb"."grid"`). A string that names no column of either keeps
+    # its literal reading (`F("number") + "7"`).
     operand = new_filter.operand
-    if operand isa FExpression && !(new_filter.operation in _COMPARISON_OPERATIONS)
-      operand = _prefix_join_filter(operand, prefix, foreign_model)
+    if !(new_filter.operation in _COMPARISON_OPERATIONS)
+      if operand isa String
+        (_joined_model_has_key(operand, prefix, foreign_model) || _model_has_key(base, operand)) &&
+          (operand = _normalize_cjoin_filter_key(operand, prefix, foreign_model))
+      elseif operand isa Union{FExpression,SQLTypeFunction,SQLField}
+        operand = _prefix_join_column(operand, prefix, foreign_model; base = base)
+      end
     end
 
     return FExpression(field_name=field_name, operation=new_filter.operation, operand=operand,
@@ -954,7 +1035,7 @@ function _on(q::SQLObject, join_path::String, filters::AbstractVector; join_type
   parsed_filters = Vector{FilterType}()
 
   for filter in filters
-    prefixed = _prefix_join_filter(filter, join_path, target_model)
+    prefixed = _prefix_join_filter(filter, join_path, target_model; base = q.model)
 
     if isa(prefixed, Pair)
       push!(parsed_filters, _check_filter(prefixed))
@@ -1117,7 +1198,7 @@ function _cjoin(
   parsed_filters = Vector{FilterType}()
   for filter in filters
     # Call recursive helper before converting pairs into full FilterTypes
-    prefixed = _prefix_join_filter(filter, main_join.first, foreign_model)
+    prefixed = _prefix_join_filter(filter, main_join.first, foreign_model; base = q.model)
 
     if isa(prefixed, Pair)
       push!(parsed_filters, _check_filter(prefixed))

@@ -220,8 +220,8 @@ end
 # invent.
 #
 # So pin the `.root` readers instead. A hand-built key MUST consult `root` to get its namespace, and
-# `root` is deliberately tiny surface: two writers, two rewrite carriers, the constructor, and
-# `deepcopy`. Anything else is either a seventh legitimate reader — re-examined deliberately, the
+# `root` is deliberately tiny surface: two writers, one rewrite carrier, the constructor, and
+# `deepcopy`. Anything else is either a further legitimate reader — re-examined deliberately, the
 # way `allowed_hits` forces — or a key being built outside the interface.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "SQLField.root is read only by the sites entitled to it" begin
@@ -246,16 +246,20 @@ end
                "is the #474 defect." unexpected
     end
     @test isempty(unexpected)
-    # Pinned, not bounded — the same contract as `allowed_hits` above. Seven sites today:
-    # build_helpers ×2 (the `_retag_cte_field!` / `_retag_joined_field!` writers), ctes ×3
-    # (#492's `_bind_cte_string!` writer, plus the two #474 rewrite carriers), memos ×1, types ×1.
+    # Pinned, not bounded — the same contract as `allowed_hits` above. Six sites today:
+    # build_helpers ×2 (the `_retag_cte_field!` / `_retag_joined_field!` writers), ctes ×2
+    # (#492's `_bind_cte_string!` writer, plus the #474 rewrite carrier), memos ×1, types ×1.
+    #
+    # #961 took it from seven to six: the two rewrite carriers — `_prefix_join_filter`'s `OperObject`
+    # and `FExpression` arms, each rebuilding an `SQLField` by hand — became one,
+    # `_prefix_join_column(::SQLField)`, which both arms now call. Same reader, one copy.
     #
     # The seventh arrived with #492 and was admitted deliberately: `_bind_cte_string!` is the
     # string-spelling twin of `_retag_cte_field!` — it WRITES the tag for a path the resolution pass
     # rewrote into a `CTEReference`. A writer is not the hazard this guard exists for; a hand-built
     # key reading `(v.root, v._as)` is. That the count forced this note rather than absorbing the
     # change silently is the point of pinning it.
-    @test length(sites) == 7
+    @test length(sites) == 6
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

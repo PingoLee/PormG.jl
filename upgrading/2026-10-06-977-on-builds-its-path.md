@@ -13,10 +13,14 @@ else reaching the path, the predicate and any `join_type` were silently left out
 | query | before | after |
 |---|---|---|
 | `on("constructorid", "name" => "Ferrari", join_type = "INNER").values("resultid")` | `SELECT … FROM "result"`: every result | `INNER JOIN "constructor" … AND "name" = $1`: only Ferrari's results |
-| `on("constructorid", "name" => "Ferrari").values("resultid")` (a nullable relation, so `LEFT`) | no join | `LEFT JOIN "constructor" … AND "name" = $1`: every result, once |
-| `on("test_deletion", "name" => "x").values("resultid")` (a reverse relation) | no join | `LEFT JOIN` the reverse table: a result repeats once per matching child, as `values("test_deletion__name")` would make it |
+| `on("constructorid", "name" => "Ferrari").values("resultid")` (no `join_type`) | no join | the join PormG derives for the relation, with the predicate: `INNER` for a `NOT NULL` ForeignKey (only Ferrari's results), `LEFT` for a nullable one (every result, once) |
+| `on("test_deletion", "name" => "x").values("resultid")` (a reverse relation, nullable FK) | no join | `LEFT JOIN` the reverse table: a result repeats once per matching child, as `values("test_deletion__name")` would make it |
+| `M.Driver.objects.on("result", "grid" => 1).values("driverid")` (a reverse relation, `NOT NULL` FK) | no join | `INNER JOIN` the results: a driver with no matching result is dropped, the rest repeat |
 
-An `on()` whose path the query already reaches renders exactly as before.
+The join is the one traversal would build, with the type PormG derives — what `values()` through
+the same path would produce. A query that also aggregates over a to-many path built this way now
+meets the [#74](https://github.com/PingoLee/PormG.jl/issues/74) fan-out guard, as it would had
+`values()` reached the path. An `on()` whose path the query already reaches renders exactly as before.
 
 ### Who this affects
 

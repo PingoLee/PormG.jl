@@ -3,7 +3,7 @@
 - **Version**: Unreleased
 - **PormG ref**: #973, #977 ; `src/querybuilder/join_conditions.jl` (`_refuse_lhs_past_hop`)
 - **Recorded**: 2026-10-06
-- **Severity**: breaking. A join-condition key whose relation part went past the join path was accepted, and PormG silently added that relation's join, with the predicate in its `ON` clause. It now raises `FilterError` at the `on()` / `cjoin()` call, on both engines. The deep-key spelling was documented as a tip on the custom-joins page.
+- **Severity**: breaking. A join-condition key whose relation part went past the join path was accepted, and PormG silently added that relation's join, with the predicate in its `ON` clause. It now raises `FilterError`, on both engines: at the `on()` / `cjoin()` call, or when the query is built for a path through a `cjoin(field = …)` link, whose target is known only then. The deep-key spelling was documented as a tip on the custom-joins page.
 
 ### What changed
 
@@ -30,7 +30,7 @@ Apps that write a join-condition key through a relation of the joined model. Mea
 
 ### How to find the calls to migrate
 
-Run the app's tests. Every remaining call raises at the call with this message:
+Run the app's tests. Every remaining call raises with this message:
 
 ```
 past the join path

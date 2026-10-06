@@ -18,8 +18,8 @@
 # The fixture below is the shape the Django importer actually emits — a lowercase positional name
 # (#300-legal) under a mixed-case binding — pinned by test_import_django_models.jl's
 # `Dim_CNES = Models.Model("dim_cnes"` assertion. Each testset targets one of the four sites that
-# used to reconstruct: build_joins.jl first-hop, build_joins.jl multi-hop loop, ctes.jl
-# `_resolve_join_target_model`, and deletion.jl `find_related_objects!`.
+# used to reconstruct: build_joins.jl first-hop, build_joins.jl multi-hop loop, the on() path
+# resolver (`_relation_step` in join_conditions.jl since #977), and deletion.jl `find_related_objects!`.
 #
 # Everything here renders against a mock backend — no database. The pre-#343 failure was an
 # `UndefVarError` at query-BUILD time, so `inspect_query` traverses the identical code path a
@@ -160,7 +160,7 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ctes.jl — `_resolve_join_target_model`, reached through on(). Sibling coverage for the
+# join_conditions.jl — `_relation_step` (#977), reached through on(). Sibling coverage for the
 # lowercase-binding case lives in test_alignment_sqlite.jl "Related Objects - on() ...".
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Mixed-case binding - on() resolves the reverse target (ctes)" begin

@@ -9,7 +9,7 @@
 
 A ManyToMany hop joins through a link table, in two joins that never read the `on()` entry for their
 path. So the predicate and the join type were simply missing from the SQL, whether or not the query
-projected the path:
+projected the path. With a driver model that declares `sponsors = Models.ManyToManyField(Sponsor)`:
 
 | query | before | after |
 |---|---|---|
@@ -33,17 +33,20 @@ crosses the ManyToMany relation
 
 ### Migrate your app
 
-Put the predicate in `.filter(...)`. That is a `WHERE` predicate, which is what the query returned
-anyway as soon as anything joined the path; the `on()` never restricted it.
+Put the predicate in `.filter(...)`. That is a `WHERE` predicate, so it restricts the rows — which the
+dropped `on()` never did. Where the unrestricted result was the one you relied on, delete the `on()`
+call instead: it never contributed to the statement.
 
 ```julia
+# Driver declares sponsors = Models.ManyToManyField(Sponsor)
+
 # before: the predicate never reached the SQL
-M.Driver.objects.
+Driver.objects.
     on("sponsors", "name" => "X").
     values("driverid", "sponsors__name")
 
 # after
-M.Driver.objects.
+Driver.objects.
     filter("sponsors__name" => "X").
     values("driverid", "sponsors__name")
 ```

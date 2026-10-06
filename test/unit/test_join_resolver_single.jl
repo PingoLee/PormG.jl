@@ -54,7 +54,7 @@ end
 # A CALL to `_get_join_field` — not its definition.
 const JRS_LINK_READ = r"(?<!function )\b_get_join_field\("
 # The one read, pinned by expression so a second read added to the resolver file is still caught.
-const JRS_LINK_READ_ALLOWED = "link = _get_join_field(q, String(seg))"
+const JRS_LINK_READ_ALLOWED = "link = _get_join_field(q, col)"
 # The resolvers #977 deleted.
 const JRS_RETIRED = r"\b(_resolve_join_target_model|_relation_hop|_rhs_relation_prefix)\b"
 
@@ -208,6 +208,32 @@ end
     # One row added: an internal error naming it.
     err = try
         PormG.QueryBuilder._assert_condition_added_no_join(instruc, rows[1], length(rows) - 1)
+        nothing
+    catch e
+        e
+    end
+    @test err isa ErrorException
+    @test occursin("PormG internal error", err.msg)
+    @test occursin("\"jrs_team\"", err.msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Join conditions: the backstop is wired into the ON-clause render
+# End to end through `build_row_join_sql_text`: a built query's driver row is handed a condition that
+# was never bound — it names the team, one relation past the hop — and re-rendered. Without the check
+# the render would add the team's join and carry the predicate there (#973); with it, an internal error.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Join conditions: the ON render raises on an added join (#977)" begin
+    QB = PormG.QueryBuilder
+    q = JrsModels.Result.objects
+    q.values("resultid", "driverid__number")
+    instruc = QB.build(q.object; connection = JrsMockSQLite())
+    @test length(instruc.row_join) == 1
+    unbound = QB._check_filter("driverid__teamid__name" => "X")
+    instruc.row_join[1] = QB._with_config(instruc.row_join[1], nothing, QB.FilterType[unbound])
+    empty!(instruc.join)
+    err = try
+        QB.build_row_join_sql_text(instruc)
         nothing
     catch e
         e

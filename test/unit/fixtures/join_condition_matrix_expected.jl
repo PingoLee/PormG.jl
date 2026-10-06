@@ -185,6 +185,14 @@ const _JCM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :build, error = "FilterError", message = "F(\"status__name\") reaches 'status_id', a relation outside the join path 'driverid', so it cannot appear in that join's O"),
   ("P1 on first hop/rhs off-path, FK short form", :sqlite) =>
     (stage = :build, error = "FilterError", message = "F(\"status__name\") reaches 'status_id', a relation outside the join path 'driverid', so it cannot appear in that join's O"),
+  ("P1 on first hop/rhs off-path in a When over Q", :postgres) =>
+    (stage = :build, error = "FilterError", message = "\"constructorid__name\" reaches 'constructorid', a relation outside the join path 'driverid', so it cannot appear in that "),
+  ("P1 on first hop/rhs off-path in a When over Q", :sqlite) =>
+    (stage = :build, error = "FilterError", message = "\"constructorid__name\" reaches 'constructorid', a relation outside the join path 'driverid', so it cannot appear in that "),
+  ("P1 on first hop/rhs off-path OuterRef in a Case branch", :postgres) =>
+    (stage = :build, error = "FilterError", message = "OuterRef(\"constructorid__name\") reaches 'constructorid', a relation outside the join path 'driverid', so it cannot appea"),
+  ("P1 on first hop/rhs off-path OuterRef in a Case branch", :sqlite) =>
+    (stage = :build, error = "FilterError", message = "OuterRef(\"constructorid__name\") reaches 'constructorid', a relation outside the join path 'driverid', so it cannot appea"),
   ("P1 on first hop/CTE handle", :postgres) =>
     (stage = :call, error = "FilterError", message = "CTE(\"ev\", \"sku\") cannot be used in a join ON clause (on(...) / cjoin(...)). A JOIN's ON clause targets the joined MODEL;"),
   ("P1 on first hop/CTE handle", :sqlite) =>
@@ -241,6 +249,14 @@ const _JCM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"constructor\" AS \"Tb_1\" ON \"Tb\".\"constructorid\" = \"Tb_1\".\"constructorid\" AND \"Tb_1\".\"name\" = \$1", params = Any["X"], join = nothing),
   ("P6 on() unreached path/INNER", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"constructor\" AS \"Tb_1\" ON \"Tb\".\"constructorid\" = \"Tb_1\".\"constructorid\" AND \"Tb_1\".\"name\" = ?", params = Any["X"], join = Any["X"]),
+  ("P9 on() short form, traversed by field name/INNER", :postgres) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"name\" as \"status_id__name\" FROM \"result\" as \"Tb\" INNER JOIN \"status\" AS \"Tb_1\" ON \"Tb\".\"status_id\" = \"Tb_1\".\"statusid\" AND \"Tb_1\".\"name\" = \$1", params = Any["X"], join = nothing),
+  ("P9 on() short form, traversed by field name/INNER", :sqlite) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"name\" as \"status_id__name\" FROM \"result\" as \"Tb\" INNER JOIN \"status\" AS \"Tb_1\" ON \"Tb\".\"status_id\" = \"Tb_1\".\"statusid\" AND \"Tb_1\".\"name\" = ?", params = Any["X"], join = Any["X"]),
+  ("P9 on() field name, traversed by short form/bare pair", :postgres) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"name\" as \"status__name\" FROM \"result\" as \"Tb\" LEFT JOIN \"status\" AS \"Tb_1\" ON \"Tb\".\"status_id\" = \"Tb_1\".\"statusid\" AND \"Tb_1\".\"name\" = \$1", params = Any["X"], join = nothing),
+  ("P9 on() field name, traversed by short form/bare pair", :sqlite) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"name\" as \"status__name\" FROM \"result\" as \"Tb\" LEFT JOIN \"status\" AS \"Tb_1\" ON \"Tb\".\"status_id\" = \"Tb_1\".\"statusid\" AND \"Tb_1\".\"name\" = ?", params = Any["X"], join = Any["X"]),
   ("P8 on() ManyToMany hop/traversed", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "on(\"driverid__sponsors\", …) crosses the ManyToMany relation 'driverid__sponsors', whose join goes through a link table t"),
   ("P8 on() ManyToMany hop/traversed", :sqlite) =>

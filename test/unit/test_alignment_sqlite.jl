@@ -3248,8 +3248,8 @@ end
 # (SQLite is dynamically typed); it just returns nothing, which is why this shipped unnoticed.
 #
 # #973 refused the key that relocated (a cjoin filter reaching past its hop), so the deeper predicate
-# is now written on its own hop with `on()`, and declaration order is what makes binding and emission
-# disagree. Rendering coverage for the same defect, on mock models and both backends, is in
+# is now written on its own hop with `on()` and binds where its join is emitted; the deep-first
+# declaration is kept as the original bug's order. Rendering coverage for the same defect, on mock models and both backends, is in
 # `test/unit/test_order_by_joins.jl`; execution coverage is in `test/integration/test_cjoin.jl`.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Alignment Verification - cjoin ON filters across two join depths (#421)" begin
@@ -3260,8 +3260,8 @@ end
 
     q = M.Result.objects
     q.values("points")
-    # The circuit predicate is declared FIRST, so declaration order differs from emission order —
-    # reversed (the control below), this same pair must render and bind identically.
+    # The circuit predicate is declared FIRST — the original bug's order. Reversed (the control
+    # below), this same pair must render and bind identically.
     q.on("raceid__circuitid", "country" => "Italy")
     q.cjoin("raceid" => "Race", filters = ["year" => 2009], warn = false)
 

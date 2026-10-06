@@ -483,13 +483,12 @@ end
     # Attach CTE 2 – LEFT join on raceid
     query.with("mr" => modern_races, join_field="raceid" => "raceid")
 
-    # cjoin: attach Circuit via raceid__circuitid, but only for non-null altitude circuits
-    # (alt IS NOT NULL means the circuit has a recorded elevation, used as a proxy
-    #  for non-street circuits).  ON filter bucket: join param 1.
-    query.cjoin("raceid" => "Race",
-        filters=["circuitid__country__@ne" => "UK"],  # join param 1
-        join_type="LEFT",
-        warn=false)
+    # cjoin: attach Race, and Circuit via raceid__circuitid, but only for circuits outside the UK.
+    # ON filter bucket: join param 1. #973: the circuit predicate is written on the circuit's own hop
+    # with on() — inside the race cjoin's filters, `circuitid__country__@ne` reached past the hop and
+    # is refused. LEFT on both, as the relocated predicate's join was.
+    query.cjoin("raceid" => "Race", join_type="LEFT", warn=false)
+    query.on("raceid__circuitid", "country__@ne" => "UK", join_type = "LEFT")  # join param 1
 
     # on(): attach Driver but only for drivers born before 1985 (LEFT JOIN).
     # join bucket param 2. The explicit join_type keeps that "(LEFT JOIN)" true after #474 — this

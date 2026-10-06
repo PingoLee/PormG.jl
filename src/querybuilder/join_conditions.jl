@@ -21,11 +21,14 @@
 # field under the FK short form — or `nothing` when it names none. A field, not a relation: it may be a
 # plain column, which is the caller's call to refuse or accept.
 function _segment_field(q::SQLObject, model::PormGModel, seg::AbstractString, first_segment::Bool)
+  col = _resolve_fk_short_form(model, String(seg))
   if first_segment
-    link = _get_join_field(q, String(seg))
+    # Keyed by the base field the `cjoin` links — always the field's own name, so look it up under
+    # the resolved name: `status__…` reaches a `cjoin("status_id" => …)` link too.
+    link = _get_join_field(q, col)
     link !== nothing && return link
   end
-  return get(model.fields, _resolve_fk_short_form(model, String(seg)), nothing)
+  return get(model.fields, col, nothing)
 end
 
 # The model a target slot names: a model, or a binding name in the model's module.
@@ -200,7 +203,8 @@ end
 function _bind_join_conditions!(instruct::SQLInstruction)
   q = instruct.object
   for (path, cfg) in q.custom_join
-    bound = _lower_join_conditions(q, path, _join_path_target(q, path), cfg.filters)
+    target = _join_path_target(q, path)
+    bound = _lower_join_conditions(q, path, target, cfg.filters)
     if !isempty(q.ctes)
       for f in bound
         _refuse_cte_string_in_join(f, q, "a join ON clause (on(...) / cjoin(...))")
@@ -209,10 +213,20 @@ function _bind_join_conditions!(instruct::SQLInstruction)
     for f in bound
       _off_path_rhs_condition(f, q, path, 0)
     end
-    instruct.join_conditions[path] = bound
+    # Keyed by the canonical path, so a hop finds its conditions whichever spelling reached it — the
+    # FK short form `on("status", …)` against `values("status_id__name")`, or the reverse. Two
+    # spellings of one path in `custom_join` meet here and are ANDed, as two `on()` calls on one path
+    # always are.
+    key = _canonical_join_path(q, path)
+    instruct.join_conditions[key] = vcat(get(instruct.join_conditions, key, FilterType[]), bound)
+    cfg.join_type === nothing || (instruct.join_type_overrides[key] = cfg.join_type)
   end
   return instruct
 end
+
+# The canonical key of a hop being built (`_finish_hop!`, the PATH loop) — the one `_bind_join_conditions!`
+# files its conditions under.
+_join_key(instruct::SQLInstruction, join_path::AbstractString) = _canonical_join_path(instruct.object, join_path)
 
 # ── #973: a left side stays on its hop ──────────────────────────────────────────────────────────
 # A condition's left side names the joined row. A key whose RELATION part goes past the hop —

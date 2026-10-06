@@ -259,8 +259,9 @@ function _guard_no_handle(filter, ::Type{T}, reject::Function, context::String, 
   # `g.operand = g` on an internal `FExpression` is no longer one assignment away — that route is
   # closed by the type. What survives is the same container cycle arriving INDIRECTLY: `FObject.column`
   # admits `SQLTypeQ`/`SQLTypeQor` (`types.jl`), so a cyclic `Q` nested inside a function still reaches
-  # this walk. Be precise about what it buys, though: it protects **`cjoin_on`**, the
-  # one caller that reaches this sweep WITHOUT going through `_prefix_join_filter`. It does NOT make
+  # this walk. Be precise about what it buys, though: it protects **`cjoin_on`**, and the `on()` /
+  # `cjoin()` call-time sweep in `_join_conditions_as_written` (#977), the callers that reach it
+  # WITHOUT going through `_prefix_join_filter`. It does NOT make
   # the `on()` / `cjoin()` route cycle-safe, and the three arms of `_prefix_join_filter` fail
   # differently, so do not read a uniform rule into it:
   #
@@ -854,8 +855,16 @@ function _off_path_rhs_paths(x, q::SQLObject, path::String, depth::Int; f_slot::
     x.aggregate && return nothing
     _off_path_rhs_paths(x.column, q, path, depth + 1)
     for v in values(x.kwargs)
-      v isa Union{SQLTypeFunction,FExpression} && _off_path_rhs_paths(v, q, path, depth + 1)
+      # #977: a subquery in a `then`/`else` too — `_off_path_nested_rhs` already read it there, and
+      # its `OuterRef` escaped this walk only.
+      v isa Union{SQLTypeFunction,FExpression,SubqueryObject} && _off_path_rhs_paths(v, q, path, depth + 1)
     end
+  elseif x isa Union{QObject,QorObject}
+    # #977: a `When` over a `Q(...)` holds its conditions here. Inside a right-side value every column
+    # is a right-side column, whichever side of its own comparison it sits on.
+    for v in (x isa QObject ? x.filters : x.or); _off_path_rhs_paths(v, q, path, depth + 1); end
+  elseif x isa ExistsObject
+    _off_path_outer_refs(getfield(x.query, :object), q, path)
   elseif x isa SQLField
     _off_path_rhs_paths(x.field, q, path, depth + 1)
   elseif x isa OperObject

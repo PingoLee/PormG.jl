@@ -1203,11 +1203,6 @@ function _get_join_field(q::SQLObject, join_path::String)
   return config.field
 end
 
-function _get_join_type_override(q::SQLObject, join_path::String)
-  config = _get_join_config(q, join_path)
-  config === nothing && return nothing
-  return config.join_type
-end
 # The one place an unknown field name becomes a typed error (#446).
 #
 # #612: this block sits ABOVE the docstring. Between it and `function`, it detached the docstring

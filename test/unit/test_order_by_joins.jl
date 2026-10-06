@@ -401,10 +401,10 @@ end
 # first `?` took the relocated fragment's value and the two conditions swapped. Valid SQL, wrong rows.
 #
 # #973 refuses the key that relocated (a cjoin filter reaching past its hop); the deep predicate is now
-# written on its own hop, `on("parent__grandparent", …)`. The swap stays pinned, because declaration
-# order is now the way to make declaring and emitting disagree: (a) declares the DEEP predicate first.
-# The control pair is what earns this testset its length — the same two predicates, declared the other
-# way round, must render the same text and bind the same bucket.
+# written on its own hop, `on("parent__grandparent", …)`, and binds where its join is emitted. The swap
+# stays pinned as a regression guard: (a) declares the DEEP predicate first, the order the original bug
+# needed, and the control pair — the same two predicates declared the other way round — must render the
+# same text and bind the same bucket.
 # ─────────────────────────────────────────────────────────────────────────────
 _cj_two_depth(sku, code; deep_first = true) = begin
   q = OBJ.Cj_child.objects

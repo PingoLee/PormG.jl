@@ -163,7 +163,6 @@ if ccall(:jl_generating_output, Cint, ()) == 1
     Base.precompile(Tuple{QB.ChainCaller{typeof(QB._order_by!), QB.ObjectHandler}, String, Vararg{String}})  # 0.04 s
     Base.precompile(Tuple{typeof(QB.F), String})                                  # 0.01 s
     Base.precompile(Tuple{typeof(*), QB.FExpression, Float64})                    # 0.02 s
-    Base.precompile(Tuple{typeof(QB._get_join_type_override), QB.SQLObjectQuery, String}) # 0.005 s
     # add_parameter! bodyfunction forms (snoop run 2 — 0.05s combined)
     let fbody = try Base.bodyfunction(which(QB.add_parameter!, (QB.InstructionObject, Int64,))) catch; missing end
       ismissing(fbody) || precompile(fbody, (Bool, String, Nothing, typeof(QB.add_parameter!), QB.InstructionObject, Int64,))

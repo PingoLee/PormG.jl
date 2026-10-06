@@ -297,7 +297,7 @@ end
 #
 # #973 refused the original shape — `circuitid__country` inside the race cjoin's filters reaches past
 # the hop — so the circuit predicate is written on its own hop, `on("raceid__circuitid", …)`, INNER so it
-# restricts rows the way the cjoin's did. Declared FIRST, so declaration and emission order differ.
+# restricts rows the way the cjoin's did. Declared FIRST, the original bug's order.
 # Rendering/bucket coverage is in `test/unit/test_order_by_joins.jl` and
 # `test/unit/test_alignment_sqlite.jl`.
 # ─────────────────────────────────────────────────────────────────────────────

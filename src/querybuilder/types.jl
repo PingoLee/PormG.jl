@@ -458,9 +458,12 @@ end
   row_join::Vector{JoinRow} = JoinRow[] # the materialized joins, one typed row each (#487)
   row_path::Vector{String} = [] # array of path to map the row_join (model__model__ etc)
   # #977: each `on()` / `cjoin(filters = …)` path's conditions, BOUND — every left-side column lowered
-  # onto the path, every check run — by `_bind_join_conditions!` before anything renders. The query
+  # onto the path, every check run — by `_bind_join_conditions!` before anything renders, and its
+  # explicit `join_type`. Both keyed by the CANONICAL path (`_canonical_join_path`: the FK short form
+  # resolved), so `on("status", …)` and a traversal spelled `status_id__…` find each other. The query
   # object keeps them as written; a hop reads them from here (`_finish_hop!`).
   join_conditions::Dict{String,Vector{FilterType}} = Dict{String,Vector{FilterType}}()
+  join_type_overrides::Dict{String,String} = Dict{String,String}()
   # array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
   tab_field_cache::Dict{MemoKey,PormGField} = sizehint!(Dict{MemoKey,PormGField}(), 12) # cache to be used in join query (#474: keyed by MemoKey)
   # #27: the membership set of resolved JSON-lookup paths (e.g. "payload__driver"). Added when the

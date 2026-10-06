@@ -2085,7 +2085,8 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         # only name rows already here. A row appearing now is a binding gap, not a query to emit.
         value isa ModelJoin && _assert_condition_added_no_join(instruc, value, rows_before)
         condition_params = detach_parameters!(mark)
-        # #946: no alias remap here. `_on`/`_cjoin` prefix every key with the join path, so the
+        # #946: no alias remap here. Binding (`_bind_join_conditions!`, #977) prefixed every key with
+        # the join path, so the
         # condition's own columns already render under the joined alias, at any hop depth. What is
         # still under the base alias genuinely names the base row — above all an `OuterRef` in a
         # nested `Subquery`, which binds the query that owns the join. A text rewrite of the base
@@ -2149,13 +2150,10 @@ function build_row_join_sql_text(instruc::SQLInstruction)
   relocated_self_ref = Set{Int}()
   for idx in 1:length(instruc.row_join)
     haskey(on_clause_extras, idx) || continue
-    # #977: only a `cjoin_on` predicate can still name a join emitted after its own. A path join's
-    # conditions are bound onto their hop — the left side on the hop (#973), the right side on the
-    # base row, an ancestor or the hop itself (#962) — and every one of those is emitted at or before
-    # it, so there is nothing to relocate, and a text match there could only be a false one (an alias
-    # spelled inside a nested subquery). Moving `cjoin_on` onto the same binding is the follow-up
-    # that retires this phase.
-    instruc.row_join[idx] isa AnchorlessJoin || continue
+    # #977: in practice only a `cjoin_on` predicate still relocates. A path join's conditions are
+    # bound onto their hop — the left side on the hop (#973), the right side on the base row, an
+    # ancestor or the hop itself (#962) — and every one of those is emitted at or before it. Moving
+    # `cjoin_on` onto the same binding is the follow-up that retires this phase.
     extras = on_clause_extras[idx]
     relocated = falses(length(extras))
 
@@ -2511,7 +2509,10 @@ function build(object::SQLObject;
   with_scope(instruct; phase = :row, label = "a join condition") do
     for (path, config) in object.custom_join
       _refuse_many_to_many_join_path(object, path)
-      path ∈ instruct.row_path && continue
+      # Membership by CANONICAL path (#977): `row_path` holds each traversal's own spelling, so
+      # `on("status", …)` must recognise a join `values("status_id__name")` built.
+      key = _join_key(instruct, path)
+      any(p -> _join_key(instruct, p) == key, instruct.row_path) && continue
       _build_row_join(_join_path_columns(object, path, config), instruct)
     end
 

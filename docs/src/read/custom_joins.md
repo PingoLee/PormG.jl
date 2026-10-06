@@ -116,14 +116,16 @@ Only the row joined to `Result.resultid = 1` is returned because the INNER JOIN 
 
 ### Join with Q/Qor Filters (AND/OR Logic)
 
-Use `Q()` for AND logic and `Qor()` for OR logic in join conditions. Plain field names are automatically prefixed with the join path:
+Use `Q()` for AND logic and `Qor()` for OR logic in join conditions. Plain field names are automatically prefixed with the join path. A column of a further relation — the result's status — goes on that relation's own join, with `on()`:
 
 ```julia
-# Plain fields are auto-prefixed: "statusid__status" and nested fields work too
+# "positionorder" is auto-prefixed onto the result join; the status predicate rides on the
+# result__statusid join, which on() builds since values() already reaches it
 df = M.New_join_position.objects.
     cjoin("result" => "Result", filters=[
-        Q("statusid__status" => "Finished", Qor("positionorder" => 1, "positionorder" => 2))
+        Q("grid__@gte" => 1, Qor("positionorder" => 1, "positionorder" => 2))
     ]).
+    on("result__statusid", "status" => "Finished").
     values("result__statusid__status", "description") |> DataFrame
 ```
 
@@ -227,8 +229,10 @@ The reverse join is `LEFT` here because that is what PormG derives for it, not b
   `filter()` or `order_by()` through it. Before [#977](https://github.com/PingoLee/PormG.jl/issues/977)
   such an `on()` was dropped from the statement with no error, `join_type="INNER"` included, so a
   predicate meant to restrict rows restricted nothing. The join it builds is the one traversal would
-  build, so a reverse path (`on("test_deletion", …)`) repeats a base row once per matching child, as
-  `values("test_deletion__name")` would
+  build, with the type PormG derives for it: a reverse path repeats a base row once per matching child,
+  as `values("test_deletion__name")` would, and where that join is `INNER` (a `NOT NULL` ForeignKey) a
+  base row with no matching child is dropped. A query that aggregates over such a to-many join now
+  meets the [#74](https://github.com/PingoLee/PormG.jl/issues/74) fan-out guard
 - a path that crosses a `ManyToManyField` raises `QueryBuildError`: that join goes through a link
   table PormG does not attach an `ON` predicate or a `join_type` to, and it used to drop them
   silently. Put the predicate in `.filter(...)` instead
@@ -257,7 +261,8 @@ In an `on()` or `cjoin(filters = …)` condition:
   `on("driverid__results", …)`, `F("driverid__number")` is the driver's `number`.
 - **A left side stays on its hop.** A key whose relation part goes past the join path —
   `on("driverid", "results__grid" => 1)`, or `cjoin("raceid" => "Race", filters =
-  ["circuitid__country" => "Italy"])` — raises `FilterError` at the call. It names a row of a further
+  ["circuitid__country" => "Italy"])` — raises `FilterError`, at the call (or, for a path through a
+  `cjoin(field = …)` link, when the query is built). It names a row of a further
   relation, and PormG used to add that relation's join silently, with the predicate in its `ON`
   clause; for a reverse relation that join repeated base rows. Write the predicate on the hop that
   owns the column, `on("raceid__circuitid", "country" => "Italy")` (`on()` builds that join when

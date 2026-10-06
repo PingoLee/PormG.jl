@@ -584,9 +584,12 @@ end
 # gate covers a MODEL hop whose path equals a declared alias — the third instance of this family.
 # `track_path = !cte` for the same reason: a CTE hop must not claim its name in `row_path`.
 function _finish_hop!(instruct::SQLInstruction, row::JoinRow, join_path::String; cte::Bool)
-  join_type_override = cte ? nothing : _get_join_type_override(instruct.object, join_path)
-  # #977: the conditions as bound at the start of this build, not as stored on the query.
-  join_filters = cte ? nothing : get(instruct.join_conditions, join_path, nothing)
+  # #977: the conditions and join type as bound at the start of this build, not as stored on the
+  # query — under the canonical path, so the spelling this traversal used does not decide whether
+  # they are found.
+  key = cte ? "" : _join_key(instruct, join_path)
+  join_type_override = cte ? nothing : get(instruct.join_type_overrides, key, nothing)
+  join_filters = cte ? nothing : get(instruct.join_conditions, key, nothing)
   row = _with_config(row, join_type_override, join_filters)
   alias = _insert_join(instruct.row_join, row, instruct.row_path, join_path; track_path = !cte)
   return (alias, row)

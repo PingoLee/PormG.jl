@@ -142,6 +142,17 @@ const _JCM_SINGLE_CELLS = (
                 q.values("resultid", "driverid__code"))),
   ("P1 on first hop/rhs off-path, FK short form",
    (q, mod) -> (q.on("driverid", "code" => F("status__name")); q.values("resultid", "driverid__code"))),
+  # Two more right sides #962's walk missed (review of #977): a `When` over a `Q` naming an off-path
+  # relation, and a subquery's off-path `OuterRef` in a `Case` branch. Both used to land in the
+  # constructor's join.
+  ("P1 on first hop/rhs off-path in a When over Q",
+   (q, mod) -> (q.on("driverid", "number" => Case(When(Q("constructorid__name" => "x"), then = 1), default = 0));
+                q.values("resultid", "driverid__code"))),
+  ("P1 on first hop/rhs off-path OuterRef in a Case branch",
+   (q, mod) -> (q.on("driverid", "number" => Case(When("grid" => 1,
+                  then = Subquery(mod.Constructor.objects.filter("name" => OuterRef("constructorid__name")).values("constructorid"))),
+                  default = 0));
+                q.values("resultid", "driverid__code"))),
   # Handles are refused at the call (#444, #481).
   ("P1 on first hop/CTE handle",
    (q, mod) -> (q.on("driverid", "number" => CTE("ev", "sku")); q.values("resultid", "driverid__code"))),
@@ -183,6 +194,12 @@ const _JCM_SINGLE_CELLS = (
    (q, mod) -> (q.on("constructorid", "name" => "X"); q.values("resultid"))),
   ("P6 on() unreached path/INNER",
    (q, mod) -> (q.on("constructorid", "name" => "X", join_type = "INNER"); q.values("resultid"))),
+  # The FK short form and the field name are one path: an `on()` in one spelling decorates the join a
+  # traversal built in the other (review of #977: the predicate was dropped, INNER included).
+  ("P9 on() short form, traversed by field name/INNER",
+   (q, mod) -> (q.on("status", "name" => "X", join_type = "INNER"); q.values("resultid", "status_id__name"))),
+  ("P9 on() field name, traversed by short form/bare pair",
+   (q, mod) -> (q.on("status_id", "name" => "X"); q.values("resultid", "status__name"))),
   # A ManyToMany hop: its join goes through a link table the ON predicate was never attached to.
   ("P8 on() ManyToMany hop/traversed",
    (q, mod) -> (q.on("driverid__sponsors", "name" => "X"); q.values("resultid", "driverid__sponsors__name"))),
@@ -266,6 +283,27 @@ else
           @test get(got, k, missing) == expected[k]
         end
       end
+    end
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Join conditions: a correlated UPDATE ... FROM refuses one rather than dropping it (#977)
+  # Setting a column from a joined table renders the join in the WHERE clause, key columns only. An
+  # `on()` condition there was dropped (main: the UPDATE ignored it; with `on()` building its join, the
+  # values outnumbered the markers). Refused, as `cjoin_on` (#45) and a CTE (#394) already are.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "#977: a correlated UPDATE ... FROM refuses a join condition" begin
+    for (backend, mod) in _JCM_MODELS
+      q = mod.Result.objects
+      q.on("driverid", "code" => "X")
+      q.filter("grid" => 3)
+      err = try q.update("number" => F("driverid__number"), show_query = :inspection); nothing catch e; e end
+      @test err isa QueryBuildError
+      @test occursin("correlated UPDATE ... FROM", _jcm_message(err))
+      # Control: the same update with no join condition still renders.
+      ok = mod.Result.objects
+      ok.filter("grid" => 3)
+      @test ok.update("number" => F("driverid__number"), show_query = :inspection) isa AbstractDict
     end
   end
 

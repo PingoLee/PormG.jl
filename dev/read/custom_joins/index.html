@@ -103,8 +103,10 @@ The reverse join is `LEFT` here because that is what PormG derives for it, not b
 
 In an `on()` or `cjoin(filters = …)` condition:
 
-- **The key, and every `F` on the left side, names the joined row.** PormG prefixes it with the join
-  path, so `&quot;number&quot;` in `on(&quot;driverid&quot;, …)` is the driver&#39;s `number`.
+- **The key, and every column on the left side, names the joined row.** PormG prefixes it with the
+  join path, so `&quot;number&quot;` in `on(&quot;driverid&quot;, …)` is the driver&#39;s `number`. That holds for a key
+  inside `Q(...)`/`Qor(...)`, for a key with a transform (`&quot;dob__@year&quot;`), and for every column inside
+  a left-side expression or function (`Abs(F(&quot;number&quot;)) &gt; 0`), whatever `values()` selects.
 - **A right-side `F` names the base row**, the query&#39;s own model, in every spelling: a bare pair,
   `Q(...)`, `Qor(...)`, `OP(...)` or `F(...) == F(...)`, and at any hop depth. On a deep hop, a table
   earlier on the same path is reached through its path from the base model: in
@@ -116,8 +118,20 @@ the car number is the driver&#39;s permanent number:
 `Q(&quot;number&quot; =&gt; F(&quot;number&quot;))` and `F(&quot;number&quot;) == F(&quot;number&quot;)` render the same predicate. Before
 [#958](https://github.com/PingoLee/PormG.jl/issues/958), every spelling except the bare pair also
 prefixed the right side. That rendered `&quot;Tb_1&quot;.&quot;number&quot; = &quot;Tb_1&quot;.&quot;number&quot;`, which is true on every
-row, so the condition was silently dropped.
+row, so the condition was silently dropped. Before
+[#961](https://github.com/PingoLee/PormG.jl/issues/961), the left side had the mirror-image gap: a key
+inside `Q(...)` named the base row when `values()` also selected a base column of the same name, or
+when the key carried a transform, and so did a function on the left of an `F` comparison.
 
+A right side may not reach any **other** relation. On `on(&quot;constructorid&quot;, …)`, the right side
+`F(&quot;driverid__nationality&quot;)` names the driver, a relation beside the constructor rather than on its
+path. That raises `FilterError` when the query is built, wherever the column sits on a right side:
+in an `F`, inside a function or a `Case` branch, as a subquery&#39;s `OuterRef`, or on the right of a
+comparison nested in the left side, such as a `When` condition. SQL can only hold such a
+predicate in the constructor&#39;s `ON` clause if the driver&#39;s join comes first. PormG would have to move
+it onto another join, and which one would depend on the order of `values()`. Compare the two
+relations in `.filter(...)` instead:
+</code></pre><p>julia df = M.Result.objects.     filter(F(&quot;constructorid<strong>nationality&quot;) == F(&quot;driverid</strong>nationality&quot;)).     values(&quot;resultid&quot;, &quot;constructorid<strong>name&quot;, &quot;driverid</strong>surname&quot;) |&gt; DataFrame</p><pre><code class="nohighlight hljs">
 ### When `.cjoin()` is Applied
 
 The `.cjoin()` configuration is only applied when you access fields through the join path:
@@ -480,4 +494,4 @@ mermaid.initialize({
     startOnLoad: true,
     theme: "neutral"
 });
-</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Monday 5 October 2026 23:33">Monday 5 October 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Tuesday 6 October 2026 01:55">Tuesday 6 October 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

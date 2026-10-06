@@ -31,6 +31,23 @@ function _field_read_kind(f::PormGField)::Union{CanonicalType,Nothing}
   return kind
 end
 
+# #979 — the read kind of a projection the memo can stand for: a path, a `Joined`/`CTE` handle, an
+# outer reference (the `memo_node` gate in `get_select_query`). Asked AFTER the column resolved, so
+# it is the same answer whether this projection rendered it or reused the entry an earlier render
+# left under its name — a `When("finished" => true, …)` condition renders the bare column there.
+# A path takes its column's unnarrowed kind (`_projection_column_kind`, not the arithmetic-narrowed
+# `_operand_column_kind`: a `TimeField` or `DurationField` has a representation to undo even though
+# neither can be the left of date arithmetic); a handle reads as `Max` over it does (#824). A
+# boolean column reads as a `Bool` (#965), as `_field_read_kind` types it for a wildcard read; a
+# transformed path is the transform's result, not the column, so it keeps the kind it was given.
+function _memo_node_read_kind(original, instruc::SQLInstruction)::Union{CanonicalType,Nothing}
+  kind = original isa String ? _projection_column_kind(original, instruc) :
+         original isa Union{JoinedReference,CTEReference} ? _operand_kind(original, instruc) : nothing
+  kind === nothing && !(original isa AbstractString && occursin("__@", original)) &&
+    _expression_formatter(original, instruc) === Models.format_bool_sql && (kind = CBool())
+  return kind
+end
+
 function _record_wildcard_projection_kinds!(instruc::SQLInstruction)
   # An EXPLICIT `"*"` counts too, not only an empty projection list. `values("*")` and
   # `values("*", "team__founded")` both put every model column in the result under its own name, and
@@ -164,6 +181,13 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
     memo_node = v_copy.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject}
     if same_name && memo_node
       instruc.select[i] = cached
+      # #979: the entry is not always an earlier PROJECTION's, whose kind is already recorded under
+      # this name. A `When("finished" => true, …)` condition in an earlier projection renders the bare
+      # column under the same key, and recording nothing here left the column reading raw on SQLite
+      # (a 0/1 for a boolean, the stored text for a date). The memo already holds the resolution the
+      # kind is read from, so the answer is the one the render branch gives.
+      kind = _memo_node_read_kind(v_copy.field, instruc)
+      kind === nothing || (instruc.projection_kinds[Symbol(_projection_output_name(cached))] = kind)
     else
       @pormg_debug false
       # #564 — RENDER, AND CARRY OUT WHAT THE RESULT IS.
@@ -216,29 +240,25 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
           else
             v_copy.field = _get_select_query(original, instruc, _as=v_copy._as)
           end
-          # A plain path: render first (above), THEN type — the memo ordering `_render_left_typed`
-          # documents. A dotted join key cannot be typed before it has been resolved.
-          # `_projection_column_kind`, not the arithmetic-narrowed `_operand_column_kind`: a projected
-          # `TimeField` or `DurationField` has a representation to undo even though neither can be the
-          # left of date arithmetic.
-          original isa String && (kind = _projection_column_kind(original, instruc))
-          # #800: an extremum or a window value function has its operand's kind. Same order: render,
-          # then type.
-          original isa SQLTypeFunction &&
-            (kind = interval ? CInterval() : _function_projection_kind(original, instruc))
-          # #824: a `Joined(...)` / `CTE(...)` handle (and a `"cte__col"` path, retagged to one before
-          # this loop) reads as `Max` over it does — one rule, `_operand_kind`. #888: so does a
-          # `Subquery(...)`, as its one column — rendered above, which is what recorded its kind.
-          original isa Union{JoinedReference,CTEReference,SubqueryObject} &&
-            (kind = _operand_kind(original, instruc))
-          # #965: a boolean column (a path, a `Joined`/`CTE` handle, a `Subquery` of one) reads as a
-          # `Bool`, as `_field_read_kind` types it for a wildcard read. A transformed path is the
-          # transform's result, not the column, so it keeps the kind `_projection_column_kind` gave it.
-          # A function has answered already, through `_function_projection_kind`, whose rule for one
-          # is stricter than its formatter's (`_is_boolean_valued`).
-          kind === nothing && !(original isa SQLTypeFunction) &&
-            !(original isa AbstractString && occursin("__@", original)) &&
-            _expression_formatter(original, instruc) === Models.format_bool_sql && (kind = CBool())
+          # Render first (above), THEN type — the memo ordering `_render_left_typed` documents. A
+          # dotted join key cannot be typed before it has been resolved.
+          if memo_node
+            # A path or a `Joined(...)` / `CTE(...)` handle (a `"cte__col"` path is retagged to one
+            # before this loop). One rule, shared with the reuse branch above (#979).
+            kind = _memo_node_read_kind(original, instruc)
+          else
+            # #800: an extremum or a window value function has its operand's kind.
+            original isa SQLTypeFunction &&
+              (kind = interval ? CInterval() : _function_projection_kind(original, instruc))
+            # #888: a `Subquery(...)` reads as its one column — rendered above, which is what
+            # recorded its kind.
+            original isa SubqueryObject && (kind = _operand_kind(original, instruc))
+            # #965: a boolean value (a `Subquery` of one, an `Exists`) reads as a `Bool`. A function
+            # has answered already, through `_function_projection_kind`, whose rule for one is
+            # stricter than its formatter's (`_is_boolean_valued`).
+            kind === nothing && !(original isa SQLTypeFunction) &&
+              _expression_formatter(original, instruc) === Models.format_bool_sql && (kind = CBool())
+          end
         end
         kind
       end
@@ -252,8 +272,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       # is taken over — an entry under another name may be `_cache_join`'s, which is not ours.
       (cached === nothing || same_name) && memo_projection!(instruc, cache_key, instruc.select[i])
       # #564: keyed by the RESULT-ROW name, which is what the driver hands back. The reuse branch
-      # above needs no equivalent — it is taken only when the output name is EQUAL, so the entry it
-      # would write is the one already written under that key.
+      # above records under the same name, by the same rule (#979).
       if kind !== nothing
         name = _projection_output_name(v_copy)
         name === nothing || (instruc.projection_kinds[Symbol(name)] = kind)

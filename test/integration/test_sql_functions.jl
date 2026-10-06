@@ -1650,3 +1650,60 @@ end
         purge()
     end
 end
+
+@testset "A column projected after a When on it keeps its read type (#979)" begin
+    # Logic: a column projected after a `Case(When(<same column> …))` projection reads back with the
+    # type it has projected alone: a `BooleanField` as a `Bool`, a `DateField` as a `Date`, on the
+    # base model and across a foreign key.
+    # Why: the `When` condition renders the bare column into the projection memo under the column's
+    # own name, and the projection reused that entry without recording a read kind, so SQLite handed
+    # back the stored value: 0/1 for the flag, the date's text. `isa Bool` / `isa Date` fail on either.
+    # Its own rows, under a marker, so the shared New_join_position fixture (test_cjoin.jl) is untouched.
+    rows = (("s190-979", true), ("s190-979", false), ("s190-979", missing))
+    purge() = (q = M.New_join_position.objects; q.filter("description" => "s190-979"); q.exists() && q.delete())
+    purge()
+    try
+        for (label, flag) in rows
+            M.New_join_position.objects.create("description" => label, "boolean_field" => flag)
+        end
+        q = M.New_join_position.objects
+        q.filter("description" => "s190-979")
+        q.values("c" => Case([When("boolean_field" => true, then = 1)], default = 0), "boolean_field")
+        q.order_by("id")
+        got = q.list()
+        # `===` per row, not `isequal` over the vectors: `isequal(1, true)` holds, so a 0/1 would pass.
+        @test length(got) == length(rows)
+        for (r, (_, flag)) in zip(got, rows)
+            @test r[:boolean_field] === flag
+        end
+        @test [r[:c] for r in got] == [1, 0, 0]
+    finally
+        purge()
+    end
+
+    # The F1 fixture, read-only: race 1000 is the 2018 Hungarian GP, race 1100 the 2023 Australian GP.
+    hungary = Date(2018, 7, 29)
+    r = M.Race.objects
+    r.filter("raceid__@in" => [1000, 1100])
+    r.values("raceid", "c" => Case([When("date" => hungary, then = 1)], default = 0), "date")
+    r.order_by("raceid")
+    races = r.list()
+    @test all(x -> x[:date] isa Date, races)
+    @test [x[:date] for x in races] == [hungary, Date(2023, 4, 2)]
+    @test [x[:c] for x in races] == [1, 0]
+
+    j = M.Result.objects
+    j.filter("raceid__@in" => [1000, 1100])
+    j.values("resultid", "c" => Case([When("raceid__date" => hungary, then = 1)], default = 0), "raceid__date")
+    j.order_by("resultid")
+    joined = j.list()
+    @test !isempty(joined)
+    @test all(x -> x[:raceid__date] isa Date, joined)
+    @test all(x -> x[:c] == (x[:raceid__date] == hungary ? 1 : 0), joined)
+    # The same column projected alone, which always rendered and so was always typed.
+    alone = M.Result.objects
+    alone.filter("raceid__@in" => [1000, 1100])
+    alone.values("resultid", "raceid__date")
+    alone.order_by("resultid")
+    @test [x[:raceid__date] for x in joined] == [x[:raceid__date] for x in alone.list()]
+end

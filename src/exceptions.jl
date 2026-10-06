@@ -126,15 +126,80 @@ end
 
 """
     InvalidValueError(msg) <: PormGError
+    InvalidValueError(reason, kind; op, model, field, field_type, row) <: PormGError
 
-A value failed coercion/type validation on insert/update, an identifier failed the fail-closed
-safety check, or an interval/duration literal could not be parsed. Also raised by the
-`Models.format_*_sql` coercion helpers, which the insert/update path calls (#239).
+A value was refused: it failed coercion/type validation on a filter, insert or update, an
+identifier failed the fail-closed safety check, or an interval/duration literal could not be
+parsed. Raised by the `Models.format_*_sql` coercion helpers, which every write and filter path
+calls (#239).
+
+**A refusal never contains the value it refused** (#971): a bound value can be a password or any
+other secret, and an app may hand `e.msg` to an HTTP client. The message names where it happened —
+the operation, the field, the row of a bulk write — and why, and the value stays out of it.
+
+Fields, beyond the rendered `msg`:
+- `kind::Symbol` — what was wrong, as data: `:type` (a value of the wrong type), `:format` (text
+  that does not parse), `:range` (parses, but out of bounds), `:nul` (a NUL character, #951),
+  `:json_nul` (a NUL inside a JSON document, #954), `:other` for everything else.
+- `reason::String` — the formatter's explanation, without any field or row.
+- `op`, `model`, `field`, `field_type`, `row` — where it happened, `nothing` until a funnel knows.
+  A formatter raises with the reason alone; the funnel that knows the field and row attaches them
+  once (`with_location`).
 """
 struct InvalidValueError <: PormGError
   msg::String
-  InvalidValueError(msg::AbstractString) = new(_emsg(msg))
+  kind::Symbol
+  reason::String
+  op::Union{Nothing, String}
+  model::Union{Nothing, String}
+  field::Union{Nothing, String}
+  field_type::Union{Nothing, String}
+  row::Union{Nothing, Int}
+
+  InvalidValueError(msg::AbstractString) =
+    (m = _emsg(msg); new(m, :other, m, nothing, nothing, nothing, nothing, nothing))
+  function InvalidValueError(reason::AbstractString, kind::Symbol;
+                             op = nothing, model = nothing, field = nothing,
+                             field_type = nothing, row::Union{Nothing, Integer} = nothing)
+    r = _emsg(reason)
+    o, m, f, t = _opt_string(op), _opt_string(model), _opt_string(field), _opt_string(field_type)
+    n = row === nothing ? nothing : Int(row)
+    new(_render_refusal(r, o, m, f, t, n), kind, r, o, m, f, t, n)
+  end
 end
+
+_opt_string(x) = x === nothing ? nothing : String(string(x))
+
+# The one place a refusal's text is assembled (#971). The refused value is not an input to it, so
+# no message built here can carry one:
+#   Error in <op>[, row <n>][ for model <M>][, field `<f>`][ (<type>)]: <reason>
+function _render_refusal(reason::String, op, model, field, field_type, row)
+  op === nothing && model === nothing && field === nothing && row === nothing && return reason
+  io = IOBuffer()
+  print(io, "Error in ", op === nothing ? "a value" : op)
+  row === nothing || print(io, ", row ", row)
+  model === nothing || print(io, " for model ", model)
+  field === nothing || print(io, ", field `", field, "`")
+  field_type === nothing || print(io, " (", field_type, ")")
+  print(io, ": ", reason)
+  return String(take!(io))
+end
+
+"""
+    with_location(e::InvalidValueError; op, model, field, field_type, row) -> InvalidValueError
+
+`e` with its location filled in and its message rendered again. A part `e` already carries is kept
+— the funnel nearest the value knows it best — so a refusal that passes through two funnels (a
+single-cell format inside a bulk writer) is located once, and the second adds only the row (#971).
+"""
+with_location(e::InvalidValueError; op = nothing, model = nothing, field = nothing,
+              field_type = nothing, row = nothing) =
+  InvalidValueError(e.reason, e.kind;
+                    op = something(e.op, op, Some(nothing)),
+                    model = something(e.model, model, Some(nothing)),
+                    field = something(e.field, field, Some(nothing)),
+                    field_type = something(e.field_type, field_type, Some(nothing)),
+                    row = something(e.row, row, Some(nothing)))
 
 """
     UnsupportedConnectionError(msg) <: PormGError

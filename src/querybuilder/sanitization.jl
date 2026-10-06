@@ -36,7 +36,7 @@ const SAFE_JSON_KEY_PATTERN = r"\A[\p{L}_][\p{L}\p{M}\p{N}_]*\z"
 function _validate_identifier(identifier::String)::String
     if !occursin(SAFE_IDENTIFIER_PATTERN, identifier)
         # `repr`, so a refused newline or other control character is visible in the message (#794).
-        throw(InvalidValueError(
+        throw(InvalidValueError(  # refusal-value-ok: an identifier the developer wrote (#794)
             "Invalid SQL identifier: $(repr(identifier)). PormG requires a plain identifier here because " *
             "this name is used as a query ALIAS — a join alias, a `.with(...)` CTE name, a " *
             "`cjoin_on` alias, or a `values(\"label\" => ...)` label. A physical table or column may " *
@@ -111,15 +111,28 @@ other rejection — a bad **value**, a protected primary key, a many-to-many rel
 `InvalidValueError` (#231; was `ErrorException`).
 SQL expressions (SQLTypeF, SQLTypeFunction) skip data validation as they are evaluated by the DB.
 """
-function _validation_error(operation::String, model::PormGModel, field::String, message::String; suggestion::Union{Nothing, String}=nothing)
+function _validation_error(operation::String, model::PormGModel, field::String, message::String;
+                           suggestion::Union{Nothing, String}=nothing, kind::Symbol=:other)
+    # A write refusal names the operation, model and field, and why — never the value (#971): a
+    # bound value can be a secret, and an app may return `e.msg` to an HTTP client. The rendering
+    # lives in `InvalidValueError`'s constructor, the one place every refusal's text is assembled.
     suffix = suggestion === nothing ? "" : " Suggested fix: $suggestion"
-    throw(InvalidValueError("Error in $operation for model $(model.name), field \"$field\": $message$suffix"))
+    throw(InvalidValueError("$message$suffix", kind; op = operation, model = model.name, field = field))
 end
 
 function _type_mismatch_error(operation::String, model::PormGModel, field::String, value::Any, expected::String; suggestion::Union{Nothing, String}=nothing)
     actual_type = value === nothing ? "Nothing" : ismissing(value) ? "Missing" : string(typeof(value))
-    preview = value === nothing || ismissing(value) ? "" : " (value=$(repr(value)))"
-    _validation_error(operation, model, field, "expected $expected, got $actual_type$preview"; suggestion=suggestion)
+    _validation_error(operation, model, field, "expected $expected, got $actual_type"; suggestion=suggestion, kind=:type)
+end
+
+# A formatter's refusal, caught by a validator: keep its reason and kind, add the location. Any other
+# error is named by its type alone — a `MethodError`'s or a `Dates` parser's own text quotes the
+# value it was given.
+function _formatter_refusal(e, operation::String, model::PormGModel, field::String; suggestion::Union{Nothing, String}=nothing)
+    (e isa InterruptException || e isa StackOverflowError) && rethrow(e)
+    e isa InvalidValueError ||
+        _validation_error(operation, model, field, "the value could not be formatted ($(typeof(e)))"; suggestion=suggestion)
+    _validation_error(operation, model, field, e.reason; suggestion=suggestion, kind=e.kind)
 end
 
 function _is_integer_field(f_meta)::Bool
@@ -310,7 +323,7 @@ function _validate_decimal_value(model::PormGModel, field::String, value::Any, o
             Models.format_number_sql(value)
             return true
         catch e
-            _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass a literal numeric string like \"123.45\" or a Julia numeric value")
+            _formatter_refusal(e, operation, model, field; suggestion="pass a literal numeric string like \"123.45\" or a Julia numeric value")
         end
     else
         _type_mismatch_error(operation, model, field, value, "a numeric value or numeric string"; suggestion="pass an Int64, Float64, Decimals.Decimal, or a literal numeric string")
@@ -352,7 +365,7 @@ function _validate_date_value(model::PormGModel, field::String, value::Any, oper
             Models.format_date_sql(value)
             return true
         catch e
-            _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass a Date, DateTime, ZonedDateTime, or a YYYY-MM-DD string")
+            _formatter_refusal(e, operation, model, field; suggestion="pass a Date, DateTime, ZonedDateTime, or a YYYY-MM-DD string")
         end
     else
         _type_mismatch_error(operation, model, field, value, "a Date, DateTime, ZonedDateTime, or YYYY-MM-DD string"; suggestion="normalize the value to a calendar date before calling $operation")
@@ -370,10 +383,10 @@ function _validate_time_value(model::PormGModel, field::String, value::Any, oper
                 Time(value)
                 return true
             catch e
-                _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass a Time object or a valid HH:MM:SS string")
+                _formatter_refusal(e, operation, model, field; suggestion="pass a Time object or a valid HH:MM:SS string")
             end
         else
-            _validation_error(operation, model, field, "invalid time format: $value"; suggestion="pass a Time object or an HH:MM:SS string")
+            _validation_error(operation, model, field, "invalid time format"; suggestion="pass a Time object or an HH:MM:SS string", kind=:format)
         end
     else
         _type_mismatch_error(operation, model, field, value, "a Time object or time string"; suggestion="use Time(...) or normalize to HH:MM:SS")
@@ -386,7 +399,7 @@ function _validate_duration_value(model::PormGModel, field::String, value::Any, 
         return true
     catch e
         if value isa Union{Period, Dates.CompoundPeriod, AbstractString}
-            _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass a Period, CompoundPeriod, or a duration string like \"1:27.452\"")
+            _formatter_refusal(e, operation, model, field; suggestion="pass a Period, CompoundPeriod, or a duration string like \"1:27.452\"")
         else
             _type_mismatch_error(operation, model, field, value, "a Period, CompoundPeriod, or duration string"; suggestion="use Minute(1) + Second(27) + Millisecond(452) or a string like \"1:27.452\"")
         end
@@ -401,7 +414,7 @@ function _validate_datetime_value(model::PormGModel, field::String, value::Any, 
             Models.format_timezone_sql(value)
             return true
         catch e
-            _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass a DateTime, ZonedDateTime, or a datetime string matching the configured timestamp format")
+            _formatter_refusal(e, operation, model, field; suggestion="pass a DateTime, ZonedDateTime, or a datetime string matching the configured timestamp format")
         end
     else
         _type_mismatch_error(operation, model, field, value, "a DateTime, ZonedDateTime, or timezone-aware datetime string"; suggestion="use DateTime(...) or ZonedDateTime(...)")
@@ -416,7 +429,7 @@ function _validate_uuid_value(model::PormGModel, field::String, value::Any, oper
             Models.format_uuid_sql(value)
             return true
         catch e
-            _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass a UUID or a string in the format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
+            _formatter_refusal(e, operation, model, field; suggestion="pass a UUID or a string in the format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
         end
     else
         _type_mismatch_error(operation, model, field, value, "a UUID or UUID-formatted string"; suggestion="use UUIDs.uuid4() or a string like \"550e8400-e29b-41d4-a716-446655440000\"")
@@ -436,7 +449,7 @@ function _validate_network_value(model::PormGModel, field::String, f_meta, value
             return true
         catch e
             e isa InvalidValueError || rethrow()
-            _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass an address string like $example or a Sockets.IPv4 / Sockets.IPv6")
+            _formatter_refusal(e, operation, model, field; suggestion="pass an address string like $example or a Sockets.IPv4 / Sockets.IPv6")
         end
     else
         _type_mismatch_error(operation, model, field, value, cidr ? "a CIDR network string" : "an IP address string"; suggestion="pass a string like $example or a Sockets.IPv4 / Sockets.IPv6")
@@ -455,7 +468,7 @@ function _validate_array_value(model::PormGModel, field::String, f_meta, value::
             Models.parse_pg_array_literal(value)
         catch e
             e isa InvalidValueError || rethrow()
-            _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass a Vector, e.g. [1, 2]")
+            _formatter_refusal(e, operation, model, field; suggestion="pass a Vector, e.g. [1, 2]")
         end
     elseif value isa Union{AbstractVector, Tuple}
         value
@@ -490,8 +503,7 @@ function _validate_json_value(model::PormGModel, field::String, value::Any, oper
             Models.format_json_sql(value)
             return true
         catch e
-            _is_json_nul_refusal(e) && throw(_json_nul_field_refusal(field, operation))   # #954
-            _validation_error(operation, model, field, sprint(showerror, e); suggestion="pass a valid JSON string, Dict, Vector, or scalar value")
+            _formatter_refusal(e, operation, model, field; suggestion="pass a valid JSON string, Dict, Vector, or scalar value")
         end
     else
         _type_mismatch_error(operation, model, field, value, "a valid JSON value (Dict, Vector, String, Number, Bool)"; suggestion="serialize to a JSON string or use a Dict/Vector")
@@ -537,7 +549,8 @@ _written_text(f_meta, value) = nothing
 const _CollectionValue = Union{AbstractArray, Tuple, AbstractDict, NamedTuple}
 _single_value(value, ::AbstractString, ::AbstractString) = value
 function _single_value(value::_CollectionValue, field::AbstractString, op::AbstractString)
-  throw(InvalidValueError("Error in $op, field `$field` was given a $(typeof(value)): a column holds a single value, not a collection."))
+  throw(InvalidValueError("The value is a $(typeof(value)): a column holds a single value, not a collection.",
+                          :type; op = op, field = field))
 end
 
 # The fields whose formatter turns a collection into ONE value: a `JSONField` serializes it to one
@@ -555,32 +568,22 @@ _takes_collection(f_meta) = _is_json_field(f_meta) || _is_binary_field(f_meta) |
 # `_bulk_cell_error`, its row; the execution funnels refuse it again for filters and raw params.
 # Checked after the formatter, on what would actually bind: a `BinaryField`'s `PormGBytes` passes,
 # an `ArrayField` literal is checked whole. A `JSONField` value carries its NUL as the escape
-# `\u0000`, which `format_json_sql` refuses itself (#954); `_format_json_named` names the field.
+# `\u0000`, which `format_json_sql` refuses itself (#954).
+#
+# This is the single-write funnel that locates a formatter's refusal (#971): the formatter knows the
+# reason, this knows the field, and the refusal carries both as data — no funnel re-reads its text.
 function _format_single(f_meta, field::AbstractString, value, op::AbstractString)
   _refuse_collection(f_meta, field, value, op)
-  formatted = _single_value(_is_json_field(f_meta) ? _format_json_named(f_meta, field, value, op) :
-                            f_meta.formatter(value), field, op)
-  _contains_nul(formatted) && throw(InvalidValueError(
-    "Error in $op, field `$field` contains a NUL character (\\0). " * NUL_REFUSAL_REASON))
-  return formatted
-end
-
-# #954 — a NUL in a JSON value is refused by `format_json_sql` itself, the one funnel every JSON value
-# passes (writes, a `@jcontains` or document filter, `get_or_create`'s lookup, a default). The
-# formatter cannot know the field, so the write path re-raises the refusal naming it, in #951's
-# wording — which is also what lets `_bulk_cell_error` name the row. Matched by its exact message:
-# any other formatter error passes as raised.
-_is_json_nul_refusal(e) = e isa InvalidValueError && e.msg == Models.JSON_NUL_REFUSAL
-_json_nul_field_refusal(field::AbstractString, op::AbstractString) = InvalidValueError(
-  "Error in $op, field `$field` contains a NUL character (\\0, written \\u0000 in JSON). " * Models.JSON_NUL_REASON)
-
-function _format_json_named(f_meta, field::AbstractString, value, op::AbstractString)
-  try
-    return f_meta.formatter(value)
+  formatted = try
+    f_meta.formatter(value)
   catch e
-    _is_json_nul_refusal(e) && throw(_json_nul_field_refusal(field, op))
+    e isa InvalidValueError && throw(with_location(e; op = op, field = field))
     rethrow()
   end
+  formatted = _single_value(formatted, field, op)
+  _contains_nul(formatted) && throw(InvalidValueError(
+    "The value contains a NUL character (\\0). " * NUL_REFUSAL_REASON, :nul; op = op, field = field))
+  return formatted
 end
 
 # The raw-value half on its own, for a caller that runs the bare formatter to find the failing cell
@@ -691,7 +694,7 @@ function _validate_field_value(model::PormGModel, field::String, f_meta, value::
     elseif hasfield(typeof(f_meta), :max_length) && f_meta.max_length !== nothing &&
            (text = _written_text(f_meta, value)) !== nothing
         if length(text) > f_meta.max_length
-            written = value isa AbstractString ? "" : " (the $(typeof(value)) is written as $(repr(text)))"
+            written = value isa AbstractString ? "" : " (the $(typeof(value)), written as text)"
             _validation_error(operation, model, field, "max_length is $(f_meta.max_length), but the provided value has length $(length(text))$written")
         end
     end

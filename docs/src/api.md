@@ -818,7 +818,7 @@ field, and for the few with their own `showerror` it returns the richer renderin
 | `UnsafeMutationError` | An `update()`/`delete()` was requested without a filter, or an `update()`/`delete()`/`bulk_update()` on another unsafe shape. |
 | `ProtectedError` | A `delete()` was refused because rows reference the target through a `ForeignKey` with `on_delete = PROTECT`/`RESTRICT` — the data forbids it; delete or reassign the referencing rows first. |
 | `BackendCapabilityError` | The active backend cannot do this: PG-only lookups on SQLite (JSONB, `iunaccent_*`, the `regex` family), explicit window `frame=` on SQLite, `bulk_copy` on SQLite, `with_advisory_lock(...; on_missing_lock = :error)` on SQLite, a `ToChar` format outside the portable table on SQLite, a `DecimalField` wider than the 15 digits SQLite stores exactly (at `makemigrations`), or a too-old SQLite library. Change the query or the backend. |
-| `InvalidValueError` | A **value** failed coercion/type validation on insert/update, an identifier failed the safety check, an interval/duration could not be parsed, or a piece of SQL grammar PormG must write itself — a `Cast` type name, an `Extract` part, a window `frame=` — is outside the grammar it accepts. |
+| `InvalidValueError` | A **value** failed coercion/type validation on a filter, an insert or an update — the message names where, never the value, and `kind`/`field`/`row` carry it as data (#971) — an identifier failed the safety check, an interval/duration could not be parsed, or a piece of SQL grammar PormG must write itself — a `Cast` type name, an `Extract` part, a window `frame=` — is outside the grammar it accepts. |
 | `WritesDisabledError` | The connection is not permitted to insert/update/delete — `change_data: false` in `connection.yml`, which is why it lives under `ConfigurationError`. (Renamed from `PermissionError` in the pre-publish naming pass.) |
 | `UnsupportedConnectionError` | A connection object that is neither PostgreSQL nor SQLite reached an execution path — an internal PormG dispatch bug; please report it. (Capability limits are `BackendCapabilityError`; an unbound model is `InvalidConfigurationError`.) |
 | `DoesNotExist` / `MultipleObjectsReturned` | `get()` found zero / more than one row. |
@@ -832,7 +832,7 @@ field, and for the few with their own `showerror` it returns the richer renderin
 | `ModelDefinitionError` | A model/schema definition is invalid — more than one primary key, a duplicate `related_name`, an illegal field name, a `UniqueConstraint` or `Index` naming an unknown field, a `CheckConstraint` with no name or a malformed condition, two constraints sharing a name, a constrained `ForeignKey` into an unmanaged model, or an unresolvable `ForeignKey` target. |
 
 `FieldValidationError` fires while *defining* a model; `InvalidValueError` fires while coercing a
-*value* on the insert/update path. That is the distinction between the two.
+*value*, on a filter or a write. That is the distinction between the two.
 
 **Configuration and migrations**
 

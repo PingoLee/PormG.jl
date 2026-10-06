@@ -126,7 +126,7 @@ json954_rows(pool) = [(r.id, r.telemetry) for r in fetch(pool, "SELECT id, telem
                        ("get_or_create", () -> model.objects.get_or_create("telemetry" => NUL954)))
       e = json954_refused(call)
       @test is_json_nul_refusal(e)
-      @test occursin("Error in $op, field `telemetry` contains a NUL", e.msg)
+      @test occursin("Error in $op", e.msg) && occursin("field `telemetry`: A JSONField value contains a NUL", e.msg)
     end
     # Bulk writers name the row too — and must not fall through to the generic "can't be formatted"
     # message, which prints the value.
@@ -137,16 +137,16 @@ json954_rows(pool) = [(r.id, r.telemetry) for r in fetch(pool, "SELECT id, telem
     @test json954_rows(pool) == seeded
 
     # A JSON *string* on the filter path: a plain filter, an `@in` list, and `get_or_create`, whose
-    # lookup filters before it formats a write. The filter path converts a formatter's
-    # `InvalidValueError` into a `FilterError` that prints the value, so this refusal is passed
-    # through it named instead — never echoing the text after the NUL.
+    # lookup filters before it formats a write. The filter path locates the formatter's
+    # `InvalidValueError` on the field (#971) and, like every refusal, never echoes the text after
+    # the NUL.
     nul_text = raw"""{"note":"box\u0000secret"}"""
     for call in (() -> model.objects.filter("telemetry" => nul_text).list(),
                  () -> model.objects.filter("telemetry__@in" => [nul_text]).list(),
                  () -> model.objects.get_or_create("telemetry" => nul_text))
       e = json954_refused(call)
       @test is_json_nul_refusal(e)
-      @test occursin("Error in filter, field `telemetry` contains a NUL", e.msg)
+      @test occursin("Error in filter, field `telemetry`", e.msg) && occursin("A JSONField value contains a NUL", e.msg)
     end
     @test json954_rows(pool) == seeded
 

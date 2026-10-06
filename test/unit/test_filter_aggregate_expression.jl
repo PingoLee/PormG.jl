@@ -596,7 +596,7 @@ end
       q = Model_.objects
       q.values("ahead" => F("lap") > F("points"))
       q.filter("ahead" => 5)
-      @test_throws PormG.FilterError inspect_query(q)
+      @test_throws PormG.InvalidValueError inspect_query(q)
       q = Model_.objects
       q.values("ahead" => F("lap") > F("points"))
       q.filter("ahead" => 1)
@@ -910,7 +910,7 @@ end
       @test last(inspect_query(q)[:parameters]) === (pg ? true : 1)
       # #949's rule now reaches it: an integer other than 0/1 is refused rather than bound.
       err = _f_agg_build_error(Model_, q -> (q.values("lap", "c" => bool_case()); q.filter("c" => 5)))
-      @test err isa PormG.FilterError
+      @test err isa PormG.InvalidValueError
     end
   end
 end

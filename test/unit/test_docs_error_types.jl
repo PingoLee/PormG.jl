@@ -310,7 +310,7 @@ const DOCERR_CASES = [
         # written: `filter("raceid" => "r91__raceid")` raises, `filter("surname" => "d91__surname")`
         # returns zero rows.
         "read/subqueries_and_ctes.md — a CTE-rooted string on a filter's right is a value, not a column",
-        FilterError,
+        InvalidValueError,
         () -> begin
             ev = DOCERR_STATUS_PG.objects
             ev.values("statusid", "status")
@@ -387,8 +387,8 @@ const DOCERR_CASES = [
         # #707. The page states one typing rule for an alias filter, top-level or inside `Q`. The
         # `Q` spelling is the half that used to bind a wrong-typed value unchecked, so it is the one
         # pinned here: a number alias refuses a string, naming the alias.
-        "read/filters_and_aggregates.md — a wrong-typed alias filter value raises FilterError on every spelling",
-        FilterError,
+        "read/filters_and_aggregates.md — a wrong-typed alias filter value raises InvalidValueError on every spelling (#971)",
+        InvalidValueError,
         () -> begin
             q = DOCERR_RESULT_PG.objects
             q.values("driverid", "double_points" => F("points") * 2)
@@ -792,12 +792,12 @@ const DOCERR_CASES = [
     # branch from the scalar and `BETWEEN` arms those issues converted.
     (
         "read/filters_and_aggregates.md — a period number outside its range",
-        FilterError,
+        InvalidValueError,
         () -> DOCERR_RACE_PG.objects.filter("date__@quarter" => 9).list(show_query = :dict),
     ),
     (
         "read/functions_and_dates.md — a period transform compared against a non-number",
-        FilterError,
+        InvalidValueError,
         () -> DOCERR_RACE_PG.objects.filter("date__@quarter" => "abc").list(show_query = :dict),
     ),
     # #654 — the *Which Lookups Work on an Aggregate Alias* section says `@isnull` on a `Count` alias
@@ -1336,7 +1336,7 @@ const DOCERR_CASES = [
     ),
     (
         "fields.md — a numeric string with a 0x/0b/0o prefix raises in a filter (#773)",
-        FilterError,
+        InvalidValueError,
         () -> let m = Model("docerr_laps_773f", id = IDField(), laps = IntegerField())
             m.connect_key = "docerr_pg"; m._module = Main
             q = m.objects; q.filter("laps" => "0x10"); q.list(show_query = :dict)
@@ -1355,7 +1355,7 @@ const DOCERR_CASES = [
     ),
     (
         "fields.md — a float compared with a text field raises in a filter (#860)",
-        FilterError,
+        InvalidValueError,
         () -> let m = Model("docerr_postext_860f", id = IDField(), positiontext = CharField())
             m.connect_key = "docerr_pg"; m._module = Main
             q = m.objects; q.filter("positiontext" => 1.0); q.list(show_query = :dict)
@@ -1400,7 +1400,7 @@ const DOCERR_CASES = [
     ),
     (
         "fields.md — a filter value that is not a valid address raises (#28)",
-        FilterError,
+        InvalidValueError,
         () -> let m = Model("docerr_pitwall_28f", id = IDField(), client_ip = GenericIPAddressField())
             m.connect_key = "docerr_pg"; m._module = Main
             q = m.objects; q.filter("client_ip" => "10.1"); q.list(show_query = :dict)
@@ -1423,7 +1423,7 @@ const DOCERR_CASES = [
     # `test/unit/test_network_address_fields.jl`; these hold the page's sentences.
     (
         "fields.md — a network containment value that is not an address raises (#904)",
-        FilterError,
+        InvalidValueError,
         () -> let m = Model("docerr_pitwall_904a", id = IDField(), client_ip = GenericIPAddressField())
             m.connect_key = "docerr_pg"; m._module = Main
             q = m.objects; q.filter("client_ip__@net_contained" => "10.20.0.0/33"); q.list(show_query = :dict)
@@ -1602,7 +1602,7 @@ const DOCERR_CASES = [
     # rendering is pinned in `test_uuid_pattern_lookups.jl`.
     (
         "fields.md — a malformed UUID in an equality filter raises (#902)",
-        FilterError,
+        InvalidValueError,
         () -> let m = Model("docerr_token_902", id = IDField(), token = UUIDField())
             m.connect_key = "docerr_pg"; m._module = Main
             q = m.objects; q.filter("token" => "550e"); q.list(show_query = :dict)
@@ -1631,7 +1631,7 @@ const DOCERR_CASES = [
     ),
     (
         "fields.md — a Bool compared with a text field raises in a filter (#876)",
-        FilterError,
+        InvalidValueError,
         () -> let m = Model("docerr_postext_876f", id = IDField(), positiontext = CharField())
             m.connect_key = "docerr_pg"; m._module = Main
             q = m.objects; q.filter("positiontext" => true); q.list(show_query = :dict)

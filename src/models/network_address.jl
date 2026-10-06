@@ -41,7 +41,7 @@ const _IP_DECIMAL = r"^(?:0|[1-9][0-9]{0,2})$"
 const _IPV6_GROUP = r"^[0-9A-Fa-f]{1,4}$"
 
 _ip_invalid(raw, why::AbstractString) =
-  throw(InvalidValueError("Invalid IP address $(repr(String(raw))): $why."))
+  throw(InvalidValueError("Invalid IP address: $why.", :format))
 
 function _parse_ipv4(s::AbstractString)::Union{UInt32, Nothing}
   parts = split(s, '.')
@@ -188,9 +188,9 @@ end
 function _inet_text(value, unpack_ipv4::Bool)::String
   p = _parsed_ip(value)
   p.bits === nothing || throw(InvalidValueError(
-    "Invalid IP address $(repr(String(value))): a GenericIPAddressField holds one host address, and " *
-    "'/$(p.bits)' makes it a network. Store the address without the prefix, or use a CIDRField " *
-    "for a network."))
+    "Invalid IP address: a GenericIPAddressField holds one host address, and a " *
+    "'/$(p.bits)' prefix makes it a network. Store the address without the prefix, or use a " *
+    "CIDRField for a network.", :format))
   # Django's `unpack_ipv4`: only the IPv4-MAPPED form (`::ffff:a.b.c.d`) is a v4 address in v6
   # clothing. The IPv4-compatible form (`::a.b.c.d`) is deprecated and is left as written, as Django
   # leaves it.
@@ -239,10 +239,10 @@ function format_cidr_sql(value::Union{AbstractString, Sockets.IPAddr})::String
   bits = something(p.bits, _ip_maxbits(p.family))
   mask = _ip_host_mask(p.family, bits)
   if p.addr & mask != 0
-    network = _render_ip(p.family, p.addr & ~mask)
     throw(InvalidValueError(
-      "Invalid CIDR network $(repr(String(value))): it has bits set to the right of the /$bits " *
-      "mask. Did you mean '$network/$bits'? A single host address belongs in a GenericIPAddressField."))
+      "Invalid CIDR network: it has bits set to the right of the /$bits mask. Write the " *
+      "network address, with those host bits zero. A single host address belongs in a " *
+      "GenericIPAddressField.", :format))
   end
   return "$(_render_ip(p.family, p.addr))/$bits"
 end
@@ -284,6 +284,6 @@ function check_ip_protocol(protocol::AbstractString, text::AbstractString)::Stri
   family = occursin(':', text) ? "ipv6" : "ipv4"
   family == protocol && return String(text)
   _label(p) = p == "ipv4" ? "IPv4" : "IPv6"
-  throw(InvalidValueError("'$text' is an $(_label(family)) address, but this field accepts " *
-                          "$(_label(protocol)) addresses only (protocol = \"$protocol\")."))
+  throw(InvalidValueError("The value is an $(_label(family)) address, but this field accepts " *
+                          "$(_label(protocol)) addresses only (protocol = \"$protocol\").", :format))
 end

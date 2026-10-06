@@ -665,7 +665,7 @@ function _resolve_having_filter_value(alias::MemoKey, raw_value, instruc::SQLIns
   # value as the write path's `InvalidValueError`. Splitting the choice out leaves exactly one
   # format call to guard, and `_guarded_format` guards it.
   #
-  # The message is alias-shaped on purpose. `_rethrow_as_filter_error`'s default wording names a
+  # The message is alias-shaped on purpose. `_locate_filter_refusal`'s default wording names a
   # *field*, and there is no field here: `alias[2]` is an output name the user invented in
   # `values(...)`, and the type is whatever formatter the ladder below resolved for it.
   # #654: `@isnull`'s value is the predicate's polarity, not a value of the alias's type, so it is
@@ -1487,7 +1487,7 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         end
       end
     else
-      throw(FilterError("Invalid filter entry: $(v) (::$(typeof(v))) is not a Q, Qor, or operator expression."))
+      throw(FilterError("Invalid filter entry: a $(typeof(v)) is not a Q, Qor, or operator expression."))
     end
   end
   return nothing

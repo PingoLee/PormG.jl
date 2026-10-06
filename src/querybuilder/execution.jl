@@ -2358,10 +2358,9 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
       _format_date_operand(operand, field_name, instruc; left_kind = left_kind)
     catch e
       _kind = left_kind === nothing ? _operand_column_kind(field_name, instruc) : left_kind
-      _rethrow_as_filter_error(e, field_name,
-                               _kind isa CDateTime ? _formatter_type_label(Models.format_timezone_sql) :
-                                                     _formatter_type_label(Models.format_date_sql),
-                               operand)
+      _locate_filter_refusal(e, field_name,
+                             _kind isa CDateTime ? _formatter_type_label(Models.format_timezone_sql) :
+                                                   _formatter_type_label(Models.format_date_sql))
     end
     return add_parameter!(instruc, formatted_date)
   elseif operation in _COMPARISON_OPERATIONS &&
@@ -2440,9 +2439,9 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # #576: this arm was unguarded, and the issue listed it as SUSPECTED. Guarded since, and the guard
     # became load-bearing with #860: `format_text_sql` now refuses anything it cannot render as text
     # with `InvalidValueError`, so `F("surname") == 1.5` (a float or a UUID against a text column)
-    # reaches it and reports a `FilterError`. The pairs this arm can still form against
+    # reaches it and reports an `InvalidValueError` (a `FilterError` until #971). The pairs this arm can still form against
     # `format_number_sql` (`::UUID`, `::Time`) have no method, so they raise `MethodError`, which
-    # `_rethrow_as_filter_error` rethrows untouched by design.
+    # `_locate_filter_refusal` rethrows untouched by design.
     #
     # `field_name` is in scope, but `f` may be `nothing` (a nested expression, an unresolvable
     # path) — there the formatter came from the OPERAND's own type above, so the type label comes

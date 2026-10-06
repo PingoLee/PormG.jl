@@ -175,12 +175,12 @@ end
 @testset "#951: PostgreSQL — create/update/bulk writes name the field and row" begin
   e = nul951_pg(() -> NUL951_PG.objects.create("code" => NUL951, "year" => 1988))
   @test e isa PormG.InvalidValueError
-  @test occursin("Error in insert, field `code` contains a NUL character", e.msg)
+  @test occursin("Error in insert, field `code`: The value contains a NUL character", e.msg)
   @test !occursin("hidden", nul951_msg(e))
   @test isempty(NUL951_SENT)
 
   e = nul951_pg(() -> NUL951_PG.objects.filter("id" => 1).update("code" => NUL951))
-  @test e isa PormG.InvalidValueError && occursin("Error in update, field `code` contains a NUL", e.msg)
+  @test e isa PormG.InvalidValueError && occursin("Error in update, field `code`: The value contains a NUL", e.msg)
   @test isempty(NUL951_SENT)
 
   # Row 2 carries the NUL, so the reported row is the failing one, not the first one formatted.
@@ -191,7 +191,7 @@ end
     # bulk_copy logs its failure with `@error` before rethrowing; that log is not under test here.
     e = op == "bulk_copy" ? (@test_logs (:error,) match_mode = :any nul951_pg(run)) : nul951_pg(run)
     @test e isa PormG.InvalidValueError
-    @test occursin("Error in $op, row 2 for model nul951_result, field `code` contains a NUL", e.msg)
+    @test occursin("Error in $op, row 2 for model nul951_result, field `code`: The value contains a NUL", e.msg)
     @test !occursin("hidden", nul951_msg(e))
     @test isempty(NUL951_SENT)
   end

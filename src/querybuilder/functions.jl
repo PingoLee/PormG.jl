@@ -14,7 +14,7 @@ a.filter(Q("name" => "John", Qor("age" => 18, "age" => 19)))
 ```
 """
 function Q(x...)
-  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? _check_filter_node(v) : throw(FilterError("Invalid argument: $(v); please use a pair (key => value).")) for v in x]   # #863
+  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? _check_filter_node(v) : throw(FilterError("Invalid argument: a $(typeof(v)); please use a pair (key => value).")) for v in x]   # #863
   return QObject(filters = colect)
 end
 
@@ -34,7 +34,7 @@ a.filter(Qor("name" => "John", Q("age__gte" => 18, "age__lte" => 19)))
 ```
 """
 function Qor(x...)
-  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? _check_filter_node(v) : throw(FilterError("Invalid argument: $(v); please use a pair (key => value).")) for v in x]   # #863
+  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? _check_filter_node(v) : throw(FilterError("Invalid argument: a $(typeof(v)); please use a pair (key => value).")) for v in x]   # #863
   return QorObject(or = colect)
 end
 
@@ -1341,7 +1341,7 @@ function ISNULL(v::AbstractString, value::Bool; aggregate::Bool = false)
   # (every value in the group is NULL). The caller decides from the projection node, never from the
   # text, so the refusal below is unchanged for every other column.
   if !aggregate && contains(v, "(")
-    throw(FilterError("Error in ISNULL: the column $(v) cannot be a function expression."))
+    throw(FilterError("Error in ISNULL: the column $(v) cannot be a function expression."))  # refusal-value-ok: a column name from the query, not a bound value
   end
   if value
     return string(v, " IS NULL")

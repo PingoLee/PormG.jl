@@ -93,10 +93,10 @@ slb_params(model, build) = (q = model.objects; build(q); inspect_query(q)[:param
   @test sqlite_bind_value(Decimal(0, 15, -1)) isa Decimal
   # A byte view is copied into the one container SQLite.jl binds as a blob.
   @test sqlite_bind_value(view(UInt8[1, 2, 3], 1:2)) isa Vector{UInt8}
-  # A `Month` has no fixed length: refused, and the message names the value being bound rather than
-  # only the `DurationField` the formatter's own message mentions.
+  # A `Month` has no fixed length: refused, and the message names the TYPE being bound (never the value,
+  # #971) rather than only the `DurationField` the formatter's own message mentions.
   err = @test_throws PormG.InvalidValueError sqlite_bind_value(Month(1))
-  @test occursin("Month(1)", err.value.msg) && occursin("SQLite parameter", err.value.msg)
+  @test occursin("A Month value", err.value.msg) && !occursin("Month(1)", err.value.msg) && occursin("SQLite parameter", err.value.msg)
   # Anything else would have been serialized. It is refused, and the message names the value.
   for x in (:points, 'x', 1//2, (1, 2), [1, 2], Dict("a" => 1))
     err = @test_throws PormG.InvalidValueError sqlite_bind_value(x)

@@ -1693,7 +1693,8 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
       catch e
         _depuration_values_bulk_insert(fields_df, mapping, model, df[index, :], index)
         e isa PormGError && rethrow()   # keep the taxonomy type; a value refusal already names its row (the depuration pass above, or `_validate_bulk_cell` / `_format_bulk_cell`, #875)
-        throw(InvalidValueError("Error in bulk_insert, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
+        throw(InvalidValueError("The row failed validation or formatting ($(typeof(e))).", :other;
+                                op = "bulk_insert", model = model.name, row = index))   # the type, never `$(e)`: its text can quote the value (#971)
       end
       count += 1
       if count == effective_chunk || index == total
@@ -2001,7 +2002,8 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
             # is the only place a 100k-row frame's bad cell is located (#869).
             e isa InvalidValueError && throw(_bulk_cell_error(e, "bulk_copy", model, field, row_index))
             e isa PormGError && rethrow()   # any other taxonomy type is not about the value, and passes as is
-            throw(InvalidValueError("Error in bulk_copy, row $(row_index) for model $(model.name), field \"$(field)\" failed validation or formatting: $(e)"))
+            throw(InvalidValueError("The value failed validation or formatting ($(typeof(e))).", :other;
+                                    op = "bulk_copy", model = model.name, field = field, row = row_index))
           end
         end
       end
@@ -2040,19 +2042,13 @@ bulk_copy(model::PormGModel, df::DataFrames.DataFrame; kwargs...) = bulk_copy(mo
 
 # #869: a cell's `InvalidValueError`, re-raised with the row, model and field it came from. Before,
 # only an untyped error got the row index; a typed refusal (`format_text_sql`, `format_date_sql`,
-# `format_uuid_sql`, `format_duration_sql`, a max_length) was rethrown bare, naming no cell. Two of
-# the refusals already name part of the cell, so the message says each part once: `_single_value`'s
-# own "field `x` was given …" is kept as it is (#712 pins that wording for every writer), and
-# `_validation_error`'s model-and-field prefix is dropped for the one this adds.
+# `format_uuid_sql`, `format_duration_sql`, a max_length) was rethrown bare, naming no cell.
 # #875: shared by all three bulk writers — `bulk_insert` and `bulk_update` raise it for a validation
 # refusal, which their formatter-only depuration pass cannot locate.
-function _bulk_cell_error(e::InvalidValueError, op::AbstractString, model::PormGModel, field::AbstractString, row_index::Integer)
-  head = "Error in $(op), row $(row_index) for model $(model.name)"
-  startswith(e.msg, "Error in $(op), field `$(field)` ") &&                    # _single_value
-    return InvalidValueError("$(head), $(chopprefix(e.msg, "Error in $(op), "))")
-  reason = chopprefix(e.msg, "Error in $(op) for model $(model.name), field \"$(field)\": ")   # _validation_error
-  return InvalidValueError("$(head), field \"$(field)\": $(reason)")
-end
+# #971: the location is data on the refusal, so this adds the parts it knows and keeps any the inner
+# funnel already set; it used to strip the inner funnel's message prefix by its exact text.
+_bulk_cell_error(e::InvalidValueError, op::AbstractString, model::PormGModel, field::AbstractString, row_index::Integer) =
+  with_location(e; op = op, model = model.name, field = field, row = row_index)
 
 # One cell's value checks, and its format step, with a refusal re-raised naming its row (#875).
 # Every other error passes as raised; the caller's `catch` owns the untyped arm. The format step is
@@ -2087,9 +2083,7 @@ function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{St
     try
       model.fields[field].formatter(row[col_name])
     catch e
-      # A NUL in a JSON value gets the refusal every writer raises, naming the row (#954) — never the
-      # generic message below, which would print the value.
-      _is_json_nul_refusal(e) && throw(_bulk_cell_error(_json_nul_field_refusal(field, op), op, model, field, index))
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
       # A collection gets the refusal every writer raises (#716), not the generic message below: the
       # bare formatter can throw on its elements before the bind site's check ever ran. Only here,
       # in the catch: a collection the formatter maps fine (`["A", "B"]`) must not pre-empt another
@@ -2105,12 +2099,15 @@ function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{St
       # and printing that name would point the caller at a DataFrame column they never wrote. Name
       # the source of the value instead.
       source = _is_injected_fill_column(col_name) ?
-        "PormG-supplied default/auto value" : "col: $(col_name)"
+        "a PormG-supplied default/auto value" : "column $(col_name)"
       # This pass runs before the caller's field validation reports, so its message is the one a bulk
-      # caller sees: carry the formatter's own reason when it gave one (#773 — "0x10" is refused for
-      # its prefix, and "can't be formatted" alone did not say so).
-      reason = e isa InvalidValueError ? " ($(e.msg))" : ""
-      throw(InvalidValueError("Error in bulk processing, the field \e[4m\e[31m$(field)\e[0m ($(source)) in row \e[4m\e[31m$(index)\e[0m has a value that can't be formatted: \e[4m\e[31m$(row[col_name])\e[0m$(reason)"))
+      # caller sees: carry the formatter's own reason and kind when it gave them (#773 — "0x10" is
+      # refused for its prefix, and "can't be formatted" alone did not say so). Never the value
+      # (#971): the cell used to be printed here.
+      refusal = e isa InvalidValueError ?
+        InvalidValueError("$(rstrip(e.reason, '.')) (from $(source)).", e.kind) :
+        InvalidValueError("The value from $(source) can't be formatted ($(typeof(e))).", :other)
+      throw(_bulk_cell_error(refusal, op, model, field, index))
     end
   end  
 end
@@ -2551,7 +2548,8 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
       catch e
         _depuration_values_bulk_insert(fields_df, mapping, model, df[index, :], index; op = "bulk_update")
         e isa PormGError && rethrow()   # keep the taxonomy type; a value refusal already names its row (the depuration pass above, or `_validate_bulk_cell` / `_format_bulk_cell`, #875)
-        throw(InvalidValueError("Error in bulk_update, row $(index) for model $(model.name) failed validation or formatting: $(e)"))
+        throw(InvalidValueError("The row failed validation or formatting ($(typeof(e))).", :other;
+                                op = "bulk_update", model = model.name, row = index))   # the type, never `$(e)` (#971)
       end
       count += 1
       if count == effective_chunk || index == total

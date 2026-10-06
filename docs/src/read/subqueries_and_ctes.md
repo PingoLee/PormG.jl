@@ -551,7 +551,7 @@ Reach for the object in two places:
 
    The second line is **not** an error on a text column — it compares `surname` against that
    literal and quietly matches nothing. (On a numeric column the field's type check catches it and
-   raises `FilterError`.) The handle is the only spelling that correlates, whatever the type.
+   raises `InvalidValueError`.) The handle is the only spelling that correlates, whatever the type.
 
 Ordering direction needs no object: the ordinary `-` prefix works in both `order_by(...)` and a
 window's `order_by`, so there is one DESC dialect rather than two. `desc = true` is the object's

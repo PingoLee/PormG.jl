@@ -408,14 +408,14 @@ function _check_fixed_shape_lookup(suffix::AbstractString, value)
   suffix in ("range", "nrange") &&
     throw(FilterError("Error in filter, '$(suffix)' operator requires exactly 2 values, got 1"))
   suffix == "isnull" && !(value isa Bool) &&
-    throw(FilterError("Error in filter, 'isnull' takes true or false, got $(value isa SQLType ? "a column expression" : repr(value))"))
+    throw(FilterError("Error in filter, 'isnull' takes true or false, got $(value isa SQLType ? "a column expression" : "a $(typeof(value))")"))
   # #28: an array lookup compares two arrays, so its value is a list even for one element. A scalar is
   # refused rather than wrapped — and a bare String would otherwise be read as array-literal text
   # (`"SOFT"` is not one). A column expression is left to `_check_column_rhs_lookup`, which owns that
   # message on the column arms.
   suffix in ARRAY_CONTAINMENT_OPERATORS && !(value isa SQLType) &&
     throw(FilterError("Error in filter, '$(suffix)' takes a list of elements, even for one: " *
-                      "\e[4m\e[32m[$(repr(value))]\e[0m, got a single value"))
+                      "wrap the value in a Vector, \e[4m\e[32m[value]\e[0m; got a single $(typeof(value))"))
   return nothing
 end
 
@@ -819,7 +819,7 @@ end
 function _refuse_array_lookup_tuple(x::Pair{Vector{String},<:Tuple})
   lookup = join(x.first, "__@")
   throw(FilterError("Error in filter '$(lookup)': '$(x.first[end])' takes a Vector of elements, not a " *
-                    "Tuple — \e[4m\e[32m\"$(lookup)\" => [$(join(repr.(x.second), ", "))]\e[0m."))
+                    "Tuple — \e[4m\e[32m\"$(lookup)\" => [a, b, …]\e[0m."))
 end
 function _get_pair_to_oper(x::Pair{Vector{String},Date})
   _get_pair_to_oper(x.first => x.second |> string)
@@ -2248,10 +2248,10 @@ function _json_numeric_rhs(value)
   value isa AbstractFloat && return value
   s = strip(string(value))
   # Base 10 only, as on every other numeric path (#773): the bare parsers read `"0x10"` as 16.
-  Models.is_base10_number(s) || throw(FilterError("A numeric JSON comparison requires a base-10 number; got \e[31m$(value)\e[0m."))
+  Models.is_base10_number(s) || throw(FilterError("A numeric JSON comparison requires a base-10 number; got a string that is not one."))
   n = tryparse(Int, s); n !== nothing && return n
   f = tryparse(Float64, s); (f !== nothing && isfinite(f)) && return f
-  throw(FilterError("A numeric JSON comparison requires a number; got \e[31m$(value)\e[0m."))
+  throw(FilterError("A numeric JSON comparison requires a number; got a $(typeof(value))."))
 end
 
 # #27: render a comparison against a JSON path lookup (e.g. `payload__driver`). The RHS binds
@@ -2368,7 +2368,7 @@ function _render_network_operator(v::SQLTypeOper, column::String, operand_field,
     # A `Bool` is an `Integer` in Julia, and `true` is not a family (#949's reasoning).
     allowed, what = op == "family" ? ((4, 6), "4 or 6") : (0:128, "a whole number from 0 to 128")
     (v.values isa Integer && !(v.values isa Bool) && v.values in allowed) ||
-      throw(FilterError("Error in filter '$(lookup)': the @$(op) lookup takes $(what), got $(repr(v.values))."))
+      throw(FilterError("Error in filter '$(lookup)': the @$(op) lookup takes $(what), got another $(typeof(v.values))."))
     add_parameter!(instruc, Int(v.values))
   end
   return getfield(Dialect, Symbol(op))(instruc.connection, column, ph)
@@ -2512,7 +2512,7 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
   first_of_period, next_period = try
     bucket == :yyyy_mm ? _yyyy_mm_bucket_bounds(v.values) : _year_bucket_bounds(v.values)
   catch e
-    _rethrow_as_filter_error(e, raw_field, f_meta.type, v.values)
+    _locate_filter_refusal(e, raw_field, f_meta.type)
   end
 
   if v.operator == ">="
@@ -2637,7 +2637,7 @@ end
 # execution with an opaque server-side error — and `format_date_sql(::Date)` is a bare `string(...)`
 # that validates nothing. Takes any `Real` so it can run before `Int(...)` narrowing.
 function _check_year_bound(y::Real)
-  (1 <= y <= 9999) || throw(FilterError("The year \e[31m$(y)\e[0m is out of the range a date bound can express (1-9999)."))
+  (1 <= y <= 9999) || throw(FilterError("The year is out of the range a date bound can express (1-9999)."))
   return nothing
 end
 
@@ -2651,7 +2651,7 @@ function _yyyy_mm_bucket_bounds(value)::Tuple{Dates.Date,Dates.Date}
     first_of_period = Dates.Date(y, m, 1)
     return first_of_period, first_of_period + Dates.Month(1)
   catch e
-    throw(FilterError("The value \e[31m$(value)\e[0m is not a valid YYYY-MM bucket: $(sprint(showerror, e))"))
+    throw(FilterError("The value is not a valid YYYY-MM bucket: it is not a calendar month."))
   end
 end
 
@@ -2675,17 +2675,17 @@ function _year_bucket_bounds(value)::Tuple{Dates.Date,Dates.Date}
   # never mentions a year filter. `isinteger(1e30)` is `true`, so the whole-year guard alone does
   # not stop it. Comparing first works on any Real — BigInt, BigFloat, Rational, Decimal.
   y = if value isa Bool
-    throw(FilterError("A __@year filter requires a year, not a Bool; got \e[31m$(value)\e[0m."))
+    throw(FilterError("A __@year filter requires a year, not a Bool."))
   elseif value isa Integer
     _check_year_bound(value)
     Int(value)
   elseif value isa Real
-    isinteger(value) || throw(FilterError("The value \e[31m$(value)\e[0m is not a whole year for a __@year filter."))
+    isinteger(value) || throw(FilterError("The value is not a whole year for a __@year filter."))
     _check_year_bound(value)
     Int(value)
   elseif value isa AbstractString
     n = tryparse(Int, strip(value), base=10)
-    n === nothing && throw(FilterError("The value \e[31m$(value)\e[0m is not a valid year for a __@year filter."))
+    n === nothing && throw(FilterError("The value is not a valid year for a __@year filter."))
     _check_year_bound(n)
     n
   else
@@ -2748,18 +2748,28 @@ _format_filter_value(formatter, values, operator::AbstractString) =
 # exactly two callers, both inside a `catch`: `_guarded_format` below and the sargable rewrite's
 # bounds guard. (The `BETWEEN` arm was a third until #654 routed it through `_guarded_format`.)
 #
-# The one `InvalidValueError` it does not convert is a NUL in a JSON value (#954): that refusal keeps
-# its type and its #951 wording, the field named, because this message prints the value — and the
-# text after a NUL is exactly what the refusal must never echo.
-_rethrow_as_filter_error(e, field_name, field_type, values; subject::AbstractString = "field") =
-  _is_json_nul_refusal(e) ? throw(_json_nul_field_refusal(string(field_name), "filter")) :
-  e isa InvalidValueError ?
-    throw(FilterError("The \e[4m\e[31m$(field_name)\e[0m $(subject) is the type " *
-                      "\e[4m\e[32m$(field_type)\e[0m. Please check the value: " *
-                      "\e[4m\e[31m$(values)\e[0m")) :
-    rethrow(e)
+# #971: a refused value raises `InvalidValueError` here as on a write, located by this funnel —
+# filter, field and column type — and never quoting the value. It used to be re-raised as a
+# `FilterError` ending in "Please check the value: <value>", which put the bound value (a password,
+# a token) in a message an app may return to an HTTP client. `FilterError` stays for what is wrong
+# with the filter's SHAPE — a lookup, an operator — not with a value.
+# A label that is not a name — an `F` expression on the left of a comparison — is not printed: its
+# `string` is a struct dump, operands included.
+function _locate_filter_refusal(e, label, type_label; subject::AbstractString = "field")
+  e isa InvalidValueError || rethrow(e)
+  named = label isa AbstractString ? String(label) : label isa Symbol ? string(label) : nothing
+  throw(subject == "field" && named !== nothing ?
+          with_location(e; op = "filter", field = named, field_type = _opt_label(type_label)) :
+        subject == "field" ?
+          with_location(e; op = "filter on an expression", field_type = _opt_label(type_label)) :
+          with_location(e; op = named === nothing ? "filter on a $(subject)" :
+                                                    "filter on the `$(named)` $(subject)",
+                        field_type = _opt_label(type_label)))
+end
 
-# #576: the guarded form of the format step. `_rethrow_as_filter_error` above fixed the `catch`
+_opt_label(x) = x === nothing ? nothing : string(x)
+
+# #576: the guarded form of the format step. `_locate_filter_refusal` above fixed the `catch`
 # body; this fixes the `try`. #467 was never a missing message -- it was a branch that formatted
 # where the guard was not, and the rest of them were still out there.
 #
@@ -2770,7 +2780,7 @@ _rethrow_as_filter_error(e, field_name, field_type, values; subject::AbstractStr
 #
 # One further site calls a formatter DIRECTLY rather than through `_format_filter_value`: the
 # sargable rewrite guards a bounds computation rather than a formatter call (guarded by #576), and
-# calls `_rethrow_as_filter_error` directly, so the message and the type check still have one
+# calls `_locate_filter_refusal` directly, so the message and the type check still have one
 # definition. The `BETWEEN` arm was the other until #654 — its two operands now format here, as one
 # iterable lookup, which is what keeps "bind neither until both succeed" (#467) true in both clauses.
 #
@@ -2783,7 +2793,7 @@ _guarded_format(formatter, values, operator::AbstractString, label, type_label;
   try
     _format_filter_value(formatter, values, operator)
   catch e
-    _rethrow_as_filter_error(e, label, type_label, values; subject = subject)
+    _locate_filter_refusal(e, label, type_label; subject = subject)
   end
 
 # #576: the type label for a site that has a formatter but no `PormGField` to read `.type` off.

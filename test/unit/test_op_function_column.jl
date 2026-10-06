@@ -243,7 +243,7 @@ end
 
       # The table's text formatter refuses what has no single text (#860) — typed, at render.
       q2 = () -> (q = OPF.Opf_row.objects; q.values("note"); q.filter(OP(ToChar("seen", "YYYY"), 20.5)); q)
-      @test _opf_err(q2; conn = conn) isa PormG.FilterError
+      @test _opf_err(q2; conn = conn) isa PormG.InvalidValueError
 
       # The node's own formatter wins over the table on the bare-function arm…
       q3 = OPF.Opf_row.objects
@@ -251,7 +251,7 @@ end
       q3.filter(OP(ym(), 202003))
       @test last(_opf_params(q3; conn = conn)) == "2020-03"
       q4 = () -> (q = OPF.Opf_row.objects; q.values("note"); q.filter(OP(ym(), "nonsense")); q)
-      @test _opf_err(q4; conn = conn) isa PormG.FilterError
+      @test _opf_err(q4; conn = conn) isa PormG.InvalidValueError
 
       # …as it already did on the alias path, and on the public `@yyyy_mm` transform.
       q5 = OPF.Opf_row.objects

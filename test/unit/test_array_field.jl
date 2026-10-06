@@ -535,9 +535,9 @@ const ARR28_BASES = [
     @test qq.list(show_query = :dict)[:parameters] == ["{12,30}"]
     qn = _AS.objects.filter("targets__@isnull" => true); qn.values("id")
     @test occursin("\"targets\" IS NULL", qn.list(show_query = :dict)[:sql_text])
-    # An element the base field refuses is a FilterError, like any bad filter value.
+    # An element the base field refuses is an InvalidValueError, like any bad filter value (#971).
     qb = _AS.objects.filter("pit_laps" => ["x"]); qb.values("id")
-    @test_throws PormG.FilterError qb.list(show_query = :dict)
+    @test_throws PormG.InvalidValueError qb.list(show_query = :dict)
 
     # A vector on a column that holds one value: the message the parse ladder always gave.
     qt = _AS.objects.filter("team" => ["Ferrari", "Mercedes"]); qt.values("id")

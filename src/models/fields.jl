@@ -3568,7 +3568,7 @@ function JSONField(; kwargs...)
       format_json_sql(default)
     catch e
       (e isa InterruptException || e isa StackOverflowError) && rethrow()   # #472
-      e isa InvalidValueError && throw(FieldValidationError("Invalid default value for JSONField: $(e.msg)"))
+      e isa InvalidValueError && throw(FieldValidationError("Invalid default value for JSONField: $(e.reason)"))
       default isa AbstractString && rethrow()
       # Any other failure serializing a collection (`JSON.json` refuses `NaN`, for one) keeps the
       # report it had before #954: `validate_default` raises it as a FieldValidationError.
@@ -3682,9 +3682,10 @@ function (f::ArrayFormatter)(value)
       (e isa InterruptException || e isa StackOverflowError) && rethrow()   # #472
       # The base formatters cover their own types; one handed another type (`format_bool_sql("t")`)
       # has no method for it. Either way the reason belongs to the element, so say which one.
-      reason = e isa InvalidValueError ? e.msg :
-               e isa MethodError ? "$(repr(el)) is not a valid $(_pg_kind_label(f.kind)) value" : rethrow()
-      throw(InvalidValueError("element $i of the array: $(rstrip(reason, '.'))."))
+      reason = e isa InvalidValueError ? e.reason :
+               e isa MethodError ? "a $(typeof(el)) is not a valid $(_pg_kind_label(f.kind)) value" : rethrow()
+      throw(InvalidValueError("element $i of the array: $(rstrip(reason, '.')).",
+                              e isa InvalidValueError ? e.kind : :type))
     end
   end
   return PormGArrayLiteral(print_pg_array_literal(texts))

@@ -253,20 +253,21 @@ end
 # silently matches nothing. The type WAS `InvalidValueError`, matching the sibling `@month`/`@day`
 # formatters exactly, and this comment named #576 as the issue that would move the whole family to
 # `FilterError`. #576 has landed and it did: `format_quarter_sql` still raises `InvalidValueError`,
-# but the filter path now converts it, so what a CALLER sees here is `FilterError`. The refusal
-# itself — the whole point of #579 — is unchanged, which is why only the type moved below.
+# but the filter path converted it, so what a CALLER saw was `FilterError`. #971 moved it back: a
+# refused value is an `InvalidValueError` on the filter path too, located on the transform. The
+# refusal itself — the whole point of #579 — is unchanged, which is why only the type moved below.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#579: a value no period can express is refused, not bound" begin
   for (backend, conn) in _TLP_BACKENDS
     for (key, over) in (("quarter", 5), ("quadrimester", 4))
       # Not a number at all.
-      @test_throws PormG.FilterError _tlp_sql(
+      @test_throws PormG.InvalidValueError _tlp_sql(
         (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)" => "abc"); q); conn = conn)
       # A number, but outside the period range — the case a plain numeric formatter would accept
       # and then match nothing with.
-      @test_throws PormG.FilterError _tlp_sql(
+      @test_throws PormG.InvalidValueError _tlp_sql(
         (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)" => over); q); conn = conn)
-      @test_throws PormG.FilterError _tlp_sql(
+      @test_throws PormG.InvalidValueError _tlp_sql(
         (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)" => 0); q); conn = conn)
       # The in-range values all build.
       for v in 1:(key == "quarter" ? 4 : 3)
@@ -281,7 +282,7 @@ end
       @test _tlp_params(
         (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)__@in" => [1, 2]); q);
         conn = conn) == (conn === _TLP_SL ? [1, 2] : [[1, 2]])
-      @test_throws PormG.FilterError _tlp_sql(
+      @test_throws PormG.InvalidValueError _tlp_sql(
         (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)__@in" => [1, over]); q); conn = conn)
     end
   end
@@ -293,7 +294,8 @@ end
 # for the same reason as #562's controls above: the parity loops iterate `PormGtransform` and would be
 # satisfied by both ladders rendering the wrong part together. `SECOND` is the one whose PostgreSQL
 # arm differs from the rest — `trunc` first, because `numeric::integer` ROUNDS (45.6 → 46) where
-# SQLite's `%S` truncates. Range refusal follows #579: a value no clock can show is a `FilterError`,
+# SQLite's `%S` truncates. Range refusal follows #579: a value no clock can show is refused (an
+# `InvalidValueError` since #971),
 # never a bound parameter that silently matches nothing.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#636: the time-part transforms render and validate on both engines" begin
@@ -318,7 +320,7 @@ end
       build(v) = (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)" => v); q)
       # Out of range on either side, fractional, and not a number at all.
       for bad in (hi + 1, -1, 1.5, "abc")
-        @test_throws PormG.FilterError _tlp_sql(build(bad); conn = conn)
+        @test_throws PormG.InvalidValueError _tlp_sql(build(bad); conn = conn)
       end
       # Both ends of the range bind, as integers.
       @test _tlp_params(build(0); conn = conn) == [0]
@@ -327,7 +329,7 @@ end
       @test _tlp_params(
         (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)__@in" => [0, hi]); q);
         conn = conn) == (conn === _TLP_SL ? [0, hi] : [[0, hi]])
-      @test_throws PormG.FilterError _tlp_sql(
+      @test_throws PormG.InvalidValueError _tlp_sql(
         (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)__@in" => [0, hi + 1]); q); conn = conn)
     end
   end

@@ -468,7 +468,7 @@ function _filter!(q::SQLObject, filter)
     else
       # FilterError (a PormGError) so filter() misuse matches the values()/order_by() siblings —
       # this call site was the two-era inconsistency #197 called out (now typed via #231).
-      throw(FilterError("Invalid filter argument: $(v) (::$(typeof(v))) — use a \"field\" => value pair, a Q(key => value, …), or a Qor(key => value, …)."))
+      throw(FilterError("Invalid filter argument: a $(typeof(v)) — use a \"field\" => value pair, a Q(key => value, …), or a Qor(key => value, …)."))
     end
   end
   return q

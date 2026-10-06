@@ -1745,7 +1745,7 @@ end
     q2 = FD.Fd_result.objects
     q2.filter(F("seen") * 2 > 5)
     err = try _fd_sql(q2; conn = _FD_SL); nothing catch e; e end
-    @test err isa PormG.FilterError
+    @test err isa PormG.InvalidValueError
   end
 
   # A left whose kind differs from its root binds through the LEFT's kind, not the literal's own
@@ -1756,7 +1756,7 @@ end
       q = FD.Fd_result.objects
       q.filter((F("seen") + Dates.Hour(6)) > 5)
       err = try _fd_sql(q; conn = conn); nothing catch e; e end
-      @test err isa PormG.FilterError
+      @test err isa PormG.InvalidValueError
     end
   end
 

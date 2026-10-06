@@ -407,7 +407,7 @@ function _validate_json_key_segments(segments::Vector{String})::Vector{String}
       continue
     end
     # `repr`, so a refused newline or other control character is visible in the message (#794).
-    throw(InvalidValueError("Invalid JSON key segment \e[31m$(repr(seg))\e[0m in a JSON path lookup. Segments must be ASCII digits (an array index) or a simple key (a letter or underscore, then letters, digits or underscores). Keys with spaces, line breaks, dots, or quotes are not addressable via the `__` path syntax."))
+    throw(InvalidValueError("Invalid JSON key segment \e[31m$(repr(seg))\e[0m in a JSON path lookup. Segments must be ASCII digits (an array index) or a simple key (a letter or underscore, then letters, digits or underscores). Keys with spaces, line breaks, dots, or quotes are not addressable via the `__` path syntax."))  # refusal-value-ok: a segment of the lookup key the developer wrote (#794)
   end
   return segments
 end

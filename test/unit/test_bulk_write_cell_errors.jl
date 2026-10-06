@@ -91,7 +91,7 @@ const BWCE875_CASES = (
       # The taxonomy type is kept: callers catch `InvalidValueError`, as before #875.
       @test err isa PormG.InvalidValueError
       msg = bwce875_msg(err)
-      @test occursin("Error in $writer, row 3 for model bwce875_result, field \"$(c.column)\": ", msg)
+      @test occursin("Error in $writer, row 3 for model bwce875_result, field `$(c.column)`: ", msg)
       @test occursin(c.reason, msg)
       # Said once: the wrapped `_validation_error` prefix is dropped, not nested.
       @test count("Error in $writer", msg) == 1
@@ -101,8 +101,8 @@ const BWCE875_CASES = (
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A formatter refusal is unchanged: the formatter refuses the cell, and the depuration pass names it
-# in its own wording. Pinned so the validation wrap above cannot pre-empt it. Two shapes: a float in a
+# A formatter refusal: the formatter refuses the cell, and the depuration pass locates it — row,
+# model, field and source column, as data since #971, and never the value it used to print. Pinned so the validation wrap above cannot pre-empt it. Two shapes: a float in a
 # text field passes validation (`_written_text` has no text for it) and only the formatter refuses
 # it; `"nineteen"` in an integer field is refused by both, and the formatter's report wins — it named
 # the row before #875, which is why #875's integer example was never the unlocated case.
@@ -120,7 +120,9 @@ const BWCE875_FORMATTER_CASES = (
       # The depuration message colors the row and field; whether the escapes survive depends on
       # the terminal, so they are stripped before matching across them.
       msg = replace(bwce875_msg(err), r"\e\[[0-9;]*m" => "")
-      @test occursin("the field $(c.column) (col: $(c.column)) in row 3 has a value that can't be formatted", msg)
+      @test occursin("Error in $writer, row 3 for model bwce875_result, field `$(c.column)`: ", msg)
+      @test occursin("(from column $(c.column))", msg)
+      @test !occursin(string(c.bad), msg)   # never the value (#971)
       @test occursin(c.reason, msg)
     end
   end
@@ -131,8 +133,8 @@ end
 # validation case above: a list of text is mapped element-wise by the text formatter, so the
 # depuration pass finds nothing and the format step's refusal is the one raised; a tuple in an
 # integer field fails that formatter, and the depuration pass raises the collection refusal itself.
-# Either way the #712 wording — field `<f>` was given … — is kept after the row (#712 pins it for
-# every writer in `test_single_row_collection_value.jl`).
+# Either way the #712 refusal — the value is a collection — is located after the row (#712 pins it
+# for every writer in `test_single_row_collection_value.jl`).
 # ─────────────────────────────────────────────────────────────────────────────
 const BWCE875_COLLECTION_CASES = (
   (source = "a list in a text field", column = :code, bad = ["SEN", "PRO"]),
@@ -145,7 +147,7 @@ const BWCE875_COLLECTION_CASES = (
       err = bwce875_refusal(writer, model, c.column, c.bad)
       @test err isa PormG.InvalidValueError
       msg = bwce875_msg(err)
-      @test occursin("Error in $writer, row 3 for model bwce875_result, field `$(c.column)` was given", msg)
+      @test occursin("Error in $writer, row 3 for model bwce875_result, field `$(c.column)`: The value is a", msg)
       @test occursin("a column holds a single value", msg)
       @test count("Error in $writer", msg) == 1
     end

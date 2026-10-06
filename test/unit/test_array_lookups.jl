@@ -105,8 +105,8 @@ end
     @test _pg_al("tyre_compounds__@contained_by" => five)[:parameters] ==
           ["{SOFT,MEDIUM,HARD,INTERMEDIATE,WET}"]
     @test _pg_al("tyre_compounds__@overlap" => five)[:parameters] == ["{SOFT,MEDIUM,HARD,INTERMEDIATE,WET}"]
-    # An element the element field refuses is a FilterError, as for any bad filter value.
-    @test_throws PormG.FilterError _pg_al("pit_laps__@acontains" => ["x"])
+    # An element the element field refuses is an InvalidValueError, as for any bad filter value (#971).
+    @test_throws PormG.InvalidValueError _pg_al("pit_laps__@acontains" => ["x"])
     # A text element is quoted by the literal printer where PostgreSQL needs it.
     @test _pg_al("tyre_compounds__@acontains" => ["a b"])[:parameters] == ["{\"a b\"}"]
   end
@@ -119,7 +119,7 @@ end
   @testset "value-shape refusals" begin
     e = _err_al(() -> _AL.Race_strategy.objects.filter("tyre_compounds__@acontains" => "SOFT"))
     @test e isa PormG.FilterError
-    @test occursin("[\"SOFT\"]", _plain_al(sprint(showerror, e)))
+    @test occursin("[value]", _plain_al(sprint(showerror, e))) && !occursin("SOFT", _plain_al(sprint(showerror, e)))
     for nul in ([12, missing], Union{Int,Nothing}[12, nothing])
       e = _err_al(() -> _AL.Race_strategy.objects.filter("pit_laps__@overlap" => nul))
       @test e isa PormG.FilterError
@@ -133,7 +133,7 @@ end
     e = _err_al(() -> _AL.Race_strategy.objects.filter("pit_laps__@overlap" => (12, 30)))
     @test e isa PormG.FilterError
     m = _plain_al(sprint(showerror, e))
-    @test occursin("takes a Vector", m) && occursin("[12, 30]", m) && !occursin("@range", m)
+    @test occursin("takes a Vector", m) && occursin("[a, b, …]", m) && !occursin("30", m) && !occursin("@range", m)
     # Every other tuple shape — the three-compound one is the natural spelling — gets the same
     # refusal rather than a raw `MethodError` (none of them matched a method before).
     for t in (("SOFT", "MEDIUM", "HARD"), ("SOFT",), ("SOFT", 1))
@@ -191,7 +191,7 @@ end
     # Over a slice: the slice is an array.
     @test occursin("cardinality(\"Tb\".\"pit_laps\"[2:3]) = \$1", _pg_al("pit_laps__1_3__@len" => 2)[:sql_text])
     # Its right-hand side is a count.
-    @test_throws PormG.FilterError _pg_al("pit_laps__@len" => "two")
+    @test_throws PormG.InvalidValueError _pg_al("pit_laps__@len" => "two")
     # Over a column that is not an array: refused at build, naming the path, before the server could.
     e = _err_al(() -> _pg_al("team__@len" => 2))
     @test e isa PormG.FilterError
@@ -237,7 +237,7 @@ end
   # lookup works on a text element, where it is refused on the whole array.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "an index takes the element field's lookups and value" begin
-    @test_throws PormG.FilterError _pg_al("pit_laps__0" => "x")
+    @test_throws PormG.InvalidValueError _pg_al("pit_laps__0" => "x")
     r = _pg_al("tyre_compounds__0__@icontains" => "so")
     @test occursin("\"Tb\".\"tyre_compounds\"[1] ILIKE \$1", r[:sql_text]) && r[:parameters] == ["%so%"]
     r = _pg_al("pit_laps__0__@gte" => 10)

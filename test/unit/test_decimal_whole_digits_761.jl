@@ -81,7 +81,7 @@ end
     @test err isa InvalidValueError
     @test occursin("max_digits - decimal_places is 3", err.msg)
     @test occursin("uses 4", err.msg)
-    @test occursin("field \"amount\"", err.msg)
+    @test occursin("field `amount`", err.msg)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -1276,7 +1276,7 @@ _cte_refusal(Model_, expr) = try _cte_case_field(Model_, expr); nothing catch e;
     q = Model_.objects
     q.values("resultid", "x" => PormG.Functions.Cast("raceid", "int8"))
     q.filter("x" => "abc")
-    @test_throws PormG.FilterError inspect_query(q)
+    @test_throws PormG.InvalidValueError inspect_query(q)
     q = Model_.objects
     q.values("resultid", "x" => PormG.Functions.Cast("raceid", "int8"))
     q.filter("x" => 7)

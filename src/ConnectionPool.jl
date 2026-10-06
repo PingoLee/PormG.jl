@@ -108,12 +108,12 @@ const NUL_REFUSAL_REASON = "PostgreSQL text cannot store one and SQLite cannot r
 # NUL, which is a syntax error or, right after a complete statement, the rest dropped silently.
 function _refuse_nul(sql::AbstractString, params)
   '\0' in sql && throw(InvalidValueError(
-    "The statement text contains a NUL character (\\0). " * NUL_REFUSAL_REASON))
+    "The statement text contains a NUL character (\\0). " * NUL_REFUSAL_REASON, :nul))
   params === nothing && return nothing
   values = params isa AbstractPormGParam ? params.parameters : params
   for (i, v) in enumerate(values)
     _contains_nul(v) && throw(InvalidValueError(
-      "Parameter $i contains a NUL character (\\0). " * NUL_REFUSAL_REASON))
+      "Parameter $i contains a NUL character (\\0). " * NUL_REFUSAL_REASON, :nul))
   end
   return nothing
 end

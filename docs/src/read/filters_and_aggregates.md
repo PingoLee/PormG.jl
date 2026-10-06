@@ -107,7 +107,7 @@ be part of the answer. `@quarter` and `@quadrimester` extract the period **numbe
 and `1` through `3` — so `filter("date__@quarter" => 1)` selects the first quarter of *every* year.
 `@yyyy_q` and `@yyyy_quad` build the year-qualified **label** (`"1991-Q1"`), which is what you want as
 a `values()` grouping key when each year's quarters must stay separate. A value outside the period's
-range raises `FilterError` rather than matching nothing. The same goes for the time parts `@hour`,
+range raises `InvalidValueError` rather than matching nothing. The same goes for the time parts `@hour`,
 `@minute` and `@second` — see [Time of day](functions_and_dates.md#Time-of-day-(@hour,-@minute,-@second)).
 
 A label filter compares the whole `"YYYY-Qn"` string, so `filter("date__@yyyy_q" => "1991-Q1")`
@@ -1249,7 +1249,7 @@ same whether the filter is written top-level or inside `Q(...)`/`Qor(...)`:
   and `Cast` and `Case` bind the value as given. On SQLite the cast itself refuses a timestamp (see
   [Functions and Dates](functions_and_dates.md)).
 
-A value of the wrong type raises `FilterError`, which names the alias. When PormG cannot tell what
+A value of the wrong type raises `InvalidValueError`, which names the alias but never the value. When PormG cannot tell what
 type an expression returns, for example a `Case` with no `output_field`, it binds the value as
 given. An expression on the right, such as `F("grid")` or `Max("grid")`, is not a value: it is
 compared as SQL, so `filter("total_points__@gt" => F("raceid"))` over

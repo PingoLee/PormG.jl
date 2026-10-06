@@ -429,7 +429,12 @@ git status --porcelain upgrading/     # expect: nothing, or `A ` lines. A `??` l
 Under the old layout the entry was an edit to a *tracked* file, so `git diff`, `git commit -a` and
 any glance at the working tree surfaced it. Now only this does.
 Put `Closes #N` in the PR body so the issue auto-closes
-with a back-reference — only when the PR actually completes the issue. Record in the PR body **the
+with a back-reference — only when the PR actually completes the issue. When the issue is a design
+**umbrella** and the PR lands part of its invariants, write `Part of #N` instead. Keep `Closes` for the
+sub-issues and superseded issues the PR does complete, and say in the body which invariants it
+lands and where the rest is tracked
+([`pormg-issue-management`](../pormg-issue-management/SKILL.md) → *Design (umbrella) issues*).
+Record in the PR body **the
 tier you worked at and which rungs CI is covering for you**, plus what you deliberately did not do
 and why: deferred guards, declined findings, scope you widened and on whose say-so, and whether the
 repro was hermetic.

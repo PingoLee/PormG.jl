@@ -981,6 +981,20 @@ end
 Most code should not call this at all — `run_in_transaction` and the fluent terminals do the
 pairing for you. Reach for it only when hand-rolling a connection lifecycle.
 
+# Passing your connection to a funnel: it is borrowed
+
+`fetch`, `fetch_async`, `with_transaction` and `with_transaction_async` accept the connection as
+`conn = c`. **A funnel never releases a connection you pass** — not after the statement, not when a
+check refuses it before it is sent, not when the driver throws, and not after a cancelled await. It
+stays yours, and you release it exactly once (#970). The single exception is an explicit hand-over,
+`with_transaction(…; conn = c, release_conn = true)`. A connection the funnel acquired itself
+(`conn = nothing`) is the funnel's: `fetch` releases it, `with_transaction*` returns it to you in
+the result tuple.
+
+If an await on your connection was cut short by a cancellation (`Ctrl+C`), the driver may still be
+using it: do not release it as it is — pass it to
+[`finalize_transaction_connection!`](@ref) with `renew = true`.
+
 # Keyword arguments
 - `timeout_seconds`: how long to wait for a free connection. Defaults to the pool's
   `pool_timeout` from `connection.yml` (30 s if unset, #126); passing it explicitly wins.
@@ -2034,6 +2048,9 @@ Use `await_result(task)` to get the result and properly release the connection.
 - `completed::Bool`: Whether the async result has been awaited
 - `result_cache::Union{Nothing, Any}`: Cached result for multiple `await_result` calls
 - `in_transaction::Bool`: Whether this task is part of a transaction (don't release connection)
+- `borrowed::Bool`: Whether the caller passed the connection in as `conn` (#970). A borrowed
+  connection is the caller's, so `await_result` never releases it — on success, on a failure, or
+  after a cancelled await.
 - `abandoned::Bool`: Whether the await was cut short by a cancellation rather than a database
   failure (#315). Set by `await_result`; it sends the connection through the abandoned-await
   recovery — cancel, wait for the driver, drain, then release or renew — instead of a plain
@@ -2049,14 +2066,15 @@ mutable struct FetchTask
   result_cache::Union{Nothing, Any}
   in_transaction::Bool  # Whether this task is part of a transaction context
   abandoned::Bool       # Await cut short by a cancellation — connection is NOT returnable as-is (#315)
+  borrowed::Bool        # The caller passed `conn` in: it is theirs, never released here (#970)
 
-  # Constructor for transaction-aware fetch
-  FetchTask(async_result, pool::Union{PormGPostgres, PormGSQLite}, conn, in_transaction::Bool) =
-    new(async_result, pool, conn, false, nothing, in_transaction, false)
+  FetchTask(async_result, pool::Union{PormGPostgres, PormGSQLite}, conn, in_transaction::Bool;
+            borrowed::Bool = false) =
+    new(async_result, pool, conn, false, nothing, in_transaction, false, borrowed)
 
   # Legacy constructor (defaults to not in transaction)
   FetchTask(async_result, pool::Union{PormGPostgres, PormGSQLite}, conn) =
-    new(async_result, pool, conn, false, nothing, false, false)
+    new(async_result, pool, conn, false, nothing, false, false, false)
 end
 
 # Abandoned-await recovery budgets (#315), in seconds. Exposed as `_recover_abandoned_connection!`
@@ -2271,7 +2289,9 @@ _recover_abandoned_connection!(ft::FetchTask; kwargs...) =
     await_result(ft::FetchTask) -> result
 
 Await the completion of an async fetch task and return the result.
-Automatically releases the connection back to the pool.
+Releases the connection back to the pool when the task acquired it. A connection the caller passed
+in as `conn` is borrowed and stays leased, on success and on failure — see
+[`acquire_connection`](@ref) for the ownership rule (#970).
 
 This function is idempotent - calling it multiple times returns the same result
 without re-releasing the connection.
@@ -2305,9 +2325,11 @@ function await_result(ft::FetchTask)
     err = _as_database_error(ft.pool, e)
     err === e ? rethrow() : throw(err)
   finally
-    # Only release connection if we're not in a transaction context
-    # Transaction context manages its own connection lifecycle
-    if ft.completed && !ft.in_transaction
+    # Release only a connection this task acquired. A transaction context manages its own
+    # connection, and a borrowed one (the caller's `conn`, #970) is the caller's to release — that
+    # includes a cancelled await: recovery would hand the slot back under the caller's lease, so
+    # the caller settles it instead, as `with_transaction` already leaves it to them.
+    if ft.completed && !ft.in_transaction && !ft.borrowed
       # An abandoned await must NOT hand the connection back: the driver may still be writing to it
       # (SQLite's global worker) or have left an unconsumed result on the socket (libpq), and
       # NEITHER state is visible to `backend_is_alive` — so the next borrower would inherit a
@@ -2323,6 +2345,9 @@ end
 
 Start an async database query that yields to the Julia scheduler.
 Returns a `FetchTask` that can be awaited with `await_result()`.
+
+`conn = c` runs the statement on your own leased connection, which is borrowed: it is never released
+here — see [`acquire_connection`](@ref). It also bypasses an open transaction context.
 
 This is useful in Genie.jl async handlers where you want to run multiple
 queries in parallel or allow other tasks to run while waiting for the database.
@@ -2348,18 +2373,13 @@ function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
   # NULLs once, here. Guarded to ManualParams: ORM collectors (AbstractPormGParam) and the
   # `nothing` sentinel are untouched (collectors already ran nothing→missing via format_*_sql).
   # #951: both checks run before a connection is leased, so a refusal costs nothing and sends
-  # nothing. A caller's own `conn` is already leased, though, and this call owns it from here on
-  # (released after the statement, or in the `catch` below when the driver throws), so a refusal
-  # hands it back too — before #960 it leaked one lease per refusal.
-  try
-    if params isa ManualParams
-      params = _normalize_manual_params(params, connection)
-    end
-    _refuse_nul(sql, params)
-  catch
-    conn === nothing || release_connection(connection, conn)
-    rethrow()
+  # nothing. A caller's own `conn` is borrowed (#970): it stays leased on a refusal, exactly as it
+  # does after the statement and when the driver throws.
+  if params isa ManualParams
+    params = _normalize_manual_params(params, connection)
   end
+  _refuse_nul(sql, params)
+  borrowed = conn !== nothing
 
   # Check for transaction context first — on THIS pool only (#831). A transaction open on another
   # database is not this statement's transaction: reusing its connection would run the statement on
@@ -2399,10 +2419,10 @@ function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
       else
         sqlite_execute_async(connection, conn, sql, params)
       end
-      return FetchTask(task, connection, conn, false)  # false = not in transaction
+      return FetchTask(task, connection, conn, false; borrowed = borrowed)  # false = not in transaction
     catch e
-      # If EXEC fails immediately, release connection
-      release_connection(connection, conn)
+      # If EXEC fails immediately, release the connection — only one this call acquired (#970)
+      borrowed || release_connection(connection, conn)
       throw(_as_database_error(connection, e))
     end
   end
@@ -2416,6 +2436,9 @@ fetch_async(settings::Union{PormGPostgres, PormGSQLite}, sql::String, params::Un
 
 Execute a database query synchronously (blocking).
 Internally uses async execution but immediately awaits the result.
+
+`conn = c` runs the statement on your own leased connection, which is borrowed: it is never released
+here, and a dropped connection is not retried — see [`acquire_connection`](@ref).
 """
 function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
   conn = nothing,
@@ -2542,7 +2565,10 @@ fetch_copy(settings::PormGSettings, sql::String, data_itr) = fetch_copy(settings
     with_transaction_async(pool::PormGPostgres, sql::String; ...) -> (task, conn)
 
 Start an async transaction query. Returns the async handle and connection.
-The connection is NOT released - caller must manage it for transaction continuation.
+The connection is NOT released - caller must manage it for transaction continuation. A `conn` you
+pass is borrowed and stays yours on every outcome, a driver error included (#970); a connection this
+call acquired is released only when it throws before returning it — see
+[`acquire_connection`](@ref).
 
 For transactions, you typically want to keep the connection for multiple queries.
 """
@@ -2551,19 +2577,19 @@ function with_transaction_async(pool::Union{PormGPostgres, PormGSQLite}, sql::St
   params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing)
 
   # Raw values are normalized as `fetch_async` does it (#218/#721), and before the acquire, so a
-  # value SQLite refuses to bind raises without leasing a connection. A caller's own `conn` stays
-  # the caller's on a refusal (#960): this function hands it back on success too, so it is not a
-  # leak, and it may carry an open `BEGIN` the caller still has to roll back — released here, it
-  # would go back to the pool mid-transaction. `fetch_async` is the opposite case: it releases a
-  # caller's `conn` after every statement, so it releases it on a refusal as well.
+  # value SQLite refuses to bind raises without leasing a connection. A caller's own `conn` is
+  # borrowed (#970) and stays the caller's on every outcome: it may carry an open `BEGIN` the
+  # caller still has to roll back, and released here it would go back to the pool mid-transaction.
   params isa ManualParams && (params = _normalize_manual_params(params, pool))
   _refuse_nul(sql, params)   # #951, before the acquire for the same reason
+  conn_acquired = false
   if conn === nothing
     if pool isa PormGSQLite
       conn = acquire_connection(pool; mode=:write)
     else
       conn = acquire_connection(pool)
     end
+    conn_acquired = true
   end
   try
     task = if pool isa PormGPostgres
@@ -2574,7 +2600,9 @@ function with_transaction_async(pool::Union{PormGPostgres, PormGSQLite}, sql::St
     # Don't wrap in FetchTask since we don't want auto-release
     return task, conn
   catch e
-    release_connection(pool, conn)
+    # The caller never receives a connection this call acquired, so it goes back here; a borrowed
+    # one is the caller's (#970) — before, it was released too, under a possibly open `BEGIN`.
+    conn_acquired && release_connection(pool, conn)
     throw(_as_database_error(pool, e))
   end
 end
@@ -2596,9 +2624,11 @@ transaction.
 
 # Keyword arguments
 - `conn`: an existing connection to reuse. When `nothing`, one is acquired — on SQLite with
-  `mode = :write`, since a transaction writes.
-- `release_conn`: return the connection to the pool when this call finishes. Leave it `false`
-  while the transaction is still open; you receive `conn` back in the return tuple.
+  `mode = :write`, since a transaction writes. A connection you pass is borrowed: this call never
+  releases it unless `release_conn = true` (see [`acquire_connection`](@ref), #970).
+- `release_conn`: return the connection to the pool when this call finishes — the one explicit
+  hand-over of a connection you passed. Leave it `false` while the transaction is still open; you
+  receive `conn` back in the return tuple.
 - `params`: bound query parameters. Never interpolate values into `sql`. A plain vector or tuple
   of values works as it does for `fetch` (#218): write the backend's own placeholders (`\$1, \$2`
   on PostgreSQL, `?` on SQLite), since PormG translates none, and `nothing` binds as `NULL`.

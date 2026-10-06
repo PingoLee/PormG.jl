@@ -663,7 +663,7 @@ end
 
 If you need finer control (e.g., manual `SAVEPOINT` or multi-statement blocks), PormG exposes:
 
-- **`with_tx_context(conn_pool, conn::LibPQ.Connection, block)`**: Install a connection in thread-local storage so child tasks inherit it.
+- **`with_tx_context(f, pool, conn)`**: Run `f()` with `conn` installed as the ambient transaction connection for `pool`, so ORM calls and child tasks inside `f` use it. It is a scoped value, not thread-local storage, and it does not start a transaction: you issue `BEGIN`/`COMMIT`/`ROLLBACK` yourself.
 - **`with_transaction(settings, sql, conn=nothing, release_conn=false, params=nothing)`**: Execute raw SQL inside a transaction context. Bind values with `params`, a vector or tuple in the backend's own placeholder style (`$1, $2` on PostgreSQL, `?` on SQLite), as with [raw `fetch`](@ref "Binding values — a manual-params array"). Never interpolate them into `sql`.
 - **`get_tx_connection()`**: Check whether a transaction context is active, on any database, and return its connection. It does not say which database that is, so never hand it to a query for a different one.
 - **`finalize_transaction_connection!(settings, conn; rollback_error=nothing)`**: Return `conn` to the pool exactly once from a terminal `finally`. Pass `rollback_error=nothing` when the COMMIT succeeded or the cleanup ROLLBACK ran cleanly; pass the caught error when the cleanup ROLLBACK itself threw, and a non-benign one causes the connection to be renewed or discarded instead of released.
@@ -705,6 +705,30 @@ If you need finer control (e.g., manual `SAVEPOINT` or multi-statement blocks), 
     do **not** end it with `release_connection`: a failed cleanup `ROLLBACK` can leave the
     connection holding an open transaction. Terminate with `finalize_transaction_connection!`
     instead, exactly as the example below does.
+
+### Who releases a connection
+
+A connection you pass to a funnel as `conn = c` is **borrowed**: the funnel never releases it. That
+holds on every outcome — the statement succeeds, a check refuses it before it is sent (a NUL in a
+string, say), or the driver throws — so a connection carrying your open `BEGIN` cannot go back to
+the pool underneath you. You release it once, from your own `finally`. A connection the funnel
+acquired itself (`conn = nothing`) is the funnel's.
+
+| Funnel | `conn = c` (yours) | `conn = nothing` (acquired by the funnel) |
+|---|---|---|
+| `fetch`, `fetch_async` + `await_result` | kept — yours to release | released when the statement ends |
+| `with_transaction_async` | kept | returned to you in `(task, conn)`; released only if the call throws |
+| `with_transaction(…; release_conn = false)` | kept | returned to you in `(result, conn)`; released only if the call throws |
+| `with_transaction(…; release_conn = true)` | **released** — the one explicit hand-over | released |
+
+`release_conn = true` releases even when the statement fails, which is why it is the wrong ending
+for a `COMMIT` or `ROLLBACK` (see the warning in the `with_transaction` docstring). End a lifecycle
+with `finalize_transaction_connection!` instead.
+
+A passed `conn` also bypasses an open transaction context: `fetch(…; conn = c)` inside
+`run_in_transaction` runs on `c`, outside that transaction. If an await on your connection was cut
+short by `Ctrl+C`, the driver may still be on it — end it with
+`finalize_transaction_connection!(pool, c; renew = true)` rather than a plain release.
 
 ### Example: Manual Savepoint
 

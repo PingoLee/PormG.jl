@@ -106,7 +106,7 @@ Because the placeholder style is backend-native, a manual-params string is **not
     string from user input, even with the values-array path available.
 
 !!! warning "An un-awaited `FetchTask` holds a pool connection"
-    `fetch_async` checks its connection out *synchronously*; only `await_result` (or the owning transaction's cleanup) returns it. Always await every task you start — including fire-and-forget writes. The opt-in [`leak_detection_threshold`](configuration/advanced.md) logs a warning when a connection is held suspiciously long, which almost always means an un-awaited `FetchTask`.
+    `fetch_async` checks its connection out *synchronously*; only `await_result` (or the owning transaction's cleanup) returns it. A connection you passed in as `conn = c` is the exception: it is borrowed, so `await_result` leaves it leased and you release it yourself (see [Who releases a connection](@ref)). Always await every task you start — including fire-and-forget writes. The opt-in [`leak_detection_threshold`](configuration/advanced.md) logs a warning when a connection is held suspiciously long, which almost always means an un-awaited `FetchTask`.
 
 ## Cancelling a query with `Ctrl+C`
 

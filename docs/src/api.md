@@ -597,7 +597,8 @@ n    = await_result(task)
 
 !!! warning "An un-awaited `FetchTask` leaks its pool connection"
     `fetch_async` checks its connection out synchronously; only `await_result` returns it.
-    Always await every task you start.
+    Always await every task you start. (A connection you pass as `conn = c` is borrowed and is
+    never released for you — see [Who releases a connection](@ref).)
 
 See the [Async & Concurrency guide](async.md) for fan-out patterns, `@async` vs
 `Threads.@spawn`, connection-pool sizing, and why you must not fan out queries *inside* a

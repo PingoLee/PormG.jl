@@ -1005,8 +1005,9 @@ function _precheck_lossy_alters(conn::PormGPostgres, findings::Vector{LossyAlter
     timeouts.statement_timeout_ms === nothing ||
       with_transaction(conn, "SET LOCAL statement_timeout = '$(timeouts.statement_timeout_ms)ms';", conn = leased)
     # Under the transaction context, so every `fetch` below runs on `leased` and leaves it leased.
-    # A `fetch(...; conn = leased)` would not: an explicit `conn` is treated as outside any
-    # transaction and handed back to the pool when the statement finishes — mid-transaction (#139).
+    # The context, not `fetch(...; conn = leased)`, because the helpers called below take no `conn`.
+    # (Before #970 an explicit `conn` was also handed back to the pool when the statement finished —
+    # mid-transaction, #139; it is borrowed now.)
     Configuration.with_tx_context(conn, leased) do
       # #828: the `:text_cast` count depends on the server's version; read once, and only for one.
       version = any(f -> f.kind === :text_cast, findings) ?
@@ -1279,9 +1280,9 @@ end
 
 # A history read, optionally on a connection the caller already holds — the migration transaction's
 # own, which is how the SQLite #81 guard reads inside `BEGIN IMMEDIATE` (#737). Through
-# `with_transaction(…; conn)`, the idiom `sqlite_foreign_keys_enabled` uses, and NOT `fetch(…; conn)`:
-# outside a `run_in_transaction` context `fetch` releases the connection it ran on when it finishes
-# (`await_result`'s `finally`), so it would hand the open transaction's handle back to the pool.
+# `with_transaction(…; conn)`, the idiom `sqlite_foreign_keys_enabled` uses. (`fetch(…; conn)` used
+# to release the connection it ran on, which would have handed the open transaction's handle back
+# to the pool; a passed `conn` is borrowed since #970, but this keeps the one idiom.)
 function _history_rows(connection::Union{PormGPostgres, PormGSQLite}, sql::String; conn = nothing)::DataFrame
   conn === nothing && return DataFrame(fetch(connection, sql))
   rows, _ = with_transaction(connection, sql; conn = conn)
@@ -3534,8 +3535,8 @@ function _execute_migration_lifecycle(connection::PormGSQLite, settings::PormGSe
         # #739: the schema precondition, after the #81 guard for the reason given in the PostgreSQL
         # lifecycle, and inside `BEGIN IMMEDIATE` — the only mutual exclusion SQLite has — so no other
         # process can change these tables before our COMMIT. The read runs on this transaction's own
-        # connection through `with_tx_context`: a `fetch(...; conn = conn)` would hand the connection
-        # back to the pool mid-transaction (#139). A refusal leaves `attempted` false, so it rolls
+        # connection through `with_tx_context`, which reaches every `fetch` inside the precondition
+        # check without threading a `conn` through it. A refusal leaves `attempted` false, so it rolls
         # back without a `failed` row.
         schema_tables === nothing || Configuration.with_tx_context(connection, conn) do
           _check_schema_precondition(connection, settings, schema_tables)
@@ -3924,8 +3925,7 @@ function _run_once_locked(f::Function, connection::PormGSQLite, settings::PormGS
   return :applied
 end
 
-# `fetch` with no `conn`, so inside `run_in_transaction` both run on the transaction's connection:
-# an explicit `conn` would hand it back to the pool mid-transaction (#139).
+# `fetch` with no `conn`, so inside `run_in_transaction` both run on the transaction's connection.
 _data_step_recorded(connection::Union{PormGPostgres, PormGSQLite}, step::String)::Bool =
   nrow(DataFrame(fetch(connection, Dialect.select_data_step_sql(connection); params = Any[step]))) > 0
 

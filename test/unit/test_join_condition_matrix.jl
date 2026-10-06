@@ -220,6 +220,48 @@ const _JCM_SINGLE_CELLS = (
   ("P7 cjoin_on/Joined anchor + predicate",
    (q, mod) -> (q.cjoin_on("Driver", alias = "d2", on = [Joined("d2", "driverid") == F("driverid"), Joined("d2", "code") => "X"]);
                 q.values("resultid"))),
+  # #982: the shapes the relocation pass existed for. A `cjoin_on` condition may name the base row, a
+  # path join, or another `cjoin_on` alias, and where each lands is recorded here.
+  ("P7 cjoin_on/base column against Joined",
+   (q, mod) -> (q.cjoin_on("Driver", alias = "d2", on = [Joined("d2", "number") == F("number")]); q.values("resultid"))),
+  # A path nothing else reaches: its join is built while the ON renders, after `d2`.
+  ("P7 cjoin_on/deep path predicate, unreached",
+   (q, mod) -> (q.cjoin_on("Driver", alias = "d2", on = [Joined("d2", "driverid") == F("driverid"), "driverid__code" => "X"]);
+                q.values("resultid"))),
+  # The same path, already projected: its join exists before `d2`.
+  ("P7 cjoin_on/deep path predicate, projected",
+   (q, mod) -> (q.cjoin_on("Driver", alias = "d2", on = [Joined("d2", "driverid") == F("driverid"), "driverid__code" => "X"]);
+                q.values("resultid", "driverid__code"))),
+  ("P7 cjoin_on/deep path predicate, LEFT",
+   (q, mod) -> (q.cjoin_on("Driver", alias = "d2", join_type = "LEFT",
+                           on = [Joined("d2", "driverid") == F("driverid"), "driverid__code" => "X"]);
+                q.values("resultid"))),
+  # The only predicate correlates the alias with a path join (#435's shape).
+  ("P7 cjoin_on/Joined against deep path F",
+   (q, mod) -> (q.cjoin_on("Driver", alias = "d2", on = [Joined("d2", "code") == F("driverid__code")]); q.values("resultid"))),
+  # #421's shape for `cjoin_on`: literals on the alias and on a path join, the path one listed first.
+  ("P7 cjoin_on/two rows bind, path first (#421)",
+   (q, mod) -> (q.cjoin_on("Driver", alias = "d2",
+                           on = ["driverid__code" => "A", Joined("d2", "driverid") == F("driverid"), Joined("d2", "code") => "B"]);
+                q.values("resultid"))),
+  # Two aliases, the second naming the first: declaration order is dependency order (#449).
+  ("P7 cjoin_on/second alias names the first",
+   (q, mod) -> (q.cjoin_on("Driver", alias = "d1", on = [Joined("d1", "driverid") == F("driverid")]);
+                q.cjoin_on("Driver", alias = "d2", on = [Joined("d2", "number") == Joined("d1", "number")]);
+                q.values("resultid"))),
+  # The forward reference: the first alias names the second.
+  ("P7 cjoin_on/first alias names the second",
+   (q, mod) -> (q.cjoin_on("Driver", alias = "d1", on = [Joined("d1", "number") == Joined("d2", "number")]);
+                q.cjoin_on("Driver", alias = "d2", on = [Joined("d2", "driverid") == F("driverid")]);
+                q.values("resultid"))),
+  # Each alias names the other: no order emits both.
+  ("P7 cjoin_on/alias cycle",
+   (q, mod) -> (q.cjoin_on("Driver", alias = "d1", on = [Joined("d1", "number") == Joined("d2", "number")]);
+                q.cjoin_on("Driver", alias = "d2", on = [Joined("d2", "code") == Joined("d1", "code")]);
+                q.values("resultid"))),
+  # #448: no predicate names the alias's own row.
+  ("P7 cjoin_on/no reference to its own alias (#448)",
+   (q, mod) -> (q.cjoin_on("Driver", alias = "d2", on = ["number" => 5]); q.values("resultid"))),
 )
 
 # Every cell, flattened: (id, build). The grid is generated, so a new spelling or position is one row.

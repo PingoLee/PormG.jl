@@ -2973,6 +2973,81 @@ _array_index_expr(::PormGSQLite, column::AbstractString, index::Int) =
 _array_slice_expr(::PormGSQLite, column::AbstractString, lower::Int, upper::Int) =
   throw(BackendCapabilityError("An ArrayField slice (`__$(lower - 1)_$(upper)`) requires PostgreSQL: SQLite has no array type."))
 
+# #904: PostgreSQL network operators over an `inet`/`cidr` column. The same three arms as the JSON
+# four: PostgreSQL emits the operator, SQLite and the abstract arm refuse. SQLite cannot declare
+# either column (`_refuse_specialized_sqlite_type`), so its arm is reached only by a model that
+# declares one and is queried without being migrated. A containment operand arrives already cast
+# (`$1::inet`) — `<<` is ambiguous on an untyped parameter — or as a column, which needs no cast.
+function net_contained(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "$(column) << $(value)"                    # strictly inside the given network
+end
+function net_contained(conn::PormGSQLite, column::AbstractString, value::AbstractString)
+  throw(BackendCapabilityError("The @net_contained lookup (inet <<) requires PostgreSQL"))
+end
+function net_contained(conn::PormGAbstractType, column::AbstractString, value)
+  throw(BackendCapabilityError("The @net_contained lookup (inet <<) requires PostgreSQL"))
+end
+
+function net_contained_or_equal(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "$(column) <<= $(value)"                   # inside the given network, or equal to it
+end
+function net_contained_or_equal(conn::PormGSQLite, column::AbstractString, value::AbstractString)
+  throw(BackendCapabilityError("The @net_contained_or_equal lookup (inet <<=) requires PostgreSQL"))
+end
+function net_contained_or_equal(conn::PormGAbstractType, column::AbstractString, value)
+  throw(BackendCapabilityError("The @net_contained_or_equal lookup (inet <<=) requires PostgreSQL"))
+end
+
+function net_contains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "$(column) >> $(value)"                    # strictly contains the given value
+end
+function net_contains(conn::PormGSQLite, column::AbstractString, value::AbstractString)
+  throw(BackendCapabilityError("The @net_contains lookup (inet >>) requires PostgreSQL"))
+end
+function net_contains(conn::PormGAbstractType, column::AbstractString, value)
+  throw(BackendCapabilityError("The @net_contains lookup (inet >>) requires PostgreSQL"))
+end
+
+function net_contains_or_equals(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "$(column) >>= $(value)"                   # contains the given value, or equals it
+end
+function net_contains_or_equals(conn::PormGSQLite, column::AbstractString, value::AbstractString)
+  throw(BackendCapabilityError("The @net_contains_or_equals lookup (inet >>=) requires PostgreSQL"))
+end
+function net_contains_or_equals(conn::PormGAbstractType, column::AbstractString, value)
+  throw(BackendCapabilityError("The @net_contains_or_equals lookup (inet >>=) requires PostgreSQL"))
+end
+
+function net_overlaps(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "$(column) && $(value)"                    # either contains or equals the other
+end
+function net_overlaps(conn::PormGSQLite, column::AbstractString, value::AbstractString)
+  throw(BackendCapabilityError("The @net_overlaps lookup (inet &&) requires PostgreSQL"))
+end
+function net_overlaps(conn::PormGAbstractType, column::AbstractString, value)
+  throw(BackendCapabilityError("The @net_overlaps lookup (inet &&) requires PostgreSQL"))
+end
+
+function family(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "family($(column)) = $(value)"             # 4 or 6
+end
+function family(conn::PormGSQLite, column::AbstractString, value::AbstractString)
+  throw(BackendCapabilityError("The @family lookup (inet family()) requires PostgreSQL"))
+end
+function family(conn::PormGAbstractType, column::AbstractString, value)
+  throw(BackendCapabilityError("The @family lookup (inet family()) requires PostgreSQL"))
+end
+
+function prefixlen(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+  return "masklen($(column)) = $(value)"            # the netmask length
+end
+function prefixlen(conn::PormGSQLite, column::AbstractString, value::AbstractString)
+  throw(BackendCapabilityError("The @prefixlen lookup (inet masklen()) requires PostgreSQL"))
+end
+function prefixlen(conn::PormGAbstractType, column::AbstractString, value)
+  throw(BackendCapabilityError("The @prefixlen lookup (inet masklen()) requires PostgreSQL"))
+end
+
 # #28: the operand a pattern lookup (`@contains`, `@startswith`, `@regex`, …) reads from a network
 # column. PostgreSQL has no `LIKE` for `inet`/`cidr`, so the column is turned into the text it PRINTS
 # — Django's backend makes the same choice (`HOST(%s)` for a `GenericIPAddressField`). `HOST`, not a

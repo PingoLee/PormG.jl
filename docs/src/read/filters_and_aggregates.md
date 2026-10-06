@@ -41,6 +41,12 @@ These work in both `filter()` and `values()`.
 | `@regex` | `~ pattern` | POSIX regular expression, case-sensitive (PostgreSQL only) | `"surname__@regex" => "^Ver"` |
 | `@iregex` | `~* pattern` | POSIX regular expression, case-insensitive (PostgreSQL only) | `"surname__@iregex" => "^ver"` |
 
+Three field types have lookups of their own, beyond this table: a `JSONField` (see
+[JSON / JSONB Lookups and Operators](#JSON-/-JSONB-Lookups-and-Operators) below), an `ArrayField`
+(see [Array Lookups](#Array-Lookups-(PostgreSQL-only)) below), and the network address fields
+(`@net_contained`, `@net_contains`, …, see
+[Fields → Network containment lookups](../fields.md#Network-containment-lookups)).
+
 ### Negating Pattern and Range Lookups
 
 The pattern and range lookups each have a **negated twin** — same value handling, the SQL operator

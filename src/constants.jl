@@ -115,6 +115,16 @@ const PormGsuffix = Dict{String,Union{Int64, String}}(
   "acontains" => "acontains",         # @>  (the array holds every given element)
   "contained_by" => "contained_by",   # <@  (every element of the array is among the given ones)
   "overlap" => "overlap",             # &&  (the array shares at least one element with the given)
+  # #904: PostgreSQL network operators on an `inet`/`cidr` column — django-netfields' lookups. Each
+  # maps to a Dialect renderer of the same name, as the JSON four do. `net_` keeps them apart from the
+  # LIKE `contains` above, the `jcontains` precedent.
+  "net_contained" => "net_contained",                     # <<   (strictly inside the given network)
+  "net_contained_or_equal" => "net_contained_or_equal",   # <<=  (inside or equal)
+  "net_contains" => "net_contains",                       # >>   (strictly contains the given value)
+  "net_contains_or_equals" => "net_contains_or_equals",   # >>=  (contains or equal)
+  "net_overlaps" => "net_overlaps",                       # &&   (either contains the other)
+  "family" => "family",                                   # family(col) = 4 | 6
+  "prefixlen" => "prefixlen",                             # masklen(col) = n
 )
 
 # #27: the JSON containment/overlap operators, routed to a dedicated render branch in
@@ -125,6 +135,14 @@ const JSON_CONTAINMENT_OPERATORS = ("jcontains", "has_key", "has_any_keys", "has
 # render branch (`_render_array_operator`), a vector right-hand side bound as ONE array literal, and
 # PostgreSQL only (SQLite has no array type, and PormG does not emulate one).
 const ARRAY_CONTAINMENT_OPERATORS = ("acontains", "contained_by", "overlap")
+
+# #904: the network operators, routed to `_render_network_operator` in
+# _get_filter_query(::SQLTypeOper) and gated PostgreSQL-only. The first five compare against a
+# network (`NETWORK_CONTAINMENT_OPERATORS`); `family` and `prefixlen` compare a number the column
+# yields.
+const NETWORK_CONTAINMENT_OPERATORS = ("net_contained", "net_contained_or_equal", "net_contains",
+                                       "net_contains_or_equals", "net_overlaps")
+const NETWORK_LOOKUP_OPERATORS = (NETWORK_CONTAINMENT_OPERATORS..., "family", "prefixlen")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # The LIKE-family pattern lookups (#604)

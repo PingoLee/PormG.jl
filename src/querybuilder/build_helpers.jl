@@ -2322,6 +2322,58 @@ function _render_json_operator(v::SQLTypeOper, column::String, instruc::SQLInstr
   return getfield(Dialect, Symbol(op))(instruc.connection, column, ph)
 end
 
+# #904: render a PostgreSQL network operator (`<<`, `<<=`, `>>`, `>>=`, `&&`, `family()`,
+# `masklen()`). The left-hand side must be a `GenericIPAddressField` or `CIDRField` column — the
+# model's own or a joined path's terminal field — which is the same evidence a pattern lookup reads
+# (`_pattern_text_kind`). A projection alias never gets here from a filter
+# (`_ALIAS_UNSUPPORTED_OPERATORS`), and a `When` condition on one has no field, so it is refused below.
+#
+# The containment operand binds through `format_inet_network_sql`, not the column's own formatter: it
+# is a network, which `format_inet_sql` refuses, and its host bits may be set, which `format_cidr_sql`
+# refuses. It binds typed (`::inet`), because `<<` is ambiguous on an untyped parameter; a `cidr` column
+# meets it through PostgreSQL's implicit `cidr → inet` cast. A column on the right (`F`, a CTE or a
+# joined column) is compared as it is, uncast. Any other expression is refused: none was asked for, and
+# an unvalidated one would fail at the server instead.
+function _render_network_operator(v::SQLTypeOper, column::String, operand_field, field_label::AbstractString,
+                                  instruc::SQLInstruction)::String
+  op = v.operator
+  # The path the caller wrote, for the messages. Without a field it is a projection alias (reached
+  # through a `When` condition) or a transform (`happened__@year`). A transform node keeps neither the
+  # caller's `@year` spelling nor a path to quote, so its refusal names the column it transforms and
+  # quotes no path, rather than one the caller never wrote or the SQL it renders.
+  label, subject = if operand_field !== nothing
+    field_label, field_label
+  elseif isa(v.column, SQLTypeField) && isa(v.column.field, AbstractString)
+    v.column.field, v.column.field
+  elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) &&
+         isa(v.column.field.column, AbstractString)
+    nothing, "$(v.column.field.column), under a transform,"
+  else
+    column, column
+  end
+  where_ = label === nothing ? "Error in filter" : "Error in filter '$(label)__@$(op)'"
+  (operand_field !== nothing && _pattern_text_kind(operand_field.formatter) in (:inet, :cidr)) ||
+    throw(FilterError("$(where_): the @$(op) lookup requires a GenericIPAddressField " *
+                      "or CIDRField column, and $(subject) is not one."))
+  lookup = "$(label)__@$(op)"
+  ph = if isa(v.values, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
+    _get_filter_query(v.values, instruc)
+  elseif isa(v.values, Union{SQLType,SubqueryObject,SQLObjectHandler})
+    throw(FilterError("Error in filter '$(lookup)': the @$(op) lookup takes a value or a column " *
+                      "(F(\"…\")), not this expression."))
+  elseif op in NETWORK_CONTAINMENT_OPERATORS
+    add_parameter!(instruc, _guarded_format(Models.format_inet_network_sql, v.values, op, label,
+                                            operand_field.type); sql_type = "inet")
+  else  # family / prefixlen
+    # A `Bool` is an `Integer` in Julia, and `true` is not a family (#949's reasoning).
+    allowed, what = op == "family" ? ((4, 6), "4 or 6") : (0:128, "a whole number from 0 to 128")
+    (v.values isa Integer && !(v.values isa Bool) && v.values in allowed) ||
+      throw(FilterError("Error in filter '$(lookup)': the @$(op) lookup takes $(what), got $(repr(v.values))."))
+    add_parameter!(instruc, Int(v.values))
+  end
+  return getfield(Dialect, Symbol(op))(instruc.connection, column, ph)
+end
+
 # Resolve the base PormGField a JSON operator targets: a bare column name lives on the model;
 # an FK-reached terminal JSON column was cached in tab_field_cache when `column` resolved.
 function _resolve_json_operator_field(v::SQLTypeOper, instruc::SQLInstruction)
@@ -3110,7 +3162,11 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   # #28: a network column. Here, once, so the model-field arm, the joined-path arm and a column RHS
   # all get it. #903: a `When` condition on a projection alias renders here too, and has no field —
   # the alias's formatter is what says it projects a network column.
-  operand_field, _ = _operand_field(v, instruc)
+  operand_field, operand_label = _operand_field(v, instruc)
+  # #904: the network operators bind and render on their own, ahead of the pattern operand and every
+  # value arm below — none of which knows their operand.
+  v.operator in NETWORK_LOOKUP_OPERATORS &&
+    return _render_network_operator(v, column, operand_field, operand_label, instruc)
   operand_formatter = operand_field !== nothing ? operand_field.formatter :
                       alias !== nothing ? _having_alias_formatter(memo_key(:base, alias), instruc) : nothing
   # The label is derived only for an array column — the one kind that refuses here and names a path.

@@ -250,6 +250,26 @@ format_cidr_sql(value) =
   throw(InvalidValueError("A CIDR network must be $(_NETWORK_VALUE_TYPES), got $(typeof(value))."))
 
 """
+    format_inet_network_sql(value) -> Union{String, Missing}
+
+The value of a network containment lookup (`@net_contained`, `@net_contains`, …, #904): one `inet`
+value, normalized to the text PostgreSQL's `inet` prints for it. Neither field's own formatter fits.
+`format_inet_sql` refuses a `/prefix`, and the operand is usually a network. `format_cidr_sql`
+refuses bits set to the right of the mask, and PostgreSQL's `<<` takes those on an `inet` operand.
+So a prefix is allowed and the host bits are kept: `"10.20.0.9/16"` stays `"10.20.0.9/16"`. A
+full-width prefix is dropped, as `inet_out` drops it (`"10.0.0.1/32"` prints `"10.0.0.1"`).
+"""
+format_inet_network_sql(value::Union{Missing, Nothing}) = missing
+function format_inet_network_sql(value::Union{AbstractString, Sockets.IPAddr})::String
+  p = _parsed_ip(value)
+  text = _render_ip(p.family, p.addr)
+  (p.bits === nothing || p.bits == _ip_maxbits(p.family)) && return text
+  return "$text/$(p.bits)"
+end
+format_inet_network_sql(value) =
+  throw(InvalidValueError("A network lookup value must be $(_NETWORK_VALUE_TYPES), got $(typeof(value))."))
+
+"""
     check_ip_protocol(protocol, text) -> String
 
 Refuse a normalized address whose family `GenericIPAddressField(protocol = …)` does not allow, and

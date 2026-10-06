@@ -330,6 +330,57 @@ M.Pit_wall_session.objects.
   list()
 ```
 
+### Network containment lookups
+
+These lookups use PostgreSQL's network operators, the main reason to store an address as `inet`
+rather than text. The names follow django-netfields. The `net_` prefix keeps them apart from
+`@contains`, which is a text match.
+
+| Lookup | PostgreSQL | True when the column… |
+|---|---|---|
+| `@net_contained` | `col << value` | is inside the network, and not equal to it |
+| `@net_contained_or_equal` | `col <<= value` | is inside the network, or equal to it |
+| `@net_contains` | `col >> value` | contains the value, and is not equal to it |
+| `@net_contains_or_equals` | `col >>= value` | contains the value, or is equal to it |
+| `@net_overlaps` | `col && value` | contains the value, or is inside it |
+| `@family` | `family(col) = value` | is IPv4 (`4`) or IPv6 (`6`) |
+| `@prefixlen` | `masklen(col) = value` | has this prefix length (`/16` is `16`) |
+
+```julia
+# The pit-wall clients connected from inside the 10.20.0.0/16 garage subnet.
+M.Pit_wall_session.objects.
+  filter("client_ip__@net_contained" => "10.20.0.0/16").
+  values("team", "client_ip").
+  list()
+
+# The sessions whose garage network holds a given relay address.
+M.Pit_wall_session.objects.
+  filter("garage_lan__@net_contains" => "10.20.0.9").
+  values("team").
+  list()
+
+# A column on the right: each client inside its own team's garage network.
+M.Pit_wall_session.objects.
+  filter("client_ip__@net_contained" => F("garage_lan")).
+  values("team", "client_ip").
+  list()
+```
+
+- The **value of the five containment lookups** is one address or network, as a `String` or a
+  `Sockets.IPv4` / `Sockets.IPv6`. It may carry a prefix, and its host bits may be set:
+  `"10.20.0.9/16"` means the network `10.20.0.0/16`, as it does in PostgreSQL. It works on a
+  `GenericIPAddressField` and a `CIDRField` alike. A value that is not an address raises
+  `FilterError`.
+- A **column on the right** (`F("garage_lan")`) is compared directly.
+- `@family` takes `4` or `6`, and `@prefixlen` a whole number from `0` to `128`. Anything else raises
+  `FilterError`.
+- These lookups work on a network column only: the model's own, one reached through a relation
+  (`"session__client_ip__@net_contained"`), or a CTE or `cjoin_on` column over one. On any other
+  column, on a projection alias, or with a list of values, they raise `FilterError`.
+- **PostgreSQL only.** On SQLite, a lookup that is otherwise valid raises `BackendCapabilityError`,
+  as the fields themselves do. The value checks above come first, so an invalid one still raises
+  `FilterError` there.
+
 ---
 
 ## Array Fields

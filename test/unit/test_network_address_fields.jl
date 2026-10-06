@@ -14,6 +14,7 @@ This file covers:
   on a column and on a projection alias over one (#903)
 - A `Sockets` literal (`Value(ip"…")`, a function operand): typed inet text on PostgreSQL, refused on SQLite (#903)
 - Migration retypes: the `USING` clauses, the lossy-ALTER findings and their row counts
+- The network containment lookups (#904): `@net_contained` … `@net_overlaps`, `@family`, `@prefixlen`
 
 Hermetic: mock connections only. The live half — that PostgreSQL itself prints what the normalizer
 produced — is `test/integration/test_network_address_fields.jl`.
@@ -623,5 +624,224 @@ using PormG.QueryBuilder: Subquery, OuterRef
     err = try; q.list(show_query = :dict); nothing; catch e; e; end
     @test err isa PormG.QueryBuildError
     @test occursin("cannot be typed from the SQL type", _plain28(sprint(showerror, err)))
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Network containment lookups (#904)
+# django-netfields' lookups over PostgreSQL's network operators. The containment value is an `inet`:
+# a network or a host, host bits kept, bound typed (`$1::inet`) because `<<` is ambiguous on an
+# untyped parameter. `@family` / `@prefixlen` compare a number the column yields. The left-hand side
+# must be a network column, the model's own or one reached by a join. SQLite has no network column,
+# so the operators refuse there, as the JSONB ones do.
+# ─────────────────────────────────────────────────────────────────────────────
+PormG.config["net904_pg"] = PormG.Configuration.Settings(connections = PG_NET28, change_data = true,
+                                                         db_def_folder = "net904_pg")
+if !isdefined(Main, :Net904Models)
+  @eval module Net904Models
+  import PormG
+  import PormG.Models
+  Pit_wall_session = Models.Model("pit_wall_session",
+    id         = Models.IDField(),
+    team       = Models.CharField(max_length = 100),
+    client_ip  = Models.GenericIPAddressField(),
+    garage_lan = Models.CIDRField(null = true),
+    seen       = Models.DateField(null = true),   # a non-network column a transform applies to
+  )
+  # A pass issued at a pit-wall session — the joined path `session__client_ip`.
+  Pit_pass = Models.Model("pit_pass",
+    id      = Models.IDField(),
+    session = Models.ForeignKey("Pit_wall_session"),
+    holder  = Models.CharField(max_length = 100),
+  )
+  PormG.Models.set_models(@__MODULE__, "net904_pg")
+  end
+end
+const N904 = Net904Models
+
+# The WHERE clause of a filter, flattened, and its bound parameters.
+function _where904(q)
+  res = q.list(show_query = :dict)
+  sql = replace(res[:sql_text], r"\s+" => " ")
+  return strip(split(sql, "WHERE ")[end]), res[:parameters]
+end
+_q904(pairs...; model = N904.Pit_wall_session) = (q = model.objects; q.filter(pairs...); q.values("id"); q)
+_err904(f) = try; f(); nothing; catch e; e; end
+
+@testset "Network containment lookups (#904)" begin
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Formatter: the containment value is one `inet`, in the text PostgreSQL prints
+  # Neither field's own formatter fits: `inet` refuses a prefix, `cidr` refuses host bits, and `<<`
+  # takes both. A full-width prefix is dropped, as `inet_out` drops it.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "format_inet_network_sql keeps host bits and drops a full-width prefix" begin
+    @test NA.format_inet_network_sql("10.20.0.0/16") == "10.20.0.0/16"
+    @test NA.format_inet_network_sql("10.20.0.9/16") == "10.20.0.9/16"     # cidr would refuse this
+    @test NA.format_inet_network_sql("10.0.0.1") == "10.0.0.1"             # inet would refuse a prefix,
+    @test NA.format_inet_network_sql("10.0.0.1/32") == "10.0.0.1"          # and prints none at /32
+    @test NA.format_inet_network_sql("2001:0DB8::/32") == "2001:db8::/32"
+    @test NA.format_inet_network_sql("::1/128") == "::1"
+    @test NA.format_inet_network_sql(ip"::FFFF:10.0.0.1") == "::ffff:10.0.0.1"
+    @test NA.format_inet_network_sql(nothing) === missing
+    @test_throws PormG.InvalidValueError NA.format_inet_network_sql("10.0.0.0/33")
+    @test_throws PormG.InvalidValueError NA.format_inet_network_sql("10.1/8")
+    @test_throws PormG.InvalidValueError NA.format_inet_network_sql(5)
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Rendering: each operator's SQL and bound value, on an inet and a cidr column
+  # A containment value binds typed (`$1::inet`); a `cidr` column meets it through PostgreSQL's
+  # implicit cast. `@family` / `@prefixlen` wrap the column and bind a plain number.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "PostgreSQL: $lookup on $column" for (column, lookup, value, where, bound) in (
+      ("client_ip",  "net_contained",          "10.20.0.0/16",  "\"Tb\".\"client_ip\" << \$1::inet",   "10.20.0.0/16"),
+      ("client_ip",  "net_contained_or_equal", "10.20.0.9/16",  "\"Tb\".\"client_ip\" <<= \$1::inet",  "10.20.0.9/16"),
+      ("garage_lan", "net_contains",           "10.20.0.9",     "\"Tb\".\"garage_lan\" >> \$1::inet",  "10.20.0.9"),
+      ("garage_lan", "net_contains_or_equals", "10.20.0.0/16",  "\"Tb\".\"garage_lan\" >>= \$1::inet", "10.20.0.0/16"),
+      ("garage_lan", "net_overlaps",           "10.0.0.0/8",    "\"Tb\".\"garage_lan\" && \$1::inet",  "10.0.0.0/8"),
+      ("client_ip",  "family",                 6,               "family(\"Tb\".\"client_ip\") = \$1",  6),
+      ("garage_lan", "prefixlen",              24,              "masklen(\"Tb\".\"garage_lan\") = \$1", 24),
+    )
+    sql, params = _where904(_q904("$(column)__@$(lookup)" => value))
+    @test sql == where
+    @test params == [bound]
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Binding: the value is the printed text, whatever spelling or type it came in
+  # One text for a value everywhere PormG handles it, as for equality on these columns (#28).
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "the containment value is normalized, and a Sockets address is accepted" begin
+    @test _where904(_q904("client_ip__@net_contained" => "2001:0DB8::/32"))[2] == ["2001:db8::/32"]
+    @test _where904(_q904("garage_lan__@net_contains" => ip"10.20.0.9"))[2] == ["10.20.0.9"]
+    @test _where904(_q904("client_ip__@net_contains_or_equals" => "10.0.0.1/32"))[2] == ["10.0.0.1"]
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Column right-hand side: `F("garage_lan")` is compared as it is
+  # The issue's second spelling. A network column needs no cast, and nothing is bound.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a column on the right compares column to column, uncast" begin
+    sql, params = _where904(_q904("client_ip__@net_contained" => F("garage_lan")))
+    @test sql == "\"Tb\".\"client_ip\" << \"Tb\".\"garage_lan\""
+    @test isempty(params)
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Joined path: the terminal field of `session__client_ip` is the network column
+  # Read from the join memo, as a pattern lookup's is; the operand renders on the joined alias.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a joined path's network column" begin
+    q = _q904("session__client_ip__@net_contained" => "10.0.0.0/8"; model = N904.Pit_pass)
+    sql, params = _where904(q)
+    @test sql == "\"Tb_1\".\"client_ip\" << \$1::inet"
+    @test params == ["10.0.0.0/8"]
+    q_f = _q904("session__client_ip__@net_contained" => F("session__garage_lan"); model = N904.Pit_pass)
+    @test _where904(q_f)[1] == "\"Tb_1\".\"client_ip\" << \"Tb_1\".\"garage_lan\""
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Q / Qor: the operators render through the same path inside a group
+  # Parameters number in text order across the group.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "inside Q / Qor" begin
+    sql, params = _where904(_q904(Qor("client_ip__@net_contained" => "10.0.0.0/8", "client_ip__@family" => 6)))
+    @test sql == "(\"Tb\".\"client_ip\" << \$1::inet OR family(\"Tb\".\"client_ip\") = \$2)"
+    @test params == ["10.0.0.0/8", 6]
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # When / Case, and a `Joined` column on the right
+  # A `When` condition renders through the filter path too, so it binds in the projection's text
+  # position. A column of a `cjoin_on` copy compares uncast, as `F` does.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "inside a When condition, and a Joined column on the right" begin
+    q = N904.Pit_wall_session.objects
+    q.values("id", "garage" => Case([When(Q("client_ip__@net_contained" => "10.20.0.0/16"), then = 1)], default = 0))
+    q.filter("garage_lan__@family" => 4)
+    res = q.list(show_query = :dict)
+    sql = replace(res[:sql_text], r"\s+" => " ")
+    @test occursin("WHEN (\"Tb\".\"client_ip\" << \$1::inet)", sql)
+    @test occursin("WHERE family(\"Tb\".\"garage_lan\") = \$", sql)
+    @test res[:parameters][1] == "10.20.0.0/16" && 4 in res[:parameters]
+
+    q_j = N904.Pit_wall_session.objects
+    q_j.cjoin_on("Pit_wall_session", alias = "s2", on = [Joined("s2", "id") => F("id")])
+    q_j.filter("client_ip__@net_contained" => Joined("s2", "garage_lan"))
+    q_j.values("id")
+    sql_j, params_j = _where904(q_j)
+    @test occursin(r"^\"Tb\"\.\"client_ip\" << \"\w+\"\.\"garage_lan\"$", sql_j)
+    @test isempty(params_j)
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Refusals: everything the operators cannot serve is a FilterError before the server sees it
+  # A non-network column, a bad address, a family other than 4/6, a prefix outside 0-128, a list, a
+  # non-column expression, and a projection alias.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "refusals" begin
+    msg(e) = _plain28(sprint(showerror, e))
+    # Not a network column: `team` is text. The operator would be a server error.
+    e = _err904(() -> _q904("team__@net_contained" => "10.0.0.0/8").list(show_query = :dict))
+    @test e isa PormG.FilterError
+    @test occursin("requires a GenericIPAddressField or CIDRField column, and team is not one", msg(e))
+    # A transform is not a network column either. The message names the column it transforms, not
+    # the SQL it renders, and quotes no path: `seen__@net_contained` is not what the caller wrote.
+    e = _err904(() -> _q904("seen__@year__@net_contained" => "10.0.0.0/8").list(show_query = :dict))
+    @test e isa PormG.FilterError
+    @test occursin("Error in filter: the @net_contained lookup", msg(e))
+    @test occursin("and seen, under a transform, is not one", msg(e)) && !occursin("EXTRACT", msg(e))
+    # A value that is not an address.
+    @test _err904(() -> _q904("client_ip__@net_contained" => "10.0.0.0/33").list(show_query = :dict)) isa PormG.FilterError
+    @test _err904(() -> _q904("client_ip__@net_contained" => 10).list(show_query = :dict)) isa PormG.FilterError
+    # `@family` takes 4 or 6. (`true` is refused by the set alone; the `Bool` guard is what refuses
+    # `@prefixlen => false` below, since `false in 0:128`.)
+    for bad in (5, true, "4", 4.0)
+      e = _err904(() -> _q904("client_ip__@family" => bad).list(show_query = :dict))
+      @test e isa PormG.FilterError
+      @test occursin("takes 4 or 6, got $(repr(bad))", msg(e))
+    end
+    for bad in (-1, 129, false)
+      e = _err904(() -> _q904("garage_lan__@prefixlen" => bad).list(show_query = :dict))
+      @test e isa PormG.FilterError
+      @test occursin("takes a whole number from 0 to 128", msg(e))
+    end
+    # A list is not one network.
+    e = with_logger(NullLogger()) do
+      _err904(() -> _q904("client_ip__@net_contained" => ["10.0.0.0/8"]).list(show_query = :dict))
+    end
+    @test e isa PormG.FilterError
+    @test occursin("@net_contained is not valid with a vector value", msg(e))
+    # An expression other than a column.
+    e = _err904(() -> _q904("client_ip__@net_contained" =>
+                            Subquery(N904.Pit_wall_session.objects.filter("id" => 1).values("garage_lan"))).list(show_query = :dict))
+    @test e isa PormG.FilterError
+    @test occursin("takes a value or a column", msg(e))
+    # A projection alias has no field to say it is a network column.
+    q = N904.Pit_wall_session.objects
+    q.values("team", "top_ip" => Max("client_ip"))
+    q.filter("top_ip__@net_contained" => "10.0.0.0/8")
+    e = _err904(() -> q.list(show_query = :dict))
+    @test e isa PormG.FilterError
+    @test occursin("@net_contained lookup is not supported on the projection alias top_ip", msg(e))
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # SQLite: the operators are PostgreSQL only
+  # SQLite cannot create either column, so this is a model that declares one and is queried without
+  # being migrated: the renderer refuses, as `@jcontains` does.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "SQLite: BackendCapabilityError for each operator" begin
+    PormG.config["net904_sl"] = PormG.Configuration.Settings(connections = SL_NET28, change_data = true)
+    sl = NA.Model("pit_wall_session", id = NA.IDField(), client_ip = NA.GenericIPAddressField())
+    sl.connect_key = "net904_sl"; sl._module = Main
+    for (lookup, value) in (("net_contained", "10.0.0.0/8"), ("net_contained_or_equal", "10.0.0.0/8"),
+                            ("net_contains", "10.0.0.1"), ("net_contains_or_equals", "10.0.0.1"),
+                            ("net_overlaps", "10.0.0.0/8"), ("family", 4), ("prefixlen", 32))
+      e = _err904(() -> _q904("client_ip__@$(lookup)" => value; model = sl).list(show_query = :dict))
+      @test e isa PormG.BackendCapabilityError
+      @test occursin("@$(lookup) lookup", sprint(showerror, e))
+    end
   end
 end

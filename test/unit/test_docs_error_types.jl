@@ -1418,6 +1418,41 @@ const DOCERR_CASES = [
         BackendCapabilityError,
         () -> PormG.Dialect.field_to_column("garage_lan", CIDRField(), DocErrMockSQLite()),
     ),
+    # #904. `fields.md` → *Network containment lookups* names the type of each refusal, and
+    # `postgres.md` lists the lookups as PostgreSQL-only. Every refusal is pinned in
+    # `test/unit/test_network_address_fields.jl`; these hold the page's sentences.
+    (
+        "fields.md — a network containment value that is not an address raises (#904)",
+        FilterError,
+        () -> let m = Model("docerr_pitwall_904a", id = IDField(), client_ip = GenericIPAddressField())
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("client_ip__@net_contained" => "10.20.0.0/33"); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — @family other than 4 or 6 raises (#904)",
+        FilterError,
+        () -> let m = Model("docerr_pitwall_904b", id = IDField(), client_ip = GenericIPAddressField())
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("client_ip__@family" => 5); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — a network lookup on a column that is not a network column raises (#904)",
+        FilterError,
+        () -> let m = Model("docerr_pitwall_904c", id = IDField(), team = CharField())
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("team__@net_contained" => "10.20.0.0/16"); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md + postgres.md — a network lookup raises on SQLite (#904)",
+        BackendCapabilityError,
+        () -> let m = Model("docerr_pitwall_904d", id = IDField(), client_ip = GenericIPAddressField())
+            m.connect_key = "docerr_sl"; m._module = Main
+            q = m.objects; q.filter("client_ip__@net_contained" => "10.20.0.0/16"); q.list(show_query = :dict)
+        end,
+    ),
     # #28. `fields.md` → *Array Fields* names the type each ArrayField refusal raises. The write
     # refusals go through `create`; every writer and both drivers are pinned live in
     # `test/integration/test_array_field.jl`, the rest in `test/unit/test_array_field.jl`.

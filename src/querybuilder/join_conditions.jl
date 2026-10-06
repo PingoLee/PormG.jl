@@ -223,7 +223,122 @@ function _bind_join_conditions!(instruct::SQLInstruction)
     instruct.join_conditions[key] = vcat(get(instruct.join_conditions, key, FilterType[]), bound)
     cfg.join_type === nothing || (instruct.join_type_overrides[key] = cfg.join_type)
   end
+  _bind_cjoin_on_conditions!(instruct)
   return instruct
+end
+
+# ── Binding `cjoin_on` conditions (#982) ────────────────────────────────────────────────────────
+# A `cjoin_on` condition has no hop to lower onto. Each column in it names the base row (a bare
+# column or a `__` path) or a declared alias (`Joined(alias, col)`), and `_cjoin_on` has already
+# checked it as a filter. What binding decides is WHERE each named row is, before anything renders:
+#
+#   - A relation path (`"driverid__code"`, `F("driverid__code")`, an `OuterRef` in a subquery) is
+#     recorded, and `build()` joins it before the alias rows. It used to be joined while the ON clause
+#     rendered, after the alias row, and the predicate was then moved by a substring scan of the
+#     rendered SQL onto that later join (Phase 1b, #421, #435): out of the ON clause the caller wrote
+#     it in, into a join of another type. Under a LEFT `cjoin_on` that turned "null the alias's
+#     columns" into "drop the row".
+#   - Another alias is a dependency. Alias rows are emitted every alias after the ones it names, so a
+#     reference always points backwards (#449's declaration order breaks the ties). A cycle has no such
+#     order, and is refused.
+#   - An ON clause that never names its own alias constrains nothing, and is refused (#448), from the
+#     conditions rather than from the SQL text they rendered to.
+#
+# The segments recorded are the column's own, as written (`__@` transforms peeled), so the render that
+# follows resolves through the very join built here and adds none: `_assert_condition_added_no_join`
+# holds it to that, for this row kind too.
+function _bind_cjoin_on_conditions!(instruct::SQLInstruction)
+  q = instruct.object
+  isempty(q.alias_join) && return instruct
+  names_of = OrderedCollections.OrderedDict{String,Vector{String}}()
+  built = Set{String}()
+  for (alias, cfg) in q.alias_join
+    names = String[]
+    self_ref = false
+    for f in cfg.filters
+      _each_condition_column(f, 0) do column, _
+        if column isa JoinedReference
+          column.alias == alias ? (self_ref = true) :
+            (column.alias in names || push!(names, column.alias))
+        elseif !isempty(_relation_prefix(q, column))
+          path = String(first(split(column, "__@")))
+          path in built && return nothing
+          push!(built, path)
+          push!(instruct.cjoin_on_paths, String.(split(path, "__")))
+        end
+        return nothing
+      end
+    end
+    self_ref || _refuse_unconstrained_cjoin_on(alias, cfg)
+    # A `Joined` naming no declared alias is left to the render, which refuses it with the declared list.
+    names_of[alias] = filter(n -> haskey(q.alias_join, n), names)
+  end
+  append!(instruct.cjoin_on_order, _cjoin_on_emission_order(names_of))
+  return instruct
+end
+
+# Kahn's algorithm over "alias → the aliases its ON clause names", taking the earliest-declared ready
+# alias each step, so a query whose aliases already name only earlier ones keeps its declaration order
+# (#449) — and with it the generated-alias numbering the rest of the statement was built against.
+function _cjoin_on_emission_order(names_of::OrderedCollections.OrderedDict{String,Vector{String}})::Vector{String}
+  order = String[]
+  placed = Set{String}()
+  pending = collect(keys(names_of))
+  while !isempty(pending)
+    i = findfirst(a -> all(n -> n in placed, names_of[a]), pending)
+    if i === nothing
+      # Name the cycle, not every alias still waiting: one that only names a member is blocked by it,
+      # not part of it. Every pending alias names a pending one, so following those names from any of
+      # them must revisit one, and the walk from that first revisit is the cycle.
+      walk = String[first(pending)]
+      while true
+        nxt = first(n for n in names_of[walk[end]] if n in pending)
+        k = findfirst(==(nxt), walk)
+        k === nothing || (walk = walk[k:end]; break)
+        push!(walk, nxt)
+      end
+      cycle = join(("\e[4m\e[31m$(a)\e[0m" for a in walk), ", ", " and ")
+      throw(QueryBuildError(
+        "The cjoin_on ON clauses of $(cycle) name each other, so no join order emits every alias before " *
+        "the ON clauses that reference it.\n  Each ON clause may name only the base row, a relation path " *
+        "and the aliases joined before it. Break the cycle: correlate one of them with the base row " *
+        "instead, e.g. \e[4m\e[32mJoined(\"$(first(walk))\", \"<column>\") == F(\"<base column>\")\e[0m (#982)."))
+    end
+    push!(order, pending[i])
+    push!(placed, pending[i])
+    deleteat!(pending, i)
+  end
+  return order
+end
+
+# #448: having an ON clause is not the same as being CONSTRAINED by one. A predicate list that names
+# this alias nowhere — `on = ["note" => "Z"]` — renders a well-formed, unconstrained join: every row
+# of the joined table pairs with every matched base row, silently, since the #44 Cartesian warning
+# covers CROSS entries only.
+#
+# Fail closed rather than warn. Stricter than SQLAlchemy, Ecto and jOOQ, which all emit an
+# unconstrained join without complaint; Django never has the question because it exposes no arbitrary
+# ON clause. Deliberate: a silently row-multiplied result is the worst failure mode here, and there is
+# an escape hatch.
+#
+# That escape hatch is an unkeyed `.with(...)` that is REFERENCED — `values("x" => CTE(n, c))` — which
+# is what the message points at. NOT `.with(...)` + `.filter(...)`: since #444 a CTE is joined only
+# when referenced, so that spelling emits no join at all and silently returns N rows instead of N×M —
+# the inverse of the bug this guard exists for.
+function _refuse_unconstrained_cjoin_on(alias::String, cfg::AliasJoin)
+  table = Models.model_table_name(cfg.target)
+  throw(QueryBuildError(
+    "The ON clause built for \e[4m\e[31m$(alias)\e[0m never references " *
+    "\e[4m\e[31m$(alias)\e[0m, so the join is not constrained by it: every " *
+    "\e[4m\e[31m$(table)\e[0m row would pair with every matched base row.\n  " *
+    "Give it a predicate naming its own alias, e.g. " *
+    "\e[4m\e[32mJoined(\"$(alias)\", \"<column>\") == F(\"<base column>\")\e[0m. " *
+    "If the conditions were never about this join, move them to " *
+    "\e[4m\e[32m.filter(...)\e[0m and drop the \e[4m\e[32mcjoin_on\e[0m; if you " *
+    "genuinely want a cross product, declare the table as an unkeyed " *
+    "\e[4m\e[32m.with(\"n\" => sub)\e[0m and REFERENCE it — e.g. " *
+    "\e[4m\e[32mvalues(\"x\" => CTE(\"n\", \"col\"))\e[0m — which emits a real " *
+    "\e[4m\e[32mCROSS JOIN\e[0m and warns that it is Cartesian (#44, #448)."))
 end
 
 # The canonical key of a hop being built (`_finish_hop!`, the PATH loop) — the one `_bind_join_conditions!`

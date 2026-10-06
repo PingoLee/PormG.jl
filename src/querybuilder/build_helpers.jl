@@ -2082,9 +2082,9 @@ end
 # the moment a projection resolves the row may not exist yet — but the declaration always does.
 # Rendering needs only the alias and the target model, both of which the config carries.
 #
-# The rendered text is byte-identical to what the dotted-string path produced, which is what keeps
-# the #435 relocation guard, the #448 self-reference guard and Phase 1b working: all three
-# substring-match `"alias".` in the emitted ON clause.
+# The rendered text is byte-identical to what the dotted-string path produced. Nothing reads it back
+# any more: the #448 self-reference check and the alias ordering read the handle itself, at binding
+# (#982), where #435's relocation and Phase 1b used to substring-match `"alias".` in the ON clause.
 function _resolve_joined(ref::JoinedReference, instruc::SQLInstruction)::String
   _reject_joined_desc(ref, "a projection or predicate")
   # A `__@` segment is one of two different things, and they end differently.

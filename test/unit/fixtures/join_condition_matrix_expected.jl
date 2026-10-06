@@ -286,37 +286,37 @@ const _JCM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("P7 cjoin_on/base column against Joined", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"number\" = \"Tb\".\"number\")", params = Any[], join = Any[]),
   ("P7 cjoin_on/deep path predicate, unreached", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"code\" = \$1", params = Any["X"], join = nothing),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") AND \"Tb_1\".\"code\" = \$1", params = Any["X"], join = nothing),
   ("P7 cjoin_on/deep path predicate, unreached", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"code\" = ?", params = Any["X"], join = Any["X"]),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") AND \"Tb_1\".\"code\" = ?", params = Any["X"], join = Any["X"]),
   ("P7 cjoin_on/deep path predicate, projected", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") AND \"Tb_1\".\"code\" = \$1", params = Any["X"], join = nothing),
   ("P7 cjoin_on/deep path predicate, projected", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") AND \"Tb_1\".\"code\" = ?", params = Any["X"], join = Any["X"]),
   ("P7 cjoin_on/deep path predicate, LEFT", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"code\" = \$1", params = Any["X"], join = nothing),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") AND \"Tb_1\".\"code\" = \$1", params = Any["X"], join = nothing),
   ("P7 cjoin_on/deep path predicate, LEFT", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"code\" = ?", params = Any["X"], join = Any["X"]),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") AND \"Tb_1\".\"code\" = ?", params = Any["X"], join = Any["X"]),
   ("P7 cjoin_on/Joined against deep path F", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Every ON predicate given for d2 resolved onto Tb_1 instead, leaving this join with no ON clause of its own."),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"code\" = \"Tb_1\".\"code\")", params = Any[], join = nothing),
   ("P7 cjoin_on/Joined against deep path F", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Every ON predicate given for d2 resolved onto Tb_1 instead, leaving this join with no ON clause of its own."),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"code\" = \"Tb_1\".\"code\")", params = Any[], join = Any[]),
   ("P7 cjoin_on/two rows bind, path first (#421)", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") AND \"d2\".\"code\" = \$2 INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"code\" = \$1", params = Any["A", "B"], join = nothing),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver\" AS \"d2\" ON \"Tb_1\".\"code\" = \$1 AND (\"d2\".\"driverid\" = \"Tb\".\"driverid\") AND \"d2\".\"code\" = \$2", params = Any["A", "B"], join = nothing),
   ("P7 cjoin_on/two rows bind, path first (#421)", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") AND \"d2\".\"code\" = ? INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"code\" = ?", params = Any["B", "A"], join = Any["B", "A"]),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver\" AS \"d2\" ON \"Tb_1\".\"code\" = ? AND (\"d2\".\"driverid\" = \"Tb\".\"driverid\") AND \"d2\".\"code\" = ?", params = Any["A", "B"], join = Any["A", "B"]),
   ("P7 cjoin_on/second alias names the first", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"d1\" ON (\"d1\".\"driverid\" = \"Tb\".\"driverid\") INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"number\" = \"d1\".\"number\")", params = Any[], join = nothing),
   ("P7 cjoin_on/second alias names the first", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"d1\" ON (\"d1\".\"driverid\" = \"Tb\".\"driverid\") INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"number\" = \"d1\".\"number\")", params = Any[], join = Any[]),
   ("P7 cjoin_on/first alias names the second", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Every ON predicate given for d1 resolved onto d2 instead, leaving this join with no ON clause of its own."),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") INNER JOIN \"driver\" AS \"d1\" ON (\"d1\".\"number\" = \"d2\".\"number\")", params = Any[], join = nothing),
   ("P7 cjoin_on/first alias names the second", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Every ON predicate given for d1 resolved onto d2 instead, leaving this join with no ON clause of its own."),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") INNER JOIN \"driver\" AS \"d1\" ON (\"d1\".\"number\" = \"d2\".\"number\")", params = Any[], join = Any[]),
   ("P7 cjoin_on/alias cycle", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Every ON predicate given for d1 resolved onto d2 instead, leaving this join with no ON clause of its own."),
+    (stage = :build, error = "QueryBuildError", message = "The cjoin_on ON clauses of d1 and d2 name each other, so no join order emits every alias before the ON clauses that refe"),
   ("P7 cjoin_on/alias cycle", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Every ON predicate given for d1 resolved onto d2 instead, leaving this join with no ON clause of its own."),
+    (stage = :build, error = "QueryBuildError", message = "The cjoin_on ON clauses of d1 and d2 name each other, so no join order emits every alias before the ON clauses that refe"),
   ("P7 cjoin_on/no reference to its own alias (#448)", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The ON clause built for d2 never references d2, so the join is not constrained by it: every driver row would pair with e"),
   ("P7 cjoin_on/no reference to its own alias (#448)", :sqlite) =>

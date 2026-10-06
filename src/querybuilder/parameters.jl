@@ -143,21 +143,18 @@ end
 set_context!(instruc::SQLInstruction, context::Symbol) = instruc.parameters !== nothing ? set_context!(instruc.parameters, context) : nothing
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Detachable parameter runs (#421)
+# Positional parameter marks
 #
-# A SQL fragment that is RENDERED in one order and EMITTED in another needs its positional values
-# to travel with it. `build_row_join_sql_text` is the case: Phase 1 resolves every cjoin ON
-# condition (binding as it goes), Phase 1b may relocate a fragment onto a later join, and Phase 2
-# emits in `row_join` order — so a value's INDEX in the `:join` bucket stopped matching its `?`,
-# and a relocated condition bound its neighbour's value.
+# `parameter_mark` records the ACTIVE bucket and its length, so a caller can read back the values a
+# render bound (`bound_since`); `reattach_parameters!` appends a run lifted out elsewhere (#432's
+# nested runs). The mark holds the bucket VECTOR, not the context symbol: a render that switched
+# context and failed to restore it then reads nothing, rather than an unrelated run.
 #
-# `parameter_mark` records the ACTIVE bucket and its length, `detach_parameters!` lifts everything
-# pushed since, and `reattach_parameters!` appends once the fragment's clause position is final.
-# The mark holds the bucket VECTOR, not the context symbol: a fragment whose resolution switched
-# context and failed to restore it then detaches nothing, rather than deleting an unrelated run.
+# #421 used a third verb here, `detach_parameters!`, to lift a join condition's values out while its
+# SQL fragment waited to be relocated onto another join. #982 deleted it with the relocation: a
+# condition now renders where its join is emitted, so its values bind in text order without moving.
 #
-# All no-ops on numbered backends. PostgreSQL's `$N` numbering already travels with the text, which
-# is exactly why #421 was SQLite-only.
+# All no-ops on numbered backends. PostgreSQL's `$N` numbering already travels with the text.
 # ─────────────────────────────────────────────────────────────────────────────
 const ParameterMark = Tuple{Union{Nothing,Vector{Any}},Int}
 
@@ -169,14 +166,6 @@ _positional_bucket(instruc::SQLInstruction) =
 function parameter_mark(instruc::SQLInstruction)::ParameterMark
   bucket = _positional_bucket(instruc)
   return (bucket, bucket === nothing ? 0 : length(bucket))
-end
-
-function detach_parameters!(mark::ParameterMark)::Vector{Any}
-  bucket, len = mark
-  (bucket === nothing || length(bucket) <= len) && return Any[]
-  values = bucket[len+1:end]
-  deleteat!(bucket, len+1:length(bucket))
-  return values
 end
 
 function reattach_parameters!(instruc::SQLInstruction, values::Vector{Any})

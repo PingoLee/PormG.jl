@@ -587,26 +587,25 @@ const DOCERR_CASES = [
         end,
     ),
     (
-        # #435. Resolving `driverid__surname` builds the driver join DURING Phase 1, so it lands at
-        # a higher `row_join` index than `d` — a forward reference. Phase 1b moves the predicate
-        # onto it, and since it is `d`'s only one, `d` is left with no ON clause. The doc note tells
-        # the reader this raises and names the alias the predicates went to.
-        "read/custom_joins.md — a cjoin_on whose predicates all relocate away is refused",
+        # #982. Binding emits each `cjoin_on` alias after the aliases its ON clause names; two that
+        # name each other have no such order. The doc says this raises and names the two. (It
+        # replaced #435's case: a predicate naming a later join is no longer moved onto it, so a
+        # `cjoin_on` can no longer be left with no ON clause.)
+        "read/custom_joins.md — two cjoin_on aliases whose ON clauses name each other are refused",
         QueryBuildError,
         () -> begin
             q = DOCERR_RESULT_PG.objects
             q.values("resultid")
-            q.cjoin_on("DOCERR_STATUS_PG", alias = "d", on = ["driverid__surname" => "Senna"])
+            q.cjoin_on("DOCERR_STATUS_PG", alias = "d1", on = [Joined("d1", "status") == Joined("d2", "status")])
+            q.cjoin_on("DOCERR_STATUS_PG", alias = "d2", on = [Joined("d2", "statusid") == Joined("d1", "statusid")])
             q.list(show_query = :dict)
         end,
     ),
     (
-        # #448. The neighbour of the case above, and the one that used to RENDER. `points` is a
-        # column of the base model, so this predicate resolves against the base alias and stays put
-        # — nothing relocates, so #435 cannot fire and `extras` is not empty. Before #448 that was
-        # enough: the join emitted with an ON clause naming everything except itself, pairing every
-        # `docerr_status` row with every matched base row. The docs use this exact `points__@gt`
-        # shape, so the case is the doc sentence made executable.
+        # #448. The shape that used to RENDER: `points` is a column of the base model, so nothing in
+        # this ON clause names `d`, and the join emitted pairing every `docerr_status` row with every
+        # matched base row. Binding refuses it from the conditions (#982). The docs use this exact
+        # `points__@gt` shape, so the case is the doc sentence made executable.
         "read/custom_joins.md — a cjoin_on ON clause that never names its own alias is refused",
         QueryBuildError,
         () -> begin

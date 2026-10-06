@@ -3657,17 +3657,17 @@ function (f::ArrayFormatter)(value)
     Any[e === nothing ? nothing : pg_array_element_value(f.kind, e) for e in parse_pg_array_literal(value)] :
     _pg_array_elements(value)
   f.size !== nothing && length(elems) > f.size &&
-    throw(InvalidValueError("this ArrayField holds at most $(f.size) elements (size = $(f.size)), got $(length(elems))."))
+    throw(InvalidValueError("this ArrayField holds at most $(f.size) elements (size = $(f.size)), got $(length(elems)).", :range))
   texts = Vector{Union{Nothing, String}}(undef, length(elems))
   for (i, el) in enumerate(elems)
     if el === nothing || el === missing
       f.base.null ||
-        throw(InvalidValueError("element $i is null, and this ArrayField's base field does not allow null elements (declare it with null = true)."))
+        throw(InvalidValueError("element $i is null, and this ArrayField's base field does not allow null elements (declare it with null = true).", :other))
       texts[i] = nothing
       continue
     end
     (el isa Union{AbstractArray, Tuple} && !(el isa AbstractString)) &&
-      throw(InvalidValueError("element $i is a $(typeof(el)): an ArrayField holds a one-dimensional array, so an element cannot be a collection."))
+      throw(InvalidValueError("element $i is a $(typeof(el)): an ArrayField holds a one-dimensional array, so an element cannot be a collection.", :type))
     texts[i] = try
       formatted = f.base.formatter(el)
       # A float into a numeric element converts through its shortest text (`string`, `1.1`), not the

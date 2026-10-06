@@ -41,7 +41,7 @@ after:  Error in insert for model result, field `grid`: expected Int64 or an int
 `:format`, `:range`, `:nul`, `:json_nul`, `:other`), `reason`, and the location `op`, `model`,
 `field`, `field_type`, `row` (`nothing` where unknown). Branch on `e.kind` or `e.field` rather
 than on the message text. A refusal on a projection alias or a transform carries its location in `op`
-(`"filter on the `best` projection alias"`), so `e.field` is `nothing` there. `InvalidValueError("…")` still builds one from a message alone.
+(``"filter on the `best` projection alias"``), so `e.field` is `nothing` there. `InvalidValueError("…")` still builds one from a message alone.
 
 ### Who this affects
 

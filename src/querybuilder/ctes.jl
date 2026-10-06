@@ -774,7 +774,7 @@ function _refuse_off_path_join_rhs!(q::SQLObject)
 end
 
 # One condition: find its right side. A `Q`/`Qor` holds conditions; an `OperObject` keeps its right side
-# in `values`; a comparison `FExpression` in `operand`. An `Exists(...)` is its own statement.
+# in `values`; a comparison `FExpression` in `operand`. An `Exists(...)` contributes its `OuterRef`s.
 function _off_path_rhs_condition(f, q::SQLObject, path::String, depth::Int)
   depth > 32 && return nothing
   if f isa QObject
@@ -790,6 +790,10 @@ function _off_path_rhs_condition(f, q::SQLObject, path::String, depth::Int)
     # A String operand of an `F` comparison is read as a column first (see `_refuse_cte_string_in_join`).
     _off_path_rhs_paths(f.operand, q, path, depth + 1)
     _off_path_nested_rhs(f.field_name, q, path, depth + 1)
+  elseif f isa ExistsObject
+    # #977: `Q(Exists(…))` is a condition of its own, and its `OuterRef`s resolve in this statement —
+    # unwalked, an off-path one was relocated onto a later join like any other right side.
+    _off_path_outer_refs(getfield(f.query, :object), q, path)
   end
   return nothing
 end
@@ -830,6 +834,8 @@ function _off_path_nested_rhs(x, q::SQLObject, path::String, depth::Int)
     _off_path_outer_refs(getfield(x.query, :object), q, path)
   elseif x isa SQLObjectHandler
     _off_path_outer_refs(getfield(x, :object), q, path)
+  elseif x isa ExistsObject
+    _off_path_outer_refs(getfield(x.query, :object), q, path)
   elseif x isa AbstractVector && !(x isa AbstractVector{UInt8})
     for v in x; _off_path_nested_rhs(v, q, path, depth + 1); end
   end
@@ -915,56 +921,20 @@ function _collect_outer_refs!(refs::Vector{String}, x, depth::Int)
   return refs
 end
 
+# Both sides in canonical spelling (#977's one resolver): `F("status__name")` is the FK short form of
+# `status_id`, so it is the same relation the renderer joins, and is judged as that relation.
 function _check_rhs_relation(column::String, q::SQLObject, path::String;
                              spelled::AbstractString = "F(\"$(column)\")")
   isempty(column) && return nothing
-  rel = _rhs_relation_prefix(q, column)
-  (isempty(rel) || rel == path || startswith(path, rel * "__")) && return nothing
+  rel = _relation_prefix(q, column)
+  canonical = _canonical_join_path(q, path)
+  (isempty(rel) || rel == canonical || startswith(canonical, rel * "__")) && return nothing
   throw(FilterError(
     "\e[4m\e[31m$(spelled)\e[0m reaches '$(rel)', a relation outside the join path " *
     "'$(path)', so it cannot appear in that join's ON clause. A condition in on(...) / cjoin(...) " *
     "compares the joined row with the base row or with a table earlier on the same path; PormG will " *
     "not move it onto another join's ON clause.\n  " *
     "Put the predicate in \e[4m\e[32m.filter(...)\e[0m instead (#962)."))
-end
-
-# The relation part of a column path: the longest leading run of segments that are relations from
-# the base model, `__@` transforms stripped first. `"driverid__nationality"` → `"driverid"`; a base
-# column, a JSON key path (`"payload__key"`) or a literal → `""`. The last segment is the column, so
-# it is never part of the prefix, even when it is itself a ForeignKey column.
-function _rhs_relation_prefix(q::SQLObject, column::String)
-  segments = split(String(first(split(column, "__@"))), "__")
-  prefix = ""
-  model = q.model
-  for (i, seg) in enumerate(segments[1:end-1])
-    model = _relation_hop(q, model, String(seg), i == 1)
-    model === nothing && break
-    prefix = isempty(prefix) ? String(seg) : string(prefix, "__", seg)
-  end
-  return prefix
-end
-
-# The model one relation segment reaches, or `nothing` when `seg` is not a relation. The relations are
-# `_resolve_join_target_model`'s — ForeignKey, reverse relation (M2M included) — plus a `cjoin` link on
-# the first segment, consulted FIRST: `cjoin("grid" => "Driver", field = …)` turns the plain column
-# `grid` into a join, and the renderer resolves `grid__…` through it. (`_resolve_join_target_model`
-# reads the base field first and so refuses `on("grid", …)` after such a cjoin — a separate defect,
-# and the reason this does not reuse it.)
-function _relation_hop(q::SQLObject, model::PormGModel, seg::String, first_segment::Bool)
-  field = first_segment ? _get_join_field(q, seg) : nothing
-  if field === nothing && seg in model.field_names
-    field = model.fields[seg]
-  end
-  if field !== nothing
-    to = hasproperty(field, :to) ? field.to : nothing
-    to === nothing && return nothing
-    return to isa PormGModel ? to : getfield(model._module, Symbol(String(to)))
-  end
-  haskey(model.related_objects, seg) || return nothing
-  related = model.related_objects[seg]
-  related isa Models.ManyToManyRelation &&
-    return getfield(model._module, Symbol(related.related_binding))
-  return (related::Models.ReverseRelation).model_resolved
 end
 
 # Filter elements are containers, not `SQLField`s, so they get their own shallow walk down to the
@@ -1186,68 +1156,8 @@ function _collect_join_filters(filters)
   return _filters
 end
 
-function _resolve_join_target_model(q::SQLObject, join_path::String)
-  parts = split(join_path, "__")
-  isempty(parts) && throw(QueryBuildError("on() requires a non-empty join path."))
-
-  current_model = q.model
-  current_module = q.model._module
-
-  for (index, part) in enumerate(parts)
-    current_path = join(parts[1:index], "__")
-
-    # #434 was here: `if index == 1 && haskey(q.ctes, part) throw(…) end`. It read the CTE registry
-    # as it stood at `.on()` time, so `.with()` then `.on()` was refused while `.on()` then `.with()`
-    # sailed past — order-dependent where every other fluent method is order-independent.
-    #
-    # #444 dissolves it rather than moving it. `join_path` is now unambiguously a FIELD path: a CTE
-    # is reachable only through `CTE(name, path)`, which `on()` refuses outright (see
-    # `_prefix_join_filter`). So a segment naming a CTE is simply a segment that is not a relation,
-    # and the generic error below is both correct and order-independent. The CTE-aware hint lives
-    # there, where it can be best-effort without any of this being conditional on it.
-
-    field = if part in current_model.field_names
-      current_model.fields[part]
-    elseif index == 1 && _get_join_field(q, current_path) !== nothing
-      _get_join_field(q, current_path)
-    else
-      nothing
-    end
-
-    if field !== nothing
-      if !hasproperty(field, :to) || field.to === nothing
-        throw(QueryBuildError("Join path '$(join_path)' stops at base field '$(part)', which is not a relation. Use .cjoin(..., field=...) first if this path depends on a custom link."))
-      end
-
-      current_model = field.to isa PormGModel ? field.to : getfield(current_module, Symbol(String(field.to)))
-    elseif haskey(current_model.related_objects, part)
-      related_value = current_model.related_objects[part]
-      if related_value isa Models.ManyToManyRelation
-        # ManyToMany reverse traversal in cjoin path: hop directly to the
-        # related model, the through table is materialized later by the
-        # query builder when emitting joins.
-        current_model = getfield(current_module, Symbol(related_value.related_binding))
-      else
-        # #343: hop to the resolved child. This arm used to respell the binding as
-        # `uppercasefirst(lowercased_name)` — the mirror of the M2M arm above, except that one reads
-        # a STORED binding and therefore worked, while this one could not reach `Dim_CNES`.
-        current_model = (related_value::Models.ReverseRelation).model_resolved
-      end
-    else
-      # #434/#444: best-effort hint. Both `.on()`-then-`.with()` and `.with()`-then-`.on()` reach
-      # this same throw with the same wording; only the parenthetical depends on whether the CTE has
-      # been declared yet, and it adds information rather than deciding the outcome.
-      hint = haskey(q.ctes, part) ?
-        " ('$(part)' is a CTE declared on this query — on() targets model relations only; set a CTE's join type with with(..., join_type=...).)" : ""
-      throw(QueryBuildError("Join path '$(join_path)' is invalid. The segment '$(part)' is not a relation on model '$(current_model.name)'.$(hint)"))
-    end
-  end
-
-  return current_model
-end
-
 function _on(q::SQLObject, join_path::String, filters::AbstractVector; join_type::Union{String,Nothing}=nothing)
-  target_model = _resolve_join_target_model(q, join_path)
+  target_model = _join_path_target(q, join_path)
   parsed_filters = Vector{FilterType}()
 
   for filter in filters

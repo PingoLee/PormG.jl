@@ -99,6 +99,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Right-side F in a Join Condition (#958)" include("unit/test_join_condition_rhs_f.jl")
     @testset "Left Side of a Join Condition (#961)" include("unit/test_join_condition_lhs_prefix.jl")
     @testset "Join-Condition Matrix (#977)" include("unit/test_join_condition_matrix.jl")
+    @testset "One Join-Path Resolver (#977)" include("unit/test_join_resolver_single.jl")
     @testset "Aggregate Flag Through Wrappers (#702)" include("unit/test_aggregate_flag_propagation.jl")
     @testset "Bare Literal Function Operands (#705)" include("unit/test_function_literal_operands.jl")
     @testset "Greatest/Least Skip NULL on SQLite (#844)" include("unit/test_greatest_least_null.jl")

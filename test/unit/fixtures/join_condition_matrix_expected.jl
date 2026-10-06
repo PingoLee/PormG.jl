@@ -178,13 +178,13 @@ const _JCM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("P1 on first hop/rhs off-path (#962)", :sqlite) =>
     (stage = :build, error = "FilterError", message = "F(\"constructorid__constructorid\") reaches 'constructorid', a relation outside the join path 'driverid', so it cannot app"),
   ("P1 on first hop/Exists, off-path OuterRef", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"constructor\" AS \"Tb_2\" ON \"Tb\".\"constructorid\" = \"Tb_2\".\"constructorid\" AND (EXISTS (SELECT 1 FROM \"constructor\" as \"R1\" WHERE \"R1\".\"name\" = \"Tb_2\".\"name\" LIMIT 1))", params = Any[], join = nothing),
+    (stage = :build, error = "FilterError", message = "OuterRef(\"constructorid__name\") reaches 'constructorid', a relation outside the join path 'driverid', so it cannot appea"),
   ("P1 on first hop/Exists, off-path OuterRef", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"constructor\" AS \"Tb_2\" ON \"Tb\".\"constructorid\" = \"Tb_2\".\"constructorid\" AND (EXISTS (SELECT 1 FROM \"constructor\" as \"R1\" WHERE \"R1\".\"name\" = \"Tb_2\".\"name\" LIMIT 1))", params = Any[], join = Any[]),
+    (stage = :build, error = "FilterError", message = "OuterRef(\"constructorid__name\") reaches 'constructorid', a relation outside the join path 'driverid', so it cannot appea"),
   ("P1 on first hop/rhs off-path, FK short form", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"status\" AS \"Tb_2\" ON \"Tb\".\"status_id\" = \"Tb_2\".\"statusid\" AND \"Tb_1\".\"code\" = \"Tb_2\".\"name\"", params = Any[], join = nothing),
+    (stage = :build, error = "FilterError", message = "F(\"status__name\") reaches 'status_id', a relation outside the join path 'driverid', so it cannot appear in that join's O"),
   ("P1 on first hop/rhs off-path, FK short form", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"status\" AS \"Tb_2\" ON \"Tb\".\"status_id\" = \"Tb_2\".\"statusid\" AND \"Tb_1\".\"code\" = \"Tb_2\".\"name\"", params = Any[], join = Any[]),
+    (stage = :build, error = "FilterError", message = "F(\"status__name\") reaches 'status_id', a relation outside the join path 'driverid', so it cannot appear in that join's O"),
   ("P1 on first hop/CTE handle", :postgres) =>
     (stage = :call, error = "FilterError", message = "CTE(\"ev\", \"sku\") cannot be used in a join ON clause (on(...) / cjoin(...)). A JOIN's ON clause targets the joined MODEL;"),
   ("P1 on first hop/CTE handle", :sqlite) =>
@@ -222,9 +222,9 @@ const _JCM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("P4 cjoin plain column/bare pair", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"grid__code\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"grid\" = \"Tb_1\".\"number\" AND \"Tb_1\".\"code\" = ?", params = Any["X"], join = Any["X"]),
   ("P5a cjoin then on()/bare pair (#974)", :postgres) =>
-    (stage = :call, error = "QueryBuildError", message = "Join path 'grid' stops at base field 'grid', which is not a relation. Use .cjoin(..., field=...) first if this path depe"),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"grid__code\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"grid\" = \"Tb_1\".\"number\" AND \"Tb_1\".\"code\" = \$1", params = Any["X"], join = nothing),
   ("P5a cjoin then on()/bare pair (#974)", :sqlite) =>
-    (stage = :call, error = "QueryBuildError", message = "Join path 'grid' stops at base field 'grid', which is not a relation. Use .cjoin(..., field=...) first if this path depe"),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"grid__code\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"grid\" = \"Tb_1\".\"number\" AND \"Tb_1\".\"code\" = ?", params = Any["X"], join = Any["X"]),
   ("P5b on() then cjoin/bare pair (#974)", :postgres) =>
     (stage = :call, error = "QueryBuildError", message = "Join path 'grid' stops at base field 'grid', which is not a relation. Use .cjoin(..., field=...) first if this path depe"),
   ("P5b on() then cjoin/bare pair (#974)", :sqlite) =>

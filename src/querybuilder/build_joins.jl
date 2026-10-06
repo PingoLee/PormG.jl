@@ -794,10 +794,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     )
     foreign_table_name = foreign_model
     inserted = true
-  elseif first_column in instruct.object.model.field_names || _get_join_field(instruct.object, join_path) !== nothing
+  elseif (first_field = _segment_field(instruct.object, instruct.object.model, join_path, true)) !== nothing
     # A `cjoin(field = …)` entry on this path supplies the link field itself; the first hop is the
-    # only one that can carry such an override, which is why the choice stays here.
-    first_field = _get_join_field(instruct.object, join_path) !== nothing ? _get_join_field(instruct.object, join_path) : instruct.object.model.fields[first_column]
+    # only one that can carry such an override. `_segment_field` is the one place that reads it
+    # (#977), so `on()`, the #962 check and this hop agree on which relation a segment is.
     row_join, foreign_table_name, last_field = _forward_fk_hop(
       instruct, instruct.object.model, Models.model_table_name(instruct.object.model), instruct.alias,
       first_column, first_field, vector; prev_how = nothing,

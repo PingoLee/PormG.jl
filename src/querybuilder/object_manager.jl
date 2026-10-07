@@ -804,3 +804,73 @@ end
 # text to `ChainCaller(::Any, ::Any)`, so the docstring documents the constructor, never `.filter`,
 # and `@autodocs` publishes it on the site under a heading that belongs to nothing (#212). There is
 # no binding behind `q.filter` to attach docs to; the fluent reference lives on `object`.
+
+# ---
+# Pagination
+#
+# INTERNAL, and NOT the fluent implementation. `query.page(...)` routes through
+# `ChainCaller(_page!, q)` (`getproperty(::ObjectHandler)` above), which dispatches on `SQLObject`;
+# these methods take an `SQLObjectHandler` and are never reached from the chain. `page` is
+# un-exported (#202), has no caller in this repo, and survives only because test_public_exports.jl
+# pins it as defined-but-unexported. The external API is the fluent `query.page(limit)` /
+# `query.page(limit, offset)` — nothing in `docs/` or `README.md` mentions the function form.
+#
+# It is a second, parallel implementation of the same semantics, and the two surfaces silently
+# drifting apart is exactly what #272 was. `test_fluent_parity_208.jl` now pins them equal; keep
+# that test passing rather than editing one side alone.
+#
+# No docstring on purpose. Since #289 `api.md`'s `@autodocs` sets `Private = false`, so a docstring
+# here would no longer reach the site by itself — but adding one would still present the function
+# form as supported surface to anyone reading the source, and would invite a `public` declaration to
+# "fix" its absence from the page. The `.page(...)` reference lives on the `object` docstring and in
+# `docs/src/api.md` (the split that test_docstring_coverage.jl enforces).
+
+# Sets BOTH clauses (offset falls back to its 0 default). Unreachable from the chain: `ChainCaller`
+# forwards positional arguments only, so no keyword can arrive on the fluent path.
+function page(object::SQLObjectHandler; limit::Integer = 10, offset::Integer = 0)
+  object.object.limit = limit
+  object.object.offset = offset
+  return object
+end
+# Limit-only: the offset already on the handler is left alone. `_page!`'s 1-tuple method mirrors this.
+function page(object::SQLObjectHandler, limit::Integer)
+  object.object.limit = limit
+  return object
+end
+function page(object::SQLObjectHandler, limit::Integer, offset::Integer)
+  object.object.limit = limit
+  object.object.offset = offset
+  return object
+end
+
+# ---
+# Fluent mutators behind `query.limit(...)`, `query.offset(...)` and `query.page(...)`.
+#
+# `ChainCaller` packs the call's varargs into ONE tuple and calls `f(q.object, args)`, so the
+# argument these receive is always a `Tuple` and the arity check IS the dispatch. Every shape that is
+# not an accepted arity therefore needs an `::Any` fallback throwing a `PormGError`: without one the
+# user gets a bare `MethodError` naming `_page!` and a `Tuple{String, String}` — neither of which
+# appears anywhere in their code — and `catch PormGError` (#231/#239) does not cover it (#272).
+function _limit!(object::SQLObject, limit::Tuple{Integer})
+  object.limit = limit[1]
+end
+function _limit!(object::SQLObject, limit)
+  throw(QueryBuildError("Invalid limit() arguments: $(limit) (::$(typeof(limit))) — limit() takes exactly one Integer, e.g. limit(20)."))
+end
+function _offset!(object::SQLObject, offset::Tuple{Integer})
+  object.offset = offset[1]
+end
+function _offset!(object::SQLObject, offset)
+  throw(QueryBuildError("Invalid offset() arguments: $(offset) (::$(typeof(offset))) — offset() takes exactly one Integer, e.g. offset(40)."))
+end
+# page(n) is limit-only — the offset already on the handler survives, matching page(object, limit).
+function _page!(object::SQLObject, v::Tuple{Integer})
+  object.limit = v[1]
+end
+function _page!(object::SQLObject, v::Tuple{Integer, Integer})
+  object.limit = v[1]
+  object.offset = v[2]
+end
+function _page!(object::SQLObject, v)
+  throw(QueryBuildError("Invalid page() arguments: a $(typeof(v)) — page() takes one Integer (limit) or two Integers (limit, offset), e.g. page(20) or page(20, 40)."))
+end

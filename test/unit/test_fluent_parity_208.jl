@@ -226,7 +226,7 @@ end
 end
 
 @testset "fluent .page(...) and the internal page() stay in lockstep (#272)" begin
-  # ROOT CAUSE GUARD. `page` (SQLObjectHandler, functions.jl) and `_page!` (SQLObject, behind the
+  # ROOT CAUSE GUARD. `page` (SQLObjectHandler, object_manager.jl) and `_page!` (SQLObject, behind the
   # ChainCaller) are two parallel implementations of one contract, and #272 *was* them drifting:
   # the free function grew a limit-only arity, the fluent one did not, and only the docstring
   # noticed. Nothing but this test ties them together — assert equal end state from equal start,

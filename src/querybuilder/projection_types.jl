@@ -624,7 +624,7 @@ function _declared_type_formatter(type_name::AbstractString, instruc::SQLInstruc
   instruc.connection isa PormGSQLite && _text_cast_on_sqlite(field) && return nothing
   return field.formatter
 end
-# The declared types SQLite renders as `CAST(x AS TEXT)` (predicates in sanitization.jl).
+# The declared types SQLite renders as `CAST(x AS TEXT)` (predicates in value_validation.jl).
 _text_cast_on_sqlite(field::PormGField) = _is_uuid_field(field) || _is_network_field(field)
 
 # The field a `Max`/`Min` or bare-`F` projection's column names, or `nothing` when it names none.

@@ -58,7 +58,7 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
         # PormG should accept exact integer-valued Decimal inputs as well, but it
         # must still reject fractional Decimal values to avoid silent truncation.
         # This is the VALUE path, and #632 did not move it: `validate_field_data`'s integer arm
-        # has its own `Int64(value)` try (`querybuilder/sanitization.jl`) and never routed through
+        # has its own `Int64(value)` try (`querybuilder/value_validation.jl`) and never routed through
         # `format2int64`.
         @test validate_field_data(mock_int_model, "age", parse(Decimal, "25"), "insert") === true
         @test validate_field_data(mock_int_model, "age", parse(Decimal, "25.0"), "insert") === true

@@ -14,7 +14,7 @@ arrives through ordinary application code:
 
 The formatters are the canonical write/bind path — `src/value_repr.jl` names
 `format_timezone_sql` and `format_duration_sql` as slot 1 for `CDateTime` and `CInterval` — and
-`querybuilder/sanitization.jl` is `AbstractString`-typed throughout, so a non-`String` value
+`querybuilder/value_validation.jl` is `AbstractString`-typed throughout, so a non-`String` value
 PASSES validation and only fails at the formatter, where a bare `catch` dresses the failure up as
 a field-validation message. That is why this is a contract for the whole family and not a
 property of one field type, and why it gets its own file.
@@ -321,7 +321,7 @@ _lazy(s::String) = LazyString(s)
   # End to end: the QUERY path, not just the formatter in isolation
   # Everything above calls the formatters directly, which cannot show that a `SubString` survives
   # the trip from a user's `filter(...)` down to a bound parameter — and the read path is where
-  # the new generic `format_timezone_sql` arm actually earns its keep. `querybuilder/sanitization.jl`
+  # the new generic `format_timezone_sql` arm actually earns its keep. `querybuilder/value_validation.jl`
   # guards the WRITE path with `value isa AbstractString` before it ever calls a formatter, so a
   # non-string never reached one on an insert; `_format_filter_value` has no such guard and hands
   # the raw value straight over, with `_locate_filter_refusal` locating an `InvalidValueError`

@@ -81,6 +81,8 @@ include("querybuilder/memos.jl")
 include("querybuilder/error_funnels.jl")
 
 include("querybuilder/sanitization.jl")
+# #130: validating a value against its field, split out of sanitization.jl.
+include("querybuilder/value_validation.jl")
 
 #
 # Parameters

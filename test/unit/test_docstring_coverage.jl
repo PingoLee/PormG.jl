@@ -270,7 +270,7 @@ end
         # Drop `:symbol` literals BEFORE scanning. The branch CONDITIONS (`sym === :page`,
         # `sym === :update`) are not helper references, and both of those names also happen to be
         # real QueryBuilder-owned, non-public functions — the parallel `page(::SQLObjectHandler)`
-        # (functions.jl) and `update(::SQLObject)` (execution_write.jl) function forms, which this rule
+        # (object_manager.jl) and `update(::SQLObject)` (execution_write.jl) function forms, which this rule
         # does not govern because the chain routes to `_page!`/`_update!` instead. Leaving them in
         # reported both as offenders. Also removes `:execute`/`:sql`/`:Symbol` noise.
         # The strip is POSITIONAL — it deletes `:name`, never a bare `name` — so a helper called as

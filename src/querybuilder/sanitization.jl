@@ -90,7 +90,7 @@ end
 
 # Escape-only and WITHOUT a `conn`, for interpolation into a SQL string literal that PostgreSQL then
 # re-parses as an identifier — `setval`'s `regclass` argument, `to_regclass`. See
-# `_table_ident_literal` in execution.jl, which composes this with `_sql_literal`. Lives here so the
+# `_table_ident_literal` in execution_write.jl, which composes this with `_sql_literal`. Lives here so the
 # escape rule has exactly one definition on the query side (#394; was execution.jl, #59/#344).
 _quote_ident_raw(name::AbstractString)::String = "\"$(_escape_identifier(name))\""
 

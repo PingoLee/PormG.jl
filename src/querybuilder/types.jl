@@ -637,7 +637,7 @@ end
 
 # An ORDER BY term. Immutable since #540: it is a value a user constructs and hands in, not a build
 # product, and the one path that used to write into it — `last()`'s inversion — constructs the
-# reversed term instead (`_invert_order`, execution.jl). With no second writer, the inner
+# reversed term instead (`_invert_order`, execution_read.jl). With no second writer, the inner
 # constructor's whitelist below is the only place an orientation is ever set, which is what let
 # #540 delete the render-time re-validation in `get_order_query` and the hand-written `deepcopy`.
 struct SQLOrder <: SQLTypeOrder
@@ -1227,7 +1227,7 @@ _is_agg(::Any) = false
 # build-time readers — GROUP BY and the two HAVING routings — ask `_resolved_agg` (build_query.jl,
 # #722), which adds the aliases a projection reads. The `update()`/`delete()` refusals still read the
 # node: an alias can only be read beside the projection that defines it, which they already refuse.
-# So does `.aggregate()` (execution.jl), which checks each pair before any projection exists to read:
+# So does `.aggregate()` (execution_read.jl), which checks each pair before any projection exists to read:
 # `aggregate("t" => Sum(…), "big" => Case([When("t__@gte" => 1, …)]))` is refused with "must be an
 # aggregate function". That is a loud over-refusal, never wrong SQL — an aggregate over another
 # aggregate's alias is a feature of its own, not this flag's business.

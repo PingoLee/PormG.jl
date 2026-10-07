@@ -3,8 +3,9 @@
 # temporal path behind it: date/time shifts and differences (#25, #527, #564, #814), and interval
 # arithmetic carried in milliseconds (#881). Nothing here executes a statement.
 #
-# Included just before `execution.jl`, which held this code until #130. Every caller reaches it from
-# a function body, so nothing depends on where in the include chain it sits.
+# Included just before `execution_read.jl` / `execution_write.jl`; until #130 this code sat inside
+# `execution.jl`, since split into those two. Every caller reaches it from a function body, so
+# nothing depends on where in the include chain it sits.
 
 # `_is_date_field(::String, ::SQLInstruction)` used to live beside this code, then in
 # `execution.jl`. Both of its callers were the integer-days special cases #568 deleted, so it went

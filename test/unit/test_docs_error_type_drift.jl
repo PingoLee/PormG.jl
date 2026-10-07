@@ -164,7 +164,7 @@ const ALLOWED_UNTYPED_BARE_ERROR = Dict(
     # both terminals refuse aggregate projections, `_values!` REPLACES a delete's projection with its
     # key before the build (so no alias filter can route to HAVING), and `update()` refuses alias
     # filters outright (#668). Raised rather than dropped, because dropping HAVING widens the write.
-    "src/querybuilder/execution.jl"     => 1,  # GROUP BY / HAVING reaching a mutation predicate — internal invariant
+    "src/querybuilder/execution_write.jl" => 1,  # GROUP BY / HAVING reaching a mutation predicate — internal invariant
     # #433 shrank this from 2 to 1. The "unmaterialized CTE" site was NOT an internal invariant:
     # `cte_dict["model"]` is written only by `build_cte_clause`, so its absence means the statement
     # emits no WITH clause — reachable from `update()` on a query that references a CTE. It is now a

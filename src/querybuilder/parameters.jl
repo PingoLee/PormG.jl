@@ -240,7 +240,7 @@ end
 # when a bucket is added — the maintenance checklist in the QueryBuilder skill points here.
 #
 # `:group` and `:order` (#587) sit where their text does — GROUP BY between WHERE and HAVING,
-# ORDER BY last. The statement renderer in `execution.jl` (`query`) prints in exactly this order.
+# ORDER BY last. The statement renderer in `execution_read.jl` (`query`) prints in exactly this order.
 const _BUCKET_ORDER = (:cte, :select, :update, :join, :where, :group, :having, :order)
 
 # Deliberately mirrors `_current_bucket`'s fallback rather than defining its own: an unrecognized

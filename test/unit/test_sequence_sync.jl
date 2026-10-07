@@ -386,7 +386,7 @@ end
 # This is the BULK writers' normal path: `bulk_insert` and `bulk_copy` always run in a
 # transaction (execution_bulk.jl:1004, :1176). The row-level PostgreSQL writers are the
 # opposite — `insert`, `_update_or_create` and `_get_or_create` deliberately run
-# transaction-free (execution.jl:924-928 wraps in run_in_transaction only for SQLite),
+# transaction-free (execution_write.jl wraps them in run_in_transaction only for SQLite),
 # so they take the warn path unless the caller opened an `atomic` block.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Sequence resync failure inside a transaction propagates (#344)" begin

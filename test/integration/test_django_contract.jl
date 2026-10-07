@@ -50,7 +50,7 @@ end
 """
 Normalize a datetime value read back from the database to a comparable UTC DateTime.
 
-After the SQLite datetime normalization in `list()` (src/querybuilder/execution.jl), both
+After the SQLite datetime normalization in `list()` (src/querybuilder/execution_read.jl), both
 backends return `ZonedDateTime` for `DateTimeField` columns:
 - PostgreSQL TIMESTAMPTZ → `ZonedDateTime` natively via LibPQ.
 - SQLite DATETIME → `ZonedDateTime` after ORM normalization of the stored ISO 8601 string.

@@ -24,7 +24,7 @@ This skill is for implementation and regression analysis inside `src/querybuilde
 ## Core entry points
 
 - `src/QueryBuilder.jl` is the builder entry point and includes the specialized querybuilder modules
-- `build_helpers.jl`, `build_joins.jl`, `build_query.jl`, `ctes.jl`, `deletion.jl`, `execution.jl`, `expression_render.jl`, and `functions.jl` are the main internal coordination surfaces
+- `build_helpers.jl`, `build_joins.jl`, `build_query.jl`, `ctes.jl`, `deletion.jl`, `execution_read.jl`, `execution_write.jl`, `expression_render.jl`, and `functions.jl` are the main internal coordination surfaces
 - `join_conditions.jl` owns what a condition in `on(path, …)` / `cjoin(filters = …)` / `cjoin_on(on = …)` refers to: the one relation resolver, the build-time binding passes (#977, #982), the render-time column recorder (#985), and — since #130 — the `on` / `cjoin` / `cjoin_on` entry points themselves, with the handle guards and #962's right-side check. See *Join conditions: bound at build* below before touching any join-condition code
 - Keep user-facing behavior expressed through `M.Model.objects`; reach into builder internals only for implementation work or deterministic unit coverage
 
@@ -217,7 +217,7 @@ accepted it and died at render with a raw `MethodError`. #529 reported one; ther
 | **Alias** / query-time name — `instruc.alias`, a `cjoin_on` alias, a `.with(...)` CTE name, a SELECT `_as`/`custom_as` | `quote_identifier(name, conn)` | fail-closed: `_validate_identifier` then wrap |
 
 - `_validate_identifier(id)` validates against `SAFE_IDENTIFIER_PATTERN` (`\A[\p{L}_][\p{L}\p{M}\p{N}_]*\z` — `\A…\z`, not `^…$`: PCRE's `$` matches before a final newline, #794) and throws **`InvalidValueError`** on invalid input; it never silently removes characters.
-- `_escape_identifier(name)` is the shared escape. `_quote_ident_raw` is the same thing without a `conn`, for a name interpolated into a SQL string literal that PostgreSQL re-parses as an identifier (`setval`'s `regclass`, `to_regclass`) — see `_table_ident_literal` in `execution.jl`.
+- `_escape_identifier(name)` is the shared escape. `_quote_ident_raw` is the same thing without a `conn`, for a name interpolated into a SQL string literal that PostgreSQL re-parses as an identifier (`setval`'s `regclass`, `to_regclass`) — see `_table_ident_literal` in `execution_write.jl`.
 - `SAFE_JSON_KEY_PATTERN` is a **separate constant** with the same body, used only by `_validate_json_key_segments` (`build_joins.jl`). A JSON path segment is interpolated *unquoted* into a path literal, so the charset check is its entire guard; keeping the constants apart is what stops a relaxation of the identifier rules from widening it.
 
 **Do not unify these — the split is the fix.** A physical name is pinned by the model author via `db_table`/`db_column` (deliberately unvalidated, #59/#50) or read from the database catalog; validating it meant PormG refused to query a table its own DDL had just created. An alias is chosen at query-build time and names nothing that exists, so it stays strict. When adding a new identifier-quoting path, pick by which of the three it is — never strip-and-quote.
@@ -282,7 +282,7 @@ so a helper defined in a sibling module and imported here stays covered — stil
 able to leak through `_fluent_name`.
 
 **It is about the name, not call sites.** `_count`/`_exists` (`deletion.jl`) and `_values!`/`_filter!`
-(`execution.jl`) are called from elsewhere in `src/querybuilder/`; internal reuse does not make a
+(`object_manager.jl`) are called from elsewhere in `src/querybuilder/`; internal reuse does not make a
 helper API — being declared API does.
 
 **Why the join/CTE family stopped being an exception (#305).** `With` was exported and `cjoin`
@@ -342,7 +342,8 @@ Focus on:
 - `build_query.jl`
 - `ctes.jl`
 - `join_conditions.jl`
-- `execution.jl`
+- `execution_read.jl`
+- `execution_write.jl`
 - `expression_render.jl`
 - `deletion.jl`
 
@@ -440,7 +441,7 @@ fixture diff. Regenerate it with `PORMG_JCM_RECORD=1` (the command is in the tes
 review the diff row by row, because regenerating to make the test pass is exactly the anti-pattern
 below.
 
-Gotcha — `_count` (`execution.jl`): it clears `.values`/`.order` before rendering, so `count()` cannot reuse a `.values()` select. `COUNT(DISTINCT *)` is **invalid SQL on both PostgreSQL and SQLite**, so the count forms diverge:
+Gotcha — `_count` (`execution_read.jl`): it clears `.values`/`.order` before rendering, so `count()` cannot reuse a `.values()` select. `COUNT(DISTINCT *)` is **invalid SQL on both PostgreSQL and SQLite**, so the count forms diverge:
 
 - `count()` → `COUNT(*)`.
 - query-level distinct (`.distinct().count()` / `count(distinct=true)`) → wrap `SELECT DISTINCT *` in an **outer `COUNT(*)` subquery** (so `count() == length(distinct list())`).

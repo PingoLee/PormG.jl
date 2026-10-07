@@ -46,7 +46,7 @@ end
 # PormGRow: JSON.json(row) serializes the ROW, and agrees with list(:json) (#641)
 # A PormGRow has no JSON method of its own, so JSON.jl reflected over its slots, walked into
 # `_model` and re-serialized the model graph along every path through it — 1.8 MB from one row on
-# the 14-model F1 fixture, and an OOM-kill on a production schema. `src/querybuilder/execution.jl`
+# the 14-model F1 fixture, and an OOM-kill on a production schema. `src/querybuilder/execution_read.jl`
 # now defines `StructUtils.lower` for it, routed through the SAME `_json_row` that builds
 # `list(:json)`, so the two emitters cannot disagree about one row. That agreement is the assertion
 # here: a real query, real driver-delivered values, both paths, one string.

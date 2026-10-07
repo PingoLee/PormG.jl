@@ -48,7 +48,7 @@ _bulk_copy_fk_ids = [row[:resultid] for row in _bulk_copy_fk_rows]
 
 # One dependency this file cannot borrow its way out of: `test_result_set_default` is declared
 # `ForeignKey(Result, …, default = 1)`, and PormG writes a static default whenever a write does
-# not mention the field — `create()` fills it when the key is absent (execution.jl), and the bulk
+# not mention the field — `create()` fills it when the key is absent (execution_write.jl), and the bulk
 # paths add a whole column of it when the DataFrame has no such column (execution_bulk.jl). Not one
 # of the writes below carries a `test_result_set_default` column, so every row this file inserts
 # into `just_a_test_deletion` gets `test_result_set_default = 1` and needs `resultid = 1` to exist,

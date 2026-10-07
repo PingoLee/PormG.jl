@@ -8,7 +8,7 @@
   end
 
   subgraph QB[&quot;QueryBuilder — src/querybuilder/&quot;]
-    Q[&quot;query() — execution.jl&quot;]
+    Q[&quot;query() — execution_read.jl&quot;]
     B[&quot;build() → InstructionObject&lt;br/&gt;build_query.jl&quot;]
     J[&quot;_build_row_join (joins)&lt;br/&gt;build_joins.jl&lt;br/&gt;on / cjoin / cjoin_on — join_conditions.jl&quot;]
     P[&quot;parameters.jl&lt;br/&gt;$1.. (PG) / ? buckets (SQLite)&quot;]
@@ -43,7 +43,7 @@
   autonumber
   participant App as Your code
   participant OH as ObjectHandler
-  participant EX as execution.jl
+  participant EX as execution_read.jl
   participant BQ as build_query.jl
   participant CP as ConnectionPool
   participant BE as Backend + ext
@@ -77,8 +77,8 @@
   end
   L --&gt; QRY[&quot;query() → build() → fetch()&quot;]
   C --&gt; QRY
-  CR --&gt; INS[&quot;insert path&lt;br/&gt;execution.jl / execution_bulk.jl&quot;]
-  UP --&gt; UPD[&quot;update path&lt;br/&gt;execution.jl&quot;]
+  CR --&gt; INS[&quot;insert path&lt;br/&gt;execution_write.jl / execution_bulk.jl&quot;]
+  UP --&gt; UPD[&quot;update path&lt;br/&gt;execution_write.jl&quot;]
   DE --&gt; DEL[&quot;deletion.jl&lt;br/&gt;cascade planning (CASCADE/SET_NULL/...)&quot;]
   QRY --&gt; FE[&quot;fetch()&quot;]
   INS --&gt; FE
@@ -105,4 +105,4 @@ mermaid.initialize({
     startOnLoad: true,
     theme: "neutral"
 });
-</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../upgrading/">« Upgrading PormG</a><a class="docs-footer-nextpage" href="../extending/">Extending PormG »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Wednesday 7 October 2026 17:21">Wednesday 7 October 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../upgrading/">« Upgrading PormG</a><a class="docs-footer-nextpage" href="../extending/">Extending PormG »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Wednesday 7 October 2026 18:10">Wednesday 7 October 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

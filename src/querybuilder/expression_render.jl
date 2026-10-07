@@ -10,7 +10,7 @@
 # `_is_date_field(::String, ::SQLInstruction)` used to live beside this code, then in
 # `execution.jl`. Both of its callers were the integer-days special cases #568 deleted, so it went
 # with them — and with it the #563 collision, in which two functions named `_is_date_field` carried
-# DIFFERENT semantics: this one answered `true` for TIMESTAMP, while `sanitization.jl`'s
+# DIFFERENT semantics: this one answered `true` for TIMESTAMP, while `value_validation.jl`'s
 # `_is_date_field(f_meta)` answers `true` only for a plain DATE. That pair is what produced the
 # integer-days half of #527 in the first place, and removing it is what CLOSED #563: that issue
 # asked for the two predicates to have names distinguishing "any temporal column" from

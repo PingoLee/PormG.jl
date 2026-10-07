@@ -809,10 +809,10 @@ end
 # Pagination
 #
 # INTERNAL, and NOT the fluent implementation. `query.page(...)` routes through
-# `ChainCaller(_page!, q)` (`getproperty` above), which dispatches on `SQLObject`; these methods take
-# an `SQLObjectHandler` and are never reached from the chain. `page` is un-exported (#202), has no
-# caller in this repo, and survives only because test_public_exports.jl pins it as
-# defined-but-unexported. The external API is the fluent `query.page(limit)` /
+# `ChainCaller(_page!, q)` (`getproperty(::ObjectHandler)` above), which dispatches on `SQLObject`;
+# these methods take an `SQLObjectHandler` and are never reached from the chain. `page` is
+# un-exported (#202), has no caller in this repo, and survives only because test_public_exports.jl
+# pins it as defined-but-unexported. The external API is the fluent `query.page(limit)` /
 # `query.page(limit, offset)` — nothing in `docs/` or `README.md` mentions the function form.
 #
 # It is a second, parallel implementation of the same semantics, and the two surfaces silently

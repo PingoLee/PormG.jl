@@ -27,7 +27,7 @@ import PormG: _fk_targets_equal
 #   ModelDefinitionError — defining a model/schema (Model, add_field!, UniqueConstraint,
 #                          set_models, FK/M2M resolution).
 #   InvalidValueError    — coercing a VALUE (the format_*_sql family), reached from
-#                          querybuilder/sanitization.jl on the insert/update path.
+#                          querybuilder/value_validation.jl on the insert/update path.
 #   FieldValidationError — `validate_default`, which despite living here is called only from
 #                          field constructors in src/models/fields.jl to check a `default=` kwarg.
 import PormG: ModelDefinitionError, InvalidValueError, FieldValidationError
@@ -3869,7 +3869,7 @@ end
 # unhandled value is a bare `MethodError`, outside the #231 taxonomy. Matches `format_duration_sql`,
 # `format_uuid_sql`, `format_date_sql`, `format_json_sql` and `format_binary_sql`.
 #
-# THE WRITE PATH IS NOT WHAT THIS FIXES — `_validate_datetime_value` (`querybuilder/sanitization.jl`)
+# THE WRITE PATH IS NOT WHAT THIS FIXES — `_validate_datetime_value` (`querybuilder/value_validation.jl`)
 # tests `value isa AbstractString` before it calls the formatter and sends everything else to
 # `_type_mismatch_error`, so a non-string never reached here on an insert or update. The arm earns
 # its keep on the READ path, which has no such guard: `_format_filter_value` hands the raw filter
@@ -4689,7 +4689,7 @@ end
 #     not on what it denoted. Widening the live side would have copied that onto both sides.
 #
 # This is `default=` only. The VALUE path is unchanged and still takes an integer-valued Decimal on
-# an integer column — `validate_field_data`'s integer arm (`querybuilder/sanitization.jl`) has
+# an integer column — `validate_field_data`'s integer arm (`querybuilder/value_validation.jl`) has
 # always had its own `Int64(value)` try and never routed through here, so the Django-parity rule it
 # implements is untouched. The split is deliberate and pinned in
 # `test_field_validation_and_operations.jl`: a Decimal is a valid integer VALUE, not a valid
@@ -4709,7 +4709,7 @@ end
 # #780: the two `AbstractString` arms are base 10, on #773's grammar. Julia's `parse` reads `0x`/`0b`/
 # `0o` prefixes and hex floats (`"0x1p4"`), a space after the sign (`"+ 1"`) and, for floats,
 # `"Inf"`/`"NaN"`, so `IntegerField(default = "0x10")` stored 16 while the same string was refused as
-# a VALUE (`format_number_sql`, `sanitization.jl`). A declaration now takes exactly the spellings a
+# a VALUE (`format_number_sql`, `value_validation.jl`). A declaration now takes exactly the spellings a
 # value does. The float arm is also where the `isfinite` check in the `Real` arm below was missing:
 # `FloatField(default = Inf)` was refused and `FloatField(default = "Inf")` stored `Inf`.
 # `_base10_or_refuse` names the prefix, matching #773's refusal text — for the callers that see it,

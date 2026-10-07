@@ -55,6 +55,11 @@ pre-existing and neither was caused by #404:
     (`_refuse_cte_string_in_join`), so the producer count is unchanged — this file pins three where
     it once pinned four. The testset carries the arithmetic.
 
+#982 retired the machinery most of this describes. A `cjoin_on` condition is bound at build like a
+path join's (#977): every row it names is built before the JOIN clauses render, each condition renders
+on its own row in emission order, and Phases 1, 1b and 1c with `OnExtra` are gone. The testsets that
+pinned relocation now pin the shapes it used to move or refuse, and what they render instead.
+
 All assertions render through mock PostgreSQL/SQLite connections — no live database. The execution
 half (the query actually returning rows on both backends) lives in
 `test/integration/test_selection.jl` and `test/integration/test_cjoin.jl`, because the pre-fix
@@ -356,14 +361,14 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 1b matches an ALIAS, not a column that happens to share its name (#404)
-# The relocation search tests the rendered extra for the dependency's alias. Every column reference
-# renders as `"alias"."col"`, so a bare `"name"` test also hits the COLUMN half: a `cjoin_on` alias
-# spelled like a column (`alias = "code"` vs `"Tb_2"."code"`) then drags an unrelated LEFT JOIN's ON
-# filter onto itself. Valid SQL, wrong rows, no error — strictly worse than the forward reference it
-# replaced. The guard is the trailing dot, and this testset is what holds it in place.
+# A cjoin_on alias spelled like a column takes no other join's predicate (#404)
+# Phase 1b's relocation search tested the rendered SQL for each join's alias. Every column reference
+# renders as `"alias"."col"`, so a bare `"name"` test also hit the COLUMN half: a `cjoin_on` alias
+# spelled like a column (`alias = "code"` vs `"Tb_2"."code"`) then dragged an unrelated LEFT JOIN's ON
+# filter onto itself. Valid SQL, wrong rows, no error. #982 deleted the search — placement no longer
+# reads SQL text — and this testset now pins that the alias's NAME still decides nothing.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "relocation matches an alias, not a like-named column (#404)" begin
+@testset "a cjoin_on alias spelled like a column takes no other join's predicate (#404, #982)" begin
   build(alias) = begin
     q = OBJ.Cj_child.objects
     q.values("note", "parent__grandparent__code")
@@ -516,9 +521,10 @@ end
 #      looking for "what happened to #447/#424" should go.
 #
 # What is left of the guard is a fail-closed backstop with NO constructible producer: nine shapes
-# were built against it after the change and none reached it (see the comment at Phase 1c in
-# `build_query.jl`). So what stays here is the control — the thing that would break loudly if the
-# guard were ever rewritten as an unconditional throw.
+# were built against it after the change and none reached it. #982 then deleted the backstop itself
+# (Phase 1c in `build_row_join_sql_text`) with the relocation that fed it: a condition renders on its
+# own row, and a CROSS row carries none. So what stays here is the control — a CROSS-joined CTE still
+# renders with no ON clause.
 # ─────────────────────────────────────────────────────────────────────────────
 _ob_cte() = begin
   c = OBJ.Cj_grand.objects
@@ -539,87 +545,45 @@ end
   @test !occursin(r"CROSS JOIN[^\n]*ON", ok_sql)
 end
 
-# ── #435: the anchor-less guard must say WHICH of two things went wrong ──────────────────────────
+# ── #982: a cjoin_on predicate stays in the ON clause it was written in ───────────────────────────
 #
-# `cjoin_on` renders its ON clause entirely from the caller's predicates — there is no equi-anchor
-# to fall back on — so an empty extras list at emission time is fatal. Two unrelated causes reach
-# that state, and one message described only the first:
+# `cjoin_on` renders its ON clause entirely from the caller's predicates. A predicate naming a path
+# (`"parent__grandparent__code" => "Z"`) used to JOIN that path while it rendered — after the alias's
+# own row — and a substring scan of the rendered SQL then moved it onto that later join (Phase 1b). So
+# the predicate left the ON clause it was written in, the alias could be left with no ON clause at all
+# (#435's refusal, with remedies for each way of getting there), and a forward reference between two
+# aliases raised the same refusal.
 #
-#   1. the caller passed no predicates at all;
-#   2. the caller passed some, and Phase 1b relocated every one onto a join emitted later.
-#
-# In case 2 the old text — "cjoin_on produced no ON conditions for alias 'b2'" — describes the
-# internal state after relocation, and flatly contradicts what the caller wrote. It sent you looking
-# for a missing argument that is right there in the call.
-#
-# Phase 1b mutates only the local `on_clause_extras`; `row_join` keeps its `on_conditions`. So the
-# two cases stay distinguishable at the raise site with no extra bookkeeping, and `relocated_to`
-# (recorded in Phase 1b) supplies the destination alias for the message.
+# Binding (`_bind_cjoin_on_conditions!`) now builds every path an ON clause names BEFORE the alias
+# rows, and emits the aliases in dependency order. So the predicate renders where it was written, and
+# the shapes #435 refused render — the ones whose own predicates name the alias. An ON clause that
+# never names its alias is still refused, by #448, below.
 #
 # STRIP ANSI BEFORE MATCHING. `_emsg` keeps the SGR sequences when `Base.have_color` is true and
-# drops them otherwise, so a needle that spans a color boundary — `"another cjoin_on"`, which is
-# really `"another \e[4m\e[32mcjoin_on\e[0m"` — matches on a piped Windows run and fails on CI's
-# Linux runner. That is exactly how these two testsets went green locally and red on CI, and the
-# NEGATIVE assertions are worse: they pass for free wherever the escapes survive. Matching stripped
-# text makes every assertion here mean the same thing on both.
+# drops them otherwise, so a needle that spans a color boundary matches on a piped run and fails on
+# CI's Linux runner. Matching stripped text makes every assertion here mean the same thing on both.
 _no_ansi(s::AbstractString) = replace(s, r"\e\[[0-9;]*m" => "")
 
-@testset "cjoin_on distinguishes 'you passed none' from 'they all relocated' (#435)" begin
+# The ON clause of the join aliased `alias`: the text between `AS "<alias>" ON ` and the next JOIN.
+function _on_clause_of(sql::AbstractString, alias::AbstractString)
+  at = findfirst("AS \"$(alias)\" ON ", sql)
+  at === nothing && return nothing
+  rest = sql[last(at)+1:end]
+  stop = findfirst(r"\s(INNER|LEFT|CROSS) JOIN", rest)
+  return strip(stop === nothing ? rest : rest[1:first(stop)-1])
+end
 
-  # ── case 2: predicates given, all relocated away ──────────────────────────
-  # The trigger is purely POSITIONAL: `b2`'s only predicate names a join that sits at a HIGHER
-  # `row_join` index, so Phase 1b moves it there and `b2` is left holding nothing. Two ways to get
-  # there, and the review of this change refuted a narrower claim that only the first counts:
-  #
-  #   - the referenced join does not exist yet and is created during Phase 1's resolution of that
-  #     very condition (this fixture: an UNPROJECTED deep path), or
-  #   - it already exists but is ordered later. For two `cjoin_on` aliases that ordering is now
-  #     DECLARATION order (#449); it used to come from hashing the alias STRINGS, which is why this
-  #     fixture was built on the deep path instead. The deep path stays because it exercises the
-  #     FIRST bullet — a join created during Phase 1 — not because the alias route is
-  #     nondeterministic any more; #449's own testset covers that route directly.
-  #
-  # For THIS fixture, projecting the path first would build those joins at LOWER indices and nothing
-  # would relocate — but the ON clause would then never mention `b2`, which #448 refuses in its own
-  # right. Projecting trades this error for that one, which is why neither the docs nor the message
-  # offer it here. That is specific to a predicate naming no alias of its own; when the
-  # predicate DOES name the join, projecting is the correct fix and both do recommend it — see the
-  # branch testset below. A real join, not a CROSS CTE, so Phase 1c does not intercept.
-  @testset "all predicates relocated onto a later join" begin
-    for (backend, conn) in (("PostgreSQL", _OBJ_PG), ("SQLite", _OBJ_SL))
-      q = OBJ.Cj_child.objects
-      q.values("note")
-      q.cjoin_on("Cj_parent", alias = "b2", on = ["parent__grandparent__code" => "Z"])
+# ─────────────────────────────────────────────────────────────────────────────
+# cjoin_on: a predicate naming a path renders in the alias's own ON clause (#982)
+# The path's joins are built first, so the alias's ON clause can name them where it was written.
+# Each shape below is one #435 used to refuse or relocate, with the SQL it renders now.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "cjoin_on: a predicate naming a path stays in its own ON clause (#982)" begin
 
-      err = try
-        inspect_query(q; connection = conn)
-        nothing
-      catch e
-        e
-      end
-      @test err isa PormG.QueryBuildError
-      msg = _no_ansi(sprint(showerror, err))
-
-      # The regression itself: it must NOT claim the caller supplied nothing.
-      @test !occursin("produced no ON conditions", msg)
-
-      @test occursin("b2", msg)          # the join left without an ON clause
-      @test occursin("Tb_2", msg)        # …and where its predicate actually went
-      @test occursin("#435", msg)
-      # Same vocabulary as the #424 guard, which reaches this relocation from the other side.
-      @test occursin("resolved onto", msg)
-      @test occursin(".filter(", msg)    # one of the remedies
-      # A user-writable shape is never the user's fault to report (see the #424 testset).
-      @test !occursin("internal", lowercase(msg))
-      @test !occursin("please report", lowercase(msg))
-    end
-  end
-
-  # ── the boundary: ONE predicate relocating is not an error ────────────────
-  # Same deep path, plus a predicate that stays. `b2` keeps an ON clause, the relocated fragment
-  # lands on the join it names, and nothing raises. Without this, a guard that fired whenever
-  # ANY predicate relocated would pass every assertion above while breaking a working shape.
-  @testset "a surviving predicate keeps the join renderable" begin
+  # ── a path predicate beside a self-naming one ─────────────────────────────
+  # Used to relocate the path predicate into `Tb_2`'s ON. Now `Tb_2` is joined before `b2`, keeps
+  # its bare equi-anchor, and `b2` carries both predicates. One value binds, on both backends.
+  @testset "the path predicate is not moved onto the path's join" begin
     for (backend, conn) in (("PostgreSQL", _OBJ_PG), ("SQLite", _OBJ_SL))
       q = OBJ.Cj_child.objects
       q.values("note")
@@ -627,249 +591,176 @@ _no_ansi(s::AbstractString) = replace(s, r"\e\[[0-9;]*m" => "")
                  on = [Joined("b2", "sku") == F("note"), "parent__grandparent__code" => "Z"])
       r = inspect_query(q; connection = conn)
       sql = r[:sql_text]
-      @test occursin("JOIN \"cj_parent\" AS \"b2\" ON ", sql)
-      @test occursin("\"b2\".\"sku\" = \"Tb\".\"note\"", sql)
-      # the relocated fragment is merged into the ON of the join it references, not dropped
-      @test occursin("\"Tb_2\".\"code\" = ", sql)
-      # …and its value travels with it rather than being dropped or orphaned. Only ONE predicate
-      # binds here, so this cannot observe #421-style REORDERING — `_cj_two_depth` above owns that.
-      # What it does pin is that a relocated fragment still consumes exactly its own value, on both
-      # backends, which is the half a text-only assertion cannot see.
+      # The path's join comes first, so the alias's ON clause may name it.
+      @test findfirst("AS \"Tb_2\"", sql).start < findfirst("AS \"b2\"", sql).start
+      # Its own ON clause is the equi-anchor alone — the predicate did not land there.
+      @test _on_clause_of(sql, "Tb_2") == "\"Tb_1\".\"grandparent\" = \"Tb_2\".\"id\""
+      on_b2 = _on_clause_of(sql, "b2")
+      @test occursin("(\"b2\".\"sku\" = \"Tb\".\"note\")", on_b2)
+      @test occursin("\"Tb_2\".\"code\" = ", on_b2)
       @test r[:parameters] == ["Z"]
     end
   end
 
-  # ── the two branches give OPPOSITE advice, and the code must pick ─────────
-  # Review of this change caught the message asserting one branch's remedy at both. The bit that
-  # decides it: did any predicate that relocated ALSO name the join it left?
-  #
-  #   names its own alias too → a real correlation whose other side is built later. Projecting that
-  #     path in `values(...)` builds it first and the clause renders AS WRITTEN. Verified below.
-  #   names no alias of its own → nothing correlates the join. Projecting would leave an ON clause
-  #     that never mentions the alias, which #448 now refuses — so projecting swaps one error for
-  #     another instead of rendering the unconstrained join it used to.
-  #
-  # So the same message must NOT recommend projecting in both cases, and these two testsets are
-  # what stop it drifting back.
-  @testset "the remedy branches on whether a relocated predicate named the alias" begin
-    # self-referencing: predicate names b2 AND the deeper join
-    q = OBJ.Cj_child.objects
-    q.values("note")
-    q.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == F("parent__grandparent__code")])
-    msg = try
-      inspect_query(q; connection = _OBJ_SL); ""
-    catch e
-      _no_ansi(sprint(showerror, e))
+  # ── a correlation with a path renders without projecting it ──────────────
+  # #435 refused this and told the caller to project the path so it was built first. Binding builds
+  # it first anyway, so both spellings render the same ON clause.
+  @testset "a correlation with an unprojected path renders" begin
+    unprojected = OBJ.Cj_child.objects
+    unprojected.values("note")
+    unprojected.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == F("parent__grandparent__code")])
+    projected = OBJ.Cj_child.objects
+    projected.values("note", "parent__grandparent__code")
+    projected.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == F("parent__grandparent__code")])
+    for q in (unprojected, projected)
+      sql = inspect_query(q; connection = _OBJ_SL)[:sql_text]
+      @test _on_clause_of(sql, "b2") == "(\"b2\".\"sku\" = \"Tb_2\".\"code\")"
     end
-    @test occursin("does correlate", msg)
-    @test occursin("Project that path", msg)
-    @test !occursin("Do NOT", msg)            # projecting is the RIGHT fix here
-    @test !occursin("No predicate you gave names", msg)
-    # Second tripwire on the partition: with every destination a model join, the `cjoin_on`
-    # sentence must be absent. Without this, misclassifying destinations the other way leaves
-    # only one assertion standing (review finding).
-    @test !occursin("another cjoin_on", msg)
-    @test occursin("nothing relocates", msg)  # projecting IS the whole fix here, so promise it
-
-    # …and projecting really does render it as written, which is what the advice promises
-    ok = OBJ.Cj_child.objects
-    ok.values("note", "parent__grandparent__code")
-    ok.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == F("parent__grandparent__code")])
-    ok_sql = inspect_query(ok; connection = _OBJ_SL)[:sql_text]
-    @test occursin("JOIN \"cj_parent\" AS \"b2\" ON (\"b2\".\"sku\" = \"Tb_2\".\"code\")", ok_sql)
-
-    # non-self-referencing: the fixture shape, which must get the opposite advice
-    q2 = OBJ.Cj_child.objects
-    q2.values("note")
-    q2.cjoin_on("Cj_parent", alias = "b2", on = ["parent__grandparent__code" => "Z"])
-    msg2 = try
-      inspect_query(q2; connection = _OBJ_SL); ""
-    catch e
-      _no_ansi(sprint(showerror, e))
-    end
-    @test occursin("No predicate you gave names", msg2)
-    @test occursin("Do NOT instead project", msg2)
-    @test !occursin("does correlate", msg2)
-    # the remedy must not send them to .filter() without saying the cjoin_on has to go too —
-    # `_cjoin_on` refuses an empty `on`, so moving every predicate out and leaving the call raises
-    @test occursin("drop the", msg2)
   end
 
-  # ── self-ref, but the destination has no path to project ──────────────────
-  # "Project it in values(...)" is unactionable when the predicate relocated onto ANOTHER cjoin_on:
-  # `values("b2…")` is not a thing. Caught in review — the self-ref remedy was written for a
-  # model-path destination and asserted at both. The actionable move is the reverse: declare the
-  # predicate on the join PormG emits LATER, so the reference points backwards.
-  @testset "a cjoin_on destination gets the reorder remedy, not 'project it'" begin
+  # ── a forward reference to another alias is reordered ─────────────────────
+  # `b3` names `b2`, declared after it. #435 refused it with a "declare it on the other join"
+  # remedy; now `b2` is simply emitted first.
+  @testset "a forward reference to another cjoin_on is reordered" begin
     q = OBJ.Cj_child.objects
     q.values("note")
     q.cjoin_on("Cj_parent", alias = "b3", on = [Joined("b3", "sku") == Joined("b2", "sku")])
     q.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == F("note")])
-    msg = try
-      inspect_query(q; connection = _OBJ_SL); ""
-    catch e
-      _no_ansi(sprint(showerror, e))
-    end
-
-    @test occursin("does correlate", msg)              # still the self-ref branch
-    @test occursin("another cjoin_on", msg)            # …and it says why projecting is not it
-    @test occursin("declare this predicate on", msg)
-    @test !occursin("Project that path", msg)          # the unactionable advice must be absent
-    @test !occursin("Project those paths", msg)
-
-    # Moving the predicate is only HALF the rewrite, and the message must say the other half.
-    # This branch fires only when the relocated predicates were ALL of them, so moving them out
-    # leaves `b3` with an empty `on` — which `_cjoin_on` refuses — while dropping `b3` entirely
-    # makes `b3.sku` unresolvable in the predicate that referenced it. Both dead ends were
-    # reachable by following the first draft of this remedy literally (review finding); the same
-    # omission had already been fixed once in the `.filter(...)` remedy.
-    @test occursin("an ON predicate of its own", msg)
-    @test occursin("requires at least one", msg)
-
-    # …and the full rewrite the message describes actually renders: the shared predicate declared
-    # on the LATER join, and `b3` given a predicate of its own.
-    ok = OBJ.Cj_child.objects
-    ok.values("note")
-    ok.cjoin_on("Cj_parent", alias = "b3", on = [Joined("b3", "sku") == F("note")])
-    ok.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == Joined("b3", "sku")])
-    ok_sql = inspect_query(ok; connection = _OBJ_SL)[:sql_text]
-    @test occursin("JOIN \"cj_parent\" AS \"b3\" ON (\"b3\".\"sku\" = \"Tb\".\"note\")", ok_sql)
-    @test occursin("JOIN \"cj_parent\" AS \"b2\" ON (\"b2\".\"sku\" = \"b3\".\"sku\")", ok_sql)
+    sql = inspect_query(q; connection = _OBJ_SL)[:sql_text]
+    @test findfirst("AS \"b2\"", sql).start < findfirst("AS \"b3\"", sql).start
+    @test _on_clause_of(sql, "b2") == "(\"b2\".\"sku\" = \"Tb\".\"note\")"
+    @test _on_clause_of(sql, "b3") == "(\"b3\".\"sku\" = \"b2\".\"sku\")"
   end
 
-  # ── mixed destinations: both remedies, and the projecting half must not overclaim ──
-  # With one predicate relocating onto a model join and another onto a `cjoin_on`, projecting is
-  # only half the fix. The tail "then nothing relocates and the ON clause renders as you wrote it"
-  # is false there — the other predicate still moves — and it contradicts the sentence appended
-  # right after it. Verified: projecting this shape does render, but `b3`'s ON is not as written.
-  @testset "mixed destinations get both remedies without contradicting each other" begin
+  # ── both at once: a path and a later alias ────────────────────────────────
+  # #435 gave two remedies here (project the path, reorder the aliases). Both are now what binding
+  # does, and every predicate stays in `b3`'s ON clause.
+  @testset "a path and a later alias in one ON clause" begin
     q = OBJ.Cj_child.objects
     q.values("note")
     q.cjoin_on("Cj_parent", alias = "b3",
                on = [Joined("b3", "sku") == Joined("b2", "sku"), Joined("b3", "sku") == F("parent__grandparent__code")])
     q.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == F("note")])
-    msg = try
-      inspect_query(q; connection = _OBJ_SL); ""
-    catch e
-      _no_ansi(sprint(showerror, e))
-    end
-
-    @test occursin("Project that path", msg)             # the model-path destination
-    @test occursin("another cjoin_on", msg)              # …and the cjoin_on one
-    @test occursin("that predicate stays", msg)          # scoped promise
-    @test !occursin("nothing relocates and the ON clause renders as you wrote it", msg)
+    sql = inspect_query(q; connection = _OBJ_SL)[:sql_text]
+    @test _on_clause_of(sql, "b3") == "(\"b3\".\"sku\" = \"b2\".\"sku\") AND (\"b3\".\"sku\" = \"Tb_2\".\"code\")"
+    @test findfirst("AS \"Tb_2\"", sql).start < findfirst("AS \"b2\"", sql).start < findfirst("AS \"b3\"", sql).start
   end
 
-  # ── case 1: genuinely no predicates ───────────────────────────────────────
-  # Not reachable through the public API — `_cjoin_on` refuses an empty `on` at the call site — so
-  # reach it white-box by emptying the stored filters. `_build_cjoin_on_row_join` then omits the
-  # `on_conditions` key entirely, which IS the state this branch is about.
-  @testset "no predicates passed keeps its own message" begin
+  # ── a predicate list naming no alias of its own is #448's, whatever it names ──
+  # The old #435 fixture. With nothing relocated, what is left is an ON clause that never names `b2`.
+  @testset "a path predicate alone is refused as unconstrained" begin
+    for (backend, conn) in (("PostgreSQL", _OBJ_PG), ("SQLite", _OBJ_SL))
+      q = OBJ.Cj_child.objects
+      q.values("note")
+      q.cjoin_on("Cj_parent", alias = "b2", on = ["parent__grandparent__code" => "Z"])
+      err = try inspect_query(q; connection = conn); nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      msg = _no_ansi(sprint(showerror, err))
+      @test occursin("never references", msg)
+      @test occursin("#448", msg)
+      @test !occursin("resolved onto", msg)
+    end
+  end
+
+  # ── an emptied ON list is refused the same way ────────────────────────────
+  # Not reachable through the public API — `_cjoin_on` refuses an empty `on` at the call — so reach
+  # it white-box. An empty list names no alias, so binding refuses it before anything renders, and
+  # the renderer never sees an AnchorlessJoin with no ON clause.
+  @testset "an emptied ON list is refused at binding" begin
     q = OBJ.Cj_child.objects
     q.values("note")
     q.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == F("note")])
-    empty!(q.object.alias_join["b2"].filters)   # #484: cjoin_on entries live in `alias_join` now
-
-    err = try
-      inspect_query(q; connection = _OBJ_PG)
-      nothing
-    catch e
-      e
-    end
+    empty!(q.object.alias_join["b2"].filters)   # #484: cjoin_on entries live in `alias_join`
+    err = try inspect_query(q; connection = _OBJ_PG); nothing catch e; e end
     @test err isa PormG.QueryBuildError
-    msg = _no_ansi(sprint(showerror, err))
-    @test occursin("produced no ON conditions", msg)   # unchanged wording
-    @test occursin("b2", msg)
-    @test !occursin("#435", msg)                       # not the relocation story
+    @test occursin("never references", _no_ansi(sprint(showerror, err)))
   end
 
   # ── control: an ordinary cjoin_on still renders ───────────────────────────
-  # Without this, splitting the guard into two throws could satisfy every assertion above while
-  # breaking the feature — the same trap the #424 testset's control covers.
   ok = OBJ.Cj_child.objects
   ok.values("note")
   ok.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == F("note")])
   ok_sql = inspect_query(ok; connection = _OBJ_SL)[:sql_text]
-  @test occursin("JOIN \"cj_parent\" AS \"b2\" ON ", ok_sql)
+  @test _on_clause_of(ok_sql, "b2") == "(\"b2\".\"sku\" = \"Tb\".\"note\")"
 end
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# cjoin_on emission order follows DECLARATION order, not alias hashing (#449)
-# `build()` materializes `row_join` by iterating `alias_join` (`custom_join` before #484 split the
-# two namespaces), and Phase 1b relocates an ON predicate onto the LAST join it names — so the
-# container's order decides which of two `cjoin_on` aliases keeps its predicate and which is left
-# bare. While it was a plain `Dict` that order came from hashing the ALIAS STRINGS: measured across
-# five name pairs, the first-listed of
-# each pair was emitted first no matter which was declared first, so renaming an alias for
-# readability could flip a working query into a QueryBuildError or the reverse.
+# cjoin_on emission order follows the declaration and the references, not alias hashing (#449, #982)
+# `build()` materializes `row_join` from `alias_join`, so the container's order decides which of two
+# `cjoin_on` aliases is emitted first. While it was a plain `Dict` that order came from hashing the
+# ALIAS STRINGS: measured across five name pairs, the first-listed of each pair was emitted first no
+# matter which was declared first, so renaming an alias for readability could flip a working query
+# into a QueryBuildError or the reverse.
 #
-# The pairs below are the ones #449 measured, kept verbatim. What makes this a real test rather than
-# a restatement of the implementation is that it asserts the OUTCOME is a function of declaration
-# order ALONE: every pair must behave identically, in both directions. Under the old `Dict` half of
-# them behaved one way and half the other.
+# Since #982 the order is DEPENDENCY order — an alias after every alias its ON clause names — with
+# declaration order breaking the ties. The pairs below are the ones #449 measured, kept verbatim, and
+# the test asserts the OUTCOME is a function of declaration and references ALONE: every pair behaves
+# identically, in both directions.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "cjoin_on is emitted in declaration order, not alias-hash order (#449)" begin
+@testset "cjoin_on is emitted in dependency, then declaration, order — not alias-hash order (#449, #982)" begin
   # #449 lists these pairs in the order the OLD `Dict` emitted them — `b3` before `b2`, `zz` before
   # `aa`, and so on, whichever way they were declared. So each pair is exercised in BOTH declaration
-  # directions, and the reversed one is the whole test: it is the direction where hash order and
-  # declaration order DISAGREE.
-  #
-  # Testing only the listed direction is worthless here, and this testset did exactly that for one
-  # draft — it passed identically against the unfixed `Dict`, because declaring in hash order asks
-  # the container nothing.
+  # directions; the reversed one is where hash order and declaration order DISAGREE.
   _449_HASH_ORDER = (("b3", "b2"), ("zz", "aa"), ("j9", "j1"), ("omega", "alpha"), ("w", "q"))
   _449_PAIRS = collect(Iterators.flatten(((a, b), (b, a)) for (a, b) in _449_HASH_ORDER))
 
   for (first_alias, second_alias) in _449_PAIRS
     @testset "$(first_alias) declared before $(second_alias)" begin
 
-      # ── shape A: each join carries a predicate naming ITSELF ──────────────
-      # Nothing can relocate — neither predicate names a join at a higher index — so both keep their
-      # ON clause and this renders, with the two JOIN clauses in declaration order.
-      #
-      # Both must be SELF-naming, not both naming the first alias. An earlier draft did the latter
-      # and #448's guard rightly rejected it: the second join's ON clause never mentioned the second
-      # alias, which is an unconstrained join. The ordering question and the constrained question are
-      # independent, and this fixture must isolate the first.
+      # ── shape A: independent aliases keep declaration order ───────────────
+      # Each ON clause names only itself and the base row, so nothing orders them but the declaration.
       q = OBJ.Cj_child.objects
       q.values("note")
       q.cjoin_on("Cj_parent", alias = first_alias,  on = [Joined(first_alias, "sku") == F("note")])
       q.cjoin_on("Cj_parent", alias = second_alias, on = [Joined(second_alias, "sku") == F("note")])
       sql = inspect_query(q; connection = _OBJ_PG)[:sql_text]
-
       first_at  = findfirst("AS \"$(first_alias)\"", sql)
       second_at = findfirst("AS \"$(second_alias)\"", sql)
       @test first_at !== nothing
       @test second_at !== nothing
-      # THE assertion. Pre-fix this is alias-hash order, so it fails for whichever pairs hash the
-      # other way round.
+      # THE assertion. Under the old `Dict` it fails for whichever pairs hash the other way round.
       @test first(first_at) < first(second_at)
 
-      # ── shape B: the mirror image, and it must RAISE ──────────────────────
-      # Same declaration order, but now the first join's only predicate names the SECOND — a join
-      # emitted after it — so Phase 1b relocates it away and the first is left with no ON clause of
-      # its own. That is #435, and reaching it must depend on declaration order rather than on how
-      # the two aliases happen to hash.
-      # The second join keeps a self-naming predicate so it is constrained in its own right — the
-      # only thing under test here is that the FIRST one loses its predicate to relocation.
+      # ── shape B: a reference overrides the declaration ────────────────────
+      # The first-declared alias now names the second, so the second must be emitted first, for
+      # every pair in both directions. Before #982 this raised #435 instead.
       q2 = OBJ.Cj_child.objects
       q2.values("note")
-      q2.cjoin_on("Cj_parent", alias = first_alias,  on = [Joined(second_alias, "sku") == F("note")])
+      q2.cjoin_on("Cj_parent", alias = first_alias,
+                  on = [Joined(first_alias, "sku") == Joined(second_alias, "sku")])
       q2.cjoin_on("Cj_parent", alias = second_alias, on = [Joined(second_alias, "sku") == F("note")])
-
-      err = try
-        inspect_query(q2; connection = _OBJ_PG)
-        nothing
-      catch e
-        e
-      end
-      @test err isa PormG.QueryBuildError
-      msg = _no_ansi(sprint(showerror, err))
-      # The join left bare is the FIRST-declared one, whichever pair this is.
-      @test occursin("given for $(first_alias) resolved onto", msg)
-      @test occursin("#435", msg)
+      sql2 = inspect_query(q2; connection = _OBJ_PG)[:sql_text]
+      @test first(findfirst("AS \"$(second_alias)\"", sql2)) < first(findfirst("AS \"$(first_alias)\"", sql2))
+      @test _on_clause_of(sql2, first_alias) ==
+            "(\"$(first_alias)\".\"sku\" = \"$(second_alias)\".\"sku\")"
     end
+  end
+
+  # ── a cycle has no order, and is refused ────────────────────────────────────
+  # Each alias names the other. No emission order puts both references backwards, so binding
+  # refuses it and names both aliases rather than picking one to leave dangling.
+  @testset "two aliases naming each other are refused" begin
+    q = OBJ.Cj_child.objects
+    q.values("note")
+    q.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == Joined("b3", "sku")])
+    q.cjoin_on("Cj_parent", alias = "b3", on = [Joined("b3", "id") == Joined("b2", "id")])
+    err = try inspect_query(q; connection = _OBJ_PG); nothing catch e; e end
+    @test err isa PormG.QueryBuildError
+    msg = _no_ansi(sprint(showerror, err))
+    @test occursin("b2 and b3 name each other", msg)
+    @test occursin("#982", msg)
+
+    # An alias that only names a member of the cycle is blocked by it, not part of it, and the message
+    # names the cycle alone — even with the blocked one declared first, where the search starts.
+    q2 = OBJ.Cj_child.objects
+    q2.values("note")
+    q2.cjoin_on("Cj_parent", alias = "b4", on = [Joined("b4", "sku") == Joined("b2", "sku")])
+    q2.cjoin_on("Cj_parent", alias = "b2", on = [Joined("b2", "sku") == Joined("b3", "sku")])
+    q2.cjoin_on("Cj_parent", alias = "b3", on = [Joined("b3", "id") == Joined("b2", "id")])
+    msg2 = _no_ansi(sprint(showerror, try inspect_query(q2; connection = _OBJ_PG); nothing catch e; e end))
+    @test occursin("of b2 and b3 name each other", msg2)
+    @test !occursin("b4", msg2)
   end
 end
 
@@ -881,22 +772,16 @@ end
 # join — every row of the joined table paired with every matched base row, with no error and no
 # warning (the #44 Cartesian warning covers CROSS entries only).
 #
-# Two routes reach it, and the second is the reason the guard could not simply live in #435's branch:
-#
-#   1. no predicate ever names the alias, and none relocates away either;
-#   2. the predicate names a deep path that `values(...)` has ALREADY built, so it sits at a LOWER
-#      index, nothing relocates, #435 never fires — and the unconstrained join renders.
-#
-# Route 2 is what made the loud outcome depend on projection order rather than on whether the join
-# was constrained, which is the actual defect.
+# The check used to read the rendered ON clause for `"<alias>".`. Since #982 binding decides it from
+# the conditions — a `Joined("<alias>", …)` somewhere in them — before anything renders, so a
+# projection that builds a path first can no longer change the outcome.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "cjoin_on refuses an ON clause that never names its own alias (#448)" begin
   for (backend, conn) in (("PostgreSQL", _OBJ_PG), ("SQLite", _OBJ_SL))
     @testset "$backend" begin
 
-      # ── route 1: nothing names the alias, nothing relocates ───────────────
-      # `"note"` is a column of the BASE model, so this predicate resolves against the base alias and
-      # stays put. #435 cannot fire — extras is not empty.
+      # ── a base column only ────────────────────────────────────────────────
+      # `"note"` is a column of the BASE model: nothing in this ON clause names `b2`.
       q1 = OBJ.Cj_child.objects
       q1.values("note")
       q1.cjoin_on("Cj_parent", alias = "b2", on = ["note" => "Z"])
@@ -910,22 +795,16 @@ end
       @test occursin("never references", msg1)
       @test occursin("b2", msg1)
       @test occursin("#448", msg1)
-      # It must not be MISTAKEN for #435's relocation story — the remedies differ. It names #435 on
-      # purpose, to say which case this is not, so the discriminator is the claim rather than the
-      # bare number: it must never assert that anything was relocated.
-      @test occursin("This is not #435's case", msg1)
-      @test !occursin("resolved onto", msg1)
-      # A user-writable shape is never reported as an internal fault (same rule as #424/#435).
-      # A user-writable shape is never PormG's fault to disclaim. The needle is the internal-error
-      # IDIOM ("please report it", `_emsg`'s wording), not the bare word "report" — this message
-      # legitimately says the DATABASE is what reports the failure.
+      # The remedy names the typed handle — `F("b2.<column>")` was retired by #481.
+      @test occursin("Joined(\"b2\", \"<column>\")", msg1)
+      @test !occursin("F(\"b2.", msg1)
+      # A user-writable shape is never reported as an internal fault (same rule as #424).
       @test !occursin("internal", lowercase(msg1))
       @test !occursin("please report", lowercase(msg1))
 
-      # ── route 2: the projected deep path, which used to RENDER ────────────
-      # Identical predicate to the #435 fixture above; the only difference is that `values(...)`
-      # projects the path, so its joins are built first and nothing relocates. Before #448 this
-      # rendered `INNER JOIN "cj_parent" AS "b2" ON "Tb_2"."code" = ?` — an unconstrained join.
+      # ── a projected path: the outcome no longer depends on projection ─────
+      # Before #448 this rendered `INNER JOIN "cj_parent" AS "b2" ON "Tb_2"."code" = ?`; before #982
+      # its unprojected twin raised #435 instead. Both are #448's now.
       q2 = OBJ.Cj_child.objects
       q2.values("note", "parent__grandparent__code")
       q2.cjoin_on("Cj_parent", alias = "b2", on = ["parent__grandparent__code" => "Z"])
@@ -939,11 +818,10 @@ end
       @test occursin("never references", msg2)
       @test occursin("#448", msg2)
 
-      # ── discrimination: the alias must be matched as an ALIAS, not a substring ──
-      # `Cj_grand` has a column `code`; aliasing the join `code` means the ON clause contains the
-      # text `code` twice over without ever qualifying THIS join. A bare `occursin(alias, on_clause)`
-      # test would call this constrained and let the unconstrained join through — the same trap
-      # Phase 1b's trailing-dot form exists for.
+      # ── an alias spelled like a column ────────────────────────────────────
+      # `Cj_grand` has a column `code`; aliasing the join `code` puts the text `code` in the ON
+      # clause without ever naming THIS join. The text check needed a trailing dot to tell them apart;
+      # the typed check never sees the text.
       q3 = OBJ.Cj_child.objects
       q3.values("note", "parent__grandparent__code")
       q3.cjoin_on("Cj_parent", alias = "code", on = ["parent__grandparent__code" => "Z"])
@@ -964,7 +842,6 @@ end
       @test occursin("JOIN \"cj_parent\" AS \"b2\" ON ", ok_sql)
 
       # ── control: constrained via a column whose NAME matches the alias ────
-      # The mirror of the discrimination case — here the alias IS named, qualified, so it passes.
       ok2 = OBJ.Cj_child.objects
       ok2.values("note")
       ok2.cjoin_on("Cj_parent", alias = "sku", on = [Joined("sku", "sku") == F("note")])
@@ -973,5 +850,3 @@ end
     end
   end
 end
-
-

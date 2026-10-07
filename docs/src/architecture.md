@@ -194,7 +194,8 @@ characterizations worth stating plainly.
   skill's maintenance checklist). The subtler one: a bucket is chosen by the builder phase that binds
   a value, while correctness depends on where that value's `?` is **emitted** — and those diverge
   whenever a fragment renders somewhere other than its own clause. Three bugs came out of that gap —
-  #421 a relocated fragment and #432 a nested render, both SQLite-only, plus #441 a discarded
+  #421 a relocated fragment (unrepresentable since #982: a join condition renders on its own row,
+  in emission order) and #432 a nested render, both SQLite-only, plus #441 a discarded
   projection, whose *parameter* desync was SQLite-only but which dropped the column itself on **both**
   backends. All three were silent. A nested render now re-emits its values as one clause-ordered run at its own marker
   position (`nested_parameter_mark` / `detach_nested_run!`). All four such sites in the **read**

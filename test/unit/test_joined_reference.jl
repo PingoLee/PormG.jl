@@ -275,8 +275,8 @@ for (backend, conn) in (("PostgreSQL", _JN_PG), ("SQLite", _JN_SL))
     # ─────────────────────────────────────────────────────────────────────────
     # Third-table references (#174 edge 2, closed by #481)
     # `_resolve_cjoin_on_alias_column` matched only the SINGLE owning entry, so one cjoin_on's ON
-    # could not name another's alias. A handle resolves from `alias_join` by alias, so it can — and
-    # the #449 declaration-order rule then decides which join carries the predicate.
+    # could not name another's alias. A handle resolves from `alias_join` by alias, so it can, and
+    # since #982 the alias it names is emitted first whichever was declared first.
     # ─────────────────────────────────────────────────────────────────────────
     @testset "one cjoin_on may reference another's alias (#174 edge 2)" begin
       q = JN.Jn_result.objects
@@ -290,18 +290,18 @@ for (backend, conn) in (("PostgreSQL", _JN_PG), ("SQLite", _JN_SL))
       @test findfirst("AS \"d1\"", sql).start < findfirst("AS \"d2\"", sql).start
     end
 
-    @testset "a forward reference still relocates, and #435 still fires (#481)" begin
-      # Declaring the pair the other way round makes d1's only predicate name a join emitted AFTER
-      # it. Phase 1b moves that predicate onto d2, which leaves d1 with no ON clause of its own —
-      # the #435 refusal, unchanged by the handle. Pinned because the guards work by substring-
-      # matching the rendered `"alias".` text, which the handle deliberately keeps byte-identical.
+    @testset "a forward reference is emitted after the alias it names (#982)" begin
+      # Declaring the pair the other way round makes d1's predicate name a join declared AFTER it.
+      # Before #982 Phase 1b moved that predicate onto d2 and #435 refused the bare d1. Binding now
+      # reads the handle, so d2 is emitted first and d1's ON clause renders as written.
       q = JN.Jn_result.objects
       q.cjoin_on("Jn_driver", alias = "d1", on = [Joined("d1", "surname") == Joined("d2", "surname")])
       q.cjoin_on("Jn_driver", alias = "d2", on = [Joined("d2", "id") == F("driver")])
       q.values("points")
-      err = _jn_catch(() -> _jn_sql(q; conn = conn))
-      @test err isa PormG.QueryBuildError
-      @test occursin("d1", _jn_no_ansi(sprint(showerror, err)))
+      sql = _jn_sql(q; conn = conn)
+      @test occursin("INNER JOIN \"jn_driver\" AS \"d2\" ON (\"d2\".\"id\" = \"Tb\".\"driver\")", sql)
+      @test occursin("INNER JOIN \"jn_driver\" AS \"d1\" ON (\"d1\".\"family_name\" = \"d2\".\"family_name\")", sql)
+      @test findfirst("AS \"d2\"", sql).start < findfirst("AS \"d1\"", sql).start
     end
 
     @testset "an ON clause that never names its own alias is still refused (#448)" begin
@@ -532,7 +532,9 @@ end
   shapes = (
     ("in a cjoin_on ON clause", () -> begin
        q = JN.Jn_result.objects
-       q.cjoin_on("Jn_driver", alias = "d", on = [F("d.surname") == F("note")])
+       # The handle beside the dotted string keeps the ON clause constrained, so what raises is the
+       # dotted string itself, not #448's "never references" (which binding checks first, #982).
+       q.cjoin_on("Jn_driver", alias = "d", on = [Joined("d", "id") == F("driver"), F("d.surname") == F("note")])
        q.values("points"); _jn_sql(q) end),
     ("in a filter", () -> begin
        q = _jn_query(); q.values("id"); q.filter(F("d.surname") == F("note")); _jn_sql(q) end),

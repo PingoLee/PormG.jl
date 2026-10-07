@@ -1359,12 +1359,10 @@ function _get_select_query(v::String, instruc::SQLInstruction; _as::Union{Nothin
   if size(parts, 1) > 1
     return _build_row_join(parts, instruc)
   else
-    quoted_alias = quote_identifier(instruc.alias, instruc.connection)
-    
     # Fast path: allow "*" to select all main-table columns seamlessly.
     # We intercept this before _solve_field to prevent the missing-field validation error.
     if v == "*"
-      return string(quoted_alias, ".*")
+      return string(quote_identifier(instruc.alias, instruc.connection), ".*")
     end
     
     # #474: `v` is a column of the BASE model here, so the base-model half of the namespace.
@@ -1373,7 +1371,7 @@ function _get_select_query(v::String, instruc::SQLInstruction; _as::Union{Nothin
       # UnknownFieldError below, not die here with a raw KeyError (audit finding).
       memo_field!(instruc, memo_key(:base, _as), instruc.object.model.fields[v])
     end
-    return string(quoted_alias, ".", _solve_field(v, instruc.object.model, instruc))
+    return _column_sql(instruc, instruc.alias, _solve_field(v, instruc.object.model, instruc))   # #985
   end
 end
 function _get_select_query(v::SQLField, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
@@ -2066,8 +2064,7 @@ function _get_filter_query(v::String, instruc::SQLInstruction)
   if size(parts, 1) > 1
     return _build_row_join(parts, instruc, as=false)
   else
-    quoted_alias = quote_identifier(instruc.alias, instruc.connection)
-    return string(quoted_alias, ".", _solve_field(v, instruc.object.model, instruc))
+    return _column_sql(instruc, instruc.alias, _solve_field(v, instruc.object.model, instruc))   # #985
   end
 end
 
@@ -2082,9 +2079,9 @@ end
 # the moment a projection resolves the row may not exist yet — but the declaration always does.
 # Rendering needs only the alias and the target model, both of which the config carries.
 #
-# The rendered text is byte-identical to what the dotted-string path produced, which is what keeps
-# the #435 relocation guard, the #448 self-reference guard and Phase 1b working: all three
-# substring-match `"alias".` in the emitted ON clause.
+# The rendered text is byte-identical to what the dotted-string path produced. Nothing reads it back
+# any more: the #448 self-reference check and the alias ordering read the handle itself, at binding
+# (#982), where #435's relocation and Phase 1b used to substring-match `"alias".` in the ON clause.
 function _resolve_joined(ref::JoinedReference, instruc::SQLInstruction)::String
   _reject_joined_desc(ref, "a projection or predicate")
   # A `__@` segment is one of two different things, and they end differently.
@@ -2126,8 +2123,8 @@ function _resolve_joined(ref::JoinedReference, instruc::SQLInstruction)::String
   # `tab_field_cache` performs for a base-model column), under the `:joined` namespace so an
   # identically spelled field path or CTE reference cannot read or claim the entry.
   memo_field!(instruc, memo_key(ref), target_model.fields[ref.path])
-  return string(quote_identifier(ref.alias, instruc.connection), ".",
-                safe_column_identifier(Models.field_db_column(target_model.fields[ref.path], ref.path), instruc.connection))
+  return _column_sql(instruc, ref.alias,   # #985
+                     safe_column_identifier(Models.field_db_column(target_model.fields[ref.path], ref.path), instruc.connection))
 end
 function _get_filter_query(v::SQLTypeFunction, instruc::SQLInstruction)
   # A function in a condition renders as it does projected: a filter-position function is an operand
@@ -2142,7 +2139,10 @@ function _get_filter_query(v::OuterRefObject, instruc::SQLInstruction)
   instruc.outer === nothing && throw(QueryBuildError("OuterRef(\"$(v.field_name)\") can only be resolved while building a correlated subquery such as Exists(subquery)."))
   outer = instruc.outer
   column = _resolve_outer_ref_field_name(v, outer)
-  sql = _get_filter_query(column, outer)
+  # #985: an `OuterRef` resolves in the outer statement, so inside an ON clause it is checked there as
+  # a right-side column — whichever side of its comparison the subquery sits on (#962's rule). The
+  # subquery's own columns render on its own instruction, outside the ON clause's scope.
+  sql = _on_join_right(() -> _get_filter_query(column, outer), outer)
   # #194: this is the ONE place an OuterRef becomes SQL — `_resolve_outer_ref_field_name` has a
   # single caller and `_get_select_query(::OuterRefObject)` delegates straight here — so recording
   # the reference here cannot miss one that renders. Resolving against `outer` is also what makes
@@ -2210,7 +2210,18 @@ function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
   # with its value in `:select`. `_alias_lhs` (build_query.jl) applies the same rule to the
   # PROJECTION behind an alias key and renders it afresh when it binds; any other hit is returned
   # as it was.
-  if cached !== nothing && v.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject}
+  # #985: not inside an ON clause, though. Memoized text was rendered outside the clause's scope, so it
+  # never passed `_record_join_column`; there a projection alias renders its source afresh
+  # (`_alias_lhs(…; fresh = true)`), and a path or handle falls through to the render below, which
+  # resolves the same row — so the same text — and is checked on the way. It writes no memo entry
+  # (`cached` is set), so the first render stays the one every reader memoized against (#404).
+  reuse = cached !== nothing && v.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject}
+  if reuse && instruc.scope.join_hop !== nothing
+    fresh = _alias_lhs(key, cached, instruc; fresh = true)
+    fresh === nothing || return fresh
+    reuse = false
+  end
+  if reuse
     return _alias_lhs(key, cached, instruc)
   else
     v_copy = deepcopy(v)
@@ -2346,7 +2357,7 @@ function _render_network_operator(v::SQLTypeOper, column::String, operand_field,
                       "or CIDRField column, and $(subject) is not one."))
   lookup = "$(label)__@$(op)"
   ph = if isa(v.values, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
-    _get_filter_query(v.values, instruc)
+    _on_join_right(() -> _get_filter_query(v.values, instruc), instruc)   # #985: the right side
   elseif isa(v.values, Union{SQLType,SubqueryObject,SQLObjectHandler})
     throw(FilterError("Error in filter '$(lookup)': the @$(op) lookup takes a value or a column " *
                       "(F(\"…\")), not this expression."))
@@ -3046,7 +3057,7 @@ function _sqlite_interval_alias_comparison(v::SQLTypeOper, instruc::SQLInstructi
   source = _projected_interval_source(name, instruc)
   source === nothing && return nothing
   lhs, lhs_ms = _render_interval_ms(source.field, instruc; _as = source._as)
-  rhs, rhs_ms = _render_interval_ms(v.values, instruc)
+  rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)   # #985: the right side
   if !(lhs_ms && rhs_ms)
     lhs_ms && (lhs = Dialect._sqlite_interval_text(lhs))
     rhs_ms && (rhs = Dialect._sqlite_interval_text(rhs))
@@ -3126,6 +3137,10 @@ _lookup_formatter(field::PormGField, operator::AbstractString) = _lookup_formatt
 
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   @pormg_debug false
+  # #985: inside an ON clause a comparison renders its column as the LEFT side and its value, below,
+  # through `_on_join_right`. Re-entered once under the new side; a no-op everywhere else.
+  side = _join_side_change(instruc, :left)
+  side === nothing || return with_scope(() -> _get_filter_query(v, instruc), instruc; join_side = side)
   # #352/#373: rewrite a non-sargable date-bucket comparison (to_char/EXTRACT on the column) into a
   # plain range/comparison directly on the column, so an index on the column — and the planner's
   # selectivity estimate — both apply. Covers joined paths as well as bare ones; see
@@ -3183,22 +3198,23 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # rendered once either way, to the same SQL `_get_filter_query` gives it when it has no
     # millisecond form, so the fallback keeps the text comparison with the same bindings.
     if v.values isa FExpression && v.operator in _ORDERING_OPERATIONS && _is_sqlite_duration_column(v, instruc)
-      rhs, rhs_ms = _render_interval_ms(v.values, instruc)
+      rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)
       return _render_column_rhs(rhs_ms ? Dialect._sqlite_interval_ms(column) : column, v.operator, rhs, instruc)
     end
     # F expressions are safe since they reference model fields; a CTE handle (#444) is the same
     # thing scoped to a CTE — `filter("raceid" => CTE("r91", "raceid"))` is a column comparison,
     # never a bound value.
-    placeholders = _get_filter_query(v.values, instruc)
+    placeholders = _on_join_right(() -> _get_filter_query(v.values, instruc), instruc)
     return _render_column_rhs(column, v.operator, placeholders, instruc)
   elseif isa(v.values, SQLTypeFunction)
     # Case/When and other SQL function expressions as filter RHS
-    placeholders = _get_filter_query(v.values, instruc)
+    placeholders = _on_join_right(() -> _get_filter_query(v.values, instruc), instruc)
     return _render_column_rhs(column, v.operator, placeholders, instruc)
   elseif isa(v.values, SubqueryObject)
     # #926: a scalar subquery, `"grid" => Subquery(…)`. `column` rendered first, so its markers number
     # ahead of the subquery's — the text order (#586). The filter-position render: no #194 recording.
-    return _render_column_rhs(column, v.operator, _get_filter_query(v.values, instruc), instruc)
+    return _render_column_rhs(column, v.operator,
+                              _on_join_right(() -> _get_filter_query(v.values, instruc), instruc), instruc)
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && v.column.field.formatter !== nothing
     @pormg_debug false
     # #576: this is the arm `filter("happened__@month" => "abc")` lands in once the sargable rewrite

@@ -232,7 +232,7 @@ const CTEDict = Dict{String,Union{SQLObjectHandler,PormGModel,Pair,String,Nothin
 # through `_flag_to_many!`, which replaces the slot in `row_join`. Nothing holds a row across either.
 #
 # The two slots every kind shares by name — `alias_a` / `alias_b`, and `a` / `b` — are read
-# generically by the alias allocator, the dedup, the relocation pass and the UPDATE-FROM renderer, so
+# generically by the alias allocator, the dedup, the JOIN renderer and the UPDATE-FROM renderer, so
 # they are spelled the same in all four structs on purpose.
 abstract type JoinRow end
 
@@ -397,6 +397,12 @@ growing (`Coalesce(Subquery)`, `F(...) == Subquery`, a `When` condition, …), a
 - `group_key` — the expression rendering now is itself a GROUP BY key, whole: a projection the
   outer query groups by position, or an ORDER BY term it groups by text. A subquery inside it is
   evaluated per input row to form the key, so its correlation needs no grouped column.
+- `join_hop`, `join_side`, `join_left`, `join_right` (#985) — the same move for a different
+  question: while a join's ON clause renders, which rows may each column it names belong to. The
+  row being joined sets the hop and both alias sets; each comparison sets the side its operands
+  render on, and a comparison nested inside a right side stays right (#975). Every column reaches
+  `_column_sql`, which checks it — so a node type the build-time walkers do not know is caught here
+  instead of naming the wrong row in valid SQL.
 
 Prior art: PostgreSQL's parser tracks the same thing (`ParseState.p_expr_kind`), and its
 `check_ungrouped_columns` does not descend into same-level aggregate arguments.
@@ -413,6 +419,17 @@ hand it the inner query's.
   phase::Symbol = :group
   label::OptionalString = nothing
   group_key::Bool = false
+  # #985 — set only while a join's ON clause renders (`build_row_join_sql_text`): the alias of the
+  # row the clause belongs to, the side of the comparison being rendered (`:left`, `:right`, or
+  # `:none` outside any comparison), and the aliases each side may name. `_record_join_column` reads
+  # them where a model column becomes `"alias"."col"` (`_column_sql`), which is #194's move applied to
+  # "which row does this column name": recorded at resolution, not walked.
+  # Tuples, not vectors: a scope is a VALUE (`with_scope` restores by identity, and two default
+  # scopes must compare equal), and a vector field would make every fresh one distinct.
+  join_hop::OptionalString = nothing
+  join_side::Symbol = :none
+  join_left::Tuple{Vararg{String}} = ()
+  join_right::Tuple{Vararg{String}} = ()
 end
 
 _with_scope(s::RenderScope; kw...) =
@@ -464,6 +481,12 @@ end
   # object keeps them as written; a hop reads them from here (`_finish_hop!`).
   join_conditions::Dict{String,Vector{FilterType}} = Dict{String,Vector{FilterType}}()
   join_type_overrides::Dict{String,String} = Dict{String,String}()
+  # #982: the `cjoin_on` half of the same binding (`_bind_cjoin_on_conditions!`). `cjoin_on_paths` is
+  # every relation path an alias's ON clause names, as the segments `build()` materializes BEFORE the
+  # alias rows, so rendering that ON clause adds no join; `cjoin_on_order` is the order the alias rows
+  # are emitted in — every alias after the aliases its ON clause names, declaration order otherwise.
+  cjoin_on_paths::Vector{Vector{String}} = Vector{String}[]
+  cjoin_on_order::Vector{String} = String[]
   # array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
   tab_field_cache::Dict{MemoKey,PormGField} = sizehint!(Dict{MemoKey,PormGField}(), 12) # cache to be used in join query (#474: keyed by MemoKey)
   # #27: the membership set of resolved JSON-lookup paths (e.g. "payload__driver"). Added when the
@@ -757,11 +780,11 @@ mutable struct SQLObjectQuery <: SQLObject
   custom_join::OrderedCollections.OrderedDict{String,PathJoin}
   # The ALIAS namespace (#484): `cjoin_on` entries, keyed by the alias the caller declared.
   #
-  # ORDERED, and load-bearing (#449). `build()` materializes row_join by ITERATING this container,
-  # so its order decides which of two `cjoin_on` joins is emitted first — and Phase 1b relocates an
-  # ON predicate onto the LAST join it names. Under a plain `Dict` that order came from hashing the
-  # ALIAS STRINGS, so renaming an alias for readability could flip a working query into a
-  # QueryBuildError, or the reverse, while reversing the DECLARATION changed nothing. Same reason
+  # ORDERED, and load-bearing (#449). Binding emits the aliases in dependency order and breaks every
+  # tie by iterating this container (`_cjoin_on_emission_order`, #982), so its order decides which of
+  # two independent `cjoin_on` joins is emitted first — and with it the generated-alias numbering.
+  # Under a plain `Dict` that order came from hashing the ALIAS STRINGS, so renaming an alias for
+  # readability changed the statement while reversing the DECLARATION changed nothing. Same reason
   # `insert` above is ordered (#97).
   alias_join::OrderedCollections.OrderedDict{String,AliasJoin}
   parameters::Union{Nothing,AbstractPormGParam}
@@ -1653,7 +1676,7 @@ Inside a `cjoin_on` `on` list the two sides of the join are named by how you wri
 | `Joined("d", "col")` | the **joined copy** declared under `alias = "d"` |
 
 A reference may name **another** `cjoin_on`'s alias, which is how a join correlates against a third
-table; the emission-order rule in [Custom Joins](read/custom_joins.md) still applies. Operator
+table, in either declaration order: the alias it names is emitted first (#982). Operator
 suffixes work in `filter(...)`, so a comparison against a literal on the joined side is an ordinary
 pair — `filter(Joined("d", "points__@gte") => 3)`.
 

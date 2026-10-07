@@ -762,6 +762,10 @@ end
 # relation, so the answer cannot depend on call order (the #434 lesson `_on` records). The walk below
 # runs over each path's BOUND conditions (`_bind_join_conditions!`, #977). Only the RIGHT side is
 # walked: binding lowered the left side onto the path (`_prefix_join_filter`).
+#
+# #985 made this walk the HINT, not the guarantee: a right side it misses still renders through
+# `_column_sql`, and the recorder refuses the column there (`_record_join_column`). It stays because
+# it refuses at binding, naming the relation the caller wrote — before that relation's join exists.
 
 # One condition: find its right side. A `Q`/`Qor` holds conditions; an `OperObject` keeps its right side
 # in `values`; a comparison `FExpression` in `operand`. An `Exists(...)` contributes its `OuterRef`s.
@@ -843,54 +847,75 @@ _is_rhs_expression(x) = x isa Union{FExpression,FObject,SQLField,OperObject,Subq
 #
 # `f_slot` says the String came from an `F(...)`, so the error can show the caller the token they
 # wrote — `F("driverid__x")` or a bare `"driverid__x"` (#492's "spelled" convention).
-function _off_path_rhs_paths(x, q::SQLObject, path::String, depth::Int; f_slot::Bool = false)
+_off_path_rhs_paths(x, q::SQLObject, path::String, depth::Int; f_slot::Bool = false) =
+  _each_condition_column(x, depth; f_slot = f_slot) do column, spelled
+    column isa String && _check_rhs_relation(column, q, path; spelled = spelled)
+  end
+
+# The walk itself, shared by #962's check above and by `cjoin_on`'s binding (#982,
+# `_bind_cjoin_on_conditions!`): `visit(column, spelled)` once per column reference — a String path
+# (an `OuterRef`'s too, which resolves in this statement) or a `Joined(alias, col)` handle. Inside a
+# value every column is a column of the statement, whichever side of its own comparison it sits on,
+# which is exactly the reading both callers need: #962 checks each against the path, and a
+# `cjoin_on` condition has no left side bound to a hop at all.
+function _each_condition_column(visit::Function, x, depth::Int; f_slot::Bool = false)
   depth > 32 && return nothing
   if x isa String
-    _check_rhs_relation(x, q, path; spelled = f_slot ? "F(\"$(x)\")" : "\"$(x)\"")
+    visit(x, f_slot ? "F(\"$(x)\")" : "\"$(x)\"")
+  elseif x isa JoinedReference
+    visit(x, "Joined(\"$(x.alias)\", \"$(x.path)\")")
   elseif x isa FExpression
-    _off_path_rhs_paths(x.field_name, q, path, depth + 1; f_slot = true)
-    _off_path_rhs_paths(x.column, q, path, depth + 1; f_slot = true)
-    _off_path_rhs_paths(x.operand, q, path, depth + 1)
+    _each_condition_column(visit, x.field_name, depth + 1; f_slot = true)
+    _each_condition_column(visit, x.column, depth + 1; f_slot = true)
+    _each_condition_column(visit, x.operand, depth + 1)
   elseif x isa FObject
     x.aggregate && return nothing
-    _off_path_rhs_paths(x.column, q, path, depth + 1)
+    _each_condition_column(visit, x.column, depth + 1)
     for v in values(x.kwargs)
       # #977: a subquery in a `then`/`else` too — `_off_path_nested_rhs` already read it there, and
       # its `OuterRef` escaped this walk only.
-      v isa Union{SQLTypeFunction,FExpression,SubqueryObject} && _off_path_rhs_paths(v, q, path, depth + 1)
+      v isa Union{SQLTypeFunction,FExpression,SubqueryObject} && _each_condition_column(visit, v, depth + 1)
     end
   elseif x isa Union{QObject,QorObject}
     # #977: a `When` over a `Q(...)` holds its conditions here. Inside a right-side value every column
     # is a right-side column, whichever side of its own comparison it sits on.
-    for v in (x isa QObject ? x.filters : x.or); _off_path_rhs_paths(v, q, path, depth + 1); end
+    for v in (x isa QObject ? x.filters : x.or); _each_condition_column(visit, v, depth + 1); end
   elseif x isa ExistsObject
-    _off_path_outer_refs(getfield(x.query, :object), q, path)
+    _each_outer_ref(visit, getfield(x.query, :object))
   elseif x isa SQLField
-    _off_path_rhs_paths(x.field, q, path, depth + 1)
+    _each_condition_column(visit, x.field, depth + 1)
   elseif x isa OperObject
     # A `When` inside a function: its column is a column, its `values` literals unless an expression.
-    _off_path_rhs_paths(x.column, q, path, depth + 1)
-    _is_rhs_expression(x.values) && _off_path_rhs_paths(x.values, q, path, depth + 1)
+    # A `Joined` handle on the right of a pair is a column too (#982 reads it; #962 never sees one,
+    # because a path join's conditions refuse the handle at the call).
+    _each_condition_column(visit, x.column, depth + 1)
+    (_is_rhs_expression(x.values) || x.values isa JoinedReference) &&
+      _each_condition_column(visit, x.values, depth + 1)
   elseif x isa SubqueryObject
-    _off_path_outer_refs(getfield(x.query, :object), q, path)
+    _each_outer_ref(visit, getfield(x.query, :object))
   elseif x isa SQLObjectHandler   # an `@in` subquery, passed as the query itself
-    _off_path_outer_refs(getfield(x, :object), q, path)
+    _each_outer_ref(visit, getfield(x, :object))
   elseif x isa AbstractVector && !(x isa AbstractVector{UInt8})
-    for v in x; _off_path_rhs_paths(v, q, path, depth + 1); end
+    for v in x; _each_condition_column(visit, v, depth + 1); end
   end
   return nothing
 end
 
 # The `OuterRef`s of one subquery, from every slot that can hold an expression. Not descended: a nested
 # subquery, whose own `OuterRef`s name ITS enclosing query (the inner one), not this statement.
-function _off_path_outer_refs(inner::SQLObject, q::SQLObject, path::String)
+_off_path_outer_refs(inner::SQLObject, q::SQLObject, path::String) =
+  _each_outer_ref(inner) do column, spelled
+    _check_rhs_relation(column, q, path; spelled = spelled)
+  end
+
+function _each_outer_ref(visit::Function, inner::SQLObject)
   refs = String[]
   slots = Any[inner.values, inner.filter, [o.field for o in inner.order]]
   for cfg in values(inner.custom_join); push!(slots, cfg.filters); end
   for cfg in values(inner.alias_join); push!(slots, cfg.filters); end
   for s in slots; _collect_outer_refs!(refs, s, 0); end
   for r in refs
-    _check_rhs_relation(r, q, path; spelled = "OuterRef(\"$(r)\")")
+    visit(r, "OuterRef(\"$(r)\")")
   end
   return nothing
 end

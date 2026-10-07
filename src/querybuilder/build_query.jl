@@ -815,17 +815,22 @@ _resolved_contains_agg(node, instruc::SQLInstruction)::Bool =
 #
 # Callers must have switched to the clause the text prints in — the fresh render binds, and it must
 # bind there.
-function _alias_lhs(alias::MemoKey, cached, instruc::SQLInstruction)
-  alias[1] === :base || return cached.field
-  _projection_output_name(cached) == alias[2] || return cached.field
+#
+# #985: `fresh = true` is the ON-clause reading. A projection alias renders its source afresh whatever
+# its kind, so every column in it reaches `_record_join_column`; anything that is not an alias answers
+# `nothing`, and the caller renders the column itself.
+function _alias_lhs(alias::MemoKey, cached, instruc::SQLInstruction; fresh::Bool = false)
+  not_alias = fresh ? nothing : cached.field
+  alias[1] === :base || return not_alias
+  _projection_output_name(cached) == alias[2] || return not_alias
   source = _projected_source(alias, instruc)
   # No source (the memo was written by a non-projection path) or a kind that binds nothing: the
   # memoized text is safe, and reusing it keeps the common case byte-identical.
-  source === nothing && return cached.field
+  source === nothing && return not_alias
   # #707: a `Value(...)` alias IS a binding — its memoized text is the SELECT's own `?`. Render the
   # literal again, so it binds in the clause it prints in (`WHERE ? = ?`, two values for two markers).
   source isa SQLTypeText && return _get_select_query(source, instruc)
-  source.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject} && return cached.field
+  !fresh && source.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject} && return cached.field
   return _get_select_query(source.field, instruc, _as = source._as)
 end
 
@@ -2001,388 +2006,47 @@ function _row_alias_leaf(v::SQLTypeOper, instruc::SQLInstruction)
   return (key, cached)
 end
 
-# One resolved cjoin ON condition: the rendered SQL fragment and the positional parameter values it
-# bound. The two MUST travel together (#421). Phase 1b below can move a fragment onto a different
-# join, and on a positional backend a value's INDEX in the `:join` bucket IS its binding — so a
-# fragment whose text moved while its values stayed put bound its neighbour's value. Silently wrong
-# rows on SQLite; PostgreSQL was always correct, because `$N` numbering travels with the text.
-struct OnExtra
-  sql::String
-  params::Vector{Any}
-end
-
+# The JOIN clauses, one row at a time in `row_join` order. Each row's ON conditions render where the
+# row is emitted, so on a positional backend their values bind in the order their markers appear
+# (#421) by construction: a condition renders in exactly one place, and nothing it renders can land on
+# another row.
+#
+# That used to be false. A `cjoin_on` condition naming a path (`"driverid__code"`) joined that path
+# WHILE it rendered, after its own row. So every condition was pre-rendered first (Phase 1), the SQL
+# text was scanned for each alias and a forward reference moved onto the later join it named
+# (Phase 1b), and each fragment carried its own values so SQLite still bound in text order
+# (`OnExtra`). Binding retired all three — #977 for path joins, #982 for `cjoin_on`: every row a
+# condition can name is built before this runs, and `_assert_condition_added_no_join` raises when one
+# is not, for every row kind.
+#
+# Context: every value lands in `:join`, set per row. An `Exists(...)` runs a nested build whose own
+# join render switches context ungated, and `_build_exists_query` restores the ambient one in a
+# `finally`. A subquery consumed by `@in`, `Subquery(...)` or `Exists(...)` may not declare its own CTE
+# (#433): that was the one shape whose values went to `:cte` while its markers sat in this text.
 function build_row_join_sql_text(instruc::SQLInstruction)
   @pormg_debug false
-
-  # --- Phase 1: pre-resolve ON conditions -----------------------------------
-  # Filter resolution for deep paths (e.g. "raceid__circuitid__country") may
-  # create additional join entries in instruc.row_join via _build_row_join.
-  # By pre-resolving with an index-based loop we process newly created entries
-  # in order and store the generated SQL fragments for Phase 2.
-  on_clause_extras = Dict{Int, Vector{OnExtra}}()
-  i = 1
-  while i <= length(instruc.row_join)
-    value = instruc.row_join[i]
-    set_context!(instruc, :join)
-
-    on_conditions = _on_conditions(value)
-    # `!isempty`, not "has the slot" (#487): a `cjoin_on` declared with no predicates carries an
-    # EMPTY vector, and recording an empty extras list for it — or for every CTE row, which has none
-    # by construction — would make Phase 1c below refuse every `CrossJoin` and Phase 2 misreport
-    # #435's "every predicate relocated" case as this one.
-    if !isempty(on_conditions)
-      original_alias = instruc.alias
-      extras = OnExtra[]
-
-      for condition in on_conditions
-        # #421: lift the values this condition binds straight back out of the bucket. Phase 1b may
-        # still move the fragment, so nothing resolved here has a final clause position yet; Phase 2
-        # puts the values back at the point of emission.
-        #
-        # The mark/detach pair captures exactly this condition's run because the bucket it marks is
-        # the bucket every value lands in. Being precise about WHY, since the obvious phrasing —
-        # "nothing reachable from here switches context" — is false:
-        #
-        #   - The plain shapes (eq, @range, @contains, Q, Qor, F) never switch context at all. `@in`
-        #     does when its right side is a SUBQUERY that itself declares a `.with(...)`: that renders
-        #     through `build_cte_clause`, which switches to `:cte` and binds there. Both `?` end up in
-        #     the JOIN text while both values end up in `:cte`, so the mark (holding the `:join`
-        #     vector) correctly lifts NOTHING and the OnExtra carries markers with no params.
-        #     >> CLOSED BY #433, not here. This described a live hole: an ON list of
-        #        `["id__@gt" => 7, "parent__@in" => <subquery with a .with(...)>]` bound SQLite
-        #        ["CTEVAL","SUBVAL",7] against PostgreSQL's [7,"CTEVAL","SUBVAL"], because `:cte`
-        #        flattens before `:join` while the text order is the reverse. Different root cause
-        #        from #421 (bucket choice, not fragment movement); `OnExtra` neither caused nor
-        #        repaired it. #433 refuses the shape — a subquery consumed by `@in`,
-        #        `Subquery(...)` or `Exists(...)` may no longer declare its own CTE. Note WHERE:
-        #        such an ON list is still ACCEPTED at declaration and refused at build/render time,
-        #        so the desynchronizing input can be constructed but never rendered. Kept as a
-        #        record of WHY the refusal exists: if that guard is narrowed, this misbind returns.
-        #   - `Exists(...)` — which a `cjoin_on` ON expression DOES accept, though a keyed cjoin's
-        #     `filters` reject it — runs a NESTED build, and that build's own join render calls
-        #     `set_context!(:join)` UNGATED even under `set_contexts=false`. So context does move.
-        #     It is harmless here for a specific reason: the ambient context in this loop already IS
-        #     `:join`, and `_build_exists_query` restores the ambient one in a `finally` on both the
-        #     normal and the throwing exit. The invariant is therefore "the same bucket vector", not
-        #     "no switching happened" — which is exactly why the mark holds the bucket VECTOR rather
-        #     than the context symbol. A future shape that switched to a DIFFERENT bucket and failed
-        #     to restore it detaches nothing here instead of lifting an unrelated run.
-        #   - Nothing reachable from `_build_row_join` binds a parameter: `build_joins.jl` has no
-        #     `add_parameter!` at all, and `ctes.jl`'s only binding site is `build_cte_clause`, which
-        #     JOIN RESOLUTION never calls (its callers are in `execution.jl`, ahead of `build()`).
-        #     Note the careful scope — `build_cte_clause` IS reachable from `_get_filter_query`, just
-        #     not from join resolution: that is the `@in`-over-a-CTE-subquery case above.
-        #
-        # KNOWN LIMIT, neither caused nor repaired here: inside an `Exists(...)`, the nested query's
-        # own ON and WHERE parameters are already bound in the wrong order relative to its rendered
-        # text (same root cause — the ungated `:join` switch — but on the subquery's own values).
-        # `OnExtra` carries that run faithfully, preserving whatever order it arrived in.
-        _guard_no_aggregate_on_condition(condition, value, instruc)   # #917
-        mark = parameter_mark(instruc)
-        rows_before = length(instruc.row_join)
-        condition_sql = _get_filter_query(condition, instruc)
-        # #977: a path join's condition was bound onto its hop before anything rendered, so it can
-        # only name rows already here. A row appearing now is a binding gap, not a query to emit.
-        value isa ModelJoin && _assert_condition_added_no_join(instruc, value, rows_before)
-        condition_params = detach_parameters!(mark)
-        # #946: no alias remap here. Binding (`_bind_join_conditions!`, #977) prefixed every key with
-        # the join path, so the
-        # condition's own columns already render under the joined alias, at any hop depth. What is
-        # still under the base alias genuinely names the base row — above all an `OuterRef` in a
-        # nested `Subquery`, which binds the query that owns the join. A text rewrite of the base
-        # alias onto the hop's left alias (a no-op on a first hop) retargeted that correlation.
-        push!(extras, OnExtra(condition_sql, condition_params))
-      end
-
-      instruc.alias = original_alias
-      on_clause_extras[i] = extras
-    end
-    i += 1
-  end
-
-  # --- Phase 1b: relocate forward-referencing ON extras ----------------------
-  # An ON extra on join `idx` that names the alias of a join emitted LATER is a forward reference:
-  # Phase 2 emits joins in `row_join` order, so `dep_idx`'s JOIN clause has not appeared yet and
-  # both backends reject the reference. This happens when the ON condition walks a deep path
-  # (e.g. raceid__circuitid__country) that chains through the current join's target table.
-  #
-  # Fix: move the extra onto the LAST join it references. That join is emitted after every alias
-  # the extra names, and its own base ON already references its parent, so the ordering holds.
-  #
-  # The window is `idx+1 : end`, i.e. actual emission order — NOT "created during Phase 1"
-  # (`dep_idx > n_before`), which is what it used to test. That snapshot only described *when* an
-  # entry was appended, and a forward reference does not care: a join that already existed at entry
-  # is just as unemitted when it sits at a higher index. Two ways to reach that case, one of them
-  # pre-dating #404 — projecting the deep path (`values("parent__grandparent__code")`) builds the
-  # deeper join up front, and since #404 ordering by it does the same. In both, Phase 1 dedups the
-  # ON condition onto the existing entry instead of creating one, so the old window was empty and
-  # the extra stayed on the wrong join. Keying on index order covers every case uniformly.
-  #
-  # Relocation changes the order extras are EMITTED in, and on a positional backend that used to
-  # desynchronize the parameter bucket: Phase 1 bound in row_join order, Phase 2 emitted in
-  # relocated order, and nothing reconciled the two, so a relocated extra bound its neighbour's
-  # value (#421). Each extra now carries its own values and Phase 2 re-appends them as it emits,
-  # which makes binding order and emission order the same thing by construction. PostgreSQL never
-  # had the problem — `$N` numbering travels with the text.
-  #
-  # `relocated_to` exists only so a later failure can say WHERE a predicate went. `delete!` below
-  # erases the fact that this join ever had extras, which left the `no_anchor` guard in Phase 2
-  # reporting "cjoin_on produced no ON conditions" at a caller who had provided one (#435). The
-  # dict is diagnostic; nothing reads it on a successful build.
-  # Destination row_join INDICES, not alias names: the raise site needs the entry itself to tell a
-  # model join (which the caller can project in `values(...)`) from another `cjoin_on` (which they
-  # cannot — there is no path to project). Names are derived from the indices where needed.
-  relocated_to = Dict{Int, Vector{Int}}()
-  # …and whether any predicate that left ALSO named the join it left. That single bit decides which
-  # advice is true when a `cjoin_on` is emptied, and the two are opposites:
-  #
-  #   named its own alias  — `Joined("b2","sku") == F("parent__grandparent__code")` — is a real
-  #     correlation that moved only because its other side is not built yet. Projecting that path
-  #     in `values(...)` builds it first, nothing relocates, and the join renders CORRECTLY
-  #     (`ON ("b2"."sku" = "Tb_2"."code")`). Telling this caller to "add a predicate naming b2"
-  #     is telling them to do what they already did.
-  #   named no alias of its own — `"parent__grandparent__code" => "Z"` — has nothing correlating
-  #     the join at all. Projecting makes it render `ON "Tb_2"."code" = ?`, an unconstrained join
-  #     that multiplies rows silently. Here projecting is the WRONG fix and the raise is right.
-  #
-  # Phase 1b is the only place that knows which, because it is holding the fragment when it decides
-  # to move it. Review of #435 caught the message asserting the second case's advice at both.
-  relocated_self_ref = Set{Int}()
   for idx in 1:length(instruc.row_join)
-    haskey(on_clause_extras, idx) || continue
-    # #977: in practice only a `cjoin_on` predicate still relocates. A path join's conditions are
-    # bound onto their hop — the left side on the hop (#973), the right side on the base row, an
-    # ancestor or the hop itself (#962) — and every one of those is emitted at or before it. Moving
-    # `cjoin_on` onto the same binding is the follow-up that retires this phase.
-    extras = on_clause_extras[idx]
-    relocated = falses(length(extras))
-
-    for (ei, extra) in enumerate(extras)
-      # Search downwards, so the first hit is the LAST join this extra references and one move
-      # reaches the fixed point. Ascending is NOT wrong — the outer loop above revisits relocation
-      # targets, so an extra dropped on the nearest match would cascade the rest of the way one hop
-      # per visit — it is just O(hops) moves for the same result, and it makes termination an
-      # argument about convergence. Descending keeps that argument to one line: dep_idx is the
-      # MAXIMUM match, so when the outer loop later reaches dep_idx its search range is a subset
-      # already proven not to match, and no extra can move twice.
-      for dep_idx in length(instruc.row_join):-1:(idx + 1)
-        # The trailing dot is REQUIRED, not cosmetic. An extra renders every column reference as
-        # `"alias"."col"`, so a bare `"name"` test also matches the COLUMN half — and a cjoin_on
-        # alias that happens to share a column's name (`alias = "code"` against `"Tb_2"."code"`)
-        # then drags an unrelated join's ON filter onto itself. That is valid SQL returning wrong
-        # rows, silently. Phase 1 above already keys on the same `"alias".` form (:310).
-        if occursin("\"$(instruc.row_join[dep_idx].alias_b)\".", extra.sql)
-          haskey(on_clause_extras, dep_idx) || (on_clause_extras[dep_idx] = OnExtra[])
-          push!(on_clause_extras[dep_idx], extra)
-          relocated[ei] = true
-          dests = get!(relocated_to, idx, Int[])
-          dep_idx in dests || push!(dests, dep_idx)
-          # Same `"alias".` form as every other alias test here, for the same reason.
-          occursin("\"$(instruc.row_join[idx].alias_b)\".", extra.sql) &&
-            push!(relocated_self_ref, idx)
-          break
-        end
-      end
-    end
-
-    # Keep only the non-relocated extras on the original join
-    if any(relocated)
-      on_clause_extras[idx] = extras[.!relocated]
-      isempty(on_clause_extras[idx]) && delete!(on_clause_extras, idx)
-    end
-  end
-
-  # --- Phase 1c: refuse extras that landed where no ON clause can carry them --
-  # #424: a CROSS-joined CTE is the one join shape with no ON clause to merge `on_clause_extras`
-  # into, so a predicate that lands there simply vanishes — row multiplication, no error. #421 made
-  # that worse before this made it better: once values travel with their text, the orphaned value
-  # disappears too and the wrong query becomes perfectly well-formed. Fail closed, the same posture
-  # `_get_join_condition_list` takes on this marker (#394).
-  #
-  # #435 hoisted this out of the Phase 2 CROSS branch. Phase 2 walks `row_join` in index order, so
-  # whether it fired depended on where the CROSS entry sat: a `no_anchor` join at a LOWER index
-  # reported its own symptom — "produced no ON conditions", the state after relocation rather than
-  # the cause — and the accurate message never ran. Diagnosing before emitting makes the cause win
-  # regardless of ordering.
-  #
-  # #474 REMOVED the name-collision half of this loop, and with it the second, KEYED-CTE branch
-  # #447 had added. `on_clause_extras[idx]` used to reach a CROSS entry two ways: Phase 1b relocating
-  # a fragment that names its alias, or the entry carrying its own `on_conditions` — which it did
-  # exactly when `custom_join[<cte name>]` existed, because `_build_row_join`'s shared tail looked
-  # a CTE hop up in the base model's join-config registry under the CTE's own name. That lookup is
-  # gone (`build_joins.jl`, the `cte` gates in `_build_row_join`'s shared tail), so the second route
-  # is unrepresentable rather than
-  # diagnosed, and a CTE name colliding with a `cjoin` path / `cjoin_on` alias / `on()` path is now
-  # simply two relations that happen to share a name — both emitted, both addressable.
-  #
-  # WHAT IS LEFT IS A BACKSTOP, NOT A DIAGNOSIS. The relocation route needs a predicate naming the
-  # CTE's alias, and that alias is GENERATED (`_get_alias_name` → `R1_1`): no predicate in a join
-  # clause can name a CTE — a `CTE(...)` handle is refused there (#444), and since #492 restored the
-  # `__` string spelling, a CTE-rooted string is refused in the same three clauses too, at build
-  # time (`_refuse_cte_string_in_join`) — so the only way to write that name is a `cjoin_on` alias
-  # that impersonates
-  # a generated one, and `row_join` always orders CTE joins ahead of `cjoin_on` entries, while
-  # Phase 1b only ever relocates FORWARD. Nine shapes were built against this after the change (the
-  # three former collision producers plus six relocation attempts, including two CROSS CTEs and an
-  # alias impersonating `R1_1`); none reached it.
-  #
-  # It stays anyway, and the message below no longer mentions a collision, which would now be
-  # measurably wrong. Do not "clean up" the unreachability by deleting the throw: the failure it
-  # catches is a silently dropped predicate on a Cartesian join, and this file's own history is that
-  # the reachable-shape list here was "written twice and wrong twice". If you can construct a
-  # producer, it belongs in `test_order_by_joins.jl` next to the coexistence tests.
-  for (idx, value) in enumerate(instruc.row_join)
-    value isa CrossJoin || continue
-
-    haskey(on_clause_extras, idx) && throw(QueryBuildError(
-      "An ON predicate resolved onto \e[4m\e[31m$(value.alias_b)\e[0m, the CROSS-joined CTE " *
-      "\e[4m\e[31m$(value.b)\e[0m (a \e[4m\e[32m.with(...)\e[0m declared without " *
-      "\e[4m\e[32mjoin_field\e[0m). A CROSS JOIN has no ON clause to carry that predicate, so it " *
-      "would be dropped and the join would match every row.\n  Move the predicate to " *
-      "\e[4m\e[32m.filter(...)\e[0m, which is where a CROSS-joined CTE's correlation belongs " *
-      "(#44, #424)."))
-  end
-
-  # --- Phase 2: emit JOIN SQL text in original order -------------------------
-  for (idx, value) in enumerate(instruc.row_join)
+    value = instruc.row_join[idx]
     set_context!(instruc, :join)
     b_quoted = safe_table_identifier(value.b, instruc.connection)
     alias_b_quoted = quote_identifier(value.alias_b, instruc.connection)
 
     # #44: a CROSS-joined CTE (no join_field) has no key columns and no ON — the correlation is
-    # supplied by the main query's F() filter(s) in WHERE. Emit it and move on. Phase 1c above has
-    # already refused any entry here that picked up an ON predicate.
+    # supplied by the main query's F() filter(s) in WHERE. The row kind carries no conditions, and no
+    # condition can move onto it any more (#424 was a predicate relocated here and dropped).
     if value isa CrossJoin
       push!(instruc.join, """ CROSS JOIN $b_quoted AS $alias_b_quoted """)
       continue
     end
 
+    # #985: under the row's join scope, so every column the conditions render is checked against the
+    # rows this ON clause may name (`_record_join_column`).
+    conditions = _join_scope(() -> _render_on_conditions(instruc, value), instruc, idx, value)
     if value isa AnchorlessJoin
-      # #45: anchor-less join — the ON clause is entirely the user's resolved extras (no equi-anchor).
-      extras = get(on_clause_extras, idx, OnExtra[])
-      if isempty(extras)
-        # #435: two different causes reach this line, and they used to share one message that only
-        # described the first. `row_join` still carries `on_conditions` — Phase 1b mutates only the
-        # local `on_clause_extras` — so what the CALLER passed is still readable here, after
-        # relocation has erased what the join is left holding. The same `!isempty` gate as Phase 1,
-        # so the two cannot drift (#487).
-        if !isempty(value.on_conditions)
-          dest_idxs = get(relocated_to, idx, Int[])
-          # Naming the destination is diagnosis, not a remedy: relocation targets are often joins
-          # PormG built itself (`Tb_2`), and the caller cannot address those. So the message reports
-          # where the predicates went, and every remedy it offers is written in terms the caller
-          # CAN act on — their own alias, or `.filter(...)`.
-          dests = [instruc.row_join[d].alias_b for d in dest_idxs]
-          where_to = isempty(dests) ? "another join" :
-                     join(("\e[4m\e[31m$d\e[0m" for d in dests), ", ", " and ")
-          alias = value.alias_b
-
-          # A destination that is itself a `cjoin_on` has NO path to project — `values("b2…")` is
-          # not a thing — so "project it in values(...)" is unactionable there. The actionable move
-          # is the opposite one: declare the predicate on the join PormG emits LATER, which turns
-          # the forward reference into a backward one. Found in review: the self-ref remedy was
-          # written for a model-path destination and asserted at both.
-          projectable = filter(d -> !(instruc.row_join[d] isa AnchorlessJoin), dest_idxs)
-          plural = length(projectable) > 1 ? "those paths" : "that path"
-          reorder = [instruc.row_join[d].alias_b
-                     for d in dest_idxs if instruc.row_join[d] isa AnchorlessJoin]
-
-          self_ref_remedy =
-            "Your predicate does correlate \e[4m\e[31m$alias\e[0m; it moved only because the " *
-            "join on its other side is built later."
-          if !isempty(projectable)
-            self_ref_remedy *= " Project $plural in \e[4m\e[32mvalues(...)\e[0m so it is built " *
-              "FIRST"
-            # Only promise "nothing relocates" when projecting is the WHOLE fix. With a mixed set
-            # of destinations the other predicate still moves, and claiming otherwise contradicts
-            # the very next sentence.
-            self_ref_remedy *= isempty(reorder) ?
-              " — then nothing relocates and the ON clause renders as you wrote it." :
-              (length(projectable) > 1 ? " — then those predicates stay." :
-                                         " — then that predicate stays.")
-          end
-          if !isempty(reorder)
-            others = join(("\e[4m\e[31m$d\e[0m" for d in reorder), ", ", " and ")
-            # "Declare it on the other join" alone is a dead end: this branch fires only when the
-            # relocated predicates were ALL of them, so moving them out leaves this `cjoin_on` with
-            # an empty `on`, which `_cjoin_on` refuses — and simply dropping the call makes its
-            # alias unresolvable in the predicate that referenced it. The rewrite needs a predicate
-            # for THIS join too, and saying so is the difference between advice and a dead end.
-            # (Round 2 fixed the same omission in the `.filter(...)` remedy; it came back here.)
-            self_ref_remedy *= " $others is another \e[4m\e[32mcjoin_on\e[0m, so there is no path " *
-              "to project — declare this predicate on $others instead, which PormG emits after " *
-              "\e[4m\e[31m$alias\e[0m, so the reference points backwards and nothing moves. Give " *
-              "\e[4m\e[31m$alias\e[0m an ON predicate of its own as well: it is still joined, and " *
-              "\e[4m\e[32mcjoin_on\e[0m requires at least one."
-          end
-
-          remedy = idx in relocated_self_ref ? self_ref_remedy :
-            ("No predicate you gave names \e[4m\e[31m$alias\e[0m at all, so there is nothing to " *
-             "correlate it. Add one — for example " *
-             "\e[4m\e[32mJoined(\"$alias\", \"<column>\") == F(\"<base column>\")\e[0m — or, if none of " *
-             "these conditions was ever about this join, move them to " *
-             "\e[4m\e[32m.filter(...)\e[0m and drop the \e[4m\e[32mcjoin_on\e[0m entirely.\n  " *
-             # #448 changed the tail of this sentence, and the change is the point: projecting used
-             # to RENDER the unconstrained join, which is why this warned so heavily. It is now
-             # refused, so the advice stands but the consequence is a second error rather than
-             # silent wrong rows. Do not restore the old wording — it describes behavior that no
-             # longer exists.
-             "Do NOT instead project the path in \e[4m\e[32mvalues(...)\e[0m: that stops the " *
-             "relocation, but the ON clause then never mentions \e[4m\e[31m$alias\e[0m, and an " *
-             "unconstrained join is refused in its own right (#448).")
-          throw(QueryBuildError(
-            "Every ON predicate given for \e[4m\e[31m$alias\e[0m resolved onto $where_to instead, " *
-            "leaving this join with no ON clause of its own.\n  A \e[4m\e[32mcjoin_on\e[0m " *
-            "predicate is moved onto the LAST join it references, because joins are emitted in " *
-            "order and a predicate cannot name an alias that has not appeared yet. Here that is " *
-            "every predicate you gave, so nothing is left to constrain \e[4m\e[31m$alias\e[0m " *
-            "itself.\n  $remedy (#435)."))
-        end
-        throw(QueryBuildError("cjoin_on produced no ON conditions for alias '$(value.alias_b)'."))
-      end
-      on_clause = join((e.sql for e in extras), " AND ")
-
-      # #448: having an ON clause is not the same as being CONSTRAINED by one. The check above only
-      # asks whether anything SURVIVED relocation; a predicate list that names this join nowhere —
-      # `on = ["note" => "Z"]`, or a path already built by `values(...)` so nothing relocated —
-      # passes it and renders a well-formed, unconstrained join. Every row of the joined table pairs
-      # with every matched base row, silently: the #44 Cartesian warning covers CROSS entries only.
-      #
-      # Same trailing-dot form as Phase 1b's relocation test (:550-567) and Phase 1's base remap, for
-      # the same reason spelled out there: every reference renders as `"alias"."col"`, so a bare
-      # alias test also matches the COLUMN half, and an alias sharing a column's name would look
-      # constrained when it is not.
-      #
-      # Fail closed rather than warn, matching #424 and #435 next door. Stricter than SQLAlchemy,
-      # Ecto and jOOQ, which all emit an unconstrained join without complaint; Django never has the
-      # question because it exposes no arbitrary ON clause. Deliberate: a silently row-multiplied
-      # result is the worst failure mode here, and there is an escape hatch.
-      #
-      # That escape hatch is an unkeyed `.with(...)` that is REFERENCED — `values("x" => CTE(n, c))`
-      # — which is what the message points at. NOT `.with(...)` + `.filter(...)`, which an earlier
-      # draft of this comment and of the message both claimed: since #444 a CTE is joined only when
-      # referenced, so that spelling emits no join at all (measured: JOIN COUNT 0) and silently
-      # returns N rows instead of N×M — the inverse of the bug this guard exists for.
-      if !occursin("$alias_b_quoted.", on_clause)
-        throw(QueryBuildError(
-          "The ON clause built for \e[4m\e[31m$(value.alias_b)\e[0m never references " *
-          "\e[4m\e[31m$(value.alias_b)\e[0m, so the join is not constrained by it: every " *
-          "\e[4m\e[31m$(value.b)\e[0m row would pair with every matched base row.\n  " *
-          "This is not #435's case: there, EVERY predicate was relocated onto another join and this " *
-          "one was left with no ON clause at all. Here it has one — some of what you gave may well " *
-          "have relocated, but what remains never names this alias.\n  Give it a predicate naming its " *
-          "own alias, e.g. \e[4m\e[32mF(\"$(value.alias_b).<column>\") == F(\"<base column>\")\e[0m. " *
-          "If the conditions were never about this join, move them to " *
-          "\e[4m\e[32m.filter(...)\e[0m and drop the \e[4m\e[32mcjoin_on\e[0m; if you " *
-          "genuinely want a cross product, declare the table as an unkeyed " *
-          "\e[4m\e[32m.with(\"n\" => sub)\e[0m and REFERENCE it — e.g. " *
-          "\e[4m\e[32mvalues(\"x\" => CTE(\"n\", \"col\"))\e[0m — which emits a real " *
-          "\e[4m\e[32mCROSS JOIN\e[0m and warns that it is Cartesian (#44, #448)."))
-      end
-
-      for extra in extras
-        reattach_parameters!(instruc, extra.params)   # #421: bind in EMISSION order
-      end
+      # #45: anchor-less join — the ON clause is entirely the caller's conditions (no equi-anchor).
+      # Never empty: binding refuses an ON clause that never names this alias (#448), which an empty
+      # one cannot, and `_cjoin_on` refuses an empty `on` at the call.
+      on_clause = join(conditions, " AND ")
     else
       alias_a_quoted = quote_identifier(value.alias_a, instruc.connection)
       # #394: escape-only, because on every model-join branch these are PHYSICAL columns
@@ -2396,23 +2060,30 @@ function build_row_join_sql_text(instruc::SQLInstruction)
       value = value::Union{ModelJoin,CteJoin}
       key_a_quoted = safe_column_identifier(value.key_a, instruc.connection)
       key_b_quoted = safe_column_identifier(value.key_b, instruc.connection)
-
-      # Build base ON clause
       on_clause = "$alias_a_quoted.$key_a_quoted = $alias_b_quoted.$key_b_quoted"
-
-      # Append pre-resolved ON condition fragments, re-binding each as it is emitted (#421). This
-      # loop runs in `row_join` order across joins and in vector order within one, which is exactly
-      # the order the rendered `?` markers appear in; nothing else in Phase 2 touches the bucket.
-      if haskey(on_clause_extras, idx)
-        for extra in on_clause_extras[idx]
-          on_clause *= " AND $(extra.sql)"
-          reattach_parameters!(instruc, extra.params)
-        end
+      for sql in conditions
+        on_clause *= " AND $(sql)"
       end
     end
 
     push!(instruc.join, """ $(value.how) JOIN $b_quoted AS $alias_b_quoted ON $on_clause """)
   end
+end
+
+# One row's ON conditions, rendered in vector order — the order their markers appear in. `instruc.alias`
+# is not remapped (#946): binding put each column on its row, and what is still under the base alias
+# genuinely names the base row, above all an `OuterRef` in a nested `Subquery`.
+function _render_on_conditions(instruc::SQLInstruction, value::JoinRow)::Vector{String}
+  out = String[]
+  for condition in _on_conditions(value)
+    _guard_no_aggregate_on_condition(condition, value, instruc)   # #917
+    rows_before = length(instruc.row_join)
+    push!(out, _get_filter_query(condition, instruc))
+    # #977/#982: binding built every row a condition can name before anything rendered, so a row
+    # appearing now is a binding gap, not a join to emit.
+    _assert_condition_added_no_join(instruc, value, rows_before)
+  end
+  return out
 end
 
 function build(object::SQLObject;
@@ -2475,8 +2146,8 @@ function build(object::SQLObject;
   # the instruc.cache branch and discovers nothing.
   #
   # Only the position relative to the RENDER matters for CORRECTNESS. Whether this sits before or
-  # after the cjoin loops below is immaterial there — build_row_join_sql_text keys its
-  # forward-reference relocation on row_join index order, not on when an entry was appended. It is
+  # after the cjoin loops below is immaterial there: every row a join condition names is built before
+  # build_row_join_sql_text runs (#977, #982), whichever step appended it. It is
   # placed before them so the three "resolve everything" steps (select, filter, order) read as one
   # block. It is not free to move, though: the order joins are appended in decides ALIAS NUMBERING,
   # and test/unit/test_order_by_joins.jl pins concrete Tb_1/Tb_2/Tb_3 names, so a reorder rewrites
@@ -2527,8 +2198,16 @@ function build(object::SQLObject;
     # — and the alias loop runs second, which is what keeps a `cjoin_on` join's generated-alias
     # numbering behind the joins traversal built (#480 reserves the declared aliases so they cannot
     # collide in either direction).
-    for (user_alias, config) in object.alias_join
-      _build_cjoin_on_row_join(config, user_alias, instruct)
+    #
+    # #982: first the relation paths a `cjoin_on` ON clause names, so every row it can name precedes
+    # it; then the aliases in dependency order (`_bind_cjoin_on_conditions!`). Each path goes through
+    # the same `_build_row_join` call its column's render makes, so that render finds the row and adds
+    # none.
+    for segments in instruct.cjoin_on_paths
+      _build_row_join(segments, instruct, as = false)
+    end
+    for user_alias in instruct.cjoin_on_order
+      _build_cjoin_on_row_join(object.alias_join[user_alias], user_alias, instruct)
     end
 
     set_contexts && set_context!(instruct, :join)

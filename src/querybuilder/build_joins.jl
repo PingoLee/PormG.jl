@@ -143,7 +143,7 @@ end
 # #345 also DELETED the rejection of the explicit `driver_id__forename` spelling that lived here.
 # That was a style rule, not a correctness one — both spellings render identical SQL — and it was
 # only ever enforced for prefixed connections. Making it universal broke `cjoin`, whose key must be
-# in `model.field_names` and is therefore necessarily the `_id` column (`ctes.jl`), and
+# in `model.field_names` and is therefore necessarily the `_id` column (`join_conditions.jl`), and
 # `PormGRow.save()`, which splits a projected key on `__` and looks the prefix up verbatim in
 # `model.fields` — so the short form it recommended raises `KeyError` on the write path. PormG's own
 # `test/integration/test_row_mutation.jl` uses the explicit spelling. There is no spelling that

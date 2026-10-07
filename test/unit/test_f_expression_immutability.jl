@@ -23,7 +23,7 @@ build a new node and leave the operand untouched, and none of them carries a dep
 
 Scope, precisely: what is gone is the F-expression SELF-cycle. A user can still build a CONTAINER
 cycle from exported spellings — `q = Q("x" => 1); push!(q, q)` — which is why the depth cap in
-`_guard_no_handle` (`ctes.jl`) stays and is not dead weight.
+`_guard_no_handle` (`join_conditions.jl`) stays and is not dead weight.
 
 Everything renders through mock connections — no live database.
 

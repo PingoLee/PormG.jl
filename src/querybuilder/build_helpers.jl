@@ -229,7 +229,7 @@ _check_function(x::OuterRefObject) = x
 # construction, and all fifteen RHS-typed `_get_pair_to_oper` validations. What that leaves behind is
 # a plain `"seen"` where a CTE-scoped reference belongs, so this walks the result and swaps it.
 #
-# Shape and boundary are copied from `_prefix_join_filter` (ctes.jl), which already does this kind of
+# Shape and boundary are copied from `_prefix_join_filter` (join_conditions.jl), which already does this kind of
 # recursive rewrite: descend `.column` / `.field` only, NEVER `kwargs`. That boundary is load-bearing
 # here — `Y_M(["seen"])` is `ToChar(x, "YYYY-MM", …)` (functions.jl), so the format literal sits in
 # kwargs and retagging it would corrupt the rendered function.

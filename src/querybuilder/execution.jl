@@ -2046,7 +2046,7 @@ _sqlite_interval_error(what::AbstractString) =
 # would bind its parameters a second time.
 #
 # Only the operands `F(...) - x` can carry reach here (`Integer`, `Float64`, `String`, `FExpression`,
-# a function — the `Base.:-` overloads in `types.jl`). A nested expression reports the kind it
+# a function — the `Base.:-` overloads in `operators.jl`). A nested expression reports the kind it
 # EVALUATES to, not its rooted column's: `F("date") - (F("date") + Hour(6))` is a timestamp
 # difference. A `String` that names a field is the `F(...)` it stands for, which is the route
 # `_set_update_query_operand` already takes. Everything else — a function, a text literal, a number —
@@ -2590,7 +2590,7 @@ function _render_expr_typed(v::FExpression, instruc::SQLInstruction)::Tuple{Stri
     # `F(c) + 7` alone was correct on both since #527; only the nested spelling failed, and only
     # because of where the test was written.
     #
-    # Normalized at RENDER time, not at construction time (`types.jl`'s `+`/`-` overloads), for two
+    # Normalized at RENDER time, not at construction time (`operators.jl`'s `+`/`-` overloads), for two
     # reasons that are not close calls:
     #   * there is no type information at construction — `F("points") + 10` and `F("dob") + 10` are
     #     the same node shape, so an unconditional rewrite would send integer-column arithmetic into

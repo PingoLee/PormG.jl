@@ -464,7 +464,7 @@ end
     # twice over. It missed every detachment spelled with a BLANK line rather than a comment (a
     # measured `hasdoc = false`, identical defect), and its definition predicate could not see the
     # shapes this repo most uses — `Base.@kwdef struct` (`types.jl:225/242/255/264`, `Models.jl`),
-    # `Base.:(==)` operator methods (`column_ir.jl:107/218/358`, `types.jl:1181`), `where {T}`
+    # `Base.:(==)` operator methods (`column_ir.jl:107/218/358`, `operators.jl`), `where {T}`
     # signatures, `@inline`, `@enum`, and one-liners with a default argument (`f(x, y = 1) = …`,
     # where the `=` defeats the argument-list pattern). It also needed two hand-tuned filters purely
     # to reject `sql = """ … """` literals.

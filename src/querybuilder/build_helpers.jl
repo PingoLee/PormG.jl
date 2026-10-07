@@ -59,7 +59,7 @@ end
 #
 # Every slot except `column` rides across by reference, deliberately: the built node must be
 # byte-identical to what the mutating form left behind, which is the same discipline `_compare`
-# (`types.jl`) follows for the comparison operators. `kwargs` is shallow-copied for the reason it is
+# (`operators.jl`) follows for the comparison operators. `kwargs` is shallow-copied for the reason it is
 # there too — a `Dict` shared between the user's handle and the build product is exactly the mutable
 # state #112 forbids sharing.
 #

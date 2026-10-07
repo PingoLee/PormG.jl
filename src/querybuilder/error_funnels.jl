@@ -47,7 +47,7 @@ _write_not_allowed(operation::AbstractString, conn_key) = WritesDisabledError(
 # admit. Without this the call fell through to `Base.==` (identity) and evaluated to a bare `Bool`,
 # so `q.filter(F("uid") == uuid)` reported *"Invalid filter argument: false"* — naming a value the
 # user never wrote (#530's complaint, on every type the union omitted). Shared by the eighteen
-# catch-all methods in `types.jl` — six per family, `F`, `Joined` and, since #895, a function on the
+# catch-all methods in `operators.jl` — six per family, `F`, `Joined` and, since #895, a function on the
 # left (`Lower(…) == x`) — which is what earns it a funnel: one wording, one fix, and the accepted
 # list is read LIVE from `_CompareLiteral` so the text cannot drift from the union it describes.
 function _unsupported_compare_operand(op::AbstractString, operand)

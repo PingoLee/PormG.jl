@@ -659,7 +659,7 @@ end
 # `_fluent_name` never sees them.
 #
 # Note the rule is about the NAME, not about call sites: `_count`/`_exists` (deletion.jl),
-# `_values!`/`_filter!` (execution.jl) are all called from elsewhere inside `src/querybuilder/`.
+# `_values!`/`_filter!` (object_manager.jl) are all called from elsewhere inside `src/querybuilder/`.
 # Internal reuse does not make a helper API; being declared API does.
 #
 # The point is diagnostic, not cosmetic. These names are what a user SEES when a chain misfires —

@@ -192,7 +192,7 @@ end
   # The `page` docstring had always advertised `query.page(20)`, but only
   # _page!(::SQLObject, ::Tuple{Integer, Integer}) existed, so the single-argument form raised a bare
   # MethodError. Asserted on the rendered statement, not just the handler field, because
-  # execution.jl only emits each clause when the field is non-zero.
+  # execution_read.jl only emits each clause when the field is non-zero.
   q2 = GocPg.objects
   q2.page(20, 10)
   @test q2.object.limit == 20

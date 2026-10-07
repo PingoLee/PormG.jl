@@ -490,7 +490,7 @@ end
 # inside a transaction on this connection (BEGIN IMMEDIATE + with_sqlite_write_lock) to
 # avoid concurrent races — a future direct caller MUST preserve that invariant. Both
 # current callers do: allocate_primary_keys auto-wraps this in run_in_transaction whenever
-# one isn't already active (#88), and the create() path (execution.jl) reaches here only
+# one isn't already active (#88), and the create() path (execution_write.jl) reaches here only
 # when get_sqlite_reserved_primary_key_max returned non-nothing, which already implies a
 # transaction open on this connection (the overlay is read from that pool's context, #838).
 function _allocate_sqlite_ids(model::PormGModel, connection::PormGSQLite, pk_field::String, n::Int, settings::PormGSettings)
@@ -591,7 +591,7 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
   # stay generic: they branch on `per_row`, never on field type.
   #
   # The chain is deliberately EXCLUSIVE and default-first, mirroring `_prepare_row_insert!`
-  # (execution.jl:557-572): a field carrying BOTH a static `default` and `auto_now` takes the
+  # (execution_write.jl): a field carrying BOTH a static `default` and `auto_now` takes the
   # default, on the single-row and bulk paths alike.
   function resolve_absent_column_fill(f_meta)
     if f_meta.default !== nothing
@@ -799,7 +799,7 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
       #
       # So a blank cell (`missing`/`nothing`) in a present column means the caller asked for NULL,
       # exactly as `create()` reads an explicit `"field" => nothing`: `_prepare_row_insert!`
-      # (execution.jl:557) fills only when `!haskey(real_obj.insert, field)`. On a NOT NULL field
+      # (execution_write.jl) fills only when `!haskey(real_obj.insert, field)`. On a NOT NULL field
       # the blank then surfaces the ORM's own "null values are not allowed" from the per-row
       # `validate_field_data` sweep every path already runs (:insert below, :copy and :update in
       # their own loops) — the same error `create()` raises — instead of being silently papered
@@ -1253,7 +1253,7 @@ _bulk_result(count::Integer, rows = nothing) = (count = Int(count), rows = rows)
 # either engine. The cost is one extra round trip per call.
 #
 # PostgreSQL reads the rows from `RETURNING`. SQLite never uses RETURNING — `insert()` documents the
-# libsqlite3 hang (execution.jl) — and reads them back through the ORM on the same pinned
+# libsqlite3 hang (execution_write.jl) — and reads them back through the ORM on the same pinned
 # transaction connection instead.
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -182,12 +182,13 @@ const RSCOPE_CURRENT_CONTEXT = r"\.current_context\b|(get|set)(field|property)!?
 # someone decides which kind it is. The build paths (`build_query.jl`, `build_helpers.jl`, `ctes.jl`,
 # `build_joins.jl`, `join_conditions.jl`, …) hold none.
 const RSCOPE_SET_CONTEXT_ALLOWED = Dict(
-    # query() of a top-level statement (`:cte` first: WITH prints first), count(), exists(); insert and
-    # upsert rows (`:select`); update()'s SET list (`:update`); a temp-table insert (`tp`); the
-    # mutation predicate and update fence re-emitting their lifted runs under `:where`.
-    "src/querybuilder/execution.jl" => Dict(
+    # query() of a top-level statement (`:cte` first: WITH prints first), count(), exists().
+    "src/querybuilder/execution_read.jl" => Dict(
         "!is_subquery && set_context!(parameters, :cte)" => 1,
-        "set_context!(parameters, :cte)" => 2,
+        "set_context!(parameters, :cte)" => 2),
+    # insert and upsert rows (`:select`); update()'s SET list (`:update`); a temp-table insert
+    # (`tp`); the mutation predicate and update fence re-emitting their lifted runs under `:where`.
+    "src/querybuilder/execution_write.jl" => Dict(
         "set_context!(parameters, :select)" => 3,
         "set_context!(parameters, :update)" => 1,
         "set_context!(parameters, :where)" => 3,

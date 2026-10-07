@@ -60,7 +60,7 @@ PormG.eval(:(macro pormg_debug(ex); :(Infiltrator.@infiltrate($(esc(ex)))); end)
 
 **4. Mark the exact line you want to break on**
 
-Open the relevant PormG source file (e.g. `src/querybuilder/execution.jl`) and
+Open the relevant PormG source file (e.g. `src/querybuilder/execution_read.jl`) and
 change the call site from:
 
 ```julia

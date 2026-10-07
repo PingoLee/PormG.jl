@@ -763,7 +763,7 @@ end
 # every statement a fresh snapshot *inside* a transaction, so a row committed between the COUNT and
 # the DELETE was removed and not counted.
 #
-# This is `update()`'s contract rather than a new one (see execution.jl): PostgreSQL exposes the
+# This is `update()`'s contract rather than a new one (see execution_write.jl): PostgreSQL exposes the
 # count on the driver result; SQLite needs `changes()` on the SAME connection, which `conn`
 # guarantees here because every delete statement runs inside the collector's transaction on the
 # pinned connection. RETURNING is deliberately not used — `insert()` documents why SQLite RETURNING

@@ -103,7 +103,9 @@ include("querybuilder/build_query.jl")
 # #130: rendering an `F(...)` expression to SQL, and its typed temporal / interval path.
 include("querybuilder/expression_render.jl")
 
-include("querybuilder/execution.jl")
+# #130: executing a statement, split by direction — reads, then single-row and queryset writes.
+include("querybuilder/execution_read.jl")
+include("querybuilder/execution_write.jl")
 
 include("querybuilder/execution_bulk.jl")
 

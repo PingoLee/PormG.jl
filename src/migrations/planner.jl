@@ -2499,7 +2499,7 @@ function _get_temporary_default_value(field::PormGField, settings::PormGSettings
   # `DROP DEFAULT` that destroys the real expression default it had just rendered.
   (field.null || field.default !== nothing || field.db_default !== nothing) && return nothing
   # `now(TimeZone(…))` and one pass through the formatter — the same expression the insert path uses
-  # for `auto_now_add` (`querybuilder/execution.jl`). This used to be `field.formatter(now(),
+  # for `auto_now_add` (`querybuilder/execution_write.jl`). This used to be `field.formatter(now(),
   # settings.time_zone) |> field.formatter`, calling a two-argument `format_timezone_sql` arm that
   # #602 deleted as having "zero callers": the call goes through the `formatter` SLOT, not the
   # function name, so a grep by name could not see it, and every NOT NULL temporal ADD COLUMN raised

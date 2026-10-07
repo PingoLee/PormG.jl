@@ -335,7 +335,7 @@ not `format_timezone_sql`'s canonical form, so every currently-green PostgreSQL 
 would start failing. Not `DataFrame(q)` either: it was uncoerced by ACCIDENT rather than by
 contract, and #582 closed that divergence — `DataFrame(query)` now applies the same coercion as
 `list()`, so it would have gone hollow with no mark to force the visit. `query_list` is the raw
-read BY CONTRACT (its own comment in `execution.jl` says so), which is why this seam survives.
+read BY CONTRACT (its own comment in `execution_read.jl` says so), which is why this seam survives.
 
 On PostgreSQL this is a no-op for every kind but INTERVAL — `value_parser` answers `nothing` there
 for the rest, so the coerced and raw paths return the same object. INTERVAL's PostgreSQL cell (#581)

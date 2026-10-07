@@ -20,7 +20,7 @@ flowchart TD
   end
 
   subgraph QB["QueryBuilder — src/querybuilder/"]
-    Q["query() — execution.jl"]
+    Q["query() — execution_read.jl"]
     B["build() → InstructionObject<br/>build_query.jl"]
     J["_build_row_join (joins)<br/>build_joins.jl<br/>on / cjoin / cjoin_on — join_conditions.jl"]
     P["parameters.jl<br/>$1.. (PG) / ? buckets (SQLite)"]
@@ -66,7 +66,7 @@ sequenceDiagram
   autonumber
   participant App as Your code
   participant OH as ObjectHandler
-  participant EX as execution.jl
+  participant EX as execution_read.jl
   participant BQ as build_query.jl
   participant CP as ConnectionPool
   participant BE as Backend + ext
@@ -114,8 +114,8 @@ flowchart LR
   end
   L --> QRY["query() → build() → fetch()"]
   C --> QRY
-  CR --> INS["insert path<br/>execution.jl / execution_bulk.jl"]
-  UP --> UPD["update path<br/>execution.jl"]
+  CR --> INS["insert path<br/>execution_write.jl / execution_bulk.jl"]
+  UP --> UPD["update path<br/>execution_write.jl"]
   DE --> DEL["deletion.jl<br/>cascade planning (CASCADE/SET_NULL/...)"]
   QRY --> FE["fetch()"]
   INS --> FE

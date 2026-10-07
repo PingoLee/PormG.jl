@@ -73,7 +73,7 @@
 #
 # ## Why `PormGRow`'s hook is NOT here
 #
-# It stays in `src/querybuilder/execution.jl`, beside `_json_row` and `_json_value`. The split is by
+# It stays in `src/querybuilder/execution_read.jl`, beside `_json_row` and `_json_value`. The split is by
 # job, not by accident: that method SHAPES DATA — it emits the row's columns, through the one row
 # shape `list(:json)` also uses — while everything here BOUNDS THE SCHEMA GRAPH and emits no data at
 # all. Moving it would also change its defining module, and the two gates that keep a revert from

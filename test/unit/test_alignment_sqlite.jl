@@ -1434,7 +1434,7 @@ end
 end
 
 @testset "Alignment Verification - INSERT Inspection" begin
-    # Test INSERT operation parameters land in :select bucket (as expected from execution.jl:358)
+    # Test INSERT operation parameters land in :select bucket (as expected from execution_write.jl)
 
     # Use .create(...) which is the primary user-facing terminal method
     # We pass show_query=:inspection to avoid DB persistence
@@ -1467,7 +1467,7 @@ end
     # order on the positional (SQLite `?`) backend too, not hash order. This is the
     # property that lets create() be golden-tested as an exact string.
     #
-    # Columns and their bound values are pushed in lockstep (execution.jl), so once
+    # Columns and their bound values are pushed in lockstep (execution_write.jl), so once
     # the column order is pinned the params are pinned with it. We assert the column
     # order directly, which is what a plain Dict would scramble.
     call_order = ["statusid", "laps", "raceid", "points",

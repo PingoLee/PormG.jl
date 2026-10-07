@@ -25,7 +25,7 @@ This skill is for implementation and regression analysis inside `src/querybuilde
 
 - `src/QueryBuilder.jl` is the builder entry point and includes the specialized querybuilder modules
 - `build_helpers.jl`, `build_joins.jl`, `build_query.jl`, `ctes.jl`, `deletion.jl`, `execution.jl`, and `functions.jl` are the main internal coordination surfaces
-- `join_conditions.jl` owns what a condition in `on(path, …)` / `cjoin(filters = …)` refers to: the one relation resolver and the build-time binding pass (#977). See *Join conditions: bound at build* below before touching any join-condition code
+- `join_conditions.jl` owns what a condition in `on(path, …)` / `cjoin(filters = …)` / `cjoin_on(on = …)` refers to: the one relation resolver, the build-time binding passes (#977, #982) and the render-time column recorder (#985). See *Join conditions: bound at build* below before touching any join-condition code
 - Keep user-facing behavior expressed through `M.Model.objects`; reach into builder internals only for implementation work or deterministic unit coverage
 
 ## Boundary With Public API Work
@@ -345,8 +345,9 @@ Focus on:
 Join conditions produced about 20 issues, each fixed correctly at its own call site. They kept
 coming because a condition was resolved by proxies: string-prefixed at the call, checked against
 whatever had been declared so far, and resolved with side effects that could add a join. #977
-replaced the proxies with these rules. They are invariants, not style. Its status table lists which
-invariants hold today and where the rest are tracked (#982, #985).
+replaced the proxies with these rules, and #982/#985 (PR #991) extended them to `cjoin_on` and to
+the "wrong row, no join" class. They are invariants, not style. The one open design question, whether
+a typed column IR (I1) is still worth its cost, is #990.
 
 - **One relation resolver.** "Which model does segment `s` reach from model `m`?" has exactly one
   answer: `_relation_step`, whose precedence is the renderer's first hop (JSON/array value lookup,
@@ -371,12 +372,47 @@ invariants hold today and where the rest are tracked (#982, #985).
 - **`on(path)` declares its own join.** An `on()` entry nothing else reaches is materialized by
   `build()` (`_join_path_columns`). A ManyToMany path is refused (`_refuse_many_to_many_join_path`)
   until it is supported, rather than silently dropped.
-- **Not there yet.** Conditions are lowered to canonical base-rooted path strings, not typed column
-  references (I1). The ON-vs-WHERE placement of a `cjoin_on` predicate is still read from SQL text
-  (I4/I5, #982). A condition that renders against the wrong row without adding a join is caught by
-  neither the binder nor the backstop (#985). New work in this area goes into #977's sub-issues,
-  not a standalone fix ([`pormg-issue-management`](../pormg-issue-management/SKILL.md) →
-  *Design (umbrella) issues*).
+- **`cjoin_on` is bound at build too, and nothing is relocated (#982).** `_bind_cjoin_on_conditions!`
+  walks each alias's conditions with `_each_condition_column`, the one leaf visitor, and records three
+  facts:
+  - every relation path a condition names (`instruct.cjoin_on_paths`), which `build()` joins **before**
+    the alias rows;
+  - every other alias it names, a dependency edge;
+  - whether it names its own alias. If it does not, the join is unconstrained, and
+    `_refuse_unconstrained_cjoin_on` refuses it (#448).
+
+  The alias rows are emitted in dependency order (`instruct.cjoin_on_order`, `_cjoin_on_emission_order`:
+  Kahn's algorithm, declaration order breaking ties, #449), and a cycle is refused naming only the
+  cycle. Each row's ON clause renders once, in place, so a predicate stays in the ON clause the caller
+  wrote it in, and SQLite binds in text order by construction (#421).
+
+  The SQL-text relocation is gone: Phase 1b/1c, `OnExtra`, `detach_parameters!`, #435's diagnosis and
+  #448's `occursin`. Never bring back a pass that scans rendered SQL for `"alias".` to decide where a
+  predicate goes. It moved a LEFT `cjoin_on`'s predicate into a path's INNER join and dropped base rows.
+- **Which row each column names is checked where it renders (#985).** `_column_sql` is the one place a
+  model column becomes `"alias"."col"`, and `test/unit/test_join_column_recorder.jl` scans the source
+  for any site that builds the text itself. While an ON clause renders, `_join_scope` sets
+  `RenderScope`'s `join_hop`, `join_side`, `join_left` and `join_right`, and `_record_join_column`
+  refuses an alias outside the side's set:
+  - for a path join, the left side may name only the hop, and the right side the base row, the path's
+    ancestors and the hop;
+  - for a `cjoin_on` row, both sides may name every row emitted before it, and itself.
+
+  A comparison marks its column `:left` (`_join_side_change`) and its values `:right` (`_on_join_right`).
+  Inside a right side, everything stays right (#975). A comparison nested in a left side splits again.
+  A memoized column is rendered afresh inside an ON clause, so it passes the check. The walkers
+  (`_prefix_join_column`, `_refuse_lhs_past_hop`, the `_off_path_*` family) stay on purpose: they
+  refuse at binding, with the spelling the caller wrote. The recorder is the net under them, so a
+  gap in a walker becomes a loud refusal instead of a wrong row.
+- **Known gaps** (open issues; new work in this area goes there, not into a standalone fix,
+  [`pormg-issue-management`](../pormg-issue-management/SKILL.md) → *Design (umbrella) issues*):
+  - Conditions are lowered to canonical base-rooted path strings, not typed column references (I1, #990).
+  - **The side marks are opt-in at each comparison site, and an unmarked column defaults to the
+    permissive right-side set**, so a missing `:left` mark is silent while a missing `:right` mark is
+    a loud false refusal (#993). When you add a comparison arm, mark both sides, and give it a
+    mutation proof in the recorder's test file.
+  - A reverse or ManyToMany path named in a `cjoin_on` condition is joined onto the base row and
+    multiplies it (#992).
 
 Coverage: `test/unit/test_join_condition_matrix.jl` records the SQL of every path × condition shape
 as data, in `test/unit/fixtures/join_condition_matrix_expected.jl`. A behavior change shows up as a
@@ -461,7 +497,8 @@ julia -t auto --project=test/integration test/integration/test_cte.jl     # rung
 
 - Do not duplicate the full parameter bucket matrix in integration tests
 - Do not fix SQL shape bugs only by changing test expectations without validating semantics
-- Do not resolve, prefix, or validate a join condition at the `.on()` / `.cjoin()` call, and do not write a second relation walk next to `_relation_step`. Conditions are stored as written and bound once per build (#977)
+- Do not resolve, prefix, or validate a join condition at the `.on()` / `.cjoin()` / `.cjoin_on()` call, and do not write a second relation walk next to `_relation_step`. Conditions are stored as written and bound once per build (#977, #982)
+- Do not build `"alias"."col"` outside `_column_sql`, and do not decide where a join predicate goes by scanning rendered SQL (#982, #985)
 - Do not bypass public API regressions when the failure is visible to package users
 - Do not mix unrelated SQL formatting changes into a targeted regression fix
 - Do not revert to silent identifier stripping (e.g. `replace(id, r"[^a-zA-Z0-9_]" => "")`) — an alias is fail-closed (`quote_identifier`), a physical table or column is escape-only (`safe_table_identifier` / `safe_column_identifier`), and neither ever silently rewrites an identifier

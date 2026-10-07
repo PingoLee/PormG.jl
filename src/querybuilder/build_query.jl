@@ -825,8 +825,13 @@ _resolved_contains_agg(node, instruc::SQLInstruction)::Bool =
 #     joined-copy column, which binds nothing. Without this, `values("ev__grid" => F("grid") * 2)`
 #     beside a CTE `ev` made the second `Qor("ev__grid" => 1, "ev__grid" => 2)` leaf render the
 #     projection instead of the CTE column — valid SQL, aligned parameters, wrong rows. #757 now
-#     refuses a `__` alias at `values()`, so that shape cannot be written (and #723's silent
-#     CTE-wins pairing with it). The check stays as a backstop.
+#     refuses a `__` alias at `values()`, so that spelling cannot be written (and #723's silent
+#     CTE-wins pairing with it). The check is still LIVE (#777): a name PormG generates can collide
+#     too. A transform is named `<field>__<transform>`, and a CTE or `cjoin_on` copy may be named
+#     after a model field (#492, #484), so `values("race_date__@year")` beside
+#     `CTE("race_date", "year")` or `Joined("race_date", "year")` shares the name `race_date__year`
+#     across namespaces. That collision is reachable in WHERE and, through `fresh = true`, in a
+#     `cjoin_on` ON clause.
 #   - the OUTPUT NAME. A field-path projection is memoized under its PATH (`values("r" => "points")`
 #     under `"points"`); the entry is an alias only when it renders under the key.
 #
@@ -1525,7 +1530,21 @@ end
 # key names the related column as much as `"points"` names the local one. So a path whose first
 # segment is on the model (`_segment1_on_model`, the #492 test) counts. #757 later refused a `__`
 # alias at `values()` altogether, because no router could see one, so the aliased half of this
-# shape can no longer be written. The path half of the guard stays as a backstop.
+# shape can no longer be written. The path half is still LIVE (#777), through names PormG generates
+# rather than ones the caller chooses:
+#
+#   - a transform on a foreign key. `values("raceid__@year")` is named `raceid__year`, the path to
+#     the related `year`, and projects `EXTRACT(YEAR FROM raceid)`.
+#   - a joined copy named after the relation (#484). `cjoin_on(…; alias = "raceid")` plus
+#     `SQLField(Joined("raceid", "year"), "raceid__year")` shares the FK path's `:base` memo key, so
+#     the filter would read the joined copy, whatever its own ON says, and never emit the FK's join.
+#
+# Without the guard each renders one meaning and says nothing. The joined copy runs on both engines.
+# The transform's `EXTRACT` over an integer key fails when PostgreSQL executes it, but SQLite's
+# `strftime` returns a value, and a key whose column is itself a date runs on both. #706's twin
+# below reaches the same names
+# through `_model_filter_key`. The guard compares OUTPUT names, so a RENAMED transform
+# (`"yr" => "raceid__@year"`) still escapes it while keeping the `raceid__year` memo key — #1004.
 #
 # Not ambiguous, and so not refused: a projection that IS the column — `values("points")`,
 # `values("points" => "points")`, `values("points" => F("points"))`. Recursive, with the depth cap of

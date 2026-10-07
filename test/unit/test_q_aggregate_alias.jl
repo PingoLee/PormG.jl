@@ -666,6 +666,158 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #777 fixtures: names PormG generates can still spell `__`
+# #757 refuses a `__` alias the caller CHOOSES, but a name PormG generates is exempt by design: a
+# transform is named `<path>__<transform>`, and a CTE or `cjoin_on` copy may be named after a model
+# field (#492, #484). The race has a `year` so `raceid__@year` collides with the real path
+# `raceid__year`, and the result a `race_date` so `race_date__@year` collides with a CTE or joined
+# copy named `race_date`. One mock per backend; `inspect_query(…; connection = …)` picks the dialect.
+# ─────────────────────────────────────────────────────────────────────────────
+struct QAggTxMockSQLite <: PormG.PormGSQLite end
+struct QAggTxMockPostgres <: PormG.PormGPostgres end
+PormG.backend_sqlite_version(::QAggTxMockSQLite) = 3045000
+PormG.config["q_agg_tx_sl"] = PormG.Configuration.Settings(connections = QAggTxMockSQLite(),
+                                                           change_data = true,
+                                                           db_def_folder = "q_agg_tx_sl")
+
+module QAggTx
+import PormG, PormG.Models
+Race = Models.Model("q_agg_tx_race", raceid = Models.IDField(), year = Models.IntegerField(),
+                    date = Models.DateField())
+Result = Models.Model("q_agg_tx_result", resultid = Models.IDField(), points = Models.FloatField(),
+                      race_date = Models.DateField(),
+                      raceid = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"))
+PormG.Models.set_models(@__MODULE__, "q_agg_tx_sl")
+end
+
+const _Q_AGG_TX_CONNS = ((:sqlite, QAggTxMockSQLite()), (:postgres, QAggTxMockPostgres()))
+_q_agg_tx_msg(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
+# The WHERE clause, or a named join's line — the text a `Qor` leaf renders into.
+_q_agg_tx_where(sql) = (m = match(r"WHERE(.*)"s, sql); m === nothing ? "" : m.captures[1])
+_q_agg_tx_join(sql, alias) = (m = match(Regex("JOIN \"[^\"]+\" AS \"$(alias)\" ON ([^\\n]*?)(?:\\s+(?:INNER|LEFT) JOIN|\\s*WHERE|\\s*\\z)", "s"), sql);
+                              m === nothing ? "" : m.captures[1])
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #777: #703's path half is live — a transform on a foreign key spells a related path
+# `values("raceid__@year")` is named `raceid__year`, which is also the path to the race's `year`.
+# Without #703 the filter read the projection's memo entry and printed `EXTRACT(YEAR FROM raceid)`
+# where the caller named the race's column, with no error at build time (SQLite runs it, too).
+# (Renaming the transform escapes this guard
+# while keeping the memo key — #1004, not pinned here.)
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#777: a transform named like a related path refuses the filter (#703)" begin
+  for (backend, conn) in _Q_AGG_TX_CONNS
+    @testset "$backend" begin
+      q = QAggTx.Result.objects
+      q.values("resultid", "raceid__@year")
+      q.filter("raceid__year" => 2009)
+      err = @test_throws AmbiguousFieldError inspect_query(q; connection = conn)
+      msg = _q_agg_tx_msg(err.value)
+      @test occursin("filter(\"raceid__year\" => …)", msg)
+      @test occursin("#703", msg)
+
+      # Control: the path projected under its own name is the column, so the key has one meaning.
+      q = QAggTx.Result.objects
+      q.values("resultid", "raceid__year")
+      q.filter("raceid__year" => 2009)
+      where_text = _q_agg_tx_where(inspect_query(q; connection = conn)[:sql_text])
+      @test occursin(r"\"Tb_1\"\.\"year\" = ", where_text)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #777: #703's path half is live — a joined copy named after its relation
+# #484 lets a `cjoin_on` alias equal a ForeignKey's name, and an explicit `SQLField` over the handle
+# keeps the handle's own name (#757's exemption) and the `:base` memo namespace. That is the FK
+# path's key exactly: without #703 the filter read the joined copy's `"raceid"."year"` and the FK's
+# own join was never emitted — the copy's relation, whatever its ON, under the path the caller named.
+# (This fixture's copy joins on the FK's own condition, so the refusal is the contract pinned here.)
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#777: a joined copy named after its relation refuses the filter (#703)" begin
+  for (backend, conn) in _Q_AGG_TX_CONNS
+    @testset "$backend" begin
+      q = QAggTx.Result.objects
+      q.cjoin_on("Race", alias = "raceid", on = [PormG.Joined("raceid", "raceid") == F("raceid")])
+      q.values("resultid", PormG.QueryBuilder.SQLField(PormG.Joined("raceid", "year"), "raceid__year"))
+      q.filter("raceid__year" => 2009)
+      err = @test_throws AmbiguousFieldError inspect_query(q; connection = conn)
+      msg = _q_agg_tx_msg(err.value)
+      @test occursin("filter(\"raceid__year\" => …)", msg)
+      @test occursin("Joined(\"raceid\", \"year\")", msg)
+      @test occursin("#703", msg)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #777: #706's twin is live through the same generated name
+# A condition inside another projection resolves its key through the same memo, so
+# `When("raceid__year" => 2009)` beside `values("raceid__@year")` compared the EXTRACT, not the race's
+# year. `_model_filter_key` serves both guards; this pins the SELECT-side reader of it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#777: a condition on a transform named like a related path refuses (#706)" begin
+  for (backend, conn) in _Q_AGG_TX_CONNS
+    @testset "$backend" begin
+      q = QAggTx.Result.objects
+      q.values("resultid", "raceid__@year", "f" => Case([When("raceid__year" => 2009, then = 1)], default = 0))
+      err = @test_throws AmbiguousFieldError inspect_query(q; connection = conn)
+      msg = _q_agg_tx_msg(err.value)
+      @test occursin("values(\"f\" => …)", msg)
+      @test occursin("#706", msg)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #777: `_alias_lhs`'s namespace check is live — a CTE or joined copy shares a transform's name
+# A CTE (#492, via the handle) or a `cjoin_on` copy (#484) may be named after a model field, so
+# `CTE("race_date", "year")` / `Joined("race_date", "year")` and `values("race_date__@year")` share the
+# name `race_date__year` in different memo namespaces. `_projected_source` matches on the name only;
+# without the `:base` check the SECOND `Qor` leaf reused the projection and compared
+# `EXTRACT(YEAR FROM race_date)` instead of the column — valid SQL, aligned parameters, wrong rows.
+# The ON-clause reading (`fresh = true`, #985) goes through the same check.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#777: a CTE or joined column named like a transform compares the column" begin
+  # Both leaves compare `<qualifier>."year"`; no transform appears in the predicate.
+  both_leaves(text, qualifier) =
+    length(collect(eachmatch(Regex("\"$(qualifier)\"\\.\"year\" = "), text))) == 2 &&
+    !occursin("EXTRACT", text) && !occursin("strftime", text)
+  for (backend, conn) in _Q_AGG_TX_CONNS
+    @testset "$backend — CTE handle in WHERE" begin
+      q = QAggTx.Result.objects
+      q.with("race_date" => QAggTx.Result.objects.values("resultid", "year" => F("points")),
+             join_field = "resultid" => "resultid")
+      q.values("resultid", "race_date__@year")
+      q.filter(Qor(PormG.CTE("race_date", "year") => 1, PormG.CTE("race_date", "year") => 2))
+      insp = inspect_query(q; connection = conn)
+      @test both_leaves(_q_agg_tx_where(insp[:sql_text]), "R1_1")
+      assert_marker_count(insp, backend)
+    end
+    @testset "$backend — Joined handle in WHERE" begin
+      q = QAggTx.Result.objects
+      q.cjoin_on("Race", alias = "race_date", on = [PormG.Joined("race_date", "raceid") == F("raceid")])
+      q.values("resultid", "race_date__@year")
+      q.filter(Qor(PormG.Joined("race_date", "year") => 1, PormG.Joined("race_date", "year") => 2))
+      insp = inspect_query(q; connection = conn)
+      @test both_leaves(_q_agg_tx_where(insp[:sql_text]), "race_date")
+      assert_marker_count(insp, backend)
+    end
+    @testset "$backend — Joined handle in another copy's ON clause" begin
+      q = QAggTx.Result.objects
+      q.cjoin_on("Race", alias = "race_date", on = [PormG.Joined("race_date", "raceid") == F("raceid")])
+      q.cjoin_on("Race", alias = "r2",
+                 on = [PormG.Joined("r2", "raceid") == F("raceid"),
+                       Qor(PormG.Joined("race_date", "year") => 1, PormG.Joined("race_date", "year") => 2)])
+      q.values("resultid", "race_date__@year")
+      insp = inspect_query(q; connection = conn)
+      @test both_leaves(_q_agg_tx_join(insp[:sql_text], "r2"), "race_date")
+      assert_marker_count(insp, backend)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #707: a text function alias types as text, on both spellings
 # `_having_alias_formatter` knew only aggregates, the `PormGTypeField` functions and a bare `F`, and
 # guessed "number" for everything else — so `filter("nm" => "hamilton")` over `Lower("surname")` was

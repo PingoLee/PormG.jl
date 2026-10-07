@@ -577,12 +577,14 @@ function _retag_cte_string_window_order(x::SQLTypeOrder, q::SQLObject, rewrote::
   # projection, so the three spellings are two-to-one rather than unanimous; that inconsistency
   # predates #533 and is deliberately not addressed here.
   #
-  # Pinned by "a window SQLOrder over a CTE path resolves the column, not the projection" in
-  # `test_cte_reference.jl`.
-  #
-  # #757 refuses that alias at `values()` (an alias cannot contain `__`), so the aliased shape above
-  # can no longer be written. The note stays because the rule it records still holds for the
-  # unaliased spellings.
+  # #757 refuses that alias at `values()` (an alias cannot contain `__`), and an explicit
+  # `SQLField(Rank(…), "ev__seen")` with it, so through the EXPORTED surface no window projection can
+  # take a CTE path's name, and the reuse above — the bare-string half of the two-to-one split
+  # included — can no longer be written (#777). (A function node built with its own `_as`, such as
+  # the internal `WindowFunction(…; _as = "ev__seen")`, still skips #757's check — #1004.) What stays
+  # is the contract this walker keeps: it binds each term on its own `rewrote` set and never retags
+  # the enclosing projection. The Pair refusal and the column rendering are pinned by "a window
+  # SQLOrder over a CTE path: the String and handle spellings agree" in `test_cte_reference.jl`.
   if x.field isa SQLField
     # `_bind_cte_string!` is the same per-field entry the top-level `q.order` loop uses, so the
     # window and the fluent `order_by` agree on what a CTE-rooted path means.

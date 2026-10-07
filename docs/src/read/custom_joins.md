@@ -587,9 +587,22 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
 
     - **A path it names is joined first**, and the predicate stays in the `cjoin_on`'s own `ON`
       clause. Under `join_type = "LEFT"` the predicate decides which rows of the joined copy match,
-      and drops no base row itself. The path's own join is the one any reference to it builds, though:
-      a reverse (to-many) relation such as `results__…` is an `INNER JOIN` that multiplies base rows
-      and drops those with no related row, whatever the `cjoin_on`'s `join_type`.
+      and drops no base row itself. The path's own join is the one any reference to it builds, so a
+      nullable foreign key on the way is a `LEFT JOIN` and a required one an `INNER JOIN`.
+    - **The path must be to-one** — forward foreign keys only. A path that crosses a reverse relation
+      (`driverid__result__grid`) or a `ManyToManyField` raises `FilterError`
+      ([#992](https://github.com/PingoLee/PormG.jl/issues/992)): joined onto the base row, it would
+      repeat that row once per related row, whatever the `cjoin_on`'s `join_type`. To match on whether
+      a related row exists, correlate a subquery instead:
+
+      ```julia
+      # Each result, with d2 matched only for drivers who have started a race from pole.
+      M.Result.objects.
+          cjoin_on("Driver", alias = "d2", join_type = "LEFT",
+                   on = [Joined("d2", "driverid") == F("driverid"),
+                         Exists(M.Result.objects.filter("driverid" => OuterRef("driverid"), "grid" => 1))]).
+          values("resultid", "pole_sitter" => Joined("d2", "surname"))
+      ```
     - **An alias it names is emitted first.** Aliases that name no other alias keep the order you
       declared them in.
 

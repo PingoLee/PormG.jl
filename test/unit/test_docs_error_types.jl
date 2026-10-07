@@ -665,6 +665,20 @@ const DOCERR_CASES = [
             q.list(show_query = :dict)
         end,
     ),
+    (
+        # #992. A path a cjoin_on condition names is joined onto the base row first, so a to-many hop
+        # on it would repeat that row; refused at build. The page names reverse and ManyToMany alike —
+        # these unregistered models carry no reverse relation, and both kinds share one check.
+        "read/custom_joins.md — a cjoin_on condition path crossing a ManyToManyField is refused",
+        FilterError,
+        () -> begin
+            q = DOCERR_TEAM_PG.objects
+            q.cjoin_on(DOCERR_TEAM_PG, alias = "t2",
+                       on = [Joined("t2", "teamid") == F("teamid"), "sponsors__name" => "X"])
+            q.values("teamid")
+            q.list(show_query = :dict)
+        end,
+    ),
     # #474 removed TWO cases that stood here, and the removals are the point rather than a
     # tidy-up. Both pinned doc sentences about a CTE name colliding with a join key:
     #

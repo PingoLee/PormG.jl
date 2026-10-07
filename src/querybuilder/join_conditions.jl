@@ -237,7 +237,8 @@ end
 #     rendered, after the alias row, and the predicate was then moved by a substring scan of the
 #     rendered SQL onto that later join (Phase 1b, #421, #435): out of the ON clause the caller wrote
 #     it in, into a join of another type. Under a LEFT `cjoin_on` that turned "null the alias's
-#     columns" into "drop the row".
+#     columns" into "drop the row". Only a to-one path is built: a reverse or ManyToMany hop would
+#     multiply the base row, and is refused (#992).
 #   - Another alias is a dependency. Alias rows are emitted every alias after the ones it names, so a
 #     reference always points backwards (#449's declaration order breaks the ties). A cycle has no such
 #     order, and is refused.
@@ -256,12 +257,13 @@ function _bind_cjoin_on_conditions!(instruct::SQLInstruction)
     names = String[]
     self_ref = false
     for f in cfg.filters
-      _each_condition_column(f, 0) do column, _
+      _each_condition_column(f, 0) do column, written
         if column isa JoinedReference
           column.alias == alias ? (self_ref = true) :
             (column.alias in names || push!(names, column.alias))
         elseif !isempty(_relation_prefix(q, column))
           path = String(first(split(column, "__@")))
+          _refuse_to_many_cjoin_on_path(q, alias, path, written)
           path in built && return nothing
           push!(built, path)
           push!(instruct.cjoin_on_paths, String.(split(path, "__")))
@@ -275,6 +277,40 @@ function _bind_cjoin_on_conditions!(instruct::SQLInstruction)
   end
   append!(instruct.cjoin_on_order, _cjoin_on_emission_order(names_of))
   return instruct
+end
+
+# #992: a path built first must be a FORWARD path. A forward hop to a primary key matches at most one
+# row per base row (a nullable FK becomes LEFT through `_determine_join_type`), so joining it first
+# adds no rows. (A `cjoin(field = …)` link to a non-unique column can repeat rows, but that is the
+# link's own semantics, the same wherever its path is referenced.) A reverse or ManyToMany hop does
+# not: joined onto the base row it repeats it once per related row, and an INNER join drops it when
+# there is none — a reverse OneToOne too, which is to-one but may have no match. Under a LEFT
+# `cjoin_on` nothing undoes either. No SQL placement gives the caller
+# what they wrote — in the path's ON the predicate filters the base row (the pre-#982 bug), in the
+# alias's ON the path's join multiplies it — and no aggregate is projected for #74's guard to catch.
+# The intent is a correlated existence test, which `Exists(… OuterRef …)` spells explicitly.
+function _refuse_to_many_cjoin_on_path(q::SQLObject, alias::String, path::String, written::String)
+  model = q.model
+  segments = split(path, "__")
+  for (i, seg) in enumerate(segments)
+    step = _relation_step(q, model, seg, i == 1)
+    step === nothing && return nothing   # the column; every hop before it was to-one
+    if step[3] !== :forward
+      hop = join(segments[1:i], "__")
+      kind = step[3] === :reverse ? "reverse" : "ManyToMany"
+      throw(FilterError(
+        "\e[4m\e[31m$(written)\e[0m in the ON clause of cjoin_on alias \e[4m\e[31m$(alias)\e[0m crosses the " *
+        "$(kind) relation '$(hop)'. PormG joins a path a cjoin_on condition names onto the base row, and " *
+        "that join repeats each base row once per related '$(step[2].name)' row, and can drop it when there " *
+        "is none.\n  To match on the existence of a related row, correlate a subquery over it: " *
+        "\e[4m\e[32mExists(M.<Related>.objects.filter(\"<link>\" => OuterRef(\"<column>\"), …))\e[0m. " *
+        "If the predicate was never about $(alias), pass that \e[4m\e[32mExists(...)\e[0m to " *
+        "\e[4m\e[32m.filter(...)\e[0m instead — a to-many path there joins and repeats rows the same " *
+        "way (#992)."))
+    end
+    model = step[2]
+  end
+  return nothing
 end
 
 # Kahn's algorithm over "alias → the aliases its ON clause names", taking the earliest-declared ready

@@ -1462,33 +1462,24 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         if _expression_operand(v.values)
           _guard_window_alias_predicate(source, having_key[2], instruc)   # #685, as the typed path does
           clause === :where && _guard_where_operand(v, instruc)   # #895: a row alias against an aggregate
-          set_context!(instruc, clause)
-          try
+          with_bucket(instruc, clause) do
             push!(clause === :having ? instruc.having : instruc._where,
                   _in_clause_phase(() -> _get_filter_query(v, instruc), instruc, clause, having_key[2]))
-          finally
-            set_context!(instruc, :where)
           end
           continue
         end
         # Switch to the clause's context for positional parameters. #595 moved this ABOVE the
         # left-hand side: resolving it can now RENDER, and a render binds — those values belong in
         # the clause's bucket with the comparison value, ahead of it, exactly as they print.
-        # The restore is in a `finally` because the render can throw from several places — the
-        # guards, the fresh render in `_alias_lhs` (#595), `_render_predicate`'s
-        # unknown-operator `FilterError` and the SQLite-refusing `Dialect` arms'
-        # `BackendCapabilityError` (#618). Leaving the clause's context active would file a later
-        # clause's values in the wrong bucket. Harmless today — every such throw escapes `build()` and the
-        # instruction is discarded — but it matches what `_get_select_query(::ExistsObject)` already
-        # does for its `RenderScope`, and it stops the next caller who catches one of these
-        # from inheriting a wrong context.
-        set_context!(instruc, clause)
-        try
+        # `with_bucket` restores on throw too, and the render can throw from several places — the
+        # guards, the fresh render in `_alias_lhs` (#595), `_render_predicate`'s unknown-operator
+        # `FilterError` and the SQLite-refusing `Dialect` arms' `BackendCapabilityError` (#618). It
+        # RESTORES the ambient bucket rather than resetting to `:where` (#936, #939): the two agree
+        # only while this runs under `build()`'s `:where`, and nothing enforced that.
+        with_bucket(instruc, clause) do
           push!(clause === :having ? instruc.having : instruc._where,
                 _in_clause_phase(() -> _render_alias_predicate(v, having_key, having_cached, instruc),
                                  instruc, clause, having_key[2]))
-        finally
-          set_context!(instruc, :where)
         end
         continue
       end
@@ -1502,12 +1493,9 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
       where_part, having_part = _split_having(v, instruc)
       where_part === nothing || push!(instruc._where, _get_where_query(where_part, instruc))
       if having_part !== nothing
-        set_context!(instruc, :having)
-        try
+        with_bucket(instruc, :having) do
           push!(instruc.having, with_scope(() -> _get_having_query(having_part, instruc), instruc;
                                            phase = :group, label = _having_subquery_label(string(_having_leaf_label(having_part)))))
-        finally
-          set_context!(instruc, :where)
         end
       end
     else
@@ -2038,55 +2026,59 @@ end
 # condition can name is built before this runs, and `_assert_condition_added_no_join` raises when one
 # is not, for every row kind.
 #
-# Context: every value lands in `:join`, set per row. An `Exists(...)` runs a nested build whose own
-# join render switches context ungated, and `_build_exists_query` restores the ambient one in a
-# `finally`. A subquery consumed by `@in`, `Subquery(...)` or `Exists(...)` may not declare its own CTE
-# (#433): that was the one shape whose values went to `:cte` while its markers sat in this text.
+# Context: every value lands in `:join`, under one `with_bucket` that restores the caller's bucket
+# on return (#936, #939). It used to be set ungated per row, a belt-and-braces switch: the nested
+# renders a condition can hold already restored the bucket by hand. They now restore through
+# `with_bucket` structurally, so one scope covers the loop. A subquery consumed by `@in`,
+# `Subquery(...)` or `Exists(...)` may not declare its own CTE (#433): that was the one shape whose
+# values went to `:cte` while its markers sat in this text.
 function build_row_join_sql_text(instruc::SQLInstruction)
   @pormg_debug false
-  for idx in 1:length(instruc.row_join)
-    value = instruc.row_join[idx]
-    set_context!(instruc, :join)
-    b_quoted = safe_table_identifier(value.b, instruc.connection)
-    alias_b_quoted = quote_identifier(value.alias_b, instruc.connection)
+  with_bucket(instruc, :join) do
+    for idx in 1:length(instruc.row_join)
+      value = instruc.row_join[idx]
+      b_quoted = safe_table_identifier(value.b, instruc.connection)
+      alias_b_quoted = quote_identifier(value.alias_b, instruc.connection)
 
-    # #44: a CROSS-joined CTE (no join_field) has no key columns and no ON — the correlation is
-    # supplied by the main query's F() filter(s) in WHERE. The row kind carries no conditions, and no
-    # condition can move onto it any more (#424 was a predicate relocated here and dropped).
-    if value isa CrossJoin
-      push!(instruc.join, """ CROSS JOIN $b_quoted AS $alias_b_quoted """)
-      continue
-    end
-
-    # #985: under the row's join scope, so every column the conditions render is checked against the
-    # rows this ON clause may name (`_record_join_column`).
-    conditions = _join_scope(() -> _render_on_conditions(instruc, value), instruc, idx, value)
-    if value isa AnchorlessJoin
-      # #45: anchor-less join — the ON clause is entirely the caller's conditions (no equi-anchor).
-      # Never empty: binding refuses an ON clause that never names this alias (#448), which an empty
-      # one cannot, and `_cjoin_on` refuses an empty `on` at the call.
-      on_clause = join(conditions, " AND ")
-    else
-      alias_a_quoted = quote_identifier(value.alias_a, instruc.connection)
-      # #394: escape-only, because on every model-join branch these are PHYSICAL columns
-      # (`Models.model_column`). The one exception is a CTE join, where `key_b` is the CTE's
-      # projection ALIAS (`build_joins.jl` builds the `CteJoin` with `key_b = cte_table_key`). That name is
-      # not unguarded: `_build_row_join` raises `UnknownFieldError` unless it matches a field of
-      # the CTE model, and that field came from a `values()` alias, which `_query_select` renders
-      # through the fail-closed `quote_identifier`. So the strict check happens where the caller
-      # wrote the name, exactly as it does for the CTE name itself since #394.
-      # Only the two keyed kinds reach this branch (#487): `CrossJoin` and `AnchorlessJoin` left above.
-      value = value::Union{ModelJoin,CteJoin}
-      key_a_quoted = safe_column_identifier(value.key_a, instruc.connection)
-      key_b_quoted = safe_column_identifier(value.key_b, instruc.connection)
-      on_clause = "$alias_a_quoted.$key_a_quoted = $alias_b_quoted.$key_b_quoted"
-      for sql in conditions
-        on_clause *= " AND $(sql)"
+      # #44: a CROSS-joined CTE (no join_field) has no key columns and no ON — the correlation is
+      # supplied by the main query's F() filter(s) in WHERE. The row kind carries no conditions, and no
+      # condition can move onto it any more (#424 was a predicate relocated here and dropped).
+      if value isa CrossJoin
+        push!(instruc.join, """ CROSS JOIN $b_quoted AS $alias_b_quoted """)
+        continue
       end
-    end
 
-    push!(instruc.join, """ $(value.how) JOIN $b_quoted AS $alias_b_quoted ON $on_clause """)
+      # #985: under the row's join scope, so every column the conditions render is checked against the
+      # rows this ON clause may name (`_record_join_column`).
+      conditions = _join_scope(() -> _render_on_conditions(instruc, value), instruc, idx, value)
+      if value isa AnchorlessJoin
+        # #45: anchor-less join — the ON clause is entirely the caller's conditions (no equi-anchor).
+        # Never empty: binding refuses an ON clause that never names this alias (#448), which an empty
+        # one cannot, and `_cjoin_on` refuses an empty `on` at the call.
+        on_clause = join(conditions, " AND ")
+      else
+        alias_a_quoted = quote_identifier(value.alias_a, instruc.connection)
+        # #394: escape-only, because on every model-join branch these are PHYSICAL columns
+        # (`Models.model_column`). The one exception is a CTE join, where `key_b` is the CTE's
+        # projection ALIAS (`build_joins.jl` builds the `CteJoin` with `key_b = cte_table_key`). That name is
+        # not unguarded: `_build_row_join` raises `UnknownFieldError` unless it matches a field of
+        # the CTE model, and that field came from a `values()` alias, which `_query_select` renders
+        # through the fail-closed `quote_identifier`. So the strict check happens where the caller
+        # wrote the name, exactly as it does for the CTE name itself since #394.
+        # Only the two keyed kinds reach this branch (#487): `CrossJoin` and `AnchorlessJoin` left above.
+        value = value::Union{ModelJoin,CteJoin}
+        key_a_quoted = safe_column_identifier(value.key_a, instruc.connection)
+        key_b_quoted = safe_column_identifier(value.key_b, instruc.connection)
+        on_clause = "$alias_a_quoted.$key_a_quoted = $alias_b_quoted.$key_b_quoted"
+        for sql in conditions
+          on_clause *= " AND $(sql)"
+        end
+      end
+
+      push!(instruc.join, """ $(value.how) JOIN $b_quoted AS $alias_b_quoted ON $on_clause """)
+    end
   end
+  return nothing
 end
 
 # One row's ON conditions, rendered in vector order — the order their markers appear in. `instruc.alias`
@@ -2109,7 +2101,6 @@ function build(object::SQLObject;
   table_alias::Union{Nothing,SQLTableAlias}=nothing,
   connection::Union{Nothing,PormGPostgres,PormGSQLite}=nothing,
   parameters::Union{Nothing,AbstractPormGParam}=nothing,
-  set_contexts::Bool=true,
   outer::Union{Nothing,SQLInstruction}=nothing)
 
   settings, connection, conn_key = get_settings(object, connection=connection)
@@ -2143,19 +2134,25 @@ function build(object::SQLObject;
   # is declared now, so this is where they are bound onto their paths and checked (#962, #974).
   _bind_join_conditions!(instruct)
 
-  # Switch context for each SQL section so positional-parameter backends
-  # (SQLite) push values into the correct bucket.
-  # Subqueries skip this to inherit the parent's current bucket.
-  set_contexts && set_context!(instruct, :select)
+  # Each SQL section binds under its own bucket, so positional-parameter backends (SQLite) file every
+  # value under the clause its `?` prints in. Every section is a `with_bucket` scope, so `build()`
+  # hands its caller back the bucket it was entered with (#936, #939). A NESTED build is no exception:
+  # it files its values under its own clauses too, which is what lets the nested render that called it
+  # lift them out as one clause-ordered run (#432, `detach_nested_run!`). That replaced the old
+  # `set_contexts=false` mode, in which a subquery inherited its parent's bucket and so lost the
+  # clause roles the run sorts by; nothing reached that mode after #432.
   # #932 — the evaluation phase of each clause, for the #194 guard. Only clauses set it (see
   # `RenderScope`): the SELECT list and ORDER BY are evaluated after GROUP BY, WHERE and ON before it.
   # HAVING sets its own inside `get_filter_query`, and a grouping aggregate's argument in
   # `_render_function_typed`.
-  with_scope(() -> get_select_query(object.values, instruct), instruct; phase = :group)
+  with_bucket(instruct, :select) do
+    with_scope(() -> get_select_query(object.values, instruct), instruct; phase = :group)
+  end
   _record_wildcard_projection_kinds!(instruct)
 
-  set_contexts && set_context!(instruct, :where)
-  with_scope(() -> get_filter_query(object, instruct), instruct; phase = :row, label = "a filter")
+  with_bucket(instruct, :where) do
+    with_scope(() -> get_filter_query(object, instruct), instruct; phase = :row, label = "a filter")
+  end
 
   # #404: ORDER BY resolves HERE, before build_row_join_sql_text renders row_join into SQL. A path
   # named ONLY by order_by() is resolved through _get_select_query → _build_row_join, which APPENDS
@@ -2177,14 +2174,11 @@ function build(object::SQLObject;
   # no bucket existed, and `:join` flattens BEFORE `:where`: an ordering expression that binds (the
   # `@yyyy_q` / `@yyyy_quad` labels bind nine operands) shifted every WHERE value by that many
   # positions, the counts still matched, and SQLite returned the wrong rows without an error.
-  # PostgreSQL numbers `$N` at render and was always right. `:where` is restored after, so the cjoin
-  # loops below keep running under it. In a SUBQUERY (set_contexts=false) both switches are skipped
-  # and the term inherits the parent's bucket — unreachable from the public surface, because every
-  # nested render passes `own_contexts=true` (#432), and the `:order` values it files are lifted
-  # into text order by `detach_nested_run!` like any other clause.
-  set_contexts && set_context!(instruct, :order)
-  with_scope(() -> get_order_query(object, instruct), instruct; phase = :group, label = "an order_by term")
-  set_contexts && set_context!(instruct, :where)
+  # PostgreSQL numbers `$N` at render and was always right. In a nested build the `:order` values are
+  # lifted into text order by `detach_nested_run!` like any other clause's.
+  with_bucket(instruct, :order) do
+    with_scope(() -> get_order_query(object, instruct), instruct; phase = :group, label = "an order_by term")
+  end
   _group_window_terms!(instruct)   # #789: after ORDER BY, which also extends GROUP BY
 
   # PATH loop — materialize the `cjoin` and `on()` joins that traversal did not already discover. This
@@ -2196,40 +2190,45 @@ function build(object::SQLObject;
   # "INNER"` — vanished from the statement with no error. `on(path, …)` names its join; it now
   # declares it.
   # #932: join conditions — a `cjoin` filter, an `on()`, a `cjoin_on` ON — are evaluated per row.
+  # The two loops below run under `:where`, the bucket they always ran under (ORDER BY used to reset to
+  # it). Materializing a row binds nothing itself (`build_joins.jl` has no `add_parameter!`; every ON
+  # value binds in `build_row_join_sql_text`, under `:join`), and the explicit scope keeps anything
+  # they ever do bind where it was, instead of in `build()`'s caller's bucket.
   with_scope(instruct; phase = :row, label = "a join condition") do
-    for (path, config) in object.custom_join
-      _refuse_many_to_many_join_path(object, path)
-      # Membership by CANONICAL path (#977): `row_path` holds each traversal's own spelling, so
-      # `on("status", …)` must recognise a join `values("status_id__name")` built.
-      key = _join_key(instruct, path)
-      any(p -> _join_key(instruct, p) == key, instruct.row_path) && continue
-      _build_row_join(_join_path_columns(object, path, config), instruct)
+    with_bucket(instruct, :where) do
+      for (path, config) in object.custom_join
+        _refuse_many_to_many_join_path(object, path)
+        # Membership by CANONICAL path (#977): `row_path` holds each traversal's own spelling, so
+        # `on("status", …)` must recognise a join `values("status_id__name")` built.
+        key = _join_key(instruct, path)
+        any(p -> _join_key(instruct, p) == key, instruct.row_path) && continue
+        _build_row_join(_join_path_columns(object, path, config), instruct)
+      end
+
+      # ALIAS loop (#45) — materialize the anchor-less `cjoin_on` joins: no equi-anchor, explicit alias,
+      # user-supplied ON.
+      #
+      # It does NOT consult `row_path` (#484). `row_path` records JOIN PATHS, and an alias is not one —
+      # while both namespaces shared `custom_join`, an alias equal to a traversed ForeignKey path was
+      # found there and the join was skipped entirely, leaving the statement naming a range variable it
+      # never declared. The path loop above still needs the test, because a `cjoin` path IS what
+      # traversal records. Two loops rather than one because the two namespaces materialize differently
+      # — and the alias loop runs second, which is what keeps a `cjoin_on` join's generated-alias
+      # numbering behind the joins traversal built (#480 reserves the declared aliases so they cannot
+      # collide in either direction).
+      #
+      # #982: first the relation paths a `cjoin_on` ON clause names, so every row it can name precedes
+      # it; then the aliases in dependency order (`_bind_cjoin_on_conditions!`). Each path goes through
+      # the same `_build_row_join` call its column's render makes, so that render finds the row and adds
+      # none.
+      for segments in instruct.cjoin_on_paths
+        _build_row_join(segments, instruct, as = false)
+      end
+      for user_alias in instruct.cjoin_on_order
+        _build_cjoin_on_row_join(object.alias_join[user_alias], user_alias, instruct)
+      end
     end
 
-    # ALIAS loop (#45) — materialize the anchor-less `cjoin_on` joins: no equi-anchor, explicit alias,
-    # user-supplied ON.
-    #
-    # It does NOT consult `row_path` (#484). `row_path` records JOIN PATHS, and an alias is not one —
-    # while both namespaces shared `custom_join`, an alias equal to a traversed ForeignKey path was
-    # found there and the join was skipped entirely, leaving the statement naming a range variable it
-    # never declared. The path loop above still needs the test, because a `cjoin` path IS what
-    # traversal records. Two loops rather than one because the two namespaces materialize differently
-    # — and the alias loop runs second, which is what keeps a `cjoin_on` join's generated-alias
-    # numbering behind the joins traversal built (#480 reserves the declared aliases so they cannot
-    # collide in either direction).
-    #
-    # #982: first the relation paths a `cjoin_on` ON clause names, so every row it can name precedes
-    # it; then the aliases in dependency order (`_bind_cjoin_on_conditions!`). Each path goes through
-    # the same `_build_row_join` call its column's render makes, so that render finds the row and adds
-    # none.
-    for segments in instruct.cjoin_on_paths
-      _build_row_join(segments, instruct, as = false)
-    end
-    for user_alias in instruct.cjoin_on_order
-      _build_cjoin_on_row_join(object.alias_join[user_alias], user_alias, instruct)
-    end
-
-    set_contexts && set_context!(instruct, :join)
     build_row_join_sql_text(instruct)
   end
 

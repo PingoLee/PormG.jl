@@ -19,8 +19,9 @@ right:
 
 The fix marks every bucket around a nested render, lifts what the inner build bound, and re-emits it
 as one contiguous run in the parent's active bucket, concatenated in CLAUSE order
-(`nested_parameter_mark` / `detach_nested_run!`). `own_contexts` on `query()` is the other half: the
-inner build must file its values under its OWN clauses, or the run has nothing to sort by.
+(`nested_parameter_mark` / `detach_nested_run!`). The other half: the inner build must file its values
+under its OWN clauses, or the run has nothing to sort by — an `own_contexts` opt-in on `query()` then,
+what every build does since #936 retired the inherit-the-parent's-bucket mode.
 
 Measured before the fix, and pinned below:
 
@@ -77,6 +78,7 @@ Pan_parent = Models.Model("pan_parent",
   id          = Models.IDField(),
   sku         = Models.CharField(),
   qty         = Models.IntegerField(null = true),
+  made        = Models.DateField(null = true),   # #936: a `@yyyy_q` ORDER BY label binds nine operands
   grandparent = Models.ForeignKey(Pan_grand, on_delete = "CASCADE", related_name = "pan_pars", null = true),
 )
 
@@ -308,4 +310,159 @@ end
       @test isempty(insp[:parameter_buckets][:join])
     end
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Every nested shape, with a value before, inside and after it (#936, #939)
+# The bucket is now changed only through `with_bucket`, which restores the bucket it found — so every
+# switch an inner build makes is undone when it returns, and `build()` itself hands its caller back the
+# bucket it was entered with. Before, three `get_filter_query` branches RESET to `:where`, and
+# `build()` and the join render left their last bucket behind for the caller to restore by hand.
+# Nothing was misbinding (no regression is pinned here); this matrix is what would catch the next one.
+#
+# The inner query binds in every clause it has, so a switch that failed to restore would move the
+# values bound after it: WHERE, then an aggregate-alias filter (HAVING) BETWEEN two WHERE filters —
+# the shape whose old reset clobbered the ambient bucket (H1 above) — then its own ON, and an ORDER BY
+# label whose nine operands print twice (GROUP BY copies an unprojected ordering term, #587).
+#
+# Oracle: PostgreSQL's `$N` walk (`_pg_text_order`), the cross-backend differential — neither this
+# test nor the change. The spelled-out `inside` run checks the oracle itself is the shape it claims.
+# Shapes the public surface cannot express are recorded, not forced:
+#   - ORDER BY: `order_by` takes a name, not an expression (`SQLOrder.field` is an `SQLTypeField`), so
+#     a subquery reaches ORDER BY only as its projected alias — the case below, where it renders in SELECT;
+#   - `Exists(...)` clears the inner projection and ORDER BY, so it has no alias to HAVING on and no
+#     ordering to bind: WHERE and ON only;
+#   - `__@in` projects one column, so its HAVING alias is that column.
+# ─────────────────────────────────────────────────────────────────────────────
+import PormG.QueryBuilder: Count
+using PormG.Functions: Case, When
+
+const _PAN_LABEL_OPS = Any["-Q", 3, 1, 6, 2, 9, 3, 12, 4]   # what `made__@yyyy_q` binds, in print order
+
+function _pan_rich(; order::Bool = true)
+  s = PAN.Pan_parent.objects
+  s.values("t" => Sum("qty"))
+  s.filter("sku" => "IW1")          # WHERE
+  s.filter("t__@gt" => 50)          # HAVING, between two WHERE filters
+  s.filter("qty__@lt" => 70)        # WHERE, bound after the HAVING switch has returned
+  s.cjoin("grandparent" => "Pan_grand", filters = ["code" => "ION"], warn = false)
+  order && s.order_by("made__@yyyy_q")
+  s
+end
+# Its run in TEXT order: ON, WHERE, GROUP BY's copy of the label, HAVING, ORDER BY's label.
+const _PAN_RICH_RUN = vcat(Any["ION", "IW1", 70], _PAN_LABEL_OPS, Any[50], _PAN_LABEL_OPS)
+
+function _pan_exists_inner()
+  s = PAN.Pan_parent.objects
+  s.values("id")
+  s.filter("sku" => "IW1")
+  s.filter("qty__@lt" => 70)
+  s.cjoin("grandparent" => "Pan_grand", filters = ["code" => "ION"], warn = false)
+  s
+end
+
+# An UPDATE's SET is not a fluent-chain kwarg target for a mock PostgreSQL connection, so the SET list
+# is put on the object directly and the internal `update` renders it under either connection.
+function _pan_update_dict(q, conn)
+  q.object.insert = PormG.OrderedCollections.OrderedDict{String,Any}("note" => "SET")
+  return PormG.QueryBuilder.update(q.object; connection = conn, show_query = :dict)
+end
+
+const _PAN_MATRIX = [
+  ("Subquery in SELECT", vcat(Any["BEFORE", 1, 0], _PAN_RICH_RUN, Any["AFTER"]), (conn) -> begin
+    q = PAN.Pan_child.objects
+    q.values("note", "c" => Case([When("note" => "BEFORE", then = 1)], default = 0), "p" => Subquery(_pan_rich()))
+    q.filter("note" => "AFTER")
+    inspect_query(q; connection = conn)
+  end),
+  ("Subquery in WHERE", vcat(Any["BEFORE"], _PAN_RICH_RUN, Any["AFTER"]), (conn) -> begin
+    q = PAN.Pan_child.objects
+    q.values("note")
+    q.filter("note" => "BEFORE")
+    q.filter("id" => Subquery(_pan_rich()))
+    q.filter("note__@ne" => "AFTER")
+    inspect_query(q; connection = conn)
+  end),
+  ("Subquery in ON", vcat(Any["BEFORE"], _PAN_RICH_RUN, Any["AFTER"]), (conn) -> begin
+    q = PAN.Pan_child.objects
+    q.cjoin("parent" => "Pan_parent", warn = false, filters = ["sku" => "BEFORE", "qty" => Subquery(_pan_rich())])
+    q.values("note", "parent__sku")
+    q.filter("note" => "AFTER")
+    inspect_query(q; connection = conn)
+  end),
+  ("Subquery in HAVING", vcat(Any["BEFORE"], _PAN_RICH_RUN, Any[999]), (conn) -> begin
+    q = PAN.Pan_child.objects
+    q.values("note", "n" => Count("id"))
+    q.filter("note" => "BEFORE")
+    q.filter("n__@gt" => Subquery(_pan_rich()))
+    q.filter("n__@lt" => 999)
+    inspect_query(q; connection = conn)
+  end),
+  ("Subquery ordered by its alias", vcat(Any["BEFORE", 1, 0], _PAN_RICH_RUN, Any["AFTER"]), (conn) -> begin
+    q = PAN.Pan_child.objects
+    q.values("note", "c" => Case([When("note" => "BEFORE", then = 1)], default = 0), "p" => Subquery(_pan_rich()))
+    q.filter("note" => "AFTER")
+    q.order_by("p")
+    inspect_query(q; connection = conn)
+  end),
+  ("Exists", Any["BEFORE", "ION", "IW1", 70, "AFTER"], (conn) -> begin
+    q = PAN.Pan_child.objects
+    q.values("note")
+    q.filter("note" => "BEFORE")
+    q.filter(Exists(_pan_exists_inner()))
+    q.filter("note__@ne" => "AFTER")
+    inspect_query(q; connection = conn)
+  end),
+  ("__@in", vcat(Any["BEFORE"], _PAN_RICH_RUN, Any["AFTER"]), (conn) -> begin
+    q = PAN.Pan_child.objects
+    q.values("note")
+    q.filter("note" => "BEFORE")
+    q.filter("parent__@in" => _pan_rich())
+    q.filter("note__@ne" => "AFTER")
+    inspect_query(q; connection = conn)
+  end),
+  ("CTE body", vcat(_PAN_RICH_RUN, Any["AFTER"]), (conn) -> begin
+    body = _pan_rich()
+    body.values("id", "t" => Sum("qty"))   # the join key, beside the aggregate
+    q = PAN.Pan_child.objects
+    q.with("cq" => body, join_field = "parent" => "id")
+    q.values("note", "s" => CTE("cq", "t"))
+    q.filter("note" => "AFTER")
+    inspect_query(q; connection = conn)
+  end),
+  ("UPDATE … WHERE __@in", vcat(Any["SET", "BEFORE"], _PAN_RICH_RUN, Any["AFTER"]), (conn) -> begin
+    q = PAN.Pan_child.objects
+    q.filter("note" => "BEFORE")
+    q.filter("parent__@in" => _pan_rich())
+    q.filter("note__@ne" => "AFTER")
+    _pan_update_dict(q, conn)
+  end),
+]
+
+@testset "every nested shape binds in text order, before/inside/after (#936)" begin
+  for (label, text_order, render) in _PAN_MATRIX
+    @testset "$label" begin
+      pg = render(_PAN_PG)
+      sl = render(_PAN_SL)
+      assert_marker_count(pg, :postgres)
+      assert_marker_count(sl, :sqlite)
+      @test _pg_text_order(pg) == text_order     # the oracle is the shape this case claims
+      assert_bound_in_text_order(sl, _pg_text_order(pg))
+    end
+  end
+end
+
+# The flattened order above cannot see a value move between two buckets with nothing bound between
+# them — a CTE run re-emitted under `:select` instead of `:cte` flattens identically while the main
+# query binds no SELECT value. `:parameter_buckets` is public `:dict` output, so the two shapes whose
+# whole run belongs to a non-default bucket pin it too (review of #936).
+@testset "the CTE body and UPDATE runs keep their buckets (#936)" begin
+  shape(label) = only(r for (l, _, r) in _PAN_MATRIX if l == label)
+  nonempty(sl) = Dict(k => v for (k, v) in sl[:parameter_buckets] if !isempty(v))
+
+  sl = shape("CTE body")(_PAN_SL)
+  @test nonempty(sl) == Dict(:cte => _PAN_RICH_RUN, :where => Any["AFTER"])
+
+  sl = shape("UPDATE … WHERE __@in")(_PAN_SL)
+  @test nonempty(sl) == Dict(:update => Any["SET"], :where => vcat(Any["BEFORE"], _PAN_RICH_RUN, Any["AFTER"]))
 end

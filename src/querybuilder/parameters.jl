@@ -31,11 +31,12 @@ end
 # appear before WHERE), we cannot simply append to a single vector.
 #
 # Instead we maintain one vector per SQL section ("bucket").  As the query
-# builder processes each section it calls `set_context!` to switch the active
-# bucket.  `add_parameter!` pushes into the *active* bucket and always returns
-# "?".  After all sections are built, `get_final_parameters` concatenates the
-# buckets in standard SQL clause order so that the positional `?` markers line
-# up with their values.
+# builder processes each section it enters `with_bucket` to switch the active
+# bucket, which restores the previous one on exit (#936, #939); `set_context!`
+# is for a statement entry point starting a fresh collector.  `add_parameter!`
+# pushes into the *active* bucket and always returns "?".  After all sections
+# are built, `get_final_parameters` concatenates the buckets in standard SQL
+# clause order so that the positional `?` markers line up with their values.
 # ─────────────────────────────────────────────────────────────────────────────
 mutable struct SQLiteParameterizedQuery <: PormGSQLiteParam
   sql::String
@@ -142,6 +143,37 @@ end
 # Convenience: operate on the instruction object directly
 set_context!(instruc::SQLInstruction, context::Symbol) = instruc.parameters !== nothing ? set_context!(instruc.parameters, context) : nothing
 
+"""
+    with_bucket(f, params_or_instruc, context::Symbol)
+
+Run `f()` with `context` as the active positional bucket, then restore the bucket that was active
+before — on return and on throw, so a render that throws never leaves its clause behind for the next
+one (#936, #939). The only way a build path changes the bucket: `set_context!` is reserved for a
+statement entry point starting a FRESH collector, and `test/unit/test_render_scope.jl` pins both.
+
+A restore, never a reset. A writer that resets to a constant (`finally set_context!(x, :where)`) is
+right only while nothing nests: once a render inside a render returns, the outer one resumes in the
+constant's clause, and every value it binds after that lands in the wrong bucket — silently, and
+only on SQLite, because PostgreSQL numbers `\$N` at render. It is `with_scope`'s rule for
+`RenderScope`, applied to the second piece of render state.
+
+The bucket stays on the COLLECTOR, not in `RenderScope`: one collector is shared by the outer build
+and every nested one, while a scope belongs to one instruction. And several statement paths bind
+with no instruction at all (the CTE clause, bulk, many-to-many, delete). A no-op on PostgreSQL.
+"""
+with_bucket(f, ::PormGPostgresParam, ::Symbol) = f()
+function with_bucket(f, sq::PormGSQLiteParam, context::Symbol)
+  prev = sq.current_context
+  sq.current_context = context
+  try
+    return f()
+  finally
+    sq.current_context = prev
+  end
+end
+with_bucket(f, instruc::SQLInstruction, context::Symbol) =
+  instruc.parameters === nothing ? f() : with_bucket(f, instruc.parameters, context)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Positional parameter marks
 #
@@ -186,9 +218,9 @@ end
 # Two independent things go wrong there, and both are fixed by the same move:
 #
 #   1. **Wrong bucket.** The inner build's ON values land in the OUTER `:join` bucket (its
-#      `build_row_join_sql_text` switches to `:join` unconditionally, defeating `build()`'s own
-#      `set_contexts` gate), while their `?` renders inside the outer WHERE. `:join` flattens before
-#      `:where`, so they overtake values whose text precedes them.
+#      `build_row_join_sql_text` switched to `:join` unconditionally, defeating the `set_contexts`
+#      gate `build()` had then), while their `?` renders inside the outer WHERE. `:join` flattens
+#      before `:where`, so they overtake values whose text precedes them.
 #   2. **Wrong ORDER, even within one bucket.** A build BINDS in phase order (select → where → …
 #      → joins last) but RENDERS in clause order (joins before where). At top level the buckets
 #      absorb that difference — that is what they are for. A nested run has no such reordering

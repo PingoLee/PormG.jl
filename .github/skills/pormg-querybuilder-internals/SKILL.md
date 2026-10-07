@@ -38,11 +38,13 @@ This skill is for implementation and regression analysis inside `src/querybuilde
 
 ### Parameter routing
 
-For positional backends, preserve bucket semantics and flatten order. The buckets below are the **single authoritative list** — `set_context!` sites and the `get_final_parameters` flatten order must agree with it; do not restate the list elsewhere:
+For positional backends, preserve bucket semantics and flatten order. The buckets below are the **single authoritative list** — the clauses `with_bucket` / `set_context!` name and the `get_final_parameters` flatten order must agree with it; do not restate the list elsewhere:
 
 `:cte → :select → :update → :join → :where → :group → :having → :order`
 
-**A nested render does not pick a bucket (#432).** An `Exists(...)`, a projected `Subquery(...)` or an `__@in` subquery renders inside the PARENT's clause, so its values are marked, lifted and re-emitted as one clause-ordered run at the parent's marker position (`nested_parameter_mark` / `detach_nested_run!`), with `own_contexts=true` so the inner build files its values under its own clauses first. Binding order is not text order: a build binds joins last and renders them first, which is what the buckets exist to reconcile.
+**The bucket changes only through `with_bucket` on a build path — restore, never reset (#936, #939).** `with_bucket(f, instruc_or_params, clause)` sets the active bucket and restores the one it found, on return and on throw; `build()` wraps each clause in one, so a build hands its caller back the bucket it was entered with. A `finally set_context!(x, :where)` is a *reset*: right only while nothing nests, and once a render inside a render returns it files every later value in the wrong bucket — silently, SQLite only. The bucket lives on the shared collector, not in `RenderScope`, because outer and nested builds share one collector while a scope belongs to one instruction. `set_context!` is for **statement entry points** starting a fresh collector (`query()`/`count()`/`exists()` at top level, insert/upsert rows, update's SET list, bulk, many-to-many, the deletion collector, a fence re-emitting its lifted run). `test/unit/test_render_scope.jl` pins those by file, expression and count, and fails on any other `set_context!` call or any `.current_context` access outside `parameters.jl`; a new entry point goes on that list with its reason.
+
+**A nested render does not pick a bucket (#432).** An `Exists(...)`, a projected `Subquery(...)` or an `__@in` subquery renders inside the PARENT's clause, so its values are marked, lifted and re-emitted as one clause-ordered run at the parent's marker position (`nested_parameter_mark` / `detach_nested_run!`). The inner build files its values under its own clauses first — every build does since #936 retired the `set_contexts=false` / `own_contexts` inherit-the-parent's-bucket mode — and restores the parent's bucket itself. Binding order is not text order: a build binds joins last and renders them first, which is what the buckets exist to reconcile.
 
 **The cross-backend differential is the oracle for parameter order.** Do not eyeball it. PostgreSQL
 numbers placeholders as it binds, so `$N` travels with the text and is authoritative: walk the `$N`
@@ -56,6 +58,9 @@ idx = [parse(Int, m.match[2:end]) for m in eachmatch(r"\$\d+", pg[:sql_text])]
 text_order = [pg[:parameters][i] for i in idx]     # authoritative
 @assert sl[:parameters] == text_order              # SQLite must match it
 ```
+
+In a unit test, use `_pg_text_order` from `test/unit/helper_marker_alignment.jl` rather than
+restating that walk; it also splats the one `__@in` array PostgreSQL binds.
 
 This turns "is this order right?" from a judgment call into a measurement, and it scales: the #432
 fix was validated by sweeping 29 shapes through it (20 misaligned before, 0 after) rather than by
@@ -72,7 +77,7 @@ Parameter collector model:
 
 When changing parameter behavior, verify:
 
-- context switching through `set_context!`
+- bucket switching through `with_bucket` (restore-only); `set_context!` only at a statement entry point
 - marker and parameter count alignment
 - parent and subquery inheritance behavior
 - HAVING alias promotion placement
@@ -106,7 +111,7 @@ Recorded so whoever patches this family next knows what they are patching.
 
 **The buckets exist because SQL text and its parameters are produced by two separate passes.** A
 build binds joins last and renders them first, so a reconciliation step has to put the two back in
-agreement — that is what `set_context!`, `_BUCKET_ORDER` and `detach_nested_run!` are for.
+agreement — that is what `with_bucket`, `_BUCKET_ORDER` and `detach_nested_run!` are for.
 
 SQLAlchemy Core has no such step: its dialect compiler walks the expression tree emitting text
 **and** binding parameters in the same pass, so positional order is correct by construction — no
@@ -460,7 +465,8 @@ Useful internal tools:
 When introducing a new parameterized SQL clause or changing clause order, update all of the following together:
 
 - bucket struct fields in `parameters.jl`
-- `set_context!` call sites in builder modules
+- `with_bucket` scopes in builder modules (and, for a new statement entry point, its `set_context!` plus
+  its entry in `test/unit/test_render_scope.jl`'s allowlist)
 - `_BUCKET_ORDER` in `parameters.jl` — the single list both `get_final_parameters` and
   `detach_nested_run!` (#432) read; there is no second copy to keep in sync
 - unit coverage in the canonical alignment tests

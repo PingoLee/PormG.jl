@@ -811,15 +811,42 @@ end
       lhs, lhs_params = _tlp_transform_lhs(col, key, conn)
       @test !occursin("CONCAT(", lhs)
       @test count(" ||", lhs) == 2
+      # #1006: the public `Concat` coalesces its operands on SQLite; the labels must not.
+      @test !occursin("COALESCE(", lhs)
       @test first(lhs_params) == "-Q"
       @test lhs_params == _tlp_transform_lhs(col, key, conn === _TLP_PG ? _TLP_SL : _TLP_PG)[2]
     end
   end
-  # The flag belongs to the two labels only. A user's `Concat` still renders PostgreSQL's `CONCAT`;
-  # its NULL handling is left to a separate decision.
-  sql = _tlp_sql((q = TLP.Tlp_row.objects;
-                  q.values("x" => PormG.Functions.Concat("note", PormG.Functions.Value(" "), "note")); q);
-                 conn = _TLP_PG)
-  @test occursin("CONCAT(", sql)
-  @test !occursin(" ||", sql)
+end
+
+@testset "#1006: a public Concat skips a NULL operand on both engines" begin
+  # PostgreSQL's `CONCAT` skips a NULL argument; SQLite's `||` propagated it, so one row read
+  # `" Senna"` on one engine and NULL on the other. Django's `Concat` skips it on every backend, so
+  # SQLite now coalesces each operand to `''` and PostgreSQL keeps `CONCAT`. The `''` is a literal,
+  # so both engines bind the same parameters.
+  Fn = PormG.Functions
+  build() = (q = TLP.Tlp_row.objects;
+             q.values("x" => Fn.Concat("note", Fn.Value(" "), "seen__@year")); q)
+  pg, sl = _tlp_sql(build(); conn = _TLP_PG), _tlp_sql(build(); conn = _TLP_SL)
+
+  @test occursin("CONCAT(", pg)
+  @test !occursin("COALESCE(", pg)
+  @test !occursin(" ||", pg)
+
+  # Every operand is wrapped, a column, a bound literal and a transform alike.
+  @test !occursin("CONCAT(", sl)
+  @test count("COALESCE(", sl) == 3
+  @test occursin("COALESCE(\"Tb\".\"note\", '') ||", sl)
+  @test occursin("COALESCE(?, '') ||", sl)
+  @test _tlp_params(build(); conn = _TLP_PG) == _tlp_params(build(); conn = _TLP_SL) == [" "]
+
+  # One operand has no `||` to make it text, so `COALESCE(7, '')` would stay an integer while a NULL
+  # row reads `''`. The trailing `|| ''` keeps the column text, as `CONCAT(7)` is on PostgreSQL.
+  single = (q = TLP.Tlp_row.objects; q.values("x" => Fn.Concat(["seen__@year"])); q)
+  @test occursin("AS INTEGER), '') ||\n'')", _tlp_sql(single; conn = _TLP_SL))
+
+  # A Concat nested in a Case branch renders through the same arm.
+  nested = (q = TLP.Tlp_row.objects;
+            q.values("x" => Fn.Case(Fn.When("note__@isnull" => false, then = Fn.Concat("note", Fn.Value("!"))))); q)
+  @test occursin("COALESCE(\"Tb\".\"note\", '') ||", _tlp_sql(nested; conn = _TLP_SL))
 end

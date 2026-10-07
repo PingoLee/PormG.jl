@@ -873,16 +873,23 @@ end
 function CAST(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return sqlite_cast_sql(column, format["type"], conn)
 end
-# #997: PostgreSQL's `CONCAT` skips a NULL argument where `||` propagates it, which is what SQLite's
-# arm renders. `propagate_null` is set only by the `@yyyy_q` / `@yyyy_quad` labels (`Y_Q` / `Y_QUAD`),
-# so a NULL date gives a NULL label on both engines instead of `'-Q'` on this one. The public
-# `Concat` keeps `CONCAT(…)`; its own NULL divergence is a separate decision.
+# #1006: the public `Concat` skips a NULL operand on both engines, as Django's `ConcatPair` does
+# (it coalesces every operand to `''`). PostgreSQL's `CONCAT` already skips one; SQLite has no
+# `CONCAT` before 3.44 and its `||` propagates NULL, so each operand is wrapped in `COALESCE(…, '')`.
+# The `''` is a SQL literal, not a bind, so the parameters match PostgreSQL's one for one. A single
+# operand gets a trailing `|| ''`: with no `||` to make it text, `COALESCE(7, '')` stays an integer
+# while a NULL row reads `''`, a column of mixed types where PostgreSQL's `CONCAT(7)` reads `'7'`.
+# #997: `propagate_null` is the opposite contract, set only by the `@yyyy_q` / `@yyyy_quad` labels
+# (`Y_Q` / `Y_QUAD`): a NULL date gives a NULL label, so both engines render a bare `||`.
 function CONCAT(column::Array{Any,1}, format::Dict{String,Any}, conn::PormGPostgres)
   get(format, "propagate_null", false) === true && return "($(join(column, " ||\n")))"
   return "CONCAT($(join(column, ",\n")))"
 end
 function CONCAT(column::Array{Any,1}, format::Dict{String,Any}, conn::PormGSQLite)
-  return "($(join(column, " ||\n")))"
+  get(format, "propagate_null", false) === true && return "($(join(column, " ||\n")))"
+  parts = String["COALESCE($(c), '')" for c in column]
+  length(parts) == 1 && push!(parts, "''")
+  return "($(join(parts, " ||\n")))"
 end
 # #691 — the `EXTRACT` field list, PostgreSQL's (the superset: SQLite's eight are all in it).
 # `EXTRACT(<field> FROM x)` takes a keyword, not a value, so it cannot be a bind parameter — the

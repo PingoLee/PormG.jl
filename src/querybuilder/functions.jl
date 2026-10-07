@@ -677,6 +677,12 @@ end
 
 Concatenates multiple strings or columns.
 
+A NULL operand is skipped, read as an empty string, on both engines, so the result is never NULL:
+`Concat(Value("#"), "number", Value(" "), "surname")` is `"# Senna"` for a driver with no number.
+This follows Django's `Concat`. PostgreSQL renders `CONCAT(…)`, which skips a NULL itself, and
+SQLite renders `COALESCE(operand, '') || …`. To get NULL when a column is NULL, test it explicitly:
+`Case(When("number__@isnull" => false, then = Concat(…)))` — a `Case` with no match is NULL.
+
 The result is text on both engines, so `output_field`, when given, must be a text type
 (`CharField()`, `TextField()`, `"text"`, `"varchar(20)"`). Any other type raises
 `InvalidValueError` when the expression is built. `Concat` renders no cast, so a number declared
@@ -1292,7 +1298,8 @@ DATE(x) = (y = _transform_operand("DATE", x);
 #
 # #997: both labels set `propagate_null`, so PostgreSQL joins them with `||` like SQLite does and a
 # NULL date gives a NULL label rather than `'-Q'` (`Dialect.CONCAT`). The flag is set on the node and
-# not taken as a `Concat` keyword, because the public function does not offer it.
+# not taken as a `Concat` keyword, because the public function does not offer it: a public `Concat`
+# skips a NULL operand on both engines (#1006).
 function _null_propagating(f::FObject)
   f.kwargs["propagate_null"] = true
   return f

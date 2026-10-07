@@ -420,10 +420,20 @@ end
 # Sequence Sync: Retry bulk insert after sequence repair
 # Verifies that a duplicate PK during `bulk_insert` triggers one sequence sync
 # and then retries the same INSERT instead of forcing the caller to rerun it.
+# The duplicate is recognized by its SQLSTATE, 23505, so the first attempt fails the way the pool
+# hands a PostgreSQL failure over since #987 — an `IntegrityError` — and with the message a `pt_BR`
+# server sends (#1001): the English phrase the resync used to look for is not in it.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "bulk_insert retries after sequence synchronization" begin
+const INSERT_FAILURE = Ref{Any}(nothing)   # what the first INSERT attempt throws
+const PT_BR_DUPLICATE = PormG.IntegrityError("PostgreSQL", ErrorException("mock"); sqlstate = "23505",
+  message = "duplicar valor da chave viola a restrição de unicidade \"drivers_pkey\"")
+
+# One `_bulk_insert` of one row, its first INSERT failing with `failure`. Returns the inserted count,
+# or the exception the call raised.
+function run_retry_insert(failure)
   empty!(SEQUENCE_SYNC_SQL)
   INSERT_ATTEMPTS[] = 0
+  INSERT_FAILURE[] = failure
 
   # `change_db` deliberately left at its `false` default (#344): the self-heal must work on the
   # connections the old gate silenced, which is exactly where a drifted sequence shows up.
@@ -437,7 +447,31 @@ end
   PormG.QueryBuilder.add_parameter!(params, Any[9]; sql_type = "bigint[]")
   PormG.QueryBuilder.add_parameter!(params, Any["Lewis"]; sql_type = "varchar[]")
 
-  original_fetch = fetch
+  # Inside a transaction on this pool, as `bulk_insert` always calls it (#85): the chunk count is
+  # `changes()`/the driver count on the transaction's pinned connection, and outside one there is no
+  # connection to take it from. This also puts the first attempt under its savepoint, the path
+  # `bulk_insert` really takes.
+  try
+    PormG.Configuration.with_tx_context(settings.connections, :mock_tx_conn) do
+      PormG.QueryBuilder._bulk_insert(
+        SequenceDriver,
+        settings.connections,
+        ["id", "forename"],
+        "SELECT * FROM unnest(\$1::bigint[], \$2::varchar[])",
+        ["id"],
+        settings,
+        :execute,
+        params,
+      )
+    end
+  catch e
+    e
+  finally
+    INSERT_FAILURE[] = nothing
+  end
+end
+
+@testset "bulk_insert retries after sequence synchronization" begin
   @eval begin
     function fetch(connection::MockSequencePostgres, sql::String;
       conn = nothing,
@@ -447,7 +481,7 @@ end
 
       if occursin("INSERT INTO", sql)
         INSERT_ATTEMPTS[] += 1
-        INSERT_ATTEMPTS[] == 1 && throw(ErrorException("duplicate key value violates unique constraint"))
+        INSERT_ATTEMPTS[] == 1 && INSERT_FAILURE[] !== nothing && throw(INSERT_FAILURE[])
         return SequenceRetryResult(7)   # the retry's own result: the only one there is to count (#670)
       elseif occursin("pg_get_serial_sequence", sql)
         return DataFrame(pg_get_serial_sequence=["public.legacy_driver_id_seq"])
@@ -465,28 +499,35 @@ end
   # MethodError rather than a pass.
   @eval PormG.backend_num_affected_rows(::MockSequencePostgres, r::SequenceRetryResult) = r.n
 
-  # Inside a transaction on this pool, as `bulk_insert` always calls it (#85): the chunk count is
-  # `changes()`/the driver count on the transaction's pinned connection, and outside one there is no
-  # connection to take it from. This also puts the first attempt under its savepoint, the path
-  # `bulk_insert` really takes.
-  inserted = PormG.Configuration.with_tx_context(settings.connections, :mock_tx_conn) do
-    PormG.QueryBuilder._bulk_insert(
-      SequenceDriver,
-      settings.connections,
-      ["id", "forename"],
-      "SELECT * FROM unnest(\$1::bigint[], \$2::varchar[])",
-      ["id"],
-      settings,
-      :execute,
-      params,
-    )
-  end
+  inserted = run_retry_insert(PT_BR_DUPLICATE)
 
   @test inserted == 7
   @test INSERT_ATTEMPTS[] == 2
   @test count(sql -> occursin("INSERT INTO", sql), SEQUENCE_SYNC_SQL) == 2
   @test any(sql -> occursin("pg_get_serial_sequence", sql), SEQUENCE_SYNC_SQL)
   @test any(sql -> occursin("setval('public.legacy_driver_id_seq'", sql), SEQUENCE_SYNC_SQL)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The resync reads the SQLSTATE, not the message (#1001)
+# The English phrase alone no longer triggers the retry: a failure that says "duplicate key" but is
+# not a 23505 `IntegrityError` propagates after one attempt, with no resync. A 23503 foreign-key
+# violation is not retried either; it is logged as one, again from a Portuguese message.
+# Reuses the mock `fetch` the testset above installs.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "bulk_insert's resync reads the SQLSTATE, not the message (#1001)" begin
+  english_text = ErrorException("duplicate key value violates unique constraint \"drivers_pkey\"")
+  err = run_retry_insert(english_text)
+  @test err === english_text
+  @test INSERT_ATTEMPTS[] == 1
+  @test !any(sql -> occursin("setval", sql), SEQUENCE_SYNC_SQL)
+
+  foreign_key = PormG.IntegrityError("PostgreSQL", ErrorException("mock"); sqlstate = "23503",
+    message = "inserção ou atualização em tabela \"results\" viola restrição de chave estrangeira \"results_driverid_fkey\"")
+  err = @test_logs (:error, r"foreign key constraint violated") match_mode = :any run_retry_insert(foreign_key)
+  @test err === foreign_key
+  @test INSERT_ATTEMPTS[] == 1
+  @test !any(sql -> occursin("setval", sql), SEQUENCE_SYNC_SQL)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

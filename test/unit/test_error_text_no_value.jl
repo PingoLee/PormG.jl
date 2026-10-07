@@ -395,19 +395,6 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# The bulk-insert sequence resync still sees a duplicate key (#987)
-# `bulk_insert` retries a PostgreSQL duplicate-key failure after resyncing the primary-key sequence,
-# and it recognizes one by this phrase in `sprint(showerror, e)` (execution_bulk.jl). The safe
-# rendering keeps the class-23 primary message, so the phrase is still there on both drivers.
-# ─────────────────────────────────────────────────────────────────────────────
-@testset "#987: a duplicate key still reads as one for the bulk_insert resync" begin
-  for cause in (PG_UNIQUE987, PGJL_UNIQUE987)
-    e = wrap987(PormG.IntegrityError, "PostgreSQL", cause)
-    @test occursin("duplicate key value violates unique constraint", sprint(showerror, e))
-  end
-end
-
-# ─────────────────────────────────────────────────────────────────────────────
 # The pool's funnel fills the fields, and a throwing reader cannot replace the failure (#987)
 # `_as_database_error` is where every driver failure becomes a DatabaseError. It must attach the
 # reason, and an extension's reader that throws must degrade to no fields — not swap the database's

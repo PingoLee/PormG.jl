@@ -196,6 +196,42 @@ end
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# bulk_insert resyncs a drifted sequence and retries (#1001)
+#
+# A row written with an explicit primary key by a row-level writer leaves the PostgreSQL sequence
+# behind (#358: create() does not resync), so the next auto-generated id collides with it. bulk_insert
+# recognizes that duplicate key by its SQLSTATE, 23505, resyncs the sequence and retries the INSERT
+# once; the caller sees a plain success. The unit suite pins the SQLSTATE dispatch against a mocked
+# localized message (test_sequence_sync.jl); this is the live round-trip through the real driver.
+# PostgreSQL only: SQLite's AUTOINCREMENT moves past an explicit id on its own, so it never drifts.
+# The drift rests on #358: were create() to resync again, the first INSERT would land and this would
+# pass without the retry. Forcing the retry condition false made it fail with the 23505 (#1001).
+# ─────────────────────────────────────────────────────────────────────────────
+if PORMG_DB_FOLDER != "db_sl"
+    @testset "bulk_insert resyncs a drifted sequence and retries (#1001)" begin
+        labels = ["seq-drift-1001-seed", "seq-drift-1001-explicit", "seq-drift-1001-bulk"]
+        cleanup() = (q = M.Django_contract_scratch.objects.filter("label__@in" => labels);
+                     q.exists() && q.delete())
+        cleanup()
+        try
+            seed = M.Django_contract_scratch.objects.create("label" => "seq-drift-1001-seed")
+            # The id the sequence hands out next, taken by hand: the sequence is now behind.
+            M.Django_contract_scratch.objects.create("id" => seed[:id] + 1, "label" => "seq-drift-1001-explicit")
+
+            bulk_insert(M.Django_contract_scratch.objects,
+                DataFrame(id = Union{Missing, Int64}[missing], label = ["seq-drift-1001-bulk"]))
+
+            landed = M.Django_contract_scratch.objects.filter("label" => "seq-drift-1001-bulk").values("id").list()
+            @test length(landed) == 1
+            @test only(landed)[:id] > seed[:id] + 1
+        finally
+            cleanup()
+        end
+    end
+end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Insertion Result Semantics
 #
 # The public contract of query.create() is that it returns a Dict{Symbol, Any}

@@ -345,7 +345,9 @@ function fetch(connection::BulkReturningMockPg, sql::String;
   occursin("nextval(", sql) && return DataFrame(reserved_id = copy(BR671_RESERVED))
   if occursin(r"^\s*INSERT"i, sql)
     push!(BR671_WRITES, sql)
-    BR671_DUPLICATE[] && error("duplicate key value violates unique constraint \"br671_pg_result_pkey\"")
+    # A 23505 the way the pool hands it over (#987); the resync retry reads its SQLSTATE (#1001).
+    BR671_DUPLICATE[] && throw(PormG.IntegrityError("PostgreSQL", ErrorException("mock"); sqlstate = "23505",
+      message = "duplicate key value violates unique constraint \"br671_pg_result_pkey\""))
     return popfirst!(BR671_RETURNED)
   end
   return DataFrame()   # SAVEPOINT / RELEASE and anything else
@@ -489,7 +491,7 @@ end
     catch e
       e
     end
-    @test err !== nothing && occursin("duplicate key", sprint(showerror, err))
+    @test err isa PormG.IntegrityError && err.sqlstate == "23505"
     @test length(BR671_WRITES) == 1
     # Control: the same failure with a supplied pk is retried once after the resync.
     try

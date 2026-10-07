@@ -180,7 +180,10 @@ function fetch(connection::MockPgConflictRetry, sql::String;
 
   if occursin("INSERT INTO", sql)
     ON_CONFLICT_INSERT_ATTEMPTS[] += 1
-    throw(ErrorException("duplicate key value violates unique constraint"))
+    # A 23505 the way the pool hands it over (#987): the SQLSTATE is what would trigger the resync
+    # (#1001), so only the on_conflict gate can be what stops it here.
+    throw(PormG.IntegrityError("PostgreSQL", ErrorException("mock"); sqlstate = "23505",
+      message = "duplicate key value violates unique constraint \"dash_dim_cbo_co_cbo_key\""))
   elseif occursin("pg_get_serial_sequence", sql)
     return DataFrame(pg_get_serial_sequence = ["public.dash_dim_cbo_id_seq"])
   elseif occursin("setval", sql)
@@ -224,7 +227,7 @@ end
 
   # The duplicate-key error propagates untouched after a single attempt…
   @test err !== nothing
-  @test occursin("duplicate key value violates unique constraint", string(err))
+  @test err isa PormG.IntegrityError && err.sqlstate == "23505"
   @test ON_CONFLICT_INSERT_ATTEMPTS[] == 1
   # …the executed statement really carried the clause…
   @test any(sql -> occursin("ON CONFLICT DO NOTHING", sql), ON_CONFLICT_RETRY_SQL)

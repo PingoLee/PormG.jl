@@ -847,16 +847,23 @@ end
 # actionable PormGError — this is the one place a Django user is surprised, because Django's
 # get_or_create does SELECT-then-INSERT and needs no unique constraint (#208).
 function _rethrow_conflict_target_error(e, model::PormGModel, target_fields::Vector{String})
-  msg = sprint(showerror, e)
-  low = lowercase(msg)
-  if occursin("on conflict", low) && (occursin("unique", low) || occursin("exclusion", low) ||
-      occursin("does not match", low) || occursin("no primary key", low))
+  if _is_conflict_target_error(e)
     throw(QueryBuildError(
       "get_or_create on $(model.name) requires a UNIQUE constraint on the lookup field(s) " *
       "(\e[4m\e[31m$(join(target_fields, ", "))\e[0m) — they are the ON CONFLICT target. Add a unique " *
       "constraint/index on them, or for non-unique lookups use filter(...).first() then create(...)."))
   end
   rethrow(e)
+end
+
+# PostgreSQL by its SQLSTATE, `42P10` (invalid_column_reference): the message is localized by
+# `lc_messages`, so a `pt_BR` server never matched the text (#1001). SQLite reports no SQLSTATE and
+# does not localize, so its message stays the signal.
+function _is_conflict_target_error(e)
+  e isa DatabaseError && e.sqlstate !== nothing && return e.sqlstate == "42P10"
+  low = lowercase(sprint(showerror, e))
+  return occursin("on conflict", low) && (occursin("unique", low) || occursin("exclusion", low) ||
+         occursin("does not match", low) || occursin("no primary key", low))
 end
 
 # get_or_create's get() by the conflict target, unexecuted: through the fluent builder for

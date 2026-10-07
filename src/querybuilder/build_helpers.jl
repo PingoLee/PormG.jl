@@ -419,6 +419,23 @@ function _check_fixed_shape_lookup(suffix::AbstractString, value)
   return nothing
 end
 
+# #972: `@isnull` after a transform renders `<transform> IS [NOT] NULL` — except after the two
+# year-qualified LABEL transforms, which are refused here, from the path the caller typed.
+#
+# `@yyyy_q` / `@yyyy_quad` render a `Concat`, and the engines disagree on what it yields for a NULL
+# date: PostgreSQL's `CONCAT` skips NULL arguments and returns `'-Q'`, while SQLite's `||`
+# propagates the NULL. So `IS NULL` on the label would match the NULL-date rows on SQLite and none on
+# PostgreSQL. Refusing it is loud on both; the bare column answers the question either way, since a
+# label is NULL only when its date is (on the engine where it is NULL at all). #997 tracks making the
+# label NULL-preserving on PostgreSQL, which lifts this refusal.
+function _check_transform_isnull(path::Vector{String})
+  length(path) >= 3 && path[end] == "isnull" && path[end-1] in ("yyyy_q", "yyyy_quad") || return nothing
+  col = join(path[1:end-2], "__@")
+  throw(FilterError("Error in filter '$(join(path, "__@"))': '@isnull' is not supported after " *
+                    "'@$(path[end-1])', whose label is NULL for a NULL date on SQLite but '-Q' on " *
+                    "PostgreSQL. Test the column itself: \"$(col)__@isnull\" => true"))
+end
+
 # #811: the lookups whose right-hand side is never a single column, refused on the column-reference
 # arms only (`F`, a function, `Joined`, `CTE`) — the scalar arm's `@in` binds a one-element list, which
 # is fine. A column is not a list, so `"points__@in" => F("grid")` rendered `IN "Tb"."grid"`, invalid
@@ -473,6 +490,7 @@ end
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:Union{AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID}
   if haskey(PormGsuffix, x.first[end])
     _check_fixed_shape_lookup(x.first[end], x.second)
+    _check_transform_isnull(x.first)
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__"))) # TODO, maybe I need to check if the column is valid and process the function before store
@@ -2944,6 +2962,35 @@ function _bind_predicate_value(instruc::SQLInstruction, operator::AbstractString
                         contains = operator in LIKE_WILDCARD_OPERATORS, operator = operator)
 end
 
+# #972: the binding half of the three transform arms of `_get_filter_query(::SQLTypeOper, …)`.
+#
+# They bound every value with one `add_parameter!`, so `"date__@year__@range" => [1990, 1999]`
+# handed `_render_predicate` one placeholder where `BETWEEN` needs a pair, and `@isnull` handed it a
+# placeholder where `ISNULL` needs its `Bool` — each refused as "X is not a supported operator".
+# `_bind_predicate_value` is the shape the WHERE `BETWEEN` arm and the alias branch already share
+# (#654), so the transform arms take it too.
+#
+# `@isnull` skips the formatter (#886). Its value is the `IS [NOT] NULL` polarity, already checked to
+# be a `Bool` by `_check_fixed_shape_lookup`, not a value of the transform's type — formatting it
+# sent `true` through `format_yyyy_mm` / `format_date_sql` and blamed the value, the one part of the
+# filter that was right.
+#
+# `node` is the function the arm matched. `COUNT` reaches the two `PormGTypeField`-keyed arms through
+# the internal `OP(Count(…), …)`, and `COUNT(…) IS NULL` can never match (an empty group counts 0), so
+# it is refused here exactly as the alias branch refuses it (#654) — those arms were a refusal for
+# every `@isnull` before #972, and stay one for this case.
+function _bind_transform_value(instruc::SQLInstruction, v::SQLTypeOper, node::SQLTypeFunction,
+                               formatter, label, type, subject)
+  if v.operator == "ISNULL"
+    node.function_name == "COUNT" && throw(FilterError(
+      "The \e[31m@isnull\e[0m lookup can never match COUNT($(label)): COUNT never returns NULL — an empty " *
+      "group counts 0. Compare it with 0 instead."))
+    return v.values
+  end
+  formatted = _guarded_format(formatter, v.values, v.operator, label, type; subject = subject)
+  return _bind_predicate_value(instruc, v.operator, formatted)
+end
+
 # The operator ladder every filter predicate renders through, whatever clause it lands in (#618).
 #
 # It used to be inlined at the tail of `_get_filter_query(::SQLTypeOper, …)` — the WHERE path — while
@@ -2969,12 +3016,13 @@ end
 # returned ABOVE this ladder, so the alias branch could not reach them and #618 refused them there.
 # They are arms here now, with the two shapes that made them early returns stated as the argument:
 # `BETWEEN` takes a 2-tuple of placeholders (`_bind_predicate_value`), and `ISNULL` takes the `Bool`
-# polarity itself, because it binds nothing. A `BETWEEN` that arrives with anything but a 2-tuple
-# — a transform arm, which binds one vector — falls through to the unknown-operator refusal it
-# always reached. `aggregate` is the alias branch's explicit licence to put an aggregate call under
-# `IS NULL`, which `ISNULL` otherwise refuses (#197); it is never inferred from the column text.
+# polarity itself, because it binds nothing. Since #972 the transform arms bind through the same
+# helper (`_bind_transform_value`), so `@range` and `@isnull` after a transform reach these arms
+# too. `expression` is the caller's explicit licence to put a call under `IS NULL`, which `ISNULL`
+# otherwise refuses (#197): the alias branch passes it for an aggregate projection (#654) and the
+# WHERE path for a transform column (#972). It is never inferred from the column text.
 function _render_predicate(column::AbstractString, operator::AbstractString, placeholders,
-                           instruc::SQLInstruction; aggregate::Bool = false)::String
+                           instruc::SQLInstruction; expression::Bool = false)::String
   if operator in ["=", ">", "<", ">=", "<=", "<>", "!="]
     return string(column, " ", operator, " ", placeholders)
   elseif operator in ["IN", "NOT IN"]
@@ -2983,7 +3031,7 @@ function _render_predicate(column::AbstractString, operator::AbstractString, pla
     # #207: `nrange` renders NOT BETWEEN — the operator string carries it, so it is emitted verbatim.
     return string(column, " ", operator, " ", placeholders[1], " AND ", placeholders[2])
   elseif operator == "ISNULL" && placeholders isa Bool
-    return ISNULL(column, placeholders; aggregate = aggregate)
+    return ISNULL(column, placeholders; expression = expression)
   elseif operator in PATTERN_LOOKUP_OPERATORS
     @pormg_debug false
     # The `ESCAPE` clause an escaped pattern needs comes from these arms and the `%` from the
@@ -3160,6 +3208,10 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   end
 
   column = _get_filter_query(v.column, instruc)
+  # #972: set by the three transform arms below, from the NODE they matched — the licence
+  # `_render_predicate` needs to put a transform's call text under `IS [NOT] NULL` (#197 refuses
+  # any `(` otherwise). Never inferred from `column`'s text.
+  transform_lhs = false
   # #27: JSONB containment/overlap operators (@>, ?, ?|, ?&) — dedicated binding + PG-only render.
   if v.operator in JSON_CONTAINMENT_OPERATORS
     return _render_json_operator(v, column, instruc)
@@ -3232,10 +3284,10 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # #618: the transform arms reach the `Dialect` dispatch below, so their SQL keyword and `ESCAPE`
     # clause were always right — but they bound the value with no `contains=` / `operator=`, so a
     # pattern lookup over a transform column got no `%` and no `escape_like_pattern`. That is the same
-    # bind half as the HAVING/alias branch, so all three arms here take the two kwargs too.
-    placeholders = add_parameter!(instruc,
-      _guarded_format(v.column.field.formatter, v.values, v.operator, _label, _type; subject = _subject),
-      contains = v.operator in LIKE_WILDCARD_OPERATORS, operator = v.operator)
+    # bind half as the HAVING/alias branch, so all three arms here take the two kwargs too — now
+    # through `_bind_transform_value`, which also gives them `@isnull` and `@range` (#972).
+    placeholders = _bind_transform_value(instruc, v, v.column.field, v.column.field.formatter, _label, _type, _subject)
+    transform_lhs = true
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && haskey(PormGTypeField, v.column.field.function_name)
     # Through the same helper as the other sites (#411). These work today only because
     # `PormGTypeField` maps to `format_number_sql` / `format_text_sql` — the two formatters that
@@ -3244,9 +3296,8 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     _fmt = getfield(Models, PormGTypeField[v.column.field.function_name])
     _label, _type, _subject = _transform_filter_labels(v.column, _fmt)   # #576
     _guard_vector_equality(v, nothing, _label)   # #596 — fail-safe; no public spelling reaches this arm
-    placeholders = add_parameter!(instruc,
-      _guarded_format(_fmt, v.values, v.operator, _label, _type; subject = _subject),
-      contains = v.operator in LIKE_WILDCARD_OPERATORS, operator = v.operator)   # #618
+    placeholders = _bind_transform_value(instruc, v, v.column.field, _fmt, _label, _type, _subject)   # #618, #972
+    transform_lhs = true
   elseif isa(v.column, SQLTypeFunction) && haskey(PormGTypeField, v.column.function_name)
     # Function with formatter
     @pormg_debug false
@@ -3264,9 +3315,8 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     _fmt = _own !== nothing ? _own : getfield(Models, PormGTypeField[v.column.function_name])
     _label, _type, _subject = _transform_filter_labels(v.column, _fmt)   # #576
     _guard_vector_equality(v, nothing, _label)   # #596 — fail-safe; no public spelling reaches this arm
-    placeholders = add_parameter!(instruc,
-      _guarded_format(_fmt, v.values, v.operator, _label, _type; subject = _subject),
-      contains = v.operator in LIKE_WILDCARD_OPERATORS, operator = v.operator)   # #618
+    placeholders = _bind_transform_value(instruc, v, v.column, _fmt, _label, _type, _subject)   # #618, #972
+    transform_lhs = true
   elseif isa(v.column, SQLTypeFunction)
     # #537 — a function column none of the branches above can bind. `OP(::SQLTypeFunction, …)` is a
     # constructor arm PormG itself relies on — `When(OP(MONTH(x), "<=", N))` builds `Y_Q` / `Y_QUAD`,
@@ -3411,7 +3461,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   # #618: the ladder lives in `_render_predicate` so the HAVING/alias branch renders through the
   # same one. Behavior here is unchanged, which is why the existing WHERE coverage is the
   # regression test for the extraction itself.
-  return _render_predicate(column, v.operator, placeholders, instruc)
+  return _render_predicate(column, v.operator, placeholders, instruc; expression = transform_lhs)
 end
 function _get_filter_query(q::SQLTypeQ, instruc::SQLInstruction)
   resp = []

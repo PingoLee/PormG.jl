@@ -669,3 +669,155 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# `@isnull`, `@range` and `@nrange` after a transform (#972, #886).
+# The transform arm of `_get_filter_query(::SQLTypeOper)` bound every value with one `add_parameter!`,
+# so `"date__@year__@range" => [1990, 1999]` and `"date__@year__@isnull" => true` were refused as
+# "BETWEEN / ISNULL is not a supported operator", and `@yyyy_mm` / `@date` / `@quarter` sent the
+# `@isnull` polarity through their own formatter and blamed the value (#886). Django renders
+# `pub_date__year__isnull` as `EXTRACT(…) IS NULL`; PormG now does the same.
+#
+# The expected left-hand side is NOT written out here: it is read from the PROJECTION of the same
+# transform, a render this change does not touch, so every key — and a key added later — is checked
+# against an independent source rather than against a list copied from the new output. `@isnull`
+# binds nothing; a range binds its two formatted operands after whatever the expression bound itself
+# (`@yyyy_q` binds its `'-Q'` and CASE bounds).
+#
+# The two filter spellings are the pair and `Q(…)`: an `F` comparison overloads the comparison
+# operators only, so there is no `F` spelling of `@isnull` or `@range` to agree with.
+#
+# Mutation gates: restore the arm's single `add_parameter!` (`_bind_transform_value` →
+# `add_parameter!(instruc, _guarded_format(…))`) and every row fails as "not a supported operator";
+# drop `expression = transform_lhs` at the tail and every `@isnull` row fails on the #197 refusal;
+# format the `ISNULL` polarity again and the `@yyyy_mm` / `@date` / `@quarter` rows fail as #886.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The transform's own SQL, as the projection renders it, plus the parameters that SQL binds.
+function _tlp_transform_lhs(col, key, conn)
+  r = inspect_query((q = TLP.Tlp_row.objects; q.values("x" => "$(col)__@$(key)"); q); connection = conn)
+  m = match(r"SELECT\s+(.*?)\s+as \"x\""s, r[:sql_text])
+  return (m.captures[1], r[:parameters])
+end
+
+# The `@isnull` carve-out (`_check_transform_isnull`) — the two CONCAT labels.
+const _TLP_LABEL_TRANSFORMS = ("yyyy_q", "yyyy_quad")
+
+# The third slot is what precedes the predicate in WHERE: `Q(…)` parenthesizes its group.
+_tlp_972_spellings = (
+  ("pair", (q, path, v) -> q.filter(path => v),    "WHERE "),
+  ("Q",    (q, path, v) -> q.filter(Q(path => v)), "WHERE ("),
+)
+
+@testset "#972: @isnull after a transform renders IS [NOT] NULL and binds nothing" begin
+  for (backend, conn) in _TLP_BACKENDS, key in _TLP_DATE_TRANSFORMS, col in ("seen", "ts")
+    key in _TLP_LABEL_TRANSFORMS && continue
+    lhs, lhs_params = _tlp_transform_lhs(col, key, conn)
+    for (spelling, filter!, where) in _tlp_972_spellings, (polarity, tail) in ((true, "IS NULL"), (false, "IS NOT NULL"))
+      @testset "$backend $(col)__@$(key) $spelling $polarity" begin
+        r = inspect_query((q = TLP.Tlp_row.objects; filter!(q, "$(col)__@$(key)__@isnull", polarity); q);
+                          connection = conn)
+        @test occursin("$(where)$(lhs) $(tail)", r[:sql_text])
+        @test r[:parameters] == lhs_params
+      end
+    end
+  end
+end
+
+@testset "#886: the @isnull polarity never reaches the transform's formatter" begin
+  # The three keys whose formatter refuses a `Bool`, so the polarity used to come back as a refused
+  # VALUE — `InvalidValueError` on `@yyyy_mm`, the one #886 reported. The loop above already renders
+  # them; this names the regression and pins that no value refusal is raised.
+  for (backend, conn) in _TLP_BACKENDS, key in ("yyyy_mm", "date", "quarter"), polarity in (true, false)
+    @test _tlp_params((q = TLP.Tlp_row.objects; q.filter("seen__@$(key)__@isnull" => polarity); q);
+                      conn = conn) == _tlp_transform_lhs("seen", key, conn)[2]
+  end
+end
+
+@testset "#972: @range / @nrange after a transform bind both operands, in order" begin
+  operands(key) = key == "date" ? ([Date(2020, 1, 1), Date(2020, 2, 1)], ["2020-01-01", "2020-02-01"]) :
+                  key == "yyyy_mm" ? (["2020-01", "2020-03"], ["2020-01", "2020-03"]) :
+                  key in _TLP_LABEL_TRANSFORMS ? (["2020-Q1", "2020-Q2"], ["2020-Q1", "2020-Q2"]) :
+                  ([1, 3], [1, 3])
+  for (backend, conn) in _TLP_BACKENDS, key in _TLP_DATE_TRANSFORMS, col in ("seen", "ts")
+    lhs, lhs_params = _tlp_transform_lhs(col, key, conn)
+    given, bound = operands(key)
+    n = length(lhs_params)
+    ph1, ph2 = conn === _TLP_SL ? ("?", "?") : ("\$$(n + 1)", "\$$(n + 2)")
+    for (spelling, filter!, where) in _tlp_972_spellings, (op, sql_op) in (("range", "BETWEEN"), ("nrange", "NOT BETWEEN"))
+      @testset "$backend $(col)__@$(key)__@$(op) $spelling" begin
+        r = inspect_query((q = TLP.Tlp_row.objects; filter!(q, "$(col)__@$(key)__@$(op)", given); q);
+                          connection = conn)
+        @test occursin("$(where)$(lhs) $(sql_op) $(ph1) AND $(ph2)", r[:sql_text])
+        @test r[:parameters] == [lhs_params..., bound...]
+      end
+    end
+  end
+  # The operands still go through the transform's formatter: an hour no clock shows is refused,
+  # not bound — the #579 / #636 contract, now reached through the range arm too.
+  for (backend, conn) in _TLP_BACKENDS
+    @test_throws PormG.InvalidValueError _tlp_sql(
+      (q = TLP.Tlp_row.objects; q.filter("ts__@hour__@range" => [1, 25]); q); conn = conn)
+  end
+end
+
+@testset "#972: the other places a filter pair is read take the same render" begin
+  # A `When` condition and a joined path read the pair through the same parser and the same arms.
+  # Pinned because they are the two routes most likely to grow their own binding later; the
+  # expected text is again the projection's.
+  for (backend, conn) in _TLP_BACKENDS
+    lhs, _ = _tlp_transform_lhs("ts", "year", conn)
+    sql = _tlp_sql((q = TLP.Tlp_row.objects;
+                    q.values("x" => PormG.Functions.Case([PormG.Functions.When("ts__@year__@isnull" => true, then = 1)], default = 0)); q);
+                   conn = conn)
+    @test occursin("WHEN $(lhs) IS NULL THEN", sql)
+
+    J = TlpJoinModels
+    proj = _tlp_sql((q = J.Tlp_result.objects; q.values("x" => "driver__dob__@year"); q); conn = conn)
+    joined_lhs = match(r"SELECT\s+(.*?)\s+as \"x\""s, proj).captures[1]
+    sql = _tlp_sql((q = J.Tlp_result.objects; q.filter("driver__dob__@year__@isnull" => false); q); conn = conn)
+    @test occursin("$(joined_lhs) IS NOT NULL", sql)
+  end
+end
+
+@testset "#972: COUNT under @isnull stays refused on the internal OP route" begin
+  # The two `PormGTypeField`-keyed arms are reached only by the internal `OP(Count(…), …)`. They
+  # refused every `@isnull` before #972; `COUNT` keeps that refusal, because `COUNT(…) IS NULL` can
+  # never match — the alias branch's #654 rule. Mutation gate: drop the `COUNT` check in
+  # `_bind_transform_value` and this renders a predicate that is always false.
+  QB = PormG.QueryBuilder; Fn = PormG.Functions
+  for (backend, conn) in _TLP_BACKENDS
+    err = try
+      _tlp_sql((q = TLP.Tlp_row.objects;
+                q.values("id", "x" => Fn.Case([Fn.When(QB.OP(Fn.Count("id"), "ISNULL", true), then = 1)], default = 0)); q);
+               conn = conn)
+      nothing
+    catch e
+      e
+    end
+    @test err isa PormG.FilterError
+    @test occursin("COUNT never returns NULL", replace(sprint(showerror, err), r"\e\[[0-9;]*m" => ""))
+  end
+end
+
+@testset "#972: @isnull after @yyyy_q / @yyyy_quad is refused, naming why" begin
+  # PostgreSQL's `CONCAT` skips a NULL argument and yields `'-Q'` for a NULL date; SQLite's `||`
+  # yields NULL. Rendering `IS NULL` would answer differently per engine, so it is refused on both,
+  # pointing at the bare column — which answers the question the caller meant.
+  for (backend, conn) in _TLP_BACKENDS, key in _TLP_LABEL_TRANSFORMS, (spelling, filter!, _) in _tlp_972_spellings
+    @testset "$backend @$(key) $spelling" begin
+      err = try
+        _tlp_sql((q = TLP.Tlp_row.objects; filter!(q, "seen__@$(key)__@isnull", true); q); conn = conn)
+        nothing
+      catch e
+        e
+      end
+      @test err isa PormG.FilterError
+      msg = replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
+      @test occursin("'@isnull' is not supported after '@$(key)'", msg)
+      @test occursin("\"seen__@isnull\" => true", msg)
+      @test !occursin("not a supported operator", msg)
+      @test !occursin("function expression", msg)
+    end
+  end
+end

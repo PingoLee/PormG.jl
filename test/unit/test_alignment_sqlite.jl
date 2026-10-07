@@ -3664,7 +3664,8 @@ end
     @test sl[:parameters] == [1]
 
     # `BETWEEN` on a transform column renders the left-hand side once as well — an arm that used
-    # to re-render it. (`ISNULL` refuses a function column outright, so it has no binding shape.)
+    # to re-render it. (`ISNULL` binds nothing, so it has no binding shape — #972 lets it follow a
+    # transform, as `IS [NOT] NULL` on the transform's text.)
     sl = _assert_predicate_binds_once() do
         q = M.Race.objects
         q.values("name")

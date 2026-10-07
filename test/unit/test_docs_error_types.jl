@@ -1685,6 +1685,25 @@ const DOCERR_CASES = [
         FieldValidationError,
         () -> CharField(default = true),
     ),
+    # #972. *Null checks and ranges after a transform* says `@isnull` after a year-qualified label
+    # raises, and that a range operand is checked like a single value. Every transform is pinned in
+    # `test_transform_ladder_parity.jl`.
+    (
+        "functions_and_dates.md — @isnull after @yyyy_q raises (#972)",
+        FilterError,
+        () -> let m = Model("docerr_race_972", id = IDField(), date = DateField(null = true))
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("date__@yyyy_q__@isnull" => true); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "functions_and_dates.md — an hour no clock shows in a range raises (#972)",
+        InvalidValueError,
+        () -> let m = Model("docerr_race_972r", id = IDField(), ts = DateTimeField(null = true))
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("ts__@hour__@range" => [1, 25]); q.list(show_query = :dict)
+        end,
+    ),
     # #885. The *TimeField* section says a Bool or a bare number default is refused; the full
     # spelling matrix is pinned in `test_default_converter_contract.jl`.
     (

@@ -216,6 +216,10 @@ An `ArrayField` (PostgreSQL only) takes `@acontains` (`@>`), `@contained_by` (`<
 | `field__@second` | Extract whole second (0-59) | `"time__@second" => 0` |
 | `field__@len` | Element count of an `ArrayField` (PostgreSQL only) | `"pit_laps__@len__@gte" => 2` |
 
+A lookup chains after a transform: `"date__@year__@range" => [1990, 1999]`,
+`"sprint_date__@year__@isnull" => false`. `@isnull` is the one refused after `@yyyy_q` / `@yyyy_quad`; see
+[Null checks and ranges after a transform](read/functions_and_dates.md#Null-checks-and-ranges-after-a-transform).
+
 For the full list of operators and transforms, see [Filters and Aggregates](read/filters_and_aggregates.md).
 
 ---

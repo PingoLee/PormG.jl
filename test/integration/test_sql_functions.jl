@@ -1707,3 +1707,33 @@ end
     alone.order_by("resultid")
     @test [x[:raceid__date] for x in joined] == [x[:raceid__date] for x in alone.list()]
 end
+
+@testset "#972: @isnull and @range after a transform execute on both engines" begin
+    # `"date__@year__@isnull"` and `"date__@year__@range"` were refused as "ISNULL / BETWEEN is not a
+    # supported operator" before the build reached the database; they render the transform's own
+    # `IS [NOT] NULL` / `BETWEEN` now. The unit suite pins the SQL; this runs it, against expected
+    # counts that do not come from the transform.
+    #
+    # `sprint_date` is NULL on every race without a sprint, so a date part of it is NULL on exactly
+    # those rows — the bare column's own `@isnull` is the independent count. The guard below keeps
+    # that from passing vacuously on a fixture with no NULLs.
+    @test M.Race.objects.filter("sprint_date__@isnull" => true).count() > 0
+    @test M.Race.objects.filter("sprint_date__@isnull" => false).count() > 0
+    @test M.Race.objects.filter("start_at__@isnull" => true).count() > 0
+    @test M.Race.objects.filter("start_at__@isnull" => false).count() > 0
+    for polarity in (true, false)
+        bare = M.Race.objects.filter("sprint_date__@isnull" => polarity).count()
+        @test M.Race.objects.filter("sprint_date__@year__@isnull" => polarity).count() == bare
+        @test M.Race.objects.filter("sprint_date__@yyyy_mm__@isnull" => polarity).count() == bare
+        @test M.Race.objects.filter("start_at__@hour__@isnull" => polarity).count() ==
+              M.Race.objects.filter("start_at__@isnull" => polarity).count()
+    end
+
+    # The range, against the years counted in Julia from the dates themselves. The date's text is
+    # read rather than its type, so the count does not depend on what each engine hands back.
+    years = [parse(Int, first(string(r[:date]), 4)) for r in M.Race.objects.values("date").list()]
+    in_90s = count(y -> 1990 <= y <= 1999, years)
+    @test in_90s > 0
+    @test M.Race.objects.filter("date__@year__@range" => [1990, 1999]).count() == in_90s
+    @test M.Race.objects.filter("date__@year__@nrange" => [1990, 1999]).count() == length(years) - in_90s
+end

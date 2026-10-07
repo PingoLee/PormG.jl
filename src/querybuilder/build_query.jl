@@ -1344,7 +1344,7 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   # `PATTERN_LOOKUP_OPERATORS` → `Dialect` dispatch it never had, and brings the
   # unknown-operator refusal that was missing here entirely.
   return _render_predicate(string(field), v.operator, placeholder, instruc;
-                           aggregate = isnull_aggregate)
+                           expression = isnull_aggregate)
 end
 
 # #894 — an interval alias compared with a duration compares milliseconds on SQLite: the alias's own

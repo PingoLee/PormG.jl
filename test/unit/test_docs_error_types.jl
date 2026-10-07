@@ -1685,6 +1685,13 @@ const DOCERR_CASES = [
         FieldValidationError,
         () -> CharField(default = true),
     ),
+    # #885. The *TimeField* section says a Bool or a bare number default is refused; the full
+    # spelling matrix is pinned in `test_default_converter_contract.jl`.
+    (
+        "fields.md — a TimeField's default = 5 raises (#885)",
+        FieldValidationError,
+        () -> PormG.Models.TimeField(default = 5),
+    ),
     # #868. The same *Text Fields* section says `max_length` counts the text an integer is written
     # as. Every writer, value type and both engines are pinned in `test_text_value_types.jl`.
     (

@@ -161,7 +161,7 @@ end
 # function expression is evaluated per-row AFTER grouping, so it must never
 # appear in GROUP BY itself.
 #
-# Before the _is_window_expr guard in build_query.jl, a window function would
+# Before the _is_window_expr guard in build_select.jl, a window function would
 # fall through to `push!(instruc.group, ...)` — emitting invalid SQL like
 # `GROUP BY 1, 3` where position 3 is RANK() OVER (...), which databases reject.
 # ─────────────────────────────────────────────────────────────────────────────

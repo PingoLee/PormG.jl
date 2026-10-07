@@ -227,7 +227,7 @@ characterizations worth stating plainly.
 | You want to understand… | Start at |
 |---|---|
 | How `.objects` and chaining work | `src/querybuilder/object_manager.jl`, `types.jl` (`SQLObjectQuery`, `object()`) |
-| How SQL text is assembled | `src/querybuilder/build_query.jl` (`build`), `build_joins.jl`, `ctes.jl` |
+| How SQL text is assembled | `src/querybuilder/build_query.jl` (`build`), `build_select.jl` (SELECT / ORDER BY), `build_filter.jl` (WHERE / HAVING), `projection_types.jl`, `build_joins.jl`, `ctes.jl` |
 | Custom joins — `on` / `cjoin` / `cjoin_on`, and what their conditions refer to | `src/querybuilder/join_conditions.jl` |
 | How an `F(...)` expression, a date shift or an interval renders | `src/querybuilder/expression_render.jl` |
 | Parameter ordering (PG `$1` vs SQLite `?` buckets) | `src/querybuilder/parameters.jl` |

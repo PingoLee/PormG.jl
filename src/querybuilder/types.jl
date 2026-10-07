@@ -1224,7 +1224,7 @@ _is_agg(::Any) = false
 #
 # The flag answers only what the node can see when it is BUILT. A condition that names an alias
 # (`When("total__@gte" => 100)` over `"total" => Sum(…)`) holds the name, not the aggregate, so the
-# build-time readers — GROUP BY and the two HAVING routings — ask `_resolved_agg` (build_query.jl,
+# build-time readers — GROUP BY and the two HAVING routings — ask `_resolved_agg` (projection_types.jl,
 # #722), which adds the aliases a projection reads. The `update()`/`delete()` refusals still read the
 # node: an alias can only be read beside the projection that defines it, which they already refuse.
 # So does `.aggregate()` (execution_read.jl), which checks each pair before any projection exists to read:

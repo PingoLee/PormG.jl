@@ -751,7 +751,7 @@ _case_value_field(v, field::String, ::SQLInstruction) =
 # A bare `F("points")` is that column. Arithmetic keeps a number a number — both sides integral stays
 # an integer (SQL integer arithmetic does, on both engines), otherwise a float — and anything else
 # (`F("date") + Day(1)`) is refused rather than given the column's type, as `_expression_formatter`
-# (build_query.jl) declines to type it too.
+# (projection_types.jl) declines to type it too.
 #
 # #823: one rule for a `Case` branch and for an `F` projected at the top of a CTE body, so the refusal
 # is a parameter — `refuse(field, reason)` — and the message names what the caller wrote: a `Case`
@@ -851,7 +851,7 @@ end
 
 # The type a function declares — `output_field=` on `Case`/`Coalesce`/`Concat`/`Greatest`/`Least`,
 # `type` on `Cast` — as a field, or `nothing` when it declares none. A declared type outside the
-# families `_sql_type_field` (build_query.jl) recognises is refused rather than dropped: the caller
+# families `_sql_type_field` (projection_types.jl) recognises is refused rather than dropped: the caller
 # named it, and falling back to inference would quietly override them.
 #
 # A declared type is believed because the SQL applies it on both engines: `Cast` and `Case` render

@@ -951,7 +951,7 @@ function _prefix_join_column(x::SQLField, prefix::String, foreign_model; base = 
   )
 end
 # An aggregate or a window function is left exactly as written. No ON clause can hold one, whatever
-# row it names — #917 refuses it at render (`build_query.jl`, "cannot appear in a join's ON clause")
+# row it names — #917 refuses it at render (`build_filter.jl`, "cannot appear in a join's ON clause")
 # with the CTE remedy. Prefixing its column first would only swap that refusal for a less useful one:
 # `OP(Count("grid"), ">", 1)` on the driver join would die as "Invalid cjoin filter field 'grid'".
 function _prefix_join_column(x::FObject, prefix::String, foreign_model; base = nothing)

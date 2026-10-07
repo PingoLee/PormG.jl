@@ -21,7 +21,7 @@ using PormG
 using PormG.Models: Model, IDField, CharField, IntegerField
 using PormG.QueryBuilder: SQLField, SQLOrder
 
-# Internal helpers live in the QueryBuilder submodule (build_query.jl), unexported.
+# Internal helpers live in the QueryBuilder submodule (build_select.jl), unexported.
 const _nulls_placement = PormG.QueryBuilder._nulls_placement
 const _order_term_sql  = PormG.QueryBuilder._order_term_sql
 

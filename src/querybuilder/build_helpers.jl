@@ -779,7 +779,7 @@ end
 
 # The lookups that take a vector right-hand side — the `allowed` list every "a vector needs one of
 # these operators" refusal names. One list, because it was restated as a literal at three sites (here,
-# `_guard_vector_equality`, and its alias twin in `build_query.jl`) and #28 had to grow all three.
+# `_guard_vector_equality`, and its alias twin in `projection_types.jl`) and #28 had to grow all three.
 const _VECTOR_VALUE_OPERATORS = ["in", "nin", "range", "nrange", "has_any_keys", "has_keys", "jcontains",
                                  ARRAY_CONTAINMENT_OPERATORS...]
 
@@ -2208,7 +2208,7 @@ function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
   #
   # #701: that gate reads the KEY's kind, and a projection alias is a plain `String` key whose
   # memoized text can still bind — `Q("next_race" => 73)` over `F("raceid") + 1` reprinted the `?`
-  # with its value in `:select`. `_alias_lhs` (build_query.jl) applies the same rule to the
+  # with its value in `:select`. `_alias_lhs` (projection_types.jl) applies the same rule to the
   # PROJECTION behind an alias key and renders it afresh when it binds; any other hit is returned
   # as it was.
   # #985: not inside an ON clause, though. Memoized text was rendered outside the clause's scope, so it
@@ -2732,7 +2732,7 @@ _format_filter_value(formatter, values, operator::AbstractString) =
 # guarded kept leaking `InvalidValueError` for two releases while every sibling operator converted.
 # One definition means the next operator branch cannot diverge by being written somewhere else.
 #
-# Since #576 it is the only re-raise on the FILTER path: the HAVING ladder (build_query.jl), the
+# Since #576 it is the only re-raise on the FILTER path: the HAVING ladder (projection_types.jl), the
 # `SQLTypeFunction` transform branches, the #474 memo arm, the `F(...)` operand
 # (expression_render.jl) and the sargable rewrite all reach it, most of them through
 # `_guarded_format` below. Before that, one of thirteen formatter call sites was guarded — see the
@@ -2978,7 +2978,7 @@ end
 # The operator ladder every filter predicate renders through, whatever clause it lands in (#618).
 #
 # It used to be inlined at the tail of `_get_filter_query(::SQLTypeOper, …)` — the WHERE path — while
-# the HAVING/projection-alias branch in `get_filter_query` (`build_query.jl`) hand-rolled its own
+# the HAVING/projection-alias branch in `get_filter_query` (`build_filter.jl`) hand-rolled its own
 # two-case version: `IN`/`NOT IN` through `_render_membership` (#411) and a bare
 # `"$(field) $(operator) $(placeholder)"` for everything else. So a pattern lookup on an alias
 # printed the LOOKUP NAME as a SQL token — `HAVING MAX("Tb"."name") istartswith $1` — which is a
@@ -3312,7 +3312,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # bind through a known formatter. Deliberately not a consumer arm: `OP` is internal (#202) and
     # the string-lookup forms are the public surface, so the fix does not grow a spelling users are
     # steered away from. An AGGREGATE or window column in a WHERE predicate is refused one level up
-    # (`_guard_no_aggregate_predicate`, build_query.jl) with the HAVING / CTE spelling, so what
+    # (`_guard_no_aggregate_predicate`, build_filter.jl) with the HAVING / CTE spelling, so what
     # reaches this branch is a scalar function — or a SELECT-side `When(OP(Sum(…)))`, which took the
     # same raw `FieldError` and now takes the same typed refusal.
     throw(QueryBuildError(

@@ -24,7 +24,7 @@ This skill is for implementation and regression analysis inside `src/querybuilde
 ## Core entry points
 
 - `src/QueryBuilder.jl` is the builder entry point and includes the specialized querybuilder modules
-- `build_helpers.jl`, `build_joins.jl`, `build_query.jl`, `ctes.jl`, `deletion.jl`, `execution_read.jl`, `execution_write.jl`, `expression_render.jl`, and `functions.jl` are the main internal coordination surfaces
+- `build_helpers.jl`, `build_joins.jl`, `build_query.jl`, `build_select.jl`, `build_filter.jl`, `projection_types.jl`, `ctes.jl`, `deletion.jl`, `execution_read.jl`, `execution_write.jl`, `expression_render.jl`, and `functions.jl` are the main internal coordination surfaces
 - `join_conditions.jl` owns what a condition in `on(path, …)` / `cjoin(filters = …)` / `cjoin_on(on = …)` refers to: the one relation resolver, the build-time binding passes (#977, #982), the render-time column recorder (#985), and — since #130 — the `on` / `cjoin` / `cjoin_on` entry points themselves, with the handle guards and #962's right-side check. See *Join conditions: bound at build* below before touching any join-condition code
 - Keep user-facing behavior expressed through `M.Model.objects`; reach into builder internals only for implementation work or deterministic unit coverage
 
@@ -340,6 +340,9 @@ Focus on:
 - `build_helpers.jl`
 - `build_joins.jl`
 - `build_query.jl`
+- `build_select.jl`
+- `build_filter.jl`
+- `projection_types.jl`
 - `ctes.jl`
 - `join_conditions.jl`
 - `execution_read.jl`

@@ -157,7 +157,7 @@ _cdc_sku_cte() = (c = CDC.Cdc_parent.objects; c.values("id", "sku"); c)
   # CTE reference: order_by() on a CTE-projected db_column field
   # ORDER BY must resolve the CTE column FRESHLY, so the ordered column is deliberately neither
   # projected nor filtered: `get_order_query` reuses `instruc.cache` when the same path was already
-  # resolved (build_query.jl:138), and `get_filter_query` runs first — so filtering `ev__seen` here
+  # resolved (build_select.jl), and `get_filter_query` runs first — so filtering `ev__seen` here
   # would silently test the filter's selector instead. `ev__sku` is filtered to keep the ordered and
   # the resolved-elsewhere column distinct; it is NO LONGER needed to emit the JOIN. It once was: a
   # CTE column referenced only by order_by registered the alias without emitting a join, a defect

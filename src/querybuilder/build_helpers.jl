@@ -419,22 +419,13 @@ function _check_fixed_shape_lookup(suffix::AbstractString, value)
   return nothing
 end
 
-# #972: `@isnull` after a transform renders `<transform> IS [NOT] NULL` — except after the two
-# year-qualified LABEL transforms, which are refused here, from the path the caller typed.
-#
-# `@yyyy_q` / `@yyyy_quad` render a `Concat`, and the engines disagree on what it yields for a NULL
-# date: PostgreSQL's `CONCAT` skips NULL arguments and returns `'-Q'`, while SQLite's `||`
-# propagates the NULL. So `IS NULL` on the label would match the NULL-date rows on SQLite and none on
-# PostgreSQL. Refusing it is loud on both; the bare column answers the question either way, since a
-# label is NULL only when its date is (on the engine where it is NULL at all). #997 tracks making the
-# label NULL-preserving on PostgreSQL, which lifts this refusal.
-function _check_transform_isnull(path::Vector{String})
-  length(path) >= 3 && path[end] == "isnull" && path[end-1] in ("yyyy_q", "yyyy_quad") || return nothing
-  col = join(path[1:end-2], "__@")
-  throw(FilterError("Error in filter '$(join(path, "__@"))': '@isnull' is not supported after " *
-                    "'@$(path[end-1])', whose label is NULL for a NULL date on SQLite but '-Q' on " *
-                    "PostgreSQL. Test the column itself: \"$(col)__@isnull\" => true"))
-end
+# #997: true for the `@yyyy_q` / `@yyyy_quad` label column — a `Concat` node that `Y_Q` / `Y_QUAD`
+# flagged `propagate_null`, so it renders `||` on both engines and is NULL exactly when its date is.
+# That is what makes `<label> IS NULL` mean "the date is NULL", and so what licenses it in `ISNULL`.
+# The narrowness is a fail-safe no test can pin: no other public spelling reaching that arm renders
+# a call today, so a licence granted to every column would render the same SQL.
+_is_null_propagating_label(c) =
+  c isa SQLTypeField && c.field isa FObject && get(c.field.kwargs, "propagate_null", false) === true
 
 # #811: the lookups whose right-hand side is never a single column, refused on the column-reference
 # arms only (`F`, a function, `Joined`, `CTE`) — the scalar arm's `@in` binds a one-element list, which
@@ -490,7 +481,6 @@ end
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:Union{AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID}
   if haskey(PormGsuffix, x.first[end])
     _check_fixed_shape_lookup(x.first[end], x.second)
-    _check_transform_isnull(x.first)
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
   else
     return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__"))) # TODO, maybe I need to check if the column is valid and process the function before store
@@ -3369,6 +3359,11 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     end
     if v.operator == "ISNULL"
       placeholders = v.values   # the `Bool` polarity; `IS [NOT] NULL` binds nothing
+      # #997: the year-qualified labels reach this arm rather than the transform arms above, because
+      # their `Concat` node carries no formatter. They take the same `ISNULL` licence as the other
+      # transform columns (#972), granted from the node and never from the text: only a label
+      # built NULL-propagating (`Y_Q` / `Y_QUAD`) is NULL exactly when its date is.
+      transform_lhs = _is_null_propagating_label(v.column)
     elseif v.operator in ("BETWEEN", "NOT BETWEEN")
       # #467: both operands format in ONE guard and neither binds until both succeed — the
       # iterable-lookup arm of `_format_filter_value` is what does that now.

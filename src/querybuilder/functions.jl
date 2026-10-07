@@ -1289,8 +1289,16 @@ DATE(x) = (y = _transform_operand("DATE", x);
 # The label bodies are moved verbatim. `@yyyy_quad` therefore still renders `'1985-Q1'`, sharing the
 # `-Q` separator with `@yyyy_q`; that ambiguity predates this change and is left alone here so the
 # move stays a rename.
+#
+# #997: both labels set `propagate_null`, so PostgreSQL joins them with `||` like SQLite does and a
+# NULL date gives a NULL label rather than `'-Q'` (`Dialect.CONCAT`). The flag is set on the node and
+# not taken as a `Concat` keyword, because the public function does not offer it.
+function _null_propagating(f::FObject)
+  f.kwargs["propagate_null"] = true
+  return f
+end
 function Y_QUAD(x)
-  return Concat([
+  return _null_propagating(Concat([
                 Cast(YEAR(x), CharField()), 
                 Value("-Q"), 
                 Case([When(OP(MONTH(x), "<=", 4), then = 1), 
@@ -1299,11 +1307,11 @@ function Y_QUAD(x)
                       ], 
                       output_field = CharField())
                 ], 
-                output_field = CharField(), 
-                _as = "$(x[1])__yyyy_quad")
+                output_field = CharField(),
+                _as = "$(x[1])__yyyy_quad"))
 end
 function Y_Q(x)
-  return Concat([
+  return _null_propagating(Concat([
                 Cast(YEAR(x), CharField()), 
                 Value("-Q"), 
                 Case([When(OP(MONTH(x), "<=", 3), then = 1), 
@@ -1314,7 +1322,7 @@ function Y_Q(x)
                       output_field = CharField())
                 ],
                 output_field = CharField(),
-                _as = "$(x[1])__yyyy_q")
+                _as = "$(x[1])__yyyy_q"))
 end
 # `Dialect.QUARTER` / `Dialect.QUADRIMESTER` already rendered the number per engine — they were what
 # the `F` ladder resolved into before #562 collapsed the two. Naming the function here is what puts

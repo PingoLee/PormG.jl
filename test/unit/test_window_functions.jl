@@ -321,7 +321,8 @@ end
       q.values("raceid", "prev" => window(Window789PgRace))
       sql = inspect_query(q)[:sql_text]
       # `$N` numbers in render order, so the label's first operand comes right after the function's own.
-      @test occursin(r"PARTITION BY CONCAT\([^$]*\$" * string(length(own) + 1) * r"::text", sql)
+      # The label opens with `(` rather than `CONCAT(` since #997 joined it with `||`.
+      @test occursin(r"PARTITION BY \([^$]*\$" * string(length(own) + 1) * r"::text", sql)
     end
   end
 end

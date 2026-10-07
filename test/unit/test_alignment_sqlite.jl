@@ -3315,20 +3315,8 @@ include("helper_marker_alignment.jl")
 struct MockPostgresAlign <: PormG.PormGPostgres end
 const _ALIGN_PG = MockPostgresAlign()
 
-# PostgreSQL's parameter vector read back in TEXT order: walk the `$N` markers left to right. This is
-# the oracle SQLite's flattened vector must equal — a `$N` printed twice (GROUP BY and ORDER BY
-# carrying one expression) yields its value twice, which is exactly what SQLite must bind. The one
-# dialect split the skill names: `__@in` binds ONE array on PostgreSQL and expands to N `?` on
-# SQLite, so an array value is splatted into the walk. A binary payload never reaches this branch —
-# PostgreSQL binds it as hex TEXT, not as a byte vector — so no exclusion is needed for it.
-function _pg_text_order(pg::Dict)
-    out = Any[]
-    for m in eachmatch(r"\$\d+", pg[:sql_text])
-        v = pg[:parameters][parse(Int, m.match[2:end])]
-        v isa AbstractVector ? append!(out, v) : push!(out, v)
-    end
-    return out
-end
+# `_pg_text_order` — PostgreSQL's vector read back in text order, the oracle below — lives in
+# helper_marker_alignment.jl, shared with test_parameter_alignment_nested.jl (#936).
 
 # Render on both engines, assert the count on each and the SQLite vector against the PG walk.
 function _assert_order_by_aligned(build)

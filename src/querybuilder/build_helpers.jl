@@ -1931,9 +1931,9 @@ function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::St
 
   _warn_if_possible_multirow(handler)
 
-  # Passing the shared `parameters` makes query() treat this as a subquery: it inherits the ambient
-  # bucket the caller switched to (`:select` for a projection, `:where`/`:join`/`:having` for a
-  # predicate, #926) and restores the context afterward, so the inner params flatten where the text
+  # Passing the shared `parameters` makes query() treat this as a subquery: its build files under its
+  # own clauses and restores the ambient bucket the caller switched to (`:select` for a projection,
+  # `:where`/`:join`/`:having` for a predicate, #926), so the lifted run below lands where the text
   # sits. Correlate via outer=instruc.
   # #432: same nested-run reordering as `_build_exists_query` — everything this subquery binds must be
   # one clause-ordered run in the ambient bucket.
@@ -1944,7 +1944,6 @@ function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::St
                     connection=instruc.connection,
                     parameters=instruc.parameters,
                     outer=instruc,
-                    own_contexts=true,
                     built = inner -> (inner_formatter[] = _subquery_projection_formatter(handler, inner)))
   reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
   # #888: the inner build typed its one column (`query()` writes `projection_kinds` back onto
@@ -1980,25 +1979,19 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
   q.object.limit = 0
   q.object.offset = 0
 
-  old_context = instruc.parameters isa PormGSQLiteParam ? instruc.parameters.current_context : nothing
   # #432: the inner build scatters its values across its own clause buckets while this EXISTS text is
   # spliced into ONE of the parent's clauses. Mark every bucket, then re-emit what it bound as one
-  # contiguous run, clause-ordered, at this fragment's position. See `detach_nested_run!`.
+  # contiguous run, clause-ordered, at this fragment's position. See `detach_nested_run!`. The build
+  # files under its OWN clause roles, which is what the run sorts by, and restores the parent's
+  # ambient bucket itself, on return and on throw (#936, #939).
   nested_mark = nested_parameter_mark(instruc)
-  instruction = try
-    build(
-      q.object,
-      table_alias=instruc.table_alias,
-      connection=instruc.connection,
-      parameters=instruc.parameters,
-      # #432: record this subquery's OWN clause roles so `detach_nested_run!` can sort its values
-      # into text order. The `finally` below restores the parent's ambient bucket.
-      set_contexts=true,
-      outer=instruc,
-    )
-  finally
-    old_context !== nothing && set_context!(instruc.parameters, old_context)
-  end
+  instruction = build(
+    q.object,
+    table_alias=instruc.table_alias,
+    connection=instruc.connection,
+    parameters=instruc.parameters,
+    outer=instruc,
+  )
   reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
 
   safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
@@ -3298,7 +3291,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     _guard_no_nested_cte(v.values, "A membership filter (__@in / __@nin)")
     # #432: same nested-run reordering — the subquery renders inside this predicate's clause.
     nested_mark = nested_parameter_mark(instruc)
-    placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc, own_contexts=true)
+    placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc)
     reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
     # #586: `column` was rendered before the subquery, so its markers number ahead of the
     # subquery's — the text order. Re-rendering here would bind a composite LHS a second time.

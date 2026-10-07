@@ -156,14 +156,6 @@ function query(q::SQLObjectHandler;
   cte::Union{Nothing, CTEDict} = nothing,
   outer::Union{Nothing, SQLInstruction} = nothing,
   show_query::Symbol = :execute,
-  # #432: opt-in for a nested render that will re-emit its own parameters as one clause-ordered run
-  # (see `detach_nested_run!`). A subquery normally suppresses context switching so it cannot clobber
-  # the parent's active bucket — but that also means its values are filed under the PARENT's clause
-  # rather than their own, which is exactly the information the run needs to sort itself into text
-  # order. `query()` restores the ambient bucket itself below (the `is_subquery` branch), so a
-  # caller passing this does NOT need to — and none of them does. Do not delete that restore on the
-  # assumption the caller handles it: the failure would be silent and SQLite-only.
-  own_contexts::Bool = false,
   # #929: called with the inner build's instruction right after `build()`, while its memos still hold
   # what the render resolved — the one window in which a nested render can ask about its own
   # projection. `_render_scalar_subquery` reads the projected column's formatter through it.
@@ -177,21 +169,18 @@ function query(q::SQLObjectHandler;
   
   settings, connection, conn_key = get_settings(q, connection=connection)
 
-  # Track if this is a subquery
+  # Track if this is a subquery. A nested render passes the shared collector (PostgreSQL needs one
+  # sequential `$N` counter); its build still files values under its OWN clauses, and `build()`
+  # restores the ambient bucket on return (#936, #939), so the caller lifts them as one clause-ordered
+  # run (#432, `detach_nested_run!`). That restore used to be a save/restore here, beside an
+  # `own_contexts` opt-in; `with_bucket` made both structural.
   is_subquery = parameters !== nothing
-  # #432: `own_contexts` keeps the shared collector (PostgreSQL still needs one sequential `$N`
-  # counter) while letting the inner build file its values under its OWN clauses.
-  set_own_contexts = own_contexts || !is_subquery
 
   # IMPORTANT: Create the shared parameters object BEFORE building CTEs
   # This ensures all CTEs and the main query use sequential parameter numbering
   if parameters === nothing
     parameters = get_parameter(connection)
   end
-
-  # Save current context for backends that use positional buckets (SQLite)
-  # This is crucial for nested subqueries to avoid clobbering the parent's bucket.
-  old_context = parameters isa PormGSQLiteParam ? parameters.current_context : nothing
 
   # Build WITH clause - passes the SAME parameters object
   # CTE context is set inside build_cte_clause
@@ -202,8 +191,7 @@ function query(q::SQLObjectHandler;
 
   # Main query uses the SAME parameters object (will continue numbering from where CTEs left off)
   # Context switching for select/where/join happens inside build()
-  # Subqueries skip context switching to inherit the parent's current bucket.
-  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, set_contexts=set_own_contexts, outer=outer)
+  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, outer=outer)
   built === nothing || built(instruction)
   
   # Prevent SELECT * across JOINs which causes DataFrame column collisions downstream.
@@ -214,10 +202,6 @@ function query(q::SQLObjectHandler;
     throw(QueryBuildError("PormG: Joined queries must explicitly select fields using .values(...) to prevent duplicate column names. Tip: Use .values(\"*\", \"joined_model__field_name\") to select all main table fields alongside specific joined fields."))
   end
 
-  # Restore the context for parent query if this was a subquery
-  if is_subquery && old_context !== nothing
-    set_context!(parameters, old_context)
-  end
   if cte !== nothing
     @pormg_debug false
     _build_cte_custom_model(cte, instruction)

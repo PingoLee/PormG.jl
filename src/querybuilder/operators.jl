@@ -145,12 +145,12 @@ end
 # made "keep additions to it and to `FExpression.operand` in step" structural rather than a rule to
 # remember: both are now COMPOSED from `_CompareLiteral` / `_ColumnHandle` (declared above the
 # `FExpression` struct in `types.jl`), so widening one widens the other. The CONSUMER half is no
-# longer per-type either (#536): the literal arm of `_set_update_query_operand` (`execution.jl`)
-# binds every `_CompareLiteral` scalar through the rooted column's formatter, so a new member cannot
-# bind RAW — what it can still lack is PROOF, and that is the oracle row `test_f_date_operands.jl`
-# demands per member. A column HANDLE (`_ColumnHandle`) is the other kind of operand and renders as
-# a column reference, never a bound value; `test_node_admission.jl` is what fails when a NODE type
-# is admitted without a consumer.
+# longer per-type either (#536): the literal arm of `_set_update_query_operand`
+# (`expression_render.jl`) binds every `_CompareLiteral` scalar through the rooted column's
+# formatter, so a new member cannot bind RAW — what it can still lack is PROOF, and that is the
+# oracle row `test_f_date_operands.jl` demands per member. A column HANDLE (`_ColumnHandle`) is the
+# other kind of operand and renders as a column reference, never a bound value;
+# `test_node_admission.jl` is what fails when a NODE type is admitted without a consumer.
 const _CompareOperand = Union{_CompareLiteral,_ColumnHandle,_SubqueryOperand,FExpression}
 
 function _compare(f::FExpression, operation::String, operand)

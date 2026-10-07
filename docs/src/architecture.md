@@ -24,7 +24,7 @@ flowchart TD
     B["build() → InstructionObject<br/>build_query.jl"]
     J["_build_row_join (joins)<br/>build_joins.jl<br/>on / cjoin / cjoin_on — join_conditions.jl"]
     P["parameters.jl<br/>$1.. (PG) / ? buckets (SQLite)"]
-    F["functions.jl / operators.jl / ctes.jl"]
+    F["functions.jl / operators.jl / ctes.jl<br/>expression_render.jl — F(...) / date / interval SQL"]
   end
 
   DI["Dialect.jl<br/>per-backend SQL rendering"]
@@ -229,6 +229,7 @@ characterizations worth stating plainly.
 | How `.objects` and chaining work | `src/querybuilder/object_manager.jl`, `types.jl` (`SQLObjectQuery`, `object()`) |
 | How SQL text is assembled | `src/querybuilder/build_query.jl` (`build`), `build_joins.jl`, `ctes.jl` |
 | Custom joins — `on` / `cjoin` / `cjoin_on`, and what their conditions refer to | `src/querybuilder/join_conditions.jl` |
+| How an `F(...)` expression, a date shift or an interval renders | `src/querybuilder/expression_render.jl` |
 | Parameter ordering (PG `$1` vs SQLite `?` buckets) | `src/querybuilder/parameters.jl` |
 | Backend-specific SQL | `src/Dialect.jl` |
 | Pool, async, transactions | `src/ConnectionPool.jl` |

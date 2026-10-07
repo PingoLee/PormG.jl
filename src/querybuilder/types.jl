@@ -1088,7 +1088,7 @@ const _DurationOperand = Union{Dates.Period, Dates.CompoundPeriod, Interval}
 # comparison binds — through the ROOTED COLUMN's own formatter — the same bytes the pair spelling
 # `filter("col" => value)` binds, and `test_f_date_operands.jl`'s oracle table (`_FD_ORACLE_ROWS`)
 # proves that per member, on both backends. The consumer half is the literal arm of
-# `_set_update_query_operand` (`execution.jl`): it resolves the LEFT column with
+# `_set_update_query_operand` (`expression_render.jl`): it resolves the LEFT column with
 # `_operand_column_field` and runs the value through that column's formatter, exactly as
 # `_get_filter_query(::SQLTypeOper)` does for a pair. The three temporal members take the
 # `_format_date_operand` arm beside it, which adds the DATE-vs-TIMESTAMP promotion.

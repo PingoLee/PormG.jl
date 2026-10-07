@@ -1727,6 +1727,9 @@ end
         @test M.Race.objects.filter("sprint_date__@yyyy_mm__@isnull" => polarity).count() == bare
         @test M.Race.objects.filter("start_at__@hour__@isnull" => polarity).count() ==
               M.Race.objects.filter("start_at__@isnull" => polarity).count()
+        # #997: the two labels too, refused until their PostgreSQL arm stopped reading `'-Q'`.
+        @test M.Race.objects.filter("sprint_date__@yyyy_q__@isnull" => polarity).count() == bare
+        @test M.Race.objects.filter("sprint_date__@yyyy_quad__@isnull" => polarity).count() == bare
     end
 
     # The range, against the years counted in Julia from the dates themselves. The date's text is
@@ -1736,4 +1739,20 @@ end
     @test in_90s > 0
     @test M.Race.objects.filter("date__@year__@range" => [1990, 1999]).count() == in_90s
     @test M.Race.objects.filter("date__@year__@nrange" => [1990, 1999]).count() == length(years) - in_90s
+end
+
+@testset "#997: @yyyy_q / @yyyy_quad read NULL for a NULL date on both engines" begin
+    # PostgreSQL's `CONCAT` skipped the NULL year and month and returned `"-Q"` for a race without a
+    # sprint, where SQLite returned NULL. The expected labels are computed in Julia from the date's
+    # own text, so a renderer that returned `"-Q"`, or the wrong period, fails here.
+    q = M.Race.objects
+    q.values("raceid", "sprint_date", "q" => "sprint_date__@yyyy_q", "quad" => "sprint_date__@yyyy_quad")
+    df = q |> DataFrame
+    @test any(ismissing, df.sprint_date)
+    @test !all(ismissing, df.sprint_date)
+    expected(date, months) = ismissing(date) ? missing :
+        (d = Dates.Date(string(date)[1:10]); "$(Dates.year(d))-Q$(cld(Dates.month(d), months))")
+    wrong = [r.raceid for r in eachrow(df) if
+             !isequal(r.q, expected(r.sprint_date, 3)) || !isequal(r.quad, expected(r.sprint_date, 4))]
+    @test isempty(wrong)
 end

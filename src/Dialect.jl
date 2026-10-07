@@ -873,7 +873,12 @@ end
 function CAST(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return sqlite_cast_sql(column, format["type"], conn)
 end
+# #997: PostgreSQL's `CONCAT` skips a NULL argument where `||` propagates it, which is what SQLite's
+# arm renders. `propagate_null` is set only by the `@yyyy_q` / `@yyyy_quad` labels (`Y_Q` / `Y_QUAD`),
+# so a NULL date gives a NULL label on both engines instead of `'-Q'` on this one. The public
+# `Concat` keeps `CONCAT(…)`; its own NULL divergence is a separate decision.
 function CONCAT(column::Array{Any,1}, format::Dict{String,Any}, conn::PormGPostgres)
+  get(format, "propagate_null", false) === true && return "($(join(column, " ||\n")))"
   return "CONCAT($(join(column, ",\n")))"
 end
 function CONCAT(column::Array{Any,1}, format::Dict{String,Any}, conn::PormGSQLite)

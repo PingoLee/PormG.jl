@@ -700,7 +700,7 @@ function _tlp_transform_lhs(col, key, conn)
   return (m.captures[1], r[:parameters])
 end
 
-# The `@isnull` carve-out (`_check_transform_isnull`) — the two CONCAT labels.
+# The two year-qualified labels, the transforms that render a `Concat`.
 const _TLP_LABEL_TRANSFORMS = ("yyyy_q", "yyyy_quad")
 
 # The third slot is what precedes the predicate in WHERE: `Q(…)` parenthesizes its group.
@@ -709,9 +709,10 @@ _tlp_972_spellings = (
   ("Q",    (q, path, v) -> q.filter(Q(path => v)), "WHERE ("),
 )
 
+# The two labels are in the loop since #997, which made them NULL for a NULL date on both engines;
+# #972 refused `@isnull` after them until then.
 @testset "#972: @isnull after a transform renders IS [NOT] NULL and binds nothing" begin
   for (backend, conn) in _TLP_BACKENDS, key in _TLP_DATE_TRANSFORMS, col in ("seen", "ts")
-    key in _TLP_LABEL_TRANSFORMS && continue
     lhs, lhs_params = _tlp_transform_lhs(col, key, conn)
     for (spelling, filter!, where) in _tlp_972_spellings, (polarity, tail) in ((true, "IS NULL"), (false, "IS NOT NULL"))
       @testset "$backend $(col)__@$(key) $spelling $polarity" begin
@@ -764,18 +765,19 @@ end
 @testset "#972: the other places a filter pair is read take the same render" begin
   # A `When` condition and a joined path read the pair through the same parser and the same arms.
   # Pinned because they are the two routes most likely to grow their own binding later; the
-  # expected text is again the projection's.
-  for (backend, conn) in _TLP_BACKENDS
-    lhs, _ = _tlp_transform_lhs("ts", "year", conn)
+  # expected text is again the projection's. `@yyyy_q` rides along since #997: its `@isnull` is
+  # licensed in a different arm of `_get_filter_query` from `@year`'s, so it is a separate route.
+  for (backend, conn) in _TLP_BACKENDS, key in ("year", "yyyy_q")
+    lhs, _ = _tlp_transform_lhs("ts", key, conn)
     sql = _tlp_sql((q = TLP.Tlp_row.objects;
-                    q.values("x" => PormG.Functions.Case([PormG.Functions.When("ts__@year__@isnull" => true, then = 1)], default = 0)); q);
+                    q.values("x" => PormG.Functions.Case([PormG.Functions.When("ts__@$(key)__@isnull" => true, then = 1)], default = 0)); q);
                    conn = conn)
     @test occursin("WHEN $(lhs) IS NULL THEN", sql)
 
     J = TlpJoinModels
-    proj = _tlp_sql((q = J.Tlp_result.objects; q.values("x" => "driver__dob__@year"); q); conn = conn)
+    proj = _tlp_sql((q = J.Tlp_result.objects; q.values("x" => "driver__dob__@$(key)"); q); conn = conn)
     joined_lhs = match(r"SELECT\s+(.*?)\s+as \"x\""s, proj).captures[1]
-    sql = _tlp_sql((q = J.Tlp_result.objects; q.filter("driver__dob__@year__@isnull" => false); q); conn = conn)
+    sql = _tlp_sql((q = J.Tlp_result.objects; q.filter("driver__dob__@$(key)__@isnull" => false); q); conn = conn)
     @test occursin("$(joined_lhs) IS NOT NULL", sql)
   end
 end
@@ -800,24 +802,24 @@ end
   end
 end
 
-@testset "#972: @isnull after @yyyy_q / @yyyy_quad is refused, naming why" begin
-  # PostgreSQL's `CONCAT` skips a NULL argument and yields `'-Q'` for a NULL date; SQLite's `||`
-  # yields NULL. Rendering `IS NULL` would answer differently per engine, so it is refused on both,
-  # pointing at the bare column — which answers the question the caller meant.
-  for (backend, conn) in _TLP_BACKENDS, key in _TLP_LABEL_TRANSFORMS, (spelling, filter!, _) in _tlp_972_spellings
-    @testset "$backend @$(key) $spelling" begin
-      err = try
-        _tlp_sql((q = TLP.Tlp_row.objects; filter!(q, "seen__@$(key)__@isnull", true); q); conn = conn)
-        nothing
-      catch e
-        e
-      end
-      @test err isa PormG.FilterError
-      msg = replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
-      @test occursin("'@isnull' is not supported after '@$(key)'", msg)
-      @test occursin("\"seen__@isnull\" => true", msg)
-      @test !occursin("not a supported operator", msg)
-      @test !occursin("function expression", msg)
+@testset "#997: @yyyy_q / @yyyy_quad join with || on both engines, so a NULL date is a NULL label" begin
+  # PostgreSQL's `CONCAT` skips a NULL argument, so the label read `'-Q'` for a NULL date there and
+  # NULL on SQLite, whose `||` propagates it. Both engines render `||` now. The operands and their
+  # binding are unchanged, so the parameters agree across engines, separator first.
+  for (backend, conn) in _TLP_BACKENDS, key in _TLP_LABEL_TRANSFORMS, col in ("seen", "ts")
+    @testset "$backend $(col)__@$(key)" begin
+      lhs, lhs_params = _tlp_transform_lhs(col, key, conn)
+      @test !occursin("CONCAT(", lhs)
+      @test count(" ||", lhs) == 2
+      @test first(lhs_params) == "-Q"
+      @test lhs_params == _tlp_transform_lhs(col, key, conn === _TLP_PG ? _TLP_SL : _TLP_PG)[2]
     end
   end
+  # The flag belongs to the two labels only. A user's `Concat` still renders PostgreSQL's `CONCAT`;
+  # its NULL handling is left to a separate decision.
+  sql = _tlp_sql((q = TLP.Tlp_row.objects;
+                  q.values("x" => PormG.Functions.Concat("note", PormG.Functions.Value(" "), "note")); q);
+                 conn = _TLP_PG)
+  @test occursin("CONCAT(", sql)
+  @test !occursin(" ||", sql)
 end

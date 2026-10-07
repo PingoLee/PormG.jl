@@ -109,10 +109,9 @@ The range operands are values of the transform: years for `@year`, `"YYYY-MM"` s
 `DateField` is (below), so it compares the transform itself.
 
 A date part is NULL exactly when its date is, so `"sprint_date__@year__@isnull" => false` selects
-the same rows as `"sprint_date__@isnull" => false`. The exceptions are the two year-qualified labels: `@isnull` after
-`@yyyy_q` or `@yyyy_quad` raises a `FilterError`, because their label is NULL for a NULL date on
-SQLite but `'-Q'` on PostgreSQL, and the two engines would answer differently. Test the column
-itself instead: `"date__@isnull" => true`.
+the same rows as `"sprint_date__@isnull" => false`. The year-qualified labels follow the same rule:
+`"sprint_date__@yyyy_q"` reads `missing` for a race without a sprint on both engines, never a
+partial `"-Q"`.
 
 ### Time of day (`@hour`, `@minute`, `@second`)
 

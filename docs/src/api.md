@@ -208,8 +208,8 @@ An `ArrayField` (PostgreSQL only) takes `@acontains` (`@>`), `@contained_by` (`<
 | `field__@day` | Extract day from date | `"dob__@day" => 21` |
 | `field__@quarter` | Extract quarter (1-4) | `"date__@quarter" => 1` |
 | `field__@quadrimester` | Extract quadrimester (1-3) | `"date__@quadrimester" => 2` |
-| `field__@yyyy_q` | Year-qualified quarter label (`values()` only) | `"q" => "date__@yyyy_q"` |
-| `field__@yyyy_quad` | Year-qualified quadrimester label (`values()` only) | `"q" => "date__@yyyy_quad"` |
+| `field__@yyyy_q` | Year-qualified quarter label (`"YYYY-Qn"`) | `"q" => "date__@yyyy_q"` |
+| `field__@yyyy_quad` | Year-qualified quadrimester label (`"YYYY-Qn"`) | `"q" => "date__@yyyy_quad"` |
 | `field__@date` | Extract date from datetime | `"created_at__@date" => Date(2025, 1, 1)` |
 | `field__@hour` | Extract hour (0-23) | `"start_at__@hour" => 13` |
 | `field__@minute` | Extract minute (0-59) | `"start_at__@minute" => 30` |
@@ -217,7 +217,7 @@ An `ArrayField` (PostgreSQL only) takes `@acontains` (`@>`), `@contained_by` (`<
 | `field__@len` | Element count of an `ArrayField` (PostgreSQL only) | `"pit_laps__@len__@gte" => 2` |
 
 A lookup chains after a transform: `"date__@year__@range" => [1990, 1999]`,
-`"sprint_date__@year__@isnull" => false`. `@isnull` is the one refused after `@yyyy_q` / `@yyyy_quad`; see
+`"sprint_date__@year__@isnull" => false`. A transform is NULL exactly when its column is; see
 [Null checks and ranges after a transform](read/functions_and_dates.md#Null-checks-and-ranges-after-a-transform).
 
 For the full list of operators and transforms, see [Filters and Aggregates](read/filters_and_aggregates.md).

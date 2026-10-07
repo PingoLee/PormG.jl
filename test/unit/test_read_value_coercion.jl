@@ -73,6 +73,17 @@ Rvc_row = Models.Model("rvc_row",
   # …and one whose physical name differs, which is what lets an alias reuse its field NAME.
   cost   = Models.DecimalField(max_digits = 10, decimal_places = 2, db_column = "cost_eur", null = true),
 )
+# #979: a boolean and a date on the base model and across a foreign key. A pair of their own, so the
+# wildcard kind sets the testsets above pin on `Rvc_row` stay as they are.
+Rvc_flag_team = Models.Model("rvc_flag_team", id = Models.IDField(),
+  won = Models.BooleanField(null = true), since = Models.DateField(null = true),
+  dur = Models.DurationField(null = true))
+Rvc_flag = Models.Model("rvc_flag",
+  id       = Models.IDField(),
+  team     = Models.ForeignKey(Rvc_flag_team, on_delete = "CASCADE", related_name = "rvc_flags", null = true),
+  finished = Models.BooleanField(null = true),
+  recorded = Models.DateField(null = true),
+)
 PormG.Models.set_models(@__MODULE__, "rvc_mock")
 end
 const RVC = RvcModels
@@ -746,6 +757,45 @@ end
     @test kinds[:m] == PormG.CDecimal(12, 2)
     @test !haskey(kinds, :a)
     @test !haskey(kinds, :ma)
+  end
+
+  # #979: a column projected after a `When` condition on the same column. The condition renders the
+  # bare column into the projection memo under the column's own name, so the projection reuses that
+  # entry instead of rendering. The reuse branch recorded no kind, and on SQLite the column read back
+  # raw: a boolean as 0/1, a date as its stored text. Each shape is checked against the same column
+  # projected alone, which renders and so was always typed.
+  @testset "a column that reuses a condition's memo entry keeps its kind (#979)" begin
+    F_ = PormG.Functions
+    cond(column, value) = "c" => F_.Case([F_.When(column => value, then = 1)], default = 0)
+    with_g!(q) = q.with("g" => RVC.Rvc_flag.objects.values("id", "finished", "recorded"),
+                        join_field = "id" => "id", join_type = "INNER")
+    # (label, the condition's column, its value, the projection, the output name, the kind)
+    shapes = (
+      ("a boolean path", "finished", true, "finished", :finished, PormG.CBool()),
+      ("a date path", "recorded", Date(2009), "recorded", :recorded, PormG.CDate()),
+      ("a joined boolean path", "team__won", true, "team__won", :team__won, PormG.CBool()),
+      ("a joined date path", "team__since", Date(2009), "team__since", :team__since, PormG.CDate()),
+      # The one shape whose kind has a parser on PostgreSQL too (`CInterval`), so the gap was not
+      # SQLite-only: the PostgreSQL interval came back as the driver's raw value.
+      ("a joined duration path", "team__dur__@isnull", true, "team__dur", :team__dur, PormG.CInterval()),
+      ("a boolean CTE handle", PormG.CTE("g", "finished"), true, PormG.CTE("g", "finished"), :g__finished, PormG.CBool()),
+      # The `"cte__col"` path is retagged to the same handle before the projection loop.
+      ("a date CTE column, as a path", PormG.CTE("g", "recorded"), Date(2009), "g__recorded", :g__recorded, PormG.CDate()),
+    )
+    for (backend, connection) in ((:sqlite, _RVC_SL), (:postgres, _RVC_PG))
+      @testset "$backend: $label" for (label, column, value, projection, name, kind) in shapes
+        kinds_of(build!) = (q = RVC.Rvc_flag.objects; build!(q);
+                            PormG.QueryBuilder.query(q; connection = connection, show_query = :sql);
+                            q.object.projection_kinds)
+        cte = !(column isa String)
+        reused = kinds_of(q -> (cte && with_g!(q); q.values(cond(column, value), projection)))
+        alone = kinds_of(q -> (cte && with_g!(q); q.values(projection)))
+        @test get(alone, name, nothing) == kind
+        @test get(reused, name, nothing) == kind
+        # The CASE itself is an integer count, so it records nothing either way.
+        @test !haskey(reused, :c)
+      end
+    end
   end
 
   # #888: a `Subquery(...)` reads back as its one projected column, typed by the inner build exactly

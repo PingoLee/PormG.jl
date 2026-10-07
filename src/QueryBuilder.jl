@@ -110,6 +110,7 @@ include("querybuilder/deletion.jl")
 
 include("querybuilder/ctes.jl")
 # #977: what a join condition refers to — the one relation resolver, and the binding of conditions.
+# #130: also the `on` / `cjoin` / `cjoin_on` entry points and their condition guards.
 include("querybuilder/join_conditions.jl")
 
 

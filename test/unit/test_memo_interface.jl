@@ -227,7 +227,8 @@ end
 @testset "SQLField.root is read only by the sites entitled to it" begin
     expected = Set([
         ("src/querybuilder/build_helpers.jl", "_retag_cte_field! sets the CTE tag"),
-        ("src/querybuilder/ctes.jl", "the CTE filter rewrite carries the tag through"),
+        ("src/querybuilder/ctes.jl", "_bind_cte_string! writes the CTE tag"),
+        ("src/querybuilder/join_conditions.jl", "the join-condition rewrite carries the tag through"),
         ("src/querybuilder/memos.jl", "memo_key — the constructor itself"),
         ("src/querybuilder/types.jl", "SQLField's deepcopy"),
     ])
@@ -247,8 +248,9 @@ end
     end
     @test isempty(unexpected)
     # Pinned, not bounded — the same contract as `allowed_hits` above. Six sites today:
-    # build_helpers ×2 (the `_retag_cte_field!` / `_retag_joined_field!` writers), ctes ×2
-    # (#492's `_bind_cte_string!` writer, plus the #474 rewrite carrier), memos ×1, types ×1.
+    # build_helpers ×2 (the `_retag_cte_field!` / `_retag_joined_field!` writers), ctes ×1
+    # (#492's `_bind_cte_string!` writer), join_conditions ×1 (the #474 rewrite carrier,
+    # `_prefix_join_column(::SQLField)`, which #130 moved out of ctes.jl), memos ×1, types ×1.
     #
     # #961 took it from seven to six: the two rewrite carriers — `_prefix_join_filter`'s `OperObject`
     # and `FExpression` arms, each rebuilding an `SQLField` by hand — became one,

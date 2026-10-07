@@ -25,7 +25,7 @@ This skill is for implementation and regression analysis inside `src/querybuilde
 
 - `src/QueryBuilder.jl` is the builder entry point and includes the specialized querybuilder modules
 - `build_helpers.jl`, `build_joins.jl`, `build_query.jl`, `ctes.jl`, `deletion.jl`, `execution.jl`, and `functions.jl` are the main internal coordination surfaces
-- `join_conditions.jl` owns what a condition in `on(path, …)` / `cjoin(filters = …)` / `cjoin_on(on = …)` refers to: the one relation resolver, the build-time binding passes (#977, #982) and the render-time column recorder (#985). See *Join conditions: bound at build* below before touching any join-condition code
+- `join_conditions.jl` owns what a condition in `on(path, …)` / `cjoin(filters = …)` / `cjoin_on(on = …)` refers to: the one relation resolver, the build-time binding passes (#977, #982), the render-time column recorder (#985), and — since #130 — the `on` / `cjoin` / `cjoin_on` entry points themselves, with the handle guards and #962's right-side check. See *Join conditions: bound at build* below before touching any join-condition code
 - Keep user-facing behavior expressed through `M.Model.objects`; reach into builder internals only for implementation work or deterministic unit coverage
 
 ## Boundary With Public API Work
@@ -169,7 +169,7 @@ The rules now:
   as documented API (`docs/src/read/q_objects.md`), and `WindowSpec` documents in-place assembly.
   They are containers, not nodes; do not extend that affordance to the node types. Containers are
   also where the remaining user-buildable cycles live, which is why `_guard_no_handle`'s depth cap
-  (`ctes.jl`) stays: `push!(q, q)` on a `Q` is one, and a `WindowSpec` is another —
+  (`join_conditions.jl`) stays: `push!(q, q)` on a `Q` is one, and a `WindowSpec` is another —
   `spec = WindowOver(partition_by = "c"); push!(spec.partition_by, Rank(over = spec))` type-checks,
   because `WindowFunction <: SQLTypeFunction <: WindowPartitionPart`.
 - **A hand-written `deepcopy` is a symptom.** The seven that existed only to satisfy the #112 copy

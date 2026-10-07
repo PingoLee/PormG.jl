@@ -1235,7 +1235,7 @@ _is_agg(::Any) = false
 # It looks through the containers an argument can arrive in: a `Vector` (the variadic wrappers), an
 # operator (a `When` condition), and `Q`/`Qor` (a `When` condition too). Concrete types on purpose —
 # each is the only subtype of its abstract parent. The depth cap is the one `_guard_no_handle`
-# (`ctes.jl`) keeps for the same reason: `push!(q, q)` on a `Q` is a user-buildable cycle.
+# (`join_conditions.jl`) keeps for the same reason: `push!(q, q)` on a `Q` is a user-buildable cycle.
 function _holds_agg(x, depth::Int = 0)::Bool
   depth > 32 && return false
   x isa AbstractVector && return any(v -> _holds_agg(v, depth + 1), x)

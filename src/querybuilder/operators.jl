@@ -125,7 +125,7 @@ end
 # AST, jOOQ and peewee all return a new node and leave the operand untouched. Making THIS cycle
 # unrepresentable is why no depth guard was added for it. It is not the only cycle a user can build —
 # `q = Q("x" => 1); push!(q, q)` is a container cycle from exported spellings, and the depth cap in
-# `_guard_no_handle` (ctes.jl) is what absorbs that one.
+# `_guard_no_handle` (join_conditions.jl) is what absorbs that one.
 #
 # The operand union is the dispatch contract for a `CTE(...)` / `Joined(...)` right-hand side
 # (#444/#481) — narrowing it would make those comparisons fall through to `Base.==` and silently

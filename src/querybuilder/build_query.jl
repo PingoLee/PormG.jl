@@ -1696,7 +1696,7 @@ end
 # evaluates it in: an aggregate through the projection alias (HAVING — the alias branch in
 # `get_filter_query` above), a window through a CTE, because SQL evaluates windows after WHERE.
 #
-# Recursive, in the shape of `_guard_no_handle` (ctes.jl) and with its depth cap, because `Q(...)`
+# Recursive, in the shape of `_guard_no_handle` (join_conditions.jl) and with its depth cap, because `Q(...)`
 # and `Qor(...)` admit an `OperObject` directly (functions.jl): a flat check on the top-level entry
 # would let `Q(OP(Count("id"), ">", 3))` through. `_is_agg(::WindowFunction)` is `false` by design —
 # a window is not an aggregate, even over one (#776 asks `_contains_agg` for GROUP BY instead) — hence

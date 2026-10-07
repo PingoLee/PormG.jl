@@ -1334,13 +1334,15 @@ ARRAY_LEN(x) = (y = _transform_operand("LEN", x);
                 FObject(function_name = "ARRAY_LEN", column = y, aggregate = _any_agg(y), formatter = Models.format_number_sql))
 
 
-function ISNULL(v::AbstractString, value::Bool; aggregate::Bool = false)
+function ISNULL(v::AbstractString, value::Bool; expression::Bool = false)
   # `v` is the rendered column text (#602: `AbstractString`, so a non-`String` spelling dispatches).
-  # `aggregate` (#654): the HAVING alias branch passes it for a `Max`/`Min`/`Sum`/`Avg` projection,
-  # whose rendered text is a call by construction — `MAX("Tb"."name") IS NULL` is meaningful there
-  # (every value in the group is NULL). The caller decides from the projection node, never from the
-  # text, so the refusal below is unchanged for every other column.
-  if !aggregate && contains(v, "(")
+  # `expression`: the caller's licence for a column whose rendered text is a call by construction.
+  # The HAVING alias branch passes it for a `Max`/`Min`/`Sum`/`Avg` projection (#654) —
+  # `MAX("Tb"."name") IS NULL` is meaningful there (every value in the group is NULL) — and the WHERE
+  # path for a transform column (#972), `EXTRACT(YEAR FROM "Tb"."date") IS NULL`. Named `aggregate`
+  # until #972 gave it a second, non-aggregate caller. The caller decides from the node, never from
+  # the text, so the refusal below is unchanged for every other column.
+  if !expression && contains(v, "(")
     throw(FilterError("Error in ISNULL: the column $(v) cannot be a function expression."))  # refusal-value-ok: a column name from the query, not a bound value
   end
   if value

@@ -1061,6 +1061,19 @@ Store_order = Models.Model(
 
 **Format**: HH:MM:SS
 
+`default=` accepts a `Time`, an `HH:MM:SS` string, a `DateTime` (its time of day) or a time
+period whose unit is named, and stores a `Time` for each:
+
+```julia
+Models.TimeField(default = Time(0, 1, 30))   # Time(0, 1, 30)
+Models.TimeField(default = "00:01:30")       # Time(0, 1, 30)
+Models.TimeField(default = Hour(5))          # Time(5)
+```
+
+A `Bool` or a bare number is refused with `FieldValidationError`. `default = 5` used to store 05:00
+and `default = true` 01:00, because `Time(5)` reads a number as the hour; spell the time you mean
+instead.
+
 ```julia
 # Facility hours
 Team_store = Models.Model(

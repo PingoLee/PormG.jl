@@ -197,6 +197,15 @@ end
     @test e isa PormG.FilterError
     @test occursin("@len transform counts the elements of an ArrayField, and team is not one",
                    _plain_al(sprint(showerror, e)))
+    # #972: `@isnull` and `@range` after `@len`, which the transform arm refused as "not a supported
+    # operator" — `@isnull` was the one #28's live test wanted. `cardinality(NULL)` is NULL, so it
+    # asks whether the array itself is; it binds nothing.
+    r = _pg_al("pit_laps__@len__@isnull" => true)
+    @test occursin("WHERE cardinality(\"Tb\".\"pit_laps\") IS NULL", r[:sql_text]) && isempty(r[:parameters])
+    r = _pg_al("pit_laps__@len__@isnull" => false)
+    @test occursin("WHERE cardinality(\"Tb\".\"pit_laps\") IS NOT NULL", r[:sql_text]) && isempty(r[:parameters])
+    r = _pg_al("pit_laps__@len__@range" => [1, 3])
+    @test occursin("WHERE cardinality(\"Tb\".\"pit_laps\") BETWEEN \$1 AND \$2", r[:sql_text]) && r[:parameters] == [1, 3]
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

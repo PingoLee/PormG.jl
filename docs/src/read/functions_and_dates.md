@@ -88,6 +88,32 @@ query = M.Race.objects.filter("date__@month__@gte" => 6)
 query = M.Race.objects.filter("date__@year" => 1991, "date__@quarter" => 1)
 ```
 
+### Null checks and ranges after a transform
+
+`@isnull`, `@range` and `@nrange` chain after a transform like any other lookup, as Django's
+`date__year__isnull` does:
+
+```julia
+# Races of the 1990s
+query = M.Race.objects.filter("date__@year__@range" => [1990, 1999])
+# renders:  EXTRACT(YEAR FROM "Tb"."date")::integer BETWEEN $1 AND $2
+
+# Races with a sprint: `sprint_date` is NULL on every other race
+query = M.Race.objects.filter("sprint_date__@year__@isnull" => false)
+# renders:  EXTRACT(YEAR FROM "Tb"."sprint_date")::integer IS NOT NULL
+```
+
+The range operands are values of the transform: years for `@year`, `"YYYY-MM"` strings for
+`@yyyy_mm`, and each is checked the way a single value is (`"start_at__@hour__@range" => [1, 25]` raises
+`InvalidValueError`). A range is not rewritten onto the column the way a comparison on a
+`DateField` is (below), so it compares the transform itself.
+
+A date part is NULL exactly when its date is, so `"sprint_date__@year__@isnull" => false` selects
+the same rows as `"sprint_date__@isnull" => false`. The exceptions are the two year-qualified labels: `@isnull` after
+`@yyyy_q` or `@yyyy_quad` raises a `FilterError`, because their label is NULL for a NULL date on
+SQLite but `'-Q'` on PostgreSQL, and the two engines would answer differently. Test the column
+itself instead: `"date__@isnull" => true`.
+
 ### Time of day (`@hour`, `@minute`, `@second`)
 
 The time parts work on a `DateTimeField` and on a `TimeField`, in `filter()` and `values()` alike.

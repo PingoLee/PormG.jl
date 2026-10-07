@@ -162,6 +162,47 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# TimeField default=: a Bool or a bare number is refused, not read as an hour (#885)
+# `TimeField` converts through `Time(x)`, which takes any real number as the HOUR — and `Bool <: Real`.
+# So `default = true` stored 01:00 and `default = 5` stored 05:00, while `DateField` /
+# `DateTimeField` / `DurationField` already refused both through their own converters. The message
+# is asserted, not just the type: `validate_default`'s bare `catch` would answer with its generic
+# "Expected type" text, which names neither the hour reading nor a spelling that works.
+#
+# Mutation gate: delete the `default isa Real` refusal in `TimeField` (`src/models/fields.jl`)
+# and every refused row constructs instead.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "TimeField default= refuses a Bool or a bare number (#885)" begin
+    # The floats and the rational are the review's find: `Time(5.0)` and `Time(5//1)` are 05:00 too.
+    for bad in (true, false, 5, 0, Int8(1), UInt(3), 5.0, Float32(7), 5//1)
+        @testset "$(repr(bad))" begin
+            err = try
+                TimeField(default = bad)
+                nothing
+            catch e
+                e
+            end
+            @test err isa PormG.FieldValidationError
+            @test !(err isa ArgumentError)
+            msg = sprint(showerror, err)
+            @test occursin("TimeField", msg)
+            @test occursin("hour", msg)
+            @test occursin("\"00:01:30\"", msg)
+            @test !occursin("Expected type", msg)
+        end
+    end
+
+    # The explicit spellings are untouched. `Hour(5)` stays legal because its unit is named — the
+    # refusal is about an integer with no unit, not about whole hours.
+    @test TimeField(default = Time(0, 1, 30)).default == Time(0, 1, 30)
+    @test TimeField(default = "00:01:30").default == Time(0, 1, 30)
+    @test TimeField(default = Hour(5)).default == Time(5)
+    @test TimeField(default = Minute(30)).default == Time(0, 30)
+    @test TimeField(default = DateTime(2024, 7, 28, 14, 5)).default == Time(14, 5)
+    @test TimeField().default === nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # validate_default re-checks its converter's result (#631)
 # The general half. Three converters could return outside their paired `expected_type`, and all
 # three reached the caller as a bare MethodError from the struct's `convert`. `missing` is the one

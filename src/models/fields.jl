@@ -2790,8 +2790,10 @@ end
 
 Time of day with no date component — SQL `TIME`.
 
-`default` accepts a `Time` or anything `Time(x)` parses (e.g. `"09:30:00"`); an invalid value raises
-`FieldValidationError` at model-definition time rather than on the first insert.
+`default` accepts a `Time`, an ISO time string (e.g. `"09:30:00"`), a `DateTime` (its time of day)
+or a time period such as `Hour(5)`; an invalid value raises `FieldValidationError` at model-definition
+time rather than on the first insert. A `Bool` or a bare number is refused (#885): `Time(5)` reads it
+as an hour, so `default = 5` was 05:00 and `default = true` was 01:00.
 
 # Examples
 ```julia
@@ -2811,7 +2813,14 @@ function TimeField(; kwargs...)
 
   default = get(kwargs, :default, nothing)
 
-  # Validate default
+  # #885: `Time(x)` takes any real number as the HOUR (`Bool <: Integer <: Real`), so
+  # `default = true` was 01:00 and `default = 5` or `5.0` was 05:00 — silently, and `5` could as
+  # well mean seconds or minutes.
+  # Refused before `validate_default`, whose bare `catch` would replace this message with its
+  # generic "Expected type" one (the #612 / BinaryField pattern). `Hour(5)` stays: the unit is named.
+  if default isa Real
+    throw(_fielderr("TimeField: 'default' must be a Dates.Time or an ISO time string such as \"00:01:30\", got $(typeof(default)) ($(default)). A number has no unit here — `Time(5)` reads 5 as the hour, 05:00; spell the time you mean, e.g. `Time(0, 0, 5)` or `Hour(5)`."))
+  end
   default = validate_default(default, Union{Time, Nothing}, "TimeField", x -> Time(x))
   # Return the field instance
   return sTimeField(

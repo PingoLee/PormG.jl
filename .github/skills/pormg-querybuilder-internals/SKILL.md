@@ -400,19 +400,33 @@ a typed column IR (I1) is still worth its cost, is #990.
 
   A comparison marks its column `:left` (`_join_side_change`) and its values `:right` (`_on_join_right`).
   Inside a right side, everything stays right (#975). A comparison nested in a left side splits again.
+  **A column on no side (`:none`) is checked against the narrow left set (#993):** the marks are opt-in
+  at each comparison site and nothing scans for them, so the default is what makes a forgotten mark
+  fail. With the left set, a forgotten `:left` is a loud refusal instead of #961's silent wrong row,
+  and only an explicit `_on_join_right` widens the set. Never flip the default back to the right
+  set. When you add a comparison arm, mark both sides, and give it a mutation proof in
+  `test/unit/test_join_column_recorder.jl`.
   A memoized column is rendered afresh inside an ON clause, so it passes the check. The walkers
   (`_prefix_join_column`, `_refuse_lhs_past_hop`, the `_off_path_*` family) stay on purpose: they
   refuse at binding, with the spelling the caller wrote. The recorder is the net under them, so a
   gap in a walker becomes a loud refusal instead of a wrong row.
+- **A path a `cjoin_on` condition names is to-one, or it is refused (#992).**
+  `_refuse_to_many_cjoin_on_path` walks it with `_relation_step` at binding. The first hop that is not
+  `:forward` raises, and the message points to `Exists(… OuterRef …)`. That covers a reverse or
+  ManyToMany hop, and a reverse OneToOne, which can drop the base row when there is no match. Built
+  first onto the base row, such a hop repeats the base row once per related row, and no ON placement
+  undoes it.
 - **Known gaps** (open issues; new work in this area goes there, not into a standalone fix,
   [`pormg-issue-management`](../pormg-issue-management/SKILL.md) → *Design (umbrella) issues*):
   - Conditions are lowered to canonical base-rooted path strings, not typed column references (I1, #990).
-  - **The side marks are opt-in at each comparison site, and an unmarked column defaults to the
-    permissive right-side set**, so a missing `:left` mark is silent while a missing `:right` mark is
-    a loud false refusal (#993). When you add a comparison arm, mark both sides, and give it a
-    mutation proof in the recorder's test file.
-  - A reverse or ManyToMany path named in a `cjoin_on` condition is joined onto the base row and
-    multiplies it (#992).
+    Since #993 a gap in that lowering is a loud refusal, not a wrong row, so I1 now buys message
+    quality and fewer walker arms, not correctness.
+  - **Cardinality is not one invariant yet (#1002).** Reference is settled. "Does this join repeat a
+    base row?" is answered by six local guards: #74, #973, the M2M `on()` refusal, #992, open #174,
+    and none for a `cjoin(field = …)` link to a non-unique column, which `_relation_step` classifies
+    `:forward`. Do not add a seventh local guard for a to-many shape: put the case in #1002, which
+    also holds the open decision on `filter()` / `order_by` across a to-many path (Django-shaped
+    repeats, refuse, or rewrite to `EXISTS`).
 
 Coverage: `test/unit/test_join_condition_matrix.jl` records the SQL of every path × condition shape
 as data, in `test/unit/fixtures/join_condition_matrix_expected.jl`. A behavior change shows up as a

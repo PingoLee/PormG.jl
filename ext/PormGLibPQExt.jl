@@ -273,14 +273,113 @@ function PormG.backend_is_alive(pool::PormGPostgres, conn::LibPQ.Connection)
   end
 end
 
+# ── The reason as data, read before the result is gone (#1000) ───────────────
+#
+# LibPQ's `handle_result(::Result; throw_error = true)` builds a `PQResultError` from a failed result —
+# two strings, `msg` and `verbose_msg` — then `close`s the result and throws. The constraint, table and
+# column the server named (`PQresultErrorField`) are freed with it, so a `DatabaseError` built from that
+# exception can never carry them (#987 shipped exactly that). Every statement here therefore runs with
+# `throw_error = false`: a failed result comes back still open, `_raise_if_failed` reads its fields,
+# closes it, and raises the taxonomy error itself — with the SAME `PQResultError` LibPQ would have
+# thrown as its `cause`. Raising a `DatabaseError` from here is safe: `_as_database_error` passes a
+# `PormGError` through untouched, and every classifier reads the driver exception via `_driver_cause`.
+#
+# Two consequences of `throw_error = false`, both accepted:
+#   * An async execute returns the LAST result, not a `CompositeException` of every failed one. The
+#     simple-query protocol stops at the first error, so the last result is that error. The one case
+#     with two is a terminated backend — 57P01, then libpq's own "server closed the connection" with no
+#     SQLSTATE — and that second one still classifies as a dropped connection on its message
+#     (`backend_is_connection_error`, step 3), so the kind and `fetch`'s retry are unchanged.
+#   * LibPQ logs the failure through its Memento logger at `warn` instead of `error`.
+
+const _FAILED_RESULT_STATUSES = (LibPQ.libpq_c.PGRES_BAD_RESPONSE, LibPQ.libpq_c.PGRES_FATAL_ERROR)
+
+# The fields a `DatabaseError` is built with, from the failed result's own diagnostics. `field(code)`
+# is `PQresultErrorField` — `nothing` when the server did not send that field — taken as an argument so
+# the mapping is testable without a server. The SQLSTATE still comes from the exception's type, as in
+# `backend_error_fields` below, and `message` from the PRIMARY field rather than the first line of the
+# rendered text; DETAIL, HINT and the `LINE n:` excerpt are never read.
+function _result_error_fields(cause::LibPQ.Errors.PQResultError, field)
+  # `CUN` / `EUNOWN` is LibPQ's synthetic "the server sent no code" — no diagnostics to read either.
+  cause isa LibPQ.Errors.PQResultError{LibPQ.Errors.CUN} && return PormG._NO_ERROR_FIELDS
+  fallback = PormG.backend_error_fields(cause)
+  primary = field(LibPQ.libpq_c.PG_DIAG_MESSAGE_PRIMARY)
+  return (sqlstate = fallback.sqlstate,
+          constraint = field(LibPQ.libpq_c.PG_DIAG_CONSTRAINT_NAME),
+          table = field(LibPQ.libpq_c.PG_DIAG_TABLE_NAME),
+          column = field(LibPQ.libpq_c.PG_DIAG_COLUMN_NAME),
+          message = primary === nothing ? fallback.message : PormG._safe_server_message(fallback.sqlstate, primary))
+end
+
+# `result`, unless it failed: then raise the taxonomy error with the result's diagnostics and close it.
+# The throw sits after the `try`, never inside a `catch` (#987) — and no driver exception is ever
+# thrown on this path, so none can sit on the exception stack beneath it.
+#
+# A closed `result` is a failure here, never a success: it is what LibPQ builds when libpq returned no
+# `PGresult` at all (`PQexec` on a broken connection, out of memory). libpq reports it as FATAL with an
+# empty message and no SQLSTATE, so it raises exactly the `PQResultError` LibPQ raised before (#1000),
+# which `backend_is_connection_error` reads as a dropped connection.
+function _raise_if_failed(pool::PormGPostgres, result::LibPQ.Result)
+  LibPQ.status(result) in _FAILED_RESULT_STATUSES || return result
+  cause = LibPQ.Errors.PQResultError(result)
+  fields = try
+    _result_error_fields(cause, code -> LibPQ.error_field(result, code))
+  catch read_failure
+    # A failed read never replaces the failure being reported: degrade to what the text carries.
+    read_failure isa InterruptException && rethrow()
+    PormG.backend_error_fields(cause)
+  finally
+    close(result)
+  end
+  throw(PormG.ConnectionPool._as_database_error(pool, cause; fields = fields))
+end
+
+# The async handle `backend_execute_async` returns. `fetch` checks the result the driver task produced;
+# `wait` is the driver task's own, so the abandoned-await probe (#315, `_settle_probe`) still waits on
+# the task that holds the connection. A wrapper `Task` would not: a Ctrl-C landing in it would report
+# the await settled while LibPQ was still on the socket.
+#
+# `fetch` is repeatable, as LibPQ's own is: the first one that finds a failed result closes it, so
+# whatever ended that fetch is kept and raised again rather than re-read off a closed result — which
+# `_raise_if_failed` would hand back as a success. EVERY exception, not only the `DatabaseError`: an
+# interrupt landing after the `close` leaves the result just as closed.
+mutable struct _CheckedAsyncResult
+  const pool::PormGPostgres
+  const inner::LibPQ.AsyncResult
+  raised::Union{Nothing, Exception}
+end
+_CheckedAsyncResult(pool::PormGPostgres, inner::LibPQ.AsyncResult) = _CheckedAsyncResult(pool, inner, nothing)
+
+function Base.fetch(handle::_CheckedAsyncResult)
+  handle.raised === nothing || throw(handle.raised)
+  result = Base.fetch(handle.inner)
+  # Closed here means the caller closed it after an earlier, successful `fetch`: the driver task never
+  # yields a NULL `PGresult`, and a failed one was closed by the `fetch` that raised, recorded above.
+  isopen(result) || return result
+  err = try
+    return _raise_if_failed(handle.pool, result)
+  catch e
+    handle.raised = e
+    # Not ours (an interrupt): rethrown as it is, backtrace kept. It is alone on the stack either way.
+    e isa PormG.DatabaseError || rethrow()
+    e
+  end
+  throw(err)   # after the `catch`, never inside it (#987)
+end
+Base.wait(handle::_CheckedAsyncResult) = wait(handle.inner)
+
 function PormG.backend_execute(pool::PormGPostgres, conn::LibPQ.Connection, sql::String, params)
   resolved = params isa PormGPostgresParam ? params.parameters : params
-  return resolved === nothing ? LibPQ.execute(conn, sql) : LibPQ.execute(conn, sql, resolved)
+  result = resolved === nothing ? LibPQ.execute(conn, sql; throw_error = false) :
+                                  LibPQ.execute(conn, sql, resolved; throw_error = false)
+  return _raise_if_failed(pool, result)
 end
 
 function PormG.backend_execute_async(pool::PormGPostgres, conn::LibPQ.Connection, sql::String, params)
   resolved = params isa PormGPostgresParam ? params.parameters : params
-  return resolved === nothing ? LibPQ.async_execute(conn, sql) : LibPQ.async_execute(conn, sql, resolved)
+  inner = resolved === nothing ? LibPQ.async_execute(conn, sql; throw_error = false) :
+                                 LibPQ.async_execute(conn, sql, resolved; throw_error = false)
+  return _CheckedAsyncResult(pool, inner)
 end
 
 # SQLSTATEs that mean THE BACKEND IS GONE AND THE STATEMENT NEVER RAN. That second half is the bar,
@@ -344,7 +443,9 @@ const _PG_LOST_CONNECTION_ERRORS = Union{
 function PormG.backend_is_connection_error(pool::PormGPostgres, e)
   # (0) LibPQ raises `CompositeException` when several results in one execute errored, and
   #     `_unwrap_async_exception` only unwraps the single-error case. Recurse, or a multi-result
-  #     failure would skip the SQLSTATE gate below and be judged on concatenated message text.
+  #     failure would skip the SQLSTATE gate below and be judged on concatenated message text. This
+  #     extension's own statements no longer produce one (`throw_error = false`, #1000); the branch
+  #     stays for a LibPQ call made with the default, which is any caller's to make.
   e isa CompositeException &&
     return any(inner -> PormG.backend_is_connection_error(pool, inner), e.exceptions)
 
@@ -426,12 +527,14 @@ function PormG.backend_classify_error(pool::PormGPostgres, e::LibPQ.Errors.LibPQ
   return :statement
 end
 
-# The reason as data (#987). LibPQ's exception keeps two strings and nothing else: the PGresult that
-# holds the constraint, table and column fields is closed before `handle_result` throws. So this
-# reports what the type and the text carry without guessing — the SQLSTATE, from the type parameter,
-# and the primary message, which is the message's first line after its severity (`ERROR:  `, or a
-# localized `ERRO:  `; libpq separates the two with a colon and two spaces in every locale). DETAIL,
-# HINT and `LINE n:` sit on the lines after it and are never read.
+# The reason as data (#987), from the exception ALONE. A statement this extension runs never needs it:
+# `_raise_if_failed` above reads the failed result's own fields first (#1000). This is the fallback for
+# a `PQResultError` that arrives without its result — one LibPQ raised itself (a call made with its
+# default `throw_error = true`), or one built by hand — and LibPQ's exception keeps two strings and
+# nothing else. So it reports what the type and the text carry without guessing — the SQLSTATE, from the type
+# parameter, and the primary message, which is the message's first line after its severity
+# (`ERROR:  `, or a localized `ERRO:  `; libpq separates the two with a colon and two spaces in every
+# locale). DETAIL, HINT and `LINE n:` sit on the lines after it and are never read.
 function PormG.backend_error_fields(e::LibPQ.Errors.PQResultError)
   # `CUN` / `EUNOWN` is LibPQ's synthetic "the server sent no code" — not a SQLSTATE to report.
   e isa LibPQ.Errors.PQResultError{LibPQ.Errors.CUN} && return PormG._NO_ERROR_FIELDS
@@ -523,15 +626,43 @@ function PormG.backend_drain_connection!(pool::PormGPostgres, conn::LibPQ.Connec
   end
 end
 
+# Did the server name this failure — a failed result carrying a SQLSTATE?
+_server_named_failure(res::LibPQ.Result) =
+  isopen(res) && LibPQ.status(res) in _FAILED_RESULT_STATUSES &&
+  LibPQ.error_field(res, LibPQ.libpq_c.PG_DIAG_SQLSTATE) !== nothing
+
+# Is this the result that follows `PQputCopyEnd` — command tag `COPY n`?
+_copy_completed(res::LibPQ.Result) =
+  LibPQ.status(res) == LibPQ.libpq_c.PGRES_COMMAND_OK &&
+  Base.startswith(unsafe_string(LibPQ.libpq_c.PQcmdStatus(res.result)), "COPY")
+
 # PostgreSQL COPY FROM STDIN. `LibPQ.CopyIn` owns the connection until the stream is
 # fully consumed; the caller in core holds the pool lease for the whole call.
 #
 # Returns the rows copied (#670). `LibPQ.execute(::Connection, ::CopyIn)` hands back the result that
 # follows `PQputCopyEnd`, whose command tag is `COPY n` — so the count is read here, before `close`
 # frees it, rather than by any extra round trip.
+#
+# `throw_error = false` for the reason `_raise_if_failed` gives (#1000): a COPY that violates a
+# constraint must name it like any other write. Under `false` LibPQ only LOGS two failures it used to
+# raise, and both are raised here instead, as before:
+#   * a failed `PQputCopyEnd` — the connection broke mid-stream — was `PQConnectionError`. Unless the
+#     server named the failure first (a result with a SQLSTATE, e.g. 57P01), which is the better report;
+#   * a statement that never entered COPY_IN and did not fail either — it was not a COPY FROM STDIN —
+#     was `JLResultError`. Without the check it would return as a successful copy.
 function PormG.backend_copy_in!(pool::PormGPostgres, conn::LibPQ.Connection, sql::String, data_itr)::Int
   try
-    res = LibPQ.execute(conn, LibPQ.CopyIn(sql, data_itr))
+    res = LibPQ.execute(conn, LibPQ.CopyIn(sql, data_itr); throw_error = false)
+    if LibPQ.status(conn) != LibPQ.libpq_c.CONNECTION_OK && !_server_named_failure(res)
+      close(res)
+      throw(LibPQ.Errors.PQConnectionError(conn))
+    end
+    _raise_if_failed(pool, res)   # closes a failed result before it throws
+    if !_copy_completed(res)
+      status = LibPQ.status(res)
+      close(res)
+      throw(LibPQ.Errors.JLResultError("Expected PGRES_COPY_IN after COPY query, got $status"))
+    end
     try
       return LibPQ.num_affected_rows(res)
     finally

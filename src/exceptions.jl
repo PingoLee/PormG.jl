@@ -335,8 +335,8 @@ All three are built from structured fields rather than a `msg::String`, so read 
 | Field | What | Reported by |
 |---|---|---|
 | `sqlstate` | The five-character SQLSTATE, e.g. `"23505"` | both PostgreSQL drivers |
-| `constraint` | The constraint that refused the row | the Postgres.jl driver |
-| `table`, `column` | The table and column the server named | the Postgres.jl driver |
+| `constraint` | The constraint that refused the row | both PostgreSQL drivers |
+| `table`, `column` | The table and column the server named | both PostgreSQL drivers |
 | `message` | The server's primary message — `nothing` for SQLSTATE class `22`, whose message quotes the input | every driver |
 
 **The rendered text never carries a value** — `error_message`, `showerror` and `string` alike — so

@@ -129,13 +129,14 @@ row. So `error_message(e)` is safe to return to a client (#987).
 | Field | What | LibPQ | Postgres.jl | SQLite |
 |---|---|---|---|---|
 | `sqlstate` | The SQLSTATE, e.g. `"23505"` for a unique violation | ✓ | ✓ | — |
-| `constraint` | The constraint that refused the row | — | ✓ | — |
-| `table`, `column` | The table and column the server named | — | ✓ | — |
+| `constraint` | The constraint that refused the row | ✓ | ✓ | — |
+| `table`, `column` | The table and column the server named | ✓ | ✓ | — |
 | `message` | The server's primary message | ✓ | ✓ | ✓ |
 
-A field the driver does not report is `nothing`. LibPQ's exception keeps only its text, so on that
-driver the constraint's name is inside `message` —
-`duplicate key value violates unique constraint "driver_code_key"` — but not in a field of its own.
+A field the driver does not report is `nothing`, and so is one the server did not send for that
+error: a unique violation names its `constraint` and `table`, a `NOT NULL` violation its `table` and
+`column`, a syntax error none of the three. The same holds for a `bulk_copy` that violates a
+constraint.
 
 `message` is `nothing` for SQLSTATE class `22`, a data exception: PostgreSQL builds that message from
 the input (`invalid input syntax for type uuid: "<value>"`), so the error states only the SQLSTATE.
@@ -164,11 +165,11 @@ above — then raises the error to you. A failed `ROLLBACK` is logged with the d
 that statement binds no values.
 
 The LibPQ driver logs separately, through its own [Memento](https://github.com/invenia/Memento.jl)
-logger. Every failed statement prints the server's full message there — `DETAIL` included, which
-on a unique violation names the value:
+logger. Every failed statement prints the server's full message there at `warn` — `DETAIL`
+included, which on a unique violation names the value:
 
 ```text
-[error | LibPQ]: UniqueViolation: ERROR:  duplicate key value violates unique constraint "drivers_code_key"
+[warn | LibPQ]: UniqueViolation: ERROR:  duplicate key value violates unique constraint "drivers_code_key"
 DETAIL:  Key (code)=(SEN) already exists.
 ```
 

@@ -19,7 +19,7 @@
 
 using Test
 using PormG
-import PormG.QueryBuilder: F, Q, Qor, Joined
+import PormG.QueryBuilder: F, Q, Qor, Joined, Exists, OuterRef
 
 struct CJoinOnMockPG <: PormG.PormGPostgres end
 struct CJoinOnMockSL <: PormG.PormGSQLite end
@@ -303,4 +303,84 @@ end
   q2.cjoin_on(loose, alias = "lc", on = [Joined("lc", "raceid") == F("raceid")])
   q2.values("id")
   @test occursin("INNER JOIN \"loose_circuits\" AS \"lc\" ON", q2.list(show_query = :sql))
+end
+
+# Relations for #992: `Result → Driver` forward, `Driver.results` reverse, `Driver.sponsors` ManyToMany.
+module CJoinOnRelModels
+import PormG
+import PormG.Models
+Sponsor = Models.Model("sponsor",
+  sponsorid = Models.IDField(),
+  name = Models.CharField(),
+)
+Driver = Models.Model("driver",
+  driverid = Models.IDField(),
+  code = Models.CharField(),
+  number = Models.IntegerField(),
+  sponsors = Models.ManyToManyField(Sponsor, related_name = "drivers"),
+)
+Result = Models.Model("result",
+  resultid = Models.IDField(),
+  grid = Models.IntegerField(),
+  driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
+)
+PormG.Models.set_models(@__MODULE__, "cjoinon_sl")
+end
+
+const REL = CJoinOnRelModels
+_cjoin_on_rel_err(f) = try f(); nothing catch e; e end
+_cjoin_on_rel_msg(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# cjoin_on: a to-many path in an ON condition is refused, in every spelling (#992)
+# A path a cjoin_on condition names is joined onto the base row before the alias. A reverse or
+# ManyToMany hop would repeat each base row once per related row, under any join type and with no
+# aggregate for #74's guard to see. The matrix pins the pair-key spelling; this pins `F(...)` and an
+# `OuterRef` in an `Exists`, and that the rewrite the message suggests renders.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a reverse or ManyToMany path in a cjoin_on condition is refused (#992)" begin
+  anchor = Joined("d2", "driverid") == F("driverid")
+  build(cond) = () -> begin
+    q = REL.Result.objects
+    q.cjoin_on("Driver", alias = "d2", join_type = "LEFT", on = [anchor, cond])
+    q.values("resultid")
+    q.list(show_query = :sql)
+  end
+
+  # A reverse hop on the right of a comparison, spelled as an F.
+  err = _cjoin_on_rel_err(build(Joined("d2", "number") == F("driverid__results__grid")))
+  @test err isa PormG.FilterError
+  msg = _cjoin_on_rel_msg(err)
+  @test occursin("F(\"driverid__results__grid\") in the ON clause of cjoin_on alias d2", msg)
+  @test occursin("crosses the reverse relation 'driverid__results'", msg)
+  @test occursin("per related 'result' row", msg)
+  @test occursin("Exists(M.<Related>.objects.filter(", msg)
+  # Not a bare `.filter(...)`: a to-many path there joins and repeats rows the same way.
+  @test occursin("pass that Exists(...) to .filter(...) instead", msg)
+  @test occursin("#992", msg)
+
+  # A ManyToMany hop reached through an OuterRef in a correlated subquery: the outer path is joined
+  # onto the base row the same way, so it is refused the same way.
+  err = _cjoin_on_rel_err(build(Q(Exists(REL.Sponsor.objects.filter("name" => OuterRef("driverid__sponsors__name"))))))
+  @test err isa PormG.FilterError
+  @test occursin("crosses the ManyToMany relation 'driverid__sponsors'", _cjoin_on_rel_msg(err))
+
+  # The rewrite: the existence test correlated explicitly. It renders, and the only join to `Result`
+  # is inside the subquery — the base row is joined to `d2` alone.
+  ok = build(Exists(REL.Result.objects.filter("driverid" => OuterRef("driverid"), "grid" => 1)))()
+  @test occursin("LEFT JOIN \"driver\" AS \"d2\"", ok)
+  @test occursin("EXISTS", ok)
+  @test count("JOIN", ok) == 1
+
+  # The message's other remedy: the same Exists in `.filter(...)` restricts the base rows, with no join.
+  where = REL.Result.objects
+  where.filter(Exists(REL.Result.objects.filter("driverid" => OuterRef("driverid"), "grid" => 1)))
+  where.values("resultid")
+  where_sql = where.list(show_query = :sql)
+  @test occursin("EXISTS", where_sql)
+  @test !occursin("JOIN", where_sql)
+
+  # A forward path is to-one, and still builds before the alias (#982).
+  fwd = build("driverid__code" => "X")()
+  @test occursin("LEFT JOIN \"driver\" AS \"d2\"", fwd)
 end

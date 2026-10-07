@@ -237,7 +237,8 @@ end
 #     rendered, after the alias row, and the predicate was then moved by a substring scan of the
 #     rendered SQL onto that later join (Phase 1b, #421, #435): out of the ON clause the caller wrote
 #     it in, into a join of another type. Under a LEFT `cjoin_on` that turned "null the alias's
-#     columns" into "drop the row".
+#     columns" into "drop the row". Only a to-one path is built: a reverse or ManyToMany hop would
+#     multiply the base row, and is refused (#992).
 #   - Another alias is a dependency. Alias rows are emitted every alias after the ones it names, so a
 #     reference always points backwards (#449's declaration order breaks the ties). A cycle has no such
 #     order, and is refused.
@@ -256,12 +257,13 @@ function _bind_cjoin_on_conditions!(instruct::SQLInstruction)
     names = String[]
     self_ref = false
     for f in cfg.filters
-      _each_condition_column(f, 0) do column, _
+      _each_condition_column(f, 0) do column, written
         if column isa JoinedReference
           column.alias == alias ? (self_ref = true) :
             (column.alias in names || push!(names, column.alias))
         elseif !isempty(_relation_prefix(q, column))
           path = String(first(split(column, "__@")))
+          _refuse_to_many_cjoin_on_path(q, alias, path, written)
           path in built && return nothing
           push!(built, path)
           push!(instruct.cjoin_on_paths, String.(split(path, "__")))
@@ -275,6 +277,40 @@ function _bind_cjoin_on_conditions!(instruct::SQLInstruction)
   end
   append!(instruct.cjoin_on_order, _cjoin_on_emission_order(names_of))
   return instruct
+end
+
+# #992: a path built first must be a FORWARD path. A forward hop to a primary key matches at most one
+# row per base row (a nullable FK becomes LEFT through `_determine_join_type`), so joining it first
+# adds no rows. (A `cjoin(field = …)` link to a non-unique column can repeat rows, but that is the
+# link's own semantics, the same wherever its path is referenced.) A reverse or ManyToMany hop does
+# not: joined onto the base row it repeats it once per related row, and an INNER join drops it when
+# there is none — a reverse OneToOne too, which is to-one but may have no match. Under a LEFT
+# `cjoin_on` nothing undoes either. No SQL placement gives the caller
+# what they wrote — in the path's ON the predicate filters the base row (the pre-#982 bug), in the
+# alias's ON the path's join multiplies it — and no aggregate is projected for #74's guard to catch.
+# The intent is a correlated existence test, which `Exists(… OuterRef …)` spells explicitly.
+function _refuse_to_many_cjoin_on_path(q::SQLObject, alias::String, path::String, written::String)
+  model = q.model
+  segments = split(path, "__")
+  for (i, seg) in enumerate(segments)
+    step = _relation_step(q, model, seg, i == 1)
+    step === nothing && return nothing   # the column; every hop before it was to-one
+    if step[3] !== :forward
+      hop = join(segments[1:i], "__")
+      kind = step[3] === :reverse ? "reverse" : "ManyToMany"
+      throw(FilterError(
+        "\e[4m\e[31m$(written)\e[0m in the ON clause of cjoin_on alias \e[4m\e[31m$(alias)\e[0m crosses the " *
+        "$(kind) relation '$(hop)'. PormG joins a path a cjoin_on condition names onto the base row, and " *
+        "that join repeats each base row once per related '$(step[2].name)' row, and can drop it when there " *
+        "is none.\n  To match on the existence of a related row, correlate a subquery over it: " *
+        "\e[4m\e[32mExists(M.<Related>.objects.filter(\"<link>\" => OuterRef(\"<column>\"), …))\e[0m. " *
+        "If the predicate was never about $(alias), pass that \e[4m\e[32mExists(...)\e[0m to " *
+        "\e[4m\e[32m.filter(...)\e[0m instead — a to-many path there joins and repeats rows the same " *
+        "way (#992)."))
+    end
+    model = step[2]
+  end
+  return nothing
 end
 
 # Kahn's algorithm over "alias → the aliases its ON clause names", taking the earliest-declared ready
@@ -445,13 +481,21 @@ function _column_sql(instruc::SQLInstruction, alias::AbstractString, column_sql:
 end
 
 # The check. Outside an ON clause there is nothing to check; inside one, the left side of a comparison
-# names the row the join adds (#961), and everything else — the right side, and a column outside any
-# comparison — the base row, an earlier table on the join's path, or the joined row itself (#958,
-# #962). For a `cjoin_on` row both sets are "every row emitted before it, and itself".
+# names the row the join adds (#961), and its right side the base row, an earlier table on the join's
+# path, or the joined row itself (#958, #962). For a `cjoin_on` row both sets are "every row emitted
+# before it, and itself".
+#
+# A column on NO side — `:none`, the scope `_join_scope` opens with — gets the narrow LEFT set (#993).
+# Which side a column is on is opt-in at each comparison render site (`_join_side_change(…, :left)`,
+# `_on_join_right`), and nothing scans for those sites, so the default decides which way a forgotten
+# mark fails. The permissive right set made a forgotten `:left` silent: a left side naming the base
+# row passed, #961's wrong-row shape. The left set makes it a loud refusal, and only an explicit
+# `_on_join_right` widens it. What it refuses besides is a column outside any comparison naming
+# another row, and that predicate restricts rows: it belongs in `.filter(...)`.
 function _record_join_column(instruc::SQLInstruction, alias::AbstractString, column_sql::AbstractString)
   s = instruc.scope
   s.join_hop === nothing && return nothing
-  allowed = s.join_side === :left ? s.join_left : s.join_right
+  allowed = s.join_side === :right ? s.join_right : s.join_left
   alias in allowed && return nothing
   hop = s.join_hop
   written = "\"$(alias)\".$(column_sql)"
@@ -460,6 +504,13 @@ function _record_join_column(instruc::SQLInstruction, alias::AbstractString, col
       "\e[4m\e[31m$(written)\e[0m is on the left side of a condition in the ON clause of \"$(hop)\", but " *
       "it names \"$(alias)\". A condition's left side names the row its join adds; compare another " *
       "row's column on the right, or put the predicate in \e[4m\e[32m.filter(...)\e[0m (#985)."))
+  elseif s.join_side === :none
+    throw(FilterError(
+      "\e[4m\e[31m$(written)\e[0m sits in the ON clause of \"$(hop)\" outside any comparison, and names " *
+      "\"$(alias)\" rather than the row that join adds. A condition that does not compare the joined row " *
+      "with another restricts rows, not the join.\n  Put it in \e[4m\e[32m.filter(...)\e[0m instead. If the " *
+      "column IS inside a comparison, PormG rendered it without marking its side: that is a bug, please " *
+      "report it (#993)."))
   end
   throw(FilterError(
     "\e[4m\e[31m$(written)\e[0m in the ON clause of \"$(hop)\" names \"$(alias)\", which is not the base " *
@@ -486,8 +537,9 @@ end
 
 # The scope one row's ON clause renders under: the hop, and the aliases each side may name. A path
 # join's right side may name the base row, every table on its own path, and itself; its left side
-# only itself. A `cjoin_on` row has no hop to bind a side to, so both sides may name the base row and
-# every row emitted before it — binding built every row it names there (#982) — and itself.
+# only itself, and so may a column no comparison has marked yet (`:none`, #993). A `cjoin_on` row
+# has no hop to bind a side to, so both sides may name the base row and every row emitted before it
+# — binding built every row it names there (#982) — and itself.
 function _join_scope(f, instruc::SQLInstruction, idx::Int, value::JoinRow)
   hop = value.alias_b
   if value isa AnchorlessJoin

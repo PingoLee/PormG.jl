@@ -236,6 +236,16 @@ const _JCM_SINGLE_CELLS = (
    (q, mod) -> (q.cjoin_on("Driver", alias = "d2", join_type = "LEFT",
                            on = [Joined("d2", "driverid") == F("driverid"), "driverid__code" => "X"]);
                 q.values("resultid"))),
+  # #992: a to-many hop on the path. Built first, it would repeat every base row once per related row
+  # under any join type, so it is refused; the forward cells above stay as they render.
+  ("P7 cjoin_on/reverse path predicate (#992)",
+   (q, mod) -> (q.cjoin_on("Driver", alias = "d2", join_type = "LEFT",
+                           on = [Joined("d2", "driverid") == F("driverid"), "driverid__results__grid" => 1]);
+                q.values("resultid"))),
+  ("P7 cjoin_on/ManyToMany path predicate (#992)",
+   (q, mod) -> (q.cjoin_on("Driver", alias = "d2", join_type = "LEFT",
+                           on = [Joined("d2", "driverid") == F("driverid"), "driverid__sponsors__name" => "X"]);
+                q.values("resultid"))),
   # The only predicate correlates the alias with a path join (#435's shape).
   ("P7 cjoin_on/Joined against deep path F",
    (q, mod) -> (q.cjoin_on("Driver", alias = "d2", on = [Joined("d2", "code") == F("driverid__code")]); q.values("resultid"))),

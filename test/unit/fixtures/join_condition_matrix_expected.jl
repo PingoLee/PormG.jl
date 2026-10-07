@@ -297,6 +297,14 @@ const _JCM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") AND \"Tb_1\".\"code\" = \$1", params = Any["X"], join = nothing),
   ("P7 cjoin_on/deep path predicate, LEFT", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") AND \"Tb_1\".\"code\" = ?", params = Any["X"], join = Any["X"]),
+  ("P7 cjoin_on/reverse path predicate (#992)", :postgres) =>
+    (stage = :build, error = "FilterError", message = "\"driverid__results__grid\" in the ON clause of cjoin_on alias d2 crosses the reverse relation 'driverid__results'. PormG "),
+  ("P7 cjoin_on/reverse path predicate (#992)", :sqlite) =>
+    (stage = :build, error = "FilterError", message = "\"driverid__results__grid\" in the ON clause of cjoin_on alias d2 crosses the reverse relation 'driverid__results'. PormG "),
+  ("P7 cjoin_on/ManyToMany path predicate (#992)", :postgres) =>
+    (stage = :build, error = "FilterError", message = "\"driverid__sponsors__name\" in the ON clause of cjoin_on alias d2 crosses the ManyToMany relation 'driverid__sponsors'. P"),
+  ("P7 cjoin_on/ManyToMany path predicate (#992)", :sqlite) =>
+    (stage = :build, error = "FilterError", message = "\"driverid__sponsors__name\" in the ON clause of cjoin_on alias d2 crosses the ManyToMany relation 'driverid__sponsors'. P"),
   ("P7 cjoin_on/Joined against deep path F", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"code\" = \"Tb_1\".\"code\")", params = Any[], join = nothing),
   ("P7 cjoin_on/Joined against deep path F", :sqlite) =>

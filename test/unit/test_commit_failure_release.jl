@@ -277,6 +277,8 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixed lifecycle: a failed COMMIT keeps the connection leased through ROLLBACK
 # ─────────────────────────────────────────────────────────────────────────────
+# The COMMIT failure's text is read off the driver's exception (`_driver_cause`): since #987 the
+# wrapping `DatabaseError` names its cause by type and never renders the driver's text.
 @testset "PG failed COMMIT holds the connection until ROLLBACK, releases once (#139)" begin
   pool = MockPGPool139(fail_commit = true)
   old = pool.connections[1]
@@ -285,7 +287,7 @@ end
     run_fixed_lifecycle_139(pool, "BEGIN;")
   end
 
-  @test err !== nothing && occursin("commit refused", string(CP._unwrap_async_exception(err)))   # the COMMIT failure propagates
+  @test err !== nothing && occursin("commit refused", sprint(showerror, CP._driver_cause(CP._unwrap_async_exception(err))))   # the COMMIT failure propagates
   @test pool.available_at_rollback === false            # STILL LEASED when ROLLBACK is issued (the #139 fix)
   @test pool.conn_at_rollback === conn                  # ROLLBACK ran on the transaction's own connection
   @test pool.executed == ["BEGIN;", "COMMIT;", "ROLLBACK;"]
@@ -304,7 +306,7 @@ end
     run_fixed_lifecycle_139(pool, "BEGIN IMMEDIATE TRANSACTION;")
   end
 
-  @test err !== nothing && occursin("commit refused", string(CP._unwrap_async_exception(err)))
+  @test err !== nothing && occursin("commit refused", sprint(showerror, CP._driver_cause(CP._unwrap_async_exception(err))))
   @test pool.available_at_rollback === false            # still leased at ROLLBACK time
   @test pool.conn_at_rollback === conn
   @test pool.executed == ["BEGIN IMMEDIATE TRANSACTION;", "COMMIT;", "ROLLBACK;"]
@@ -341,7 +343,7 @@ end
     run_fixed_lifecycle_139(pool, "BEGIN;")
   end
 
-  @test err !== nothing && occursin("commit refused", string(CP._unwrap_async_exception(err)))   # root cause wins, not "rollback refused"
+  @test err !== nothing && occursin("commit refused", sprint(showerror, CP._driver_cause(CP._unwrap_async_exception(err))))   # root cause wins, not "rollback refused"
   @test pool.available_at_rollback === false            # leased through the (failing) ROLLBACK
   @test conn === old
   @test pool.connections[1] !== old                     # slot renewed (dirty handle never returned)
@@ -358,7 +360,7 @@ end
     run_fixed_lifecycle_139(pool, "BEGIN IMMEDIATE TRANSACTION;")
   end
 
-  @test err !== nothing && occursin("commit refused", string(CP._unwrap_async_exception(err)))
+  @test err !== nothing && occursin("commit refused", sprint(showerror, CP._driver_cause(CP._unwrap_async_exception(err))))
   @test pool.available_at_rollback === false
   @test conn === old
   @test pool.connections[1] !== old                     # renewed

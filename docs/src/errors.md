@@ -157,10 +157,11 @@ The driver's own exception, with the full text the server sent, is in `e.cause`.
 
 ## What reaches your logs
 
-PormG's own log lines name a failure by its **type**, never by the database's text: a driver message
-can quote the value it refused, and a value can be a password or a token. When `with_transaction`
-fails it logs the classified type, the driver's exception type, the SQLSTATE and `error_message(e)`
-(the safe text above), then raises the error to you.
+PormG's own log lines never carry the database's DETAIL or the value it refused: a driver message
+can quote the value, and a value can be a password or a token. When `with_transaction` fails it logs
+the classified type, the driver's exception type, the SQLSTATE and `error_message(e)` — the safe text
+above — then raises the error to you. A failed `ROLLBACK` is logged with the driver's own exception;
+that statement binds no values.
 
 The LibPQ driver logs separately, through its own [Memento](https://github.com/invenia/Memento.jl)
 logger. Every failed statement prints the server's full message there — `DETAIL` included, which

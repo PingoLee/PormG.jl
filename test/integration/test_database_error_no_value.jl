@@ -81,7 +81,7 @@ err987_renderings(e) = [PormG.error_message(e), sprint(showerror, e), string(e),
         # The reason, as data — what each driver can report.
         if ERR987_IS_PG
             @test e.sqlstate == "23505"
-            @test occursin("duplicate key value violates unique constraint", e.message)
+            @test e.message !== nothing   # the server's primary message, in whatever locale it speaks
             if ERR987_ON_PGJL
                 @test e.constraint !== nothing && occursin("slug", e.constraint)
                 @test e.table == "field_validation_scratch"

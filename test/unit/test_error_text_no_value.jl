@@ -168,7 +168,9 @@ function _interpolations987(lit::AbstractString)
   return out
 end
 
-_log_leaks987(expr) = occursin(EXC_NAME987, expr) || occursin("showerror", expr)
+# …or a rendering of one: `string(e)`, `repr(err)`, `sprint(show, e)`, or the raw `e.cause`.
+const EXC_RENDER987 = r"^(?:string|repr)\((?:e|err|ex|exc|exception|error|[a-z_]+_err|[a-z_]+_error)(?:\.cause)?\)$|\.cause(?:\.msg)?$|sprint\(show\b"
+_log_leaks987(expr) = occursin(EXC_NAME987, expr) || occursin(EXC_RENDER987, expr) || occursin("showerror", expr)
 
 # Every log call's text: from the macro to its matching `)` when it is called with parentheses, else
 # to the end of the line — extended over continuation lines that end in an operator (`*`, `,`).
@@ -178,7 +180,7 @@ function _log_sites987(path)
   i = 1
   while i <= length(lines)
     line = lines[i]
-    m = match(r"@(?:error|warn|info|debug)\b", line)
+    m = match(r"@(?:error|warn|info|debug|logmsg)\b", line)
     if m === nothing || occursin('#', line[1:prevind(line, m.offset)])   # absent, or in a comment
       i += 1
       continue
@@ -237,7 +239,10 @@ end
     probe(src) = (path = joinpath(dir, "probe.jl"); write(path, src); _log_offenders987(path, dir))
     for leak in ("@error \"Failed: \$e\"\n", "@warn \"Failed: \$(err)\" key=1\n",
                  "@error(\"rolled back: \$(rollback_err)\")\n", "@error \"x\" reason=sprint(showerror, e)\n",
-                 "@error \"failed: \" *\n    \"\$(e.msg)\"\n", "  @warn(\"multi\",\n    \"\$(renew_error)\")\n")
+                 "@error \"failed: \" *\n    \"\$(e.msg)\"\n", "  @warn(\"multi\",\n    \"\$(renew_error)\")\n",
+                 "@error \"x: \$(string(e))\"\n", "@warn \"x: \$(repr(err))\"\n", "@error \"x: \$(e.cause)\"\n",
+                 "@error \"x: \$(sprint(show, e))\"\n", "@logmsg Logging.Error \"x: \$e\"\n",
+                 "@error \"x: \$(e.cause.msg)\"\n", "@warn \"x: \$(string(err.cause))\"\n")
       @test !isempty(probe(leak))
     end
     for fine in ("@error \"Failed\" exception=e\n", "@error \"Failed\" type=typeof(e) msg=error_message(e)\n",
@@ -453,4 +458,90 @@ PormG.backend_execute_async(::MockPGDriverPool987, conn, sql::String, params) = 
   @test kw[:sqlstate] == "23505"
   @test occursin("duplicate key value violates unique constraint", kw[:msg])
   @test !occursin(SECRET987, text)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The raw driver exception does not ride along on the exception stack (#987)
+# A wrapper thrown INSIDE a `catch` keeps the exception being handled on the task's stack, and
+# `showerror` of a `TaskFailedException` — what `fetch(Threads.@spawn …)` raises, the documented
+# async pattern — prints that whole stack: the raw driver exception, DETAIL and value included.
+# Every pool site therefore builds the wrapper in the `catch` and throws it after the block. Each
+# case below fails one site with a real LibPQ exception inside a spawned task, and reads what the
+# app would print.
+# ─────────────────────────────────────────────────────────────────────────────
+mutable struct MockPGStackPool987 <: PormG.PormGPostgres
+  connections::Vector{Any}
+  available::Vector{Bool}
+  connection_string::String
+  pool_size::Int
+  lock::ReentrantLock
+  fail_prefix::String    # the statement that fails
+  sync::Bool             # fail synchronously (before a task exists) instead of inside the task
+end
+MockPGStackPool987(fail_prefix; sync = false) =
+  MockPGStackPool987(Any[FakeConn987(false)], [true], "mock://pg", 1, ReentrantLock(), fail_prefix, sync)
+PormG.backend_is_alive(::MockPGStackPool987, conn) = conn isa FakeConn987 && !conn.closed
+PormG.backend_connect(::MockPGStackPool987; kwargs...) = FakeConn987(false)
+PormG.backend_renew_connection(::MockPGStackPool987, conn; kwargs...) = FakeConn987(false)
+PormG.backend_is_connection_error(::MockPGStackPool987, e) = false
+function PormG.backend_execute_async(pool::MockPGStackPool987, conn, sql::String, params)
+  fails = startswith(sql, pool.fail_prefix)
+  fails && pool.sync && throw(PG_UNIQUE987)
+  return @async (fails ? throw(PG_UNIQUE987) : NamedTuple[])
+end
+PormG.backend_copy_in!(::MockPGStackPool987, conn, sql::String, data_itr) = throw(PG_UNIQUE987)
+
+# What an app prints for a failure that crossed a task boundary: the whole exception stack.
+function spawned_text987(f)
+  t = Threads.@spawn f()
+  failure = try fetch(t); nothing catch x; x end
+  @test failure isa TaskFailedException
+  return sprint(showerror, failure)
+end
+
+@testset "#987: no pool site leaves the driver's text on the exception stack" begin
+  sites = [
+    ("fetch → await_result",        MockPGStackPool987("INSERT"),
+       pool -> CP987.fetch(pool, "INSERT INTO driver (code) VALUES (\$1)")),
+    ("fetch_async, failing to start", MockPGStackPool987("INSERT"; sync = true),
+       pool -> CP987.fetch(pool, "INSERT INTO driver (code) VALUES (\$1)")),
+    ("with_transaction",            MockPGStackPool987("INSERT"),
+       pool -> CP987.with_transaction(pool, "INSERT INTO driver (code) VALUES (\$1)"; release_conn = true)),
+    ("with_transaction_async",      MockPGStackPool987("INSERT"; sync = true),
+       pool -> CP987.with_transaction_async(pool, "INSERT INTO driver (code) VALUES (\$1)")),
+    ("run_in_transaction's COMMIT", MockPGStackPool987("COMMIT"),
+       pool -> CP987.run_in_transaction(() -> nothing, pool)),
+    ("fetch_copy",                  MockPGStackPool987("never"),
+       pool -> CP987.fetch_copy(pool, "COPY driver (code) FROM STDIN", ["SEN\n"])),
+  ]
+  for (site, pool, call) in sites
+    @testset "$site" begin
+      text = spawned_text987(() -> call(pool))
+      @test occursin("IntegrityError", text)        # the wrapper is what crossed the boundary
+      @test !occursin(SECRET987, text)              # …and nothing beneath it
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JSON.json of a DatabaseError is the reason fields, never the cause (#987)
+# An app that serializes a caught error into a response body reaches it through `JSON.json`, which
+# reflects every field it has no method for — `cause`, the driver's whole message, included. The
+# document is the exact set of safe fields and the cause's type name.
+# ─────────────────────────────────────────────────────────────────────────────
+import JSON
+
+@testset "#987: JSON.json of a DatabaseError carries the reason, not the value" begin
+  e = wrap987(PormG.IntegrityError, "PostgreSQL", PGJL_UNIQUE987)
+  doc = JSON.json(e)
+  @test !occursin(SECRET987, doc)
+  @test JSON.parse(doc) == Dict("pormg_database_error" => Dict(
+    "type" => "IntegrityError", "adapter" => "PostgreSQL", "cause_type" => "Error",
+    "sqlstate" => "23505", "constraint" => "driver_code_key", "table" => "driver", "column" => "code",
+    "message" => "duplicate key value violates unique constraint \"driver_code_key\""))
+
+  # A class-22 error and a bare LibPQ cause: the marker is in the cause's text, never in the document.
+  for cause in (PG_UUID987, PG_UNIQUE987)
+    @test !occursin(SECRET987, JSON.json(wrap987(PormG.StatementError, "PostgreSQL", cause)))
+  end
 end

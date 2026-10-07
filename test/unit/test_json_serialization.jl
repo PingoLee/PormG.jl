@@ -512,6 +512,14 @@ const CONFIG_CASES = Pair{String, Tuple{Any, String}}[
     "{\"pormg_settings\":{\"app_env\":\"dev\",\"change_data\":true,\"change_db\":false," *
     "\"connection\":\"PostgreSQL\",\"db_def_folder\":\"j649_folder\",\"django_prefix\":null," *
     "\"dynamic\":false,\"implicit\":false,\"model_file\":\"models.jl\",\"time_zone\":\"UTC\"}}"),
+  # Not a credential, but the same egress (#987): a `DatabaseError`'s `cause` is the driver's whole
+  # message, DETAIL and value included, so the document is its reason fields and the cause's TYPE.
+  # A String cause (PormG's own text) keeps the specimen driver-free; the value-free check against a
+  # real driver exception is in test_error_text_no_value.jl.
+  "DatabaseError"          => (PormG.OperationalError("PostgreSQL", "Failed to acquire advisory lock for 'grid'"),
+    "{\"pormg_database_error\":{\"adapter\":\"PostgreSQL\",\"cause_type\":\"String\",\"column\":null," *
+    "\"constraint\":null,\"message\":\"Failed to acquire advisory lock for 'grid'\",\"sqlstate\":null," *
+    "\"table\":null,\"type\":\"OperationalError\"}}"),
 ]
 
 const CONFIG_TYPES = [
@@ -547,8 +555,9 @@ if HAS_CONFIG_LOWER
       @testset "$label" begin
         # Parsed equality rather than string equality for the multi-key `Settings` document: Julia
         # 1.13 changed string hashing (#544) and CI runs 1.12 and 1.13, so an exact multi-key
-        # string is a cross-version flake. The single-key markers are compared as strings.
-        if label == "Settings"
+        # string is a cross-version flake (so is `DatabaseError`'s). The single-key markers are
+        # compared as strings.
+        if label in ("Settings", "DatabaseError")
           @test J641.parse(J641.json(value)) == J641.parse(expected)
         else
           @test J641.json(value) == expected

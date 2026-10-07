@@ -74,12 +74,13 @@ function _await_lock_handle(pool::PormGPostgres, state::_LockAwaitState, handle)
   # Recorded BEFORE the await: the settle probe needs the handle precisely in the case where the
   # await never returns normally.
   state.handle = handle
-  try
+  err = try
     return Base.fetch(handle)
   catch e
     _await_abandoned(e) && (state.abandoned = true)
-    throw(_as_database_error(pool, e))
+    _as_database_error(pool, e)
   end
+  throw(err)   # Thrown after the `catch`, never inside it (#987) — see `ConnectionPool._as_database_error`.
 end
 
 # " — held by pid 4711 (app-worker-1)", or "" when the holder cannot be read (#737). Best-effort: the

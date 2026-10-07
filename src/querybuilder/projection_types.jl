@@ -182,7 +182,8 @@ _resolved_contains_agg(node, instruc::SQLInstruction)::Bool =
 #     after a model field (#492, #484), so `values("race_date__@year")` beside
 #     `CTE("race_date", "year")` or `Joined("race_date", "year")` shares the name `race_date__year`
 #     across namespaces. That collision is reachable in WHERE and, through `fresh = true`, in a
-#     `cjoin_on` ON clause.
+#     `cjoin_on` ON clause. (Since #1004 the transform's memo key is `race_date__@year`, so the KEY
+#     no longer collides; `_projected_source` matches on the output name, which still does.)
 #   - the OUTPUT NAME. A field-path projection is memoized under its PATH (`values("r" => "points")`
 #     under `"points"`); the entry is an alias only when it renders under the key.
 #

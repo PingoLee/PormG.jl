@@ -43,10 +43,12 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         having_key = memo_key(v.column)
         having_cached = memo_projection(instruc, having_key)
         having_cached === nothing &&
-          # #474: report the aliases the CALLER could have written — `memo_projection_names` yields
-          # exactly that spelling, and never the internal namespace half.
+          # #474: report the aliases the CALLER could have written, never an internal memo key.
+          # #1004: read off the declaration, not the memo — a path projection is memoized under its
+          # path, so the memo listed `race_date__year` for `values("yr" => "race_date__@year")`.
           throw(_unknown_field(instruc.object.model, v.column.field;
-                               aliases = memo_projection_names(instruc)))
+                               aliases = _declared_alias_names(instruc),
+                               hint = _path_alias_hint(v.column.field, instruc)))
         # #701: only an AGGREGATE alias filters groups. A row alias — `F("raceid") + 1`, a bare
         # `F("code")` — has one value per row, so its predicate belongs in WHERE; sending every
         # alias to HAVING printed `HAVING` on a query with no GROUP BY, which both engines reject.
@@ -118,6 +120,37 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
   return nothing
 end
 
+# #1004 — the names the caller declared in `values(...)`, for the unknown-field message: every output
+# name except one PormG generated from a path (`raceid__year`, `d__surname`), which is not an alias,
+# and a model field's own name, which the message lists already.
+function _declared_alias_names(instruc::SQLInstruction)::Vector{String}
+  names = String[]
+  for v in instruc.object.values
+    v isa Union{SQLTypeField,SQLTypeText} || continue
+    _is_wildcard_projection(v) && continue
+    _generated_projection_name(v) && continue
+    name = _projection_output_name(v)
+    (name === nothing || name in instruc.object.model.field_names || name in names) && continue
+    push!(names, name)
+  end
+  return names
+end
+
+# #1004 — the one declared name the unknown-field message must explain rather than just list: the
+# chosen name of a PATH projection (`values("yr" => "race_date__@year")`). Such a projection is
+# memoized under its path, so filtering by its name is unsupported (#423's note in `get_order_query`
+# records why); the projection's own spelling is what filters it.
+function _path_alias_hint(key::AbstractString, instruc::SQLInstruction)::String
+  for v in instruc.object.values
+    v isa SQLField && v.custom_as == key || continue
+    v.field isa Union{String,SQLTypeCTE,SQLTypeJoined} || _is_transform_term(v) || continue
+    return "\n  \e[4m\e[31m$(key)\e[0m is the name of \e[4m\e[31mvalues($(_projection_spelling(v)))\e[0m, " *
+           "a projection of a field path, and such a projection cannot be filtered by its name. Filter " *
+           "\e[4m\e[32m$(_describe_projection(v))\e[0m instead (#1004)."
+  end
+  return ""
+end
+
 # #703 — a plain filter key that names a model field AND the output name of a projection that is
 # not that column. `values("raceid", "points" => Sum("points")); filter("points" => 1.0)` rendered
 # `WHERE SUM("Tb"."points") = ?`: the key names a field, so neither the top-level alias branch nor
@@ -142,7 +175,9 @@ end
 # rather than ones the caller chooses:
 #
 #   - a transform on a foreign key. `values("raceid__@year")` is named `raceid__year`, the path to
-#     the related `year`, and projects `EXTRACT(YEAR FROM raceid)`.
+#     the related `year`, and projects `EXTRACT(YEAR FROM raceid)`. Since #1004 its memo key keeps the
+#     `@`, so the filter no longer READS it — but the key still names both the column and an output
+#     column, which is what this guard refuses.
 #   - a joined copy named after the relation (#484). `cjoin_on(…; alias = "raceid")` plus
 #     `SQLField(Joined("raceid", "year"), "raceid__year")` shares the FK path's `:base` memo key, so
 #     the filter would read the joined copy, whatever its own ON says, and never emit the FK's join.
@@ -152,7 +187,8 @@ end
 # `strftime` returns a value, and a key whose column is itself a date runs on both. #706's twin
 # below reaches the same names
 # through `_model_filter_key`. The guard compares OUTPUT names, so a RENAMED transform
-# (`"yr" => "raceid__@year"`) still escapes it while keeping the `raceid__year` memo key — #1004.
+# (`"yr" => "raceid__@year"`) is not refused — and need not be: since #1004 it is memoized as
+# `raceid__@year`, so the filter renders the race's column, which is the only thing it names.
 #
 # Not ambiguous, and so not refused: a projection that IS the column — `values("points")`,
 # `values("points" => "points")`, `values("points" => F("points"))`. Recursive, with the depth cap of
@@ -275,26 +311,60 @@ _projects_column(::Any, ::String) = false
 
 function _refuse_field_alias_collision(key::String, projection, instruc::SQLInstruction;
                                        condition_in::OptionalString = nothing)
+  # #1004: a `__` key here is a name PormG GENERATED — #757 refuses one the caller chooses — so the
+  # projection is spelled as it was declared (`values("raceid__@year")`), and the advice cannot be
+  # #703's `"<key>_value"` rename, which keeps the `__` and which #757 refuses. Renaming takes the
+  # projection out of the path namespace, but a path projection is not filterable by its chosen name
+  # either, so the projection is reached through its own source spelling (`"raceid__@year"`), the
+  # one that renders it.
+  generated = contains(key, "__")
+  # #703 keys a `__` path on its first segment alone, so a generated name whose path reaches NO column
+  # (`values("date__@day")` is named `date__day`, and a date has no `day` field) is refused here too.
+  # It has one meaning, not two — but filtering by a generated name is not supported, and the plain
+  # path would fail to render — so the message says that instead of offering a column that does not
+  # exist.
+  column = !generated || _path_names_related_column(instruc.object, key)
+  declared = generated ? "the projection \e[4m\e[31mvalues($(_projection_spelling(projection)))\e[0m, " *
+                         "which PormG named \e[4m\e[31m$(key)\e[0m" :
+                         "the projection alias \e[4m\e[31mvalues(\"$(key)\" => $(_describe_projection(projection)))\e[0m"
+  source = _describe_projection(projection)
   # #706: the same two meanings, met by a condition inside a projection rather than by a filter.
-  condition_in === nothing || throw(AmbiguousFieldError(
-    "The condition on \e[4m\e[31m\"$(key)\"\e[0m inside " *
-    "\e[4m\e[31mvalues(\"$(condition_in)\" => …)\e[0m is ambiguous: \e[4m\e[31m$(key)\e[0m names " *
-    "both a column of \e[4m\e[32m$(instruc.object.model.name)\e[0m (a field, or a path through " *
-    "one) and the projection alias " *
-    "\e[4m\e[31mvalues(\"$(key)\" => $(_describe_projection(projection)))\e[0m, so the condition " *
-    "has two meanings and PormG will not choose one.\n  " *
-    "Rename the alias — \e[4m\e[32mvalues(\"$(key)_value\" => …)\e[0m — then write " *
-    "\e[4m\e[32m\"$(key)_value\"\e[0m in the condition for the projection, or " *
-    "\e[4m\e[32m\"$(key)\"\e[0m for the column (#706)."))
+  if condition_in !== nothing
+    column || throw(AmbiguousFieldError(
+      "The condition on \e[4m\e[31m\"$(key)\"\e[0m inside " *
+      "\e[4m\e[31mvalues(\"$(condition_in)\" => …)\e[0m names $(declared), and no column of " *
+      "\e[4m\e[32m$(instruc.object.model.name)\e[0m: a generated name is not a condition key.\n  " *
+      "Write \e[4m\e[32m$(source)\e[0m in the condition for the projection's value (#706)."))
+    advice = generated ?
+      "Name the projection — \e[4m\e[32mvalues($(_renamed_projection_spelling(key, projection)))\e[0m — " *
+      "then write \e[4m\e[32m$(source)\e[0m in the condition for the " *
+      "projection's value, or \e[4m\e[32m\"$(key)\"\e[0m for the column (#706)." :
+      "Rename the alias — \e[4m\e[32mvalues(\"$(key)_value\" => …)\e[0m — then write " *
+      "\e[4m\e[32m\"$(key)_value\"\e[0m in the condition for the projection, or " *
+      "\e[4m\e[32m\"$(key)\"\e[0m for the column (#706)."
+    throw(AmbiguousFieldError(
+      "The condition on \e[4m\e[31m\"$(key)\"\e[0m inside " *
+      "\e[4m\e[31mvalues(\"$(condition_in)\" => …)\e[0m is ambiguous: \e[4m\e[31m$(key)\e[0m names " *
+      "both a column of \e[4m\e[32m$(instruc.object.model.name)\e[0m (a field, or a path through " *
+      "one) and $(declared), so the condition has two meanings and PormG will not choose one.\n  " *
+      advice))
+  end
+  column || throw(AmbiguousFieldError(
+    "\e[4m\e[31mfilter(\"$(key)\" => …)\e[0m names $(declared), and no column of " *
+    "\e[4m\e[32m$(instruc.object.model.name)\e[0m: a generated name is not a filter key.\n  " *
+    "Filter \e[4m\e[32m$(source)\e[0m for the projection's value (#703)."))
+  advice = generated ?
+    "Name the projection — \e[4m\e[32mvalues($(_renamed_projection_spelling(key, projection)))\e[0m — " *
+    "then filter \e[4m\e[32m$(source)\e[0m for the projection's value, or " *
+    "\e[4m\e[32m\"$(key)\"\e[0m for the column (#703)." :
+    "Rename the alias — \e[4m\e[32mvalues(\"$(key)_value\" => …)\e[0m — then filter " *
+    "\e[4m\e[32m\"$(key)_value\"\e[0m for the projection, or \e[4m\e[32m\"$(key)\"\e[0m " *
+    "for the column (#703)."
   throw(AmbiguousFieldError(
     "\e[4m\e[31mfilter(\"$(key)\" => …)\e[0m is ambiguous: \e[4m\e[31m$(key)\e[0m names " *
     "both a column of \e[4m\e[32m$(instruc.object.model.name)\e[0m (a field, or a path through " *
-    "one) and the projection alias " *
-    "\e[4m\e[31mvalues(\"$(key)\" => $(_describe_projection(projection)))\e[0m, so the filter " *
-    "has two meanings and PormG will not choose one.\n  " *
-    "Rename the alias — \e[4m\e[32mvalues(\"$(key)_value\" => …)\e[0m — then filter " *
-    "\e[4m\e[32m\"$(key)_value\"\e[0m for the projection, or \e[4m\e[32m\"$(key)\"\e[0m " *
-    "for the column (#703)."))
+    "one) and $(declared), so the filter has two meanings and PormG will not choose one.\n  " *
+    advice))
 end
 
 # #537 — an aggregate or window function cannot be a WHERE predicate, and `OP(::SQLTypeFunction, …)`

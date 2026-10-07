@@ -183,6 +183,17 @@ function _check_function(x::Vector{String})
     end
   end
 end
+# #1004 — the `SQLField` for a path the caller wrote, already split on `__@`: the column, or the
+# transform over it. The single constructor every `values`/`filter`/`order_by` parse goes through,
+# because each of them used to restate `SQLField(_check_function(check), join(check, "__"))`, and
+# that `join` is where the `@` was lost. `_as` keeps the `__` spelling — it is the output column name
+# (`values("raceid__@year")` → `raceid__year`, as Django names it) — and a transform's memo name
+# keeps the `@`, so it cannot share a memo entry with the plain path to the related `year`.
+function _path_sqlfield(check::Vector{String})::SQLField
+  return SQLField(_check_function(check), join(check, "__"), nothing, :base,
+                  length(check) > 1 ? join(check, "__@") : nothing)
+end
+_path_sqlfield(check::AbstractVector{<:AbstractString}) = _path_sqlfield(String.(check))
 # #603 — the single consumer arm the widened constructor surface owes under the #533 rule ("a
 # consumer per admitted member"). Every `Union{AbstractString,...}` signature in `functions.jl`,
 # `types.jl` and `object_manager.jl` normalizes at its own seam, so this arm is the backstop for the
@@ -298,6 +309,9 @@ end
 function _retag_cte_field!(field::SQLField, name::String)
   field.field = _retag_cte_column(field.field, name)
   field._as === nothing || (field._as = _cte_as(name, field._as))
+  # #1004: the memo name moves with it, so `"ev__seen__@year"` and `CTE("ev", "seen__@year")` share
+  # one key and neither shares it with the plain CTE path `seen__year`.
+  field.memo_as === nothing || (field.memo_as = _cte_as(name, field.memo_as))
   # #474 — the single site that marks an expression CTE-rooted. `_as` keeps the `name__path`
   # spelling #444 pinned (it is the output column name); the MEMO moves to the other half of a
   # `MemoKey`, so a field path spelled identically can no longer read or claim this entry.
@@ -345,6 +359,7 @@ end
 function _retag_joined_field!(field::SQLField, alias::String)
   field.field = _retag_joined_column(field.field, alias)
   field._as === nothing || (field._as = _joined_as(alias, field._as))
+  field.memo_as === nothing || (field.memo_as = _joined_as(alias, field.memo_as))   # #1004, as above
   field.root = :joined
   return field
 end

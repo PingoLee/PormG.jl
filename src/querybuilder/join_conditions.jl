@@ -947,7 +947,9 @@ function _prefix_join_column(x::SQLField, prefix::String, foreign_model; base = 
     _prefix_join_column(x.field, prefix, foreign_model; base = base),
     x._as === nothing ? nothing : _normalize_cjoin_filter_key(x._as, prefix, foreign_model),
     x.custom_as,
-    x.root   # #474: carry the namespace tag through the rewrite
+    x.root,   # #474: carry the namespace tag through the rewrite
+    # #1004: and the memo name, prefixed the same way, so a transform keeps its `@`
+    x.memo_as === nothing ? nothing : _normalize_cjoin_filter_key(x.memo_as, prefix, foreign_model)
   )
 end
 # An aggregate or a window function is left exactly as written. No ON clause can hold one, whatever

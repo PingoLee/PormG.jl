@@ -1014,8 +1014,20 @@ end
     @test str_side.root == hdl_side.root == :cte
     @test str_side.field isa PormG.QueryBuilder.CTEReference
     @test typeof(str_side.field) == typeof(hdl_side.field)
-    @test PormG.QueryBuilder.memo_key(str_side.root, str_side._as) ==
-          PormG.QueryBuilder.memo_key(hdl_side.root, hdl_side._as)
+    # Through the key constructor rather than `(root, _as)`: the name half is not always `_as`
+    # (#1004), and a transform's spellings are the case where it is not.
+    @test PormG.QueryBuilder.memo_key(str_side) == PormG.QueryBuilder.memo_key(hdl_side)
+
+    # #1004: a transform keeps its `@` in the name half under both spellings, so the two still share
+    # one key — and it is not the key of the plain CTE path its output name spells.
+    probe = CR.Cj_child.objects
+    probe.with("ev" => _full_cte(), join_field = "id" => "id")
+    probe.values("note", "ev__seen__@year", CTE("ev", "seen__@month"))
+    resolved = PormG.QueryBuilder._resolve_cte_string_paths!(deepcopy(probe.object))
+    fields = [v for v in resolved.values if v isa PormG.QueryBuilder.SQLField]
+    @test PormG.QueryBuilder.memo_key(fields[2]) == (:cte, "ev__seen__@year")
+    @test PormG.QueryBuilder.memo_key(fields[3]) == (:cte, "ev__seen__@month")
+    @test fields[2]._as == "ev__seen__year"
   end
 
   # ───────────────────────────────────────────────────────────────────────────

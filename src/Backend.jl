@@ -148,3 +148,39 @@ function backend_classify_error(pool::PormGBackend, e)
     return :unknown
   end
 end
+
+"""
+    backend_error_fields(e) -> NamedTuple{(:sqlstate, :constraint, :table, :column, :message)}
+
+The reason a driver exception carries, **as data** (#987): the fields a [`DatabaseError`](@ref) is
+built with, each `nothing` when the driver does not report it. `ConnectionPool._as_database_error`
+calls it for every failure it wraps, so the error's rendered text can be built from these fields
+alone and never from the driver's text — which carries DETAIL, HINT and the `LINE n:` excerpt,
+i.e. the row (prior art: psycopg's `e.diag`).
+
+Keyed on the **exception type alone**, unlike the other `backend_*` generics: the type says which
+driver raised it, and with no pool argument no extension method can shadow the default for the unit
+suite's mock pools (the hazard `backend_classify_error` documents). Extensions add one method per
+driver exception type:
+
+    PormG.backend_error_fields(e::SQLite.SQLiteException) = …
+
+What each driver can report differs, on purpose — the Postgres.jl `Error` has every field, LibPQ's
+exception keeps only its text (the PGresult holding the rest is closed before it throws), and SQLite
+names no SQLSTATE. Like `backend_classify_error`, it never throws: the caller is mid-`catch`.
+"""
+function backend_error_fields end
+
+const _NO_ERROR_FIELDS = (sqlstate = nothing, constraint = nothing, table = nothing, column = nothing,
+                          message = nothing)
+
+backend_error_fields(e) = _NO_ERROR_FIELDS
+
+# The server's primary message, or `nothing` when it is not safe to show. SQLSTATE class 22 (data
+# exception) is the class whose message PostgreSQL builds FROM THE INPUT —
+# `invalid input syntax for type uuid: "<value>"`, `value "<value>" is out of range for type integer`.
+# Every other class names objects (a constraint, a column, a type), not values; the value is in the
+# DETAIL, which no field carries. Decided here once, for both PostgreSQL extensions.
+_safe_server_message(sqlstate, message) =
+  (message === nothing || isempty(message) || (sqlstate !== nothing && Base.startswith(sqlstate, "22"))) ?
+    nothing : String(message)

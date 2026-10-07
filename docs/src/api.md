@@ -882,6 +882,12 @@ end
     stable, but not a code. Treat `IntegrityError` as reliable on both; `.cause` is there when you
     need more than PormG's three kinds.
 
+!!! note "The reason is data, and the text is safe to show"
+    Each error carries `sqlstate`, `constraint`, `table`, `column` and `message` — whichever the
+    driver reports, `nothing` otherwise — and renders from them alone. `error_message(e)` never
+    carries the database's DETAIL, so the `conflict(error_message(e))` above can go to a client.
+    See [A database error is safe to show](errors.md#A-database-error-is-safe-to-show).
+
 Connect-time failure is **not** a `DatabaseError` — it never reached a statement, and arrives as
 `PoolConnectError` under `PoolError`. A failed migration `ALTER TABLE` **is** one: `migrate()` lets
 the `StatementError` through rather than re-wrapping it as `MigrationError`, which would bury the

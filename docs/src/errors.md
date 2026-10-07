@@ -105,7 +105,7 @@ structured fields instead, and `e.msg` on those is a `FieldError`:
 | `MultipleObjectsReturned` | `model_name`, `count`, `filters` |
 | `PoolTimeoutError` | `adapter`, `pool_size`, `max_size`, `attempts`, `elapsed_seconds` |
 | `PoolConnectError` | `adapter`, `cause`, `connection`, `attempts`, `elapsed_seconds` |
-| `IntegrityError`, `OperationalError`, `StatementError` | `adapter`, `cause` |
+| `IntegrityError`, `OperationalError`, `StatementError` | `adapter`, `cause`, and the reason as data: `sqlstate`, `constraint`, `table`, `column`, `message` |
 | `DestructiveMigrationError` | `msg`, `statements`, `lossy_alters` |
 | `MigrationPrecheckError` | `msg`, `findings` |
 | `PlanPreconditionError` | `msg`, `tables` |
@@ -119,11 +119,48 @@ catch e
 end
 ```
 
+### A database error is safe to show
+
+`IntegrityError`, `OperationalError` and `StatementError` carry the reason the database gave as
+data, and their text is built from those fields alone: `error_message(e)`, `showerror` and
+`string(e)` never contain the database's `DETAIL`, `HINT` or `LINE n:` excerpt, which quote the
+row. So `error_message(e)` is safe to return to a client (#987).
+
+| Field | What | LibPQ | Postgres.jl | SQLite |
+|---|---|---|---|---|
+| `sqlstate` | The SQLSTATE, e.g. `"23505"` for a unique violation | ✓ | ✓ | — |
+| `constraint` | The constraint that refused the row | — | ✓ | — |
+| `table`, `column` | The table and column the server named | — | ✓ | — |
+| `message` | The server's primary message | ✓ | ✓ | ✓ |
+
+A field the driver does not report is `nothing`. LibPQ's exception keeps only its text, so on that
+driver the constraint's name is inside `message` —
+`duplicate key value violates unique constraint "driver_code_key"` — but not in a field of its own.
+
+`message` is `nothing` for SQLSTATE class `22`, a data exception: PostgreSQL builds that message from
+the input (`invalid input syntax for type uuid: "<value>"`), so the error states only the SQLSTATE.
+A value PormG binds as a parameter never appears. Text your app wrote itself still can — the message
+of a trigger's `RAISE EXCEPTION` (SQLSTATE `P0001`), or a literal typed into raw SQL that a syntax
+error quotes back.
+
+Branch on the fields, not on the message:
+
+```julia
+catch e
+    e isa IntegrityError && e.sqlstate == "23505" && return conflict(error_message(e))
+    rethrow()
+end
+```
+
+The driver's own exception, with the full text the server sent, is in `e.cause`. Log
+`sprint(showerror, e.cause)` only to a sink you trust with the row's data.
+
 ## What reaches your logs
 
 PormG's own log lines name a failure by its **type**, never by the database's text: a driver message
 can quote the value it refused, and a value can be a password or a token. When `with_transaction`
-fails it logs the classified type and the driver's exception type, then raises the error to you.
+fails it logs the classified type, the driver's exception type, the SQLSTATE and `error_message(e)`
+(the safe text above), then raises the error to you.
 
 The LibPQ driver logs separately, through its own [Memento](https://github.com/invenia/Memento.jl)
 logger. Every failed statement prints the server's full message there — `DETAIL` included, which

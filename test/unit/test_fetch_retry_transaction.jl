@@ -39,7 +39,9 @@ const CP = PormG.ConnectionPool
 #   * the KIND is what the retry gate reads, so a misclassification (`:statement`) would silently
 #     disable the #138 reconnect path while a type-only assertion still passed;
 #   * `.cause` must be the driver's own exception, or apps lose SQLSTATE-level detail;
-#   * the text must still reach the caller, so a wrapper that swallowed the message fails here.
+#   * the driver's text must still reach the caller — through `.cause`, which is where it lives since
+#     #987: the rendered message names the cause by its type and never carries its text, because a
+#     driver's text can quote the row. A wrapper that swallowed the cause fails here.
 #
 # It also pins that classification reaches a MOCK pool at all: these mocks define
 # `backend_is_connection_error` on their concrete type, and the core default classifier is what
@@ -47,7 +49,8 @@ const CP = PormG.ConnectionPool
 function assert_wrapped_conn_loss_138(err)
   @test err isa PormG.OperationalError
   @test err.cause isa MockConnLost138
-  @test occursin("mock: connection lost", PormG.error_message(err))
+  @test occursin("mock: connection lost", sprint(showerror, err.cause))
+  @test occursin("MockConnLost138", PormG.error_message(err))   # named, not rendered (#987)
 end
 
 # ── Fake driver handle: tracks whether the pool cleanup closed it ──

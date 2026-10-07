@@ -426,7 +426,10 @@ end
 `IntegrityError` covers every constraint the database enforces — `FOREIGN KEY`, `UNIQUE`,
 `NOT NULL`, `CHECK`. It is a `DatabaseError`, so it means the statement *reached* the database and
 was rejected there; a value PormG rejects before sending raises `InvalidValueError` instead (see
-the null-field example above).
+the null-field example above). Its `error_message(e)` says which kind of constraint refused the
+row (on PostgreSQL, with the SQLSTATE and the constraint's name) but never the row's values, so it
+is safe to show a user — see
+[A database error is safe to show](../errors.md#A-database-error-is-safe-to-show).
 
 !!! note "Foreign keys are enforced on both backends"
     The insert above raises `IntegrityError` on SQLite as well as PostgreSQL: PormG issues

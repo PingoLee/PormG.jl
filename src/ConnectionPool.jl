@@ -12,7 +12,7 @@ import PormG: @pormg_debug
 import PormG
 # `PoolError` is the taxonomy's connection-pool umbrella; it lives in Kernel (layer 1) so that
 # modules included before this one can name it (#261). PormGError comes along for `catch` sites.
-import PormG: PormGError, PoolError
+import PormG: PormGError, PoolError, error_message
 # Throw sites (#239): a bad acquire mode is a value error, an unresolvable pool is a config error,
 # and atomic(durable=true) nesting is transaction-API misuse (#268 — was QueryBuildError).
 import PormG: InvalidValueError, InvalidConfigurationError, TransactionError
@@ -28,7 +28,7 @@ import PormG: DatabaseError, IntegrityError, OperationalError, StatementError
 import PormG: backend_connect, backend_renew_connection, backend_is_alive, backend_execute,
               backend_execute_async, backend_is_connection_error, backend_is_permanent_connect_error,
               backend_cancel_query!, backend_drain_connection!,
-              backend_copy_in!, backend_classify_error
+              backend_copy_in!, backend_classify_error, backend_error_fields, _NO_ERROR_FIELDS
 # Which PostgreSQL driver a pool uses (#785).
 import PormG: postgres_driver, _PG_DRIVER_PACKAGES
 
@@ -271,6 +271,10 @@ match. Wrapped, that branch never fires and `fetch`'s reconnect-retry (#138) die
 _driver_cause(e::DatabaseError) = e.cause
 _driver_cause(e) = e
 
+# The SQLSTATE of a wrapped failure, for a log line; a PormG error passed through has none.
+_err_sqlstate(e::DatabaseError) = e.sqlstate
+_err_sqlstate(e) = nothing
+
 """
     _as_database_error(pool, e) -> Exception
 
@@ -289,10 +293,19 @@ function _as_database_error(pool, e)
   root isa PormGError && return root
   adapter = pool isa PormGPostgres ? "PostgreSQL" : "SQLite"
   kind = backend_classify_error(pool, root)
-  kind === :integrity   && return IntegrityError(adapter, root)
-  kind === :operational && return OperationalError(adapter, root)
+  # The reason as data (#987). The error renders from these fields alone, so the driver's text —
+  # DETAIL, HINT, the `LINE n:` excerpt — stays in `cause`. Never let an extension's reader replace
+  # the failure being reported: a throw there degrades to no fields, a cancellation still propagates.
+  fields = try
+    backend_error_fields(root)
+  catch read_failure
+    read_failure isa InterruptException && rethrow()
+    _NO_ERROR_FIELDS
+  end
+  kind === :integrity   && return IntegrityError(adapter, root; fields...)
+  kind === :operational && return OperationalError(adapter, root; fields...)
   # `:statement` and anything unrecognized land here, so `catch DatabaseError` has no hole.
-  return StatementError(adapter, root)
+  return StatementError(adapter, root; fields...)
 end
 
 """
@@ -2702,10 +2715,11 @@ function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
     if conn_acquired && !release_conn
       _finish_statement_connection!(pool, conn, task; abandoned = abandoned, rollback_failed = rollback_failed)
     end
-    # Types only, never the error's text (#984): a driver message can quote the bound value —
-    # PostgreSQL's `invalid input syntax for type integer: "<value>"`, or a DETAIL naming the key.
+    # Never the driver's text (#984): a driver message can quote the bound value — PostgreSQL's
+    # `invalid input syntax for type integer: "<value>"`, or a DETAIL naming the key. The types, the
+    # SQLSTATE and `error_message` only, which renders from the error's safe fields (#987).
     err = _as_database_error(pool, e)
-    @error "Failed to execute SQL transaction, rolling back" type=typeof(err) cause_type=typeof(_driver_cause(err))
+    @error "Failed to execute SQL transaction, rolling back" type=typeof(err) cause_type=typeof(_driver_cause(err)) sqlstate=_err_sqlstate(err) msg=error_message(err)
     throw(err)
   finally
     if release_conn

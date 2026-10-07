@@ -210,6 +210,13 @@ function PormG.backend_classify_error(pool::PormGSQLite, e::SQLite.SQLiteExcepti
   return :unknown
 end
 
+# The reason as data (#987). SQLite reports no SQLSTATE and no separate fields, and its messages
+# name the table and column, never the value (`UNIQUE constraint failed: driver.code`), because a
+# bound value never enters SQLite's text — so the whole message is the safe primary.
+PormG.backend_error_fields(e::SQLite.SQLiteException) =
+  (sqlstate = nothing, constraint = nothing, table = nothing, column = nothing,
+   message = isempty(e.msg) ? nothing : String(e.msg))
+
 # Window-function support probe used by src/Dialect.jl.
 PormG.backend_sqlite_version(pool::PormGSQLite) = Int(SQLite.C.sqlite3_libversion_number())
 

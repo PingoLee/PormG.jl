@@ -166,8 +166,11 @@ driver exception type:
     PormG.backend_error_fields(e::SQLite.SQLiteException) = …
 
 What each driver can report differs, on purpose — the Postgres.jl `Error` has every field, LibPQ's
-exception keeps only its text (the PGresult holding the rest is closed before it throws), and SQLite
-names no SQLSTATE. Like `backend_classify_error`, it never throws: the caller is mid-`catch`.
+exception keeps only its text, and SQLite names no SQLSTATE. LibPQ still reports every field: its
+extension reads them off the failed result before closing it and hands them to
+`_as_database_error` itself (#1000), so its method here is only the fallback for a `PQResultError`
+that arrives without its result. Like `backend_classify_error`, it never throws: the caller is
+mid-`catch`.
 """
 function backend_error_fields end
 

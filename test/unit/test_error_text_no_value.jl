@@ -295,9 +295,10 @@ wrap987(T, adapter, cause) = T(adapter, cause; PormG.backend_error_fields(cause)
 # ─────────────────────────────────────────────────────────────────────────────
 # Each driver's reason, read as data (#987)
 # What each driver can report differs, and each row pins exactly that: Postgres.jl keeps every
-# ErrorResponse field, LibPQ keeps only its text (so the SQLSTATE comes from the type, the message
-# from the first line, and constraint/table/column cannot be had), SQLite names no SQLSTATE. A
-# class-22 message is never carried, because the server builds it from the input.
+# ErrorResponse field, LibPQ's exception keeps only its text (so the SQLSTATE comes from the type, the
+# message from the first line, and constraint/table/column cannot be had from the exception alone —
+# the extension reads them off the failed result instead, pinned in the #1000 block below), SQLite
+# names no SQLSTATE. A class-22 message is never carried, because the server builds it from the input.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#987: backend_error_fields reads each driver's reason without its data" begin
   @test PormG.backend_error_fields(PG_UNIQUE987) ==
@@ -414,6 +415,128 @@ PormG.backend_error_fields(::BrokenCause987) = error("reader bug")
   broken = CP987._as_database_error(pool, BrokenCause987())
   @test broken isa PormG.StatementError && broken.cause isa BrokenCause987
   @test broken.sqlstate === nothing && broken.message === nothing
+end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# #1000: on LibPQ, the reason is read off the failed result before LibPQ closes it
+# ═════════════════════════════════════════════════════════════════════════════
+const LIBPQ_EXT1000 = Base.get_extension(PormG, :PormGLibPQExt)
+const PQ1000 = LibPQ.libpq_c
+
+# A failed result's diagnostics, as `PQresultErrorField` hands them out: one string per field code,
+# `nothing` for a field the server did not send. Records every code asked for, so a test can pin that
+# DETAIL and HINT — the fields that quote the row — are never read.
+function diag1000(fields::Dict{Char, String})
+  asked = Char[]
+  field = code -> (push!(asked, Char(code)); get(fields, Char(code), nothing))
+  return field, asked
+end
+
+const PG_NOTNULL1000 = E987.PQResultError{E987.C23, E987.E23502}(
+  "ERROR:  null value in column \"code\" of relation \"driver\" violates not-null constraint\n" *
+  "DETAIL:  Failing row contains ($(SECRET987), null).\n")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LibPQ: constraint, table and column come from the result's own fields (#1000)
+# LibPQ's `handle_result` closes the failed result before it throws, so #987 could only read the
+# exception's text. The extension now reads `PQresultErrorField` itself; this pins the mapping with
+# the field reader stubbed: which field lands where, that the class-22 rule still holds, that a
+# result with no SQLSTATE reports nothing, and that DETAIL / HINT are never asked for.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1000: LibPQ reads constraint/table/column off the failed result" begin
+  # A unique violation names its constraint and table; the primary message is the `M` field.
+  field, asked = diag1000(Dict(PQ1000.PG_DIAG_MESSAGE_PRIMARY => "duplicate key value violates unique constraint \"driver_code_key\"",
+                               PQ1000.PG_DIAG_CONSTRAINT_NAME => "driver_code_key",
+                               PQ1000.PG_DIAG_TABLE_NAME => "driver",
+                               PQ1000.PG_DIAG_MESSAGE_DETAIL => "Key (code)=($(SECRET987)) already exists.",
+                               PQ1000.PG_DIAG_MESSAGE_HINT => "hint $(SECRET987)"))
+  @test LIBPQ_EXT1000._result_error_fields(PG_UNIQUE987, field) ==
+        (sqlstate = "23505", constraint = "driver_code_key", table = "driver", column = nothing,
+         message = "duplicate key value violates unique constraint \"driver_code_key\"")
+  # The fields that quote the row are never read, so they cannot leak into any of the five.
+  @test !(PQ1000.PG_DIAG_MESSAGE_DETAIL in asked) && !(PQ1000.PG_DIAG_MESSAGE_HINT in asked)
+
+  # A NOT NULL violation names the table and the column, and no constraint.
+  field, _ = diag1000(Dict(PQ1000.PG_DIAG_MESSAGE_PRIMARY => "null value in column \"code\" of relation \"driver\" violates not-null constraint",
+                           PQ1000.PG_DIAG_TABLE_NAME => "driver",
+                           PQ1000.PG_DIAG_COLUMN_NAME => "code"))
+  fields = LIBPQ_EXT1000._result_error_fields(PG_NOTNULL1000, field)
+  @test fields.sqlstate == "23502" && fields.constraint === nothing
+  @test fields.table == "driver" && fields.column == "code"
+
+  # Class 22: the server built the primary message from the input, so it is still not carried.
+  field, _ = diag1000(Dict(PQ1000.PG_DIAG_MESSAGE_PRIMARY => "invalid input syntax for type uuid: \"$(SECRET987)\""))
+  fields = LIBPQ_EXT1000._result_error_fields(PG_UUID987, field)
+  @test fields.sqlstate == "22P02" && fields.message === nothing
+
+  # LibPQ's synthetic "no code" (a dropped connection): nothing to report, and nothing is read.
+  field, asked = diag1000(Dict(PQ1000.PG_DIAG_TABLE_NAME => "driver"))
+  @test LIBPQ_EXT1000._result_error_fields(PG_LOST987, field) == PormG._NO_ERROR_FIELDS
+  @test isempty(asked)
+
+  # A result without a primary-message field falls back to the exception's first line (#987's parse).
+  field, _ = diag1000(Dict{Char, String}())
+  @test LIBPQ_EXT1000._result_error_fields(PG_COLUMN987, field).message == "coluna \"nickname\" não existe"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The funnel takes the fields the extension read, instead of re-reading the exception (#1000)
+# `_raise_if_failed` hands `_as_database_error` what it read off the result. The supplied fields
+# must win over `backend_error_fields` — which on a `PQResultError` cannot see the constraint —
+# while the kind still comes from the classifier and a PormG error still passes through untouched.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1000: _as_database_error uses the fields it is handed" begin
+  pool = MockPGPool987()
+  supplied = (sqlstate = "23505", constraint = "driver_code_key", table = "driver", column = nothing,
+              message = "duplicate key value violates unique constraint \"driver_code_key\"")
+  err = CP987._as_database_error(pool, PG_UNIQUE987; fields = supplied)
+  @test err.constraint == "driver_code_key" && err.table == "driver"
+  @test err.cause === PG_UNIQUE987                # the driver's exception is still the cause
+  @test !occursin(SECRET987, PormG.error_message(err))
+
+  # Without `fields` the exception is read as before: LibPQ's text names no constraint field.
+  @test CP987._as_database_error(pool, PG_UNIQUE987).constraint === nothing
+
+  # A PormG error is returned as it is — the fields never relabel one.
+  own = PormG.InvalidValueError("not a database failure")
+  @test CP987._as_database_error(pool, own; fields = supplied) === own
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Every statement the LibPQ extension runs keeps its failed result readable (#1000)
+# With LibPQ's default `throw_error = true` the result is closed before PormG sees it, and the
+# constraint/table/column silently go back to `nothing` — no unit test with a stubbed reader would
+# notice. So every `LibPQ.execute` / `LibPQ.async_execute` call in the extension must pass
+# `throw_error = false`, which routes its result through `_raise_if_failed`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1000: every LibPQ execute in the extension passes throw_error = false" begin
+  lines = split(read(joinpath(pkgdir(PormG), "ext", "PormGLibPQExt.jl"), String), '\n')
+  is_call(l) = occursin(r"LibPQ\.(async_)?execute\(", l) && !startswith(strip(l), "#")
+  call_idx = findall(is_call, lines)
+  @test length(call_idx) >= 5                     # sync ×2, async ×2, COPY — a vanished call fails too
+  for i in call_idx
+    @test occursin("throw_error = false", lines[i])
+    # The flag alone turns a failure into a returned result, so the function making the call must
+    # also check it — `_raise_if_failed`, or the async handle whose `fetch` calls it. Its body runs
+    # from the nearest top-level `function` above the call to the next top-level `end`.
+    first_line = findlast(l -> startswith(l, "function "), lines[1:i])
+    last_line = i - 1 + findfirst(l -> l == "end", lines[i:end])
+    body = join(lines[first_line:last_line], '\n')
+    @test occursin("_raise_if_failed(", body) || occursin("_CheckedAsyncResult(", body)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The async handle still answers `wait` with the driver's own task (#1000, #315)
+# `_settle_probe` waits on the handle with a bare `catch`, so a handle with no `wait` method would
+# raise a MethodError that the probe swallows as "settled" — an abandoned connection would go back to
+# the pool while LibPQ is still on the socket, and no other test would notice. Pinned as methods the
+# extension itself owns.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1000: the LibPQ async handle defines fetch and wait" begin
+  H = LIBPQ_EXT1000._CheckedAsyncResult
+  @test which(Base.wait, Tuple{H}).module === LIBPQ_EXT1000
+  @test which(Base.fetch, Tuple{H}).module === LIBPQ_EXT1000
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -276,11 +276,15 @@ _err_sqlstate(e::DatabaseError) = e.sqlstate
 _err_sqlstate(e) = nothing
 
 """
-    _as_database_error(pool, e) -> Exception
+    _as_database_error(pool, e; fields = nothing) -> Exception
 
 Funnel every failure leaving the pool through the taxonomy: unwrap the async envelope, pass PormG's
 own errors through untouched, and wrap anything else as a [`DatabaseError`](@ref) whose kind comes
 from [`backend_classify_error`](@ref) (#268).
+
+`fields` replaces what [`backend_error_fields`](@ref) would read from the exception, for a driver that
+holds more than its exception keeps. That is LibPQ (#1000): the failed result carries the constraint,
+table and column, and the extension calls this with them before it closes that result.
 
 **Only ever apply this where the exception can only have come from the driver.** It must never see a
 caller's closure: `run_in_transaction`/`atomic`/`with_savepoint` run user code inside their `try`,
@@ -304,7 +308,7 @@ of its text. Build the error in the `catch`, let the block end, then throw:
 `test/unit/test_error_text_no_value.jl` pins the pool's sites through a spawned task
 (`AdvisoryLock._await_lock_handle` follows the same rule).
 """
-function _as_database_error(pool, e)
+function _as_database_error(pool, e; fields = nothing)
   root = _unwrap_async_exception(e)
   root isa PormGError && return root
   adapter = pool isa PormGPostgres ? "PostgreSQL" : "SQLite"
@@ -312,11 +316,13 @@ function _as_database_error(pool, e)
   # The reason as data (#987). The error renders from these fields alone, so the driver's text —
   # DETAIL, HINT, the `LINE n:` excerpt — stays in `cause`. Never let an extension's reader replace
   # the failure being reported: a throw there degrades to no fields, a cancellation still propagates.
-  fields = try
-    backend_error_fields(root)
-  catch read_failure
-    read_failure isa InterruptException && rethrow()
-    _NO_ERROR_FIELDS
+  if fields === nothing
+    fields = try
+      backend_error_fields(root)
+    catch read_failure
+      read_failure isa InterruptException && rethrow()
+      _NO_ERROR_FIELDS
+    end
   end
   kind === :integrity   && return IntegrityError(adapter, root; fields...)
   kind === :operational && return OperationalError(adapter, root; fields...)
@@ -2072,7 +2078,7 @@ A wrapper around an async database query result that manages connection lifecycl
 Use `await_result(task)` to get the result and properly release the connection.
 
 # Fields
-- `async_result`: The underlying async handle (a `LibPQ.AsyncResult` for PG, a `Task` for SQLite)
+- `async_result`: The underlying async handle (the LibPQ extension's wrapper around a `LibPQ.AsyncResult`, the Postgres.jl extension's handle, or a `Task` for SQLite)
 - `pool::Union{PormGPostgres, PormGSQLite}`: The connection pool to release the connection to
 - `conn`: The driver connection being used for this query
 - `completed::Bool`: Whether the async result has been awaited
@@ -2089,7 +2095,7 @@ Use `await_result(task)` to get the result and properly release the connection.
   `Private = false` means the target is never rendered. That broke the docs build once.)
 """
 mutable struct FetchTask
-  async_result::Any  # LibPQ.AsyncResult (PG) or Task (SQLite)
+  async_result::Any  # the PG extension's handle, or Task (SQLite) — `fetch` and `wait` are all core uses
   pool::Union{PormGPostgres, PormGSQLite}
   conn::Any
   completed::Bool
@@ -2130,7 +2136,8 @@ Park ONE detached waiter on the driver handle and return a zero-argument predica
 "has the driver let go of this connection?" (#315).
 
 `Base.wait` is the only settle test that spans both backends without core naming a driver type:
-LibPQ defines it on its `AsyncResult` as `wait(result_task)`, and SQLite's handle *is* a `Task`.
+LibPQ defines it on its `AsyncResult` as `wait(result_task)` — the LibPQ extension's handle forwards
+to it, so this waits on the driver's own task (#1000) — and SQLite's handle *is* a `Task`.
 (`Base.isready` is not usable — LibPQ defines it on `AsyncResult`, `Task` does not have it.) It
 **throws** when that task failed, which is a *settled* outcome and all we asked, so the throw is
 swallowed. Waiting here also CONSUMES that failure, which is what stops Julia printing an
@@ -2164,8 +2171,8 @@ _wait_settled(probe, seconds::Real)::Bool =
     _recover_abandoned_connection!(ft::FetchTask; settle_seconds, close_seconds, force_renew) -> Nothing
 
 Recover the pool slot of a connection whose driver await was abandoned by a cancellation (#315).
-`handle` is the driver-side object the abandoned await was parked on — a `LibPQ.AsyncResult` or the
-SQLite worker `Task` — which is what [`_settle_probe`](@ref) waits on. The [`FetchTask`](@ref) form
+`handle` is the driver-side object the abandoned await was parked on — the PostgreSQL extension's
+handle or the SQLite worker `Task` — which is what [`_settle_probe`](@ref) waits on. The [`FetchTask`](@ref) form
 is the same call with the three fields unpacked.
 
 Replaces the plain [`release_connection`](@ref) that used to run unconditionally. A connection whose
@@ -2333,7 +2340,7 @@ function await_result(ft::FetchTask)
   end
 
   err = try
-    # Await the async result (works for both LibPQ.AsyncResult and Task)
+    # Await the async result (works for every driver handle: each defines `Base.fetch`)
     result = Base.fetch(ft.async_result)
     ft.result_cache = result
     ft.completed = true

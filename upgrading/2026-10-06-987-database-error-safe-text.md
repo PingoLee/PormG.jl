@@ -19,8 +19,8 @@ fields.
 
 | `e` | `error_message(e)` before | `error_message(e)` after |
 |---|---|---|
-| unique violation (LibPQ) | `IntegrityError: PostgreSQL rejected the statement — a constraint was violated: UniqueViolation: ERROR:  duplicate key value violates unique constraint "driver_code_key"` + `DETAIL:  Key (code)=(SEN) already exists.` | `IntegrityError: PostgreSQL rejected the statement — a constraint was violated (SQLSTATE 23505): duplicate key value violates unique constraint "driver_code_key" (the driver's full text is in `.cause`)` |
-| the same on Postgres.jl | the driver's multi-line rendering, `Detail:` included | as above, plus `constraint "driver_code_key", table "driver"` |
+| unique violation (LibPQ) | `IntegrityError: PostgreSQL rejected the statement — a constraint was violated: UniqueViolation: ERROR:  duplicate key value violates unique constraint "driver_code_key"` + `DETAIL:  Key (code)=(SEN) already exists.` | `IntegrityError: PostgreSQL rejected the statement — a constraint was violated (SQLSTATE 23505, constraint "driver_code_key", table "driver"): duplicate key value violates unique constraint "driver_code_key" (the driver's full text is in `.cause`)` |
+| the same on Postgres.jl | the driver's multi-line rendering, `Detail:` included | as above |
 | bad uuid input (class 22) | `… could not be executed: InvalidTextRepresentation: ERROR:  invalid input syntax for type uuid: "<value>"` + `LINE 1: …` | `StatementError: the PostgreSQL statement could not be executed (SQLSTATE 22P02). The server's message quotes the input, so it is not shown (the driver's full text is in `.cause`)` |
 | SQLite unique violation | `… a constraint was violated: UNIQUE constraint failed: driver.code` | `… a constraint was violated: UNIQUE constraint failed: driver.code (the driver's full text is in `.cause`)` |
 
@@ -55,8 +55,8 @@ catch e
     e isa IntegrityError && m !== nothing && return conflict("$(m[1]) is taken")
 end
 
-# ✓ after — the reason as data. `constraint` is reported by the Postgres.jl driver (LibPQ keeps
-#   only the SQLSTATE and the message), and `error_message(e)` is now safe to return to the client
+# ✓ after — the reason as data. Both PostgreSQL drivers report `constraint`, `table` and `column`
+#   (#1000), and `error_message(e)` is now safe to return to the client
 catch e
     e isa IntegrityError && e.sqlstate == "23505" && return conflict(error_message(e))
     e isa IntegrityError && e.constraint == "driver_code_key" && return conflict("code is taken")

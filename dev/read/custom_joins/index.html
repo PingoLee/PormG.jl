@@ -378,9 +378,22 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
 
     - **A path it names is joined first**, and the predicate stays in the `cjoin_on`&#39;s own `ON`
       clause. Under `join_type = &quot;LEFT&quot;` the predicate decides which rows of the joined copy match,
-      and drops no base row itself. The path&#39;s own join is the one any reference to it builds, though:
-      a reverse (to-many) relation such as `results__…` is an `INNER JOIN` that multiplies base rows
-      and drops those with no related row, whatever the `cjoin_on`&#39;s `join_type`.
+      and drops no base row itself. The path&#39;s own join is the one any reference to it builds, so a
+      nullable foreign key on the way is a `LEFT JOIN` and a required one an `INNER JOIN`.
+    - **The path must be to-one** — forward foreign keys only. A path that crosses a reverse relation
+      (`driverid__result__grid`) or a `ManyToManyField` raises `FilterError`
+      ([#992](https://github.com/PingoLee/PormG.jl/issues/992)): joined onto the base row, it would
+      repeat that row once per related row, whatever the `cjoin_on`&#39;s `join_type`. To match on whether
+      a related row exists, correlate a subquery instead:
+
+      ```julia
+      # Each result, with d2 matched only for drivers who have started a race from pole.
+      M.Result.objects.
+          cjoin_on(&quot;Driver&quot;, alias = &quot;d2&quot;, join_type = &quot;LEFT&quot;,
+                   on = [Joined(&quot;d2&quot;, &quot;driverid&quot;) == F(&quot;driverid&quot;),
+                         Exists(M.Result.objects.filter(&quot;driverid&quot; =&gt; OuterRef(&quot;driverid&quot;), &quot;grid&quot; =&gt; 1))]).
+          values(&quot;resultid&quot;, &quot;pole_sitter&quot; =&gt; Joined(&quot;d2&quot;, &quot;surname&quot;))
+      ```
     - **An alias it names is emitted first.** Aliases that name no other alias keep the order you
       declared them in.
 
@@ -527,4 +540,4 @@ mermaid.initialize({
     startOnLoad: true,
     theme: "neutral"
 });
-</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Wednesday 7 October 2026 01:56">Wednesday 7 October 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Wednesday 7 October 2026 10:31">Wednesday 7 October 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

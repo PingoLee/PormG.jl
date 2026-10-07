@@ -2733,9 +2733,10 @@ _format_filter_value(formatter, values, operator::AbstractString) =
 # One definition means the next operator branch cannot diverge by being written somewhere else.
 #
 # Since #576 it is the only re-raise on the FILTER path: the HAVING ladder (build_query.jl), the
-# `SQLTypeFunction` transform branches, the #474 memo arm, the `F(...)` operand (execution.jl) and
-# the sargable rewrite all reach it, most of them through `_guarded_format` below. Before that, one
-# of thirteen formatter call sites was guarded — see the count in that helper's comment.
+# `SQLTypeFunction` transform branches, the #474 memo arm, the `F(...)` operand
+# (expression_render.jl) and the sargable rewrite all reach it, most of them through
+# `_guarded_format` below. Before that, one of thirteen formatter call sites was guarded — see the
+# count in that helper's comment.
 #
 # "Filter path", not "read path", and the difference is one pair of functions: `_m2m_format_owner` /
 # `_m2m_format_related` (`many_to_many.jl`) call a field formatter unguarded, and the owner one is

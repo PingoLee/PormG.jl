@@ -1007,7 +1007,7 @@ end
 
 # SQLite's multi-argument `MAX`/`MIN` are its scalar GREATEST/LEAST, except that they return NULL if
 # any argument is NULL. On SQLite the operands arrive here already rewritten to NULL-skipping
-# COALESCE rotations (#844, `_null_skipping_operands` in querybuilder/build_helpers.jl), which is what
+# COALESCE rotations (#844, `_null_skipping_operands` in querybuilder/select_nodes.jl), which is what
 # makes these two match PostgreSQL's. The rotations carry no `output_field`, so the #852 cast is
 # applied once, here, to the whole `MAX`/`MIN`.
 function GREATEST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
@@ -2868,7 +2868,8 @@ end
 # #602: every text-lookup renderer below takes `column::AbstractString, value::AbstractString`.
 # Both are RENDERED SQL text — `column` is the quoted column expression and `value` is the bind
 # placeholder (`$N` / `?`) `add_parameter!` returned — never the user's value, which is already
-# bound by the time the builder dispatches here (build_helpers.jl). The wide spelling is the
+# bound by the time the builder dispatches here (filter_operators.jl for the JSON, array and network
+# renderers, filter_nodes.jl for the pattern ones). The wide spelling is the
 # type-system contract, not a live repro: a `::String` arm beside an untyped generic sibling
 # meant a non-`String` placeholder fell to the sibling and was refused for the WRONG reason
 # (`InvalidValueError`, or `BackendCapabilityError` "requires PostgreSQL" *on* PostgreSQL).

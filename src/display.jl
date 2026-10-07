@@ -627,7 +627,7 @@ function Base.show(io::IO, ::MIME"text/plain", h::QueryBuilder.ObjectHandler)
   append!(joins, keys(getfield(q, :alias_join)))
   isempty(joins) || println(io, lbl("cjoin"), _d_join_capped(joins, 6))
 
-  # `limit == 0` is PormG's NO-LIMIT sentinel (`build_helpers.jl`: `has_limit = …limit != 0`), while
+  # `limit == 0` is PormG's NO-LIMIT sentinel (`select_nodes.jl`: `has_limit = …limit != 0`), while
   # in SQL `LIMIT 0` means zero rows. Rendering the sentinel printed `limit 0, offset 25` for an
   # offset-only query — a limit the query does not have, spelled as the one value that would mean
   # something else. Each half is now printed only when it is set.

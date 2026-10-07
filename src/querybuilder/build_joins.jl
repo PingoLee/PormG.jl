@@ -687,7 +687,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     #
     # Guarding HERE rather than at each caller is deliberate. `build()` has SIX call sites and only
     # three render a `WITH`: `execution_read.jl` `query`/`_count`/`_exists` do; `_update`,
-    # `bulk_update` (`execution_bulk.jl`) and `_build_exists_query` (`build_helpers.jl`, which
+    # `bulk_update` (`execution_bulk.jl`) and `_build_exists_query` (`filter_nodes.jl`, which
     # hand-rolls its own SELECT) do not. A per-caller guard would have to be re-added for each
     # future one. This is the single point where the missing render step becomes observable.
     #

@@ -89,7 +89,8 @@ end
 # declines it.
 #
 # The joined arm reads the memo rather than the model: `_get_select_query(::JoinedReference)` writes
-# the resolved `PormGField` under `memo_key(ref)` (`build_helpers.jl`), and the caller renders the
+# the resolved `PormGField` under `memo_key(ref)` (`select_nodes.jl`, through `_resolve_joined` in
+# `filter_nodes.jl`), and the caller renders the
 # left side BEFORE the operand, so the entry is always there by the time this runs. Without it a
 # `Joined` comparison fell back to the operand's own type while the `F` twin consulted the column —
 # the two families binding different bytes for the same query, which is the asymmetry #494 exists to
@@ -110,7 +111,7 @@ end
 # because the literal arm needs the column's FORMATTER, not only its temporal kind: a `Float64`
 # against a `FloatField` must bind `format_number_sql`'s string, a `UUID` against a `UUIDField`
 # `format_uuid_sql`'s — the same choice the pair path makes at `_get_filter_query(::SQLTypeOper)`
-# (build_helpers.jl) by reading `model.fields[...]`. The String arm is `_date_field_type`'s own
+# (filter_nodes.jl) by reading `model.fields[...]`. The String arm is `_date_field_type`'s own
 # two-step lookup (model fields, then the base-namespace memo the left-side render populated).
 function _operand_column_field(field_name, instruc::SQLInstruction)::Union{PormGField,Nothing}
   if field_name isa String
@@ -1109,7 +1110,7 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # this arm is not optional.
     #
     # So the literal takes the SAME route a plain filter value takes (`_get_filter_query(::SQLTypeOper)`,
-    # build_helpers.jl): run it through the field's formatter, then bind the formatted string with no
+    # filter_nodes.jl): run it through the field's formatter, then bind the formatted string with no
     # explicit cast, letting PostgreSQL infer the type from the comparison context exactly as an
     # ordinary `filter("date" => Date(...))` already does.
     # #576: this arm formats through `_format_date_operand` rather than `_format_filter_value`, so
@@ -1272,7 +1273,7 @@ _set_update_query(v::JoinedReference, instruc::SQLInstruction) = _get_select_que
 # #564 — the temporal path renders AND types, in one pass.
 #
 # `_set_update_query` keeps its `String` contract for every caller (`_get_select_query(::SQLTypeF)`
-# in `build_helpers.jl`, through which SELECT, WHERE-side `F` comparisons and UPDATE SET all funnel;
+# in `select_nodes.jl`, through which SELECT, WHERE-side `F` comparisons and UPDATE SET all funnel;
 # the insert path; the recursive operand and left-side calls). Only this file's own temporal
 # recursion reads the second element, so nothing downstream had to change.
 #

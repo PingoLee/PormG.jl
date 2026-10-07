@@ -40,7 +40,7 @@ import PormG: PormGsuffix, PormGtransform, JSON_CONTAINMENT_OPERATORS, ARRAY_CON
               NETWORK_CONTAINMENT_OPERATORS, NETWORK_LOOKUP_OPERATORS   # #904
 # #604: the LIKE-family operator sets. Exporting them from `Kernel` is not enough — this explicit
 # import is what binds them inside `QueryBuilder`, where `_apply_like_wildcards` (parameters.jl) and
-# the render dispatch (build_helpers.jl) read them.
+# the render dispatch (filter_nodes.jl, filter_pairs.jl, field_resolution.jl) read them.
 import PormG: LIKE_CONTAINS_OPERATORS, LIKE_PREFIX_OPERATORS, LIKE_SUFFIX_OPERATORS,
               LIKE_WILDCARD_OPERATORS, PATTERN_LOOKUP_OPERATORS,
               VERBATIM_PATTERN_OPERATORS
@@ -95,6 +95,12 @@ include("querybuilder/many_to_many.jl")
 include("querybuilder/operators.jl")
 
 include("querybuilder/build_helpers.jl")
+# #130: the rest of what build_helpers.jl held, by concern.
+include("querybuilder/filter_pairs.jl")
+include("querybuilder/field_resolution.jl")
+include("querybuilder/select_nodes.jl")
+include("querybuilder/filter_nodes.jl")
+include("querybuilder/filter_operators.jl")
 
 include("querybuilder/build_joins.jl")
 

@@ -564,7 +564,7 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     #
     # #478: this reads the memo HERE rather than reusing the branch's hit. The `else` arm above
     # resolves through `_get_select_query`, which reaches `_get_filter_query(::SQLTypeField)`
-    # (`build_helpers.jl`) and can write this very key as it goes — so any read taken before the
+    # (`filter_nodes.jl`) and can write this very key as it goes — so any read taken before the
     # branch is stale by now, and reusing one would clobber a fresh entry with the possibly-degraded
     # `v_field_copy`. That is exactly the poisoned-entry class the #404 and #423 clauses above exist
     # to prevent. One extra lookup on a path already doing several.

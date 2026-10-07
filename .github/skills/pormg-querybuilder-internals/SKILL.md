@@ -153,7 +153,7 @@ It took two defects to get there, and both are now unrepresentable rather than g
 
 The rules now:
 
-- **Operators and walkers construct.** `_compare` (`types.jl`) is the template: read every slot,
+- **Operators and walkers construct.** `_compare` (`operators.jl`) is the template: read every slot,
   set the new one, return a fresh node. `_check_function` / `_retag_cte_column` /
   `_retag_joined_column` (`build_helpers.jl`) and `_retag_cte_string` (`ctes.jl`) all follow it.
   `_retag_cte_string(::WindowFunction)` builds a fresh `WindowSpec` too — a spec reused across two

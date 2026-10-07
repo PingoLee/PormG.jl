@@ -628,7 +628,7 @@ Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as, x.custom_as, x.root)
 
 # `orientation` is interpolated into rendered SQL, so it is whitelisted here (#77) and stored
 # uppercase. Single whitelist for every orientation path — the window path
-# (_normalize_window_orientation, build_helpers.jl) delegates here with its own context label.
+# (_normalize_window_orientation, select_nodes.jl) delegates here with its own context label.
 function _normalize_order_orientation(orientation::AbstractString; context::String="ORDER BY")::String
   normalized = uppercase(strip(String(orientation)))
   normalized in ("ASC", "DESC") || throw(QueryBuildError("$(context) orientation must be ASC or DESC, got $(repr(orientation))"))  # refusal-value-ok: an orientation keyword argument

@@ -2,7 +2,7 @@
 # projected expression (`_expression_formatter`, `_operand_kind`, `_function_projection_kind`, the
 # subquery and CTE-column kinds), what an alias reads, and rendering a filter that compares a
 # projection alias. Shared across the query builder: the SELECT and filter renderers, `build`,
-# `expression_render.jl`, `build_helpers.jl`, `ctes.jl` and `functions.jl`.
+# `expression_render.jl`, `select_nodes.jl`, `filter_nodes.jl`, `ctes.jl` and `functions.jl`.
 
 # SQLite keeps a number compared with a NUMBER-typed alias native: an aggregate or arithmetic result
 # has no column affinity there, and neither has a bound parameter, so `SUM(x) = '1.5'` — what
@@ -21,7 +21,7 @@ function _sqlite_preserve_native_parameter(raw_value, formatted_value, formatter
 end
 
 # `operator` (#411): this function has the SAME inverted formatter contract the three filter call
-# sites in `build_helpers.jl` had — it handed `raw_value` straight to a formatter, so a
+# sites in `filter_nodes.jl` had — it handed `raw_value` straight to a formatter, so a
 # membership list reached one whole. `filter("mx__@in" => [Date(...)])` on a `Max("happened")`
 # alias therefore died with `InvalidValueError` exactly as the plain-field path did. The operator
 # is what licenses mapping, for the same reason as there: a `Vector{UInt8}` is ONE binary value,
@@ -156,14 +156,14 @@ _resolved_contains_agg(node, instruc::SQLInstruction)::Bool =
 # statement at all. (PostgreSQL numbers `$n` at render, so reprinting the text reuses `$1`/`$2` and
 # is correct there — the same PG-is-fine/SQLite-is-broken split as #586 and #587.)
 #
-# The gate is the one `_get_filter_query(::SQLTypeField)` (#586, build_helpers.jl) and
+# The gate is the one `_get_filter_query(::SQLTypeField)` (#586, filter_nodes.jl) and
 # `get_order_query` (#587) already use, applied to the third and last consumer of the memo: reuse the
 # text only for node kinds that cannot bind, and otherwise render the source afresh so the expression
 # binds its own values in the clause it prints in. An aggregate legitimately appears twice in the
 # statement, so binding twice is the correct reading, not a duplicate.
 #
 # #701: the WHERE path reads the memo through here too (`_get_filter_query(::SQLTypeField)`,
-# build_helpers.jl). It had the #586 gate on the wrong node — the filter KEY, a plain `String` alias,
+# filter_nodes.jl). It had the #586 gate on the wrong node — the filter KEY, a plain `String` alias,
 # rather than the projection behind it — so `Q("next_race" => 73)` over `F("raceid") + 1` reprinted
 # the projection's `?` in WHERE with its value still in `:select`: three markers, two values on
 # SQLite. Routing a row alias's top-level filter to WHERE (#701) would have inherited the same
@@ -689,7 +689,7 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   # `escape_like_pattern`) inside `add_parameter!`. Without them a pattern lookup on an alias
   # bound its value undecorated AND unescaped — no `%`, and a user-supplied `%` or `_` in the
   # term matched as a wildcard. `_bind_predicate_value` applies that gate — membership in
-  # `LIKE_WILDCARD_OPERATORS`, exactly as the WHERE binding arms in `build_helpers.jl` spell
+  # `LIKE_WILDCARD_OPERATORS`, exactly as the WHERE binding arms in `filter_nodes.jl` spell
   # it; the `*_exact` and regex (#635) pattern lookups take the value verbatim and must NOT be
   # decorated, which is why that tuple and `PATTERN_LOOKUP_OPERATORS` are deliberately
   # different sets (`constants.jl`). #654: it also binds a range's two operands, and nothing for `@isnull`.

@@ -761,7 +761,7 @@ function Extract(x::_TemporalOperand, part::AbstractString; formatter::Union{Not
   isa(formatter, PormGField) && (formatter = formatter.formatter)
   # #691: refuse an unknown part at build time on both engines. The node keeps the caller's
   # spelling — the dialect renders the canonical one — so the `"YEAR"` range rewrite in
-  # `build_helpers.jl` sees exactly what it saw before.
+  # `filter_operators.jl` sees exactly what it saw before.
   Dialect.extract_part(part)
   return FObject(function_name = "EXTRACT", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = formatter, kwargs = Dict{String, Any}("part" => String(part)))
 end

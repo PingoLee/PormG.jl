@@ -14,7 +14,7 @@ exists only for backends that store 32 hex digits, which PormG never does. So:
 - Every other lookup (`=`, `@in`, ordering) compares the column natively, with the value validated.
 
 Covers the model-field arm, the joined-path arm and a projection alias — all three go through
-`_pattern_operand` / `_lookup_formatter` (`src/querybuilder/build_helpers.jl`).
+`_pattern_operand` / `_lookup_formatter` (`src/querybuilder/filter_nodes.jl`).
 
 Hermetic: mock connections only. The live half is the UUID round trip in
 `test/integration/test_field_validation_db_roundtrip.jl`, on both engines.

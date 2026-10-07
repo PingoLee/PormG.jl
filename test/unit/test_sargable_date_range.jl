@@ -1,7 +1,7 @@
 """
 Unit tests for the sargable date-bucket range rewrite (#352).
 
-`_render_sargable_date_range` (`build_helpers.jl`) rewrites a comparison against a date-bucket
+`_render_sargable_date_range` (`filter_operators.jl`) rewrites a comparison against a date-bucket
 transform (`__@yyyy_mm`, `__@date`, `__@year`) on a bare `DateField` column into a plain
 range/comparison directly on the column — `col >= \$1 AND col < \$2` instead of
 `to_char(col,'YYYY-MM') = \$1` — so an index on the column applies and the planner can estimate

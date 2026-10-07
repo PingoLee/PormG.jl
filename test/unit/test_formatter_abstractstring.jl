@@ -219,7 +219,7 @@ _lazy(s::String) = LazyString(s)
     for probe in (identity, _sub, _lazy)
       @test Mo.format_yyyy_mm(probe("1991-10")) == "1991-10"
       # The return is a `String` whatever came in, so the caller's string type cannot leak into
-      # the range math in `querybuilder/build_helpers.jl`.
+      # the range math in `querybuilder/filter_operators.jl`.
       @test Mo.format_yyyy_mm(probe("1991-10")) isa String
       # These three are rejected BOTH before and after the fix — the old generic arm raised the
       # same `InvalidValueError` type — so asserting the type alone is theater. What changed is the

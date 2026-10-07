@@ -24,7 +24,7 @@ Three design choices, all load-bearing:
   - **Offenders are grouped by admitted TYPE, not by slot.** One inherited admission is ONE cause
     with ONE remedy; reporting it once per slot would bury that under 26 identical lines.
   - **The probe runs the real entry point rather than asking `hasmethod`.** `hasmethod` cannot answer
-    this question: `_resolve_window_expression` (`build_helpers.jl`) takes its argument untyped and
+    this question: `_resolve_window_expression` (`select_nodes.jl`) takes its argument untyped and
     branches on `isa`, so `hasmethod` is `true` for every type including the ones that die. What is
     asserted is the OUTCOME, which is #533's acceptance criterion executed rather than restated.
   - **A type with no specimen is itself an offender.** Adding a node type forces declaring how to

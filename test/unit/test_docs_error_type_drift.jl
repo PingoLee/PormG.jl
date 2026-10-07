@@ -171,7 +171,8 @@ const ALLOWED_UNTYPED_BARE_ERROR = Dict(
     # QueryBuildError. The remaining keep is the missing-join-alias lookup, which is genuinely
     # internal (aliases are minted from the same row_join vector that is then searched).
     "src/querybuilder/build_joins.jl"   => 1,  # missing join alias — internal invariant
-    "src/querybuilder/build_helpers.jl" => 2,  # duplicate dedup row / bad placeholder type — internal
+    "src/querybuilder/field_resolution.jl" => 1,  # duplicate dedup row in `_insert_join` — internal
+    "src/querybuilder/filter_nodes.jl" => 1,  # bad placeholder type in `_render_membership` — internal
     # #977: a path join's ON condition that adds a join while rendering. Unreachable: binding puts
     # every left side on the hop (#973) and every right side on the path (#962), and all of those
     # rows are materialized before the ON clauses render. Raised rather than emitted, because the

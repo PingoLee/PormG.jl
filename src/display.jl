@@ -614,8 +614,9 @@ function Base.show(io::IO, ::MIME"text/plain", h::QueryBuilder.ObjectHandler)
     _d_join_capped((string(getfield(o, :orientation) == "DESC" ? "-" : "", _d_col(getfield(o, :field))) for o in ord), 6))
 
   # No `group_by` line: `SQLObjectQuery.group` and `.having` have NO writer anywhere in `src/` —
-  # every `push!` targets the per-build `SQLInstruction` instead (`build_query.jl:42,52,314`), and
-  # the query object's own slots appear only inside `deepcopy` (`types.jl:473`). A clause line for
+  # every `push!` targets the per-build `SQLInstruction` instead (`build_select.jl`,
+  # `build_filter.jl`, `build_query.jl`), and the query object's own slots appear only inside
+  # `deepcopy` (`types.jl:473`). A clause line for
   # them would be dead code that reads as coverage. Grouping is derived at build time from the
   # projection, so the `values` line above is where an aggregating query shows itself.
 

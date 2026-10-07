@@ -358,7 +358,7 @@ end
 # transformed path, or a function. The column lookup answers for a column, and only for one. A
 # transform (`"date__@date"`) or a function (`Max("date")`) answered `nothing` there, so
 # `F("date") - Max("date")` fell to a bare `-`, which on SQLite subtracts the YEARS of two TEXT
-# dates, silently. Both now ask the projection path's own resolver (`build_query.jl`), the one that
+# dates, silently. Both now ask the projection path's own resolver (`projection_types.jl`), the one that
 # already types `.values("m" => Max("date"))` for the read path, so a side is typed in arithmetic
 # exactly as it is when projected on its own: `Max`/`Min` keep their operand's kind, `@date` is a
 # date, and a function PormG does not type (`Sum`, `@year`) stays `nothing`.
@@ -547,7 +547,7 @@ function _render_temporal_difference(left_side::AbstractString, right_side::Abst
 end
 
 # #881 — where a rendered expression LEAVES the tree (`_set_update_query`, the projection in
-# `build_query.jl`), an interval held in milliseconds becomes the stored text, read back as `CInterval`.
+# `build_select.jl`), an interval held in milliseconds becomes the stored text, read back as `CInterval`.
 # Every other kind is already what its SQL evaluates to.
 _finalize_render(sql::AbstractString, kind::TemporalKind, ::SQLInstruction) = (String(sql), kind)
 _finalize_render(sql::AbstractString, ::_IntervalMs, ::SQLInstruction) =
@@ -1282,7 +1282,7 @@ _set_update_query(v::JoinedReference, instruc::SQLInstruction) = _get_select_que
 _set_update_query(v::FExpression, instruc::SQLInstruction) = first(_set_update_query_typed(v, instruc))
 
 # #881 — the two doors out of the renderer (`_set_update_query` above, the projection in
-# `build_query.jl`) see only kinds a reader or a binder can act on: an interval the renderer held in
+# `build_select.jl`) see only kinds a reader or a binder can act on: an interval the renderer held in
 # milliseconds leaves as its stored text, typed `CInterval`. Inside, `_render_expr_typed` and its
 # helpers pass `_IntervalMs` along, so an interval stays a number for as long as it is being computed.
 _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple{String,TemporalKind} =

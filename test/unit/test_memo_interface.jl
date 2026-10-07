@@ -303,7 +303,7 @@ end
 #
 # Note the deliberate asymmetry between readers and writers. Readers accept `nothing` because
 # `memo_key(::SQLTypeField)` produces one for an unnamed expression and several call sites pass it
-# straight through. Writers refuse it: `build_query.jl`'s ORDER BY memo can reach a write with an
+# straight through. Writers refuse it: `build_select.jl`'s ORDER BY memo can reach a write with an
 # unnamed projection, and the resulting `MethodError` is a separately-tracked leak recorded there,
 # not a behaviour this refactor may quietly absorb.
 # ─────────────────────────────────────────────────────────────────────────────

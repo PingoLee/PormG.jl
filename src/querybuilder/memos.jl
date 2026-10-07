@@ -82,7 +82,7 @@ memo_key(ns::Symbol, name::AbstractString)::MemoKey = (ns, String(name))
 # key because `memo_key(::SQLTypeField)` produces one for an unnamed expression and several call
 # sites pass it straight through.
 #
-# WRITERS DELIBERATELY DO NOT accept `Nothing`. `build_query.jl` can reach a write with an unnamed
+# WRITERS DELIBERATELY DO NOT accept `Nothing`. `build_select.jl` can reach a write with an unnamed
 # projection, and the resulting `MethodError: Cannot convert … Nothing …` is a separately-tracked
 # leak recorded there — not a bug this refactor may quietly absorb. Typing the writers on `::MemoKey`
 # keeps it the same error class on the same reachable input, raised one frame higher. A `::Nothing`

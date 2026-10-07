@@ -1030,7 +1030,7 @@ function _first_projection_alias_filter(q::SQLObject)::Union{Nothing,String}
   return nothing
 end
 
-# Recursive in the shape of `_guard_no_aggregate_predicate` (build_query.jl), with its depth cap.
+# Recursive in the shape of `_guard_no_aggregate_predicate` (build_filter.jl), with its depth cap.
 function _projection_alias_in_filter(f, names::Set{String}, depth::Int = 0)::Union{Nothing,String}
   depth > 32 && return nothing
   if f isa SQLTypeOper

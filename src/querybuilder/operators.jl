@@ -352,7 +352,7 @@ end
 # arithmetic, which builds an `FExpression`, and the comparison nests over it. So a comparison builds
 # that same node — the nesting branch of `_compare(::FExpression)` — and the filter decides what it
 # means: a row function filters in WHERE, and a predicate containing an aggregate is refused by
-# `_guard_no_aggregate_predicate` (build_query.jl), as `OP(Count("id"), ">", 1)` has been since #537.
+# `_guard_no_aggregate_predicate` (build_filter.jl), as `OP(Count("id"), ">", 1)` has been since #537.
 #
 # The operand vocabulary is `_CompareOperand`, the `F` one, and a value outside it is refused by the
 # same funnel. A function on the RIGHT is outside it, as it is for `F`.

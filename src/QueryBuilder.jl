@@ -98,6 +98,10 @@ include("querybuilder/build_helpers.jl")
 
 include("querybuilder/build_joins.jl")
 
+# #130: the SELECT/ORDER renderer, what a projection renders as, the filter renderer, then `build`.
+include("querybuilder/build_select.jl")
+include("querybuilder/projection_types.jl")
+include("querybuilder/build_filter.jl")
 include("querybuilder/build_query.jl")
 
 # #130: rendering an `F(...)` expression to SQL, and its typed temporal / interval path.

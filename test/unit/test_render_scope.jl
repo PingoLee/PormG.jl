@@ -179,8 +179,9 @@ const RSCOPE_CURRENT_CONTEXT = r"\.current_context\b|(get|set)(field|property)!?
 # assembling at top level (a SET list, an insert row, a fence re-emitted after its build). No render
 # is suspended in such a collector, so there is no outer bucket to restore. Pinned by file AND
 # expression with its count, so a new call — or one moved into a build path — fails here until
-# someone decides which kind it is. The build paths (`build_query.jl`, `build_helpers.jl`, `ctes.jl`,
-# `build_joins.jl`, `join_conditions.jl`, …) hold none.
+# someone decides which kind it is. The build paths (`build_query.jl`, `build_select.jl`,
+# `projection_types.jl`, `build_filter.jl`, `build_helpers.jl`, `ctes.jl`, `build_joins.jl`,
+# `join_conditions.jl`, …) hold none.
 const RSCOPE_SET_CONTEXT_ALLOWED = Dict(
     # query() of a top-level statement (`:cte` first: WITH prints first), count(), exists().
     "src/querybuilder/execution_read.jl" => Dict(

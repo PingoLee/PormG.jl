@@ -74,6 +74,7 @@ const EXPECTED_FUNCTIONS = Set([
     :Concat, :Lower, :Upper, :Length, :Replace, :Trim, :LTrim, :RTrim,
     :Abs, :Round, :Floor, :Ceil, :Sqrt, :Exp, :Ln, :Power, :Mod,
     :Cast, :Extract, :ToChar, :Value, :Coalesce, :Greatest, :Least, :NullIf,
+    :SearchQuery, :SearchVector, :SearchRank, :SearchHeadline,   # #31
 ])
 
 @testset "Public export surface (#35)" begin

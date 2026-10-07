@@ -125,6 +125,7 @@ const PormGsuffix = Dict{String,Union{Int64, String}}(
   "net_overlaps" => "net_overlaps",                       # &&   (either contains the other)
   "family" => "family",                                   # family(col) = 4 | 6
   "prefixlen" => "prefixlen",                             # masklen(col) = n
+  "search" => "search",                                   # to_tsvector(col) @@ <tsquery>  (#31)
 )
 
 # #27: the JSON containment/overlap operators, routed to a dedicated render branch in
@@ -143,6 +144,12 @@ const ARRAY_CONTAINMENT_OPERATORS = ("acontains", "contained_by", "overlap")
 const NETWORK_CONTAINMENT_OPERATORS = ("net_contained", "net_contained_or_equal", "net_contains",
                                        "net_contains_or_equals", "net_overlaps")
 const NETWORK_LOOKUP_OPERATORS = (NETWORK_CONTAINMENT_OPERATORS..., "family", "prefixlen")
+
+# #31: full-text search, routed to `_render_search_operator` in _get_filter_query(::SQLTypeOper) and
+# gated PostgreSQL-only. Its own family rather than a verbatim pattern lookup: the right-hand side is a
+# `SearchQuery` (or the text one is built from), which renders a tsquery of its own, and the verbatim
+# arm would hand that rendered query to the renderer as if it were a value to wrap.
+const SEARCH_LOOKUP_OPERATORS = ("search",)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # The LIKE-family pattern lookups (#604)

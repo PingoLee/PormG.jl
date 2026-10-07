@@ -64,6 +64,7 @@ makedocs(
             "Subqueries and CTEs" => "read/subqueries_and_ctes.md",
             "Field Expressions" => "read/field_expressions.md",
             "Window Functions" => "read/window_functions.md",
+            "Full-Text Search" => "read/full_text_search.md",
             "Q Objects" => "read/q_objects.md",
         ],
         "Guides" => [

@@ -14,6 +14,7 @@ This section covers the read side of PormG — querying, filtering, joining, agg
 | [Subqueries and CTEs](subqueries_and_ctes.md) | `IN` subqueries, scalar `Subquery`/`Exists` columns, `.with(...)` CTEs and their `"<cte>__<column>"` columns, deep join paths, and CTE + cjoin combinations. |
 | [Field Expressions](field_expressions.md) | `F()` for field-to-field comparisons, arithmetic, aggregate ratios, aliasing, and atomic updates. |
 | [Window Functions](window_functions.md) | `Rank`, `RowNumber`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` — per-row analytics without collapsing rows. |
+| [Full-Text Search](full_text_search.md) | PostgreSQL full-text search: the `@search` lookup, `SearchQuery`, `SearchVector`, `SearchRank` and `SearchHeadline`, and the index that serves the lookup. |
 | [Q Objects](q_objects.md) | Complex boolean logic with `Q` (AND), `Qor` (OR), nesting, dynamic construction, and `F()` integration. |
 
 ---

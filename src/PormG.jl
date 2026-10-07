@@ -178,6 +178,9 @@ the entry point: it lists every constructor and where each family is documented.
 **Type / value** — [`Cast`](@ref), [`Extract`](@ref), [`ToChar`](@ref), [`Value`](@ref),
 [`Coalesce`](@ref), [`Greatest`](@ref), [`Least`](@ref), [`NullIf`](@ref)
 
+**Full-text search** (PostgreSQL) — [`SearchQuery`](@ref), [`SearchVector`](@ref),
+[`SearchRank`](@ref), [`SearchHeadline`](@ref) — see [Full-Text Search](@ref)
+
 They live here rather than at the top level because the names are generic enough to collide
 with `Base` and user code (`Sum`, `Count`, `Max`, `Replace`, `Round`, `Length`…), so the
 library has exactly one home and you opt in explicitly:
@@ -196,11 +199,13 @@ module Functions
   import ..QueryBuilder: Sum, Avg, Count, Max, Min, Case, When, Cast, Concat, Extract,
     ToChar, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf,
     Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod, WindowOver,
-    WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
+    WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue,
+    SearchQuery, SearchVector, SearchRank, SearchHeadline
   export Sum, Avg, Count, Max, Min, Case, When, Cast, Concat, Extract,
     ToChar, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf,
     Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod, WindowOver,
-    WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
+    WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue,
+    SearchQuery, SearchVector, SearchRank, SearchHeadline
 end
 
 # Curated top-level surface: query primitives only. The SQL function constructors above

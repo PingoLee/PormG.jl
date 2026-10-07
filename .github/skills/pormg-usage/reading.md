@@ -218,6 +218,7 @@ M.Driver.objects.
 | Conditional | `Case([When(...), …]; default)`, `When(cond; then, otherwise)` |
 | Aggregate | `Count`, `Sum`, `Avg`, `Max`, `Min` |
 | Window | `WindowOver`, `WindowSpec`, `Rank`, `DenseRank`, `RowNumber`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` — see [`advanced.md`](advanced.md) |
+| Full-text search (PostgreSQL) | `SearchQuery`, `SearchVector`, `SearchRank`, `SearchHeadline`, with the `__@search` lookup — see below |
 
 ```julia
 using PormG.Functions: Coalesce, Round, Greatest, Case, When, ToChar
@@ -248,6 +249,38 @@ M.Result.objects.
   `__@year`-style transforms are simpler still.
 
 Full reference: [Functions and Dates](https://pingolee.github.io/PormG.jl/stable/read/functions_and_dates/).
+
+### Full-text search (PostgreSQL only)
+
+`"<text column>__@search" => "words"` matches a column against a query, and the four functions shape
+and score that query. On SQLite every one of them raises `BackendCapabilityError`.
+
+```julia
+using PormG.Functions: SearchQuery, SearchVector, SearchRank, SearchHeadline
+
+M.Driver.objects.filter("surname__@search" => SearchQuery("senna"; config = "simple"))
+
+M.Driver.objects.
+    values("forename", "surname",
+           "rank" => SearchRank(SearchVector("forename", "surname"; config = "simple"), "ayrton senna")).
+    filter("rank__@gte" => 0.01).
+    order_by("-rank")
+
+M.Race.objects.
+    filter("name__@search" => SearchQuery("grand prix"; config = "english")).
+    values("year", "hl" => SearchHeadline("name", SearchQuery("grand prix"; config = "english");
+                                          start_sel = "<b>", stop_sel = "</b>"))
+```
+
+- `SearchQuery(text; config, search_type)`: `search_type` is `"plain"` (the default), `"phrase"`,
+  `"websearch"` (`"a phrase" or -word`) or `"raw"` (`tsquery` syntax).
+- The `config` is a name (`"english"`, `"pg_catalog.portuguese"`) and is written into the SQL, so an
+  index on `to_tsvector('english', col)` can serve the lookup. A side written as a bare string takes
+  its config from the side written as an object. The search text is always bound.
+- Filter a rank on a threshold (`"rank__@gte" => 0.01`), not on `> 0`. For a query of several
+  words, a row that misses them scores `1e-20`, not `0`.
+- A `SearchVector` or `SearchQuery` is an operand, not a value. It cannot be projected, compared, or
+  wrapped in another function; `@search` takes a CharField/TextField column, not an alias.
 
 ## Aliases
 

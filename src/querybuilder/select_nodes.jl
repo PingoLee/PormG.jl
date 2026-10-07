@@ -284,6 +284,31 @@ _render_case_branches(col::AbstractVector, instruc::SQLInstruction; _as::Union{N
 _render_case_branches(col, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing) =
   _render_case_branch(col, instruc; _as = _as)
 
+# #31: the full-text nodes, at the one site every function renders through as a value. On SQLite each
+# is refused here, naming the outermost one the caller wrote, before any operand binds. A
+# `SearchVector` or `SearchQuery` reaching this site is being used as a VALUE — projected, compared,
+# wrapped in another function, or put in arithmetic — and is refused on every engine: neither a
+# tsvector nor a tsquery has a Julia reading yet. Their three legitimate consumers (`@search`,
+# `SearchRank`, `SearchHeadline`) render them through `_render_fts_operand`, which does not come here,
+# so no spelling can smuggle one past the check the way a scope flag inherited by nested operands could.
+const _FTS_FUNCTION_NAMES = Dict("SEARCH_VECTOR" => "SearchVector", "SEARCH_QUERY" => "SearchQuery",
+                                 "SEARCH_RANK" => "SearchRank", "SEARCH_HEADLINE" => "SearchHeadline")
+function _check_fts_render(v::SQLTypeFunction, instruc::SQLInstruction)
+  name = get(_FTS_FUNCTION_NAMES, v.function_name, nothing)
+  name === nothing && return nothing
+  instruc.connection isa PormGSQLite && throw(Dialect.fts_capability_error(name))
+  v.function_name in _FTS_OPERANDS && throw(QueryBuildError(
+    "A $(name) is an operand of the \e[4m\e[32m@search\e[0m lookup, SearchRank or SearchHeadline, " *
+    "not a value: it cannot be projected, compared or wrapped in another function. Search a column " *
+    "with \e[4m\e[32m\"surname__@search\" => SearchQuery(\"senna\")\e[0m, or score rows with " *
+    "\e[4m\e[32mSearchRank(SearchVector(…), SearchQuery(…))\e[0m (#31)."))
+  return nothing
+end
+# One operand of an FTS consumer: a `SearchVector`/`SearchQuery` renders its body directly, past the
+# refusal above; anything else (the headline's document, its bound options) renders as a value.
+_render_fts_operand(c, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing) =
+  _is_fts_operand(c) ? _render_function_body(c, instruc; _as = _as)[1] : _get_select_query(c, instruc; _as = _as)
+
 function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   sql, interval_ms, _ = _render_function_typed(v, instruc; _as = _as)
   # #894: an interval held in milliseconds leaves as the interval text, as a difference does (#881).
@@ -309,6 +334,7 @@ end
 function _render_function_typed(v::SQLTypeFunction, instruc::SQLInstruction;
                                 _as::Union{Nothing,String}=nothing)::Tuple{String,Bool,Bool}
   v.function_name == "WHEN" && throw(_bare_when_refusal())
+  _check_fts_render(v, instruc)
   _is_aggregate_call(v) || return _render_function_body(v, instruc; _as = _as)
   return with_scope(() -> _render_function_body(v, instruc; _as = _as), instruc; phase = :row)
 end
@@ -396,6 +422,9 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     end
   elseif v.function_name == "CASE"
     resolved_column = _render_case_branches(v.column, instruc; _as = _as)
+  elseif v.function_name in ("SEARCH_RANK", "SEARCH_HEADLINE")
+    # #31: in text order — the vector or document, then the query, then the headline's options.
+    resolved_column = Any[_render_fts_operand(c, instruc; _as = _as) for c in v.column]
   else
     resolved_column = _get_select_query(_null_skipping_operands(v, instruc), instruc, _as=_as)
   end

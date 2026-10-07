@@ -361,7 +361,10 @@ end
 
 `IntegrityError` is what the database itself refused — `UNIQUE`, `FOREIGN KEY`, `NOT NULL`,
 `CHECK`. Match on the **type**, never on the message: the wording differs between PostgreSQL and
-SQLite and is not part of any contract. See [Error Handling](../errors.md) for the full set.
+SQLite and is not part of any contract. On PostgreSQL, `e.sqlstate` narrows it further (`"23505"`
+is a unique violation). The message never quotes the conflicting row, so it is safe to log or
+show. [A database error is safe to show](../errors.md#A-database-error-is-safe-to-show) lists the
+fields each driver reports.
 
 ```julia
 # Pre-validate data before insertion

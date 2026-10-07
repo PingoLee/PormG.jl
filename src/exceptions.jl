@@ -329,14 +329,26 @@ the connection dropped, a deadlock, a lock timeout), and [`StatementError`](@ref
 itself was rejected, plus anything the backend could not classify).
 
 All three are built from structured fields rather than a `msg::String`, so read them with
-[`error_message`](@ref). Each keeps the driver's own exception in `.cause`, so SQLSTATE-level
-detail stays available to callers that want it:
+[`error_message`](@ref). The reason the database gave is carried **as data** (#987), each field
+`nothing` when the driver does not report it:
+
+| Field | What | Reported by |
+|---|---|---|
+| `sqlstate` | The five-character SQLSTATE, e.g. `"23505"` | both PostgreSQL drivers |
+| `constraint` | The constraint that refused the row | the Postgres.jl driver |
+| `table`, `column` | The table and column the server named | the Postgres.jl driver |
+| `message` | The server's primary message — `nothing` for SQLSTATE class `22`, whose message quotes the input | every driver |
+
+**The rendered text never carries a value** — `error_message`, `showerror` and `string` alike — so
+it is safe to return to a client. The database's DETAIL, HINT and `LINE n:` excerpt quote the row,
+so they live only in the driver's own exception, kept in `.cause` for a caller that logs it to a
+trusted sink.
 
 ```julia
 try
     M.Driver.objects.create("code" => "SEN")
 catch e
-    e isa IntegrityError  && return conflict(error_message(e))
+    e isa IntegrityError && e.sqlstate == "23505" && return conflict(error_message(e))
     e isa OperationalError && return retry()
     rethrow()
 end
@@ -347,77 +359,60 @@ Connect-time failure is *not* here: it never reached a statement, and has been
 """
 abstract type DatabaseError <: PormGError end
 
-# Render a wrapped driver failure for human consumption.
-#
-# Driver exceptions are not required to be `Exception` subtypes (same defensive reasoning as
-# `PoolConnectError.cause`), so both shapes are handled.
-#
-# The `msg` branch exists because the two drivers are not equally well-behaved. LibPQ defines
-# `Base.showerror` for its exceptions, so `sprint(showerror, …)` renders "UniqueViolation: ERROR:
-# duplicate key …" — exactly what we want. SQLite.jl defines none, so Julia falls back to
-# `showerror(io, ::Exception) = show(io, ex)` and the cause renders as the struct literal
-# `SQLiteException("UNIQUE constraint failed: t.c")` — type name and quoting as noise inside our own
-# sentence. Comparing against `show` detects that fallback exactly (it is the same method), so a
-# driver that bothers to define `showerror` keeps its richer rendering and one that doesn't
-# contributes its bare message.
-function _cause_text(cause)
-  cause isa Exception || return string(cause)
-  rendered = sprint(showerror, cause)
-  if hasproperty(cause, :msg) && rendered == sprint(show, cause)
-    return string(getproperty(cause, :msg))
-  end
-  return rendered
-end
-
 """
-    IntegrityError(adapter, cause) <: DatabaseError <: PormGError
+    IntegrityError(adapter, cause; sqlstate, constraint, table, column, message) <: DatabaseError <: PormGError
 
 A constraint rejected the statement — `UNIQUE`, `FOREIGN KEY`, `NOT NULL`, `CHECK`, or an exclusion
 constraint. This is the one database failure applications routinely *handle* rather than propagate,
 which is why it is its own type.
 
-`adapter` is `"PostgreSQL"` or `"SQLite"`; `cause` is the driver's own exception. On PostgreSQL this
-is derived from SQLSTATE class `23`, so it is exact; on SQLite it comes from SQLite's own literal
-constraint messages.
+`adapter` is `"PostgreSQL"` or `"SQLite"`; `cause` is the driver's own exception, with the full text
+the server sent. On PostgreSQL this is derived from SQLSTATE class `23`, so it is exact; on SQLite it
+comes from SQLite's own literal constraint messages. The other fields are the reason as data — see
+[`DatabaseError`](@ref).
 """
 struct IntegrityError <: DatabaseError
-  adapter::String        # "PostgreSQL" | "SQLite"
-  cause                  # underlying driver exception (untyped: a driver may throw a non-Exception)
+  adapter::String                      # "PostgreSQL" | "SQLite"
+  cause                                # driver exception (untyped: a driver may throw a non-Exception)
+  sqlstate::Union{String, Nothing}
+  constraint::Union{String, Nothing}
+  table::Union{String, Nothing}
+  column::Union{String, Nothing}
+  message::Union{String, Nothing}      # the SAFE primary message — see the constructors below
 end
 
-Base.showerror(io::IO, e::IntegrityError) = print(io,
-  "IntegrityError: ", e.adapter, " rejected the statement — a constraint was violated: ",
-  _cause_text(e.cause))
-
 """
-    OperationalError(adapter, cause) <: DatabaseError <: PormGError
+    OperationalError(adapter, cause; sqlstate, constraint, table, column, message) <: DatabaseError <: PormGError
 
 The database could not complete the statement for a reason outside the statement itself, and
 retrying may succeed — the connection dropped mid-query, a deadlock was detected, a serialization
 failure occurred, or a lock could not be acquired in time.
 
 `catch OperationalError` is the retry signal. PormG raises it for `with_advisory_lock` acquisition
-timeouts too: contention is a runtime condition, not misuse.
+timeouts too: contention is a runtime condition, not misuse. The fields are those of
+[`DatabaseError`](@ref).
 """
 struct OperationalError <: DatabaseError
   adapter::String
   cause
+  sqlstate::Union{String, Nothing}
+  constraint::Union{String, Nothing}
+  table::Union{String, Nothing}
+  column::Union{String, Nothing}
+  message::Union{String, Nothing}
 end
 
-Base.showerror(io::IO, e::OperationalError) = print(io,
-  "OperationalError: the ", e.adapter, " operation could not complete and may succeed on retry: ",
-  _cause_text(e.cause))
-
 """
-    StatementError(adapter, cause) <: DatabaseError <: PormGError
+    StatementError(adapter, cause; sqlstate, constraint, table, column, message) <: DatabaseError <: PormGError
 
 A statement failed to execute — invalid SQL, an unknown table or column, a type the backend would
 not accept, or insufficient privileges. Also the landing type for any failure on the database path
 that could not be classified, so `catch DatabaseError` never has a hole.
 
-Usually a bug to fix rather than a condition to handle. The driver's exception is in `.cause`; the
-SQL text is deliberately **not** stored, because it can embed user data (the `@error … sql=…` log
-sites already surface the statement where that is appropriate).
+Usually a bug to fix rather than a condition to handle. The driver's exception is in `.cause` and the
+fields are those of [`DatabaseError`](@ref); the SQL text is deliberately **not** stored, because it
+can embed user data (the `@error … sql=…` log sites already surface the statement where that is
+appropriate).
 
 The wording says *could not execute*, not *the database rejected this*, on purpose. Being the
 unclassified fallback means a PormG-internal fault on the statement path can land here too — the
@@ -427,10 +422,82 @@ never saw would send a reader hunting for a SQL bug that does not exist.
 struct StatementError <: DatabaseError
   adapter::String
   cause
+  sqlstate::Union{String, Nothing}
+  constraint::Union{String, Nothing}
+  table::Union{String, Nothing}
+  column::Union{String, Nothing}
+  message::Union{String, Nothing}
 end
 
-Base.showerror(io::IO, e::StatementError) = print(io,
-  "StatementError: the ", e.adapter, " statement could not be executed: ", _cause_text(e.cause))
+# The 2-argument form every raise site used before #987 still works: the reason fields default to
+# `nothing`. `ConnectionPool._as_database_error` fills them from `backend_error_fields`.
+#
+# `message` holds the SAFE primary message, never the raw one: the extensions leave it `nothing` for
+# a class-22 SQLSTATE (`invalid input syntax for type uuid: "<value>"`), so an app reading `e.message`
+# cannot trip over the value either. A `String` cause is PormG's own text — no driver throws one;
+# advisory-lock contention passes a String, after `PoolConnectError`'s precedent — so it doubles as
+# the message unless one is given.
+_default_message(cause) = cause isa AbstractString ? String(cause) : nothing
+
+IntegrityError(adapter, cause; sqlstate = nothing, constraint = nothing, table = nothing,
+               column = nothing, message = _default_message(cause)) =
+  IntegrityError(adapter, cause, sqlstate, constraint, table, column, message)
+OperationalError(adapter, cause; sqlstate = nothing, constraint = nothing, table = nothing,
+                 column = nothing, message = _default_message(cause)) =
+  OperationalError(adapter, cause, sqlstate, constraint, table, column, message)
+StatementError(adapter, cause; sqlstate = nothing, constraint = nothing, table = nothing,
+               column = nothing, message = _default_message(cause)) =
+  StatementError(adapter, cause, sqlstate, constraint, table, column, message)
+
+# The sentence each subtype opens with — what happened, in the error's own words.
+_database_error_head(e::IntegrityError) =
+  "IntegrityError: $(e.adapter) rejected the statement — a constraint was violated"
+_database_error_head(e::OperationalError) =
+  "OperationalError: the $(e.adapter) operation could not complete and may succeed on retry"
+_database_error_head(e::StatementError) =
+  "StatementError: the $(e.adapter) statement could not be executed"
+
+# A driver exception named by its type alone, never its text: `PQResultError{C23, E23505}` reads
+# `PQResultError` — the SQLSTATE says the rest.
+_cause_type_name(cause) = string(nameof(typeof(cause)))
+
+# One rendering for every channel (#987, option B): `showerror`, and through it `error_message` and
+# `@error … exception = e`. It is built ONLY from the fields — the driver's text is never read here —
+# so no DETAIL, HINT, `LINE n:` excerpt or class-22 message can reach it, whatever the driver sent.
+function Base.showerror(io::IO, e::DatabaseError)
+  print(io, _database_error_head(e))
+  facts = String[]
+  e.sqlstate   === nothing || push!(facts, "SQLSTATE $(e.sqlstate)")
+  e.constraint === nothing || push!(facts, "constraint \"$(e.constraint)\"")
+  e.table      === nothing || push!(facts, "table \"$(e.table)\"")
+  e.column     === nothing || push!(facts, "column \"$(e.column)\"")
+  isempty(facts) || print(io, " (", join(facts, ", "), ")")
+  if e.message !== nothing
+    print(io, ": ", e.message)
+  elseif e.sqlstate !== nothing && Base.startswith(e.sqlstate, "22")
+    print(io, ". The server's message quotes the input, so it is not shown")
+  elseif !(e.cause isa AbstractString)
+    print(io, ": ", _cause_type_name(e.cause))   # the driver gave no reason PormG can read
+  end
+  e.cause isa AbstractString || print(io, " (the driver's full text is in `.cause`)")
+  return nothing
+end
+
+# The 2-arg `show` too: `"$e"`, `string(e)` and `repr(e)` go through it, and the default method
+# prints every field — the raw `cause` included, which on LibPQ is the whole server message.
+# `PoolConnectError` has the same method for the same reason. The cause appears as its type.
+function Base.show(io::IO, e::DatabaseError)
+  print(io, nameof(typeof(e)), "(", repr(e.adapter), ", ",
+        e.cause isa AbstractString ? repr(e.cause) : "<$(_cause_type_name(e.cause))>")
+  sep = "; "
+  for f in (:sqlstate, :constraint, :table, :column, :message)
+    v = getfield(e, f)
+    v === nothing && continue
+    print(io, sep, f, " = ", repr(v))
+    sep = ", "
+  end
+  print(io, ")")
+end
 
 """
     TransactionError(msg) <: PormGError

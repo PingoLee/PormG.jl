@@ -60,6 +60,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "Connection Pool (#37)"        begin include("test_connection_pool.jl")    end
     @testset "Manual Params raw SQL (#218)" begin include("test_manual_params.jl")       end
     @testset "NUL in String Values (#951)"  begin include("test_nul_string_values.jl")  end
+    @testset "Database Error Text Carries No Value (#987)"  begin include("test_database_error_no_value.jl")  end
     @testset "Advisory Locks"               begin include("test_advisorylock.jl")       end
     @testset "migrate() at Boot (#737)"     begin include("test_migrate_boot.jl")       end
     @testset "Lossy ALTERs (#803)"          begin include("test_lossy_alter.jl")        end

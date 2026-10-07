@@ -410,6 +410,16 @@ function PormG.backend_classify_error(pool::_Pool,
   return :statement
 end
 
+# The reason as data (#987): the server's ErrorResponse fields, which Postgres.jl keeps one by one.
+# `detail`, `hint`, `where` and `internal_query` are never copied — they quote the row or the
+# statement. An empty `code` is the driver's own protocol error, which has no SQLSTATE.
+# `PostgresInterfaceError` gets the default (no fields): its text can quote the SQL.
+function PormG.backend_error_fields(e::Postgres.Error)
+  sqlstate = isempty(e.code) ? nothing : e.code
+  return (sqlstate = sqlstate, constraint = e.constraint, table = e.table, column = e.column,
+          message = PormG._safe_server_message(sqlstate, e.message))
+end
+
 # ── Cancellation (#315) ──────────────────────────────────────────────────────
 
 # Out-of-band, on its own socket, safe while another task is inside `execute`. Never `isopen(conn)`

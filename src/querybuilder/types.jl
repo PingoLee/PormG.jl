@@ -884,7 +884,7 @@ function Base.deepcopy(obj::SQLObjectQuery)
     )
   catch e
     @pormg_debug false
-    @error "Error in deepcopy for SQLObjectQuery: $e" exception = (e, catch_backtrace())
+    @error "Error in deepcopy for SQLObjectQuery" exception = (e, catch_backtrace())
     rethrow(e)
   end
 end

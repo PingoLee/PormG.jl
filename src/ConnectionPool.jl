@@ -12,7 +12,7 @@ import PormG: @pormg_debug
 import PormG
 # `PoolError` is the taxonomy's connection-pool umbrella; it lives in Kernel (layer 1) so that
 # modules included before this one can name it (#261). PormGError comes along for `catch` sites.
-import PormG: PormGError, PoolError
+import PormG: PormGError, PoolError, error_message
 # Throw sites (#239): a bad acquire mode is a value error, an unresolvable pool is a config error,
 # and atomic(durable=true) nesting is transaction-API misuse (#268 — was QueryBuildError).
 import PormG: InvalidValueError, InvalidConfigurationError, TransactionError
@@ -28,7 +28,7 @@ import PormG: DatabaseError, IntegrityError, OperationalError, StatementError
 import PormG: backend_connect, backend_renew_connection, backend_is_alive, backend_execute,
               backend_execute_async, backend_is_connection_error, backend_is_permanent_connect_error,
               backend_cancel_query!, backend_drain_connection!,
-              backend_copy_in!, backend_classify_error
+              backend_copy_in!, backend_classify_error, backend_error_fields, _NO_ERROR_FIELDS
 # Which PostgreSQL driver a pool uses (#785).
 import PormG: postgres_driver, _PG_DRIVER_PACKAGES
 
@@ -271,6 +271,10 @@ match. Wrapped, that branch never fires and `fetch`'s reconnect-retry (#138) die
 _driver_cause(e::DatabaseError) = e.cause
 _driver_cause(e) = e
 
+# The SQLSTATE of a wrapped failure, for a log line; a PormG error passed through has none.
+_err_sqlstate(e::DatabaseError) = e.sqlstate
+_err_sqlstate(e) = nothing
+
 """
     _as_database_error(pool, e) -> Exception
 
@@ -283,16 +287,41 @@ caller's closure: `run_in_transaction`/`atomic`/`with_savepoint` run user code i
 and relabelling a user's `BoundsError` — or an `InterruptException` — as a `StatementError` would be
 worse than the raw-driver-error problem this solves. Those bodies wrap their own BEGIN/COMMIT/
 ROLLBACK statements individually instead (`_await_tx_statement`).
+
+**Throw the result after the `catch` block, never inside it** (#987). An exception thrown inside a
+`catch` keeps the one being handled on the task's exception stack, and `showerror` of a
+`TaskFailedException` — what `fetch(Threads.@spawn …)` raises — prints that whole stack: the raw
+driver exception, DETAIL and value included, which is exactly what the wrapper exists to keep out
+of its text. Build the error in the `catch`, let the block end, then throw:
+
+    err = try
+        return Base.fetch(task)
+    catch e
+        _as_database_error(pool, e)
+    end
+    throw(err)
+
+`test/unit/test_error_text_no_value.jl` pins the pool's sites through a spawned task
+(`AdvisoryLock._await_lock_handle` follows the same rule).
 """
 function _as_database_error(pool, e)
   root = _unwrap_async_exception(e)
   root isa PormGError && return root
   adapter = pool isa PormGPostgres ? "PostgreSQL" : "SQLite"
   kind = backend_classify_error(pool, root)
-  kind === :integrity   && return IntegrityError(adapter, root)
-  kind === :operational && return OperationalError(adapter, root)
+  # The reason as data (#987). The error renders from these fields alone, so the driver's text —
+  # DETAIL, HINT, the `LINE n:` excerpt — stays in `cause`. Never let an extension's reader replace
+  # the failure being reported: a throw there degrades to no fields, a cancellation still propagates.
+  fields = try
+    backend_error_fields(root)
+  catch read_failure
+    read_failure isa InterruptException && rethrow()
+    _NO_ERROR_FIELDS
+  end
+  kind === :integrity   && return IntegrityError(adapter, root; fields...)
+  kind === :operational && return OperationalError(adapter, root; fields...)
   # `:statement` and anything unrecognized land here, so `catch DatabaseError` has no hole.
-  return StatementError(adapter, root)
+  return StatementError(adapter, root; fields...)
 end
 
 """
@@ -303,11 +332,12 @@ statements are issued directly through `backend_execute_async` / `sqlite_execute
 through `fetch`, so they are the one driver path a transaction body owns that no other seam covers.
 """
 function _await_tx_statement(pool, task)
-  try
+  err = try
     return Base.fetch(task)
   catch e
-    throw(_as_database_error(pool, e))
+    _as_database_error(pool, e)
   end
+  throw(err)   # Thrown after the `catch`, never inside it (#987) — see `_as_database_error`.
 end
 #
 # Connection Pool Implementation
@@ -2302,7 +2332,7 @@ function await_result(ft::FetchTask)
     return ft.result_cache
   end
 
-  try
+  err = try
     # Await the async result (works for both LibPQ.AsyncResult and Task)
     result = Base.fetch(ft.async_result)
     ft.result_cache = result
@@ -2322,8 +2352,9 @@ function await_result(ft::FetchTask)
     # `StatementError` wrapping the `InterruptException`, exactly as before this fix. That
     # relabelling is its own defect — `_as_database_error`'s docstring above forbids it — but
     # correcting it changes a caller-visible error contract, so it is tracked separately.
-    err = _as_database_error(ft.pool, e)
-    err === e ? rethrow() : throw(err)
+    wrapped = _as_database_error(ft.pool, e)
+    wrapped === e && rethrow()
+    wrapped
   finally
     # Release only a connection this task acquired. A transaction context manages its own
     # connection, and a borrowed one (the caller's `conn`, #970) is the caller's to release — that
@@ -2338,6 +2369,7 @@ function await_result(ft::FetchTask)
       ft.abandoned ? _recover_abandoned_connection!(ft) : release_connection(ft.pool, ft.conn)
     end
   end
+  throw(err)   # Thrown after the `catch`, never inside it (#987) — see `_as_database_error`.
 end
 
 """
@@ -2391,7 +2423,7 @@ function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
   if use_tx_context
     # Use transaction context connection - don't acquire a new one
     conn = tx_conn
-    try
+    err = try
       task = if connection isa PormGPostgres
         backend_execute_async(connection, conn, sql, params)
       else
@@ -2401,8 +2433,9 @@ function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
       return FetchTask(task, connection, conn, true)  # true = in_transaction
     catch e
       # Don't release - transaction context manages the connection
-      throw(_as_database_error(connection, e))
+      _as_database_error(connection, e)
     end
+    throw(err)   # Thrown after the `catch`, never inside it (#987) — see `_as_database_error`.
   else
     # Normal path: acquire connection from pool
     if conn === nothing
@@ -2413,7 +2446,7 @@ function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
         conn = acquire_connection(connection)
       end
     end
-    try
+    err = try
       task = if connection isa PormGPostgres
         backend_execute_async(connection, conn, sql, params)
       else
@@ -2423,8 +2456,9 @@ function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
     catch e
       # If EXEC fails immediately, release the connection — only one this call acquired (#970)
       borrowed || release_connection(connection, conn)
-      throw(_as_database_error(connection, e))
+      _as_database_error(connection, e)
     end
+    throw(err)   # Thrown after the `catch`, never inside it (#987) — see `_as_database_error`.
   end
 end
 fetch_async(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
@@ -2541,22 +2575,24 @@ function fetch_copy(connection::PormGPostgres, sql::String, data_itr)
   # `finally` still releases the lease.
   if tx_conn !== nothing
     # Reuse the transaction connection — COPY is part of the open transaction.
-    try
+    err = try
       return backend_copy_in!(connection, tx_conn, sql, data_itr)
     catch e
-      throw(_as_database_error(connection, e))
+      _as_database_error(connection, e)
     end
+    throw(err)   # Thrown after the `catch`, never inside it (#987) — see `_as_database_error`.
   else
     # Acquire a pool connection for the duration of the COPY stream. CopyIn owns the
     # connection until the stream is fully consumed, so we hold it until done.
     conn = acquire_connection(connection)
-    try
+    err = try
       return backend_copy_in!(connection, conn, sql, data_itr)
     catch e
-      throw(_as_database_error(connection, e))
+      _as_database_error(connection, e)
     finally
       release_connection(connection, conn)
     end
+    throw(err)   # Thrown after the `catch`, never inside it (#987) — see `_as_database_error`.
   end
 end
 fetch_copy(settings::PormGSettings, sql::String, data_itr) = fetch_copy(settings.connections, sql, data_itr)
@@ -2591,7 +2627,7 @@ function with_transaction_async(pool::Union{PormGPostgres, PormGSQLite}, sql::St
     end
     conn_acquired = true
   end
-  try
+  err = try
     task = if pool isa PormGPostgres
       backend_execute_async(pool, conn, sql, params)
     else
@@ -2603,8 +2639,9 @@ function with_transaction_async(pool::Union{PormGPostgres, PormGSQLite}, sql::St
     # The caller never receives a connection this call acquired, so it goes back here; a borrowed
     # one is the caller's (#970) — before, it was released too, under a possibly open `BEGIN`.
     conn_acquired && release_connection(pool, conn)
-    throw(_as_database_error(pool, e))
+    _as_database_error(pool, e)
   end
+  throw(err)   # Thrown after the `catch`, never inside it (#987) — see `_as_database_error`.
 end
 
 """
@@ -2673,7 +2710,7 @@ function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
     conn_acquired = true
   end
 
-  try
+  err = try
     # Raw values are normalized as `fetch_async` does it (#218/#721). Inside the `try`, so a value
     # SQLite refuses to bind still reaches the release below — a caller's `release_conn = true`
     # included (#846). `_as_database_error` passes that `InvalidValueError` through as it is.
@@ -2702,13 +2739,18 @@ function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
     if conn_acquired && !release_conn
       _finish_statement_connection!(pool, conn, task; abandoned = abandoned, rollback_failed = rollback_failed)
     end
-    @error "Failed to execute SQL transaction, rolling back: $e"
-    throw(_as_database_error(pool, e))
+    # Never the driver's text (#984): a driver message can quote the bound value — PostgreSQL's
+    # `invalid input syntax for type integer: "<value>"`, or a DETAIL naming the key. The types, the
+    # SQLSTATE and `error_message` only, which renders from the error's safe fields (#987).
+    err = _as_database_error(pool, e)
+    @error "Failed to execute SQL transaction, rolling back" type=typeof(err) cause_type=typeof(_driver_cause(err)) sqlstate=_err_sqlstate(err) msg=error_message(err)
+    err
   finally
     if release_conn
       _finish_statement_connection!(pool, conn, task; abandoned = abandoned, rollback_failed = rollback_failed)
     end
   end
+  throw(err)   # Thrown after the `catch`, never inside it (#987) — see `_as_database_error`.
 end
 with_transaction(pool::PormGSettings, sql::AbstractString; conn = nothing, release_conn::Bool = false, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing) = with_transaction(pool.connections, sql; conn=conn, release_conn=release_conn, params=params)
 with_transaction_async(pool::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing) = with_transaction_async(pool.connections, sql; conn=conn, params=params)

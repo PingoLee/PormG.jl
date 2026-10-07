@@ -426,6 +426,23 @@ function PormG.backend_classify_error(pool::PormGPostgres, e::LibPQ.Errors.LibPQ
   return :statement
 end
 
+# The reason as data (#987). LibPQ's exception keeps two strings and nothing else: the PGresult that
+# holds the constraint, table and column fields is closed before `handle_result` throws. So this
+# reports what the type and the text carry without guessing — the SQLSTATE, from the type parameter,
+# and the primary message, which is the message's first line after its severity (`ERROR:  `, or a
+# localized `ERRO:  `; libpq separates the two with a colon and two spaces in every locale). DETAIL,
+# HINT and `LINE n:` sit on the lines after it and are never read.
+function PormG.backend_error_fields(e::LibPQ.Errors.PQResultError)
+  # `CUN` / `EUNOWN` is LibPQ's synthetic "the server sent no code" — not a SQLSTATE to report.
+  e isa LibPQ.Errors.PQResultError{LibPQ.Errors.CUN} && return PormG._NO_ERROR_FIELDS
+  sqlstate = chopprefix(string(LibPQ.Errors.error_code(e)), "E")
+  line = first(split(e.msg, '\n'; limit = 2))
+  sep = findfirst(":  ", line)
+  primary = strip(sep === nothing ? line : line[nextind(line, last(sep)):end])
+  return (sqlstate = sqlstate, constraint = nothing, table = nothing, column = nothing,
+          message = PormG._safe_server_message(sqlstate, primary))
+end
+
 PormG.backend_num_affected_rows(pool::PormGPostgres, result) = LibPQ.num_affected_rows(result)
 PormG.backend_num_rows(pool::PormGPostgres, result) = LibPQ.num_rows(result)
 

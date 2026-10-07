@@ -618,9 +618,11 @@ end
         catch e
             e
         end
-        # StatementError, carrying the server's `invalid regular expression` text.
+        # StatementError with SQLSTATE 2201B. It is class 22, whose messages PostgreSQL builds from
+        # the input, so the server's `invalid regular expression` text is in `.cause` only (#987).
         @test err isa PormG.StatementError
-        @test occursin("invalid regular expression", PormG.error_message(err))
+        @test err.sqlstate == "2201B"
+        @test occursin("invalid regular expression", sprint(showerror, err.cause))
     end
 end
 

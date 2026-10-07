@@ -202,3 +202,23 @@ function JSON.StructUtils.lower(::JSON.JSONStyle, s::Kernel.PormGSettings)
     "connection"    => conn === nothing ? nothing : _d_backend_label(conn),
   ))
 end
+
+# ── The database errors (#987) ─────────────────────────────────────────────────────────────────
+#
+# A `DatabaseError` keeps the driver's exception in `cause`, and on PostgreSQL that is the server's
+# whole message — DETAIL and the value included. Reflected, `JSON.json(e)` put it in the document,
+# which reopens the hole its `showerror` closes for any app that serializes a caught error into a
+# response body. The document is the reason fields the rendering is built from, and the cause by its
+# type name only (rule 2). A `String` cause is PormG's own text (advisory-lock contention); it is
+# already the `message`. Every leaf is a `String` or `nothing`.
+JSON.StructUtils.lower(::JSON.JSONStyle, e::Kernel.DatabaseError) =
+  Dict("pormg_database_error" => Dict{String, Any}(
+    "type"       => string(nameof(typeof(e))),
+    "adapter"    => getfield(e, :adapter),
+    "cause_type" => Kernel._cause_type_name(getfield(e, :cause)),
+    "sqlstate"   => getfield(e, :sqlstate),
+    "constraint" => getfield(e, :constraint),
+    "table"      => getfield(e, :table),
+    "column"     => getfield(e, :column),
+    "message"    => getfield(e, :message),
+  ))

@@ -65,6 +65,9 @@ struct NetClosingError <: Exception end
     (PormG.backend_num_affected_rows, (PostgresPool, Any)),
     (PormG.backend_num_rows, (PostgresPool, Any)),
     (PormG.backend_copy_in!, (PostgresPool, PgConn, String, Any)),
+    # Keyed on the exception alone (#987) — no pool to fall back on, but Postgres.jl's reader is
+    # still the extension's own.
+    (PormG.backend_error_fields, (Postgres.Error,)),
   ]
   for (f, types) in rows
     @test which(f, Tuple{types...}).module === PGExt

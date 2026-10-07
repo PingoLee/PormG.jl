@@ -411,7 +411,9 @@ end
   end
 
   @test thrown !== nothing                                                   # it raised, not warned
-  @test occursin("permission denied for sequence", sprint(showerror, thrown))  # the ORIGINAL cause
+  # The ORIGINAL cause, on `.cause`: since #987 the wrapper's own text names it by type only.
+  @test thrown isa PormG.DatabaseError
+  @test occursin("permission denied for sequence", sprint(showerror, thrown.cause))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

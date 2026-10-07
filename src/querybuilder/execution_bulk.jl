@@ -2263,11 +2263,11 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
         # sequence, so the resync-and-retry below would fail identically. Propagate instead.
         #
         # `sprint(showerror, e)`, not `string(e)` (#268): since the pool wraps driver failures,
-        # `e` is normally an `IntegrityError` here, and `string()` on a struct renders the struct
-        # literal rather than calling `showerror`. It happens to still contain the driver text
-        # because Julia's default `show` recurses into `.cause` — an accident that would evaporate
-        # the moment anyone gave the wrapper a `Base.show`, silently disabling the sequence resync.
-        # `showerror` is the contract for both wrapped and raw errors. Kept as a message match
+        # `e` is normally an `IntegrityError` here. Since #987 its `showerror` renders the safe
+        # fields only — never the driver's DETAIL — and the server's primary message is one of
+        # them for every SQLSTATE class but 22, so the phrase below is still there for a 23505.
+        # `test_error_text_no_value.jl` pins that; drop the phrase from the rendering and the
+        # sequence resync silently stops. Kept as a message match
         # rather than `e isa IntegrityError`: the sequence-resync retry is specific to a PostgreSQL
         # *duplicate-key* failure, not to constraint violations in general.
         if retry_on_duplicate && occursin("duplicate key value violates unique constraint", sprint(showerror, e))

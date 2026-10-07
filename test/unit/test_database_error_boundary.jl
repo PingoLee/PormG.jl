@@ -250,17 +250,23 @@ _raised(f) = try (f(); nothing) catch e; e end
   # ─────────────────────────────────────────────────────────────────────────
   # Rendering.
   # ─────────────────────────────────────────────────────────────────────────
-  @testset "showerror names the adapter and renders the cause" begin
-    e = PormG.IntegrityError("SQLite", SQLite.SQLiteException("UNIQUE constraint failed: constructor.code"))
+  @testset "showerror names the adapter and renders the reason" begin
+    # Built the way the pool's funnel builds it: the reason read off the driver exception (#987).
+    cause = SQLite.SQLiteException("UNIQUE constraint failed: constructor.code")
+    e = PormG.IntegrityError("SQLite", cause; PormG.backend_error_fields(cause)...)
     msg = PormG.error_message(e)
     @test occursin("IntegrityError", msg)
     @test occursin("SQLite", msg)
     @test occursin("UNIQUE constraint failed: constructor.code", msg)
-    # SQLite.jl defines no `showerror`, so `_cause_text` falls back to the cause's `msg` rather
-    # than Julia's default struct rendering — otherwise the sentence reads
-    # `… violated: SQLiteException("UNIQUE constraint failed: …")`, with the type name and quoting
-    # as noise inside our own message.
+    # The message is SQLite's own text, read as a field — never Julia's default struct rendering of
+    # the cause, which would read `… violated: SQLiteException("UNIQUE constraint failed: …")`.
     @test !occursin("SQLiteException(", msg)
+
+    # Built WITHOUT the reason (the two-argument form), the error names its cause by type and
+    # renders none of its text: since #987 the rendering is built from the fields alone.
+    bare = PormG.error_message(PormG.IntegrityError("SQLite", cause))
+    @test occursin("SQLiteException", bare)
+    @test !occursin("constructor.code", bare)
 
     # A non-Exception cause is supported on purpose (advisory-lock contention passes a String, and
     # PoolConnectError set that precedent) — it must not throw when rendered.

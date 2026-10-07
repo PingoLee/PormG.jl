@@ -177,6 +177,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Refusal Keeps an Explicit conn (#960)" include("unit/test_fetch_explicit_conn_refusal.jl")
     @testset "A Passed conn Is Borrowed (#970)" include("unit/test_conn_ownership.jl")
     @testset "A Refusal Never Prints the Value (#971)" include("unit/test_refusal_no_value.jl")
+    @testset "A Database Error Never Prints the Value (#984, #987)" include("unit/test_error_text_no_value.jl")
     @testset "A NUL in a JSONField Value Is Refused (#954)" include("unit/test_json_nul_escape.jl")
     @testset "bulk_insert returning= (#671)" include("unit/test_bulk_returning.jl")
     @testset "PostgreSQL Bulk Column Arrays (#672)" include("unit/test_bulk_pg_unnest.jl")

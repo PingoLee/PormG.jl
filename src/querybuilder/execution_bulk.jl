@@ -2262,15 +2262,13 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
         # than the clause target conflicted — the values came from the DataFrame, not a stale
         # sequence, so the resync-and-retry below would fail identically. Propagate instead.
         #
-        # `sprint(showerror, e)`, not `string(e)` (#268): since the pool wraps driver failures,
-        # `e` is normally an `IntegrityError` here. Since #987 its `showerror` renders the safe
-        # fields only — never the driver's DETAIL — and the server's primary message is one of
-        # them for every SQLSTATE class but 22, so the phrase below is still there for a 23505.
-        # `test_error_text_no_value.jl` pins that; drop the phrase from the rendering and the
-        # sequence resync silently stops. Kept as a message match
-        # rather than `e isa IntegrityError`: the sequence-resync retry is specific to a PostgreSQL
-        # *duplicate-key* failure, not to constraint violations in general.
-        if retry_on_duplicate && occursin("duplicate key value violates unique constraint", sprint(showerror, e))
+        # Recognized by SQLSTATE, never by the message (#1001): the pool wraps every driver failure
+        # into a `DatabaseError` carrying the SQLSTATE when the server sent one (#987); one without
+        # it is simply not retried. PostgreSQL localizes the primary message by `lc_messages`, so a
+        # `pt_BR` server never said "duplicate key". `23505` is a unique violation specifically —
+        # the resync answers a stale sequence, not constraint failures in general — and `23503` a
+        # foreign key. SQLite never reaches this branch.
+        if retry_on_duplicate && e isa IntegrityError && e.sqlstate == "23505"
           if !isempty(pk_field)
             # with_savepoint already rolled back and released the savepoint; the outer
             # transaction is still usable. Fix the sequence and retry without a savepoint.
@@ -2283,7 +2281,7 @@ function _bulk_insert(model::PormGModel, connection::Union{PormGPostgres, PormGS
             @error "bulk_insert: duplicate key and no primary-key sequence to resync — the conflicting values came from the DataFrame" model=model.name exception=e
             rethrow()
           end
-        elseif occursin("violates foreign key constraint", sprint(showerror, e))
+        elseif e isa IntegrityError && e.sqlstate == "23503"
           @error "bulk_insert: foreign key constraint violated — a referenced row is missing" model=model.name exception=e
           rethrow()
         else

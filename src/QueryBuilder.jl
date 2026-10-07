@@ -30,7 +30,9 @@ import PormG: PormGError, FieldAccessError, UnknownFieldError, AmbiguousFieldErr
   ModelDefinitionError,
   # Also CAUGHT, not thrown (#344): the two abstract roots `_update_sequence` allowlists when it
   # decides whether a failed sequence repair is tolerable. Everything outside them propagates.
-  DatabaseError, PoolError
+  DatabaseError, PoolError,
+  # Also CAUGHT (#1001): bulk_insert's resync retry and FK log read an `IntegrityError`'s SQLSTATE.
+  IntegrityError
 # Locates a formatter's refusal — op, model, field, row — without re-reading its text (#971).
 import PormG: with_location
 import PormG: PormGsuffix, PormGtransform, JSON_CONTAINMENT_OPERATORS, ARRAY_CONTAINMENT_OPERATORS,

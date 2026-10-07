@@ -97,6 +97,39 @@ end
     _p208_error(() -> GocPg.objects.get_or_create("nope" => 1; show_query = :dict)))
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# A missing conflict target is recognized by SQLSTATE on PostgreSQL (#1001)
+# `42P10` is the signal there, because the server localizes the message: a `pt_BR` one still gets
+# the actionable error, and English "on conflict … unique" text under another SQLSTATE does not.
+# SQLite has no SQLSTATE and does not localize, so its message stays the signal.
+# ─────────────────────────────────────────────────────────────────────────────
+# What `_rethrow_conflict_target_error` raises for `e` — it rethrows, so it must run inside a catch.
+function _conflict_target_outcome(e)
+  try
+    try
+      throw(e)
+    catch caught
+      PormG.QueryBuilder._rethrow_conflict_target_error(caught, GocPg, ["code"])
+    end
+  catch out
+    out
+  end
+end
+
+@testset "get_or_create's missing conflict target is recognized by SQLSTATE (#1001)" begin
+  pt_br = PormG.StatementError("PostgreSQL", ErrorException("mock"); sqlstate = "42P10",
+    message = "não há restrição de unicidade ou de exclusão que corresponda à especificação ON CONFLICT")
+  @test _conflict_target_outcome(pt_br) isa PormG.QueryBuildError
+
+  english_other = PormG.StatementError("PostgreSQL", ErrorException("mock"); sqlstate = "42601",
+    message = "there is no unique or exclusion constraint matching the ON CONFLICT specification")
+  @test _conflict_target_outcome(english_other) === english_other
+
+  sqlite = PormG.StatementError("SQLite", ErrorException("mock");
+    message = "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint")
+  @test _conflict_target_outcome(sqlite) isa PormG.QueryBuildError
+end
+
 @testset "last() inverts ordering and falls back to primary key" begin
   # Explicit ASC ordering → last() renders DESC + LIMIT 1.
   q = GocPg.objects

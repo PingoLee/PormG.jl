@@ -2702,8 +2702,11 @@ function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
     if conn_acquired && !release_conn
       _finish_statement_connection!(pool, conn, task; abandoned = abandoned, rollback_failed = rollback_failed)
     end
-    @error "Failed to execute SQL transaction, rolling back: $e"
-    throw(_as_database_error(pool, e))
+    # Types only, never the error's text (#984): a driver message can quote the bound value —
+    # PostgreSQL's `invalid input syntax for type integer: "<value>"`, or a DETAIL naming the key.
+    err = _as_database_error(pool, e)
+    @error "Failed to execute SQL transaction, rolling back" type=typeof(err) cause_type=typeof(_driver_cause(err))
+    throw(err)
   finally
     if release_conn
       _finish_statement_connection!(pool, conn, task; abandoned = abandoned, rollback_failed = rollback_failed)

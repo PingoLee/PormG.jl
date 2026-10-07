@@ -260,7 +260,7 @@ function _field_or_drop_default(build::Function, table_name, column_name, defaul
     # SAME call that file's twin degrade warning makes (`reason = _one_line(sprint(showerror, e),
     # 160)`). Both files are included into `Migrations`, so it needs no import. Without it the
     # warning says a default was dropped but never why.
-    @warn _DEFAULT_DROPPED_MESSAGE table = string(table_name) column = string(column_name) default = string(default_val) field_type = string(nameof(typeof(field)))[2:end] reason = _one_line(sprint(showerror, e), 160)
+    @warn _DEFAULT_DROPPED_MESSAGE table = string(table_name) column = string(column_name) default = string(default_val) field_type = string(nameof(typeof(field)))[2:end] reason = _one_line(sprint(showerror, e), 160)  # log-error-text-ok: a column-default parse failure, from the schema
     return field
   end
 end
@@ -475,7 +475,7 @@ function _default_or_drop(table_name, probe::ColumnSpec, raw,
     _coerce_default(cleaned, probe.type)
   catch e
     (e isa InterruptException || e isa StackOverflowError) && rethrow()
-    @warn _DEFAULT_DROPPED_MESSAGE table = string(table_name) column = probe.name default = string(cleaned) field_type = _inspectdb_field_name(probe, table_name, conn) reason = _one_line(sprint(showerror, e), 160)
+    @warn _DEFAULT_DROPPED_MESSAGE table = string(table_name) column = probe.name default = string(cleaned) field_type = _inspectdb_field_name(probe, table_name, conn) reason = _one_line(sprint(showerror, e), 160)  # log-error-text-ok: a column-default parse failure, from the schema
     return NoDefault()
   end
   return value === nothing ? NoDefault() : _literal_default(value)

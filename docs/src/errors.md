@@ -119,6 +119,31 @@ catch e
 end
 ```
 
+## What reaches your logs
+
+PormG's own log lines name a failure by its **type**, never by the database's text: a driver message
+can quote the value it refused, and a value can be a password or a token. When `with_transaction`
+fails it logs the classified type and the driver's exception type, then raises the error to you.
+
+The LibPQ driver logs separately, through its own [Memento](https://github.com/invenia/Memento.jl)
+logger. Every failed statement prints the server's full message there — `DETAIL` included, which
+on a unique violation names the value:
+
+```text
+[error | LibPQ]: UniqueViolation: ERROR:  duplicate key value violates unique constraint "drivers_code_key"
+DETAIL:  Key (code)=(SEN) already exists.
+```
+
+PormG does not reconfigure a driver's logging. To keep that text out of your logs, raise the
+logger's level once at startup — the error is still raised to your code:
+
+```julia
+using LibPQ
+LibPQ.Memento.setlevel!(LibPQ.LOGGER, "critical")
+```
+
+The SQLite driver does not log a failed statement, and Postgres.jl logs one only in its debug mode.
+
 ## Catching a whole category
 
 The abstract umbrellas exist so a handler can name a family without listing its members:

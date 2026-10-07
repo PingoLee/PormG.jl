@@ -20,6 +20,8 @@ The rules this file pins:
 4. **The nested-side rule (decided on #985).** A comparison nested in a LEFT side splits again — its
    column left, its values right. Inside a RIGHT side every column stays right (#975).
 5. **Legal cells render unchanged** — `test_join_condition_matrix.jl` holds that, byte for byte.
+6. **An unmarked side fails closed (#993).** A column no comparison marked checks against the narrow
+   left set, so a render site that forgets its `:left` mark refuses instead of passing silently.
 
 Static text scan plus live checks on mock connections — no database.
 """
@@ -180,6 +182,48 @@ end
         @test occursin("#985", msg)
     end
     # The real arm is back.
+    @test occursin("ABS(\"Tb_1\".\"number\")", _jcr_sql(build()))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Join-column recorder: a comparison site that forgets its :left mark fails closed (#993)
+# Which side a column is on is opt-in at each comparison render site, and nothing scans for those
+# sites. Mutant a's lowering gap plus a second mutant — the function arm of `_render_left_typed`
+# without its `:left` mark — leaves `ABS("Tb"."number")` on the left under the unmarked `:none` side.
+# Under the old default `:none` took the permissive right-side set, which holds the base row, and the
+# wrong row rendered silently; it now takes the left set (the hop alone), so the recorder refuses.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Join-column recorder: an unmarked comparison side fails closed (#993)" begin
+    build() = (q = JcrModels.Result.objects; q.on("driverid", Abs(F("number")) > 0);
+               q.values("resultid", "driverid__code"); q)
+
+    gap() = @eval JCR_QB function _prefix_join_column(x::FObject, prefix::String, foreign_model::PormGModel; base = nothing)
+        return x
+    end
+    # The real method's function arm, minus `_join_side_change(instruc, :left)`: more specific than
+    # `value::Any`, so the mutant adds a method rather than replacing the real one.
+    unmarked() = @eval JCR_QB function _render_left_typed(value::FObject, operation::String, instruc::SQLInstruction)
+        return _render_function_operand_typed(value, instruc)
+    end
+
+    # The unmarked site alone is harmless while the column names the hop: the left set allows it.
+    _jcr_with_mutant(unmarked, JCR_QB._render_left_typed) do
+        @test occursin("ABS(\"Tb_1\".\"number\")", _jcr_sql(build()))
+    end
+
+    # Both mutants: the base row's column on an unmarked left side is refused, by the `:none` arm.
+    _jcr_with_mutant(gap, JCR_QB._prefix_join_column) do
+        _jcr_with_mutant(unmarked, JCR_QB._render_left_typed) do
+            err = _jcr_err(build())
+            @test err isa PormG.FilterError
+            msg = _jcr_msg(err)
+            @test occursin("\"Tb\".\"number\" sits in the ON clause of \"Tb_1\" outside any comparison", msg)
+            # A forgotten mark is a PormG bug, and the message says so for this case.
+            @test occursin("that is a bug, please report it", msg)
+            @test occursin("#993", msg)
+        end
+    end
+    # Both real methods are back.
     @test occursin("ABS(\"Tb_1\".\"number\")", _jcr_sql(build()))
 end
 

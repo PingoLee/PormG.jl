@@ -481,13 +481,21 @@ function _column_sql(instruc::SQLInstruction, alias::AbstractString, column_sql:
 end
 
 # The check. Outside an ON clause there is nothing to check; inside one, the left side of a comparison
-# names the row the join adds (#961), and everything else — the right side, and a column outside any
-# comparison — the base row, an earlier table on the join's path, or the joined row itself (#958,
-# #962). For a `cjoin_on` row both sets are "every row emitted before it, and itself".
+# names the row the join adds (#961), and its right side the base row, an earlier table on the join's
+# path, or the joined row itself (#958, #962). For a `cjoin_on` row both sets are "every row emitted
+# before it, and itself".
+#
+# A column on NO side — `:none`, the scope `_join_scope` opens with — gets the narrow LEFT set (#993).
+# Which side a column is on is opt-in at each comparison render site (`_join_side_change(…, :left)`,
+# `_on_join_right`), and nothing scans for those sites, so the default decides which way a forgotten
+# mark fails. The permissive right set made a forgotten `:left` silent: a left side naming the base
+# row passed, #961's wrong-row shape. The left set makes it a loud refusal, and only an explicit
+# `_on_join_right` widens it. What it refuses besides is a column outside any comparison naming
+# another row, and that predicate restricts rows: it belongs in `.filter(...)`.
 function _record_join_column(instruc::SQLInstruction, alias::AbstractString, column_sql::AbstractString)
   s = instruc.scope
   s.join_hop === nothing && return nothing
-  allowed = s.join_side === :left ? s.join_left : s.join_right
+  allowed = s.join_side === :right ? s.join_right : s.join_left
   alias in allowed && return nothing
   hop = s.join_hop
   written = "\"$(alias)\".$(column_sql)"
@@ -496,6 +504,13 @@ function _record_join_column(instruc::SQLInstruction, alias::AbstractString, col
       "\e[4m\e[31m$(written)\e[0m is on the left side of a condition in the ON clause of \"$(hop)\", but " *
       "it names \"$(alias)\". A condition's left side names the row its join adds; compare another " *
       "row's column on the right, or put the predicate in \e[4m\e[32m.filter(...)\e[0m (#985)."))
+  elseif s.join_side === :none
+    throw(FilterError(
+      "\e[4m\e[31m$(written)\e[0m sits in the ON clause of \"$(hop)\" outside any comparison, and names " *
+      "\"$(alias)\" rather than the row that join adds. A condition that does not compare the joined row " *
+      "with another restricts rows, not the join.\n  Put it in \e[4m\e[32m.filter(...)\e[0m instead. If the " *
+      "column IS inside a comparison, PormG rendered it without marking its side: that is a bug, please " *
+      "report it (#993)."))
   end
   throw(FilterError(
     "\e[4m\e[31m$(written)\e[0m in the ON clause of \"$(hop)\" names \"$(alias)\", which is not the base " *
@@ -522,8 +537,9 @@ end
 
 # The scope one row's ON clause renders under: the hop, and the aliases each side may name. A path
 # join's right side may name the base row, every table on its own path, and itself; its left side
-# only itself. A `cjoin_on` row has no hop to bind a side to, so both sides may name the base row and
-# every row emitted before it — binding built every row it names there (#982) — and itself.
+# only itself, and so may a column no comparison has marked yet (`:none`, #993). A `cjoin_on` row
+# has no hop to bind a side to, so both sides may name the base row and every row emitted before it
+# — binding built every row it names there (#982) — and itself.
 function _join_scope(f, instruc::SQLInstruction, idx::Int, value::JoinRow)
   hop = value.alias_b
   if value isa AnchorlessJoin

@@ -1268,7 +1268,16 @@ right-hand side of the `@search` lookup and the query of `SearchRank` and `Searc
 | `"raw"` | `to_tsquery` | `tsquery` syntax: `senn:* & !prost`. A syntax error is the server's, at execution |
 
 `config` names a text-search configuration (`"english"`, `"simple"`, `"pg_catalog.portuguese"`); with
-none, the server's `default_text_search_config` applies. The text is bound as a parameter; the config
+none, the server's `default_text_search_config` applies.
+
+Queries combine with `&` (both), `|` (either) and `~` (not), PostgreSQL's `&&`, `||` and `!!`.
+Combined queries must share one config, or `QueryBuildError` is raised:
+
+```julia
+SearchQuery("senna"; config = "simple") | SearchQuery("prost"; config = "simple")
+# (plainto_tsquery('simple'::regconfig, \$1::text) || plainto_tsquery('simple'::regconfig, \$2::text))
+```
+ The text is bound as a parameter; the config
 is checked to be a name and written into the SQL, which is what lets PostgreSQL use an index built on
 `to_tsvector('english', col)`. A config that is not a name, or an unknown `search_type`, raises
 `InvalidValueError` here, as does text containing a NUL character.
@@ -1287,6 +1296,29 @@ function SearchQuery(text::AbstractString; config = nothing, search_type = "plai
   return FObject(function_name = "SEARCH_QUERY", column = Any[Value(String(text))],
                  kwargs = Dict{String,Any}("config" => cfg, "search_type" => String(search_type)))
 end
+# `a & b`, `a | b`, `~a` (#1021): Django's `SearchQuery` combinators, PostgreSQL's `&&`, `||` and `!!`
+# on `tsquery`. The result is a SEARCH_QUERY node, so the lookup, `SearchRank` and `SearchHeadline`
+# take it as they take one query. Each leaf keeps its own search type and its text stays bound.
+#
+# The halves must agree on the config. The `@search` lookup parses the COLUMN with its query's config,
+# and a combination of two configs has no single one to give it — Django lends it the left side's,
+# which is the guess this refuses. A query with a config and one without disagree too: the second is
+# parsed with the server's `default_text_search_config`, which may or may not be the first's.
+const _TS_COMBINATORS = Dict("&&" => "&", "||" => "|", "!!" => "~")
+function _combine_search_queries(op::String, operands...)
+  all(x -> _is_fts_node(x, "SEARCH_QUERY"), operands) || throw(QueryBuildError(
+    "A SearchQuery combines only with another SearchQuery, through &, | and ~: " *
+    "SearchQuery(\"senna\") | SearchQuery(\"prost\"). A SearchVector adds to another with + instead (#1021)."))
+  configs = unique(x.kwargs["config"] for x in operands)
+  length(configs) == 1 || throw(QueryBuildError(
+    "SearchQueries combined with $(_TS_COMBINATORS[op]) must share one config; got " *
+    "$(join((c === nothing ? "none" : repr(c) for c in configs), " and ")). The @search lookup parses the " *
+    "column with its query's config, so a combination of two has none to give it (#1021)."))
+  column = Any[operands...]
+  return FObject(function_name = "SEARCH_QUERY", column = column, aggregate = _any_agg(column),
+                 kwargs = Dict{String,Any}("config" => only(configs), "combinator" => op))
+end
+
 SearchQuery(x; kwargs...) = throw(QueryBuildError(
   "SearchQuery takes the search text as a String; got a $(typeof(x)). To search a column, use the " *
   "lookup: \e[4m\e[32m\"surname__@search\" => SearchQuery(\"senna\")\e[0m (#31)."))

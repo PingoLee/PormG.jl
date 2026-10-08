@@ -550,4 +550,72 @@ end
     rank.kwargs["weights"] = ["1}'::float4[], (SELECT 1)) --"]
     @test _err31(() -> _q31(; vals = Any["driverid", "r" => rank])) isa InvalidValueError
   end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Query combinators: &, | and ~ are tsquery's &&, || and !!
+  # Each leaf keeps its own parser and binds its own text, so the parameters come back in text order;
+  # the combination is parenthesized, so nesting keeps the grouping it was written with.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "SearchQuery & | ~ render tsquery's operators, leaves bound in text order" begin
+    a = SearchQuery("senna"; config = "simple")
+    b = SearchQuery("prost"; config = "simple", search_type = "websearch")
+    r = _q31("surname__@search" => a | b)
+    @test occursin("WHERE to_tsvector('simple'::regconfig, \"Tb\".\"surname\") @@ " *
+                   "(plainto_tsquery('simple'::regconfig, \$1::text) || websearch_to_tsquery('simple'::regconfig, \$2::text))",
+                   r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna", "prost"])
+    r = _q31("surname__@search" => a & ~b)
+    @test occursin("@@ (plainto_tsquery('simple'::regconfig, \$1::text) && (!!websearch_to_tsquery('simple'::regconfig, \$2::text)))",
+                   r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna", "prost"])
+    # Nesting: ~(a & b) | c keeps its parentheses, and the texts still bind left to right.
+    c = SearchQuery("hill"; config = "simple")
+    r = _q31("surname__@search" => ~(a & b) | c)
+    @test occursin("@@ ((!!(plainto_tsquery('simple'::regconfig, \$1::text) && websearch_to_tsquery('simple'::regconfig, \$2::text))) " *
+                   "|| plainto_tsquery('simple'::regconfig, \$3::text))", r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna", "prost", "hill"])
+  end
+
+  @testset "a combined query works wherever one query does" begin
+    q = SearchQuery("senna"; config = "simple") | SearchQuery("prost"; config = "simple")
+    # The lookup parses the column with the combination's (shared) config.
+    @test occursin("to_tsvector('simple'::regconfig, \"Tb\".\"surname\") @@ (",
+                   _q31("surname__@search" => q)[:sql_text])
+    # SearchRank, with the alias filter re-rendering it: four texts, in text order.
+    r = _q31("r__@gte" => 0.01; vals = Any["driverid", "r" => SearchRank(SearchVector("surname"; config = "simple"), q)])
+    @test occursin("ts_rank(to_tsvector('simple'::regconfig, COALESCE((\"Tb\".\"surname\")::text, '')), " *
+                   "(plainto_tsquery('simple'::regconfig, \$1::text) || plainto_tsquery('simple'::regconfig, \$2::text)))",
+                   r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna", "prost", "senna", "prost", "0.01"])
+    # SearchHeadline takes the combination's config for the document.
+    r = _q31(; model = _F.Race, vals = Any["raceid", "h" => SearchHeadline("name", q)])
+    @test occursin("ts_headline('simple'::regconfig, (\"Tb\".\"name\")::text, (plainto_tsquery(", r[:sql_text])
+    # Inside Q, beside another predicate.
+    r = _q31(PormG.Q("surname__@search" => ~SearchQuery("senna"), "forename" => "Bruno"))
+    @test occursin("@@ (!!plainto_tsquery(\$1::text))", r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna", "Bruno"])
+  end
+
+  @testset "a SearchQuery combines only with a SearchQuery of the same config" begin
+    q = SearchQuery("senna")
+    for f in (() -> q & 1, () -> 1 & q, () -> q | 2, () -> 2 | q, () -> q & SearchVector("surname"),
+              () -> SearchVector("surname") | q, () -> ~SearchVector("surname"), () -> q & Lower("surname"),
+              () -> PormG.F("driverid") & q)
+      e = _err31(f)
+      @test e isa QueryBuildError
+      @test occursin("combines only with another SearchQuery", _plain31(sprint(showerror, e)))
+    end
+    # Two configs, or a config and none, have no single config for the lookup's column.
+    for (x, y) in ((SearchQuery("a"; config = "simple"), SearchQuery("b"; config = "english")),
+                   (SearchQuery("a"; config = "simple"), SearchQuery("b")))
+      for f in (() -> x & y, () -> x | y)
+        e = _err31(f)
+        @test e isa QueryBuildError
+        @test occursin("must share one config", _plain31(sprint(showerror, e)))
+      end
+    end
+    # The integer bitwise operators are untouched.
+    r = _q31(; vals = Any["driverid", "m" => PormG.F("number") & 3])
+    @test occursin("&", r[:sql_text]) && !occursin("&&", r[:sql_text])
+  end
 end

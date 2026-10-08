@@ -273,7 +273,8 @@ M.Race.objects.
 ```
 
 - `SearchQuery(text; config, search_type)`: `search_type` is `"plain"` (the default), `"phrase"`,
-  `"websearch"` (`"a phrase" or -word`) or `"raw"` (`tsquery` syntax).
+  `"websearch"` (`"a phrase" or -word`) or `"raw"` (`tsquery` syntax). Queries combine with `&`,
+  `|` and `~` (`&&`, `||`, `!!`), and combined queries must share one config.
 - The `config` is a name (`"english"`, `"pg_catalog.portuguese"`) and is written into the SQL, so an
   index on `to_tsvector('english', col)` can serve the lookup. A side written as a bare string takes
   its config from the side written as an object. The search text is always bound.

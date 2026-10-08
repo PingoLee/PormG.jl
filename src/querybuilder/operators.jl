@@ -422,22 +422,30 @@ function _build_bitwise_unary(expr, op::String)
   )
 end
 
-# Overload Base operators
+# Overload Base operators. #1021: on a `SearchQuery` (or with one on either side) `&`, `|` and `~`
+# are the `tsquery` combinators, never the integer bitwise operators; `_combine_search_queries`
+# refuses anything that is not a query.
+_has_fts(xs...) = any(_is_fts_operand, xs)
 function Base.:&(a::BitwiseExpression, b::BitwiseOperand)
+  _has_fts(a, b) && return _combine_search_queries("&&", a, b)
   return _build_bitwise_expr(a, "&", b)
 end
 function Base.:&(a::Integer, b::BitwiseExpression)
+  _has_fts(b) && return _combine_search_queries("&&", a, b)
   return _build_bitwise_expr(b, "&", a)
 end
 
 function Base.:|(a::BitwiseExpression, b::BitwiseOperand)
+  _has_fts(a, b) && return _combine_search_queries("||", a, b)
   return _build_bitwise_expr(a, "|", b)
 end
 function Base.:|(a::Integer, b::BitwiseExpression)
+  _has_fts(b) && return _combine_search_queries("||", a, b)
   return _build_bitwise_expr(b, "|", a)
 end
 
 function Base.:~(f::BitwiseExpression)
+  _has_fts(f) && return _combine_search_queries("!!", f)
   return _build_bitwise_unary(f, "~")
 end
 

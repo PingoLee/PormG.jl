@@ -3206,6 +3206,18 @@ SEARCH_VECTOR(column::String, format::Dict{String,Any}, conn::PormGPostgres) =
   SEARCH_VECTOR(Any[column], format, conn)
 
 function SEARCH_QUERY(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
+  # #1021: `a & b`, `a | b`, `~a` — the operands are rendered queries, combined by `tsquery`'s own
+  # operators. Parenthesized, so a nested combination keeps the grouping it was written with.
+  op = get(format, "combinator", nothing)
+  if op !== nothing
+    if op in ("&&", "||") && length(columns) == 2
+      return "($(columns[1]) $(op) $(columns[2]))"
+    elseif op == "!!" && length(columns) == 1
+      return "(!!$(columns[1]))"
+    end
+    throw(InvalidValueError("A combined SearchQuery is two queries under && or ||, or one under !!; " *
+                            "got a malformed node (#1021).", :format))
+  end
   fn = get(_TS_QUERY_FUNCTIONS, get(format, "search_type", "plain"), nothing)
   fn === nothing && throw(InvalidValueError(
     "search_type is one of \"plain\", \"phrase\", \"websearch\" or \"raw\" (#31).", :format))

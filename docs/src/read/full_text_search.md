@@ -92,6 +92,29 @@ it is built. Use `"websearch"` for text a user typed, because it accepts any inp
 An unknown `search_type`, or text containing a NUL character, raises `InvalidValueError` when the
 `SearchQuery` is built.
 
+### Combining queries
+
+Queries combine with `&` (both), `|` (either) and `~` (not), like Django's. They render PostgreSQL's
+`&&`, `||` and `!!` on `tsquery`. Each query keeps its own `search_type`, and each text is bound:
+
+```julia
+english(text; kw...) = SearchQuery(text; config = "english", kw...)
+
+# Every Grand Prix that is not the British one
+M.Race.objects.filter("name__@search" => english("grand prix"; search_type = "phrase") & ~english("british"))
+# WHERE to_tsvector('english'::regconfig, "Tb"."name") @@
+#       (phraseto_tsquery('english'::regconfig, $1::text) && (!!plainto_tsquery('english'::regconfig, $2::text)))
+
+# Senna or Prost, built from two queries rather than one websearch string
+M.Driver.objects.filter("surname__@search" => SearchQuery("senna"; config = "simple") | SearchQuery("prost"; config = "simple"))
+```
+
+Combined queries must share one configuration. The lookup parses the column with its query's
+configuration, so a combination of two configurations has none to give it. Two different
+configurations, or one and none, raise `QueryBuildError`. So does combining a `SearchQuery` with
+anything but another `SearchQuery`. On text a user typed, a single `"websearch"` query is still the
+simpler choice: it reads `or` and `-word` itself.
+
 ### The configuration
 
 `config` names a text-search configuration: `"english"`, `"simple"`, `"portuguese"`, or a
@@ -275,6 +298,4 @@ These are deliberate for now. Each is refused with a typed error, not run as som
   raises `FilterError`. Neither has a Julia reading yet.
 - **No stored `tsvector` column.** A model has no `SearchVectorField` yet, so a document is always
   computed from its text columns. Use an expression index (above) to make that fast.
-- **No query combinators**: `SearchQuery` objects do not combine with `&`, `|` or `~`. A
-  `"websearch"` query takes `or` and `-word` in its text, and a `"raw"` one takes `&`, `|` and `!`.
 - **`@search` on a projection alias** raises `FilterError`. Search the column itself.

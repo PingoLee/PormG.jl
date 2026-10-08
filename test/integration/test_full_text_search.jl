@@ -164,6 +164,24 @@ _fts31_err(f) = try f(); nothing catch e; e end
         end
 
         # ─────────────────────────────────────────────────────────────────────
+        # Query combinators (#1021): &, | and ~ mean what the words mean
+        # `|` finds the same rows as the websearch `or` above; `& ~` removes one name from it. Both
+        # against the tokenized surnames, not a typed list.
+        # ─────────────────────────────────────────────────────────────────────
+        @testset "SearchQuery & | ~ select the rows the words say" begin
+            senna = SearchQuery("senna"; config = "simple")
+            prost = SearchQuery("prost"; config = "simple")
+            has(r, w) = w in _fts31_words(r["surname"])
+            either = Set(r["driverid"] for r in surnames if has(r, "senna") || has(r, "prost"))
+            only_prost = Set(r["driverid"] for r in surnames if has(r, "prost") && !has(r, "senna"))
+            @test length(either) >= 3 && !isempty(only_prost) && only_prost != either
+            found(q) = ids(M.Driver.objects.filter("surname__@search" => q).values("driverid").list(), "driverid")
+            @test found(senna | prost) == either
+            @test found((senna | prost) & ~senna) == only_prost
+            @test isempty(found(senna & prost))
+        end
+
+        # ─────────────────────────────────────────────────────────────────────
         # SearchHeadline: the markup, and options that survive PostgreSQL's option parser
         # ─────────────────────────────────────────────────────────────────────
         @testset "SearchHeadline marks the matched words" begin

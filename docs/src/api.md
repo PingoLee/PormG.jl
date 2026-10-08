@@ -361,7 +361,7 @@ df = M.Result.objects.values(
 
 | Function | Description | Example |
 | :--- | :--- | :--- |
-| `SearchQuery(text; config, search_type)` | The query: `plainto_tsquery`, `phraseto_tsquery`, `websearch_to_tsquery` or `to_tsquery` | `"surname__@search" => SearchQuery("senna"; config = "simple")` |
+| `SearchQuery(text; config, search_type)` | The query: `plainto_tsquery`, `phraseto_tsquery`, `websearch_to_tsquery` or `to_tsquery`; `&`, `\|` and `~` combine queries | `"surname__@search" => SearchQuery("senna"; config = "simple")` |
 | `SearchVector(fields...; config, weight)` | The document: the fields cast to text, NULL-safe, joined by a space, labelled `"A"`–`"D"` by `weight`; `+` adds two | `SearchVector("surname"; weight = "A") + SearchVector("forename"; weight = "D")` |
 | `SearchRank(vector, query; normalization, cover_density, weights)` | `ts_rank` / `ts_rank_cd`, as a `Float64`; `weights` are D, C, B, A | `"rank" => SearchRank(SearchVector("forename", "surname"), "senna")` |
 | `SearchHeadline(field, query; config, start_sel, stop_sel, …)` | `ts_headline`: the text with the matched words marked | `"hl" => SearchHeadline("name", "grand prix"; start_sel = "<b>", stop_sel = "</b>")` |

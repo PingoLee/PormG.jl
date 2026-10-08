@@ -1125,6 +1125,16 @@ const DOCERR_CASES = [
         () -> SearchRank(SearchVector("surname"; config = "simple") + SearchVector("forename"; config = "english"), "senna"),
     ),
     (
+        "read/full_text_search.md — a SearchQuery combines only with another SearchQuery",
+        QueryBuildError,
+        () -> SearchQuery("senna") & SearchVector("surname"),
+    ),
+    (
+        "read/full_text_search.md — combined queries must share one config",
+        QueryBuildError,
+        () -> SearchQuery("senna"; config = "simple") | SearchQuery("prost"),
+    ),
+    (
         "read/full_text_search.md + Models.search_vector_expression — a column that is not an identifier",
         ModelDefinitionError,
         () -> PormG.Models.search_vector_expression("surname)"),

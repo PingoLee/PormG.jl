@@ -92,6 +92,29 @@ it is built. Use `"websearch"` for text a user typed, because it accepts any inp
 An unknown `search_type`, or text containing a NUL character, raises `InvalidValueError` when the
 `SearchQuery` is built.
 
+### Combining queries
+
+Queries combine with `&` (both), `|` (either) and `~` (not), like Django's. They render PostgreSQL's
+`&&`, `||` and `!!` on `tsquery`. Each query keeps its own `search_type`, and each text is bound:
+
+```julia
+english(text; kw...) = SearchQuery(text; config = "english", kw...)
+
+# Every Grand Prix that is not the British one
+M.Race.objects.filter("name__@search" => english("grand prix"; search_type = "phrase") & ~english("british"))
+# WHERE to_tsvector('english'::regconfig, "Tb"."name") @@
+#       (phraseto_tsquery('english'::regconfig, $1::text) && (!!plainto_tsquery('english'::regconfig, $2::text)))
+
+# Senna or Prost, built from two queries rather than one websearch string
+M.Driver.objects.filter("surname__@search" => SearchQuery("senna"; config = "simple") | SearchQuery("prost"; config = "simple"))
+```
+
+Combined queries must share one configuration. The lookup parses the column with its query's
+configuration, so a combination of two configurations has none to give it. Two different
+configurations, or one and none, raise `QueryBuildError`. So does combining a `SearchQuery` with a
+`SearchVector`, a number or a column expression. On text a user typed, a single `"websearch"` query is still the
+simpler choice: it reads `or` and `-word` itself.
+
 ### The configuration
 
 `config` names a text-search configuration: `"english"`, `"simple"`, `"portuguese"`, or a
@@ -151,6 +174,64 @@ M.Driver.objects.
 
 A comparison works too, with no alias: `filter(SearchRank(SearchVector("surname"), "senna") > 0.5)`.
 
+### Searching several columns
+
+To match a word in any of several columns, project a `SearchVector` under a name and filter that
+name with `@search`, as Django's annotate-then-filter does:
+
+```julia
+M.Driver.objects.
+    values("forename", "surname", "doc" => SearchVector("forename", "surname"; config = "simple")).
+    filter("doc__@search" => "lewis") |> DataFrame
+#  Row │ forename  surname      doc
+# ─────┼──────────────────────────────────────────────
+#    1 │ Lewis     Hamilton     'hamilton':2 'lewis':1
+#    2 │ Jackie    Lewis        'jackie':1 'lewis':2
+#    3 │ Stuart    Lewis-Evans  'evans':4 'lewis':3 'lewis-evans':2 'stuart':1
+# renders:  WHERE to_tsvector('simple'::regconfig, COALESCE(("Tb"."forename")::text, '') || ' ' ||
+#                 COALESCE(("Tb"."surname")::text, '')) @@ plainto_tsquery('simple'::regconfig, $1::text)
+```
+
+The alias reads as the `tsvector`'s text, a `String`. A query written as a String takes the
+vector's configuration, as in `SearchRank`. `@search` is the only lookup on such an alias, and any
+other raises `FilterError`. `@search` on an alias that is not a `SearchVector` raises `FilterError`
+too. Weighted and summed vectors work here as well.
+
+### Weights
+
+A match in one column can count for more than a match in another. Label each column's words with a
+`weight` of `"A"`, `"B"`, `"C"` or `"D"`, and add the vectors with `+` into one document. The rank
+then scores a word by its label:
+
+```julia
+vector = SearchVector("surname"; config = "simple", weight = "A") +
+         SearchVector("forename"; config = "simple", weight = "D")
+
+M.Driver.objects.
+    values("forename", "surname", "rank" => SearchRank(vector, SearchQuery("lewis"; config = "simple"))).
+    filter("rank__@gte" => 0.01).
+    order_by("-rank", "surname") |> DataFrame
+#  Row │ forename  surname      rank
+# ─────┼──────────────────────────────────
+#    1 │ Jackie    Lewis        0.607927
+#    2 │ Stuart    Lewis-Evans  0.607927
+#    3 │ Lewis     Hamilton     0.0607927
+```
+
+PostgreSQL's default weights are `0.1`, `0.2`, `0.4` and `1.0` for D, C, B and A, which is why a
+forename match scores a tenth of a surname match. `SearchRank(…; weights = [d, c, b, a])` sets them,
+**in that order** (D first), as four numbers from 0 to 1. With `weights = [0.0, 0.0, 0.0, 1.0]` only
+the surname counts, and Lewis Hamilton drops below the threshold.
+
+- Weights only change the score of a word against a word labelled differently. On a vector with no
+  `weight`, every word carries `"D"`.
+- Each half of a sum keeps its own config and weight. If the configs differ, a query written as a
+  String has no config to be parsed with, so `SearchRank` needs a `SearchQuery` and raises
+  `QueryBuildError` otherwise.
+- A weight other than `"A"` to `"D"`, or weights that are not four numbers from 0 to 1, raise
+  `InvalidValueError`. A `SearchVector` adds only to another `SearchVector`: adding a number, a column
+  path, a `SearchQuery` or a function to one raises `QueryBuildError`.
+
 ## `SearchHeadline`
 
 `SearchHeadline(field, query; config = nothing, options...)` returns the field's text with the
@@ -194,32 +275,104 @@ query's.
     `ts_headline` reads the whole text of every row it returns, and it cannot use an index. Narrow
     the rows with `@search` and `limit` before projecting a headline.
 
+## A stored document: `SearchVectorField`
+
+Every query above parses the text of every row it reads. A `SearchVectorField` stores the parsed
+document in a `tsvector` column instead, as Django's does, so a search reads the stored document:
+
+```julia
+Race_report = Models.Model("race_report",
+    id     = Models.IDField(),
+    title  = Models.CharField(max_length = 200),
+    body   = Models.TextField(null = true),
+    search_vector = Models.SearchVectorField(null = true),
+    indexes = [Models.Index(fields = ("search_vector",), method = "gin", name = "race_report_search_vector_gin")],
+)
+```
+
+Fill it from the text columns with `update` and a `SearchVector`. Weights and sums work here too:
+
+```julia
+M.Race_report.objects.filter("id__@gte" => 0).
+    update("search_vector" => SearchVector("title"; config = "simple", weight = "A") +
+                       SearchVector("body"; config = "simple", weight = "B"))
+# UPDATE "race_report" AS "Tb"
+# SET "search_vector" = (setweight(to_tsvector('simple'::regconfig, COALESCE(("Tb"."title")::text, '')), 'A') || …)
+```
+
+Then search it with `@search`, which on this column renders `"search_vector" @@ <query>` with no
+`to_tsvector`, and rank it by its path, Django's `SearchRank(F("search_vector"), …)`:
+
+```julia
+M.Race_report.objects.filter("search_vector__@search" => SearchQuery("senna"; config = "simple"))
+
+M.Race_report.objects.
+    values("title", "rank" => SearchRank("search_vector", SearchQuery("senna"; config = "simple"))).
+    filter("rank__@gte" => 0.01).
+    order_by("-rank") |> DataFrame
+#  Row │ title              rank
+# ─────┼───────────────────────────────
+#    1 │ Senna at Suzuka    0.607927
+#    2 │ Monaco Grand Prix  0.243171
+```
+
+- **The column does not refresh itself.** Run the `update` again after the text changes, for the
+  rows that changed. A generated column (`GENERATED ALWAYS AS (…) STORED`) is not supported yet.
+- **Search with the configuration the document was built with.** The stored document does not
+  record it, so a `SearchQuery` without one is parsed with the server's default, and an `english`
+  document searched with a `simple` query misses every stemmed word.
+- The column reads as the `tsvector`'s text, a `String`: `'at':2A 'senna':1A 'suzuka':3A`. A
+  `String` written to it is parsed as that text, not as words. Use `update` with a `SearchVector`
+  to build it from words. It takes no `default` (`FieldValidationError`): PostgreSQL stores a
+  document literal rewritten, so a declared one would never match its column. Declare it
+  `null = true`, and fill it with `update`.
+- Name it something other than `search`, such as Django's `search_vector`. `search` is also the
+  lookup's name, so a bare `filter("search" => …)` on such a column is misread today (#1030).
+- A GIN index on the column (`Models.Index(fields = ("search_vector",), method = "gin", …)`) serves
+  `@search`, with no expression to match.
+- `SearchVector`, `SearchHeadline` and the pattern lookups (`@contains`, …) do not take the column.
+  It is already a document, so they raise `QueryBuildError` or `FilterError`. So does a
+  `SearchVector` written to any other column, or a `SearchQuery` written to any column.
+- PostgreSQL only: on SQLite, `makemigrations` raises `BackendCapabilityError` for a model that
+  declares one. A retype from text into `tsvector` is refused, because `CAST(text AS tsvector)`
+  reads the text as a document literal rather than parsing its words. Add a new column and fill it
+  with `update` instead.
+
 ## Indexing
 
 Without an index, every search reads and parses each row's text. A GIN index on the same expression
-the query renders lets PostgreSQL find the matching rows directly. Declare it with `Models.Index`,
-and write the expression **exactly** as PormG renders it, configuration included:
+the query renders lets PostgreSQL find the matching rows directly. PostgreSQL uses the index only
+when the two expressions are the same, and a wrong configuration or column still makes a valid index
+that is simply never used. So declare the expression with `Models.search_vector_expression`, which
+returns the text the query itself renders, rather than typing it by hand:
 
 ```julia
 Driver = Models.Model("driver",
     driverid = Models.IDField(),
     forename = Models.CharField(),
     surname  = Models.CharField(),
-    indexes  = [Models.Index(expressions = ("to_tsvector('simple', surname)",),
+    indexes  = [Models.Index(expressions = (Models.search_vector_expression("surname"; config = "simple"),),
                              method = "gin", name = "driver_surname_tsv")],
 )
+
+Models.search_vector_expression("surname"; config = "simple")
+# "to_tsvector('simple'::regconfig, \"surname\")"
 
 # Served by driver_surname_tsv: the same configuration, the same column
 M.Driver.objects.filter("surname__@search" => SearchQuery("senna"; config = "simple"))
 ```
 
-| The lookup | The index expression it needs |
+| The query | The index expression it needs |
 | :--- | :--- |
-| `"col__@search" => SearchQuery(…; config = "cfg")` | `to_tsvector('cfg', col)` |
+| `"col__@search" => SearchQuery(…; config = "cfg")` | `search_vector_expression("col"; config = "cfg")` |
 | `"col__@search" => "text"` (no configuration) | none: one-argument `to_tsvector` depends on a server setting, so PostgreSQL refuses to index it |
+| `"doc__@search"` on `"doc" => SearchVector("a", "b"; config = "cfg")` | `search_vector_expression("a", "b"; config = "cfg")` |
+| the same with `weight = "A"` | `search_vector_expression("a", "b"; config = "cfg", weight = "A")` |
 
-The second row is the reason to always pass a configuration on a large table. The `'cfg'` in an
-index and the `'cfg'::regconfig` PormG renders are the same expression to PostgreSQL.
+The second row is the reason to always pass a configuration on a large table. The configuration you
+give the helper must be the query's, and it is required: without one there is no index to declare. Its columns are database column names, a field's `db_column`
+where it sets one. A configuration that is not a name raises `InvalidValueError`, as it does in the
+query, and a column that is not an identifier, or no configuration, raises `ModelDefinitionError`.
 
 Only the lookup uses an index. `SearchRank` and `SearchHeadline` are computed for each row the query
 keeps, so filter with an indexed `@search` first and rank or headline what is left.
@@ -228,13 +381,12 @@ keeps, so filter with an indexed `@search` first and rank or headline what is le
 
 These are deliberate for now. Each is refused with a typed error, not run as something else:
 
-- **A `SearchVector` or `SearchQuery` is not a value.** Projecting one, comparing it, or wrapping it
-  in another function raises `QueryBuildError`. Putting one on the right of any lookup but `@search`
-  raises `FilterError`. Neither has a Julia reading yet.
-- **No stored `tsvector` column.** A model has no `SearchVectorField` yet, so a document is always
-  computed from its text columns. Use an expression index (above) to make that fast.
-- **No weights**: `SearchVector(…; weight = …)` and `SearchRank(…; weights = …)` raise
-  `QueryBuildError`. Ranking weighs every word the same.
-- **No query combinators**: `SearchQuery` objects do not combine with `&`, `|` or `~`. A
-  `"websearch"` query takes `or` and `-word` in its text, and a `"raw"` one takes `&`, `|` and `!`.
-- **`@search` on a projection alias** raises `FilterError`. Search the column itself.
+- **A `SearchVector` or `SearchQuery` is not a value.** A `SearchVector` may be projected under a
+  name (above). Otherwise, projecting either, comparing it, or wrapping it in another function raises
+  `QueryBuildError`, and putting one on the right of any lookup but `@search` raises `FilterError`.
+- **A single-column `SearchVector` alias is not the lookup's expression.** `SearchVector("surname")`
+  is `COALESCE`d and cast, so an index on `search_vector_expression("surname"; config = …)` serves
+  `"surname__@search"` but not that alias. Search the column itself.
+- **No generated `tsvector` column.** A `SearchVectorField` is filled by `update`, not by the
+  database. A column that keeps itself current (`GENERATED ALWAYS AS (to_tsvector(…)) STORED`) is
+  not supported yet.

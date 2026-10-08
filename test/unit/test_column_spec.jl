@@ -108,6 +108,7 @@ const SPEC_CORPUS = [
   Models.GenericIPAddressField(),
   Models.GenericIPAddressField(protocol = "ipv4", unpack_ipv4 = false),
   Models.CIDRField(),
+  Models.SearchVectorField(),
   Models.BinaryField(max_length = 4),
   Models.BinaryField(),
   Models.ForeignKey("Races"),
@@ -127,7 +128,7 @@ const SPEC_CORPUS = [
   @testset "every field kind compiles on both engines" begin
     concrete = filter(T -> isconcretetype(T) && parentmodule(T) === PormG.Models,
                       subtypes(PormG.PormGField))
-    @test length(concrete) == 28   # 25 until #28 added GenericIPAddressField and CIDRField, then ArrayField
+    @test length(concrete) == 29   # 25 until #28 added GenericIPAddressField and CIDRField, then ArrayField; 28 until #1021 added SearchVectorField
 
     # One constructible instance per struct. Relational types need a target; the bounded ones need
     # their bound. Anything not listed takes its zero-argument constructor.
@@ -210,9 +211,13 @@ const SPEC_CORPUS = [
     # The degradation path: an unrecognised type keeps its lower-cased raw string and compares by
     # that — exactly what `Dialect._column_signature` did for EVERY type before #507. So an exotic
     # column loses precision, never correctness, and never aborts `makemigrations`.
-    @test parse_canonical_type("tsvector", PG507) == CUnsupported("tsvector")
-    @test parse_canonical_type("TSVECTOR", PG507) == CUnsupported("tsvector")
-    @test parse_canonical_type("tsvector", PG507) != parse_canonical_type("hstore", PG507)
+    # `tsvector` was the example here until #1021 gave it a field (`SearchVectorField`, `CTsVector`);
+    # `hstore` and `ltree` are types PormG still never renders.
+    @test parse_canonical_type("hstore", PG507) == CUnsupported("hstore")
+    @test parse_canonical_type("HSTORE", PG507) == CUnsupported("hstore")
+    @test parse_canonical_type("hstore", PG507) != parse_canonical_type("ltree", PG507)
+    @test parse_canonical_type("tsvector", PG507) == PormG.CTsVector()
+    @test parse_canonical_type("TSVECTOR", PG507) == PormG.CTsVector()
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

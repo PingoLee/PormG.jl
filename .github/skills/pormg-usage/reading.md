@@ -273,14 +273,27 @@ M.Race.objects.
 ```
 
 - `SearchQuery(text; config, search_type)`: `search_type` is `"plain"` (the default), `"phrase"`,
-  `"websearch"` (`"a phrase" or -word`) or `"raw"` (`tsquery` syntax).
+  `"websearch"` (`"a phrase" or -word`) or `"raw"` (`tsquery` syntax). Queries combine with `&`,
+  `|` and `~` (`&&`, `||`, `!!`), and combined queries must share one config.
 - The `config` is a name (`"english"`, `"pg_catalog.portuguese"`) and is written into the SQL, so an
   index on `to_tsvector('english', col)` can serve the lookup. A side written as a bare string takes
   its config from the side written as an object. The search text is always bound.
 - Filter a rank on a threshold (`"rank__@gte" => 0.01`), not on `> 0`. For a query of several
   words, a row that misses them scores `1e-20`, not `0`.
-- A `SearchVector` or `SearchQuery` is an operand, not a value. It cannot be projected, compared, or
-  wrapped in another function; `@search` takes a CharField/TextField column, not an alias.
+- Weights: `SearchVector(col; weight = "A")` labels a column's words (`"A"`–`"D"`), `+` adds two
+  vectors into one document, and `SearchRank(…; weights = [d, c, b, a])` scores the labels (D
+  first, as PostgreSQL takes them). Summed vectors with different configs need a `SearchQuery`.
+- To search several columns, project a vector and filter its name:
+  `values("doc" => SearchVector("forename", "surname"; config = "simple")).filter("doc__@search" => "lewis")`.
+  `@search` is the only lookup on such an alias, and the alias reads as the tsvector's text.
+- Otherwise a `SearchVector` or `SearchQuery` is an operand, not a value: it cannot be compared or
+  wrapped in another function, and `@search` takes a CharField/TextField column or a SearchVector alias.
+- Index a search with `Models.Index(expressions = (Models.search_vector_expression("surname"; config = "simple"),), method = "gin", name = …)`:
+  the helper returns the `to_tsvector(…)` the query renders (several columns: the SearchVector's).
+- A stored document: `search_vector = Models.SearchVectorField(null = true)`, filled with
+  `filter(…).update("search_vector" => SearchVector("title"; config = "simple"))` (it does not refresh
+  itself), searched with `"search_vector__@search"` (no `to_tsvector`), ranked with `SearchRank("search_vector", q)`,
+  indexed with `Models.Index(fields = ("search_vector",), method = "gin", name = …)`. Reads as tsvector text.
 
 ## Aliases
 

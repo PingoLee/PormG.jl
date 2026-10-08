@@ -295,8 +295,10 @@ end
   # #28: `ArrayField` renders an array of its element, so `integer[]` left the unsupported loop below;
   # an array of an element no ArrayField declares (`smallint[]`) took its place there.
   @test pg("integer[]") == PormG.CArray(CInt32())
+  # #1021: `SearchVectorField` renders `tsvector`, so it reads back as its own kind.
+  @test pg("tsvector") == PormG.CTsVector()
   # Deliberately unsupported — PormG never renders them, so a declaration must not match them.
-  for raw in ("character(8)", "bpchar", "smallint[]", "bit(1)", "macaddr", "citext")
+  for raw in ("character(8)", "bpchar", "smallint[]", "bit(1)", "macaddr", "citext", "tsquery")
     @test (raw, pg(raw) isa CUnsupported) == (raw, true)
   end
 

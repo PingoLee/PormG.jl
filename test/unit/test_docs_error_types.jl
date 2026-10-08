@@ -1074,9 +1074,11 @@ const DOCERR_CASES = [
         () -> SearchHeadline("surname", "senna"; max_words = 10, min_words = 10),
     ),
     (
-        "read/full_text_search.md — SearchRank's vector must be a SearchVector",
+        "read/full_text_search.md — SearchRank's vector must be a SearchVector or a SearchVectorField column",
         QueryBuildError,
-        () -> SearchRank("surname", "senna"),
+        # #1021: a String is a column path now, checked to be a SearchVectorField when it renders.
+        () -> DOCERR_DRIVER_PG.objects.values("r" => SearchRank("surname", "senna")).
+            list(show_query = :dict),
     ),
     (
         "read/full_text_search.md — `@search` on a column that is not text raises FilterError",
@@ -1090,11 +1092,19 @@ const DOCERR_CASES = [
         () -> DOCERR_DRIVER_PG.objects.filter("surname__@search" => 1).
             list(show_query = :dict),
     ),
+    # #1021: projecting a SearchVector under a name became legal (the alias route), so the claim
+    # this row pins is now "wrapping or comparing one raises", not "projecting one raises".
     (
-        "read/full_text_search.md — a SearchVector projected raises QueryBuildError",
+        "read/full_text_search.md — a SearchVector wrapped in another function raises QueryBuildError",
         QueryBuildError,
-        () -> DOCERR_DRIVER_PG.objects.values("v" => SearchVector("surname")).
+        () -> DOCERR_DRIVER_PG.objects.values("v" => PormG.Functions.Lower(SearchVector("surname"))).
             list(show_query = :dict),
+    ),
+    (
+        "read/full_text_search.md — a SearchVector alias takes @search and no other lookup",
+        FilterError,
+        () -> DOCERR_DRIVER_PG.objects.values("doc" => SearchVector("surname")).
+            filter("doc__@gt" => 1).list(show_query = :dict),
     ),
     (
         "read/full_text_search.md — a SearchQuery on the right of another lookup raises FilterError",
@@ -1102,10 +1112,60 @@ const DOCERR_CASES = [
         () -> DOCERR_DRIVER_PG.objects.filter("surname" => SearchQuery("senna")).
             list(show_query = :dict),
     ),
+    # #1021 — the weights, the sum of vectors and the index helper. The row above was "weights raise
+    # QueryBuildError", part 1's deferral, which #1021 replaced with these claims.
     (
-        "read/full_text_search.md — weights raise QueryBuildError",
+        "read/full_text_search.md — a weight other than A to D raises InvalidValueError",
+        InvalidValueError,
+        () -> SearchVector("surname"; weight = "E"),
+    ),
+    (
+        "read/full_text_search.md — weights that are not four numbers from 0 to 1 raise InvalidValueError",
+        InvalidValueError,
+        () -> SearchRank(SearchVector("surname"), "senna"; weights = [0.1, 0.2, 1.5]),
+    ),
+    (
+        "read/full_text_search.md — a SearchVector adds only to another SearchVector",
         QueryBuildError,
-        () -> SearchVector("surname"; weight = "A"),
+        () -> SearchVector("surname") + 1,
+    ),
+    (
+        "read/full_text_search.md — summed vectors with different configs need a SearchQuery",
+        QueryBuildError,
+        () -> SearchRank(SearchVector("surname"; config = "simple") + SearchVector("forename"; config = "english"), "senna"),
+    ),
+    (
+        "read/full_text_search.md — a SearchQuery combines only with another SearchQuery",
+        QueryBuildError,
+        () -> SearchQuery("senna") & SearchVector("surname"),
+    ),
+    (
+        "read/full_text_search.md — combined queries must share one config",
+        QueryBuildError,
+        () -> SearchQuery("senna"; config = "simple") | SearchQuery("prost"),
+    ),
+    # #1021 — SearchVectorField: refused on SQLite at the column, not a text column for SearchVector,
+    # and filled only from a SearchVector into itself.
+    (
+        "fields.md + postgres.md + read/full_text_search.md — SearchVectorField on SQLite raises BackendCapabilityError",
+        BackendCapabilityError,
+        () -> PormG.Dialect.field_to_column("search", PormG.Models.SearchVectorField(null = true), DocErrMockSQLite()),
+    ),
+    (
+        "read/full_text_search.md — a SearchVector written to a column that is not a SearchVectorField",
+        QueryBuildError,
+        () -> DOCERR_DRIVER_PG.objects.filter("driverid" => 1).
+            update("surname" => SearchVector("forename"), show_query = :dict),
+    ),
+    (
+        "read/full_text_search.md + Models.search_vector_expression — a column that is not an identifier",
+        ModelDefinitionError,
+        () -> PormG.Models.search_vector_expression("surname)"),
+    ),
+    (
+        "read/full_text_search.md + Models.search_vector_expression — a config that is not a name",
+        InvalidValueError,
+        () -> PormG.Models.search_vector_expression("surname"; config = "simple'"),
     ),
     (
         "read/full_text_search.md — `@search` on a projection alias raises FilterError",

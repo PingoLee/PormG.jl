@@ -318,6 +318,8 @@ end
 # Arithmetic operations for FObject (aggregate functions like Sum, Count, Avg)
 # Enable expressions like Sum("points") / Count("resultid")
 function Base.:+(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
+  # #1021: `SearchVector + SearchVector` is one document, not arithmetic.
+  (_is_fts_operand(f) || _is_fts_operand(operand)) && return _combine_search_vectors(f, operand)
   return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
 end
 function Base.:-(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
@@ -337,6 +339,7 @@ end
 
 # Commutative: scalar op FObject
 function Base.:+(operand::Union{Integer,Float64}, f::FObject)
+  _is_fts_operand(f) && return _combine_search_vectors(operand, f)   # refuses: a number is no vector
   return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", aggregate=f.aggregate)
 end
 
@@ -419,22 +422,30 @@ function _build_bitwise_unary(expr, op::String)
   )
 end
 
-# Overload Base operators
+# Overload Base operators. #1021: on a `SearchQuery` (or with one on either side) `&`, `|` and `~`
+# are the `tsquery` combinators, never the integer bitwise operators; `_combine_search_queries`
+# refuses anything that is not a query.
+_has_fts(xs...) = any(_is_fts_operand, xs)
 function Base.:&(a::BitwiseExpression, b::BitwiseOperand)
+  _has_fts(a, b) && return _combine_search_queries("&&", a, b)
   return _build_bitwise_expr(a, "&", b)
 end
 function Base.:&(a::Integer, b::BitwiseExpression)
+  _has_fts(b) && return _combine_search_queries("&&", a, b)
   return _build_bitwise_expr(b, "&", a)
 end
 
 function Base.:|(a::BitwiseExpression, b::BitwiseOperand)
+  _has_fts(a, b) && return _combine_search_queries("||", a, b)
   return _build_bitwise_expr(a, "|", b)
 end
 function Base.:|(a::Integer, b::BitwiseExpression)
+  _has_fts(b) && return _combine_search_queries("||", a, b)
   return _build_bitwise_expr(b, "|", a)
 end
 
 function Base.:~(f::BitwiseExpression)
+  _has_fts(f) && return _combine_search_queries("!!", f)
   return _build_bitwise_unary(f, "~")
 end
 

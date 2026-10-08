@@ -1,12 +1,12 @@
 """
 Field-constructor behavior snapshot (#260).
 
-Pins the **observable result** of every field constructor: for each of the 29 constructors, the
+Pins the **observable result** of every field constructor: for each of the 30 constructors, the
 complete struct field set as built (a) with no keyword arguments and (b) with each common keyword
 explicitly set to a non-default value, one at a time.
 
-There are **29** constructors (26 until #28 added `GenericIPAddressField`, `CIDRField` and then
-`ArrayField`), one more
+There are **30** constructors (26 until #28 added `GenericIPAddressField`, `CIDRField` and then
+`ArrayField`, and 29 until #1021 added `SearchVectorField`), one more
 than the `*Field` naming suggests — `ForeignKey` doesn't end in `Field`, which is exactly how it
 escaped the first inventory. If a constructor is added, it must be
 added to `FKE_CTORS` or the row-count guard below fails.
@@ -71,6 +71,7 @@ const FKE_CTORS = Dict{String,Function}(
     "JSONField"                 => kw -> FKE_M.JSONField(; kw...),
     "GenericIPAddressField"     => kw -> FKE_M.GenericIPAddressField(; kw...),
     "CIDRField"                 => kw -> FKE_M.CIDRField(; kw...),
+    "SearchVectorField"         => kw -> FKE_M.SearchVectorField(; kw...),
     # #28: the one constructor with a positional FIELD; the element is fixed, the keywords probed.
     "ArrayField"                => kw -> FKE_M.ArrayField(FKE_M.IntegerField(); kw...),
     "ForeignKey"                => kw -> FKE_M.ForeignKey("Driver"; kw...),
@@ -154,10 +155,11 @@ else
 
     # Guard the guard: an empty or truncated harness would pass a naive comparison.
     @test length(actual) == length(FKE_CTORS) * length(FKE_PROBES)
-    # 29 constructors x 13 probes. Was 297 until #408 retired AutoField, which took 11 rows with it,
+    # 30 constructors x 13 probes. Was 297 until #408 retired AutoField, which took 11 rows with it,
     # 286 until #496 added the two `db_default` probes (+52), 338 until #28 added the two
-    # network-address fields (+26), and 364 until #28 added ArrayField (+13).
-    @test length(actual) >= 377
+    # network-address fields (+26), 364 until #28 added ArrayField (+13), and 377 until #1021 added
+    # SearchVectorField (+13).
+    @test length(actual) >= 390
     # No probe may error — every common keyword must remain accepted (or ignored with a warning) by
     # every constructor. An ERROR row would mean a keyword stopped being accepted, which breaks the
     # `Model_to_str` round-trip contract (generated model files reload through this kwargs form).

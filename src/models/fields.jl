@@ -3341,6 +3341,126 @@ function CIDRField(; kwargs...)
 end
 
 # ============================================================================
+# Search Vector Field (#1021)
+# ============================================================================
+
+mutable struct sSearchVectorField <: PormGField
+  verbose_name::Union{String, Nothing}
+  primary_key::Bool
+  unique::Bool
+  blank::Bool
+  null::Bool
+  db_index::Bool
+  db_column::Union{String, Nothing}
+  default::Union{String, Nothing}
+  editable::Bool
+  type::String
+  formatter::Function
+  db_default::DbDefault
+end
+
+"""
+    SearchVectorField(; kwargs...)
+
+A stored full-text document — PostgreSQL's native `tsvector`, Django's `SearchVectorField`. It holds
+what `SearchVector(…)` computes, so a search reads the stored document instead of parsing the text
+of every row on every query.
+
+Fill it from text columns with `update` and a `SearchVector`, and search it with the `@search`
+lookup, which on this column renders `col @@ query` with no `to_tsvector`:
+
+```julia
+M.Race.objects.filter("year" => 2009).update("search_vector" => SearchVector("name"; config = "english"))
+M.Race.objects.filter("search_vector__@search" => SearchQuery("grand prix"; config = "english"))
+M.Race.objects.values("name", "rank" => SearchRank("search_vector", SearchQuery("monaco"; config = "english")))
+```
+
+The column does not refresh itself: re-run the `update` after the text changes. A query's config
+must be the one the document was built with, or a stemmed word will not match. A GIN index on the
+column (`Models.Index(fields = ("search_vector",), method = "gin", name = …)`) serves `@search`.
+
+It reads as the `tsvector`'s text, a `String` (`'grand':2 'monaco':1 'prix':3`), and a `String` it is
+given is that text, parsed by PostgreSQL as a `tsvector` literal. A pattern lookup (`@contains`, …)
+on it raises `FilterError`: search it with `@search`. `SearchVector`, `SearchHeadline` and the
+`to_tsvector` the lookup puts around a text column do not take it, since it is already a document.
+
+**PostgreSQL only**: on SQLite, rendering the column raises `BackendCapabilityError`. A generated
+column (`GENERATED ALWAYS AS (to_tsvector(…)) STORED`) is not supported yet.
+
+# Keyword Arguments
+- `verbose_name::Union{String, Nothing} = nothing`: A human-readable name for the field
+- `unique::Bool = false`: Whether values in this field must be unique across all records
+- `blank::Bool = false`: Whether the field can be left blank in forms
+- `null::Bool = false`: Whether the database column can store NULL values. Usually `true`: a new row
+  has no document until the `update` fills it
+- `db_index::Bool = false`: A plain b-tree index, which no full-text search uses. Declare a GIN
+  `Models.Index` instead
+- `default`: not accepted — raises `FieldValidationError`. A document literal is stored in the form
+  PostgreSQL rewrites it to, so a declared one would never compare equal to the column. Every row's
+  document comes from its own text, through `update`: declare the column `null = true` and fill it
+- `db_default::Union{NamedTuple, Nothing} = nothing`: accepted as on every field (#496), but not a way
+  to give the column a document. A literal one (`''::tsvector`) reads back from the catalog as a
+  value rather than the expression declared, so `makemigrations` would plan it again each time
+- `editable::Bool = false`: Whether the field should be editable in forms
+
+# Database Mapping
+- **PostgreSQL Type**: tsvector
+- **SQLite**: none — rendering the column raises `BackendCapabilityError` (see above)
+
+# Examples
+```julia
+Race = Models.Model("race",
+  raceid = Models.IDField(),
+  name   = Models.CharField(max_length = 255),
+  search_vector = Models.SearchVectorField(null = true),
+  indexes = [Models.Index(fields = ("search_vector",), method = "gin", name = "race_search_vector_gin")],
+)
+```
+
+See also [`search_vector_expression`](@ref), which indexes a document computed at query time instead.
+"""
+function SearchVectorField(; kwargs...)
+  (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
+    _common_kwargs("SearchVectorField", kwargs; editable = false)
+
+  # A `tsvector` literal is stored rewritten (`'monaco:1'` reads back as `'monaco':1`, `'b a'` as
+  # `'a' 'b'`), so a declared default would plan a `SET DEFAULT` on every `makemigrations`.
+  # Normalizing it here would mean parsing tsvector syntax in Julia — emulation — so it is refused.
+  get(kwargs, :default, nothing) === nothing || throw(FieldValidationError(
+    "SearchVectorField takes no default: a document comes from each row's own text, through " *
+    "update(\"search_vector\" => SearchVector(…)). Declare the column null = true and fill it that way (#1021)."))
+
+  return sSearchVectorField(
+    verbose_name,
+    false, # primary_key
+    unique,
+    blank,
+    null,
+    db_index,
+    db_column,
+    nothing, # default
+    editable,
+    "TSVECTOR",
+    format_tsvector_sql, db_default
+  )
+end
+
+"""
+    format_tsvector_sql(value) -> Union{String, Missing}
+
+`SearchVectorField`'s formatter (#1021): a document is its `tsvector` text, a `String`, which
+PostgreSQL parses as a `tsvector` literal. Its own function rather than `format_text_sql`, because a
+pattern lookup decides by the formatter whether a column reads as text (`_pattern_text_kind`), and
+this one is refused there.
+"""
+format_tsvector_sql(value::Union{Missing, Nothing}) = missing
+format_tsvector_sql(value::AbstractString)::String = String(value)
+format_tsvector_sql(value) = throw(InvalidValueError(
+  "A SearchVectorField value is a document as tsvector text (a String), got a $(typeof(value)). To " *
+  "build it from text columns, update the column with a SearchVector: " *
+  "update(\"search\" => SearchVector(\"name\"; config = \"english\")).", :type))
+
+# ============================================================================
 # URL Field
 # ============================================================================
 

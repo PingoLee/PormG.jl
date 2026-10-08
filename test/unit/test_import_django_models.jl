@@ -368,6 +368,40 @@ class Lap_note(TimeStampedModel):
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#1021): a SearchVectorField is read in its bare spelling too
+#
+# Django ships it in `django.contrib.postgres.search`, so the idiomatic declaration is a bare
+# `SearchVectorField(...)` that `_FIELD_CALL_RE` never matched — the #943 widening, for a second name.
+# `models.SearchVectorField(...)` resolves by name now that the constructor exists. The file loads.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer reads SearchVectorField into Models.SearchVectorField (#1021)" begin
+    source = """
+from django.db import models
+from django.contrib.postgres.search import SearchVectorField
+from django.contrib.postgres import search
+
+class Race_report(models.Model):
+    title = models.CharField(max_length=200)
+    search = SearchVectorField(null=True)
+    summary_search = search.SearchVectorField(null=True, blank=True)
+"""
+    generated, config_key, db_dir_existed = import_django_source(source;
+                                                                 output_file = "searchvector_1021_unit.jl")
+    try
+        @test occursin("search = Models.SearchVectorField(null=true)", generated)
+        @test occursin("summary_search = Models.SearchVectorField(blank=true, null=true)", generated)
+        @test !occursin("NOT imported", generated)
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        report = Core.eval(sandbox, :(searchvector_1021_unit.Race_report))
+        @test report.fields["search"] isa PormG.Models.sSearchVectorField
+        @test report.fields["summary_search"].blank
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Django Importer (#943): an element PormG's ArrayField cannot hold stays reported, by name
 #
 # Reading the element is what lets the report name it. "a field type PormG does not implement" is

@@ -38,6 +38,9 @@ import PormG: PORTABLE_DB_DEFAULTS, canonical_db_default, db_default_is_portable
               is_valid_db_default_sql
 # #29: the access methods and operator-class shape `Index` validates against (Kernel, layer 1).
 import PormG: INDEX_METHODS, INDEX_OPCLASS_RE
+# #1021: the one writer of `to_tsvector(…)` (Kernel) — `search_vector_expression` writes an index with
+# the text `Dialect` writes the query with.
+import PormG: ts_lookup_document_sql, ts_vector_document_sql, ts_weighted_sql
 import PormG: PormGSettings, config, Configuration
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, DO_NOTHING, PROTECT
 using Printf
@@ -63,8 +66,8 @@ import PormG: @pormg_debug
 public ArrayField, AutoField, BigIntegerField, BinaryField, BooleanField, CharField, CIDRField, DateField,
   DateTimeField, DecimalField, DurationField, EmailField, FileField, FloatField, ForeignKey,
   GenericIPAddressField, IDField, ImageField, IntegerField, JSONField, ManyToManyField,
-  OneToOneField, PasswordField, PositiveIntegerField, PositiveSmallIntegerField, SlugField,
-  TextField, TimeField, URLField, UUIDField
+  OneToOneField, PasswordField, PositiveIntegerField, PositiveSmallIntegerField, SearchVectorField,
+  SlugField, TextField, TimeField, URLField, UUIDField
 
 # The module's ENTRY POINTS (#295), declared separately because they are a different category from
 # the field constructors above: a field is a column, these define and register the model itself.
@@ -79,6 +82,8 @@ public ArrayField, AutoField, BigIntegerField, BinaryField, BooleanField, CharFi
 # named: it appears zero times in `docs/src`, and the vocabulary users are given for "a model" is
 # the abstract `PormGModel`. Publishing the concrete name would invite code to depend on it.
 public Model, UniqueConstraint, CheckConstraint, Index, set_models
+# #1021: the text an `Index(expressions = …)` is written with to serve a full-text query.
+public search_vector_expression
 
 
 #═══════════════════════════════════════════════════════════════════════════════
@@ -2409,6 +2414,68 @@ function _index_include_fields(f)::Vector{String}
   any(isempty, out) && throw(ModelDefinitionError("Index include names a blank field"))
   return out
 end
+
+"""
+    search_vector_expression(columns...; config = nothing, weight = nothing) -> String
+
+The `to_tsvector(…)` text a full-text query renders, for a GIN index to be declared on (PostgreSQL
+only). PostgreSQL uses an expression index only when the query's expression is the index's, so write
+the index with this rather than by hand: the text comes from the same function the query is rendered
+with, and a config the query would refuse is refused here.
+
+| Query | Index expression |
+|---|---|
+| `"surname__@search" => SearchQuery(…; config = "simple")` | `search_vector_expression("surname"; config = "simple")` |
+| `"doc__@search"` on `"doc" => SearchVector("forename", "surname"; config = "simple")` | `search_vector_expression("forename", "surname"; config = "simple")` |
+| the same, with `SearchVector(…; weight = "A")` | `search_vector_expression(…; config = "simple", weight = "A")` |
+
+One column without a weight is the `@search` lookup's expression,
+`to_tsvector('simple'::regconfig, "surname")`. Otherwise it is `SearchVector`'s, each column cast to
+text, `COALESCE`d and joined by a space, inside `setweight(…, 'A')` when there is a weight. The
+`config` must be the query's: `SearchQuery`'s, for the lookup. It is required: a query with no config
+uses the server's `default_text_search_config`, and PostgreSQL only indexes the two-argument
+`to_tsvector`, so there is no index to declare for it.
+
+`columns` are database column names (a field's `db_column` where it sets one), written bare; each is
+quoted in the result. A column that is not an identifier, or no `config`, raises
+`ModelDefinitionError`, and a config that is not a name or a weight other than `"A"` to `"D"` raises
+`InvalidValueError`.
+
+```julia
+Driver = Models.Model("driver",
+  driverid = Models.IDField(),
+  forename = Models.CharField(max_length = 255),
+  surname  = Models.CharField(max_length = 255),
+  indexes = [
+    Models.Index(expressions = (Models.search_vector_expression("surname"; config = "simple"),),
+                 method = "gin", name = "driver_surname_tsv"),
+  ],
+)
+```
+"""
+function search_vector_expression(columns::AbstractString...; config = nothing, weight = nothing)::String
+  isempty(columns) && throw(ModelDefinitionError("search_vector_expression takes at least one column (#1021)."))
+  # One-argument `to_tsvector` reads a server setting, so it is not IMMUTABLE and `CREATE INDEX` refuses
+  # it at migrate time. Refused here, where the declaration is, rather than there.
+  config === nothing && throw(ModelDefinitionError(
+    "search_vector_expression needs the query's config, such as config = \"simple\": PostgreSQL cannot " *
+    "index to_tsvector without one, because its result then depends on a server setting (#1021)."))
+  for c in columns
+    occursin(_SEARCH_COLUMN_RE, c) || throw(ModelDefinitionError(
+      "search_vector_expression takes database column names (letters, digits and underscores); got " *
+      "$(repr(c)) (#1021)."))
+  end
+  quoted = ["\"$(c)\"" for c in columns]
+  # The lookup has no weight, so a weighted index is always SearchVector's document.
+  document = length(quoted) == 1 && weight === nothing ? ts_lookup_document_sql(only(quoted), config) :
+                                                         ts_vector_document_sql(quoted, config)
+  return ts_weighted_sql(document, weight)
+end
+search_vector_expression(columns...; kwargs...) = throw(ModelDefinitionError(
+  "search_vector_expression takes database column names as strings (#1021)."))
+
+# A column `search_vector_expression` quotes: an identifier, never anything it would have to escape.
+const _SEARCH_COLUMN_RE = r"\A[A-Za-z_][A-Za-z0-9_]*\z"
 
 # A bare column name, plain or double-quoted, and nothing else — see the constructor's refusal above.
 const _BARE_COLUMN_RE = r"^(?:[A-Za-z_][A-Za-z0-9_\$]*|\"(?:[^\"]|\"\")+\")$"

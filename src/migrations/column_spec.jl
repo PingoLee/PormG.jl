@@ -197,6 +197,7 @@ function parse_canonical_type(raw::AbstractString, conn::PormGPostgres)::Canonic
   # not write and stays `CUnsupported`.
   base == "inet"                          && return CInet()
   base == "cidr"                          && return CCidr()
+  base == "tsvector"                      && return CTsVector()   # #1021
   return CUnsupported(lowercase(strip(String(raw))))
 end
 
@@ -1203,6 +1204,12 @@ function _pg_no_implicit_cast(old::CanonicalType, new::CanonicalType)::Bool
     return true
   end
   new isa CArray && return true
+  # #1021: nothing has an assignment cast to `tsvector`, and none is written. `CAST(col AS tsvector)`
+  # would parse the text as a tsvector LITERAL (`'grand prix'` is one lexeme), not run `to_tsvector`,
+  # so it would store a wrong document without an error — the retype is refused instead. Out of
+  # `tsvector`, only text has a cast (an I/O one).
+  new isa CTsVector && return true
+  old isa CTsVector && return !(new isa _TextType)
   old isa _TextType && return new isa Union{_NumericType, CBool, CDate, CDateTime, CUUID, CJSON, CInet, CCidr}
   old isa CBool && return new isa _NumericType
   old isa _NumericType && return new isa CBool
@@ -1749,6 +1756,8 @@ function _inspectdb_field(spec::ColumnSpec, table_name::AbstractString,
     return Models.GenericIPAddressField(; base...)
   elseif ctype isa CCidr
     return Models.CIDRField(; base...)
+  elseif ctype isa CTsVector
+    return Models.SearchVectorField(; base...)
   elseif ctype isa CArray
     return Models.ArrayField(_inspectdb_array_element(ctype.element, spec, table_name, conn); base...)
   elseif ctype isa CBytes

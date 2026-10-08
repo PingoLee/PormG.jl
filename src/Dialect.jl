@@ -48,6 +48,9 @@ import PormG.Models: declared_check_constraints, CheckConstraint
 import PormG: check_marker
 # `_foreign_key_on_delete_sql` lives in `Models` since #498 — see the note where it used to be defined.
 import PormG.Models: _foreign_key_on_delete_sql
+# #1021: the one writer of `to_tsvector(…)` and its config check (Kernel), shared with the index helper.
+import PormG: ts_config_name, ts_config_prefix, ts_lookup_document_sql, ts_vector_document_sql,
+              ts_weight_name, ts_weighted_sql
 
 import PormG: @pormg_debug
 
@@ -1146,7 +1149,7 @@ end
 # ---
 # Convert PormGField to SQL column string
 # ---
-import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sRelationalColumn, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField, sBinaryField, sImageField, sGenericIPAddressField, sCIDRField, sArrayField
+import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sRelationalColumn, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField, sBinaryField, sImageField, sGenericIPAddressField, sCIDRField, sArrayField, sSearchVectorField
 
 """
     db_default_sql(field, conn) -> Union{String, Nothing}
@@ -1464,6 +1467,8 @@ function _get_column_type(field::PormGField, conn::PormGPostgres; type_map::Dict
     return type_map[field.type]
   elseif field isa Union{sGenericIPAddressField, sCIDRField}
     return type_map[field.type]   # `inet` / `cidr` (#28)
+  elseif field isa sSearchVectorField
+    return type_map[field.type]   # `tsvector` (#1021)
   elseif field isa sArrayField
     # #28: the element's own type, then `[]`. No size and no dimension count: PostgreSQL enforces
     # neither and `format_type` prints neither, so rendering one would differ from the catalog on
@@ -1520,8 +1525,8 @@ function _get_column_type(field::PormGField, conn::PormGSQLite; type_map::Dict{S
     return sql_type
   elseif field isa sJSONField
     return sql_type
-  elseif field isa Union{sGenericIPAddressField, sCIDRField, sArrayField}
-    # #28: for the migration compiler only — `field_to_column` refuses these on SQLite, so no DDL
+  elseif field isa Union{sGenericIPAddressField, sCIDRField, sArrayField, sSearchVectorField}
+    # #28 (and #1021's `tsvector`): for the migration compiler only — `field_to_column` refuses these on SQLite, so no DDL
     # PormG writes carries it. See `_refuse_specialized_sqlite_type`.
     return sql_type
   elseif field isa sBinaryField
@@ -1630,6 +1635,10 @@ function _refuse_specialized_sqlite_type(col_name::AbstractString, field::PormGF
       "SQLite rather than emulate it as text. Run this model on PostgreSQL, or keep the elements in " *
       "a related model (a ForeignKey per element) if it must run on SQLite."))
   end
+  field isa sSearchVectorField && throw(BackendCapabilityError(
+    "SearchVectorField \"$(col_name)\" is PostgreSQL's native `tsvector`, a stored full-text document, " *
+    "and SQLite has no such type: its FTS5 is a separate index table with its own query syntax. PormG " *
+    "refuses the column on SQLite rather than emulate it (#1021). Run this model on PostgreSQL."))
   field isa Union{sGenericIPAddressField, sCIDRField} || return nothing
   name = field isa sCIDRField ? "CIDRField" : "GenericIPAddressField"
   pg = field isa sCIDRField ? "cidr" : "inet"
@@ -1734,7 +1743,7 @@ Raises `BackendCapabilityError` for a `DecimalField` with `max_digits` above
 declared digits (#648). Every caller renders the desired model, so an existing wide column is
 never refused on its own — only when PormG would create or re-create it.
 
-Raises `BackendCapabilityError` for a `GenericIPAddressField` or `CIDRField` too: SQLite has no
+Raises `BackendCapabilityError` for a `GenericIPAddressField`, `CIDRField` or `SearchVectorField` (#1021) too: SQLite has no
 column for PostgreSQL's `inet`/`cidr`, and PormG refuses rather than emulates them (#28).
 """
 function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite;
@@ -3162,44 +3171,22 @@ end
 # table with its own query syntax and ranking, so an emulation would answer a different question; each
 # arm below refuses there instead, as the regex and array lookups do.
 #
-# The text-search config is a LITERAL, `'english'::regconfig`, not a bound parameter. That is the
-# maintainer's call on #31: PostgreSQL matches an expression index by its text, so only a literal config
-# lets `to_tsvector('english'::regconfig, "Tb"."name")` use an index on `to_tsvector('english', name)`.
-# It is safe to print because it is a NAME, checked here against an identifier pattern that admits no
-# quote, space or semicolon — and checked again at every render, since the node's `kwargs` is a mutable
-# Dict. The search text and the headline options are always bound.
+# The config, the `to_tsvector(…)` text and its validation live in Kernel (`src/column_ir.jl`, #1021):
+# `Models.search_vector_expression` writes the index from the same functions this file writes the query
+# with, so the two cannot drift apart. `ts_config_name` is bound here too, as `Dialect.ts_config_name`.
+# The search text and the headline options are always bound.
 # ──────────────────────────────────────────────────────────────────────────────
-const _TS_CONFIG_RE = r"\A[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?\z"
-
 fts_capability_error(what::AbstractString) = BackendCapabilityError(
   "$(what) requires PostgreSQL full-text search: SQLite has no tsvector or tsquery, and PormG does " *
   "not emulate full-text search (#31).")
 
-"""
-    ts_config_name(config) -> Union{Nothing,String}
-
-The validated text-search config (`"english"`, `"pg_catalog.portuguese"`), or `nothing` for none.
-Anything that is not a plain or schema-qualified identifier raises `InvalidValueError`.
-"""
-function ts_config_name(config)::Union{Nothing,String}
-  config === nothing && return nothing
-  (config isa AbstractString && occursin(_TS_CONFIG_RE, config)) && return String(config)
-  throw(InvalidValueError(
-    "A text-search config is the name of one, such as \"english\" or \"pg_catalog.portuguese\": " *
-    "letters, digits and underscores, optionally schema-qualified (#31).", :format))
-end
-_ts_config_prefix(config) = (c = ts_config_name(config); c === nothing ? "" : "'$(c)'::regconfig, ")
-
 const _TS_QUERY_FUNCTIONS = Dict("plain" => "plainto_tsquery", "phrase" => "phraseto_tsquery",
                                  "websearch" => "websearch_to_tsquery", "raw" => "to_tsquery")
 
-# The left side of the `@search` lookup: the column's document, parsed with the query's config. No
-# `COALESCE`, unlike `SEARCH_VECTOR` below — a NULL document makes the predicate NULL, which drops the
-# row exactly as `false` would, and the bare call is the expression an index on `to_tsvector('cfg',
-# col)` is written with. The connection is the LAST argument so this helper never takes the shape of a
+# The left side of the `@search` lookup: the column's document, parsed with the query's config
+# (`ts_lookup_document_sql`, which says why it has no `COALESCE`). The connection is the LAST argument so this helper never takes the shape of a
 # lookup renderer, `(conn, column, value)`, which `test_operators.jl` reads back by reflection.
-ts_vector_sql(column::AbstractString, config, conn::PormGPostgres) =
-  "to_tsvector($(_ts_config_prefix(config))$(column))"
+ts_vector_sql(column::AbstractString, config, conn::PormGPostgres) = ts_lookup_document_sql(column, config)
 ts_vector_sql(column::AbstractString, config, conn::PormGAbstractType) =
   throw(fts_capability_error("The @search lookup"))
 
@@ -3209,35 +3196,75 @@ search(conn::PormGSQLite, vector::AbstractString, query::AbstractString) =
 search(conn::PormGAbstractType, vector::AbstractString, query) =
   throw(fts_capability_error("The @search lookup"))
 
-# Django's document: every operand cast to text and NULL-safe, joined by a space, so a row whose
-# `forename` is NULL still matches on its `surname`. Indexing this needs the same expression, cast and
-# `COALESCE` included (docs/src/read/full_text_search.md → Indexing).
+# Django's document (`ts_vector_document_sql`), labelled by its weight (`setweight`, #1021).
+# `Models.search_vector_expression` writes an index on it from the same functions
+# (docs/src/read/full_text_search.md → Indexing). A sum of vectors (`v1 + v2`, #1021) holds the two
+# rendered vectors as its columns and concatenates them, each keeping its own config and weight.
 function SEARCH_VECTOR(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
-  document = join(("COALESCE(($(c))::text, '')" for c in columns), " || ' ' || ")
-  return "to_tsvector($(_ts_config_prefix(get(format, "config", nothing)))$(document))"
+  if get(format, "combinator", nothing) !== nothing
+    format["combinator"] == "||" && length(columns) == 2 || throw(InvalidValueError(
+      "A sum of SearchVectors concatenates two of them with ||; got a malformed node (#1021).", :format))
+    return "($(columns[1]) || $(columns[2]))"
+  end
+  return ts_weighted_sql(ts_vector_document_sql(columns, get(format, "config", nothing)), get(format, "weight", nothing))
 end
 SEARCH_VECTOR(column::String, format::Dict{String,Any}, conn::PormGPostgres) =
   SEARCH_VECTOR(Any[column], format, conn)
 
 function SEARCH_QUERY(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
+  # #1021: `a & b`, `a | b`, `~a` — the operands are rendered queries, combined by `tsquery`'s own
+  # operators. Parenthesized, so a nested combination keeps the grouping it was written with.
+  op = get(format, "combinator", nothing)
+  if op !== nothing
+    if op in ("&&", "||") && length(columns) == 2
+      return "($(columns[1]) $(op) $(columns[2]))"
+    elseif op == "!!" && length(columns) == 1
+      return "(!!$(columns[1]))"
+    end
+    throw(InvalidValueError("A combined SearchQuery is two queries under && or ||, or one under !!; " *
+                            "got a malformed node (#1021).", :format))
+  end
   fn = get(_TS_QUERY_FUNCTIONS, get(format, "search_type", "plain"), nothing)
   fn === nothing && throw(InvalidValueError(
     "search_type is one of \"plain\", \"phrase\", \"websearch\" or \"raw\" (#31).", :format))
-  return "$(fn)($(_ts_config_prefix(get(format, "config", nothing)))$(columns[1]))"
+  return "$(fn)($(ts_config_prefix(get(format, "config", nothing)))$(columns[1]))"
 end
 SEARCH_QUERY(column::String, format::Dict{String,Any}, conn::PormGPostgres) =
   SEARCH_QUERY(Any[column], format, conn)
 
 # `ts_rank` returns `real`, which LibPQ reads as a `Float32`; the cast makes it the `Float64` every
 # other float in PormG reads as, on both drivers. `normalization` is printed, not bound: it is an
-# integer bitmask checked to 0..63, and an `Int` prints only digits.
+# integer bitmask checked to 0..63, and an `Int` prints only digits. The weights (#1021) are printed
+# for the same reason, as a `float4[]` literal of four finite numbers in 0..1, re-checked here because
+# the node's kwargs are mutable; a `Float64` prints only digits, `.`, `e` and `-`.
 function SEARCH_RANK(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
   fn = get(format, "cover_density", false) === true ? "ts_rank_cd" : "ts_rank"
   n = get(format, "normalization", nothing)
   n === nothing || (n isa Integer && 0 <= n <= 63) || throw(InvalidValueError(
     "normalization is an integer bitmask from 0 to 63 (#31).", :range))
   tail = n === nothing ? "" : ", $(Int(n))"
-  return "($(fn)($(columns[1]), $(columns[2])$(tail)))::double precision"
+  w = ts_rank_weights(get(format, "weights", nothing))
+  head = w === nothing ? "" : "'{$(join(string.(w), ","))}'::float4[], "
+  return "($(fn)($(head)$(columns[1]), $(columns[2])$(tail)))::double precision"
+end
+
+"""
+    ts_rank_weights(weights) -> Union{Nothing,Vector{Float64}}
+
+`SearchRank`'s weights as PostgreSQL takes them, `[D, C, B, A]`: four finite real numbers from 0 to 1,
+or `nothing` for PostgreSQL's default `{0.1, 0.2, 0.4, 1.0}`. Anything else raises `InvalidValueError`.
+"""
+function ts_rank_weights(weights)::Union{Nothing,Vector{Float64}}
+  weights === nothing && return nothing
+  # `float4` cannot hold a positive value below `floatmin(Float32)`: PostgreSQL refuses `1e-50` as
+  # out of range, so it is refused here, before the query runs.
+  ok = (weights isa AbstractVector || weights isa Tuple) && length(weights) == 4 &&
+       all(w -> w isa Real && !(w isa Bool) && isfinite(w) && 0 <= w <= 1 &&
+                (w == 0 || w >= floatmin(Float32)), weights)
+  ok || throw(InvalidValueError(
+    "SearchRank's weights are four numbers from 0 to 1, for the labels D, C, B and A in that order, " *
+    "as PostgreSQL's ts_rank takes them: weights = [0.1, 0.2, 0.4, 1.0] (#1021).", :range))
+  return Float64[w for w in weights]
 end
 
 # `columns` is the document, the query and, when any option was given, the one bound options string.
@@ -3245,7 +3272,7 @@ end
 # number column or a rank would otherwise fail at the server rather than read as its text.
 function SEARCH_HEADLINE(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
   args = Any["($(columns[1]))::text", columns[2:end]...]
-  return "ts_headline($(_ts_config_prefix(get(format, "config", nothing)))$(join(args, ", ")))"
+  return "ts_headline($(ts_config_prefix(get(format, "config", nothing)))$(join(args, ", ")))"
 end
 
 # The build refuses all four on SQLite first (`_render_function_typed`); these are the backstop that

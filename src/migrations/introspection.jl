@@ -384,6 +384,9 @@ function _coerce_default(value, ctype::CanonicalType)
     return Models.format_inet_sql(String(value))
   elseif ctype isa CCidr
     return Models.format_cidr_sql(String(value))
+  elseif ctype isa CTsVector
+    # #1021: a document default is its tsvector text, compared as written.
+    return Models.format_tsvector_sql(String(value))
   elseif ctype isa CArray
     # #28: the canonical literal both sides of the comparison are written in, so the catalog's
     # `{1.50}` meets a declared `default = [1.5]`. The cast suffix (`::integer[]`) is already gone,

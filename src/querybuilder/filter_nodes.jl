@@ -753,6 +753,8 @@ function _pattern_text_kind(formatter)::Union{Symbol,Nothing}
   formatter isa Models.ArrayFormatter && return :array
   (formatter === Models.format_inet_sql || formatter === Models.format_inet_unpacked_sql) && return :inet
   formatter === Models.format_cidr_sql && return :cidr
+  # #1021: a stored document has no text a LIKE could mean — refused in `_pattern_operand`.
+  formatter === Models.format_tsvector_sql && return :tsvector
   # #902: a UUID reads as its canonical lowercase hyphenated text — what SQLite stores and what
   # PostgreSQL prints. Django's PostgreSQL backend reads the same `::text`; its hyphen stripping
   # (`UUIDTextMixin`) is only for backends that store 32 hex digits, which PormG never does.
@@ -784,6 +786,10 @@ function _pattern_operand(column::AbstractString, formatter, operator::AbstractS
       "text, and this is an ArrayField. Test its elements with the array lookups instead: " *
       "\"$(label)__@acontains\" => [ … ] (it holds them all), `@overlap` (it holds any of them)$(by_index)."))
   end
+  kind === :tsvector && throw(FilterError(
+    "Error in filter '$(label)': a pattern lookup (`@contains`, `@startswith`, `@regex`, …) matches " *
+    "text, and this is a SearchVectorField, a stored document of lexemes. Search it with " *
+    "\"$(label)__@search\" => SearchQuery(…) (#1021)."))
   return Dialect._pattern_text_operand(instruc.connection, Val(kind), column)
 end
 
@@ -861,11 +867,12 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     return _render_network_operator(v, column, operand_field, operand_label, instruc)
   operand_formatter = operand_field !== nothing ? operand_field.formatter :
                       alias !== nothing ? _having_alias_formatter(memo_key(:base, alias), instruc) : nothing
-  # The label is derived only for an array column — the one kind that refuses here and names a path.
-  # `_filter_path_label` has no method for every column kind (an `F` transform), so it is not asked
-  # for the others.
+  # The label is derived only for an array or a SearchVectorField column (#1021) — the kinds that
+  # refuse here and name a path. `_filter_path_label` has no method for every column kind (an `F`
+  # transform), so it is not asked for the others.
+  refuses = operand_formatter isa Models.ArrayFormatter || operand_formatter === Models.format_tsvector_sql
   column = _pattern_operand(column, operand_formatter, v.operator, instruc;
-                            label = operand_formatter isa Models.ArrayFormatter ? _filter_path_label(v) : column)
+                            label = refuses ? _filter_path_label(v) : column)
   if isa(v.values, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
     @pormg_debug false
     # #894: a `DurationField` ordered against an `F` interval — another `DurationField`, a timestamp

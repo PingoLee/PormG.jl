@@ -187,22 +187,24 @@ end
 # lookups are). The value is the search text, parsed as a plain `SearchQuery` with no config as in
 # Django, or a `SearchQuery`, whose config the column is parsed with too.
 #
-# A text column is the only operand today. Part 2 of #31 adds a stored tsvector column, which is
-# searched as it is rather than through `to_tsvector`; that is the branch on `field.type` below.
+# #1021: a `SearchVectorField` column is already a document, so it is searched as it is — `col @@
+# query`, no `to_tsvector` — and the query's config applies to the query alone. That is the branch on
+# `field.type` below. A config that differs from the one the column was filled with is the caller's to
+# match, as in Django: the stored document does not say which it was built with.
 function _render_search_operator(v::SQLTypeOper, column::String, instruc::SQLInstruction)::String
   instruc.connection isa PormGSQLite && throw(Dialect.fts_capability_error("The @search lookup"))
   field, _ = _operand_field(v, instruc)
-  (field !== nothing && field.type in ("VARCHAR", "TEXT")) ||
+  (field !== nothing && field.type in ("VARCHAR", "TEXT", "TSVECTOR")) ||
     throw(FilterError("The \e[31m@search\e[0m lookup searches a text column (a CharField or " *
-                      "TextField), and \e[31m$(_array_lookup_label(v))\e[0m is not one. To search " *
-                      "several columns, or an expression, rank them: " *
-                      "\e[4m\e[32mSearchRank(SearchVector(…), SearchQuery(…))\e[0m (#31)."))
+                      "TextField) or a SearchVectorField, and \e[31m$(_array_lookup_label(v))\e[0m is " *
+                      "not one. To search several columns, or an expression, project a SearchVector and " *
+                      "search its name: \e[4m\e[32mvalues(\"doc\" => SearchVector(…)).filter(\"doc__@search\" => …)\e[0m (#1021)."))
   # The parse ladder admits only these two (`_check_fixed_shape_lookup`); this is the fail-safe for a
   # spelling that bypasses it.
   query = v.values isa AbstractString ? SearchQuery(v.values) : v.values
   _is_fts_node(query, "SEARCH_QUERY") ||
     throw(FilterError("The \e[31m@search\e[0m lookup takes the search text or a SearchQuery(...) (#31)."))
-  vector = Dialect.ts_vector_sql(column, query.kwargs["config"], instruc.connection)
+  vector = field.type == "TSVECTOR" ? column : Dialect.ts_vector_sql(column, query.kwargs["config"], instruc.connection)
   rendered = _on_join_right(() -> _render_fts_operand(query, instruc), instruc)
   return Dialect.search(instruc.connection, vector, rendered)
 end

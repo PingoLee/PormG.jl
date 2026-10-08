@@ -297,6 +297,13 @@ function _check_fts_render(v::SQLTypeFunction, instruc::SQLInstruction)
   name = get(_FTS_FUNCTION_NAMES, v.function_name, nothing)
   name === nothing && return nothing
   instruc.connection isa PormGSQLite && throw(Dialect.fts_capability_error(name))
+  # #1021: a SearchVector may be PROJECTED under a name (`build_select.jl` renders it past this
+  # check), so the message says what is left: comparing and wrapping.
+  v.function_name == "SEARCH_VECTOR" && throw(QueryBuildError(
+    "A SearchVector is an operand of the \e[4m\e[32m@search\e[0m lookup or SearchRank, not a value: " *
+    "it cannot be compared or wrapped in another function. Project it under a " *
+    "name and search that, \e[4m\e[32mvalues(\"doc\" => SearchVector(…)).filter(\"doc__@search\" => …)\e[0m, " *
+    "or score rows with \e[4m\e[32mSearchRank(SearchVector(…), SearchQuery(…))\e[0m (#1021)."))
   v.function_name in _FTS_OPERANDS && throw(QueryBuildError(
     "A $(name) is an operand of the \e[4m\e[32m@search\e[0m lookup, SearchRank or SearchHeadline, " *
     "not a value: it cannot be projected, compared or wrapped in another function. Search a column " *
@@ -422,8 +429,9 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     end
   elseif v.function_name == "CASE"
     resolved_column = _render_case_branches(v.column, instruc; _as = _as)
-  elseif v.function_name in ("SEARCH_RANK", "SEARCH_HEADLINE")
+  elseif v.function_name in ("SEARCH_RANK", "SEARCH_HEADLINE") || _is_combined_fts(v)
     # #31: in text order — the vector or document, then the query, then the headline's options.
+    # #1021: a sum of vectors renders its two halves the same way, left to right.
     resolved_column = Any[_render_fts_operand(c, instruc; _as = _as) for c in v.column]
   else
     resolved_column = _get_select_query(_null_skipping_operands(v, instruc), instruc, _as=_as)
@@ -435,6 +443,9 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     (formatter === nothing || formatter === Models.format_bool_sql) ||
       throw(_non_boolean_function_condition(v.column))
   end
+  # #1021: the full-text nodes over a `SearchVectorField` column, read after their operands render (as
+  # `@len` below is). `SearchRank` ranks one; `SearchVector` and `SearchHeadline` must not take one.
+  v.function_name in ("SEARCH_RANK", "SEARCH_VECTOR", "SEARCH_HEADLINE") && _check_fts_column_operands(v, instruc)
   # #28: `@len` counts an array's elements, so its operand must be an `ArrayField` — a column, a
   # joined or CTE path, or a slice (`tags__0_2`), whose memo entry is the array field itself. Read
   # after the operand renders, like the check above: rendering a path is what fills the memo. Fails
@@ -485,6 +496,39 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   interval_ms && v.function_name == "AVG" && (sql = "CAST(round($(sql)) AS INTEGER)")
   return sql, interval_ms, interval
 end
+# #1021: a `SearchVectorField` column is a document, not text. `SearchRank`'s vector written as a path
+# must be one — a text column would be cast to `tsvector` as a literal, not parsed. `SearchVector` and
+# `SearchHeadline` cast their text operands to text: on a stored document that text is the lexeme list
+# (`'grand':2 'prix':3`), which `to_tsvector` would parse again into different words. Read off the
+# formatter, which a column, a joined path, a CTE path and an `F` over any of them all carry. An
+# explicit `Cast(…, "text")` is the caller asking for that text, and is left alone.
+function _check_fts_column_operands(v::SQLTypeFunction, instruc::SQLInstruction)
+  stored(c) = c isa Union{AbstractString, SQLTypeF} && _expression_formatter(c, instruc) === Models.format_tsvector_sql
+  if v.function_name == "SEARCH_RANK"
+    c = v.column[1]
+    (c isa AbstractString && !stored(c)) && throw(QueryBuildError(
+      "SearchRank ranks a SearchVector(...), or a SearchVectorField column, and \e[31m$(c)\e[0m is not " *
+      "one. To rank a text column, wrap it: SearchRank(SearchVector(\"$(c)\"), …) (#1021)."))
+  elseif v.function_name == "SEARCH_VECTOR"
+    # A sum's columns are its two vectors, never a column, so this loop finds nothing there.
+    for c in v.column
+      stored(c) && throw(QueryBuildError(
+        "\e[31m$(_fts_operand_label(c))\e[0m is a SearchVectorField, already a document: SearchVector " *
+        "would parse its lexemes again as text. Rank or search the column itself — " *
+        "SearchRank(\"<column>\", …), \"<column>__@search\" (#1021)."))
+    end
+  elseif v.function_name == "SEARCH_HEADLINE"
+    stored(v.column[1]) && throw(QueryBuildError(
+      "SearchHeadline marks words in TEXT, and \e[31m$(_fts_operand_label(v.column[1]))\e[0m is a " *
+      "SearchVectorField, a document of lexemes. Headline the text column it was built from (#1021)."))
+  end
+  return nothing
+end
+
+_fts_operand_label(c::AbstractString) = String(c)
+_fts_operand_label(c::SQLTypeF) = c isa FExpression && c.field_name isa String ? "F(\"$(c.field_name)\")" : "this expression"
+_fts_operand_label(::Any) = "this expression"
+
 # The operand `@len` refused, as the caller spelled it (#28).
 _len_operand_label(c::AbstractString) = String(c)
 _len_operand_label(c::CTEReference) = "CTE(\"$(c.name)\", \"$(c.path)\")"

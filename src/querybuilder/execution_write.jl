@@ -1117,7 +1117,20 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
         "visible to SET. Setting a column FROM a joined table needs the correlated UPDATE ... FROM " *
         "path, which is not implemented (#174)."))
     end
-    if isa(objct.insert[field], SQLTypeF) || isa(objct.insert[field], SQLTypeFunction) ||
+    # #1021: a `SearchVector` fills a `SearchVectorField` — Django's
+    # `update(search=SearchVector(…))` — and is rendered as the document it is, past the "operand,
+    # not a value" refusal every other value position keeps. Into any other column it is refused, as
+    # is a `SearchQuery` anywhere: neither is a value a column of another type could hold.
+    if _is_fts_operand(objct.insert[field])
+      value = objct.insert[field]
+      (_is_fts_node(value, "SEARCH_VECTOR") && model.fields[field] isa Models.sSearchVectorField) ||
+        throw(QueryBuildError(
+          "update(\"$(field)\" => $(_is_fts_node(value, "SEARCH_VECTOR") ? "SearchVector" : "SearchQuery")(…)): " *
+          "a SearchVector fills a SearchVectorField column, and nothing else is written from a full-text " *
+          "operand (#1021)."))
+      connection isa PormGSQLite && throw(Dialect.fts_capability_error("SearchVector"))
+      push!(set_clause_parts, "$(quoted_field) = $(_render_fts_operand(value, instruction))")
+    elseif isa(objct.insert[field], SQLTypeF) || isa(objct.insert[field], SQLTypeFunction) ||
        isa(objct.insert[field], SQLTypeCTE)
       f_value = _set_update_query(objct.insert[field], instruction)
       push!(set_clause_parts, "$(quoted_field) = $(f_value)")

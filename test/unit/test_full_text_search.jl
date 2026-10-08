@@ -1,6 +1,7 @@
 """
 Unit coverage for PostgreSQL full-text search (#31, part 1): the `@search` lookup and `SearchQuery`,
-`SearchVector`, `SearchRank` and `SearchHeadline`.
+`SearchVector`, `SearchRank` and `SearchHeadline`. Part 2 (#1021), in its own outer testset at the end:
+`Models.search_vector_expression`, the index text that cannot drift from the query's.
 
 PostgreSQL only. SQLite's FTS5 is a separate index table with its own query syntax and ranking, so
 every piece raises `BackendCapabilityError` there when the query is built rather than being emulated.
@@ -58,6 +59,14 @@ Result = Models.Model("result",
   resultid = Models.IDField(),
   driverid = Models.ForeignKey("Driver"),
   points   = Models.FloatField(),
+)
+# #1021: a race report with its document stored, and a ForeignKey to reach it through.
+Report = Models.Model("report",
+  reportid = Models.IDField(),
+  raceid   = Models.ForeignKey("Race"),
+  title    = Models.CharField(max_length = 200),
+  body     = Models.TextField(),
+  search   = Models.SearchVectorField(null = true),
 )
 PormG.Models.set_models(@__MODULE__, "fts31")
 end
@@ -198,11 +207,12 @@ end
   end
 
   @testset "SearchRank's operands: a SearchVector, and a String or SearchQuery" begin
-    @test _err31(() -> SearchRank("surname", "senna")) isa QueryBuildError
+    # #1021: a String is the path of a SearchVectorField column, so a text column's path is refused
+    # where it resolves — at render — rather than when the rank is built.
+    @test _err31(() -> _q31(; vals = Any["driverid", "r" => SearchRank("surname", "senna")])) isa QueryBuildError
+    @test _err31(() -> SearchRank(1, "senna")) isa QueryBuildError
     @test _err31(() -> SearchRank(SearchVector("surname"), SearchVector("forename"))) isa QueryBuildError
     @test _err31(() -> SearchRank(SearchVector("surname"), 1)) isa QueryBuildError
-    @test _err31(() -> SearchRank(SearchVector("surname"), "x"; weights = [0.1, 0.2, 0.4, 1.0])) isa QueryBuildError
-    @test _err31(() -> SearchVector("surname"; weight = "A")) isa QueryBuildError
     @test _err31(() -> SearchVector()) isa QueryBuildError
     @test _err31(() -> SearchVector(1)) isa QueryBuildError
     @test _err31(() -> SearchVector(SearchQuery("x"))) isa QueryBuildError
@@ -302,7 +312,6 @@ end
   @testset "a SearchVector or SearchQuery used as a value raises QueryBuildError" begin
     sv, sq = SearchVector("surname"), SearchQuery("senna")
     spellings = (
-      () -> _q31(; vals = Any["driverid", "v" => sv]),
       () -> _q31(; vals = Any["driverid", "q" => sq]),
       () -> _q31(; vals = Any["driverid", "x" => Lower(sq)]),
       () -> _q31(; vals = Any["driverid", "x" => Coalesce(sv, Value(""))]),
@@ -379,5 +388,485 @@ end
     end
     @test _err31(() -> PormG.Dialect.search(_FTS_SL, "a", "b")) isa BackendCapabilityError
     @test _err31(() -> PormG.Dialect.ts_vector_sql("a", nothing, _FTS_SL)) isa BackendCapabilityError
+  end
+end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Part 2 (#1021)
+# ═════════════════════════════════════════════════════════════════════════════
+
+# The `to_tsvector(…)` a rendered query holds, with the table qualification dropped — the text an
+# expression index must equal to serve it. `"Tb"."surname"` is `"surname"` to the index, which names
+# the column of its own table.
+function _tsvector_of1021(sql::AbstractString)
+  start = findfirst("to_tsvector(", sql)
+  start === nothing && return nothing
+  depth, i = 0, first(start)
+  for j in first(start):lastindex(sql)
+    sql[j] == '(' && (depth += 1)
+    sql[j] == ')' && (depth -= 1; depth == 0 && (i = j; break))
+  end
+  return replace(sql[first(start):i], r"\"Tb(?:_\d+)?\"\." => "")
+end
+
+@testset "Full-text search, part 2 (#1021)" begin
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Index helper: search_vector_expression is the query's own to_tsvector text
+  # One column is the @search lookup's expression, several are SearchVector's. Both come from the
+  # Kernel function the query is rendered with, so the index and the query cannot drift apart — a
+  # config or cast that differs is still a valid index, just one PostgreSQL never uses (#1021).
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "search_vector_expression equals the rendered to_tsvector, per config and shape" begin
+    # No config is not a case: the query has one-argument to_tsvector, which PostgreSQL cannot index,
+    # so the helper refuses it (next testset) — review of #1021.
+    for config in ("simple", "pg_catalog.english")
+      # One column: the lookup's bare form, parsed with the query's config.
+      r = _q31("surname__@search" => SearchQuery("senna"; config = config))
+      @test Models.search_vector_expression("surname"; config = config) == _tsvector_of1021(r[:sql_text])
+      # Several columns: SearchVector's COALESCE'd document, as SearchRank renders it.
+      vec = SearchVector("forename", "surname"; config = config)
+      r = _q31(; vals = Any["driverid", "r" => SearchRank(vec, SearchQuery("senna"; config = config))])
+      @test Models.search_vector_expression("forename", "surname"; config = config) ==
+            _tsvector_of1021(r[:sql_text])
+    end
+    @test Models.search_vector_expression("surname"; config = "simple") ==
+          "to_tsvector('simple'::regconfig, \"surname\")"
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Index helper: what it produces is a declarable GIN index, and its inputs are checked
+  # The text has to pass Index's own expression check (it is SQL a migration will run), and an input
+  # the query would refuse — a config that is not a name — is refused here too, with the same type.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "search_vector_expression declares an Index; bad columns and configs are refused" begin
+    expr = Models.search_vector_expression("forename", "surname"; config = "simple")
+    idx = Models.Index(expressions = (expr,), method = "gin", name = "driver_name_tsv")
+    @test idx.expressions == [expr]
+    # A config the lookup refuses is refused with the lookup's error type.
+    @test _err31(() -> Models.search_vector_expression("surname"; config = "simple'); DROP TABLE x; --")) isa InvalidValueError
+    # A column is an identifier: nothing the helper would have to escape inside its quotes.
+    for bad in ("sur\"name", "surname)", "a b", "", "1abc", "\"surname\"")
+      @test _err31(() -> Models.search_vector_expression(bad)) isa ModelDefinitionError
+    end
+    @test _err31(() -> Models.search_vector_expression()) isa ModelDefinitionError
+    # No config: the one shape PostgreSQL refuses to index (`to_tsvector(col)` is not IMMUTABLE), so
+    # the helper refuses it where the index is declared, not at migrate.
+    for cols in (("surname",), ("forename", "surname"))
+      e = _err31(() -> Models.search_vector_expression(cols...))
+      @test e isa ModelDefinitionError
+      @test occursin("needs the query's config", _plain31(sprint(showerror, e)))
+    end
+    @test _err31(() -> Models.search_vector_expression(:surname)) isa ModelDefinitionError
+    # The function is the published spelling: `Models.search_vector_expression`.
+    @test Base.ispublic(Models, :search_vector_expression)
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Weights: SearchVector(…; weight) labels the document with setweight
+  # The label is a literal like the config (an index matches by text), checked against A–D. The
+  # index helper renders the same text for the same weight, through the same Kernel function.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "SearchVector(…; weight) renders setweight, and the index helper agrees" begin
+    vec = SearchVector("forename", "surname"; config = "simple", weight = "A")
+    r = _q31(; vals = Any["driverid", "r" => SearchRank(vec, "senna")])
+    @test occursin("ts_rank(setweight(to_tsvector('simple'::regconfig, COALESCE((\"Tb\".\"forename\")::text, '') " *
+                   "|| ' ' || COALESCE((\"Tb\".\"surname\")::text, '')), 'A'), plainto_tsquery(", r[:sql_text])
+    @test r[:parameters] == Any["senna"]
+    # The helper wraps the same document in the same setweight.
+    rendered = match(r"setweight\(.*?, 'A'\)", r[:sql_text]).match
+    @test Models.search_vector_expression("forename", "surname"; config = "simple", weight = "A") ==
+          replace(rendered, r"\"Tb\"\." => "")
+    # One weighted column is SearchVector's document too: the lookup has no weight to match.
+    @test Models.search_vector_expression("surname"; config = "simple", weight = "B") ==
+          "setweight(to_tsvector('simple'::regconfig, COALESCE((\"surname\")::text, '')), 'B')"
+  end
+
+  @testset "a weight other than A, B, C or D is refused, at construction and at render" begin
+    for bad in ("E", "a", "AB", "A'); SELECT 1; --", 1, :A)
+      @test _err31(() -> SearchVector("surname"; weight = bad)) isa InvalidValueError
+      @test _err31(() -> Models.search_vector_expression("surname"; config = "simple", weight = bad)) isa InvalidValueError
+    end
+    # The kwargs Dict is mutable, so the renderer checks the label again rather than printing it.
+    vec = SearchVector("surname"; weight = "A")
+    vec.kwargs["weight"] = "A'); --"
+    @test _err31(() -> _q31(; vals = Any["driverid", "r" => SearchRank(vec, "x")])) isa InvalidValueError
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Weights: v1 + v2 is one document, each half with its own config and weight
+  # Django's CombinedSearchVector. It renders `(v1 || v2)` and binds nothing of its own, so the only
+  # parameters are the operands' own, in text order, before the query's text.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "SearchVector + SearchVector renders the two documents concatenated" begin
+    vec = SearchVector("forename"; config = "simple", weight = "A") +
+          SearchVector("surname"; config = "simple", weight = "B")
+    r = _q31(; vals = Any["driverid", "r" => SearchRank(vec, "senna")])
+    @test occursin("ts_rank((setweight(to_tsvector('simple'::regconfig, COALESCE((\"Tb\".\"forename\")::text, '')), 'A') || " *
+                   "setweight(to_tsvector('simple'::regconfig, COALESCE((\"Tb\".\"surname\")::text, '')), 'B')), " *
+                   "plainto_tsquery('simple'::regconfig, \$1::text))", r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna"])
+    # Three vectors nest left to right, and an expression operand still binds in text order.
+    vec3 = SearchVector("forename") + SearchVector(Concat("surname", Value(" jr"))) + SearchVector("number")
+    r = _q31(; vals = Any["driverid", "r" => SearchRank(vec3, "senna")])
+    @test occursin("ts_rank(((to_tsvector(", r[:sql_text])
+    _assert_pg_text_order31(r, Any[" jr", "senna"])
+  end
+
+  @testset "a sum of vectors with different configs needs a SearchQuery, not a String" begin
+    mixed = SearchVector("forename"; config = "simple") + SearchVector("surname"; config = "english")
+    @test _err31(() -> SearchRank(mixed, "senna")) isa QueryBuildError
+    @test occursin("different configs", _msg31(() -> SearchRank(mixed, "senna")))
+    # A config and none are different configs too: the text would be parsed one way or the other.
+    @test _err31(() -> SearchRank(SearchVector("forename") + SearchVector("surname"; config = "simple"), "x")) isa QueryBuildError
+    # An explicit query names its own config, so nothing is guessed.
+    r = _q31(; vals = Any["driverid", "r" => SearchRank(mixed, SearchQuery("senna"; config = "simple"))])
+    @test occursin("plainto_tsquery('simple'::regconfig, \$1::text)", r[:sql_text])
+    # Agreeing configs carry over to a String query, as for a single vector — and stay mixed once
+    # mixed, however the sum is extended.
+    same = SearchVector("forename"; config = "simple") + SearchVector("surname"; config = "simple")
+    r = _q31(; vals = Any["driverid", "r" => SearchRank(same, "senna")])
+    @test occursin("plainto_tsquery('simple'::regconfig, \$1::text)", r[:sql_text])
+    @test _err31(() -> SearchRank(mixed + SearchVector("number"; config = "simple"), "x")) isa QueryBuildError
+  end
+
+  @testset "a SearchVector adds only to a SearchVector" begin
+    vec = SearchVector("surname")
+    for f in (() -> vec + 1, () -> 1 + vec, () -> vec + 1.5, () -> vec + "forename",
+              () -> vec + SearchQuery("x"), () -> SearchQuery("x") + vec, () -> vec + Lower("forename"),
+              () -> PormG.Functions.Sum("number") + vec)
+      e = _err31(f)
+      @test e isa QueryBuildError
+      @test occursin("adds only to another SearchVector", _plain31(sprint(showerror, e)))
+    end
+    # A vector inside a SearchVector is still refused, and now names the sum as the way to join two.
+    @test occursin("add them", _msg31(() -> SearchVector(vec)))
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Weights: SearchRank(…; weights) prints PostgreSQL's float4[] in D, C, B, A order
+  # Printed like normalization — four finite numbers in 0..1, so the literal holds only digits, `.`,
+  # `e` and `-` — and re-checked at render because the node's kwargs are mutable.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "SearchRank(…; weights) renders the weights array first" begin
+    vec = SearchVector("surname"; config = "simple", weight = "A")
+    r = _q31(; vals = Any["driverid", "r" => SearchRank(vec, "senna"; weights = [0, 0.25, 0.5, 1], normalization = 2)])
+    @test occursin("(ts_rank('{0.0,0.25,0.5,1.0}'::float4[], setweight(", r[:sql_text])
+    @test occursin("plainto_tsquery('simple'::regconfig, \$1::text), 2))::double precision", r[:sql_text])
+    @test r[:parameters] == Any["senna"]
+    r = _q31(; vals = Any["driverid", "r" => SearchRank(vec, "senna"; weights = (0.1, 0.2, 0.4, 1.0), cover_density = true)])
+    @test occursin("(ts_rank_cd('{0.1,0.2,0.4,1.0}'::float4[], ", r[:sql_text])
+  end
+
+  @testset "weights other than four numbers in 0..1 are refused, at construction and at render" begin
+    vec = SearchVector("surname")
+    for bad in ([0.1, 0.2, 0.4], [0.1, 0.2, 0.4, 1.0, 1.0], [0.1, 0.2, 0.4, 1.5], [-0.1, 0.2, 0.4, 1.0],
+                [NaN, 0.2, 0.4, 1.0], [Inf, 0.2, 0.4, 1.0], [true, false, true, true], ["0.1", "0.2", "0.4", "1"],
+                0.5, "{0.1,0.2,0.4,1.0}")
+      @test _err31(() -> SearchRank(vec, "x"; weights = bad)) isa InvalidValueError
+    end
+    # float4's range (review of #1021): a positive value below floatmin(Float32) is refused here, as
+    # PostgreSQL would refuse it at the server; the smallest normal float4 and 0 are fine.
+    @test _err31(() -> SearchRank(vec, "x"; weights = [1e-50, 0.2, 0.4, 1.0])) isa InvalidValueError
+    @test _err31(() -> SearchRank(vec, "x"; weights = [Float64(floatmin(Float32)), 0, 0.4, 1.0])) === nothing
+    rank = SearchRank(vec, "x"; weights = [0.1, 0.2, 0.4, 1.0])
+    rank.kwargs["weights"] = ["1}'::float4[], (SELECT 1)) --"]
+    @test _err31(() -> _q31(; vals = Any["driverid", "r" => rank])) isa InvalidValueError
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Query combinators: &, | and ~ are tsquery's &&, || and !!
+  # Each leaf keeps its own parser and binds its own text, so the parameters come back in text order;
+  # the combination is parenthesized, so nesting keeps the grouping it was written with.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "SearchQuery & | ~ render tsquery's operators, leaves bound in text order" begin
+    a = SearchQuery("senna"; config = "simple")
+    b = SearchQuery("prost"; config = "simple", search_type = "websearch")
+    r = _q31("surname__@search" => a | b)
+    @test occursin("WHERE to_tsvector('simple'::regconfig, \"Tb\".\"surname\") @@ " *
+                   "(plainto_tsquery('simple'::regconfig, \$1::text) || websearch_to_tsquery('simple'::regconfig, \$2::text))",
+                   r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna", "prost"])
+    r = _q31("surname__@search" => a & ~b)
+    @test occursin("@@ (plainto_tsquery('simple'::regconfig, \$1::text) && (!!websearch_to_tsquery('simple'::regconfig, \$2::text)))",
+                   r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna", "prost"])
+    # Nesting: ~(a & b) | c keeps its parentheses, and the texts still bind left to right.
+    c = SearchQuery("hill"; config = "simple")
+    r = _q31("surname__@search" => ~(a & b) | c)
+    @test occursin("@@ ((!!(plainto_tsquery('simple'::regconfig, \$1::text) && websearch_to_tsquery('simple'::regconfig, \$2::text))) " *
+                   "|| plainto_tsquery('simple'::regconfig, \$3::text))", r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna", "prost", "hill"])
+  end
+
+  @testset "a combined query works wherever one query does" begin
+    q = SearchQuery("senna"; config = "simple") | SearchQuery("prost"; config = "simple")
+    # The lookup parses the column with the combination's (shared) config.
+    @test occursin("to_tsvector('simple'::regconfig, \"Tb\".\"surname\") @@ (",
+                   _q31("surname__@search" => q)[:sql_text])
+    # SearchRank, with the alias filter re-rendering it: four texts, in text order.
+    r = _q31("r__@gte" => 0.01; vals = Any["driverid", "r" => SearchRank(SearchVector("surname"; config = "simple"), q)])
+    @test occursin("ts_rank(to_tsvector('simple'::regconfig, COALESCE((\"Tb\".\"surname\")::text, '')), " *
+                   "(plainto_tsquery('simple'::regconfig, \$1::text) || plainto_tsquery('simple'::regconfig, \$2::text)))",
+                   r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna", "prost", "senna", "prost", "0.01"])
+    # SearchHeadline takes the combination's config for the document.
+    r = _q31(; model = _F.Race, vals = Any["raceid", "h" => SearchHeadline("name", q)])
+    @test occursin("ts_headline('simple'::regconfig, (\"Tb\".\"name\")::text, (plainto_tsquery(", r[:sql_text])
+    # Inside Q, beside another predicate.
+    r = _q31(PormG.Q("surname__@search" => ~SearchQuery("senna"), "forename" => "Bruno"))
+    @test occursin("@@ (!!plainto_tsquery(\$1::text))", r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna", "Bruno"])
+  end
+
+  @testset "a SearchQuery combines only with a SearchQuery of the same config" begin
+    q = SearchQuery("senna")
+    for f in (() -> q & 1, () -> 1 & q, () -> q | 2, () -> 2 | q, () -> q & SearchVector("surname"),
+              () -> SearchVector("surname") | q, () -> ~SearchVector("surname"), () -> q & Lower("surname"),
+              () -> PormG.F("driverid") & q)
+      e = _err31(f)
+      @test e isa QueryBuildError
+      @test occursin("combines only with another SearchQuery", _plain31(sprint(showerror, e)))
+    end
+    # Two configs, or a config and none, have no single config for the lookup's column.
+    for (x, y) in ((SearchQuery("a"; config = "simple"), SearchQuery("b"; config = "english")),
+                   (SearchQuery("a"; config = "simple"), SearchQuery("b")))
+      for f in (() -> x & y, () -> x | y)
+        e = _err31(f)
+        @test e isa QueryBuildError
+        @test occursin("must share one config", _plain31(sprint(showerror, e)))
+      end
+    end
+    # The integer bitwise operators are untouched.
+    r = _q31(; vals = Any["driverid", "m" => PormG.F("number") & 3])
+    @test occursin("&", r[:sql_text]) && !occursin("&&", r[:sql_text])
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # @search on a projection alias: values("doc" => SearchVector(…)).filter("doc__@search" => q)
+  # Django's multi-column search. The vector is projected (its tsvector text) and rendered again in
+  # WHERE, then the query: `<vector> @@ <query>`. A String query takes the vector's config.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a SearchVector alias is projected, and @search on it renders vector @@ query" begin
+    vec = SearchVector("forename", "surname"; config = "simple")
+    r = _q31("doc__@search" => "senna"; vals = Any["driverid", "doc" => vec])
+    doc = "to_tsvector('simple'::regconfig, COALESCE((\"Tb\".\"forename\")::text, '') || ' ' || " *
+          "COALESCE((\"Tb\".\"surname\")::text, ''))"
+    @test occursin("$(doc) as \"doc\"", r[:sql_text])
+    @test occursin("WHERE $(doc) @@ plainto_tsquery('simple'::regconfig, \$1::text)", r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna"])
+    # The index helper's text for the same columns and config is the predicate's document.
+    @test Models.search_vector_expression("forename", "surname"; config = "simple") ==
+          replace(doc, r"\"Tb\"\." => "")
+    # A projected vector with no filter on it builds too, and reads as its text.
+    r = _q31(; vals = Any["driverid", "doc" => vec])
+    @test occursin("$(doc) as \"doc\"", r[:sql_text])
+  end
+
+  @testset "alias @search: a SearchQuery, a combination, a weighted sum, a binding operand, inside Q" begin
+    # A SearchQuery keeps its own parser and config; the vector keeps its own.
+    q = SearchQuery("senna"; config = "english", search_type = "websearch")
+    r = _q31("doc__@search" => q; vals = Any["driverid", "doc" => SearchVector("surname"; config = "simple")])
+    @test occursin("WHERE to_tsvector('simple'::regconfig, COALESCE((\"Tb\".\"surname\")::text, '')) @@ " *
+                   "websearch_to_tsquery('english'::regconfig, \$1::text)", r[:sql_text])
+    # A combined query and a weighted sum of vectors.
+    both = SearchQuery("senna"; config = "simple") | SearchQuery("prost"; config = "simple")
+    sum = SearchVector("surname"; config = "simple", weight = "A") + SearchVector("forename"; config = "simple", weight = "D")
+    r = _q31("doc__@search" => both; vals = Any["driverid", "doc" => sum])
+    @test occursin("WHERE (setweight(", r[:sql_text])
+    @test occursin("'D')) @@ (plainto_tsquery('simple'::regconfig, \$1::text) || plainto_tsquery('simple'::regconfig, \$2::text))",
+                   r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna", "prost"])
+    # A vector whose operand binds: it binds once in SELECT and again in WHERE, ahead of the query.
+    vec = SearchVector("forename", Concat("surname", Value(" jr")); config = "simple")
+    r = _q31("doc__@search" => "senna"; vals = Any["driverid", "doc" => vec])
+    _assert_pg_text_order31(r, Any[" jr", " jr", "senna"])
+    # Inside Q, beside a column predicate, in text order.
+    r = _q31(PormG.Q("doc__@search" => "senna", "forename" => "Bruno");
+             vals = Any["driverid", "doc" => SearchVector("surname"; config = "simple")])
+    @test occursin("@@ plainto_tsquery('simple'::regconfig, \$1::text)", r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna", "Bruno"])
+  end
+
+  @testset "a SearchVector alias takes @search and nothing else; other aliases still refuse @search" begin
+    vals = Any["driverid", "doc" => SearchVector("surname")]
+    for pair in ("doc__@gt" => 1, "doc" => "senna", "doc__@icontains" => "senna", "doc__@isnull" => true)
+      e = _err31(() -> _q31(pair; vals = vals))
+      @test e isa FilterError
+      @test occursin("the only lookup on it is @search", _plain31(sprint(showerror, e)))
+    end
+    # @search on an alias that is not a SearchVector, in words that name the SearchVector route.
+    msg = _msg31(() -> _q31("n__@search" => "senna"; vals = Any["driverid", "n" => Lower("surname")]))
+    @test occursin("an alias that projects a SearchVector", msg)
+    # A sum with mixed configs has no config for a String query.
+    mixed = SearchVector("forename"; config = "simple") + SearchVector("surname"; config = "english")
+    e = _err31(() -> _q31("doc__@search" => "senna"; vals = Any["driverid", "doc" => mixed]))
+    @test e isa FilterError
+    @test occursin("different configs", _plain31(sprint(showerror, e)))
+    # Projected is the one new use: wrapped or compared, it is still not a value.
+    for f in (() -> _q31(; vals = Any["driverid", "x" => Coalesce(SearchVector("surname"), Value(""))]),
+              () -> _q31(SearchVector("surname") == "x"))
+      e = _err31(f)
+      @test e isa QueryBuildError
+      @test occursin("cannot be compared or wrapped", _plain31(sprint(showerror, e)))
+    end
+    # Beside an aggregate it is a grouping key, named by its position — the projection is not
+    # rendered again, so nothing re-checks it there (tsvector has equality, so PostgreSQL groups it).
+    r = _q31(; vals = Any["doc" => SearchVector("surname"), "n" => PormG.Functions.Count("driverid")])
+    @test occursin("GROUP BY 1", r[:sql_text])
+    # A Subquery's column is a value its parent compares: projected there, a SearchVector is refused
+    # at build rather than failing at the server (review of #1021).
+    inner = _F.Driver.objects
+    inner.filter("driverid" => PormG.OuterRef("driverid")).values("doc" => SearchVector("surname"))
+    e = _err31(() -> _q31("surname" => PormG.Subquery(inner)))
+    @test e isa QueryBuildError
+    @test occursin("projected only by the outermost query", _plain31(sprint(showerror, e)))
+    # On SQLite the projection and the alias search name PostgreSQL.
+    @test _err31(() -> _q31("doc__@search" => "x"; vals = vals, conn = _FTS_SL)) isa BackendCapabilityError
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # SearchVectorField: @search on a stored document is `col @@ query`
+  # The column is already a tsvector, so the lookup puts no `to_tsvector` around it: the query's
+  # config parses the query alone. On a column reached through a ForeignKey too.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "@search on a SearchVectorField renders the column itself @@ the query" begin
+    r = _q31("search__@search" => SearchQuery("monaco"; config = "english"); model = _F.Report, vals = Any["reportid"])
+    @test occursin("WHERE \"Tb\".\"search\" @@ plainto_tsquery('english'::regconfig, \$1::text)", r[:sql_text])
+    @test !occursin("to_tsvector", r[:sql_text])
+    _assert_pg_text_order31(r, Any["monaco"])
+    # A bare string is a plain query under the server's default config, as on a text column.
+    r = _q31("search__@search" => "monaco"; model = _F.Report, vals = Any["reportid"])
+    @test occursin("\"Tb\".\"search\" @@ plainto_tsquery(\$1::text)", r[:sql_text])
+    # A combined query, and the reverse path from a race to its reports.
+    q = SearchQuery("monaco"; config = "english") & ~SearchQuery("rain"; config = "english")
+    r = _q31("search__@search" => q; model = _F.Report, vals = Any["reportid"])
+    @test occursin("\"Tb\".\"search\" @@ (plainto_tsquery('english'::regconfig, \$1::text) && (!!plainto_tsquery(", r[:sql_text])
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # SearchVectorField: SearchRank ranks the stored column by its path
+  # Django's `SearchRank(F("search"), q)`. The path is checked at render to be a SearchVectorField: a
+  # text column is not a document, and casting it to tsvector would read it as a literal.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "SearchRank(\"search\", q) ranks the stored document; a text path is refused" begin
+    r = _q31(; model = _F.Report, vals = Any["reportid", "rank" => SearchRank("search", SearchQuery("monaco"; config = "english"); weights = [0.1, 0.2, 0.4, 1.0])])
+    @test occursin("(ts_rank('{0.1,0.2,0.4,1.0}'::float4[], \"Tb\".\"search\", plainto_tsquery('english'::regconfig, \$1::text)))::double precision",
+                   r[:sql_text])
+    # A String query on a stored column has no vector config to borrow: the server's default.
+    r = _q31(; model = _F.Report, vals = Any["reportid", "rank" => SearchRank("search", "monaco")])
+    @test occursin("ts_rank(\"Tb\".\"search\", plainto_tsquery(\$1::text))", r[:sql_text])
+    # Ranked through the alias filter, the text binds twice, in text order.
+    r = _q31("rank__@gte" => 0.01; model = _F.Report, vals = Any["reportid", "rank" => SearchRank("search", "monaco")])
+    _assert_pg_text_order31(r, Any["monaco", "monaco", "0.01"])
+    for path in ("title", "body", "reportid")
+      e = _err31(() -> _q31(; model = _F.Report, vals = Any["reportid", "r" => SearchRank(path, "x")]))
+      @test e isa QueryBuildError
+      @test occursin("SearchRank(SearchVector(\"$(path)\")", _plain31(sprint(showerror, e)))
+    end
+  end
+
+  @testset "a SearchVectorField is not text: SearchVector, SearchHeadline and pattern lookups refuse it" begin
+    e = _err31(() -> _q31(; model = _F.Report, vals = Any["reportid", "r" => SearchRank(SearchVector("title", "search"), "x")]))
+    @test e isa QueryBuildError
+    @test occursin("already a document", _plain31(sprint(showerror, e)))
+    e = _err31(() -> _q31(; model = _F.Report, vals = Any["reportid", "h" => SearchHeadline("search", "x")]))
+    @test e isa QueryBuildError
+    @test occursin("SearchHeadline marks words in TEXT", _plain31(sprint(showerror, e)))
+    # An `F` over the stored column is the column too (review of #1021); an explicit Cast is not checked.
+    for f in (() -> SearchVector(PormG.F("search")), () -> SearchHeadline(PormG.F("search"), "x"))
+      e = _err31(() -> _q31(; model = _F.Report, vals = Any["reportid", "r" => f()]))
+      @test e isa QueryBuildError
+      @test occursin("F(\"search\")", _plain31(sprint(showerror, e)))
+    end
+    for op in ("@contains", "@icontains", "@startswith", "@regex")
+      e = _err31(() -> _q31("search__$(op)" => "mon"; model = _F.Report, vals = Any["reportid"]))
+      @test e isa FilterError
+      @test occursin("Search it with \"search__@search\"", _plain31(sprint(showerror, e)))
+    end
+    # A number column is still not searchable, and the message now names both kinds.
+    @test occursin("or a SearchVectorField", _msg31(() -> _q31("number__@search" => "1")))
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # SearchVectorField: update fills it from a SearchVector
+  # Django's `update(search=SearchVector(…))`. The vector renders as the document it is — past the
+  # "operand, not a value" refusal — and only into a SearchVectorField; a SearchQuery, or a vector
+  # into any other column, is refused before anything runs.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "update(\"search\" => SearchVector(…)) writes the document into the column" begin
+    q = _F.Report.objects
+    q.filter("raceid" => 7)
+    vec = SearchVector("title"; config = "english", weight = "A") + SearchVector("body"; config = "english", weight = "B")
+    res = q.update("search" => vec, show_query = :dict)
+    @test occursin(r"SET \"search\" = \(setweight\(to_tsvector\('english'::regconfig, COALESCE\(\(\"?[A-Za-z_]*\"?\.?\"title\"\)::text, ''\)\), 'A'\) \|\| setweight\(",
+                   res[:sql_text])
+    @test !occursin("::tsvector", res[:sql_text])
+    # One binding operand. PostgreSQL numbers its markers: the WHERE value is bound when the scope is
+    # built ($1), and the SET operand after it ($2) — the order #668 pins for every update.
+    q = _F.Report.objects
+    q.filter("raceid" => 7)
+    res = q.update("search" => SearchVector(Concat("title", Value(" report")); config = "simple"), show_query = :dict)
+    @test res[:parameters] == Any[7, " report"]
+    @test occursin("SET \"search\" = to_tsvector('simple'::regconfig, COALESCE((CONCAT(\"Tb\".\"title\", \$2::text))::text, ''))",
+                   replace(res[:sql_text], r"\s+" => " "))
+    @test occursin(r"\"raceid\" = \$1\b", res[:sql_text])
+    # Refused: a vector into a text column, a query anywhere, and the raw value types the column
+    # does not hold.
+    for (field, value) in (("title", SearchVector("body")), ("search", SearchQuery("x")), ("title", SearchQuery("x")))
+      q = _F.Report.objects
+      q.filter("raceid" => 7)
+      e = _err31(() -> q.update(field => value, show_query = :dict))
+      @test e isa QueryBuildError
+      @test occursin("a SearchVector fills a SearchVectorField column", _plain31(sprint(showerror, e)))
+    end
+    q = _F.Report.objects
+    q.filter("raceid" => 7)
+    @test occursin("SET \"search\" = \$", q.update("search" => "'monaco':1", show_query = :dict)[:sql_text])
+    q = _F.Report.objects
+    q.filter("raceid" => 7)
+    @test _err31(() -> q.update("search" => 1, show_query = :dict)) isa InvalidValueError
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # SearchVectorField: the column — DDL, the canonical type, SQLite, inspectdb, the model file
+  # `tsvector` on PostgreSQL; refused on SQLite at both sites the #648 pattern names; read back as its
+  # own kind, so a declared field equals its live column; and a model file round-trips it.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "SearchVectorField renders tsvector, is refused on SQLite, and round-trips" begin
+    field = Models.SearchVectorField(null = true)
+    @test PormG.Dialect._get_column_type(field, _FTS_PG) == "tsvector"
+    e = _err31(() -> PormG.Dialect.field_to_column("search", field, _FTS_SL))
+    @test e isa BackendCapabilityError
+    @test occursin("SearchVectorField \"search\"", _plain31(sprint(showerror, e)))
+    @test PormG.Migrations.column_spec(field, _FTS_PG).type == PormG.CTsVector()
+    @test PormG.Migrations.parse_canonical_type("tsvector", _FTS_PG) == PormG.CTsVector()
+    # inspectdb writes the field back from the live column's kind.
+    spec = PormG.Migrations.column_spec(field, _FTS_PG)
+    back = PormG.Migrations._inspectdb_field(spec, "report", _FTS_PG, false, nothing)
+    @test back isa Models.sSearchVectorField && back.null
+    # A generated model file declares it by its constructor.
+    @test occursin("search = Models.SearchVectorField(null=true)", PormG.Models.Model_to_str(_F.Report))
+    # No default: PostgreSQL stores a document literal rewritten, so a declared one would never
+    # converge (review of #1021). db_default stays the spelling for an empty document.
+    for d in ("'monaco':1", "monaco", 1)
+      e = _err31(() -> Models.SearchVectorField(default = d))
+      @test e isa FieldValidationError
+      @test occursin("takes no default", _plain31(sprint(showerror, e)))
+    end
+    # The message points to `null = true` and `update`, not to a literal `db_default`: that one reads
+    # back from the catalog as a value, so it would not converge either (delta review of #1021).
+    @test occursin("null = true", _msg31(() -> Models.SearchVectorField(default = "x")))
+  end
+
+  @testset "a retype into tsvector is refused; out of it, only to text" begin
+    nic = PormG.Migrations._pg_no_implicit_cast
+    @test nic(PormG.CText(), PormG.CTsVector())
+    @test nic(PormG.CVarChar(200), PormG.CTsVector())
+    @test nic(PormG.CInt32(), PormG.CTsVector())
+    @test !nic(PormG.CTsVector(), PormG.CText())
+    @test nic(PormG.CTsVector(), PormG.CInt32())
+    # No USING is written for it: `CAST(col AS tsvector)` would read the text as a tsvector literal.
+    @test PormG.Dialect._postgres_retype_using("c", PormG.CText(), PormG.CTsVector(), "tsvector") === nothing
   end
 end

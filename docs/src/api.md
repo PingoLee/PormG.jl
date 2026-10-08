@@ -361,13 +361,17 @@ df = M.Result.objects.values(
 
 | Function | Description | Example |
 | :--- | :--- | :--- |
-| `SearchQuery(text; config, search_type)` | The query: `plainto_tsquery`, `phraseto_tsquery`, `websearch_to_tsquery` or `to_tsquery` | `"surname__@search" => SearchQuery("senna"; config = "simple")` |
-| `SearchVector(fields...; config)` | The document: the fields cast to text, NULL-safe, joined by a space | `SearchVector("forename", "surname"; config = "simple")` |
-| `SearchRank(vector, query; normalization, cover_density)` | `ts_rank` / `ts_rank_cd`, as a `Float64` | `"rank" => SearchRank(SearchVector("forename", "surname"), "senna")` |
+| `SearchQuery(text; config, search_type)` | The query: `plainto_tsquery`, `phraseto_tsquery`, `websearch_to_tsquery` or `to_tsquery`; `&`, `\|` and `~` combine queries | `"surname__@search" => SearchQuery("senna"; config = "simple")` |
+| `SearchVector(fields...; config, weight)` | The document: the fields cast to text, NULL-safe, joined by a space, labelled `"A"`–`"D"` by `weight`; `+` adds two | `SearchVector("surname"; weight = "A") + SearchVector("forename"; weight = "D")` |
+| `SearchRank(vector, query; normalization, cover_density, weights)` | `ts_rank` / `ts_rank_cd`, as a `Float64`; `weights` are D, C, B, A | `"rank" => SearchRank(SearchVector("forename", "surname"), "senna")` |
 | `SearchHeadline(field, query; config, start_sel, stop_sel, …)` | `ts_headline`: the text with the matched words marked | `"hl" => SearchHeadline("name", "grand prix"; start_sel = "<b>", stop_sel = "</b>")` |
 
 Each raises `BackendCapabilityError` on SQLite when the query is built. The config, the search types
-and the options are in [Full-Text Search](read/full_text_search.md).
+and the options are in [Full-Text Search](read/full_text_search.md). To index a search, declare the
+expression with `Models.search_vector_expression(columns...; config)`, which returns the
+`to_tsvector(…)` text the query renders (see *Indexing* on that page). To search several columns,
+project a `SearchVector` under a name and filter it: `values("doc" => SearchVector("forename",
+"surname")).filter("doc__@search" => "lewis")`.
 
 An operand of `Coalesce`, `Greatest`, `Least`, `NullIf`, `Power`, `Mod` and `Concat` is read by its type. A string is a column path. A number, a `Bool`, or a date or time (`Date`, `DateTime`, `ZonedDateTime`, `Time`) is a literal that is bound as a parameter, so `Coalesce("points", 0)` means `Coalesce("points", Value(0))`. Wrap a string literal in `Value`, as in `NullIf("code", Value(""))`. Any other value raises `QueryBuildError` when the expression is built.
 

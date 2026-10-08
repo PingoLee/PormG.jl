@@ -62,6 +62,8 @@ struct CBytes   <: CanonicalType end
 # there — so the SQLite parser never produces these kinds.
 struct CInet    <: CanonicalType end
 struct CCidr    <: CanonicalType end
+# A stored full-text document (#1021): `SearchVectorField` renders `tsvector`. The same template.
+struct CTsVector <: CanonicalType end
 
 # `nothing` = the type carried no length modifier. PormG always renders one for a char-family field,
 # so `nothing` only arises for a spelling PormG did not write (a hand-made table, an imported one).
@@ -648,6 +650,79 @@ index_text_marker(expressions::AbstractVector{<:AbstractString}, condition::Unio
 # (look-behind is PostgreSQL 9.6+; the floor is 11), because the readers interpolate it into SQL
 # (`_PG_MARKED_INDEX` / `_PG_UNMARKED_INDEX`).
 const INDEX_MARKER_RE = Regex("(?<![0-9A-Za-z_:])" * INDEX_MARKER * "(?::[0-9a-f]{16})?(?![0-9A-Za-z_:])")
+
+# ── Full-text search document text (#31, #1021) ──────────────────────────────────────────────────
+#
+# The ONE writer of `to_tsvector(…)`. PostgreSQL serves a query from an expression index only when
+# the query's expression is the index's, so the `@search` lookup and `SearchVector` (`Dialect`, step
+# 118) and `Models.search_vector_expression` (step 107, which writes the index) all render through
+# these. Two copies of the text are how an index silently stops serving its lookup — a wrong config or
+# a missing cast is still a valid index and a valid query (#1021). Layer 1 for the #239 reason: `Models`
+# is included before `Dialect`.
+#
+# The config is a LITERAL, `'english'::regconfig`, not a bound parameter — the maintainer's call on
+# #31, because an index matches by text and a parameter has none. It is safe to print because it is a
+# NAME, checked against an identifier pattern that admits no quote, space or semicolon, and checked
+# again at every render, since a query node's `kwargs` is a mutable Dict.
+
+const TS_CONFIG_RE = r"\A[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?\z"
+
+"""
+    ts_config_name(config) -> Union{Nothing,String}
+
+The validated text-search config (`"english"`, `"pg_catalog.portuguese"`), or `nothing` for none.
+Anything that is not a plain or schema-qualified identifier raises `InvalidValueError`.
+"""
+function ts_config_name(config)::Union{Nothing,String}
+  config === nothing && return nothing
+  (config isa AbstractString && occursin(TS_CONFIG_RE, config)) && return String(config)
+  throw(InvalidValueError(
+    "A text-search config is the name of one, such as \"english\" or \"pg_catalog.portuguese\": " *
+    "letters, digits and underscores, optionally schema-qualified (#31).", :format))
+end
+
+# `'english'::regconfig, ` — the leading argument of every config-taking text-search function.
+ts_config_prefix(config)::String = (c = ts_config_name(config); c === nothing ? "" : "'$(c)'::regconfig, ")
+
+"""
+    ts_lookup_document_sql(column, config) -> String
+
+The left side of the `@search` lookup on a text column: `to_tsvector('cfg'::regconfig, column)`. No
+`COALESCE` and no cast — a NULL document makes the predicate NULL, which drops the row exactly as
+`false` would, and the bare call is what an expression index is written with.
+"""
+ts_lookup_document_sql(column::AbstractString, config)::String = "to_tsvector($(ts_config_prefix(config))$(column))"
+
+"""
+    ts_vector_document_sql(columns, config) -> String
+
+`SearchVector`'s document — Django's: every operand cast to text and NULL-safe, joined by a space, so a
+row whose `forename` is NULL still matches on its `surname`.
+"""
+function ts_vector_document_sql(columns::AbstractVector, config)::String
+  document = join(("COALESCE(($(c))::text, '')" for c in columns), " || ' ' || ")
+  return "to_tsvector($(ts_config_prefix(config))$(document))"
+end
+
+# The four labels `setweight` takes. Printed into the SQL, so checked against this list at every
+# render as the config is — never a bound parameter, for the config's reason: an index matches by text.
+const TS_WEIGHTS = ("A", "B", "C", "D")
+
+"""
+    ts_weight_name(weight) -> Union{Nothing,String}
+
+The validated `setweight` label (`"A"` to `"D"`), or `nothing` for none. Anything else raises
+`InvalidValueError`.
+"""
+function ts_weight_name(weight)::Union{Nothing,String}
+  weight === nothing && return nothing
+  (weight isa AbstractString && weight in TS_WEIGHTS) && return String(weight)
+  throw(InvalidValueError("A SearchVector's weight is \"A\", \"B\", \"C\" or \"D\" (#1021).", :format))
+end
+
+# `document` labelled with `weight`: `setweight(document, 'A')`, or `document` itself for none.
+ts_weighted_sql(document::AbstractString, weight)::String =
+  (w = ts_weight_name(weight); w === nothing ? String(document) : "setweight($(document), '$(w)')")
 
 # ── CHECK-expressed bounds ───────────────────────────────────────────────────────────────────────
 #

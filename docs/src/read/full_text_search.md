@@ -365,8 +365,9 @@ M.Race_report.objects.
   to build it from words. It takes no `default` (`FieldValidationError`): PostgreSQL stores a
   document literal rewritten, so a declared one would never match its column. Declare it
   `null = true`, and fill it with `update`.
-- Name it something other than `search`, such as Django's `search_vector`. `search` is also the
-  lookup's name, so a bare `filter("search" => …)` on such a column is misread today (#1030).
+- Django's convention names it `search_vector`, which these examples follow. A column named `search`
+  works too: a one-segment key is always the column, so `filter("search" => …)` compares it, and
+  `"search__@search"` is the lookup on it.
 - A GIN index on the column (`Models.Index(fields = ("search_vector",), method = "gin", …)`) serves
   `@search`, with no expression to match.
 - `SearchVector`, `SearchHeadline` and the pattern lookups (`@contains`, …) do not take the column.

@@ -80,6 +80,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "cjoin_on Anchor-less Joins (#45)" include("unit/test_cjoin_on.jl")
     @testset "Joined Reference — Joined(alias, path) (#481)" include("unit/test_joined_reference.jl")
     @testset "Operator SQL Generation" include("unit/test_operators.jl")
+    @testset "Columns Named Like a Lookup (#1030)" include("unit/test_lookup_named_columns.jl")
     @testset "F/Joined Date Operands (#494)" include("unit/test_f_date_operands.jl")
     @testset "SQLite Interval Ordering (#894)" include("unit/test_sqlite_interval_order.jl")
     @testset "pormg_lower UDF (#78)" include("unit/test_pormg_lower_udf.jl")

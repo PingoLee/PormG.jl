@@ -21,6 +21,15 @@
 _suggest_operator(suffix::AbstractString)::Union{Nothing,String} =
   _suggest_name(suffix, keys(PormGsuffix))
 
+# #1030: the lookup segment of a path already split on `__@`, or `""` when there is none. A lookup
+# needs a column before it, so a one-segment path is always the column, whatever it is called —
+# `filter("search" => "monaco")` on a `search` column is an equality, as `values`/`order_by` already
+# read it (`object_manager.jl`). Every arm below used to read `path[end]` as the lookup whenever it
+# was a `PormGsuffix` key, which left the column as `path[1:end-1] == String[]` and raised a raw
+# `BoundsError` for any column named `search`, `in`, `contains`, `regex`, … . `""` is no key and no
+# operator, so every membership test reads a bare path as "no lookup" without a branch of its own.
+_lookup_segment(path::Vector{String})::String = length(path) > 1 ? path[end] : ""
+
 # Consistent, actionable error for a filter operator that is not valid for the given
 # value shape. `field_path` is the split lookup (…, suffix); `shape` is a human word
 # ("vector", "subquery", "tuple"); `allowed` is the operator subset valid for that shape.
@@ -84,12 +93,14 @@ end
 
 # #31: a `SearchVector`/`SearchQuery` on the right of any lookup but `@search`. Refused at parse, in
 # the caller's words, rather than as the render-time "not a value" error it would otherwise reach.
+# The example is the lookup on the caller's own field path (#1030): on a document column named
+# `search`, `filter("search" => SearchQuery(…))` needs `"search__@search"`, not a placeholder column.
 function _check_fts_rhs(path::Vector{String}, value)
   _is_fts_operand(value) || return nothing
-  path[end] in SEARCH_LOOKUP_OPERATORS && _is_fts_node(value, "SEARCH_QUERY") && return nothing
+  _lookup_segment(path) in SEARCH_LOOKUP_OPERATORS && _is_fts_node(value, "SEARCH_QUERY") && return nothing
   throw(FilterError("Error in filter '$(join(path, "__@"))': a SearchVector or SearchQuery is not a " *
                     "value to compare. Match a text column with " *
-                    "\e[4m\e[32m\"surname__@search\" => SearchQuery(…)\e[0m (#31)."))
+                    "\e[4m\e[32m\"$(path[1])__@search\" => SearchQuery(…)\e[0m (#31)."))
 end
 
 # #997: true for the `@yyyy_q` / `@yyyy_quad` label column — a `Concat` node that `Y_Q` / `Y_QUAD`
@@ -152,9 +163,10 @@ end
 
 """
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:Union{AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID}
-  if haskey(PormGsuffix, x.first[end])
-    _check_fixed_shape_lookup(x.first[end], x.second)
-    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=_path_sqlfield(x.first[1:end-1]))
+  suffix = _lookup_segment(x.first)   # #1030
+  if haskey(PormGsuffix, suffix)
+    _check_fixed_shape_lookup(suffix, x.second)
+    return OperObject(operator=PormGsuffix[suffix], values=x.second, column=_path_sqlfield(x.first[1:end-1]))
   else
     return OperObject(operator="=", values=x.second, column=_path_sqlfield(x.first)) # TODO, maybe I need to check if the column is valid and process the function before store
   end
@@ -175,7 +187,7 @@ _get_pair_to_oper(x::Pair{Vector{String},Vector{T}}) where T<:Sockets.IPAddr =
 # as a bare `MethodError` naming an internal function.
 function _get_pair_to_oper(x::Pair{Vector{String},Regex})
   key = join(x.first, "__@")
-  op = x.first[end]
+  op = _lookup_segment(x.first)   # #1030: a bare column named `regex` is not the pattern lookup
   # Suggest the pattern spelling only where it is the pattern lookup the user already chose; on any
   # other lookup a `@regex` suggestion would be a detour into a PostgreSQL-only feature.
   if op in ("regex", "iregex", "nregex", "niregex")
@@ -202,9 +214,10 @@ end
 # spelling #411's own error message had prescribed as the workaround for `blob__@in`. It never worked.
 #
 # This method is strictly more specific than that arm, so it wins dispatch, and it mirrors the scalar
-# shape above exactly: a `PormGsuffix` key in the last segment delegates back to the ladder (so
+# shape above exactly: a `PormGsuffix` key after a column delegates back to the ladder (so
 # `blob__@in => UInt8[1, 2]` keeps meaning a two-element IN list of the numbers 1 and 2), and a bare
-# path builds the equality the scalar arm builds.
+# path builds the equality the scalar arm builds — a bare path named like a lookup included (`"in" =>
+# bytes`, #1030).
 #
 # It deliberately does NOT decide whether the field is binary. It cannot: `_check_filter` is handed
 # only the pair, and the `Q` / `Qor` / `When` routes reach it with no model at all — a parse-time
@@ -219,11 +232,11 @@ end
 # ONLY the bare-path case is this method's business. A suffixed path goes to
 # `_vector_oper_from_suffix` — the vector arm's own ladder, shared rather than restated, because
 # restating it is how the first cut of this fix lost the `@range` arity check and the
-# wrong-operator refusal. `PormGsuffix` is the right membership test for "is the last segment an
-# operator": a TRANSFORM segment (`@year`, `@yyyy_mm`) is not in it, so `date__@year => bytes` stays a
+# wrong-operator refusal. `PormGsuffix` (through `_lookup_segment`) is the right membership test for
+# "is the last segment an operator": a TRANSFORM segment (`@year`, `@yyyy_mm`) is not in it, so `date__@year => bytes` stays a
 # bare-path equality over a transform column and is refused at render like any other non-binary field.
 function _get_pair_to_oper(x::Pair{Vector{String},Vector{UInt8}})
-  haskey(PormGsuffix, x.first[end]) && return _vector_oper_from_suffix(x)
+  haskey(PormGsuffix, _lookup_segment(x.first)) && return _vector_oper_from_suffix(x)
   return OperObject(operator="=", values=x.second, column=_path_sqlfield(x.first))
 end
 function _get_pair_to_oper(x::Pair{String,Vector{UInt8}})
@@ -237,7 +250,7 @@ function _get_pair_to_oper(x::Pair{String,Vector{T}}) where T<:Union{Missing,Abs
 end
 # Store SQLObject, to use __@in operator
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLObjectHandler
-  if x.first[end] in ["in", "nin"]
+  if _lookup_segment(x.first) in ["in", "nin"]
     # @pormg_debug
     return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=_path_sqlfield(x.first[1:end-1]))
   else
@@ -248,10 +261,11 @@ end
 # Same shape as the SQLTypeF method below it (that is the idiom `F("r91__raceid")` used pre-#444).
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeCTE
   _reject_cte_desc(x.second, "a filter comparison")
-  if haskey(PormGsuffix, x.first[end])
-    _check_fixed_shape_lookup(x.first[end], x.second)
+  suffix = _lookup_segment(x.first)   # #1030
+  if haskey(PormGsuffix, suffix)
+    _check_fixed_shape_lookup(suffix, x.second)
     _check_column_rhs_lookup(x.first)
-    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=_path_sqlfield(x.first[1:end-1]))
+    return OperObject(operator=PormGsuffix[suffix], values=x.second, column=_path_sqlfield(x.first[1:end-1]))
   else
     return OperObject(operator="=", values=x.second, column=_path_sqlfield(x.first))
   end
@@ -260,10 +274,11 @@ end
 # `filter("driverid" => Joined("d", "driverid"))` compares two columns.
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeJoined
   _reject_joined_desc(x.second, "a filter comparison")
-  if haskey(PormGsuffix, x.first[end])
-    _check_fixed_shape_lookup(x.first[end], x.second)
+  suffix = _lookup_segment(x.first)   # #1030
+  if haskey(PormGsuffix, suffix)
+    _check_fixed_shape_lookup(suffix, x.second)
     _check_column_rhs_lookup(x.first)
-    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=_path_sqlfield(x.first[1:end-1]))
+    return OperObject(operator=PormGsuffix[suffix], values=x.second, column=_path_sqlfield(x.first[1:end-1]))
   else
     return OperObject(operator="=", values=x.second, column=_path_sqlfield(x.first))
   end
@@ -273,10 +288,11 @@ end
 # pair spelling reaches these two methods — `filter`, `Q`/`Qor`, `When` conditions, CTE- and
 # Joined-keyed pairs, `.on`/`.cjoin`/`.cjoin_on` — so this is the one place to do it.
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeF
-  if haskey(PormGsuffix, x.first[end])
-    _check_fixed_shape_lookup(x.first[end], x.second)
+  suffix = _lookup_segment(x.first)   # #1030
+  if haskey(PormGsuffix, suffix)
+    _check_fixed_shape_lookup(suffix, x.second)
     _check_column_rhs_lookup(x.first)
-    return OperObject(operator=PormGsuffix[x.first[end]], values=_walk_slot(x.second), column=_path_sqlfield(x.first[1:end-1]))
+    return OperObject(operator=PormGsuffix[suffix], values=_walk_slot(x.second), column=_path_sqlfield(x.first[1:end-1]))
   else
     return OperObject(operator="=", values=_walk_slot(x.second), column=_path_sqlfield(x.first))
   end
@@ -288,7 +304,7 @@ end
 # so the column-RHS refusals apply — except that `@in` gets its own hint, because the membership
 # spelling already takes a subquery: the query itself, unwrapped (the `SQLObjectHandler` arm above).
 function _get_pair_to_oper(x::Pair{Vector{String},SubqueryObject})
-  suffix = x.first[end]
+  suffix = _lookup_segment(x.first)   # #1030
   if suffix in ("in", "nin")
     lookup = join(x.first, "__@")
     throw(FilterError("Error in filter '$(lookup)': '$(suffix)' takes the query itself, not a scalar " *
@@ -305,10 +321,11 @@ end
 # Allow Case/When and other FObject expressions as filter RHS values
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeFunction
   _check_fts_rhs(x.first, x.second)   # #31
-  if haskey(PormGsuffix, x.first[end])
-    _check_fixed_shape_lookup(x.first[end], x.second)
+  suffix = _lookup_segment(x.first)   # #1030
+  if haskey(PormGsuffix, suffix)
+    _check_fixed_shape_lookup(suffix, x.second)
     _check_column_rhs_lookup(x.first)
-    return OperObject(operator=PormGsuffix[x.first[end]], values=_check_function(x.second), column=_path_sqlfield(x.first[1:end-1]))
+    return OperObject(operator=PormGsuffix[suffix], values=_check_function(x.second), column=_path_sqlfield(x.first[1:end-1]))
   else
     return OperObject(operator="=", values=_check_function(x.second), column=_path_sqlfield(x.first))
   end
@@ -357,7 +374,7 @@ end
 function _get_pair_to_oper(x::Pair{Vector{String},<:Union{AbstractVector{<:Union{SQLType,SQLObject}},Vector{PormGAbstractType}}})
   # An empty list binds nothing, whatever its element type — the `Vector{Any}` arm's reasoning.
   isempty(x.second) && return _get_pair_to_oper(x.first => String[])
-  suffix = x.first[end]
+  suffix = _lookup_segment(x.first)   # #1030
   lookup = join(x.first, "__@")
   kinds = join(unique(string.(nameof.(typeof.(x.second)))), ", ")
   if suffix in ("in", "nin") && all(v -> v isa SQLObjectHandler, x.second)
@@ -389,11 +406,11 @@ end
 # a list of them. Strictly less specific than every arm above, so it only catches what they do not.
 function _get_pair_to_oper(x::Pair{Vector{String},<:AbstractVector})
   lookup = join(x.first, "__@")
-  path = join(haskey(PormGsuffix, x.first[end]) ? x.first[1:end-1] : x.first, "__")
+  path = join(haskey(PormGsuffix, _lookup_segment(x.first)) ? x.first[1:end-1] : x.first, "__")
   # A `nothing` among values is the other shape that lands here (`["SOFT", nothing]` is a
   # `Vector{Union{Nothing, String}}`). In a filter value a NULL element is spelled `missing` — except
   # in an array lookup, which takes no NULL element in either spelling (`_refuse_null_array_element`).
-  x.first[end] in ARRAY_CONTAINMENT_OPERATORS && _refuse_null_array_element(x.second, lookup)
+  _lookup_segment(x.first) in ARRAY_CONTAINMENT_OPERATORS && _refuse_null_array_element(x.second, lookup)
   any(isnothing, x.second) && throw(FilterError(
     "Error in filter '$(lookup)': a filter value cannot hold `nothing`; write a NULL element as " *
     "`missing` — \e[4m\e[32m\"$(path)\" => [\"SOFT\", missing]\e[0m."))
@@ -413,7 +430,7 @@ end
 # out to remove, reintroduced one method up. One body, two callers, so a guard cannot be missing from
 # one of them.
 function _vector_oper_from_suffix(x::Pair{Vector{String},<:AbstractVector})
-  suffix = x.first[end]
+  suffix = _lookup_segment(x.first)   # #1030
   # #28: a bare path — the last segment is no operator — is an equality against the WHOLE vector, the
   # meaning an `ArrayField` gives it. Built here without knowing the field, as the `Vector{UInt8}` arm
   # above builds a binary equality, and for the same reason: `Q`/`Qor`/`When` reach this ladder with
@@ -421,8 +438,9 @@ function _vector_oper_from_suffix(x::Pair{Vector{String},<:AbstractVector})
   # (`_guard_vector_equality`), with the "no operator" message this ladder used to give at parse time.
   #
   # Only a path with no `__@` segment, whose last `__` segment is not an operator name: `surname__in`
-  # is a typo for `surname__@in`, and keeps the "no operator" message that names the fix.
-  if length(x.first) == 1 && !haskey(PormGsuffix, last(split(x.first[1], "__")))
+  # is a typo for `surname__@in`, and keeps the "no operator" message that names the fix. A column
+  # that is itself named `in` has no `__` segment before the name, so it is the bare path (#1030).
+  if length(x.first) == 1 && !haskey(PormGsuffix, _lookup_segment(String.(split(x.first[1], "__"))))
     return OperObject(operator="=", values=x.second, column=_path_sqlfield(x.first))
   end
   if suffix in ["in", "nin"]
@@ -469,17 +487,17 @@ end
 # #27: JSONB document containment (@>) with a Dict / NamedTuple RHS — serialize at parse time so
 # OperObject.values stays a String.
 function _get_pair_to_oper(x::Pair{Vector{String},<:AbstractDict})
-  x.first[end] == "jcontains" || _raise_invalid_filter_operator(x.first, "dict", ["jcontains"])
+  _lookup_segment(x.first) == "jcontains" || _raise_invalid_filter_operator(x.first, "dict", ["jcontains"])
   return OperObject(operator="jcontains", values=Models.format_json_sql(x.second), column=_path_sqlfield(x.first[1:end-1]))
 end
 function _get_pair_to_oper(x::Pair{Vector{String},<:NamedTuple})
-  x.first[end] == "jcontains" || _raise_invalid_filter_operator(x.first, "namedtuple", ["jcontains"])
+  _lookup_segment(x.first) == "jcontains" || _raise_invalid_filter_operator(x.first, "namedtuple", ["jcontains"])
   return OperObject(operator="jcontains", values=Models.format_json_sql(x.second), column=_path_sqlfield(x.first[1:end-1]))
 end
 function _get_pair_to_oper(x::Pair{Vector{String},Tuple{T,T}}) where T
-  if x.first[end] in ("range", "nrange")   # #207: nrange = NOT BETWEEN, same 2-value shape
+  if _lookup_segment(x.first) in ("range", "nrange")   # #207: nrange = NOT BETWEEN, same 2-value shape
     return OperObject(operator=PormGsuffix[x.first[end]], values=[x.second[1], x.second[2]], column=_path_sqlfield(x.first[1:end-1]))
-  elseif x.first[end] in ARRAY_CONTAINMENT_OPERATORS
+  elseif _lookup_segment(x.first) in ARRAY_CONTAINMENT_OPERATORS
     _refuse_array_lookup_tuple(x)
   else
     _raise_invalid_filter_operator(x.first, "tuple", ["range", "nrange"])
@@ -489,7 +507,7 @@ end
 # `("S", 1)`). None matched a method, so each leaked a raw `MethodError` naming this function. Strictly
 # less specific than the 2-tuple arm above, so it only catches what that arm does not.
 function _get_pair_to_oper(x::Pair{Vector{String},<:Tuple})
-  suffix = x.first[end]
+  suffix = _lookup_segment(x.first)   # #1030
   suffix in ARRAY_CONTAINMENT_OPERATORS && _refuse_array_lookup_tuple(x)
   suffix in ("range", "nrange") &&
     throw(FilterError("Error in filter, '$(suffix)' operator requires exactly 2 values, got $(length(x.second))"))

@@ -1543,6 +1543,8 @@ M.Race.objects.
 ```
 
 `ts_headline` reads the whole document for every row it returns, so filter and limit the rows first.
+It does not HTML-escape the text: before rendering a headline of user-written text as HTML, see
+*Showing a headline in a web page* in the Full-Text Search guide (#1026).
 """
 function SearchHeadline(expression::_ScalarOperand, query; config = nothing, start_sel = nothing,
                         stop_sel = nothing, max_words = nothing, min_words = nothing,

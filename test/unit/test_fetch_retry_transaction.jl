@@ -115,6 +115,9 @@ end
 # Classify only the injected failure as a lost connection, so the retry branch is
 # reachable under the mock (the real drivers match their own message fingerprints).
 PormG.backend_is_connection_error(::MockPGPool138, e) = e isa MockConnLost138
+# …and as one that never ran, so the out-of-transaction retry below can fire at all (#1042). The
+# codeless drop that must NOT be retried has its own file: test_fetch_retry_safety.jl.
+PormG.backend_is_retry_safe(::MockPGPool138, ::MockConnLost138) = true
 
 # ── SQLite-shaped mock: SQLiteConnectionPool's exact fields + the same knobs.
 #    Statements funnel through the REAL global async worker → backend_execute, proving the
@@ -162,6 +165,7 @@ function PormG.backend_execute(pool::MockSQLitePool138, conn, sql::String, param
   return NamedTuple[]
 end
 PormG.backend_is_connection_error(::MockSQLitePool138, e) = e isa MockConnLost138
+PormG.backend_is_retry_safe(::MockSQLitePool138, ::MockConnLost138) = true
 
 # Run a transaction whose body issues one INSERT through the retry-capable fetch() wrapper —
 # the exact path ORM writes take inside run_in_transaction — and return the caught error.

@@ -109,6 +109,10 @@ function PormG.backend_execute_async(pool::MockPGLive442, conn, sql::String, par
   end
 end
 PormG.backend_is_connection_error(::MockPGLive442, e) = e isa MockConnLost442
+# The sentinel stands for a drop the server reported before the statement ran (57P01), the one kind
+# `fetch` still retries (#1042). The sweep runs for a codeless drop too; test_fetch_retry_safety.jl
+# pins that without the retry.
+PormG.backend_is_retry_safe(::MockPGLive442, ::MockConnLost442) = true
 
 # ── SQLite-shaped mock: SQLiteConnectionPool's exact fields (PG/SQLite stay aligned) ──
 mutable struct MockSQLiteLive442 <: PormG.PormGSQLite
@@ -496,6 +500,62 @@ end
   @test occursin("ssl syscall error", lowercase(string(poisoned)))   # the bait is really there
   @test !PormG.backend_is_connection_error(pg, poisoned)
   @test PormG.backend_classify_error(pg, poisoned) === :integrity
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (13) Only a provably unexecuted statement is retry-safe (#1042).
+#
+# `backend_is_connection_error` decides whether the slot is renewed and the idle ones swept;
+# `backend_is_retry_safe` decides whether `fetch` re-runs the statement. Every codeless shape above
+# must stay a lost connection and must NOT be retry-safe: the #1025 capture shows each one arriving
+# while the backend was still running the statement, so an autocommit write may already have
+# committed. Two things show the statement never ran: a SQLSTATE in `_PG_LOST_CONNECTION_ERRORS`,
+# and libpq refusing to send (`PQsendQueryStart`'s "no connection to the server").
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "only a statement that never ran is retry-safe — LibPQ (#1042)" begin
+  pg = CP.PostgresConnectionPool("host=localhost dbname=x user=y")
+  E = LibPQ.Errors
+  codeless(msg) = E.PQResultError{E.CUN, E.EUNOWN}(msg, nothing)
+  lost(e) = PormG.backend_is_connection_error(pg, e)
+  safe(e) = PormG.backend_is_retry_safe(pg, e)
+
+  # The server named the backend gone: the statement never ran.
+  for e in (E.AdminShutdown("", nothing), E.CrashShutdown("", nothing), E.CannotConnectNow("", nothing),
+            E.IdleSessionTimeout("", nothing), E.ConnectionFailure("", nothing),
+            E.ConnectionDoesNotExist("", nothing))
+    @test lost(e) && safe(e)
+  end
+
+  # libpq refused before writing a byte. LibPQ.jl raises the submission failure as this exact type.
+  refused = E.PQConnectionError("no connection to the server\n")
+  @test lost(refused) && safe(refused)
+
+  # The socket went away: renewed and swept, never re-run. The #1025 live captures, then the #442 one.
+  for msg in ("SSL SYSCALL error: EOF detected\n",
+              "server closed the connection unexpectedly\n\tThis probably means the server terminated abnormally\n",
+              "FATAL:  terminating connection due to administrator command\nSSL connection has been closed unexpectedly",
+              "could not receive data from server: Connection timed out\n",
+              "SSL SYSCALL error: Connection timed out\n")
+    @test lost(codeless(msg)) && !safe(codeless(msg))
+  end
+  # The same failure raised while reading the reply is the same type as a refusal; only the refusal's
+  # own text makes it safe.
+  mid_statement = E.PQConnectionError("server closed the connection unexpectedly\n")
+  @test lost(mid_statement) && !safe(mid_statement)
+  # A closed result (libpq returned no PGresult at all) cannot say when it failed.
+  @test lost(E.UnknownError("", nothing)) && !safe(E.UnknownError("", nothing))
+  # The refusal phrase counts only on the refusal's type, never on a result error's text.
+  @test !safe(codeless("no connection to the server\n"))
+
+  # The codes the lost-connection set excludes are not retry-safe either.
+  for e in (E.TransactionResolutionUnknown("", nothing), E.ProtocolViolation("", nothing),
+            E.QueryCanceled("", nothing), E.SerializationFailure("", nothing))
+    @test !safe(e)
+  end
+
+  # A multi-result failure: one coded "never ran" among them is the server's own answer.
+  @test safe(CompositeException([codeless("SSL SYSCALL error: EOF detected\n"), E.AdminShutdown("", nothing)]))
+  @test !safe(CompositeException([codeless("SSL SYSCALL error: EOF detected\n")]))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -69,6 +69,7 @@ end
 #   backend_execute(pool, conn, sql, params)           -> SYNC execute (SQLite worker; PG parity)
 #   backend_execute_async(pool, conn, sql, params)     -> async handle (PG: LibPQ.AsyncResult)
 #   backend_is_connection_error(pool, e)               -> Bool: is `e` a dropped-connection error
+#   backend_is_retry_safe(pool, e)                     -> Bool: did the statement provably never run (#1042; below, not in the loop)
 #   backend_is_permanent_connect_error(pool, e)        -> Bool: is `e` a permanent connect failure (auth/cantopen) vs transient
 #   backend_cancel_query!(pool, conn)                  -> best-effort: stop the statement running on `conn` (#315)
 #   backend_drain_connection!(pool, conn)              -> Bool: is `conn` back to a clean, reusable state (#315)
@@ -147,6 +148,37 @@ function backend_classify_error(pool::PormGBackend, e)
     classify_failure isa InterruptException && rethrow()
     return :unknown
   end
+end
+
+"""
+    backend_is_retry_safe(pool, e) -> Bool
+
+Did the statement that raised the lost connection `e` provably **never run** on the server? `fetch`
+asks this only after `backend_is_connection_error` has said the connection is lost, and it
+re-runs the statement only when this also says `true` (#1042).
+
+The two questions are separate because they have different bars. *Lost* only has to mean the session
+is gone, which is enough to renew the slot and retire the idle ones. *Never ran* is what a retry
+needs, because a statement whose socket went away after the server received it may already have
+committed, and a second run would apply an autocommit write twice. A driver answers `true` only for
+the server saying so in a SQLSTATE (the backend is gone and the statement was not executed) or for
+a failure raised before anything was written to the socket. A codeless "the socket went away"
+answers `false`, whatever the phrase.
+
+Not in the missing-driver loop above, for `backend_classify_error`'s reason: `fetch` calls it
+mid-`catch`, and a throw would replace the failure being reported. The default answers `false` —
+no retry — so a driver or mock pool that never defines it is safe. Extensions add methods typed on
+their **exception types**, never on the pool marker alone, so none shadows this default for the unit
+suite's mock pools:
+
+    PormG.backend_is_retry_safe(pool::PormGPostgres, e::LibPQ.Errors.LibPQException) = …
+"""
+function backend_is_retry_safe end
+
+function backend_is_retry_safe(pool::PormGBackend, e)
+  # A multi-result failure: one coded "never ran" among them is the server's own answer.
+  e isa CompositeException && return any(inner -> backend_is_retry_safe(pool, inner), e.exceptions)
+  return false
 end
 
 """

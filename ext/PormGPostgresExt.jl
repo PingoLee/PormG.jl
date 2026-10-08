@@ -366,7 +366,11 @@ const _LOST_CONNECTION_CODES = ("08000", "08001", "08003", "08004", "08006", "57
 # interface errors (a parameter-count mismatch) quote the SQL, which is user text.
 const _CLOSED_CONNECTION_PREFIX = "postgres connection has been closed or disconnected"
 
-const _LOST_SOCKET_ERRNOS = (Libc.ECONNRESET, Libc.EPIPE, Libc.ECONNABORTED, Libc.ENOTCONN)
+# The socket under the session failed. A timeout or an unreachable host is here as well as a reset,
+# because the LibPQ extension treats libpq's "could not receive data from server: <errno>" the same way
+# for any errno. Both drivers renew the slot and sweep on it, and neither retries it (#1042).
+const _LOST_SOCKET_ERRNOS = (Libc.ECONNRESET, Libc.EPIPE, Libc.ECONNABORTED, Libc.ENOTCONN,
+                             Libc.ETIMEDOUT, Libc.EHOSTUNREACH, Libc.ENETUNREACH)
 
 function _is_lost_connection(e, depth::Int = 4)::Bool
   e isa CompositeException && return any(inner -> _is_lost_connection(inner, depth), e.exceptions)
@@ -390,6 +394,24 @@ end
 
 PormG.backend_is_connection_error(pool::_Pool, e) = _is_lost_connection(e)
 
+# Did the statement provably NEVER RUN? The gate on `fetch`'s retry (#1042), with the same rule as the
+# LibPQ extension's method. Two cases meet it:
+#
+#   * The server named one of `_LOST_CONNECTION_CODES`, a set defined by this bar.
+#   * Postgres.jl refused to send. It raises "…closed or disconnected" from `checkconn` (and from
+#     `commit` / `rollback`) after finding the socket closed, before writing anything. PormG refuses a
+#     driver-level `reconnect`, so the refusal is never replaced by a silent reopen.
+#
+# An `EOFError`, an `IOError`, a socket errno or a `NetClosingError` is a lost connection, so it is
+# renewed and swept. It can come after the server received the statement, though, so it is not retried.
+# Typed on the driver's own exception types, which never overlap LibPQ's `LibPQException` method (see the
+# header). Any other type falls to core's default, `false`.
+function PormG.backend_is_retry_safe(pool::_Pool, e::Union{Postgres.Error, Postgres.PostgresInterfaceError})
+  e isa Postgres.Error && return e.code in _LOST_CONNECTION_CODES
+  # server-text-match-ok: Postgres.jl's own client-side text, not a server message
+  return startswith(e.msg, _CLOSED_CONNECTION_PREFIX)
+end
+
 # Permanent: the same configuration fails the same way on every retry.
 const _PERMANENT_CONNECT_CODES = ("28P01", "28000", "3D000")  # bad password, no such role, no such database
 
@@ -405,7 +427,7 @@ const _OPERATIONAL_CLASSES = ("08", "40", "53", "55", "57")
 function PormG.backend_classify_error(pool::_Pool,
                                       e::Union{Postgres.Error, Postgres.PostgresInterfaceError, EOFError, Base.IOError, SystemError})
   _is_lost_connection(e) && return :operational
-  e isa SystemError && return :operational   # e.g. ETIMEDOUT: the socket, not the statement
+  e isa SystemError && return :operational   # any other errno: the socket, not the statement
   e isa Postgres.Error || return :unknown
   isempty(e.code) && return :operational   # the driver's own protocol error: the session is suspect
   class = first(e.code, 2)

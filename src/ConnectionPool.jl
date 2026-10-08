@@ -28,7 +28,8 @@ import PormG: DatabaseError, IntegrityError, OperationalError, StatementError
 import PormG: backend_connect, backend_renew_connection, backend_is_alive, backend_execute,
               backend_execute_async, backend_is_connection_error, backend_is_permanent_connect_error,
               backend_cancel_query!, backend_drain_connection!,
-              backend_copy_in!, backend_classify_error, backend_error_fields, _NO_ERROR_FIELDS
+              backend_copy_in!, backend_classify_error, backend_error_fields, backend_is_retry_safe,
+              _NO_ERROR_FIELDS
 # Which PostgreSQL driver a pool uses (#785).
 import PormG: postgres_driver, _PG_DRIVER_PACKAGES
 
@@ -2480,6 +2481,11 @@ Internally uses async execution but immediately awaits the result.
 
 `conn = c` runs the statement on your own leased connection, which is borrowed: it is never released
 here, and a dropped connection is not retried — see [`acquire_connection`](@ref).
+
+Without `conn` and outside a transaction, a dropped connection renews the failed connection and
+retires the pool's idle ones. The statement is retried once only when it provably never ran: the
+server reported the backend gone with an error code, or the driver refused before sending it. Any
+other drop raises [`OperationalError`](@ref), because the statement may already have run (#1042).
 """
 function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
   conn = nothing,
@@ -2506,10 +2512,19 @@ function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
     # matches on the driver's type/message. Deliberately NOT `root isa OperationalError` either —
     # that kind also covers deadlock, lock timeout and serialization failure, and transparently
     # re-running a statement on a fresh autocommit session after a deadlock is a data-corruption
-    # bug. Only a *dropped connection* is safe to retry, which is exactly what this asks (#268).
+    # bug. Only a *dropped connection* reaches this branch, which is exactly what this asks (#268).
+    #
+    # A dropped connection is two decisions with two different bars (#1042). Renewing the slot and
+    # sweeping the idle ones needs only "the session is gone", which `backend_is_connection_error`
+    # answers. Re-running the statement needs "the statement never ran", which
+    # `backend_is_retry_safe` answers. A codeless drop — the socket went away, with no SQLSTATE —
+    # meets the first bar but not the second: when it comes after the server received the
+    # statement, an autocommit write may already have committed, and a retry would apply it twice.
+    # So every lost connection is renewed and swept below, and only a provably unexecuted
+    # statement is re-run. Everything else propagates as the `OperationalError` it already is.
     if conn === nothing && !fetch_task.in_transaction &&
        backend_is_connection_error(connection, _driver_cause(root))
-      @warn "Lost connection to database. Retrying the statement on a renewed or freshly acquired connection..."
+      never_ran = backend_is_retry_safe(connection, _driver_cause(root))
       # Renew the dead handle in its slot, then retry through NORMAL pool acquisition — never by
       # pinning `conn=new_conn`, which would run the retry on a connection whose lease `await_result`
       # would then release a second time. The claim below is not a substitute for that: it holds the
@@ -2554,6 +2569,14 @@ function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
       # a borrower's next statement fails and comes back through here, and a waiter's branch A
       # probe rejects it — so this task just retries through normal acquisition, where the #442
       # probe keeps corpses out of its way. The old handle is theirs to close, not ours (#585).
+      if !never_ran
+        # Renewed and swept, but not re-run: the statement may have reached the server (#1042). Still
+        # a warning, as every lost connection was before: it is the operator's sign that the pool
+        # just retired its idle connections.
+        @warn "Lost connection to database. The pool was recovered, but the statement is not retried: it may already have run"
+        throw(root)
+      end
+      @warn "Lost connection to database. Retrying the statement on a renewed or freshly acquired connection..."
       retry_task = fetch_async(connection, sql; params=params, ignore_tx=ignore_tx)
       return await_result(retry_task)
     end

@@ -350,7 +350,8 @@ try
     M.Driver.objects.create("code" => "SEN")
 catch e
     e isa IntegrityError && e.sqlstate == "23505" && return conflict(error_message(e))
-    e isa OperationalError && return retry()
+    # Not `retry()`: after a dropped connection the row may already exist (#1042).
+    e isa OperationalError && return service_unavailable(error_message(e))
     rethrow()
 end
 ```
@@ -389,8 +390,12 @@ The database could not complete the statement for a reason outside the statement
 retrying may succeed — the connection dropped mid-query, a deadlock was detected, a serialization
 failure occurred, or a lock could not be acquired in time.
 
-`catch OperationalError` is the retry signal. PormG raises it for `with_advisory_lock` acquisition
-timeouts too: contention is a runtime condition, not misuse. The fields are those of
+`catch OperationalError` is the retry signal, for work that is safe to repeat. A connection that
+dropped with no error code may have dropped after the server ran the statement, so an `INSERT`,
+`UPDATE` or `DELETE` may already have committed: repeat a read freely, but repeat a write only
+when a second run cannot change the outcome (#1042). `fetch` retries a dropped connection itself
+only when the statement provably never ran. PormG raises this error for `with_advisory_lock`
+acquisition timeouts too: contention is a runtime condition, not misuse. The fields are those of
 [`DatabaseError`](@ref).
 """
 struct OperationalError <: DatabaseError

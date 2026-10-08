@@ -40,7 +40,14 @@ This skill is for implementation and regression analysis inside `src/querybuilde
 
 For positional backends, preserve bucket semantics and flatten order. The buckets below are the **single authoritative list** — the clauses `with_bucket` / `set_context!` name and the `get_final_parameters` flatten order must agree with it; do not restate the list elsewhere:
 
-`:cte → :select → :update → :join → :where → :group → :having → :order`
+`:cte → :select → :update → :join → :where → :group → :having → :order → :limit`
+
+`:limit` (#46) holds a user's `limit`/`offset`/`page` values, which are bound, never printed into the
+SQL: `_limit_offset_sql` in `execution_read.jl` renders the tail, and on SQLite an offset with no
+limit is `LIMIT -1 OFFSET ?`, because SQLite has no standalone `OFFSET`. It is last because the tail
+is the last text that carries a marker. A nested render (a `Subquery`, an `__@in` list, a CTE body)
+lifts its LIMIT into the parent's run in that same order. Constant `LIMIT 1`s that are not user
+values (the `EXISTS (… LIMIT 1)` predicate, the `exists()` probe, write-path readbacks) stay literal.
 
 **The bucket changes only through `with_bucket` on a build path — restore, never reset (#936, #939).** `with_bucket(f, instruc_or_params, clause)` sets the active bucket and restores the one it found, on return and on throw; `build()` wraps each clause in one, so a build hands its caller back the bucket it was entered with. A `finally set_context!(x, :where)` is a *reset*: right only while nothing nests, and once a render inside a render returns it files every later value in the wrong bucket — silently, SQLite only. The bucket lives on the shared collector, not in `RenderScope`, because outer and nested builds share one collector while a scope belongs to one instruction. `set_context!` is for **statement entry points** starting a fresh collector (`query()`/`count()`/`exists()` at top level, insert/upsert rows, update's SET list, bulk, many-to-many, the deletion collector, a fence re-emitting its lifted run). `test/unit/test_render_scope.jl` pins those by file, expression and count, and fails on any other `set_context!` call or any `.current_context` access outside `parameters.jl`; a new entry point goes on that list with its reason.
 

@@ -2432,13 +2432,14 @@ with, and a config the query would refuse is refused here.
 One column without a weight is the `@search` lookup's expression,
 `to_tsvector('simple'::regconfig, "surname")`. Otherwise it is `SearchVector`'s, each column cast to
 text, `COALESCE`d and joined by a space, inside `setweight(…, 'A')` when there is a weight. The
-`config` must be the query's: `SearchQuery`'s, for the lookup. With none, the query uses the server's
-`default_text_search_config` and cannot be indexed at all, because PostgreSQL only indexes the
-two-argument `to_tsvector`.
+`config` must be the query's: `SearchQuery`'s, for the lookup. It is required: a query with no config
+uses the server's `default_text_search_config`, and PostgreSQL only indexes the two-argument
+`to_tsvector`, so there is no index to declare for it.
 
 `columns` are database column names (a field's `db_column` where it sets one), written bare; each is
-quoted in the result. A column that is not an identifier raises `ModelDefinitionError`, and a config
-that is not a name or a weight other than `"A"` to `"D"` raises `InvalidValueError`.
+quoted in the result. A column that is not an identifier, or no `config`, raises
+`ModelDefinitionError`, and a config that is not a name or a weight other than `"A"` to `"D"` raises
+`InvalidValueError`.
 
 ```julia
 Driver = Models.Model("driver",
@@ -2454,6 +2455,11 @@ Driver = Models.Model("driver",
 """
 function search_vector_expression(columns::AbstractString...; config = nothing, weight = nothing)::String
   isempty(columns) && throw(ModelDefinitionError("search_vector_expression takes at least one column (#1021)."))
+  # One-argument `to_tsvector` reads a server setting, so it is not IMMUTABLE and `CREATE INDEX` refuses
+  # it at migrate time. Refused here, where the declaration is, rather than there.
+  config === nothing && throw(ModelDefinitionError(
+    "search_vector_expression needs the query's config, such as config = \"simple\": PostgreSQL cannot " *
+    "index to_tsvector without one, because its result then depends on a server setting (#1021)."))
   for c in columns
     occursin(_SEARCH_COLUMN_RE, c) || throw(ModelDefinitionError(
       "search_vector_expression takes database column names (letters, digits and underscores); got " *

@@ -500,28 +500,34 @@ end
 # must be one — a text column would be cast to `tsvector` as a literal, not parsed. `SearchVector` and
 # `SearchHeadline` cast their text operands to text: on a stored document that text is the lexeme list
 # (`'grand':2 'prix':3`), which `to_tsvector` would parse again into different words. Read off the
-# formatter, which a column, a joined path and a CTE path all carry.
+# formatter, which a column, a joined path, a CTE path and an `F` over any of them all carry. An
+# explicit `Cast(…, "text")` is the caller asking for that text, and is left alone.
 function _check_fts_column_operands(v::SQLTypeFunction, instruc::SQLInstruction)
-  stored(c) = c isa AbstractString && _expression_formatter(c, instruc) === Models.format_tsvector_sql
+  stored(c) = c isa Union{AbstractString, SQLTypeF} && _expression_formatter(c, instruc) === Models.format_tsvector_sql
   if v.function_name == "SEARCH_RANK"
     c = v.column[1]
     (c isa AbstractString && !stored(c)) && throw(QueryBuildError(
       "SearchRank ranks a SearchVector(...), or a SearchVectorField column, and \e[31m$(c)\e[0m is not " *
       "one. To rank a text column, wrap it: SearchRank(SearchVector(\"$(c)\"), …) (#1021)."))
-  elseif v.function_name == "SEARCH_VECTOR" && !_is_combined_fts(v)
+  elseif v.function_name == "SEARCH_VECTOR"
+    # A sum's columns are its two vectors, never a column, so this loop finds nothing there.
     for c in v.column
       stored(c) && throw(QueryBuildError(
-        "\e[31m$(c)\e[0m is a SearchVectorField, already a document: SearchVector would parse its " *
-        "lexemes again as text. Rank or search the column itself — SearchRank(\"$(c)\", …), " *
-        "\"$(c)__@search\" (#1021)."))
+        "\e[31m$(_fts_operand_label(c))\e[0m is a SearchVectorField, already a document: SearchVector " *
+        "would parse its lexemes again as text. Rank or search the column itself — " *
+        "SearchRank(\"<column>\", …), \"<column>__@search\" (#1021)."))
     end
   elseif v.function_name == "SEARCH_HEADLINE"
     stored(v.column[1]) && throw(QueryBuildError(
-      "SearchHeadline marks words in TEXT, and \e[31m$(v.column[1])\e[0m is a SearchVectorField, a " *
-      "document of lexemes. Headline the text column it was built from (#1021)."))
+      "SearchHeadline marks words in TEXT, and \e[31m$(_fts_operand_label(v.column[1]))\e[0m is a " *
+      "SearchVectorField, a document of lexemes. Headline the text column it was built from (#1021)."))
   end
   return nothing
 end
+
+_fts_operand_label(c::AbstractString) = String(c)
+_fts_operand_label(c::SQLTypeF) = c isa FExpression && c.field_name isa String ? "F(\"$(c.field_name)\")" : "this expression"
+_fts_operand_label(::Any) = "this expression"
 
 # The operand `@len` refused, as the caller spelled it (#28).
 _len_operand_label(c::AbstractString) = String(c)

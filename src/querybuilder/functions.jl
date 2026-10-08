@@ -1277,7 +1277,8 @@ Combined queries must share one config, or `QueryBuildError` is raised:
 SearchQuery("senna"; config = "simple") | SearchQuery("prost"; config = "simple")
 # (plainto_tsquery('simple'::regconfig, \$1::text) || plainto_tsquery('simple'::regconfig, \$2::text))
 ```
- The text is bound as a parameter; the config
+
+The text is bound as a parameter; the config
 is checked to be a name and written into the SQL, which is what lets PostgreSQL use an index built on
 `to_tsvector('english', col)`. A config that is not a name, or an unknown `search_type`, raises
 `InvalidValueError` here, as does text containing a NUL character.

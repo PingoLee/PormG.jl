@@ -3370,14 +3370,14 @@ Fill it from text columns with `update` and a `SearchVector`, and search it with
 lookup, which on this column renders `col @@ query` with no `to_tsvector`:
 
 ```julia
-M.Race.objects.filter("year" => 2009).update("search" => SearchVector("name"; config = "english"))
-M.Race.objects.filter("search__@search" => SearchQuery("grand prix"; config = "english"))
-M.Race.objects.values("name", "rank" => SearchRank("search", SearchQuery("monaco"; config = "english")))
+M.Race.objects.filter("year" => 2009).update("search_vector" => SearchVector("name"; config = "english"))
+M.Race.objects.filter("search_vector__@search" => SearchQuery("grand prix"; config = "english"))
+M.Race.objects.values("name", "rank" => SearchRank("search_vector", SearchQuery("monaco"; config = "english")))
 ```
 
 The column does not refresh itself: re-run the `update` after the text changes. A query's config
 must be the one the document was built with, or a stemmed word will not match. A GIN index on the
-column (`Models.Index(fields = ("search",), method = "gin", name = …)`) serves `@search`.
+column (`Models.Index(fields = ("search_vector",), method = "gin", name = …)`) serves `@search`.
 
 It reads as the `tsvector`'s text, a `String` (`'grand':2 'monaco':1 'prix':3`), and a `String` it is
 given is that text, parsed by PostgreSQL as a `tsvector` literal. A pattern lookup (`@contains`, …)
@@ -3395,7 +3395,10 @@ column (`GENERATED ALWAYS AS (to_tsvector(…)) STORED`) is not supported yet.
   has no document until the `update` fills it
 - `db_index::Bool = false`: A plain b-tree index, which no full-text search uses. Declare a GIN
   `Models.Index` instead
-- `default::Union{String, Nothing} = nothing`: A default document, as `tsvector` text
+- `default`: not accepted — raises `FieldValidationError`. A document literal is stored in the form
+  PostgreSQL rewrites it to, so a declared one would never compare equal to the column. Every row's
+  document comes from its own text, through `update`; for an empty one, use
+  `db_default = (postgres = "''::tsvector",)`
 - `db_default::Union{NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). Pin it to PostgreSQL — `(postgres = "''::tsvector",)`. Mutually exclusive with `default`
 - `editable::Bool = false`: Whether the field should be editable in forms
 
@@ -3408,8 +3411,8 @@ column (`GENERATED ALWAYS AS (to_tsvector(…)) STORED`) is not supported yet.
 Race = Models.Model("race",
   raceid = Models.IDField(),
   name   = Models.CharField(max_length = 255),
-  search = Models.SearchVectorField(null = true),
-  indexes = [Models.Index(fields = ("search",), method = "gin", name = "race_search_gin")],
+  search_vector = Models.SearchVectorField(null = true),
+  indexes = [Models.Index(fields = ("search_vector",), method = "gin", name = "race_search_vector_gin")],
 )
 ```
 
@@ -3419,9 +3422,13 @@ function SearchVectorField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
     _common_kwargs("SearchVectorField", kwargs; editable = false)
 
-  default = get(kwargs, :default, nothing)
-  default === nothing || default isa AbstractString || throw(FieldValidationError(
-    "SearchVectorField's default is a document as tsvector text, such as \"'monaco':1\"; got a $(typeof(default))."))
+  # A `tsvector` literal is stored rewritten (`'monaco:1'` reads back as `'monaco':1`, `'b a'` as
+  # `'a' 'b'`), so a declared default would plan a `SET DEFAULT` on every `makemigrations`.
+  # Normalizing it here would mean parsing tsvector syntax in Julia — emulation — so it is refused.
+  get(kwargs, :default, nothing) === nothing || throw(FieldValidationError(
+    "SearchVectorField takes no default: a document comes from each row's own text, through " *
+    "update(\"search_vector\" => SearchVector(…)). For an empty document, declare " *
+    "db_default = (postgres = \"''::tsvector\",) (#1021)."))
 
   return sSearchVectorField(
     verbose_name,
@@ -3431,7 +3438,7 @@ function SearchVectorField(; kwargs...)
     null,
     db_index,
     db_column,
-    default === nothing ? nothing : String(default),
+    nothing, # default
     editable,
     "TSVECTOR",
     format_tsvector_sql, db_default

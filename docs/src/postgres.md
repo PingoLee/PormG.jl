@@ -118,11 +118,11 @@ Reference: **[Fields → Network Address Fields](fields.md#Network-Address-Field
 Race_report = Models.Model("race_report",
   id = Models.IDField(),
   title = Models.CharField(max_length = 200),
-  search = Models.SearchVectorField(null = true),   # a stored full-text document
+  search_vector = Models.SearchVectorField(null = true),   # a stored full-text document
 )
 ```
 
-- A stored document, filled by `update("search" => SearchVector(…))` and searched with `@search`,
+- A stored document, filled by `update("search_vector" => SearchVector(…))` and searched with `@search`,
   which reads it as it is, with no `to_tsvector`. A GIN index on it serves the search.
 - A text → `tsvector` retype is refused: `CAST(text AS tsvector)` reads text as a document literal,
   not as words. Add the column and fill it with `update`.

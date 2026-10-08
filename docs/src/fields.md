@@ -395,8 +395,8 @@ M.Pit_wall_session.objects.
 **PostgreSQL only.** SQLite's full-text search is a separate index table, and PormG does not emulate
 it: on SQLite, `makemigrations` raises `BackendCapabilityError` for a model that declares one.
 
-Fill it with `update("search" => SearchVector(…))`, search it with `"search__@search" => …`, rank it
-with `SearchRank("search", …)` and index it with a GIN `Models.Index`. It reads and writes as the
+Fill it with `update("search_vector" => SearchVector(…))`, search it with `"search_vector__@search" => …`, rank it
+with `SearchRank("search_vector", …)` and index it with a GIN `Models.Index`. It reads and writes as the
 `tsvector`'s text, a `String`. A text → `tsvector` retype is refused. See
 [Full-Text Search → A stored document](read/full_text_search.md#A-stored-document:-SearchVectorField).
 
@@ -404,8 +404,8 @@ with `SearchRank("search", …)` and index it with a GIN `Models.Index`. It read
 Race_report = Models.Model("race_report",
     id     = Models.IDField(),
     title  = Models.CharField(max_length = 200),
-    search = Models.SearchVectorField(null = true),
-    indexes = [Models.Index(fields = ("search",), method = "gin", name = "race_report_search_gin")],
+    search_vector = Models.SearchVectorField(null = true),
+    indexes = [Models.Index(fields = ("search_vector",), method = "gin", name = "race_report_search_vector_gin")],
 )
 ```
 

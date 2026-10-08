@@ -244,6 +244,11 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
             # of the SELECT list, past `_check_fts_render`: wrapped, compared or ordered by, it is still
             # refused, because every other site renders it through `_render_function_typed`.
             instruc.connection isa PormGSQLite && throw(Dialect.fts_capability_error("SearchVector"))
+            # The OUTERMOST query only: a Subquery's single column is a value its parent compares,
+            # which is what a SearchVector cannot be.
+            instruc.outer === nothing || throw(QueryBuildError(
+              "A SearchVector is projected only by the outermost query, where its name can be searched " *
+              "with @search. Inside a Subquery it would be a value to compare, which a tsvector is not (#1021)."))
             v_copy.field = _render_fts_operand(original, instruc; _as = memo_name(v_copy))
           elseif original isa FObject
             # #1004: the memo NAME, not the output name. A transform's `_as` (`raceid__year`) spells

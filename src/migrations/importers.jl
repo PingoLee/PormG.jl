@@ -4475,7 +4475,7 @@ function _match_field_statement(text::AbstractString)
   ann === nothing || (lhs = String(strip(lhs[firstindex(lhs):prevind(lhs, ann)])))
   Base.isidentifier(lhs) || return nothing
   m = match(_FIELD_CALL_RE, rhs)
-  type = m === nothing ? _array_field_target(rhs) : String(m.captures[1])
+  type = m === nothing ? _contrib_field_target(rhs) : String(m.captures[1])
   type === nothing && return (name = lhs, type = nothing, args = rhs)
   args = _balanced_group(rhs)
   args === nothing && return (name = lhs, type = nothing, args = rhs)
@@ -4489,7 +4489,7 @@ end
 # `django.contrib.postgres.search`. Only these names are widened — reading every bare `XField(...)` is
 # #340's question, and `_looks_like_a_field_call` keeps reporting the rest.
 const _POSTGRES_CONTRIB_FIELDS = ("ArrayField", "SearchVectorField")
-function _array_field_target(rhs::AbstractString)::Union{String, Nothing}
+function _contrib_field_target(rhs::AbstractString)::Union{String, Nothing}
   m = match(_CALL_TARGET_RE, rhs)
   return m !== nothing && m.captures[1] in _POSTGRES_CONTRIB_FIELDS ? String(m.captures[1]) : nothing
 end

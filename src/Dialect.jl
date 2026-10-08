@@ -3256,8 +3256,11 @@ or `nothing` for PostgreSQL's default `{0.1, 0.2, 0.4, 1.0}`. Anything else rais
 """
 function ts_rank_weights(weights)::Union{Nothing,Vector{Float64}}
   weights === nothing && return nothing
+  # `float4` cannot hold a positive value below `floatmin(Float32)`: PostgreSQL refuses `1e-50` as
+  # out of range, so it is refused here, before the query runs.
   ok = (weights isa AbstractVector || weights isa Tuple) && length(weights) == 4 &&
-       all(w -> w isa Real && !(w isa Bool) && isfinite(w) && 0 <= w <= 1, weights)
+       all(w -> w isa Real && !(w isa Bool) && isfinite(w) && 0 <= w <= 1 &&
+                (w == 0 || w >= floatmin(Float32)), weights)
   ok || throw(InvalidValueError(
     "SearchRank's weights are four numbers from 0 to 1, for the labels D, C, B and A in that order, " *
     "as PostgreSQL's ts_rank takes them: weights = [0.1, 0.2, 0.4, 1.0] (#1021).", :range))

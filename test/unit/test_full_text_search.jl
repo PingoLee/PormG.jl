@@ -418,7 +418,9 @@ end
   # config or cast that differs is still a valid index, just one PostgreSQL never uses (#1021).
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "search_vector_expression equals the rendered to_tsvector, per config and shape" begin
-    for config in (nothing, "simple", "pg_catalog.english")
+    # No config is not a case: the query has one-argument to_tsvector, which PostgreSQL cannot index,
+    # so the helper refuses it (next testset) — review of #1021.
+    for config in ("simple", "pg_catalog.english")
       # One column: the lookup's bare form, parsed with the query's config.
       r = _q31("surname__@search" => SearchQuery("senna"; config = config))
       @test Models.search_vector_expression("surname"; config = config) == _tsvector_of1021(r[:sql_text])
@@ -448,6 +450,13 @@ end
       @test _err31(() -> Models.search_vector_expression(bad)) isa ModelDefinitionError
     end
     @test _err31(() -> Models.search_vector_expression()) isa ModelDefinitionError
+    # No config: the one shape PostgreSQL refuses to index (`to_tsvector(col)` is not IMMUTABLE), so
+    # the helper refuses it where the index is declared, not at migrate.
+    for cols in (("surname",), ("forename", "surname"))
+      e = _err31(() -> Models.search_vector_expression(cols...))
+      @test e isa ModelDefinitionError
+      @test occursin("needs the query's config", _plain31(sprint(showerror, e)))
+    end
     @test _err31(() -> Models.search_vector_expression(:surname)) isa ModelDefinitionError
     # The function is the published spelling: `Models.search_vector_expression`.
     @test Base.ispublic(Models, :search_vector_expression)
@@ -469,14 +478,14 @@ end
     @test Models.search_vector_expression("forename", "surname"; config = "simple", weight = "A") ==
           replace(rendered, r"\"Tb\"\." => "")
     # One weighted column is SearchVector's document too: the lookup has no weight to match.
-    @test Models.search_vector_expression("surname"; weight = "B") ==
-          "setweight(to_tsvector(COALESCE((\"surname\")::text, '')), 'B')"
+    @test Models.search_vector_expression("surname"; config = "simple", weight = "B") ==
+          "setweight(to_tsvector('simple'::regconfig, COALESCE((\"surname\")::text, '')), 'B')"
   end
 
   @testset "a weight other than A, B, C or D is refused, at construction and at render" begin
     for bad in ("E", "a", "AB", "A'); SELECT 1; --", 1, :A)
       @test _err31(() -> SearchVector("surname"; weight = bad)) isa InvalidValueError
-      @test _err31(() -> Models.search_vector_expression("surname"; weight = bad)) isa InvalidValueError
+      @test _err31(() -> Models.search_vector_expression("surname"; config = "simple", weight = bad)) isa InvalidValueError
     end
     # The kwargs Dict is mutable, so the renderer checks the label again rather than printing it.
     vec = SearchVector("surname"; weight = "A")
@@ -556,6 +565,10 @@ end
                 0.5, "{0.1,0.2,0.4,1.0}")
       @test _err31(() -> SearchRank(vec, "x"; weights = bad)) isa InvalidValueError
     end
+    # float4's range (review of #1021): a positive value below floatmin(Float32) is refused here, as
+    # PostgreSQL would refuse it at the server; the smallest normal float4 and 0 are fine.
+    @test _err31(() -> SearchRank(vec, "x"; weights = [1e-50, 0.2, 0.4, 1.0])) isa InvalidValueError
+    @test _err31(() -> SearchRank(vec, "x"; weights = [Float64(floatmin(Float32)), 0, 0.4, 1.0])) === nothing
     rank = SearchRank(vec, "x"; weights = [0.1, 0.2, 0.4, 1.0])
     rank.kwargs["weights"] = ["1}'::float4[], (SELECT 1)) --"]
     @test _err31(() -> _q31(; vals = Any["driverid", "r" => rank])) isa InvalidValueError
@@ -701,6 +714,13 @@ end
     # rendered again, so nothing re-checks it there (tsvector has equality, so PostgreSQL groups it).
     r = _q31(; vals = Any["doc" => SearchVector("surname"), "n" => PormG.Functions.Count("driverid")])
     @test occursin("GROUP BY 1", r[:sql_text])
+    # A Subquery's column is a value its parent compares: projected there, a SearchVector is refused
+    # at build rather than failing at the server (review of #1021).
+    inner = _F.Driver.objects
+    inner.filter("driverid" => PormG.OuterRef("driverid")).values("doc" => SearchVector("surname"))
+    e = _err31(() -> _q31("surname" => PormG.Subquery(inner)))
+    @test e isa QueryBuildError
+    @test occursin("projected only by the outermost query", _plain31(sprint(showerror, e)))
     # On SQLite the projection and the alias search name PostgreSQL.
     @test _err31(() -> _q31("doc__@search" => "x"; vals = vals, conn = _FTS_SL)) isa BackendCapabilityError
   end
@@ -753,6 +773,12 @@ end
     e = _err31(() -> _q31(; model = _F.Report, vals = Any["reportid", "h" => SearchHeadline("search", "x")]))
     @test e isa QueryBuildError
     @test occursin("SearchHeadline marks words in TEXT", _plain31(sprint(showerror, e)))
+    # An `F` over the stored column is the column too (review of #1021); an explicit Cast is not checked.
+    for f in (() -> SearchVector(PormG.F("search")), () -> SearchHeadline(PormG.F("search"), "x"))
+      e = _err31(() -> _q31(; model = _F.Report, vals = Any["reportid", "r" => f()]))
+      @test e isa QueryBuildError
+      @test occursin("F(\"search\")", _plain31(sprint(showerror, e)))
+    end
     for op in ("@contains", "@icontains", "@startswith", "@regex")
       e = _err31(() -> _q31("search__$(op)" => "mon"; model = _F.Report, vals = Any["reportid"]))
       @test e isa FilterError
@@ -821,9 +847,14 @@ end
     @test back isa Models.sSearchVectorField && back.null
     # A generated model file declares it by its constructor.
     @test occursin("search = Models.SearchVectorField(null=true)", PormG.Models.Model_to_str(_F.Report))
-    # A default is a document's text, nothing else.
-    @test Models.SearchVectorField(default = "'monaco':1").default == "'monaco':1"
-    @test _err31(() -> Models.SearchVectorField(default = 1)) isa FieldValidationError
+    # No default: PostgreSQL stores a document literal rewritten, so a declared one would never
+    # converge (review of #1021). db_default stays the spelling for an empty document.
+    for d in ("'monaco':1", "monaco", 1)
+      e = _err31(() -> Models.SearchVectorField(default = d))
+      @test e isa FieldValidationError
+      @test occursin("takes no default", _plain31(sprint(showerror, e)))
+    end
+    @test Models.SearchVectorField(db_default = (postgres = "''::tsvector",)).default === nothing
   end
 
   @testset "a retype into tsvector is refused; out of it, only to text" begin

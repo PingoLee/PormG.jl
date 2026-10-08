@@ -93,7 +93,8 @@ df = query |&gt; DataFrame</code></pre><p>Generated SQL (PostgreSQL):</p><pre><c
        UPPER(&quot;driver&quot;.&quot;surname&quot;)                                  AS name_upper,
        LENGTH(&quot;driver&quot;.&quot;surname&quot;)                                 AS name_length
 FROM &quot;driver&quot;
-LIMIT 5</code></pre><p>Output:</p><pre><code class="nohighlight hljs">5×3 DataFrame
+LIMIT $2
+-- parameters: [&quot; &quot;, 5]</code></pre><p>Output:</p><pre><code class="nohighlight hljs">5×3 DataFrame
  Row │ full_name          name_upper  name_length
      │ String?            String?     Int32?
 ─────┼────────────────────────────────────────────
@@ -228,8 +229,8 @@ INNER JOIN &quot;driver&quot; ON &quot;driver_standings&quot;.&quot;driverid&quo
 INNER JOIN &quot;race&quot;   ON &quot;driver_standings&quot;.&quot;raceid&quot;   = &quot;race&quot;.&quot;raceid&quot;
 WHERE &quot;race&quot;.&quot;year&quot; = $4
 ORDER BY &quot;points&quot; DESC
-LIMIT 5
--- parameters: [16, &quot;Yes&quot;, &quot;No&quot;, 2023]</code></pre><p>Output:</p><pre><code class="nohighlight hljs">5×4 DataFrame
+LIMIT $5
+-- parameters: [16, &quot;Yes&quot;, &quot;No&quot;, 2023, 5]</code></pre><p>Output:</p><pre><code class="nohighlight hljs">5×4 DataFrame
  Row │ driverid__surname  points    wins    race_winner
      │ String?            Float64?  Int32?  String?
 ─────┼──────────────────────────────────────────────────
@@ -357,8 +358,8 @@ WHERE &quot;result&quot;.&quot;positionorder&quot; &lt;= CASE
     ELSE $3::bigint
 END
 ORDER BY raceid__year ASC, positionorder ASC
-LIMIT 5
--- parameters: [2010, 10, 8]</code></pre><p>Output:</p><pre><code class="nohighlight hljs">5×4 DataFrame
+LIMIT $4
+-- parameters: [2010, 10, 8, 5]</code></pre><p>Output:</p><pre><code class="nohighlight hljs">5×4 DataFrame
  Row │ raceid__year  driverid__surname  positionorder  points
      │ Int32?        String?            Int32?         Float64?
 ─────┼──────────────────────────────────────────────────────────
@@ -381,7 +382,8 @@ df = query |&gt; DataFrame</code></pre><p>Generated SQL:</p><pre><code class="la
 FROM &quot;driver&quot;
 GROUP BY 1
 ORDER BY &quot;driver_count&quot; DESC
-LIMIT 10</code></pre><p>Output:</p><pre><code class="nohighlight hljs">10×2 DataFrame
+LIMIT $1
+-- parameters: [10]</code></pre><p>Output:</p><pre><code class="nohighlight hljs">10×2 DataFrame
  Row │ region         driver_count
      │ String?        Int64?
 ─────┼─────────────────────────────
@@ -397,4 +399,4 @@ mermaid.initialize({
     startOnLoad: true,
     theme: "neutral"
 });
-</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../filters_and_aggregates/">« Filters and Aggregates</a><a class="docs-footer-nextpage" href="../subqueries_and_ctes/">Subqueries and CTEs »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Thursday 8 October 2026 16:31">Thursday 8 October 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../filters_and_aggregates/">« Filters and Aggregates</a><a class="docs-footer-nextpage" href="../subqueries_and_ctes/">Subqueries and CTEs »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Thursday 8 October 2026 18:18">Thursday 8 October 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

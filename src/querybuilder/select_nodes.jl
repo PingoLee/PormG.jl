@@ -261,6 +261,21 @@ function _null_skipping_operands(v::SQLTypeFunction, instruc::SQLInstruction)
                      aggregate = _any_agg(cols)) for k in 1:length(cols)]
 end
 
+# #1028 — one operand of `Concat` or a declared cast, rendered exactly as `_get_select_query` renders
+# it — the same SQL, the same binds, in the same order — with the kind that render computed:
+# `(sql, kind)`. Only the two shapes whose render knows more than any type reader keep a kind: `F`
+# arithmetic (`_set_update_query_typed` is what `_get_select_query(::SQLTypeF)` renders through), and a
+# function that renders as an interval (`_get_select_query(::SQLTypeFunction)`'s own arm). Everything
+# else, literals included, renders through `_get_select_query` itself and has its kind read by name.
+function _render_operand_kind(node, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
+  node isa FExpression && return _set_update_query_typed(node, instruc)
+  if node isa FObject
+    sql, interval_ms, interval = _render_function_typed(node, instruc; _as = _as)
+    return (interval_ms ? Dialect._sqlite_interval_text(sql) : sql), (interval ? CInterval() : nothing)
+  end
+  return _get_select_query(node, instruc; _as = _as), nothing
+end
+
 # #964: a `When` with no `otherwise` is a `CASE` branch: `WHEN … THEN …`, no `ELSE`, no `END`. Only
 # `Case` renders one as such (`_render_case_branches`), so a `When` that reaches the typed renderer
 # stands as a value (a projection, an aggregate's operand, a function argument), where it printed
@@ -395,6 +410,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # which is exactly what `_get_select_query(::FExpression)` renders, so its SQL is unchanged and
   # only its kind is kept.
   interval_ms = interval = false
+  operand_kinds = Any[]   # #1028: per operand, the rendered kind, set by the `Concat` / declared-cast arm below
   fanout_column = nothing   # the operand as the #74 guard reads it: its column, not the parse of it
   if v isa FObject && v.function_name == "ABS" && instruc.connection isa PormGSQLite && !(v.column isa AbstractVector)
     resolved_column, ms, operand_interval = _render_interval_operand(v.column, instruc; _as = _as)
@@ -433,6 +449,14 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     # #31: in text order — the vector or document, then the query, then the headline's options.
     # #1021: a sum of vectors renders its two halves the same way, left to right.
     resolved_column = Any[_render_fts_operand(c, instruc; _as = _as) for c in v.column]
+  elseif v.function_name == "CONCAT" || v.function_name in _DECLARED_CAST_FUNCTIONS
+    # #1028: each operand rendered once, keeping the kind its render computed — arithmetic over a
+    # timestamp or a duration (`F("start_at") + Day(1)`, a difference) and `Sum(duration)` are a
+    # timestamp or an interval that no type reader names, and their text differs per engine.
+    operands = _null_skipping_operands(v, instruc)
+    forms = [_render_operand_kind(x, instruc; _as = _as) for x in (operands isa AbstractVector ? operands : (operands,))]
+    resolved_column = operands isa AbstractVector ? Any[f[1] for f in forms] : only(forms)[1]
+    operand_kinds = Any[f[2] for f in forms]
   else
     resolved_column = _get_select_query(_null_skipping_operands(v, instruc), instruc, _as=_as)
   end
@@ -458,11 +482,27 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # refused when the `Concat` was built. This is the one site every `Concat` renders through, the
   # `@yyyy_q` labels included (their operands are text and integers, so they pass).
   if v.function_name == "CONCAT" && v.column isa AbstractVector
-    for operand in v.column
+    for (i, operand) in enumerate(v.column)
       textless = _concat_textless_operand(operand, instruc)
+      textless === nothing && (textless = _rendered_kind_textless(get(operand_kinds, i, nothing)))
       textless === nothing && continue
       throw(_concat_textless_refusal(textless...; flag = _concat_flag(operand)))
     end
+  end
+  # #1028: the same divergence through a declared cast — `Cast(x, CharField())`, `Cast(x,
+  # IntegerField())`, and the `output_field` cast `Coalesce`/`Greatest`/`Least` apply. Read at the same
+  # point, so a `Concat` over such a cast meets this refusal first, while its operand renders. An
+  # `operand_kinds` entry is set only on the arm above: a `Coalesce` of intervals with no
+  # `output_field` renders through the millisecond arm instead, and has no cast to check.
+  #
+  # `Greatest`/`Least` take no rendered kind: on SQLite their operands render as NULL-skipping
+  # `COALESCE` rotations, whose render reports neither a timestamp nor an interval beside an operand of
+  # another type, so a rendered kind would refuse on PostgreSQL what SQLite renders. Both engines
+  # answering the same comes first; their typed operands (a column, a function) are still read by name.
+  if v.function_name in _DECLARED_CAST_FUNCTIONS && v isa FObject
+    rendered = v.function_name in ("GREATEST", "LEAST") ? Any[] : operand_kinds
+    divergent = _cast_divergent_operand(v, instruc; rendered = rendered)
+    divergent === nothing || throw(_cast_divergent_refusal(_declared_cast_label(v), divergent...))
   end
   # #953: an aggregate over a boolean, read once its column resolves (as the check above is).
   # PostgreSQL has none of `max/min/sum/avg(boolean)`, so each failed there when it ran, while SQLite

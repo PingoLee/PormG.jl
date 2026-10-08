@@ -2211,7 +2211,7 @@ end
             "absolute_pts" => QB.Abs(QB.SQLField("points")),
             "floored_pts" => QB.Floor(QB.SQLField("points")),
             "sqrt_pts" => QB.Sqrt(QB.SQLField("points")),
-            "casted_pts" => QB.Cast(QB.SQLField("points"), "text")
+            "casted_pts" => QB.Cast(QB.SQLField("points"), "numeric")   # #1028: a float to text is refused
         )
 
         insp = inspect_query(q)
@@ -2224,7 +2224,7 @@ end
         @test contains(sql, "ABS")
         @test contains(sql, "FLOOR")
         @test contains(sql, "SQRT")
-        @test contains(sql, "::text") || contains(sql, "CAST(")
+        @test contains(sql, "::numeric") || contains(sql, "CAST(")
         @test contains(sql, "\"forename\"")
         @test contains(sql, "\"points\"")
         @test 2 in insp[:parameters]

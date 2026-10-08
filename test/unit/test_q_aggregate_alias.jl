@@ -1249,7 +1249,9 @@ end
     # column), SQLite keeps the Float64, because `SUM(points) = '1.5'` is false there.
     @test last(bound(Model_, Sum("points"), "rk__@gt" => 1.5)) == (backend === :postgres ? "1.5" : 1.5)
     # An integer is native on both: `format_number_sql(::Integer)` returns it as is.
-    @test last(bound(Model_, PormG.QueryBuilder.Cast("points", "integer"), "rk" => 7)) === 7
+    # #1028: over `Floor`, because a float cast to an integer rounds on one engine and truncates on
+    # the other, and is refused.
+    @test last(bound(Model_, PormG.QueryBuilder.Cast(PormG.Functions.Floor("points"), "integer"), "rk" => 7)) === 7
     # A membership list keeps each element native on SQLite, as a range does: before, the list
     # reached the scalar rule whole, was never a `Number`, and bound `["25.5", "1.5"]`.
     @test in_list(bound(Model_, Sum("points"), "rk__@in" => [25.5, 1.5]), backend) ==
@@ -1371,7 +1373,7 @@ end
     # some other failure that happens to share the exception type.
     for pred in ("pi" => "abc", Q("pi" => "abc"))
       q = Model_.objects
-      q.values("resultid", "pi" => PormG.Functions.Cast("points", IntegerField()))
+      q.values("resultid", "pi" => PormG.Functions.Cast(PormG.Functions.Round("points"), IntegerField()))   # #1028: rounded first
       q.filter(pred)
       err = @test_throws PormG.InvalidValueError inspect_query(q)
       @test occursin("projection alias", err.value.msg)

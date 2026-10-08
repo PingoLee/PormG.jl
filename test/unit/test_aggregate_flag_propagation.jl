@@ -243,7 +243,8 @@ end
   # The argument each wrapper is rendered over: a column of a type the function accepts.
   arg_for = Dict(:Extract => "born", :ToChar => "born", :Lower => "surname", :Upper => "surname",
                  :Length => "surname", :Replace => "surname", :Trim => "surname",
-                 :LTrim => "surname", :RTrim => "surname", :Concat => "surname")
+                 :LTrim => "surname", :RTrim => "surname", :Concat => "surname",
+                 :Cast => "raceid")   # #1028: a float cast to an integer is refused
   for (backend, Model_) in _AGG_FLAG_MODELS
     for (name, build) in sort!(collect(_AGG_WRAPPERS), by = first)
       @testset "$backend — $name" begin

@@ -87,9 +87,10 @@ end
   @test !occursin("COALESCE", pg)
 
   # A declared `output_field` casts the whole result once (#852), outside the rotations: the
-  # COALESCE nodes carry no declaration of their own.
-  sl = _gl_inspect(q -> q.values("g" => Greatest("a", "b"; output_field = "integer")), _GL_SL)[:sql_text]
-  @test occursin("CAST(MAX(COALESCE(\"Tb\".\"a\", \"Tb\".\"b\"), COALESCE(\"Tb\".\"b\", \"Tb\".\"a\")) AS INTEGER)", sl)
+  # COALESCE nodes carry no declaration of their own. `numeric`, not `integer`: a float cast to an
+  # integer rounds on PostgreSQL and truncates on SQLite, and is refused (#1028).
+  sl = _gl_inspect(q -> q.values("g" => Greatest("a", "b"; output_field = "numeric")), _GL_SL)[:sql_text]
+  @test occursin("CAST(MAX(COALESCE(\"Tb\".\"a\", \"Tb\".\"b\"), COALESCE(\"Tb\".\"b\", \"Tb\".\"a\")) AS NUMERIC)", sl)
   @test count("CAST(", sl) == 1
 
   # A single operand never reaches the rewrite: the constructor refuses it (#859, next testset).

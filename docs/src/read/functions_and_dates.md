@@ -348,13 +348,32 @@ literal, and an expression of one of those types: a comparison or `Q(...)` condi
 float or decimal type, arithmetic, an extremum or a window value over a float, and the functions
 PostgreSQL computes as `numeric` (`Avg`, `Round`, `Mod`, `Sqrt`, `Exp`, `Ln`, `Power`), which SQLite
 answers as a REAL (`1` vs `1.0`). A literal is refused when the `Concat` is built, and a column when
-the query is. The check is limited to these three types: an operand PormG cannot type (a `Subquery`
-over a number, an untyped `Case`) passes, and so does a timestamp, time or JSON operand, whose text
-may still differ between the engines.
+the query is.
 
-`Cast(…, CharField())` is not a way around this. It writes `25` on PostgreSQL and `25.0` on SQLite,
-the same split. Write the text you mean instead. For a boolean, use a `Case`. For a number, fetch it
-and format it in Julia, where you choose the digits:
+Three more operand types are refused the same way, because their text differs too:
+
+| Operand | PostgreSQL | SQLite |
+|---|---|---|
+| a timestamp (`DateTimeField`, `F("start_at") + Day(1)`, a `DateTime` literal) | `2009-03-29 06:00:00+00` | `2009-03-29T06:00:00.000+00:00` |
+| an interval (`DurationField`, a timestamp difference, `Sum` of a duration, a `Period` literal) | its `IntervalStyle`: `PT25.021S`, `1 day 02:00:00` | `00:00:25.021` |
+| a whole JSON document (`JSONField`) | `{"a": [1, 2]}` | `{"a":[1,2]}` |
+
+A date, a time and a uuid read the same text on both engines and pass. A JSON key lookup
+(`"payload__driver"`) passes too: it reads the same text when the value at the key is a string, but a
+boolean or a nested value can still differ (`true` vs `1`), and PormG cannot know which a key holds.
+The check covers only types PormG can name: an operand it cannot type (a `Subquery` over a number,
+an untyped `Case`, an extremum over timestamp arithmetic, `Greatest`/`Least` over computed timestamps
+or intervals) passes.
+
+`Cast(…, CharField())` is not a way around this, because a cast to text makes the same split (`25`
+against `25.0`). It is refused too (see the `Cast` section below). Write the text you mean
+instead:
+
+- For a boolean, use a `Case`.
+- For a timestamp, name the format with `ToChar`: `ToChar("start_at", "YYYY-MM-DD HH:MI:SS")` gives
+  `2009-03-29 06:00:00` on both engines.
+- For a number, an interval or a document, fetch the value and format it in Julia, where you choose
+  the digits:
 
 ```julia
 using PormG.Functions: Case, When, Concat, Value
@@ -527,13 +546,13 @@ row.
 ### `Cast` — Type Conversion
 
 ```julia
-using PormG.Functions: Cast
+using PormG.Functions: Cast, Round
 using PormG.Models: IntegerField
 
 query = M.Result.objects
 query.values(
-    "points_int" => Cast("points", IntegerField()),   # a field object: each engine's own spelling
-    "points_2dp" => Cast("points", "numeric(10,2)")   # or a type string
+    "points_int" => Cast(Round("points"), IntegerField()),   # a field object: each engine's own spelling
+    "points_2dp" => Cast("points", "numeric(10,2)")          # or a type string
 )
 ```
 
@@ -575,6 +594,55 @@ schema-qualified or quoted name (`public.mood`, `"Mood"`), `interval year to mon
 scale, and a `COLLATE` clause. The same rules apply to the `output_field=` string of `Case`,
 `Coalesce`, `Concat`, `Greatest` and `Least`.
 
+#### A cast the engines apply differently is refused
+
+A cast to text or to an integer goes through each engine's own conversion, and for some operands the
+two disagree. Measured on PostgreSQL 16.15 and SQLite 3.45.1:
+
+| Expression | PostgreSQL | SQLite |
+|---|---|---|
+| `Cast("points", CharField())`, a float `10.0` | `'10'` | `'10.0'` |
+| `Cast(<bool> true, CharField())` | `'true'` | `'1'` |
+| `Cast(<decimal> 14, CharField())`, a `numeric(10,2)` | `'14.00'` | `'14'` |
+| `Cast(<float> 1.5, IntegerField())` | `2` (rounds) | `1` (truncates) |
+| `Cast(<numeric> 2.5, IntegerField())` | `3` | `2` |
+
+So PormG raises `QueryBuildError` when the query is built, on both engines, for:
+
+- a cast to text (`CharField()`, `TextField()`, `"text"`, `"varchar(20)"`, …) of any operand
+  `Concat` refuses: a boolean, a float, a decimal, a function PostgreSQL computes as `numeric`, a
+  timestamp, an interval, or a whole JSON document;
+- a cast to an integer (`IntegerField()`, `BigIntegerField()`, `"integer"`, `"bigint"`, `"int8"`,
+  …) of a float, a decimal or a `numeric` function. A boolean casts to `1`/`0` on both engines and
+  passes.
+
+To get an integer, say how to round first. `Round(x)`, `Floor(x)` and `Ceil(x)` give the same whole
+number on both engines for every stored value measured (PostgreSQL's `round` is the `numeric` one,
+half away from zero, as SQLite's is), so a cast over them passes. `Mod` of whole numbers and `+`,
+`-`, `*` of them pass too, since they have nothing to round. `Round(x, 2)` keeps a fraction, so a
+cast over it is refused. One caveat: PostgreSQL turns a float into `numeric` at 15 significant digits
+before it rounds, so a computed value a hair below a half (`2.4999999999999996`) can still round up
+there and down on SQLite. For
+text, the way out is the same as for `Concat`: a `Case` for a boolean, `ToChar` for a timestamp, and
+Julia formatting for the rest. A cast to any other type (`"numeric(10,2)"`, `"double precision"`,
+`"date"`) is not checked: it is not a text conversion, and `Concat` refuses the result if you then
+use it as text.
+
+```julia
+using PormG.Functions: Cast, Ceil, Floor, Round
+using PormG.Models: IntegerField
+
+# Cast("points", IntegerField()) is refused: 1.5 would be 2 on PostgreSQL and 1 on SQLite.
+# Race 2, the 2009 Malaysian GP, was stopped early and scored half points.
+M.Result.objects.filter("raceid" => 2).values(
+    "resultid", "points",
+    "nearest" => Cast(Round("points"), IntegerField()),   # 1.5 → 2 on both engines
+    "down"    => Cast(Floor("points"), IntegerField()),   # 1.5 → 1
+    "up"      => Cast(Ceil("points"), IntegerField()))    # 1.5 → 2
+```
+
+#### `output_field`
+
 `Case`, `Coalesce`, `Greatest` and `Least` cast their result to the `output_field` they are given, on
 both engines, as `Cast` does. The SQLite date rule above applies to them too: a `date` renders
 `date(…)`, and a timestamp, time, interval or array type raises `BackendCapabilityError` on SQLite.
@@ -583,10 +651,15 @@ The value, a filter on it, and a CTE column typed by it therefore all agree. Bef
 none on PostgreSQL either:
 
 ```julia
-# The best of a result's points and zero, as an integer on both engines:
-# (GREATEST(…))::integer on PostgreSQL, CAST(MAX(…) AS INTEGER) on SQLite
-M.Result.objects.values("resultid", "pts" => Greatest("points", 0; output_field = "integer"))
+# The best of a result's grid slot and one, as a bigint on both engines:
+# (GREATEST(…))::bigint on PostgreSQL, CAST(MAX(…) AS BIGINT) on SQLite
+M.Result.objects.values("resultid", "slot" => Greatest("grid", 1; output_field = "bigint"))
 ```
+
+The rule above applies to these casts too: `Coalesce`, `Greatest` and `Least` with an `output_field`
+of text or an integer refuse the same operands `Cast` does. `Greatest("points", 0; output_field =
+"integer")` is refused, and `Greatest(Floor("points"), 0; output_field = "integer")` passes. `Case`
+is not checked, because its value is one of its branches, which PormG does not type.
 
 `Concat` renders no cast on either engine, because its result is always text. Its `output_field`
 must therefore be a text type (`CharField()`, `TextField()`, `"text"`, `"varchar(20)"`). Any other

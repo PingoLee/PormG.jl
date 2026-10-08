@@ -1756,3 +1756,28 @@ end
              !isequal(r.q, expected(r.sprint_date, 3)) || !isequal(r.quad, expected(r.sprint_date, 4))]
     @test isempty(wrong)
 end
+
+@testset "#1006: Concat skips a NULL operand on both engines" begin
+    # PostgreSQL's `CONCAT` skipped a NULL operand and SQLite's `||` made the whole result NULL, so a
+    # driver with no `number` read "# Senna" on one engine and `missing` on the other. Both skip it
+    # now, as Django does. The expected text is built in Julia from the columns themselves, so the
+    # same assertion holds on both engines.
+    q = M.Driver.objects
+    q.values("driverid", "number", "surname",
+             "label" => Concat(Value("#"), "number", Value(" "), "surname"),
+             "alone" => Concat(["number"]),
+             "car" => Case(When("number__@isnull" => false, then = Concat(Value("#"), "number"))))
+    df = q |> DataFrame
+    @test any(ismissing, df.number)
+    @test !all(ismissing, df.number)
+    num(n) = ismissing(n) ? "" : string(n)
+    wrong = [r.driverid for r in eachrow(df) if !isequal(r.label, "#" * num(r.number) * " " * r.surname)]
+    @test isempty(wrong)
+    # One operand is text too, never a number and never NULL: SQLite has no `||` to convert it.
+    @test all(v -> v isa AbstractString, df.alone)
+    @test isempty([r.driverid for r in eachrow(df) if !isequal(r.alone, num(r.number))])
+    # The documented way back to a NULL: a `Case` with no matching branch.
+    wrong_car = [r.driverid for r in eachrow(df) if
+                 !isequal(r.car, ismissing(r.number) ? missing : "#" * num(r.number))]
+    @test isempty(wrong_car)
+end

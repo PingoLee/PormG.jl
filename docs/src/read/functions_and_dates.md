@@ -326,6 +326,19 @@ Output:
    5 │ Heikki Kovalainen  KOVALAINEN           10
 ```
 
+A NULL operand is **skipped** — read as an empty string — on both engines, as in Django, so a
+`Concat` is never NULL: a driver with no `number` gives `"# "` for
+`Concat(Value("#"), "number", Value(" "))`. PostgreSQL's `CONCAT` skips a NULL itself; on SQLite
+each operand renders as `COALESCE(operand, '')`, joined with `||`. To get NULL instead, say so with
+a `Case`, which is NULL when no branch matches:
+
+```julia
+using PormG.Functions: Case, When, Concat, Value
+
+q = M.Driver.objects
+q.values("driverref", "car" => Case(When("number__@isnull" => false, then = Concat(Value("#"), "number"))))
+```
+
 `Concat` takes its operands either variadically or as a single vector — the two spellings build the
 same expression and render the same SQL. Each example below starts from a fresh handle, because
 `values()` **replaces** the projection rather than adding to it:

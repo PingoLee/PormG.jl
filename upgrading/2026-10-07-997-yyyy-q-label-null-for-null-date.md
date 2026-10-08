@@ -13,7 +13,8 @@ separator. SQLite's `||` propagates the NULL. The labels now join with `||` on P
 NULL date gives a NULL label on both engines, as every other date transform does. The `@isnull`
 refusal added in #972 existed only because of this divergence, and is gone.
 
-The public `Concat` function is unchanged. It still renders `CONCAT(…)` on PostgreSQL.
+The public `Concat` function is not changed by this entry. It still renders `CONCAT(…)` on
+PostgreSQL; its NULL handling on SQLite is the #1006 entry's.
 
 | PostgreSQL, a race with no sprint | before | after |
 |---|---|---|

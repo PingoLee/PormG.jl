@@ -279,6 +279,9 @@ M.Race.objects.
   its config from the side written as an object. The search text is always bound.
 - Filter a rank on a threshold (`"rank__@gte" => 0.01`), not on `> 0`. For a query of several
   words, a row that misses them scores `1e-20`, not `0`.
+- Weights: `SearchVector(col; weight = "A")` labels a column's words (`"A"`–`"D"`), `+` adds two
+  vectors into one document, and `SearchRank(…; weights = [d, c, b, a])` scores the labels (D
+  first, as PostgreSQL takes them). Summed vectors with different configs need a `SearchQuery`.
 - A `SearchVector` or `SearchQuery` is an operand, not a value. It cannot be projected, compared, or
   wrapped in another function; `@search` takes a CharField/TextField column, not an alias.
 

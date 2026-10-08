@@ -49,7 +49,8 @@ import PormG: check_marker
 # `_foreign_key_on_delete_sql` lives in `Models` since #498 — see the note where it used to be defined.
 import PormG.Models: _foreign_key_on_delete_sql
 # #1021: the one writer of `to_tsvector(…)` and its config check (Kernel), shared with the index helper.
-import PormG: ts_config_name, ts_config_prefix, ts_lookup_document_sql, ts_vector_document_sql
+import PormG: ts_config_name, ts_config_prefix, ts_lookup_document_sql, ts_vector_document_sql,
+              ts_weight_name, ts_weighted_sql
 
 import PormG: @pormg_debug
 
@@ -3189,10 +3190,18 @@ search(conn::PormGSQLite, vector::AbstractString, query::AbstractString) =
 search(conn::PormGAbstractType, vector::AbstractString, query) =
   throw(fts_capability_error("The @search lookup"))
 
-# Django's document (`ts_vector_document_sql`). `Models.search_vector_expression` writes an index on
-# it from the same function (docs/src/read/full_text_search.md → Indexing).
-SEARCH_VECTOR(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres) =
-  ts_vector_document_sql(columns, get(format, "config", nothing))
+# Django's document (`ts_vector_document_sql`), labelled by its weight (`setweight`, #1021).
+# `Models.search_vector_expression` writes an index on it from the same functions
+# (docs/src/read/full_text_search.md → Indexing). A sum of vectors (`v1 + v2`, #1021) holds the two
+# rendered vectors as its columns and concatenates them, each keeping its own config and weight.
+function SEARCH_VECTOR(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
+  if get(format, "combinator", nothing) !== nothing
+    format["combinator"] == "||" && length(columns) == 2 || throw(InvalidValueError(
+      "A sum of SearchVectors concatenates two of them with ||; got a malformed node (#1021).", :format))
+    return "($(columns[1]) || $(columns[2]))"
+  end
+  return ts_weighted_sql(ts_vector_document_sql(columns, get(format, "config", nothing)), get(format, "weight", nothing))
+end
 SEARCH_VECTOR(column::String, format::Dict{String,Any}, conn::PormGPostgres) =
   SEARCH_VECTOR(Any[column], format, conn)
 
@@ -3207,14 +3216,34 @@ SEARCH_QUERY(column::String, format::Dict{String,Any}, conn::PormGPostgres) =
 
 # `ts_rank` returns `real`, which LibPQ reads as a `Float32`; the cast makes it the `Float64` every
 # other float in PormG reads as, on both drivers. `normalization` is printed, not bound: it is an
-# integer bitmask checked to 0..63, and an `Int` prints only digits.
+# integer bitmask checked to 0..63, and an `Int` prints only digits. The weights (#1021) are printed
+# for the same reason, as a `float4[]` literal of four finite numbers in 0..1, re-checked here because
+# the node's kwargs are mutable; a `Float64` prints only digits, `.`, `e` and `-`.
 function SEARCH_RANK(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
   fn = get(format, "cover_density", false) === true ? "ts_rank_cd" : "ts_rank"
   n = get(format, "normalization", nothing)
   n === nothing || (n isa Integer && 0 <= n <= 63) || throw(InvalidValueError(
     "normalization is an integer bitmask from 0 to 63 (#31).", :range))
   tail = n === nothing ? "" : ", $(Int(n))"
-  return "($(fn)($(columns[1]), $(columns[2])$(tail)))::double precision"
+  w = ts_rank_weights(get(format, "weights", nothing))
+  head = w === nothing ? "" : "'{$(join(string.(w), ","))}'::float4[], "
+  return "($(fn)($(head)$(columns[1]), $(columns[2])$(tail)))::double precision"
+end
+
+"""
+    ts_rank_weights(weights) -> Union{Nothing,Vector{Float64}}
+
+`SearchRank`'s weights as PostgreSQL takes them, `[D, C, B, A]`: four finite real numbers from 0 to 1,
+or `nothing` for PostgreSQL's default `{0.1, 0.2, 0.4, 1.0}`. Anything else raises `InvalidValueError`.
+"""
+function ts_rank_weights(weights)::Union{Nothing,Vector{Float64}}
+  weights === nothing && return nothing
+  ok = (weights isa AbstractVector || weights isa Tuple) && length(weights) == 4 &&
+       all(w -> w isa Real && !(w isa Bool) && isfinite(w) && 0 <= w <= 1, weights)
+  ok || throw(InvalidValueError(
+    "SearchRank's weights are four numbers from 0 to 1, for the labels D, C, B and A in that order, " *
+    "as PostgreSQL's ts_rank takes them: weights = [0.1, 0.2, 0.4, 1.0] (#1021).", :range))
+  return Float64[w for w in weights]
 end
 
 # `columns` is the document, the query and, when any option was given, the one bound options string.

@@ -85,7 +85,7 @@ import .Kernel: INDEX_METHODS, INDEX_OPCLASS_RE, INDEX_MARKER, INDEX_MARKER_RE,
 # #1021: the one writer of `to_tsvector(…)` — `Models` renders an index with it, `Dialect` the query
 # that index must serve.
 import .Kernel: TS_CONFIG_RE, ts_config_name, ts_config_prefix, ts_lookup_document_sql,
-  ts_vector_document_sql
+  ts_vector_document_sql, TS_WEIGHTS, ts_weight_name, ts_weighted_sql
 # Physical-table-name resolution (#59). Deliberately NOT exported — internal plumbing reached as
 # `PormG.model_table_name`, so it stays off the public surface guard. Lives in Kernel because
 # layer-2 `Configuration` needs it and is included before `Models`.

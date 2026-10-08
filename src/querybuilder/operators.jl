@@ -318,6 +318,8 @@ end
 # Arithmetic operations for FObject (aggregate functions like Sum, Count, Avg)
 # Enable expressions like Sum("points") / Count("resultid")
 function Base.:+(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
+  # #1021: `SearchVector + SearchVector` is one document, not arithmetic.
+  (_is_fts_operand(f) || _is_fts_operand(operand)) && return _combine_search_vectors(f, operand)
   return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", aggregate=f.aggregate || _is_agg(operand))
 end
 function Base.:-(f::FObject, operand::Union{Integer,Float64,String,FExpression,FObject})
@@ -337,6 +339,7 @@ end
 
 # Commutative: scalar op FObject
 function Base.:+(operand::Union{Integer,Float64}, f::FObject)
+  _is_fts_operand(f) && return _combine_search_vectors(operand, f)   # refuses: a number is no vector
   return FExpression(field_name=f, operation="+", operand=operand, function_name="F", column="", aggregate=f.aggregate)
 end
 

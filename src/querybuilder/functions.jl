@@ -1292,7 +1292,7 @@ SearchQuery(x; kwargs...) = throw(QueryBuildError(
   "lookup: \e[4m\e[32m\"surname__@search\" => SearchQuery(\"senna\")\e[0m (#31)."))
 
 """
-    SearchVector(fields...; config = nothing)
+    SearchVector(fields...; config = nothing, weight = nothing)
 
 The document side of a full-text search (PostgreSQL only): one or more columns, each cast to text,
 NULL-safe and joined by a space, then parsed into a `tsvector`. It is the vector of `SearchRank`.
@@ -1302,6 +1302,15 @@ SearchVector("forename", "surname"; config = "simple")
 # to_tsvector('simple'::regconfig, COALESCE(("Tb"."forename")::text, '') || ' ' || COALESCE(("Tb"."surname")::text, ''))
 ```
 
+`weight` labels every word of the document `"A"`, `"B"`, `"C"` or `"D"` (`setweight`), for
+`SearchRank`'s `weights` to score; anything else raises `InvalidValueError`. Two vectors add with
+`+` into one document, each keeping its own config and weight:
+
+```julia
+SearchVector("name"; weight = "A") + SearchVector("location"; weight = "B")
+# (setweight(to_tsvector(COALESCE(("Tb"."name")::text, '')), 'A') || setweight(to_tsvector(…), 'B'))
+```
+
 A field is a column path or an expression, as for `Lower`. A `SearchVector` is an operand, not a
 value: projecting one, comparing it or wrapping it in another function raises `QueryBuildError`, and
 putting one on the right of a filter pair raises `FilterError`. To filter a single column, use the
@@ -1309,16 +1318,33 @@ putting one on the right of a filter pair raises `FilterError`. To filter a sing
 """
 function SearchVector(fields::_ScalarOperand...; config = nothing, weight = nothing)
   isempty(fields) && throw(QueryBuildError("SearchVector takes at least one field (#31)."))
-  weight === nothing || throw(QueryBuildError(
-    "SearchVector's weight is not supported yet; every lexeme carries the default weight (#31)."))
   any(_is_fts_operand, fields) && throw(QueryBuildError(
-    "A SearchVector's fields are text columns or expressions; a SearchVector or SearchQuery cannot be one (#31)."))
+    "A SearchVector's fields are text columns or expressions; a SearchVector or SearchQuery cannot be " *
+    "one. To join two vectors into one document, add them: SearchVector(…) + SearchVector(…) (#1021)."))
   column = Any[_norm_fn_arg(f) for f in fields]
   return FObject(function_name = "SEARCH_VECTOR", column = column, aggregate = _any_agg(column),
-                 kwargs = Dict{String,Any}("config" => Dialect.ts_config_name(config)))
+                 kwargs = Dict{String,Any}("config" => Dialect.ts_config_name(config),
+                                           "weight" => Dialect.ts_weight_name(weight)))
 end
 SearchVector(fields...; kwargs...) = throw(QueryBuildError(
   "SearchVector takes column paths (strings) or expressions as its fields (#31)."))
+
+# `v1 + v2` (#1021): one document of two, `(v1 || v2)`, each half keeping its own config and weight —
+# Django's `CombinedSearchVector`. The sum's config is the halves' when they agree; when they do not,
+# it has none to lend a query written as a bare string, and `SearchRank` asks for a `SearchQuery`
+# rather than guessing which half's config the text should be parsed with.
+function _combine_search_vectors(a, b)
+  (_is_fts_node(a, "SEARCH_VECTOR") && _is_fts_node(b, "SEARCH_VECTOR")) || throw(QueryBuildError(
+    "A SearchVector adds only to another SearchVector, into one document: SearchVector(\"name\") + " *
+    "SearchVector(\"location\"). A SearchQuery combines with &, | and ~ instead (#1021)."))
+  ca, cb = a.kwargs["config"], b.kwargs["config"]
+  mixed = get(a.kwargs, "mixed_config", false) === true || get(b.kwargs, "mixed_config", false) === true || ca != cb
+  column = Any[a, b]
+  return FObject(function_name = "SEARCH_VECTOR", column = column, aggregate = _any_agg(column),
+                 kwargs = Dict{String,Any}("config" => mixed ? nothing : ca, "combinator" => "||",
+                                           "mixed_config" => mixed))
+end
+_is_combined_fts(x) = _is_fts_operand(x) && get(x.kwargs, "combinator", nothing) !== nothing
 
 # A query written as a bare string takes the config of the side written as an object.
 _search_query_operand(q::AbstractString, config) = SearchQuery(q; config = config)
@@ -1326,12 +1352,26 @@ _search_query_operand(q, config) = _is_fts_node(q, "SEARCH_QUERY") ? q : throw(Q
   "The query is a SearchQuery(...), or the search text as a String (#31)."))
 
 """
-    SearchRank(vector::SearchVector, query; normalization = nothing, cover_density = false)
+    SearchRank(vector::SearchVector, query; normalization = nothing, cover_density = false, weights = nothing)
 
 How well each row's document matches a query (PostgreSQL only), as a `Float64`: `ts_rank`, or
 `ts_rank_cd` with `cover_density = true`. `query` is a `SearchQuery`, or the search text as a String,
 which is parsed with the vector's config. `normalization` is PostgreSQL's integer bitmask (0 to 63)
 for weighing the document's length; any other value raises `InvalidValueError`.
+
+`weights` scores a word by its `SearchVector` weight label: four numbers from 0 to 1 for the labels
+**D, C, B and A, in that order**, as PostgreSQL's `ts_rank` takes them (its default is
+`[0.1, 0.2, 0.4, 1.0]`). Any other shape raises `InvalidValueError`. Weights only change scores
+between words labelled differently, so they go with a weighted vector:
+
+```julia
+vector = SearchVector("name"; config = "english", weight = "A") +
+         SearchVector("location"; config = "english", weight = "B")
+SearchRank(vector, SearchQuery("monaco"; config = "english"); weights = [0.0, 0.0, 0.2, 1.0])
+```
+
+A sum of vectors with different configs has no single config to parse a String query with, so it
+needs a `SearchQuery`; a String raises `QueryBuildError`.
 
 Project it under a name, then filter and order by that name:
 
@@ -1351,17 +1391,20 @@ score a tiny positive value (`1e-20`) instead of `0`.
 function SearchRank(vector, query; normalization = nothing, cover_density = false, weights = nothing)
   _is_fts_node(vector, "SEARCH_VECTOR") || throw(QueryBuildError(
     "SearchRank ranks a SearchVector(...); pass the columns to rank as one (#31)."))
-  weights === nothing || throw(QueryBuildError(
-    "SearchRank's weights are not supported yet: SearchVector has no weight to apply them to (#31)."))
+  w = Dialect.ts_rank_weights(weights)
   normalization === nothing || (normalization isa Integer && 0 <= normalization <= 63) ||
     throw(InvalidValueError("SearchRank's normalization is an integer bitmask from 0 to 63 (#31).", :range))
   cover_density isa Bool ||
     throw(InvalidValueError("SearchRank's cover_density is true or false (#31).", :type))
+  get(vector.kwargs, "mixed_config", false) === true && query isa AbstractString && throw(QueryBuildError(
+    "This SearchVector adds vectors with different configs, so a query written as a String has no " *
+    "config to be parsed with. Pass a SearchQuery(text; config = …) (#1021)."))
   q = _search_query_operand(query, vector.kwargs["config"])
   column = Any[vector, q]
   return FObject(function_name = "SEARCH_RANK", column = column, aggregate = _any_agg(column),
                  formatter = Models.format_number_sql,
-                 kwargs = Dict{String,Any}("normalization" => normalization, "cover_density" => cover_density))
+                 kwargs = Dict{String,Any}("normalization" => normalization, "cover_density" => cover_density,
+                                           "weights" => w))
 end
 
 # PostgreSQL's ts_headline option names, in the order they are written. The values are checked here

@@ -151,6 +151,41 @@ M.Driver.objects.
 
 A comparison works too, with no alias: `filter(SearchRank(SearchVector("surname"), "senna") > 0.5)`.
 
+### Weights
+
+A match in one column can count for more than a match in another. Label each column's words with a
+`weight` of `"A"`, `"B"`, `"C"` or `"D"`, and add the vectors with `+` into one document. The rank
+then scores a word by its label:
+
+```julia
+vector = SearchVector("surname"; config = "simple", weight = "A") +
+         SearchVector("forename"; config = "simple", weight = "D")
+
+M.Driver.objects.
+    values("forename", "surname", "rank" => SearchRank(vector, SearchQuery("lewis"; config = "simple"))).
+    filter("rank__@gte" => 0.01).
+    order_by("-rank", "surname") |> DataFrame
+#  Row │ forename  surname      rank
+# ─────┼──────────────────────────────────
+#    1 │ Jackie    Lewis        0.607927
+#    2 │ Stuart    Lewis-Evans  0.607927
+#    3 │ Lewis     Hamilton     0.0607927
+```
+
+PostgreSQL's default weights are `0.1`, `0.2`, `0.4` and `1.0` for D, C, B and A, which is why a
+forename match scores a tenth of a surname match. `SearchRank(…; weights = [d, c, b, a])` sets them,
+**in that order** (D first), as four numbers from 0 to 1. With `weights = [0.0, 0.0, 0.0, 1.0]` only
+the surname counts, and Lewis Hamilton drops below the threshold.
+
+- Weights only change the score of a word against a word labelled differently. On a vector with no
+  `weight`, every word carries `"D"`.
+- Each half of a sum keeps its own config and weight. If the configs differ, a query written as a
+  String has no config to be parsed with, so `SearchRank` needs a `SearchQuery` and raises
+  `QueryBuildError` otherwise.
+- A weight other than `"A"` to `"D"`, or weights that are not four numbers from 0 to 1, raise
+  `InvalidValueError`. A `SearchVector` adds only to another `SearchVector`; anything else raises
+  `QueryBuildError`.
+
 ## `SearchHeadline`
 
 `SearchHeadline(field, query; config = nothing, options...)` returns the field's text with the
@@ -240,8 +275,6 @@ These are deliberate for now. Each is refused with a typed error, not run as som
   raises `FilterError`. Neither has a Julia reading yet.
 - **No stored `tsvector` column.** A model has no `SearchVectorField` yet, so a document is always
   computed from its text columns. Use an expression index (above) to make that fast.
-- **No weights**: `SearchVector(…; weight = …)` and `SearchRank(…; weights = …)` raise
-  `QueryBuildError`. Ranking weighs every word the same.
 - **No query combinators**: `SearchQuery` objects do not combine with `&`, `|` or `~`. A
   `"websearch"` query takes `or` and `-word` in its text, and a `"raw"` one takes `&`, `|` and `!`.
 - **`@search` on a projection alias** raises `FilterError`. Search the column itself.

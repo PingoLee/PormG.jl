@@ -202,8 +202,6 @@ end
     @test _err31(() -> SearchRank("surname", "senna")) isa QueryBuildError
     @test _err31(() -> SearchRank(SearchVector("surname"), SearchVector("forename"))) isa QueryBuildError
     @test _err31(() -> SearchRank(SearchVector("surname"), 1)) isa QueryBuildError
-    @test _err31(() -> SearchRank(SearchVector("surname"), "x"; weights = [0.1, 0.2, 0.4, 1.0])) isa QueryBuildError
-    @test _err31(() -> SearchVector("surname"; weight = "A")) isa QueryBuildError
     @test _err31(() -> SearchVector()) isa QueryBuildError
     @test _err31(() -> SearchVector(1)) isa QueryBuildError
     @test _err31(() -> SearchVector(SearchQuery("x"))) isa QueryBuildError
@@ -443,5 +441,113 @@ end
     @test _err31(() -> Models.search_vector_expression(:surname)) isa ModelDefinitionError
     # The function is the published spelling: `Models.search_vector_expression`.
     @test Base.ispublic(Models, :search_vector_expression)
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Weights: SearchVector(…; weight) labels the document with setweight
+  # The label is a literal like the config (an index matches by text), checked against A–D. The
+  # index helper renders the same text for the same weight, through the same Kernel function.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "SearchVector(…; weight) renders setweight, and the index helper agrees" begin
+    vec = SearchVector("forename", "surname"; config = "simple", weight = "A")
+    r = _q31(; vals = Any["driverid", "r" => SearchRank(vec, "senna")])
+    @test occursin("ts_rank(setweight(to_tsvector('simple'::regconfig, COALESCE((\"Tb\".\"forename\")::text, '') " *
+                   "|| ' ' || COALESCE((\"Tb\".\"surname\")::text, '')), 'A'), plainto_tsquery(", r[:sql_text])
+    @test r[:parameters] == Any["senna"]
+    # The helper wraps the same document in the same setweight.
+    rendered = match(r"setweight\(.*?, 'A'\)", r[:sql_text]).match
+    @test Models.search_vector_expression("forename", "surname"; config = "simple", weight = "A") ==
+          replace(rendered, r"\"Tb\"\." => "")
+    # One weighted column is SearchVector's document too: the lookup has no weight to match.
+    @test Models.search_vector_expression("surname"; weight = "B") ==
+          "setweight(to_tsvector(COALESCE((\"surname\")::text, '')), 'B')"
+  end
+
+  @testset "a weight other than A, B, C or D is refused, at construction and at render" begin
+    for bad in ("E", "a", "AB", "A'); SELECT 1; --", 1, :A)
+      @test _err31(() -> SearchVector("surname"; weight = bad)) isa InvalidValueError
+      @test _err31(() -> Models.search_vector_expression("surname"; weight = bad)) isa InvalidValueError
+    end
+    # The kwargs Dict is mutable, so the renderer checks the label again rather than printing it.
+    vec = SearchVector("surname"; weight = "A")
+    vec.kwargs["weight"] = "A'); --"
+    @test _err31(() -> _q31(; vals = Any["driverid", "r" => SearchRank(vec, "x")])) isa InvalidValueError
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Weights: v1 + v2 is one document, each half with its own config and weight
+  # Django's CombinedSearchVector. It renders `(v1 || v2)` and binds nothing of its own, so the only
+  # parameters are the operands' own, in text order, before the query's text.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "SearchVector + SearchVector renders the two documents concatenated" begin
+    vec = SearchVector("forename"; config = "simple", weight = "A") +
+          SearchVector("surname"; config = "simple", weight = "B")
+    r = _q31(; vals = Any["driverid", "r" => SearchRank(vec, "senna")])
+    @test occursin("ts_rank((setweight(to_tsvector('simple'::regconfig, COALESCE((\"Tb\".\"forename\")::text, '')), 'A') || " *
+                   "setweight(to_tsvector('simple'::regconfig, COALESCE((\"Tb\".\"surname\")::text, '')), 'B')), " *
+                   "plainto_tsquery('simple'::regconfig, \$1::text))", r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna"])
+    # Three vectors nest left to right, and an expression operand still binds in text order.
+    vec3 = SearchVector("forename") + SearchVector(Concat("surname", Value(" jr"))) + SearchVector("number")
+    r = _q31(; vals = Any["driverid", "r" => SearchRank(vec3, "senna")])
+    @test occursin("ts_rank(((to_tsvector(", r[:sql_text])
+    _assert_pg_text_order31(r, Any[" jr", "senna"])
+  end
+
+  @testset "a sum of vectors with different configs needs a SearchQuery, not a String" begin
+    mixed = SearchVector("forename"; config = "simple") + SearchVector("surname"; config = "english")
+    @test _err31(() -> SearchRank(mixed, "senna")) isa QueryBuildError
+    @test occursin("different configs", _msg31(() -> SearchRank(mixed, "senna")))
+    # A config and none are different configs too: the text would be parsed one way or the other.
+    @test _err31(() -> SearchRank(SearchVector("forename") + SearchVector("surname"; config = "simple"), "x")) isa QueryBuildError
+    # An explicit query names its own config, so nothing is guessed.
+    r = _q31(; vals = Any["driverid", "r" => SearchRank(mixed, SearchQuery("senna"; config = "simple"))])
+    @test occursin("plainto_tsquery('simple'::regconfig, \$1::text)", r[:sql_text])
+    # Agreeing configs carry over to a String query, as for a single vector — and stay mixed once
+    # mixed, however the sum is extended.
+    same = SearchVector("forename"; config = "simple") + SearchVector("surname"; config = "simple")
+    r = _q31(; vals = Any["driverid", "r" => SearchRank(same, "senna")])
+    @test occursin("plainto_tsquery('simple'::regconfig, \$1::text)", r[:sql_text])
+    @test _err31(() -> SearchRank(mixed + SearchVector("number"; config = "simple"), "x")) isa QueryBuildError
+  end
+
+  @testset "a SearchVector adds only to a SearchVector" begin
+    vec = SearchVector("surname")
+    for f in (() -> vec + 1, () -> 1 + vec, () -> vec + 1.5, () -> vec + "forename",
+              () -> vec + SearchQuery("x"), () -> SearchQuery("x") + vec, () -> vec + Lower("forename"),
+              () -> PormG.Functions.Sum("number") + vec)
+      e = _err31(f)
+      @test e isa QueryBuildError
+      @test occursin("adds only to another SearchVector", _plain31(sprint(showerror, e)))
+    end
+    # A vector inside a SearchVector is still refused, and now names the sum as the way to join two.
+    @test occursin("add them", _msg31(() -> SearchVector(vec)))
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Weights: SearchRank(…; weights) prints PostgreSQL's float4[] in D, C, B, A order
+  # Printed like normalization — four finite numbers in 0..1, so the literal holds only digits, `.`,
+  # `e` and `-` — and re-checked at render because the node's kwargs are mutable.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "SearchRank(…; weights) renders the weights array first" begin
+    vec = SearchVector("surname"; config = "simple", weight = "A")
+    r = _q31(; vals = Any["driverid", "r" => SearchRank(vec, "senna"; weights = [0, 0.25, 0.5, 1], normalization = 2)])
+    @test occursin("(ts_rank('{0.0,0.25,0.5,1.0}'::float4[], setweight(", r[:sql_text])
+    @test occursin("plainto_tsquery('simple'::regconfig, \$1::text), 2))::double precision", r[:sql_text])
+    @test r[:parameters] == Any["senna"]
+    r = _q31(; vals = Any["driverid", "r" => SearchRank(vec, "senna"; weights = (0.1, 0.2, 0.4, 1.0), cover_density = true)])
+    @test occursin("(ts_rank_cd('{0.1,0.2,0.4,1.0}'::float4[], ", r[:sql_text])
+  end
+
+  @testset "weights other than four numbers in 0..1 are refused, at construction and at render" begin
+    vec = SearchVector("surname")
+    for bad in ([0.1, 0.2, 0.4], [0.1, 0.2, 0.4, 1.0, 1.0], [0.1, 0.2, 0.4, 1.5], [-0.1, 0.2, 0.4, 1.0],
+                [NaN, 0.2, 0.4, 1.0], [Inf, 0.2, 0.4, 1.0], [true, false, true, true], ["0.1", "0.2", "0.4", "1"],
+                0.5, "{0.1,0.2,0.4,1.0}")
+      @test _err31(() -> SearchRank(vec, "x"; weights = bad)) isa InvalidValueError
+    end
+    rank = SearchRank(vec, "x"; weights = [0.1, 0.2, 0.4, 1.0])
+    rank.kwargs["weights"] = ["1}'::float4[], (SELECT 1)) --"]
+    @test _err31(() -> _q31(; vals = Any["driverid", "r" => rank])) isa InvalidValueError
   end
 end

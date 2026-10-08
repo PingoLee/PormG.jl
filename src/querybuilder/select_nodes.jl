@@ -422,8 +422,9 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     end
   elseif v.function_name == "CASE"
     resolved_column = _render_case_branches(v.column, instruc; _as = _as)
-  elseif v.function_name in ("SEARCH_RANK", "SEARCH_HEADLINE")
+  elseif v.function_name in ("SEARCH_RANK", "SEARCH_HEADLINE") || _is_combined_fts(v)
     # #31: in text order — the vector or document, then the query, then the headline's options.
+    # #1021: a sum of vectors renders its two halves the same way, left to right.
     resolved_column = Any[_render_fts_operand(c, instruc; _as = _as) for c in v.column]
   else
     resolved_column = _get_select_query(_null_skipping_operands(v, instruc), instruc, _as=_as)

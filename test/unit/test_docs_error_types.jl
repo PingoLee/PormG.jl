@@ -1102,10 +1102,37 @@ const DOCERR_CASES = [
         () -> DOCERR_DRIVER_PG.objects.filter("surname" => SearchQuery("senna")).
             list(show_query = :dict),
     ),
+    # #1021 — the weights, the sum of vectors and the index helper. The row above was "weights raise
+    # QueryBuildError", part 1's deferral, which #1021 replaced with these claims.
     (
-        "read/full_text_search.md — weights raise QueryBuildError",
+        "read/full_text_search.md — a weight other than A to D raises InvalidValueError",
+        InvalidValueError,
+        () -> SearchVector("surname"; weight = "E"),
+    ),
+    (
+        "read/full_text_search.md — weights that are not four numbers from 0 to 1 raise InvalidValueError",
+        InvalidValueError,
+        () -> SearchRank(SearchVector("surname"), "senna"; weights = [0.1, 0.2, 1.5]),
+    ),
+    (
+        "read/full_text_search.md — a SearchVector adds only to another SearchVector",
         QueryBuildError,
-        () -> SearchVector("surname"; weight = "A"),
+        () -> SearchVector("surname") + 1,
+    ),
+    (
+        "read/full_text_search.md — summed vectors with different configs need a SearchQuery",
+        QueryBuildError,
+        () -> SearchRank(SearchVector("surname"; config = "simple") + SearchVector("forename"; config = "english"), "senna"),
+    ),
+    (
+        "read/full_text_search.md + Models.search_vector_expression — a column that is not an identifier",
+        ModelDefinitionError,
+        () -> PormG.Models.search_vector_expression("surname)"),
+    ),
+    (
+        "read/full_text_search.md + Models.search_vector_expression — a config that is not a name",
+        InvalidValueError,
+        () -> PormG.Models.search_vector_expression("surname"; config = "simple'"),
     ),
     (
         "read/full_text_search.md — `@search` on a projection alias raises FilterError",

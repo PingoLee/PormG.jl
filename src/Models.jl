@@ -40,7 +40,7 @@ import PormG: PORTABLE_DB_DEFAULTS, canonical_db_default, db_default_is_portable
 import PormG: INDEX_METHODS, INDEX_OPCLASS_RE
 # #1021: the one writer of `to_tsvector(…)` (Kernel) — `search_vector_expression` writes an index with
 # the text `Dialect` writes the query with.
-import PormG: ts_lookup_document_sql, ts_vector_document_sql
+import PormG: ts_lookup_document_sql, ts_vector_document_sql, ts_weighted_sql
 import PormG: PormGSettings, config, Configuration
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, DO_NOTHING, PROTECT
 using Printf
@@ -2416,7 +2416,7 @@ function _index_include_fields(f)::Vector{String}
 end
 
 """
-    search_vector_expression(columns...; config = nothing) -> String
+    search_vector_expression(columns...; config = nothing, weight = nothing) -> String
 
 The `to_tsvector(…)` text a full-text query renders, for a GIN index to be declared on (PostgreSQL
 only). PostgreSQL uses an expression index only when the query's expression is the index's, so write
@@ -2427,16 +2427,18 @@ with, and a config the query would refuse is refused here.
 |---|---|
 | `"surname__@search" => SearchQuery(…; config = "simple")` | `search_vector_expression("surname"; config = "simple")` |
 | `"doc__@search"` on `"doc" => SearchVector("forename", "surname"; config = "simple")` | `search_vector_expression("forename", "surname"; config = "simple")` |
+| the same, with `SearchVector(…; weight = "A")` | `search_vector_expression(…; config = "simple", weight = "A")` |
 
-One column is the `@search` lookup's expression, `to_tsvector('simple'::regconfig, "surname")`.
-Several are `SearchVector`'s, each column cast to text, `COALESCE`d and joined by a space. The
+One column without a weight is the `@search` lookup's expression,
+`to_tsvector('simple'::regconfig, "surname")`. Otherwise it is `SearchVector`'s, each column cast to
+text, `COALESCE`d and joined by a space, inside `setweight(…, 'A')` when there is a weight. The
 `config` must be the query's: `SearchQuery`'s, for the lookup. With none, the query uses the server's
 `default_text_search_config` and cannot be indexed at all, because PostgreSQL only indexes the
 two-argument `to_tsvector`.
 
 `columns` are database column names (a field's `db_column` where it sets one), written bare; each is
 quoted in the result. A column that is not an identifier raises `ModelDefinitionError`, and a config
-that is not a name raises `InvalidValueError`.
+that is not a name or a weight other than `"A"` to `"D"` raises `InvalidValueError`.
 
 ```julia
 Driver = Models.Model("driver",
@@ -2450,7 +2452,7 @@ Driver = Models.Model("driver",
 )
 ```
 """
-function search_vector_expression(columns::AbstractString...; config = nothing)::String
+function search_vector_expression(columns::AbstractString...; config = nothing, weight = nothing)::String
   isempty(columns) && throw(ModelDefinitionError("search_vector_expression takes at least one column (#1021)."))
   for c in columns
     occursin(_SEARCH_COLUMN_RE, c) || throw(ModelDefinitionError(
@@ -2458,8 +2460,10 @@ function search_vector_expression(columns::AbstractString...; config = nothing):
       "$(repr(c)) (#1021)."))
   end
   quoted = ["\"$(c)\"" for c in columns]
-  return length(quoted) == 1 ? ts_lookup_document_sql(only(quoted), config) :
-                               ts_vector_document_sql(quoted, config)
+  # The lookup has no weight, so a weighted index is always SearchVector's document.
+  document = length(quoted) == 1 && weight === nothing ? ts_lookup_document_sql(only(quoted), config) :
+                                                         ts_vector_document_sql(quoted, config)
+  return ts_weighted_sql(document, weight)
 end
 search_vector_expression(columns...; kwargs...) = throw(ModelDefinitionError(
   "search_vector_expression takes database column names as strings (#1021)."))

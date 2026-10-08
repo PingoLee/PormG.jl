@@ -139,6 +139,31 @@ _fts31_err(f) = try f(); nothing catch e; e end
         end
 
         # ─────────────────────────────────────────────────────────────────────
+        # Weights (#1021): the label each half of a summed vector carries is what `weights` scores
+        # A word that is a forename for some drivers and a surname for others, labelled D in the
+        # forename and A in the surname: weighing only A keeps the surname matches, weighing only D
+        # the forename ones. Both sets come from tokenizing the same rows in Julia.
+        # ─────────────────────────────────────────────────────────────────────
+        @testset "weights score a summed vector by its labels" begin
+            names = M.Driver.objects.values("driverid", "forename", "surname").list()
+            both = intersect(Set(w for r in names for w in _fts31_words(r["forename"])),
+                             Set(w for r in names for w in _fts31_words(r["surname"])))
+            @test !isempty(both)
+            word = minimum(both)
+            vector = SearchVector("forename"; config = "simple", weight = "D") +
+                     SearchVector("surname"; config = "simple", weight = "A")
+            ranked(weights) = ids(M.Driver.objects.
+                values("driverid", "rank" => SearchRank(vector, SearchQuery(word; config = "simple"); weights = weights)).
+                filter("rank__@gte" => 0.01).
+                list(), "driverid")
+            by_surname = Set(r["driverid"] for r in names if word in _fts31_words(r["surname"]))
+            by_forename = Set(r["driverid"] for r in names if word in _fts31_words(r["forename"]))
+            @test ranked([0.0, 0.0, 0.0, 1.0]) == by_surname
+            @test ranked([1.0, 0.0, 0.0, 0.0]) == by_forename
+            @test by_surname != by_forename
+        end
+
+        # ─────────────────────────────────────────────────────────────────────
         # SearchHeadline: the markup, and options that survive PostgreSQL's option parser
         # ─────────────────────────────────────────────────────────────────────
         @testset "SearchHeadline marks the matched words" begin

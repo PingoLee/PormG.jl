@@ -702,6 +702,26 @@ function ts_vector_document_sql(columns::AbstractVector, config)::String
   return "to_tsvector($(ts_config_prefix(config))$(document))"
 end
 
+# The four labels `setweight` takes. Printed into the SQL, so checked against this list at every
+# render as the config is — never a bound parameter, for the config's reason: an index matches by text.
+const TS_WEIGHTS = ("A", "B", "C", "D")
+
+"""
+    ts_weight_name(weight) -> Union{Nothing,String}
+
+The validated `setweight` label (`"A"` to `"D"`), or `nothing` for none. Anything else raises
+`InvalidValueError`.
+"""
+function ts_weight_name(weight)::Union{Nothing,String}
+  weight === nothing && return nothing
+  (weight isa AbstractString && weight in TS_WEIGHTS) && return String(weight)
+  throw(InvalidValueError("A SearchVector's weight is \"A\", \"B\", \"C\" or \"D\" (#1021).", :format))
+end
+
+# `document` labelled with `weight`: `setweight(document, 'A')`, or `document` itself for none.
+ts_weighted_sql(document::AbstractString, weight)::String =
+  (w = ts_weight_name(weight); w === nothing ? String(document) : "setweight($(document), '$(w)')")
+
 # ── CHECK-expressed bounds ───────────────────────────────────────────────────────────────────────
 #
 # Two column facts neither backend can express in the type itself, so both are rendered as a CHECK

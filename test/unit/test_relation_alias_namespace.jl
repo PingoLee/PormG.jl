@@ -552,8 +552,8 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The memo namespace is internal and must not surface in user-facing text
-# `instruct.cache` is keyed by `MemoKey`, so the unknown-field message's "declared aliases" list has
-# to report the NAME half. Offering the key itself would print a tuple; offering an internally
+# `instruct.cache` is keyed by `MemoKey`, so the unknown-field message's "declared aliases" list had
+# to report the NAME half (#1004 moved it off the memo onto the declaration). Offering the key itself would print a tuple; offering an internally
 # decorated string (the prefix design that preceded `MemoKey`) would print a spelling no caller can
 # type. Either way the caller must get back only what they could have written.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -574,7 +574,10 @@ end
   @test !occursin("(:cte,", msg)      # ...and no raw MemoKey either
   @test !occursin("(:base,", msg)
   @test !occursin("(:joined,", msg)
-  @test occursin("pp__sku", msg)      # the spelling the caller CAN reach, still offered
+  # #1004: the name the caller DECLARED. This used to assert `pp__sku`, the memo's name for the
+  # projection, which the caller never wrote.
+  @test occursin(r"declared aliases: c$"m, msg)
+  @test !occursin("pp__sku", msg)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

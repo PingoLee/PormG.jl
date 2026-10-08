@@ -4036,8 +4036,12 @@ end
                                                        q.filter("n" => "Monza");
                                                        inspect_query(q))
     # `_plain`: the alias list is colorized, so this needle spans "declared aliases: " +
-    # "\e[4m\e[32mname\e[0m". Matches locally (non-TTY, `_emsg` strips) and fails on CI (colour on).
-    @test occursin("declared aliases: name", _plain(alias_miss.value.msg))
+    # "\e[4m\e[32mn\e[0m". Matches locally (non-TTY, `_emsg` strips) and fails on CI (colour on).
+    # #1004: the list used to read the memo, which holds this projection under its PATH, so it
+    # offered `name` — a field the message had just listed — and never `n`, the name the caller
+    # declared. It reads the declaration now, and says how the projection is reached instead.
+    @test occursin(r"declared aliases: n$"m, _plain(alias_miss.value.msg))   # `n`, not `name`
+    @test occursin("Filter \"name\" instead", _plain(alias_miss.value.msg))
 
     # An aggregate over a joined path binds nothing either, so it reuses the memo and keeps the ONE
     # join it registered — a fresh render must not have produced a second one.

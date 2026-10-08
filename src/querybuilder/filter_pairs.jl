@@ -154,9 +154,9 @@ end
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:Union{AbstractString,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID}
   if haskey(PormGsuffix, x.first[end])
     _check_fixed_shape_lookup(x.first[end], x.second)
-    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=_path_sqlfield(x.first[1:end-1]))
   else
-    return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__"))) # TODO, maybe I need to check if the column is valid and process the function before store
+    return OperObject(operator="=", values=x.second, column=_path_sqlfield(x.first)) # TODO, maybe I need to check if the column is valid and process the function before store
   end
 end
 # `Sockets.IPAddr` (#28): a network-address field takes one on write, so a filter — and the lookup
@@ -224,7 +224,7 @@ end
 # bare-path equality over a transform column and is refused at render like any other non-binary field.
 function _get_pair_to_oper(x::Pair{Vector{String},Vector{UInt8}})
   haskey(PormGsuffix, x.first[end]) && return _vector_oper_from_suffix(x)
-  return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
+  return OperObject(operator="=", values=x.second, column=_path_sqlfield(x.first))
 end
 function _get_pair_to_oper(x::Pair{String,Vector{UInt8}})
   return _get_pair_to_oper(String.(split(x.first, "__@")) => x.second)
@@ -239,7 +239,7 @@ end
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLObjectHandler
   if x.first[end] in ["in", "nin"]
     # @pormg_debug
-    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=_path_sqlfield(x.first[1:end-1]))
   else
     _raise_invalid_filter_operator(x.first, "subquery", ["in", "nin"])
   end
@@ -251,9 +251,9 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeCTE
   if haskey(PormGsuffix, x.first[end])
     _check_fixed_shape_lookup(x.first[end], x.second)
     _check_column_rhs_lookup(x.first)
-    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=_path_sqlfield(x.first[1:end-1]))
   else
-    return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
+    return OperObject(operator="=", values=x.second, column=_path_sqlfield(x.first))
   end
 end
 # #481 — the same shape for a joined-copy handle on the RHS:
@@ -263,9 +263,9 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeJoined
   if haskey(PormGsuffix, x.first[end])
     _check_fixed_shape_lookup(x.first[end], x.second)
     _check_column_rhs_lookup(x.first)
-    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[x.first[end]], values=x.second, column=_path_sqlfield(x.first[1:end-1]))
   else
-    return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
+    return OperObject(operator="=", values=x.second, column=_path_sqlfield(x.first))
   end
 end
 # #863: the right-hand side is walked like a projection (`_walk_slot`), so a transform inside it
@@ -276,9 +276,9 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeF
   if haskey(PormGsuffix, x.first[end])
     _check_fixed_shape_lookup(x.first[end], x.second)
     _check_column_rhs_lookup(x.first)
-    return OperObject(operator=PormGsuffix[x.first[end]], values=_walk_slot(x.second), column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[x.first[end]], values=_walk_slot(x.second), column=_path_sqlfield(x.first[1:end-1]))
   else
-    return OperObject(operator="=", values=_walk_slot(x.second), column=SQLField(_check_function(x.first), join(x.first, "__")))
+    return OperObject(operator="=", values=_walk_slot(x.second), column=_path_sqlfield(x.first))
   end
 end
 # #926: a scalar `Subquery(...)` is a filter value — `filter("grid" => Subquery(…))` renders
@@ -297,9 +297,9 @@ function _get_pair_to_oper(x::Pair{Vector{String},SubqueryObject})
   if haskey(PormGsuffix, suffix)
     _check_fixed_shape_lookup(suffix, x.second)
     _check_column_rhs_lookup(x.first)
-    return OperObject(operator=PormGsuffix[suffix], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[suffix], values=x.second, column=_path_sqlfield(x.first[1:end-1]))
   else
-    return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
+    return OperObject(operator="=", values=x.second, column=_path_sqlfield(x.first))
   end
 end
 # Allow Case/When and other FObject expressions as filter RHS values
@@ -308,9 +308,9 @@ function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeFunction
   if haskey(PormGsuffix, x.first[end])
     _check_fixed_shape_lookup(x.first[end], x.second)
     _check_column_rhs_lookup(x.first)
-    return OperObject(operator=PormGsuffix[x.first[end]], values=_check_function(x.second), column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[x.first[end]], values=_check_function(x.second), column=_path_sqlfield(x.first[1:end-1]))
   else
-    return OperObject(operator="=", values=_check_function(x.second), column=SQLField(_check_function(x.first), join(x.first, "__")))
+    return OperObject(operator="=", values=_check_function(x.second), column=_path_sqlfield(x.first))
   end
 end
 # `Base.UUID` and `AbstractVector{UInt8}` (#411, #466): without them a `Vector{UUID}` or a
@@ -423,29 +423,29 @@ function _vector_oper_from_suffix(x::Pair{Vector{String},<:AbstractVector})
   # Only a path with no `__@` segment, whose last `__` segment is not an operator name: `surname__in`
   # is a typo for `surname__@in`, and keeps the "no operator" message that names the fix.
   if length(x.first) == 1 && !haskey(PormGsuffix, last(split(x.first[1], "__")))
-    return OperObject(operator="=", values=x.second, column=SQLField(_check_function(x.first), join(x.first, "__")))
+    return OperObject(operator="=", values=x.second, column=_path_sqlfield(x.first))
   end
   if suffix in ["in", "nin"]
     @pormg_debug false
-    return OperObject(operator=PormGsuffix[suffix], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[suffix], values=x.second, column=_path_sqlfield(x.first[1:end-1]))
   elseif suffix in ("range", "nrange")   # #207: nrange = NOT BETWEEN, same 2-value shape
     if length(x.second) != 2
       throw(FilterError("Error in filter, '$(suffix)' operator requires exactly 2 values, got $(length(x.second))"))
     end
-    return OperObject(operator=PormGsuffix[suffix], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[suffix], values=x.second, column=_path_sqlfield(x.first[1:end-1]))
   elseif suffix in ("has_any_keys", "has_keys")
     # #27: JSONB overlap operators (?| / ?&) take an array of keys; the render branch binds the
     # vector as a single text[] parameter.
-    return OperObject(operator=PormGsuffix[suffix], values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[suffix], values=x.second, column=_path_sqlfield(x.first[1:end-1]))
   elseif suffix == "jcontains"
     # #27: JSONB array containment (@>) with a vector RHS — serialize to a JSON document string at
     # parse time so OperObject.values stays a String (no downstream type-union change).
-    return OperObject(operator="jcontains", values=Models.format_json_sql(x.second), column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator="jcontains", values=Models.format_json_sql(x.second), column=_path_sqlfield(x.first[1:end-1]))
   elseif suffix in ARRAY_CONTAINMENT_OPERATORS
     # #28: the vector stays as written — formatting it needs the ELEMENT field, which only the render
     # knows (`_render_array_operator`). A NULL element is refused now, while the lookup is in hand.
     _refuse_null_array_element(x.second, join(x.first, "__@"))
-    return OperObject(operator=suffix, values=x.second, column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=suffix, values=x.second, column=_path_sqlfield(x.first[1:end-1]))
   else
     _raise_invalid_filter_operator(x.first, "vector", _VECTOR_VALUE_OPERATORS)
   end
@@ -470,15 +470,15 @@ end
 # OperObject.values stays a String.
 function _get_pair_to_oper(x::Pair{Vector{String},<:AbstractDict})
   x.first[end] == "jcontains" || _raise_invalid_filter_operator(x.first, "dict", ["jcontains"])
-  return OperObject(operator="jcontains", values=Models.format_json_sql(x.second), column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  return OperObject(operator="jcontains", values=Models.format_json_sql(x.second), column=_path_sqlfield(x.first[1:end-1]))
 end
 function _get_pair_to_oper(x::Pair{Vector{String},<:NamedTuple})
   x.first[end] == "jcontains" || _raise_invalid_filter_operator(x.first, "namedtuple", ["jcontains"])
-  return OperObject(operator="jcontains", values=Models.format_json_sql(x.second), column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+  return OperObject(operator="jcontains", values=Models.format_json_sql(x.second), column=_path_sqlfield(x.first[1:end-1]))
 end
 function _get_pair_to_oper(x::Pair{Vector{String},Tuple{T,T}}) where T
   if x.first[end] in ("range", "nrange")   # #207: nrange = NOT BETWEEN, same 2-value shape
-    return OperObject(operator=PormGsuffix[x.first[end]], values=[x.second[1], x.second[2]], column=SQLField(_check_function(x.first[1:end-1]), join(x.first[1:end-1], "__")))
+    return OperObject(operator=PormGsuffix[x.first[end]], values=[x.second[1], x.second[2]], column=_path_sqlfield(x.first[1:end-1]))
   elseif x.first[end] in ARRAY_CONTAINMENT_OPERATORS
     _refuse_array_lookup_tuple(x)
   else

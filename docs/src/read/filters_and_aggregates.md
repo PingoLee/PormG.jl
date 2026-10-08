@@ -1338,6 +1338,51 @@ names it, such as
 `"points" => Case([When("points__@gte" => 15, then = 1)], default = 0)`, is not ambiguous: inside the
 expression that defines it, the name can only mean the column.
 
+### A Transform Named Like a Related Path
+
+A transform projection is named after its path with the `@` dropped, as Django names it:
+`values("date__@year")` returns a column called `date__year`. When the field under the transform is
+a foreign key, that name can also be a real path. On `M.Result`, `raceid` is a foreign key to
+`M.Race`, which has a `year` column. So `"raceid__year"` is the path to the race's year, and it is
+also the name of `values("raceid__@year")`.
+
+The examples below use that pair to show how PormG reads each spelling. The transform itself is not
+useful here: `raceid` is an integer, so PostgreSQL rejects `EXTRACT(YEAR FROM …)` over it when the
+query runs. The same naming applies to a foreign key whose column is a date, such as a key into a
+calendar table that has its own `year`.
+
+The two spellings are kept apart. The spelling with `@` is the transform, and the plain path is the
+related column, wherever you write them:
+
+```julia
+query = M.Result.objects
+query.values("resultid", "yr" => "raceid__@year")
+query.filter("raceid__year" => 2009)   # the race's year: INNER JOIN "race" … WHERE "Tb_1"."year" = $1
+query.order_by("raceid__@year")        # the transform, ordered by its name: ORDER BY "yr"
+```
+
+When the projection keeps its generated name, the plain path names two things: a column in the
+result and the related column. PormG will not choose, so a filter, a condition or an `order_by` on
+that name raises `AmbiguousFieldError`:
+
+```julia
+query = M.Result.objects
+query.values("resultid", "raceid__@year")
+query.order_by("raceid__year")   # AmbiguousFieldError: the projection, or the race's year?
+```
+
+Write `order_by("raceid__@year")` for the projection. For the column, give the projection a name of
+its own, such as `values("raceid_year" => "raceid__@year")`. After that, `"raceid__year"` means the
+column.
+
+A generated name that is not a path can still be ordered by. On `M.Race`,
+`values("date__@day"); order_by("date__day")` orders by the projection, because `date__day`
+reaches no related column. Filtering on that name raises `AmbiguousFieldError`, because a generated
+name is not a filter key. Filter `"date__@day"` instead.
+
+A name you choose for a path or transform projection is not a filter key. `values("yr" =>
+"raceid__@year"); filter("yr" => 2009)` raises `UnknownFieldError`. Filter `"raceid__@year"` instead.
+
 A projection that *is* the column is not ambiguous. `values("points")`,
 `values("points" => "points")` and `values("points" => F("points"))` filter the column as usual.
 

@@ -162,6 +162,15 @@ const DOCERR_RACE801_SL = let m = Model("docerr_race801_docerr_sl",
     m.connect_key = "docerr_sl"; m._module = Main; m
 end
 
+# #1004 — a foreign key whose target has a `year`, so `raceid__@year` (a transform's generated name)
+# and `raceid__year` (the path to the race's year) are one spelling, as on the filters page.
+const DOCERR_RESULT1004_PG = let race = Model("docerr_race1004_docerr_pg", raceid = IDField(), year = IntegerField())
+    race.connect_key = "docerr_pg"; race._module = Main
+    m = Model("docerr_result1004_docerr_pg", resultid = IDField(),
+              raceid = ForeignKey(race, pk_field = "raceid", null = true))
+    m.connect_key = "docerr_pg"; m._module = Main; m
+end
+
 # #671 — a primary key the database generates by some means other than an auto-increment PormG can
 # pre-allocate, which is what `returning=` refuses to guess about. Its own model because every other
 # fixture here has an `IDField` pk.
@@ -374,6 +383,44 @@ const DOCERR_CASES = [
             q = DOCERR_RESULT_PG.objects
             q.values("driverid", "points" => PormG.Functions.Sum("points"))
             q.filter("points__@gt" => 100)
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #1004. A bare transform keeps the name PormG generated, `raceid__year`, which is also the
+        # path to the race's year; an ORDER BY on it matched the projection by name alone and sorted
+        # by the transform. It is refused, as #703 refuses the filter.
+        "read/filters_and_aggregates.md — order_by on a transform's generated name that is also a related path is ambiguous",
+        AmbiguousFieldError,
+        () -> begin
+            q = DOCERR_RESULT1004_PG.objects
+            q.values("resultid", "raceid__@year")
+            q.order_by("raceid__year")
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #1004. A transform's generated name whose path reaches no column — a date has no `day`
+        # field — is still refused by #703 (which keys a path on its first segment); the message says
+        # a generated name is not a filter key and names the transform spelling instead.
+        "read/filters_and_aggregates.md — filtering on a transform's generated name that reaches no column",
+        AmbiguousFieldError,
+        () -> begin
+            q = DOCERR_RACE_PG.objects
+            q.values("date__@day")
+            q.filter("date__day" => 5)
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #1004. A path or transform projection is memoized under its path, so the name chosen for
+        # it is not a filter key; the message says to filter the projection's own spelling.
+        "read/filters_and_aggregates.md — a path projection's chosen name is not a filter key",
+        UnknownFieldError,
+        () -> begin
+            q = DOCERR_RESULT1004_PG.objects
+            q.values("resultid", "yr" => "raceid__@year")
+            q.filter("yr" => 2009)
             q.list(show_query = :dict)
         end,
     ),

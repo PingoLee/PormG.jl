@@ -45,14 +45,24 @@
 # (#474): #444 deliberately fixed a CTE reference's `_as` at `"<cte>__<path>"`, byte-identical to the
 # field path `"<fk>__<col>"`, and `_as` is the OUTPUT column name so it cannot change. The namespace
 # therefore has to come from `root`, which `_retag_cte_field!` / `_retag_joined_field!` are the only
-# writers of. `nothing` means the expression has no output name and memoizes nowhere.
+# writers of. `nothing` means the expression has no output name and memoizes nowhere. The name half
+# is not always `_as` either — see `memo_name` below (#1004).
 #
 # `::SQLField`, not `::SQLTypeField` (#508 phase 2 / #533). The abstract signature also matched
 # `SQLOrder` — `SQLTypeOrder <: SQLTypeField` (`Kernel.jl`) — which has no `root` slot at all, so a
 # stray `SQLOrder` reaching a memo lookup raised a raw `Base.FieldError` naming an internal field
 # rather than anything the caller wrote. That is #528's failure mode, and this is where it landed.
 memo_key(v::SQLField)::Union{Nothing,MemoKey} =
-  v._as === nothing ? nothing : (v.root, v._as)
+  v._as === nothing ? nothing : (v.root, memo_name(v))
+
+# #1004 — the NAME half, which is `_as` unless the node carries a name of its own. A transform does:
+# `values("raceid__@year")` is output as `raceid__year`, which is also the spelling of the path to
+# the related race's `year`, so keying it by `_as` let a plain `filter("raceid__year" => …)` or
+# `order_by("raceid__year")` find the transform in the memo and render it. Keyed `raceid__@year`, it
+# is out of reach of every plain path, in every namespace (`root` still says which). A reader outside
+# the key path that needs the spelling the caller wrote — an error message, the GROUP BY leaf keys —
+# asks here too, rather than reading the slot.
+memo_name(v::SQLField)::Union{Nothing,String} = v.memo_as === nothing ? v._as : v.memo_as
 
 # The same key from a handle rather than from a built `SQLField`, for the sites that resolve a
 # reference directly and then read back what `_build_row_join` cached for it.
@@ -96,12 +106,10 @@ memo_projection(::SQLInstruction, ::Nothing)::Nothing = nothing
 memo_projection!(instruc::SQLInstruction, key::MemoKey, v::SQLTypeField)::SQLTypeField =
   instruc.cache[key] = v
 
-# The declared output names, for error messages only — never for resolution. Yields the NAME half of
-# every key, because the name is what the caller could have typed; the namespace half is internal
-# bookkeeping and leaking it into a message reads as a bug. Pinned by
-# `test/unit/test_relation_alias_namespace.jl` ("no raw MemoKey in an error message").
-memo_projection_names(instruc::SQLInstruction)::Vector{String} =
-  String[k[2] for k in keys(instruc.cache)]
+# (`memo_projection_names` used to sit here, listing the NAME half of every key for the unknown-field
+# message. #1004 removed it: a memo name is not a declared name — a path projection is keyed by its
+# path, and a transform by a spelling with `@` in it — so the message now reads the declaration
+# instead, `_declared_alias_names` in `build_filter.jl`.)
 
 memo_field(instruc::SQLInstruction, key::MemoKey)::Union{Nothing,PormGField} =
   get(instruc.tab_field_cache, key, nothing)

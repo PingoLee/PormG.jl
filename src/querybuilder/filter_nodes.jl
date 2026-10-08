@@ -319,7 +319,8 @@ function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
     # `_as` travels with the render. This is now the ONLY render of a predicate's left-hand side —
     # the discarded second render was the one passing `_as`, and `_get_select_query(::String)`
     # reads it to refresh the base-model `memo_field` entry under that key.
-    v_copy.field = _get_select_query(v_copy.field, instruc, _as=v._as)
+    # #1004: under the memo name, which for a transform keeps its `@` — see `get_select_query`.
+    v_copy.field = _get_select_query(v_copy.field, instruc, _as=memo_name(v))
     # Never overwrite an existing entry (#404): the first render is the one every other reader
     # memoized against, and a fresh render of a binding node is not a better selector, only a
     # second binding.

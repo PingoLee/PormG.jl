@@ -15,7 +15,7 @@ function _values_field(raw::AbstractString)
     throw(QueryBuildError("Invalid values() field \"$(str)\": operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in a projection — use them in filter() instead."))
   else
     @pormg_debug false
-    return SQLField(_check_function(check), join(check, "__"))
+    return _path_sqlfield(check)
   end
 end
 
@@ -29,7 +29,7 @@ function _values_field(ref::CTEReference)
     throw(QueryBuildError("Invalid values() field \e[4m\e[31mCTE(\"$(ref.name)\", \"$(ref.path)\")\e[0m: operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in a projection — use them in filter() instead."))
   end
   @pormg_debug false
-  return _retag_cte_field!(SQLField(_check_function(check), join(check, "__")), ref.name)
+  return _retag_cte_field!(_path_sqlfield(check), ref.name)
 end
 
 # #481 — the joined-copy twin. The removed dotted spelling reached only the FILTER resolver, so the
@@ -44,7 +44,7 @@ function _values_field(ref::JoinedReference)
     throw(QueryBuildError("Invalid values() field \e[4m\e[31mJoined(\"$(ref.alias)\", \"$(ref.path)\")\e[0m: operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in a projection — use them in filter() instead."))
   end
   @pormg_debug false
-  return _retag_joined_field!(SQLField(_check_function(check), join(check, "__")), ref.alias)
+  return _retag_joined_field!(_path_sqlfield(check), ref.alias)
 end
 
 # #509 — the ORDER BY twin of `_values_field`, extracted so the two callers that need it cannot
@@ -62,7 +62,7 @@ function _order_field(ref::CTEReference)
   if size(check, 1) > 1 && haskey(PormGsuffix, check[end])
     throw(QueryBuildError("Invalid order_by() field \e[4m\e[31mCTE(\"$(ref.name)\", \"$(ref.path)\")\e[0m: operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in ordering."))
   end
-  return _retag_cte_field!(SQLField(_check_function(check), join(check, "__")), ref.name)
+  return _retag_cte_field!(_path_sqlfield(check), ref.name)
 end
 
 # #481/#509 — the joined-copy twin, same shape.
@@ -71,7 +71,7 @@ function _order_field(ref::JoinedReference)
   if size(check, 1) > 1 && haskey(PormGsuffix, check[end])
     throw(QueryBuildError("Invalid order_by() field \e[4m\e[31mJoined(\"$(ref.alias)\", \"$(ref.path)\")\e[0m: operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in ordering."))
   end
-  return _retag_joined_field!(SQLField(_check_function(check), join(check, "__")), ref.alias)
+  return _retag_joined_field!(_path_sqlfield(check), ref.alias)
 end
 
 # #533 — the rest of the funnel. `SQLOrder.field` is `SQLTypeField` now, and its inner constructor
@@ -102,7 +102,7 @@ function _order_field(raw::AbstractString)
     "Invalid SQLOrder field \e[4m\e[31m\"$(v)\"\e[0m: operator suffixes (__@lte, __@gte, " *
     "__@contains, …) are not allowed in ordering."))
   size(check, 1) == 1 && return SQLField(v, v)
-  return SQLField(_check_function(check), join(check, "__"))
+  return _path_sqlfield(check)
 end
 
 # An ordering term is not a column. This was constructible before #533 — `SQLTypeOrder <: SQLTypeField`
@@ -141,6 +141,10 @@ function _values!(q::SQLObject, values)
         _refuse_path_alias(v._as)
       push!(q.values, _check_function(v))
     elseif isa(v, SQLTypeFunction)
+      # #1004 (the #757 gap): a function node may carry its own `_as` — the internal
+      # `WindowFunction(…; _as = "ev__seen")` does — and that name projects exactly as a Pair's
+      # alias would, so it obeys the same rule. `nothing` is left to the "requires an alias" error.
+      v._as === nothing || _refuse_path_alias(v._as)
       push!(q.values, SQLField(_check_function(v), v._as))
     elseif isa(v, Pair)
       # #603: `AbstractString`, normalized in place. The alias is only ever stored, so a
@@ -299,6 +303,14 @@ end
 function _describe_projection(v)
   f = v.field
   f isa String && return "\"$(f)\""
+  # #1004: a transform, as the caller wrote it — `"raceid__@year"`, not `EXTRACT(...)` under the name
+  # PormG generated. A joined copy's transform takes the handle spelling, its only one.
+  if v isa SQLField && _is_transform_term(v)
+    name = memo_name(v)
+    _reads_joined(f) || return "\"$(name)\""
+    alias, path = split(name, "__"; limit = 2)
+    return "Joined(\"$(alias)\", \"$(path)\")"
+  end
   # Spell these the way the caller wrote them. `Exists`/`Subquery` under one name is the headline
   # case — it is the shape that misaligns SQLite parameters — and `ExistsObject` is not a word that
   # appears anywhere in a user's source.
@@ -313,6 +325,32 @@ function _describe_projection(v)
   hasproperty(f, :function_name) && f.function_name isa String && return "$(f.function_name)(...)"
   return string(nameof(typeof(f)))
 end
+
+# #1004 — the `values(...)` argument a projection was declared with: `"yr" => "raceid__@year"` for a
+# chosen name, the path or handle alone for a name PormG generated (`"raceid__@year"`,
+# `Joined("raceid", "year")`). An error message that printed the generated name as an alias —
+# `values("raceid__year" => …)` — showed the caller a declaration they never wrote, and one #757
+# refuses.
+function _projection_spelling(v)
+  descr = _describe_projection(v)
+  v isa Union{SQLTypeField,SQLTypeText} || return descr
+  v.custom_as === nothing || return "\"$(v.custom_as)\" => $(descr)"
+  v._as === nothing && return descr
+  _generated_projection_name(v) && return descr
+  return "\"$(v._as)\" => $(descr)"
+end
+
+# Is the projection's output name one PormG generated from its path or handle, rather than one the
+# caller chose? A generated name is the only kind that may spell `__` (#757).
+_generated_projection_name(v::SQLField) =
+  v.custom_as === nothing && v._as !== nothing &&
+  (_is_transform_term(v) || v._as == _path_output_name(v.field))
+_generated_projection_name(::Any) = false
+
+# The rename that takes a generated `__` name out of the path namespace: `values("raceid_year" =>
+# "raceid__@year")`. The name follows #757's own suggestion, so `values()` accepts it.
+_renamed_projection_spelling(name::AbstractString, v) =
+  "\"$(replace(name, r"_{2,}" => "_"))\" => $(_describe_projection(v))"
 
 function _create!(q::SQLObject, values; kwargs...)
   # OrderedDict so the rendered INSERT column list follows call order deterministically (#97)
@@ -561,7 +599,7 @@ function _order_by!(q::SQLObject, values::NTuple{N,Union{AbstractString,SQLTypeO
       elseif haskey(PormGsuffix, check[end])
         throw(QueryBuildError("Invalid order_by() field \"$(v)\": operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in ordering."))  # refusal-value-ok: an order_by field name
       else
-        push!(q.order, SQLOrder(SQLField(_check_function(check), join(check, "__")), orientation=orientation))
+        push!(q.order, SQLOrder(_path_sqlfield(check), orientation=orientation))
       end
     elseif isa(v, CTEReference)
       # #444: `order_by(CTE("monaco_stats", "total_points"; desc = true))`. A reference object cannot

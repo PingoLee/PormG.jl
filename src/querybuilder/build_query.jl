@@ -482,9 +482,13 @@ function _check_mixed_grouping(instruct::SQLInstruction)
   return nothing
 end
 
-# The path key a transform is matched on: `"born__@year"` and the `_as` a `values("born__@year")`
-# projection carries (`"born__year"`) are one key.
-_mixed_path_key(path::AbstractString)::String = replace(String(path), "__@" => "__")
+# The path key a leaf is matched on: the path as written, `@` kept. It used to fold `__@` into `__`
+# so a `"born__@year"` leaf matched the `_as` a `values("born__@year")` projection carries
+# (`"born__year"`) — which made it match the plain path `"born__year"` too, the related column when
+# `born` is a foreign key: `values("raceid__@year", "x" => F("raceid__year") + Sum(…))` passed as
+# grouped and read an ungrouped `"Tb_1"."year"` (#1004). The projection side now keys by its memo
+# name, which keeps the `@` too, so the two spellings match each other and nothing else.
+_mixed_path_key(path::AbstractString)::String = String(path)
 
 # The keys of the three namespaces a leaf can live in, kept apart so a `Joined("d", "seen")` and a
 # ForeignKey path `"d__seen"` can never match each other.
@@ -504,11 +508,11 @@ function _grouped_projection_key(v)::Union{Nothing,String}
   f isa CTEReference && return _cte_path_key(f.name, f.path)
   f isa FExpression && f.operation === nothing && f.field_name isa AbstractString &&
     return _mixed_path_key(f.field_name)
-  # `values("born__@year")` arrives as `SQLField(EXTRACT(born), _as = "born__year")`, and
-  # `values(Joined("d", "seen__@year"))` as `SQLField(EXTRACT(Joined("d", "seen")), _as =
-  # "d__seen__year")`. An alias cannot carry `__` (#757), so a `__` in `_as` is always the path.
-  if f isa FObject && !f.aggregate && v._as isa AbstractString && occursin("__", v._as)
-    return _reads_joined(f) ? string("joined:", v._as) : String(v._as)
+  # `values("born__@year")` arrives as `SQLField(EXTRACT(born), _as = "born__year")` with the memo
+  # name `"born__@year"`, and `values(Joined("d", "seen__@year"))` as `SQLField(EXTRACT(Joined("d",
+  # "seen")))` named `"d__seen__@year"`. Keyed by the memo name, which keeps the `@` (#1004).
+  if f isa FObject && !f.aggregate && v isa SQLField && _is_transform_term(v)
+    return _reads_joined(f) ? string("joined:", memo_name(v)) : memo_name(v)
   end
   return nothing
 end

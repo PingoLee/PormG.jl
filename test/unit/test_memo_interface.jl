@@ -35,7 +35,7 @@ using Test
 using PormG
 using PormG.Models
 
-import PormG.QueryBuilder: memo_key, memo_projection, memo_projection!, memo_projection_names,
+import PormG.QueryBuilder: memo_key, memo_name, memo_projection, memo_projection!,
                            memo_field, memo_field!, memo_json_lookup, memo_json_lookup!,
                            CTE, Joined
 
@@ -166,7 +166,7 @@ end
 
     if !isempty(offenders)
         @error "Instruction projection memo accessed outside src/querybuilder/memos.jl (#478). " *
-               "Use memo_projection / memo_projection! / memo_projection_names." offenders
+               "Use memo_projection / memo_projection!." offenders
     end
     @test isempty(offenders)
     # Pinned, not bounded: if the model-cache read moves or multiplies, this fails and the reason
@@ -421,25 +421,41 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# `memo_projection_names` yields the NAME half only
+# `SQLField.memo_as` is read only by the sites entitled to it (#1004)
 #
-# The one accessor whose output reaches a user: `_unknown_field`'s "declared aliases" tail. The
-# namespace half is internal bookkeeping, and leaking `(:cte, "ev__sku")` into an error message
-# reads as a bug. `test_relation_alias_namespace.jl` asserts the message never contains a raw key;
-# this asserts the accessor that feeds it, so the two fail independently.
+# The `.root` pin's twin, for the NAME half. A transform's key name keeps its `@`
+# (`"raceid__@year"`) while `_as` drops it, so a reader that builds `(v.root, v._as)` — or one that
+# rebuilds an `SQLField` and forgets the slot — silently keys the transform as the related path again,
+# which is #1004 exactly. `memo_name` is the reader; the writers are the two retag helpers, and the
+# carriers are `deepcopy` and the join-condition rewrite. (`memo_projection_names`, which listed the
+# name half of every key for the unknown-field message, was removed by #1004: a memo name is not a
+# declared name, so the message reads the declaration instead.)
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "memo_projection_names yields output names, never raw keys" begin
-    q = MI.Mi_result.objects
-    q.values("id", "points")
-    instruc = PormG.QueryBuilder.build(q.object; connection = _MEMO_SL)
+@testset "SQLField.memo_as is read only by the sites entitled to it (#1004)" begin
+    expected = Set([
+        "src/querybuilder/build_helpers.jl",   # _retag_cte_field! / _retag_joined_field! prefix it
+        "src/querybuilder/join_conditions.jl", # _prefix_join_column carries it through the rewrite
+        "src/querybuilder/memos.jl",           # memo_name — the reader
+        "src/querybuilder/types.jl",           # SQLField's deepcopy
+    ])
+    sites = Tuple{String,Int,String}[]
+    for path in vcat(_memo_files(MEMO_SRC_DIR), _memo_files(MEMO_EXT_DIR)),
+        (lineno, line) in _memo_code_lines(path)
+        occursin(r"\.memo_as\b", line) && push!(sites, (_memo_rel(path), lineno, strip(line)))
+    end
+    unexpected = filter(s -> !(s[1] in expected), sites)
+    if !isempty(unexpected)
+        @error "`SQLField.memo_as` read outside the sites entitled to it (#1004). Read the name half " *
+               "through `memo_name(field)`, and the key through `memo_key(field)`." unexpected
+    end
+    @test isempty(unexpected)
+    # Pinned, not bounded: one line per writer, one carrier each, one reader.
+    @test length(sites) == 5
 
-    memo_projection!(instruc, memo_key(:base, "points"), PormG.QueryBuilder.SQLField("x", "points"))
-    memo_projection!(instruc, memo_key(:cte, "ev__sku"), PormG.QueryBuilder.SQLField("y", "ev__sku"))
-
-    names = memo_projection_names(instruc)
-    @test names isa Vector{String}
-    @test "points" in names
-    @test "ev__sku" in names
-    # Not a stringified tuple, and no namespace tag anywhere in the output.
-    @test !any(n -> occursin("(:base", n) || occursin("(:cte", n) || occursin("(:joined", n), names)
+    # And the reader answers what the key is built from.
+    f = PormG.QueryBuilder._values_field("year__@month")
+    @test memo_name(f) == "year__@month"
+    @test memo_key(f) == memo_key(:base, "year__@month")
+    @test memo_name(PormG.QueryBuilder.SQLField("points", "points")) == "points"
+    @test memo_name(PormG.QueryBuilder.SQLField("points")) === nothing
 end

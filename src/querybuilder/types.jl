@@ -598,9 +598,19 @@ mutable struct SQLField <: SQLTypeField
   # `_retag_cte_field!` / `_retag_joined_field!` are the only places that set this.
   # Read it through `memo_key` (`memos.jl`), never directly.
   root::Symbol
+  # #1004 — the NAME half of that key, when it is not `_as`. A transform keeps its `@` here
+  # (`"raceid__@year"`) while `_as` keeps the output name Django gives it (`"raceid__year"`), which
+  # is also the related path to the race's `year`. Keyed by `_as`, the transform claimed that path's
+  # memo entry, and a filter or ORDER BY on the path read the transform back. `_path_sqlfield` sets
+  # it; the retag helpers prefix it as they prefix `_as`. Read it through `memo_name`, never directly.
+  #
+  # There is no 4-argument method that defaults it, on purpose: a constructor that rebuilds a node
+  # positionally and forgets this slot would drop the `@` silently, which is this bug again. Without
+  # one, it is a `MethodError`.
+  memo_as::OptionalString
 end
-SQLField(field::FieldPart; _as::OptionalString=nothing) = SQLField(field, _as, nothing, :base)
-SQLField(field::FieldPart, _as::OptionalString) = SQLField(field, _as, nothing, :base)
+SQLField(field::FieldPart; _as::OptionalString=nothing) = SQLField(field, _as, nothing, :base, nothing)
+SQLField(field::FieldPart, _as::OptionalString) = SQLField(field, _as, nothing, :base, nothing)
 # #508 phase 2 deleted seven hand-written `Base.deepcopy` methods — for `SQLText`, `FExpression`,
 # `OuterRefObject`, `CTEReference`, `JoinedReference`, `FObject` and `WindowFunction`. They existed
 # to satisfy the #112 discipline — *a copy must share no MUTABLE state with its original* — which an
@@ -624,7 +634,7 @@ SQLField(field::FieldPart, _as::OptionalString) = SQLField(field, _as, nothing, 
 #     #157 sharing contract holds through the generic walk (pinned in `test_model_deepcopy.jl` and by
 #     the chain testset in `test_f_expression_immutability.jl`);
 #   - `WindowSpec` — still a mutable container.
-Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as, x.custom_as, x.root)
+Base.deepcopy(x::SQLTypeField) = SQLField(x.field, x._as, x.custom_as, x.root, x.memo_as)
 
 # `orientation` is interpolated into rendered SQL, so it is whitelisted here (#77) and stored
 # uppercase. Single whitelist for every orientation path — the window path

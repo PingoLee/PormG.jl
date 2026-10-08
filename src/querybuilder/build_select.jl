@@ -239,10 +239,13 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
           # answers `nothing`), so the kind is taken from the same call that renders, as above.
           interval = false
           if original isa FObject
-            sql, interval_ms, interval = _render_function_typed(original, instruc; _as = v_copy._as)
+            # #1004: the memo NAME, not the output name. A transform's `_as` (`raceid__year`) spells
+            # the related path, and the column render below refreshes the field memo under whatever
+            # it is handed — so `_as` filed the FK's own field under the path to the race's `year`.
+            sql, interval_ms, interval = _render_function_typed(original, instruc; _as = memo_name(v_copy))
             v_copy.field = interval_ms ? Dialect._sqlite_interval_text(sql) : sql
           else
-            v_copy.field = _get_select_query(original, instruc, _as=v_copy._as)
+            v_copy.field = _get_select_query(original, instruc, _as=memo_name(v_copy))   # #1004, as above
           end
           # Render first (above), THEN type — the memo ordering `_render_left_typed` documents. A
           # dotted join key cannot be typed before it has been resolved.
@@ -338,10 +341,11 @@ end
 # #587: the output name under which the expression with memo key `key` is projected, or `nothing`.
 # The scan is the one `get_order_query` runs for the same-name case, keyed on the full `memo_key`
 # — namespace AND name, never the bare `_as` string: a `Joined("raceid", "year")` projection and a
-# base-model `raceid__@year` term share the `_as` text `raceid__year` and differ only in the
-# namespace half, which is the #474 distinction. For a field-path or transform projection the name
-# half is the PATH (the chosen name lives in `custom_as`), so `values("q" => "date__@yyyy_q")`
-# answers `"q"` for an `order_by("date__@yyyy_q")` term.
+# base-model `raceid__@year` term share the `_as` text `raceid__year` and differ in both halves —
+# the namespace (#474) and, since #1004, the name, whose `@` a transform keeps. For a field-path or
+# transform projection the name half is the PATH as written (the chosen name lives in `custom_as`),
+# so `values("q" => "date__@yyyy_q")` answers `"q"` for an `order_by("date__@yyyy_q")` term, and
+# for nothing spelled `date__yyyy_q`.
 function _projected_output_name(instruc::SQLInstruction, key)::Union{Nothing,String}
   key === nothing && return nothing
   for i in eachindex(instruc.select)
@@ -351,6 +355,36 @@ function _projected_output_name(instruc::SQLInstruction, key)::Union{Nothing,Str
     return value.custom_as !== nothing ? value.custom_as : value._as
   end
   return nothing
+end
+
+# #1004 — is this term a transform (`"raceid__@year"`), whose memo name keeps the `@` its output name
+# drops?
+_is_transform_term(v::SQLField) = memo_name(v) != v._as
+
+# #1004 — does `path` walk relations from the query's model to a real column? `"raceid__year"` does
+# (the race's `year`); `"date__day"`, a transform's output name, does not. A pure walk: `_build_row_join`
+# would answer too, but it APPENDS the join it resolves, and asking must not change the statement.
+function _path_names_related_column(q::SQLObject, path::AbstractString)::Bool
+  segs = split(path, "__")
+  length(segs) > 1 || return false
+  model = q.model
+  for (i, seg) in enumerate(view(segs, 1:length(segs)-1))
+    step = _relation_step(q, model, seg, i == 1)
+    step === nothing && return false
+    model = step[2]
+  end
+  return String(segs[end]) in model.field_names
+end
+
+function _refuse_order_alias_collision(path::String, projection)
+  throw(AmbiguousFieldError(
+    "\e[4m\e[31morder_by(\"$(path)\")\e[0m is ambiguous: \e[4m\e[31m$(path)\e[0m is the path to " *
+    "a related column and also the name PormG gave the projection " *
+    "\e[4m\e[31mvalues($(_projection_spelling(projection)))\e[0m, so the ordering has two meanings " *
+    "and PormG will not choose one.\n  " *
+    "Write \e[4m\e[32morder_by($(_describe_projection(projection)))\e[0m for the projection, or " *
+    "name it — \e[4m\e[32mvalues($(_renamed_projection_spelling(path, projection)))\e[0m — and " *
+    "\e[4m\e[32morder_by(\"$(path)\")\e[0m then means the column (#1004)."))
 end
 
 # #894 — an ORDER BY term that is a bare `DurationField` column path, on SQLite. Typed after the term
@@ -424,6 +458,29 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
 
       selected_alias = value.custom_as !== nothing ? value.custom_as : value._as
       selected_alias == v_field_copy._as || continue
+      # #1004: a GENERATED name can be one spelling of two things. `values("raceid__@year")` is output
+      # as `raceid__year`, which is also the path to the related race's `year`, and the term here
+      # matched on that name alone. Only a name nobody chose can collide (a chosen one is
+      # `custom_as`), and only when the memo keys differ — the same key is the same expression.
+      if value.custom_as === nothing && memo_key(value) != memo_key(v_field_copy)
+        # A term that is not a plain path names its expression outright, so it is not the projection
+        # that happens to share its output name: `values("raceid__year"); order_by("raceid__@year")`
+        # matched the COLUMN and sorted by it, and `order_by(Joined("raceid", "year"))` beside it
+        # sorted by the foreign key's column instead of the joined copy's. Rendered afresh below
+        # instead — or matched by key through `_projected_output_name`.
+        (_is_transform_term(v_field_copy) || !(v_field_copy.field isa String)) && continue
+        # A plain path that reaches a related column, matched against a TRANSFORM's generated name,
+        # means that column as much as it names the projection: refused, as #703 refuses the filter.
+        # One that reaches nothing keeps the alias — `values("date__@day"); order_by("date__day")` is
+        # documented and integration-tested. (A joined copy named after its foreign key reaches this
+        # point too — the #484 shape — and keeps ordering by the copy, as it always has; #1004 is
+        # about the transform's name.) The DECLARED projection is what the message spells:
+        # `instruc.select[i]` holds it rendered, and `get_select_query` fills the two index for index.
+        declared = object.values[i]
+        declared isa SQLField && _is_transform_term(declared) &&
+          _path_names_related_column(object, v_field_copy.field) &&
+          _refuse_order_alias_collision(v_field_copy.field, declared)
+      end
 
       found_in_select = true
     end

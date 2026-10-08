@@ -702,8 +702,8 @@ _q_agg_tx_join(sql, alias) = (m = match(Regex("JOIN \"[^\"]+\" AS \"$(alias)\" O
 # `values("raceid__@year")` is named `raceid__year`, which is also the path to the race's `year`.
 # Without #703 the filter read the projection's memo entry and printed `EXTRACT(YEAR FROM raceid)`
 # where the caller named the race's column, with no error at build time (SQLite runs it, too).
-# (Renaming the transform escapes this guard
-# while keeping the memo key — #1004, not pinned here.)
+# (Since #1004 the memo entry is keyed `raceid__@year`, so the filter no longer reads it; the name
+# still has two meanings, which is what this pins. The renamed transform is #1004's, below.)
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#777: a transform named like a related path refuses the filter (#703)" begin
   for (backend, conn) in _Q_AGG_TX_CONNS
@@ -815,6 +815,358 @@ end
       assert_marker_count(insp, backend)
     end
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1004 helpers: which clause reads the race's `year`, and which reads the transform
+# `raceid__@year` projects `EXTRACT(YEAR FROM raceid)` (PostgreSQL) or `strftime('%Y', raceid)`
+# (SQLite); `raceid__year` is the race's column, `"Tb_1"."year"` once the FK's join is emitted.
+# ─────────────────────────────────────────────────────────────────────────────
+_q_agg_tx_transform(text) = occursin("EXTRACT", text) || occursin("strftime", text)
+_q_agg_tx_race_year(text) = occursin("\"Tb_1\".\"year\"", text)
+_q_agg_tx_order(sql) = (m = match(r"ORDER BY(.*)"s, sql); m === nothing ? "" : m.captures[1])
+# Up to the statement's own FROM, which starts a line — not the one inside `EXTRACT(YEAR FROM …)`.
+_q_agg_tx_select(sql) = (m = match(r"SELECT(.*?)\nFROM "s, sql); m === nothing ? "" : m.captures[1])
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1004: a renamed transform does not answer for the related path
+# A transform's memo key used to drop the `@`: `values("yr" => "raceid__@year")` was keyed
+# `raceid__year`, the path to the race's `year`, so a filter, `Q`, `Qor`, `When` or `order_by` on that
+# path read the transform back. #703 compares output names (`yr`), so nothing refused it, and SQLite
+# runs `strftime` over the integer key without an error. Each now reads the race's column, and the
+# projection keeps its transform.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1004: a renamed transform does not answer for the related path" begin
+  renamed() = (q = QAggTx.Result.objects; q.values("resultid", "yr" => "raceid__@year"); q)
+  for (backend, conn) in _Q_AGG_TX_CONNS
+    @testset "$backend — $label" for (label, add!) in (
+        ("filter", q -> q.filter("raceid__year" => 2009)),
+        ("Q", q -> q.filter(Q("raceid__year" => 2009))),
+        ("Qor", q -> q.filter(Qor("raceid__year" => 2009, "raceid__year" => 2010))))
+      q = renamed(); add!(q)
+      insp = inspect_query(q; connection = conn)
+      where_text = _q_agg_tx_where(insp[:sql_text])
+      @test _q_agg_tx_race_year(where_text)
+      @test !_q_agg_tx_transform(where_text)
+      # The projection is untouched: still the transform, under the caller's name.
+      @test occursin(r"\"raceid\".*as \"yr\""s, _q_agg_tx_select(insp[:sql_text]))
+      @test _q_agg_tx_transform(_q_agg_tx_select(insp[:sql_text]))
+      assert_marker_count(insp, backend)
+    end
+    @testset "$backend — order_by" begin
+      q = renamed(); q.order_by("raceid__year")
+      order_text = _q_agg_tx_order(inspect_query(q; connection = conn)[:sql_text])
+      @test _q_agg_tx_race_year(order_text)
+      @test !_q_agg_tx_transform(order_text)
+    end
+    @testset "$backend — a When in another projection" begin
+      q = QAggTx.Result.objects
+      q.values("resultid", "yr" => "raceid__@year",
+               "f" => Case([When("raceid__year" => 2009, then = 1)], default = 0))
+      sql = inspect_query(q; connection = conn)[:sql_text]
+      @test occursin(r"CASE\s+WHEN \"Tb_1\"\.\"year\" = ", sql)
+      # ...and `yr` is still the transform, not the column the condition read.
+      @test occursin(r"\"raceid\"\)(::integer| AS INTEGER\))? as \"yr\"", sql)
+    end
+    # Control: the transform spelling still finds the projection by key (#587) and orders by its name.
+    @testset "$backend — order_by the transform spelling" begin
+      q = renamed(); q.order_by("raceid__@year")
+      @test occursin(r"ORDER BY \"yr\" ASC", inspect_query(q; connection = conn)[:sql_text])
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1004: a transform rendered in one place does not answer for the path in another
+# The memo is shared by every clause of one build, so the transform's old key leaked across them
+# with no projection at all: a filter on `raceid__@year` wrote the entry, and a later `order_by` or
+# a second filter on `raceid__year` read the transform. The mirror ran the other way: a projected
+# `raceid__year` claimed the key, and `order_by("raceid__@year")` sorted by the race's column.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1004: a transform rendered in one clause does not answer for the path in another" begin
+  for (backend, conn) in _Q_AGG_TX_CONNS
+    @testset "$backend — filter, then order_by the path" begin
+      q = QAggTx.Result.objects
+      q.values("resultid"); q.filter("raceid__@year" => 2009); q.order_by("raceid__year")
+      sql = inspect_query(q; connection = conn)[:sql_text]
+      @test _q_agg_tx_transform(_q_agg_tx_where(sql))
+      @test _q_agg_tx_race_year(_q_agg_tx_order(sql))
+      @test !_q_agg_tx_transform(_q_agg_tx_order(sql))
+    end
+    @testset "$backend — two filters" begin
+      q = QAggTx.Result.objects
+      q.values("resultid"); q.filter("raceid__@year" => 2009, "raceid__year" => 2010)
+      insp = inspect_query(q; connection = conn)
+      where_text = _q_agg_tx_where(insp[:sql_text])
+      @test _q_agg_tx_transform(where_text)
+      @test occursin(r"\"Tb_1\"\.\"year\" = ", where_text)
+      assert_marker_count(insp, backend)
+    end
+    @testset "$backend — two order terms" begin
+      q = QAggTx.Result.objects
+      q.values("resultid"); q.order_by("raceid__@year", "raceid__year")
+      # Split at the term boundary: `strftime('%Y', …)` has a comma of its own.
+      terms = split(_q_agg_tx_order(inspect_query(q; connection = conn)[:sql_text]), "NULLS LAST,")
+      @test length(terms) == 2
+      @test _q_agg_tx_transform(terms[1])
+      @test _q_agg_tx_race_year(terms[2]) && !_q_agg_tx_transform(terms[2])
+    end
+    @testset "$backend — a When on the transform, then the path projected" begin
+      q = QAggTx.Result.objects
+      q.values("f" => Case([When("raceid__@year" => 2009, then = 1)], default = 0), "raceid__year")
+      select_text = _q_agg_tx_select(inspect_query(q; connection = conn)[:sql_text])
+      @test occursin(r"\"Tb_1\"\.\"year\" as \"raceid__year\"", select_text)
+    end
+    @testset "$backend — the path projected, then order_by the transform" begin
+      q = QAggTx.Result.objects
+      q.values("resultid", "raceid__year"); q.order_by("raceid__@year")
+      order_text = _q_agg_tx_order(inspect_query(q; connection = conn)[:sql_text])
+      @test _q_agg_tx_transform(order_text)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1004: ordering by a transform's generated name that is also a related path
+# `values("raceid__@year")` is output as `raceid__year`, and ORDER BY matched a projection by output
+# name alone, so `order_by("raceid__year")` sorted by the transform whatever the caller meant. Two
+# meanings, refused as #703 refuses the filter. A generated name that is NOT a path keeps ordering by
+# the projection — `values("race_date__@day"); order_by("race_date__day")` is documented and
+# integration-tested — and so does the transform spelling.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1004: ordering by a transform's generated name that is also a related path" begin
+  for (backend, conn) in _Q_AGG_TX_CONNS
+    @testset "$backend" begin
+      q = QAggTx.Result.objects
+      q.values("resultid", "raceid__@year"); q.order_by("raceid__year")
+      err = @test_throws AmbiguousFieldError inspect_query(q; connection = conn)
+      msg = _q_agg_tx_msg(err.value)
+      @test occursin("order_by(\"raceid__year\") is ambiguous", msg)
+      @test occursin("order_by(\"raceid__@year\")", msg)
+      @test occursin("values(\"raceid_year\" => \"raceid__@year\")", msg)
+      @test occursin("#1004", msg)
+
+      # The transform spelling orders by the projection's name.
+      q = QAggTx.Result.objects
+      q.values("resultid", "raceid__@year"); q.order_by("raceid__@year")
+      @test occursin(r"ORDER BY \"raceid__year\" ASC", inspect_query(q; connection = conn)[:sql_text])
+
+      # The advice, followed: the named projection frees the path for the column.
+      q = QAggTx.Result.objects
+      q.values("resultid", "raceid_year" => "raceid__@year"); q.order_by("raceid__year")
+      order_text = _q_agg_tx_order(inspect_query(q; connection = conn)[:sql_text])
+      @test _q_agg_tx_race_year(order_text) && !_q_agg_tx_transform(order_text)
+
+      # Control: a generated name that reaches no related column still orders by the projection.
+      q = QAggTx.Result.objects
+      q.values("race_date__@day"); q.order_by("race_date__day")
+      @test occursin(r"ORDER BY \"race_date__day\" ASC", inspect_query(q; connection = conn)[:sql_text])
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1004: what the ORDER BY refusal leaves alone, and the handle twin of the transform term
+# The refusal is for a TRANSFORM's generated name. A joined copy named after its foreign key (#484)
+# keeps ordering by the copy's alias, as it always did — out of #1004's scope. A handle term is the
+# transform term's twin: `order_by(Joined("raceid", "year"))` beside a projected `raceid__year` path
+# matched that projection by name and sorted by the FOREIGN KEY's race, not the joined copy.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1004: the ORDER BY refusal is for transforms; a handle term is not matched by name" begin
+  copy_on(q) = q.cjoin_on("Race", alias = "raceid", on = [PormG.Joined("raceid", "raceid") == F("raceid")])
+  for (backend, conn) in _Q_AGG_TX_CONNS
+    @testset "$backend" begin
+      q = QAggTx.Result.objects; copy_on(q)
+      q.values("resultid", PormG.Joined("raceid", "year")); q.order_by("raceid__year")
+      @test occursin(r"ORDER BY \"raceid__year\" ASC", inspect_query(q; connection = conn)[:sql_text])
+
+      q = QAggTx.Result.objects; copy_on(q)
+      q.values("resultid", "raceid__year"); q.order_by(PormG.Joined("raceid", "year"))
+      @test occursin(r"ORDER BY \"raceid\"\.\"year\" ASC", inspect_query(q; connection = conn)[:sql_text])
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1004: an UPDATE filters the related path beside a transform projection
+# A read refuses `filter("raceid__year")` beside `values("raceid__@year")` (#703: the name means the
+# column and the projection). An UPDATE has no projection (#668), so only the column is left — and the
+# filter no longer resolves through the projection memo, which is what #668's refusal guards. It
+# filters the race's year, as the same filter does with no projection at all.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1004: an UPDATE beside a transform projection filters the related column" begin
+  q = QAggTx.Result.objects
+  q.values("resultid", "raceid__@year"); q.filter("raceid__year" => 2009)
+  sql = q.update("points" => 0.0, show_query = :dict)[:sql_text]
+  @test occursin(r"\"Tb_1\"\.\"year\" = \?", sql)
+  @test !_q_agg_tx_transform(sql)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1004: #703 and #706's advice for a generated `__` name can be followed
+# Both used to say "rename the alias — `values("raceid__year_value" => …)`", which #757 refuses, and
+# called the projection `values("raceid__year" => EXTRACT(...))`, a declaration the caller never
+# wrote. The advice now names a projection `values()` accepts, and how to reach each meaning.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1004: #703 and #706 advice for a generated name can be followed" begin
+  for (backend, conn) in _Q_AGG_TX_CONNS
+    @testset "$backend — #703" begin
+      q = QAggTx.Result.objects
+      q.values("resultid", "raceid__@year"); q.filter("raceid__year" => 2009)
+      err = @test_throws AmbiguousFieldError inspect_query(q; connection = conn)
+      msg = _q_agg_tx_msg(err.value)
+      @test occursin("the projection values(\"raceid__@year\")", msg)
+      @test occursin("values(\"raceid_year\" => \"raceid__@year\")", msg)
+      @test occursin("filter \"raceid__@year\" for the projection", msg)
+      @test !occursin("_value", msg)
+      @test occursin("#703", msg)
+    end
+    @testset "$backend — #706" begin
+      q = QAggTx.Result.objects
+      q.values("resultid", "raceid__@year", "f" => Case([When("raceid__year" => 2009, then = 1)], default = 0))
+      err = @test_throws AmbiguousFieldError inspect_query(q; connection = conn)
+      msg = _q_agg_tx_msg(err.value)
+      @test occursin("values(\"raceid_year\" => \"raceid__@year\")", msg)
+      @test occursin("write \"raceid__@year\" in the condition", msg)
+      @test !occursin("_value", msg)
+      @test occursin("#706", msg)
+    end
+    @testset "$backend — the advice, followed" begin
+      # `values()` accepts the suggested name, the transform spelling filters the transform, and the
+      # path filters the race's column — in one query, each where the advice said.
+      q = QAggTx.Result.objects
+      q.values("resultid", "raceid_year" => "raceid__@year")
+      q.filter("raceid__@year" => 2009, "raceid__year" => 2010)
+      insp = inspect_query(q; connection = conn)
+      where_text = _q_agg_tx_where(insp[:sql_text])
+      @test _q_agg_tx_transform(where_text)
+      @test occursin(r"\"Tb_1\"\.\"year\" = ", where_text)
+      assert_marker_count(insp, backend)
+    end
+    @testset "$backend — a generated name that reaches no column" begin
+      # #703 keys a path on its first segment, so it refuses this too; the message must not offer
+      # `race_date__day` as a column — a date has no `day` field.
+      q = QAggTx.Result.objects
+      q.values("resultid", "race_date__@day"); q.filter("race_date__day" => 5)
+      err = @test_throws AmbiguousFieldError inspect_query(q; connection = conn)
+      msg = _q_agg_tx_msg(err.value)
+      @test occursin("a generated name is not a filter key", msg)
+      @test occursin("Filter \"race_date__@day\" for the projection's value", msg)
+      @test !occursin("for the column", msg)
+      q = QAggTx.Result.objects
+      q.values("resultid", "race_date__@day", "f" => Case([When("race_date__day" => 5, then = 1)], default = 0))
+      err = @test_throws AmbiguousFieldError inspect_query(q; connection = conn)
+      msg = _q_agg_tx_msg(err.value)
+      @test occursin("a generated name is not a condition key", msg)
+      @test occursin("Write \"race_date__@day\" in the condition", msg)
+    end
+    @testset "$backend — a joined copy is reached through its handle" begin
+      q = QAggTx.Result.objects
+      q.cjoin_on("Race", alias = "raceid", on = [PormG.Joined("raceid", "raceid") == F("raceid")])
+      q.values("resultid", PormG.QueryBuilder.SQLField(PormG.Joined("raceid", "year"), "raceid__year"))
+      q.filter("raceid__year" => 2009)
+      err = @test_throws AmbiguousFieldError inspect_query(q; connection = conn)
+      msg = _q_agg_tx_msg(err.value)
+      @test occursin("values(\"raceid_year\" => Joined(\"raceid\", \"year\"))", msg)
+      @test occursin("filter Joined(\"raceid\", \"year\") for the projection", msg)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1004: the unknown-field message lists the names the caller declared
+# It used to list the memo's keys, and a path projection is memoized under its path:
+# `values("yr" => "race_date__@year")` showed up as `race_date__year`, a name the caller never wrote.
+# It now lists the declaration, and explains the one declared name it cannot filter on.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1004: the unknown-field message lists the names the caller declared" begin
+  for (backend, conn) in _Q_AGG_TX_CONNS
+    @testset "$backend" begin
+      declared() = (q = QAggTx.Result.objects;
+                    q.values("resultid", "yr" => "race_date__@year", "pts" => Sum("points")); q)
+      q = declared(); q.filter("nope" => 1)
+      err = @test_throws PormG.UnknownFieldError inspect_query(q; connection = conn)
+      msg = _q_agg_tx_msg(err.value)
+      @test occursin("declared aliases: pts, yr", msg)
+      @test !occursin("race_date__year", msg)
+      @test !occursin("race_date__@year", msg)
+
+      # The chosen name of a path projection is listed, and filtering on it says how to reach it.
+      q = declared(); q.filter("yr" => 2020)
+      err = @test_throws PormG.UnknownFieldError inspect_query(q; connection = conn)
+      msg = _q_agg_tx_msg(err.value)
+      @test occursin("Filter \"race_date__@year\" instead", msg)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1004: a function node's own `__` name is refused as a Pair alias is (#757)
+# `values()` checked the alias of a Pair and of an explicit `SQLField`, but a function node built with
+# its own `_as` reached the projection list unchecked — the internal `WindowFunction(…; _as =
+# "ev__seen")` projected under a `__` name every router misreads.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1004: a function node's own `__` name is refused (#757)" begin
+  with_as(f, name) = PormG.QueryBuilder.FObject(function_name = f.function_name, column = f.column,
+                                                aggregate = f.aggregate, formatter = f.formatter,
+                                                _as = name, kwargs = f.kwargs)
+  err = @test_throws PormG.QueryBuildError QAggTx.Result.objects.values("resultid", with_as(Sum("points"), "season__points"))
+  @test occursin("#757", _q_agg_tx_msg(err.value))
+  # A single underscore is a name like any other.
+  q = QAggTx.Result.objects
+  q.values("resultid", with_as(Sum("points"), "season_points"))
+  @test occursin("as \"season_points\"", inspect_query(q; connection = QAggTxMockSQLite())[:sql_text])
+  # No name at all is still the "requires an alias" error, not a MethodError from the check.
+  q = QAggTx.Result.objects
+  q.values(Sum("points"))
+  err = @test_throws PormG.QueryBuildError inspect_query(q; connection = QAggTxMockSQLite())
+  @test occursin("requires an alias", _q_agg_tx_msg(err.value))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1004: a grouped transform does not group the related path (#798)
+# The GROUP BY leaf keys folded `__@` into `__` too, so a grouped `values("raceid__@year")` made a
+# mixed term reading the plain path `raceid__year` look grouped — PostgreSQL rejects the statement,
+# SQLite answers with an arbitrary row's year. Both directions are refused now; the transform read
+# whole beside its own grouping still builds.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1004: a grouped transform does not group the related path (#798)" begin
+  for (backend, conn) in _Q_AGG_TX_CONNS
+    @testset "$backend" begin
+      q = QAggTx.Result.objects
+      q.values("raceid__@year", "x" => F("raceid__year") + Sum("points"))
+      err = @test_throws PormG.QueryBuildError inspect_query(q; connection = conn)
+      @test occursin("#798", _q_agg_tx_msg(err.value))
+
+      q = QAggTx.Result.objects
+      q.values("raceid__year", "x" => F("raceid__@year") + Sum("points"))
+      err = @test_throws PormG.QueryBuildError inspect_query(q; connection = conn)
+      @test occursin("#798", _q_agg_tx_msg(err.value))
+
+      # Control: the grouped transform read again is grouped.
+      q = QAggTx.Result.objects
+      q.values("raceid__@year", "x" => F("raceid__@year") + Sum("points"))
+      @test occursin("GROUP BY 1", inspect_query(q; connection = conn)[:sql_text])
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1004: the memo key keeps the transform's `@`
+# The key is the mechanism the testsets above observe; pinned directly so a construction site that
+# rebuilds an `SQLField` and drops the name is caught where it happens.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1004: a transform's memo key keeps its `@`; its output name does not" begin
+  QB = PormG.QueryBuilder
+  f = QB._values_field("raceid__@year")
+  @test f._as == "raceid__year"
+  @test QB.memo_key(f) == (:base, "raceid__@year")
+  @test QB.memo_key(deepcopy(f)) == (:base, "raceid__@year")
+  # A plain path's key is its name, as before.
+  @test QB.memo_key(QB._values_field("raceid__year")) == (:base, "raceid__year")
+  # The CTE and joined-copy spellings move the `@` with their prefix.
+  @test QB.memo_key(QB._values_field(PormG.CTE("ev", "seen__@year"))) == (:cte, "ev__seen__@year")
+  @test QB.memo_key(QB._values_field(PormG.Joined("d", "seen__@year"))) == (:joined, "d__seen__@year")
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

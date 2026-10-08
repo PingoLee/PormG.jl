@@ -3397,9 +3397,10 @@ column (`GENERATED ALWAYS AS (to_tsvector(…)) STORED`) is not supported yet.
   `Models.Index` instead
 - `default`: not accepted — raises `FieldValidationError`. A document literal is stored in the form
   PostgreSQL rewrites it to, so a declared one would never compare equal to the column. Every row's
-  document comes from its own text, through `update`; for an empty one, use
-  `db_default = (postgres = "''::tsvector",)`
-- `db_default::Union{NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). Pin it to PostgreSQL — `(postgres = "''::tsvector",)`. Mutually exclusive with `default`
+  document comes from its own text, through `update`: declare the column `null = true` and fill it
+- `db_default::Union{NamedTuple, Nothing} = nothing`: accepted as on every field (#496), but not a way
+  to give the column a document. A literal one (`''::tsvector`) reads back from the catalog as a
+  value rather than the expression declared, so `makemigrations` would plan it again each time
 - `editable::Bool = false`: Whether the field should be editable in forms
 
 # Database Mapping
@@ -3427,8 +3428,7 @@ function SearchVectorField(; kwargs...)
   # Normalizing it here would mean parsing tsvector syntax in Julia — emulation — so it is refused.
   get(kwargs, :default, nothing) === nothing || throw(FieldValidationError(
     "SearchVectorField takes no default: a document comes from each row's own text, through " *
-    "update(\"search_vector\" => SearchVector(…)). For an empty document, declare " *
-    "db_default = (postgres = \"''::tsvector\",) (#1021)."))
+    "update(\"search_vector\" => SearchVector(…)). Declare the column null = true and fill it that way (#1021)."))
 
   return sSearchVectorField(
     verbose_name,

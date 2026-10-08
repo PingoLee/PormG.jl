@@ -854,7 +854,9 @@ end
       @test e isa FieldValidationError
       @test occursin("takes no default", _plain31(sprint(showerror, e)))
     end
-    @test Models.SearchVectorField(db_default = (postgres = "''::tsvector",)).default === nothing
+    # The message points to `null = true` and `update`, not to a literal `db_default`: that one reads
+    # back from the catalog as a value, so it would not converge either (delta review of #1021).
+    @test occursin("null = true", _msg31(() -> Models.SearchVectorField(default = "x")))
   end
 
   @testset "a retype into tsvector is refused; out of it, only to text" begin

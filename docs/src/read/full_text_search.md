@@ -324,10 +324,10 @@ M.Race_report.objects.
 - The column reads as the `tsvector`'s text, a `String`: `'at':2A 'senna':1A 'suzuka':3A`. A
   `String` written to it is parsed as that text, not as words. Use `update` with a `SearchVector`
   to build it from words. It takes no `default` (`FieldValidationError`): PostgreSQL stores a
-  document literal rewritten, so a declared one would never match its column. For an empty
-  document, use `db_default = (postgres = "''::tsvector",)`.
+  document literal rewritten, so a declared one would never match its column. Declare it
+  `null = true`, and fill it with `update`.
 - Name it something other than `search`, such as Django's `search_vector`. `search` is also the
-  lookup's name, so a bare `filter("search" => …)` on such a column is misread today.
+  lookup's name, so a bare `filter("search" => …)` on such a column is misread today (#1030).
 - A GIN index on the column (`Models.Index(fields = ("search_vector",), method = "gin", …)`) serves
   `@search`, with no expression to match.
 - `SearchVector`, `SearchHeadline` and the pattern lookups (`@contains`, …) do not take the column.

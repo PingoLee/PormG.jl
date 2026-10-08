@@ -270,10 +270,11 @@ end
     # `:block` acquisition path — so a whole-body anchor for it is satisfied by code
     # that has nothing to do with the restore, and a fire-and-forget restore passes.
     # That is not hypothetical: it was demonstrated on this file (#322 review).
-    restore_idx = findfirst("Restore statement_timeout", body)
+    # #1024 moved the restore from `statement_timeout` to `lock_timeout`; the anchors follow it.
+    restore_idx = findfirst("Restore lock_timeout", body)
     @test restore_idx !== nothing
     restore = replace(body[first(restore_idx):end], r"(?m)#.*$" => "")
-    @test occursin("SET statement_timeout TO DEFAULT", restore)
+    @test occursin("SET lock_timeout TO DEFAULT", restore)
     # EVERY statement issued from here on is awaited — the actual invariant, rather than "there are
     # two of them". A fixed count is both too weak and too strong once `restore` runs to the end of
     # the method: regressing one branch to fire-and-forget while any later statement is awaited keeps

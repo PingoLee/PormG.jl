@@ -6,8 +6,8 @@ PostgreSQL translates its messages by `lc_messages`, so on a `pt_BR` server
 English text silently stops firing. #1001 fixed that for `bulk_insert`'s sequence resync and
 `get_or_create`'s conflict target. This file holds the rest:
 
-  1. **`with_advisory_lock`'s `:block` timeout** keys on SQLSTATE `57014`, with two guards that keep
-     it meaning `statement_timeout` rather than any cancel.
+  1. **`with_advisory_lock`'s `:block` timeout** keys on SQLSTATE `55P03`, which `lock_timeout`
+     raises and no cancel shares (#1024). A `57014` is a cancel and propagates.
   2. **The LibPQ connection fallbacks** have no SQLSTATE to read. Their decisions are pinned here:
      a dropped connection is still recognized on a localized server, by libpq's own (untranslated)
      line, and a localized auth failure degrades to the safe wait-to-deadline path.
@@ -26,11 +26,12 @@ const CP1010 = PormG.ConnectionPool
 const E1010 = LibPQ.Errors
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. with_advisory_lock(:block): the timeout is SQLSTATE 57014, not English text
+# 1. with_advisory_lock(:block): the timeout is SQLSTATE 55P03, not text, and not 57014
 #
 # A PG-shaped mock pool, after `MockPGPool322` (test_transaction_interrupt.jl). The blocking lock
 # query sleeps `block_delay` seconds and then fails with `block_error`; the holder query answers one
-# pid, so the lock-timeout error can be told apart from the error it replaces.
+# pid, so the lock-timeout error can be told apart from the error it replaces. Every statement is
+# recorded, so the timeout the call sets and restores can be read back.
 # ─────────────────────────────────────────────────────────────────────────────
 mutable struct FakeConn1010
   closed::Bool
@@ -45,12 +46,15 @@ mutable struct MockLockPool1010 <: PormG.PormGPostgres
   lock::ReentrantLock
   block_error::Any
   block_delay::Float64
+  show_answer::Any
+  sqls::Vector{String}
   unlocks::Threads.Atomic{Int}
   renewals::Threads.Atomic{Int}
 end
-MockLockPool1010(block_error; block_delay = 0.0) =
+MockLockPool1010(block_error; block_delay = 0.0, show_answer = "0") =
   MockLockPool1010(Any[FakeConn1010(false)], [true], "mock://pg", 1, ReentrantLock(),
-                   block_error, block_delay, Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+                   block_error, block_delay, show_answer, String[],
+                   Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
 
 PormG.backend_is_alive(::MockLockPool1010, conn) = conn isa FakeConn1010 && !conn.closed
 PormG.backend_connect(::MockLockPool1010; kwargs...) = FakeConn1010(false)
@@ -60,20 +64,33 @@ PormG.backend_cancel_query!(::MockLockPool1010, conn) = nothing
 PormG.backend_drain_connection!(::MockLockPool1010, conn) = true
 
 function PormG.backend_execute_async(pool::MockLockPool1010, conn, sql::String, params)
+  push!(pool.sqls, sql)
   startswith(sql, "SELECT pg_advisory_unlock") && Threads.atomic_add!(pool.unlocks, 1)
   return @async begin
     if startswith(sql, "SELECT true AS ok FROM (SELECT pg_advisory_lock")
       sleep(pool.block_delay)
+      pool.block_error === nothing && return Any[(true,)]
       throw(pool.block_error)
     end
     occursin("pg_locks", sql) && return Any[(4711, "app-worker-1")]
-    startswith(sql, "SHOW statement_timeout") && return Any[("0",)]
+    if startswith(sql, "SHOW ")
+      pool.show_answer === nothing && error("SHOW failed")
+      return Any[(pool.show_answer,)]
+    end
     startswith(sql, "SELECT pg_") ? Any[(true,)] : NamedTuple[]
   end
 end
 
-# A `statement_timeout` cancel as a `pt_BR` server reports it, wrapped the way the pool wraps it.
-function _pt_timeout1010(cause = E1010.QueryCanceled("ERRO:  cancelando comando devido ao tempo de espera do comando", nothing))
+# A `lock_timeout` expiry as a `pt_BR` server reports it, wrapped the way the pool wraps it.
+function _pt_lock_timeout1024()
+  text = "cancelando comando devido a tempo de espera de bloqueio"
+  return PormG.OperationalError("PostgreSQL", E1010.LockNotAvailable("ERRO:  " * text, nothing);
+                                sqlstate = "55P03", message = text)
+end
+
+# A `57014` cancel as a `pt_BR` server reports it — the SQLSTATE `statement_timeout` raised too.
+function _pt_timeout1010()
+  cause = E1010.QueryCanceled("ERRO:  cancelando comando devido ao tempo de espera do comando", nothing)
   return PormG.OperationalError("PostgreSQL", cause; sqlstate = "57014",
                                 message = "cancelando comando devido ao tempo de espera do comando")
 end
@@ -90,13 +107,13 @@ function _lock_outcome1010(pool; timeout_ms)
   return err, ran[]
 end
 
-@testset "#1010: a Portuguese statement_timeout still reads as a lock timeout" begin
-  pool = MockLockPool1010(_pt_timeout1010(); block_delay = 0.08)
+@testset "#1024: a Portuguese lock_timeout (55P03) reads as a lock timeout" begin
+  pool = MockLockPool1010(_pt_lock_timeout1024(); block_delay = 0.08)
   local err, ran
-  @test_logs (:warn, r"Advisory lock timed out on server-side statement_timeout") match_mode = :any begin
+  @test_logs (:warn, r"Advisory lock timed out on server-side lock_timeout") match_mode = :any begin
     err, ran = _lock_outcome1010(pool; timeout_ms = 20)
   end
-  # The lock-timeout error, not the 57014 it degrades: it names the holder (#737).
+  # The lock-timeout error, not the 55P03 it degrades: it names the holder (#737).
   @test err isa PormG.OperationalError
   @test err.sqlstate === nothing
   @test occursin("Failed to acquire advisory lock for 'k1010' within 20 ms", err.message)
@@ -107,20 +124,25 @@ end
   @test pool.renewals[] == 0
 end
 
-@testset "#1010: a 57014 that arrives before timeout_ms is an external cancel" begin
-  # `pg_cancel_backend` from another session: the same SQLSTATE, but too early to be the timeout.
+@testset "#1024: a 57014 is a cancel, however long the wait took" begin
+  # Arrives AFTER `timeout_ms` has passed — exactly what `statement_timeout`'s own expiry looked
+  # like, and what #1023's clock guard degraded into a lock timeout. `lock_timeout` cannot raise it,
+  # so it is an external `pg_cancel_backend` (or a session `statement_timeout`) and propagates.
   cancel = _pt_timeout1010()
-  pool = MockLockPool1010(cancel; block_delay = 0.0)
-  err, ran = _lock_outcome1010(pool; timeout_ms = 10_000)
+  pool = MockLockPool1010(cancel; block_delay = 0.08)
+  err, ran = _lock_outcome1010(pool; timeout_ms = 20)
   @test err === cancel
   @test !ran
   @test pool.available[1] === true
+  @test pool.renewals[] == 0
 end
 
 @testset "#1010: an abandoned await is never read as a timeout" begin
   # PormG's own #315 cancel: the await was interrupted, so the connection is renewed and the
-  # cancellation propagates, however long it took.
-  abandoned = _pt_timeout1010(InterruptException())
+  # cancellation propagates, however long it took. Built in the shape it really arrives in:
+  # `_as_database_error` unwraps to the `InterruptException`, which carries no SQLSTATE at all.
+  abandoned = PormG.OperationalError("PostgreSQL", InterruptException())
+  @test abandoned.sqlstate === nothing
   pool = MockLockPool1010(abandoned; block_delay = 0.08)
   err, ran = with_logger(NullLogger()) do
     _lock_outcome1010(pool; timeout_ms = 20)
@@ -135,25 +157,38 @@ end
   @test pool.renewals[] == 1
 end
 
-@testset "#1010: timeout_ms = 0 means every 57014 is an external cancel" begin
-  # `SET statement_timeout = 0` disables the timeout, so no amount of waiting makes it one.
-  cancel = _pt_timeout1010()
-  pool = MockLockPool1010(cancel; block_delay = 0.05)
-  err, ran = _lock_outcome1010(pool; timeout_ms = 0)
-  @test err === cancel
-  @test !ran
-end
-
-@testset "#1010: the English text under another SQLSTATE is not a timeout" begin
-  # The text alone no longer decides: no 57014, no degrade, in any language. The message carries
-  # the old English phrase, which is what the pre-#1010 `occursin` read, so that code degrades this.
+@testset "#1010: the English timeout text under another SQLSTATE is not a timeout" begin
+  # The text alone never decides: the message carries the English lock-timeout phrase, but the
+  # SQLSTATE is a cancel's, so there is no degrade in any language.
   english = PormG.OperationalError("PostgreSQL",
-    ErrorException("ERROR:  canceling statement due to statement timeout"); sqlstate = "55P03",
-    message = "canceling statement due to statement timeout")
+    ErrorException("ERROR:  canceling statement due to lock timeout"); sqlstate = "57014",
+    message = "canceling statement due to lock timeout")
   pool = MockLockPool1010(english; block_delay = 0.08)
   err, ran = _lock_outcome1010(pool; timeout_ms = 20)
   @test err === english
   @test !ran
+end
+
+@testset "#1024: :block sets and restores lock_timeout, never statement_timeout" begin
+  # The previous value is restored as it was read…
+  pool = MockLockPool1010(nothing; show_answer = "5s")
+  err, ran = _lock_outcome1010(pool; timeout_ms = 250)
+  @test err === nothing
+  @test ran
+  @test pool.sqls[1] == "SHOW lock_timeout"
+  @test pool.sqls[2] == "SET lock_timeout = 250"
+  @test pool.sqls[end] == "SET lock_timeout = '5s'"
+  @test !any(sql -> occursin("statement_timeout", sql), pool.sqls)
+
+  # …and when it cannot be read, the session default is put back instead.
+  pool = with_logger(NullLogger()) do
+    p = MockLockPool1010(_pt_lock_timeout1024(); show_answer = nothing)
+    _lock_outcome1010(p; timeout_ms = 250)
+    p
+  end
+  @test pool.sqls[2] == "SET lock_timeout = 250"
+  @test pool.sqls[end] == "SET lock_timeout TO DEFAULT"
+  @test !any(sql -> occursin("statement_timeout", sql), pool.sqls)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

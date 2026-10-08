@@ -830,14 +830,17 @@ end
 _rendered_kind_textless(kind) =
   kind isa CDateTime ? (:timestamp, "a timestamp expression") :
   kind isa CInterval ? (:interval, "an interval expression") : nothing
-_textless_literal(x::Bool) = (:bool, "the literal $(x)")
-_textless_literal(x::AbstractFloat) = (:float, "the $(typeof(x)) literal $(x)")
-_textless_literal(x::Decimals.Decimal) = (:decimal, "the Decimal literal $(x)")
+# A literal is named by its type, never its value: it is a bound value, and a refusal never prints
+# one (#971). Every label built over this one inherits it (`arithmetic over a Float64 literal`), so
+# printing the value here leaked it through `Concat`, `Cast` and `Round` alike (#1057).
+_textless_literal(::Bool) = (:bool, "a Bool literal")
+_textless_literal(x::AbstractFloat) = (:float, "a $(typeof(x)) literal")
+_textless_literal(::Decimals.Decimal) = (:decimal, "a Decimal literal")
 # #1028: PostgreSQL binds a timestamp as `$1::timestamp` and writes `2009-03-29 06:00:00`, SQLite binds
 # the stored text `2009-03-29T06:00:00.000+00:00`; a duration is an `interval` on one and the
 # `HH:MM:SS` text on the other. A `Date` and a `Time` bind the same text on both, and pass.
-_textless_literal(x::Union{DateTime,ZonedDateTime}) = (:timestamp, "the $(nameof(typeof(x))) literal $(x)")
-_textless_literal(x::Union{Dates.Period,Dates.CompoundPeriod,Interval}) = (:interval, "the duration literal $(x)")
+_textless_literal(x::Union{DateTime,ZonedDateTime}) = (:timestamp, "a $(nameof(typeof(x))) literal")
+_textless_literal(::Union{Dates.Period,Dates.CompoundPeriod,Interval}) = (:interval, "a duration literal")
 _textless_literal(::Any) = nothing
 
 # The column an operand names, as the caller spelled it, or `nothing` for any other expression.

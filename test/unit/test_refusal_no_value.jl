@@ -12,7 +12,9 @@ Pinned here, with no server:
   1. **The source scan** — no `InvalidValueError(`, `FilterError(` or `QueryBuildError(` in `src/` or `ext/`
      interpolates a value-shaped name (`value`, `v`, `x`, `raw`, `operand`, `row[…]`, …), a
      `repr(…)`, an exception's own text (`\$(e)`, `sprint(showerror, e)`, `e.msg`). A reviewed
-     exception carries `# refusal-value-ok: <why>` on its line.
+     exception carries `# refusal-value-ok: <why>` on its line. The **label builders** — a function
+     named `_…textless…`, `_…divergent…` or `_…_label…`, which writes a refusal's text outside its
+     constructor — are held to the same rule, parsed rather than matched as text (#1057).
   2. **The data shape** — the one-string constructor still works (#231's contract), and the location
      a funnel attaches renders once.
   3. **Every path, end to end** — a filter, a write, a bulk write and `sqlite_bind_value`, each fed a
@@ -119,6 +121,71 @@ end
   isempty(offenders) || foreach(o -> @info(o), offenders)
 end
 
+# A label builder writes the "what" of a refusal outside its constructor — `Concat` refuses "a Float64
+# literal" that `_textless_literal` named — so the scan above never sees its text. #1057 found
+# `_textless_literal` printing the value that way, through `Concat`, `Cast` and `Round`. The
+# convention the scan can see is the name: a function named `_…textless…`, `_…divergent…` or
+# `_…_label…` builds refusal text, and every interpolation in its body is held to the same rule.
+const LABEL_BUILDER971 = r"^_\w*(?:textless|divergent|_label)"
+
+_def_name971(sig::Symbol) = sig
+_def_name971(sig::Expr) = sig.head in (:call, :where, :(::)) ? _def_name971(sig.args[1]) : nothing
+_def_name971(::Any) = nothing
+
+# Every definition whose name matches, as `(name, line, definition)`: the long form and the short
+# one. `line` is the definition's first line, where a reviewed exception's marker goes.
+function _label_builders971(ex, found = Tuple{Symbol, Int, Expr}[], line = 0)
+  ex isa Expr || return found
+  if (ex.head === :function || (ex.head === :(=) && ex.args[1] isa Expr)) && length(ex.args) == 2
+    name = _def_name971(ex.args[1])
+    if name isa Symbol && occursin(LABEL_BUILDER971, String(name))
+      push!(found, (name, line, ex))
+      return found
+    end
+  end
+  for a in ex.args
+    a isa LineNumberNode ? (line = a.line) : _label_builders971(a, found, line)
+  end
+  return found
+end
+
+# What a body writes into text, as `_leaks971` reads it: every interpolation, and every operand of a
+# `string(…)`, `repr(…)` or `*` outside one — `"the literal " * string(x)` is the same leak.
+function _ast_interpolations971(ex, out = String[])
+  ex isa Expr || return out
+  ex.head === :string && foreach(a -> a isa String || push!(out, string(a)), ex.args)
+  ex.head === :call && ex.args[1] in (:string, :repr, :*) &&
+    foreach(a -> a isa String || push!(out, string(a)), ex.args[2:end])
+  foreach(a -> _ast_interpolations971(a, out), ex.args)
+  return out
+end
+
+# A builder's value has two more spellings than a constructor's: an `SQLText` literal keeps its value
+# in `.field` (`$(p.field)` is the likeliest way back to #1057), and `string(x)` of a value name.
+_label_leaks971(expr) = _leaks971(expr) || occursin(r"\.field$", expr) ||
+  ((m = match(r"^string\((\w+)\)$", expr)) !== nothing && m.captures[1] in VALUE_NAMES971)
+
+@testset "#1057: no refusal label builder interpolates a value" begin
+  root = pkgdir(PormG)
+  offenders = String[]
+  nbuilders = 0
+  for dir in ("src", "ext"), (base, _, files) in walkdir(joinpath(root, dir)), f in files
+    endswith(f, ".jl") || continue
+    path = joinpath(base, f)
+    lines = readlines(path)
+    for (name, line, def) in _label_builders971(Meta.parseall(read(path, String)))
+      nbuilders += 1
+      occursin("refusal-value-ok:", get(lines, line, "")) && continue
+      for expr in _ast_interpolations971(def.args[2])
+        _label_leaks971(expr) && push!(offenders, "$(relpath(path, root)):$(line) `$(name)` writes `$(expr)`")
+      end
+    end
+  end
+  @test nbuilders > 50      # the scan found the builders at all (#1057: 77 definitions, 42 names)
+  @test isempty(offenders)
+  isempty(offenders) || foreach(o -> @info(o), offenders)
+end
+
 @testset "#971: the scanner flags a leak and passes a type" begin
   # Its own mutation check: each shape it exists to catch, and the shapes it must let through.
   for leak in ("\"got \$value\"", "\"got \$(value)\"", "\"got \$(repr(x))\"", "\"\$(sprint(showerror, e))\"",
@@ -128,6 +195,19 @@ end
   for fine in ("\"got a \$(typeof(value))\"", "\"field `\$field`\"", "\"row \$(index)\"", "\"\$(e.reason)\"",
                "\"at most \$(length(text))\"")
     @test !any(_leaks971, _interpolations971(fine))
+  end
+  # The label-builder scan, on #1057's own defect in both definition forms, the spellings it would
+  # come back as, and the fix.
+  for (src, leaks) in (("_textless_literal(x::Bool) = (:bool, \"the literal \$(x)\")", true),
+                       ("function _textless_literal(x::AbstractFloat)\n  (:float, \"the \$(typeof(x)) literal \$(x)\")\nend", true),
+                       ("_textless_literal(p) = (:float, \"the literal \$(p.field)\")", true),
+                       ("_textless_literal(x) = (:float, \"the literal \$(string(x))\")", true),
+                       ("_textless_literal(x) = (:float, \"the literal \" * string(x))", true),
+                       ("_textless_literal(x) = (:float, \"the literal \" * repr(x))", true),
+                       ("_textless_literal(x::AbstractFloat) = (:float, \"a \$(typeof(x)) literal\")", false),
+                       ("_unrelated(x) = \"the literal \$(x)\"", false))   # not a builder by name
+    found = _label_builders971(Meta.parseall(src))
+    @test any(any(_label_leaks971, _ast_interpolations971(d.args[2])) for (_, _, d) in found) == leaks
   end
 end
 

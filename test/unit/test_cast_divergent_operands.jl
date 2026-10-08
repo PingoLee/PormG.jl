@@ -357,7 +357,7 @@ end
     # A date stays a date through arithmetic, and passes.
     @test !isempty(_ccd_render(Fn.Concat(Fn.Value("|"), _CF("born") + Day(1)); conn = conn))
   end
-  for (lit, named) in (Fn.Value(DateTime(2009, 3, 29, 6)) => "DateTime literal", Fn.Value(Minute(1)) => "duration literal")
+  for (lit, named) in (Fn.Value(DateTime(2009, 3, 29, 6)) => "a DateTime literal", Fn.Value(Minute(1)) => "a duration literal")
     err = try Fn.Concat("surname", lit); nothing catch e; e end
     @test _is_1028(err)
     @test occursin(named, _ccd_msg(err))
@@ -688,7 +688,7 @@ end
 end
 
 # The string, Float64 and Decimal labels this classifier writes. A Float32 literal and arithmetic over
-# a literal are named by #1027's `Concat` labels, which still print the value (a follow-up).
+# a literal are named by #1027's `Concat` labels, pinned in the #1057 testset below.
 @testset "#1044: a string, Float64 or Decimal literal is named by its digits, not its value (#971)" begin
   marker = "s3cr3t1044"
   for (expr, named) in ((Fn.Round(Fn.Value(marker), 2), "a string literal"),
@@ -700,6 +700,32 @@ end
     msg = _ccd_msg(err)
     @test err isa QueryBuildError && occursin(named, msg)
     @test !occursin(marker, msg) && !occursin("1044.123", msg) && !occursin("1044123", msg)
+  end
+end
+
+# #1027's literal labels, and every label built over one (`arithmetic over …`), name the literal by
+# its type. Each route that reaches them: `Concat` when built, and `Concat`, `Cast` and `Round` when
+# rendered — a cast to an integer or to text through `_cast_divergent_operand`, a cast to
+# `numeric(p, s)` and `Round` through `_scale_divergent_operand`'s fall-through. Every marker holds `1057`
+# or `2057`, which nothing else in these messages does.
+@testset "#1057: a Concat, Cast or Round refusal never prints the literal (#971)" begin
+  cases = (
+    (() -> Fn.Concat("surname", 1057.25), "a Float64 literal"),
+    (() -> Fn.Concat("surname", Fn.Value(Decimal(0, 1057125, -3))), "a Decimal literal"),
+    (() -> Fn.Concat("surname", Fn.Value(DateTime(2057, 1, 5))), "a DateTime literal"),
+    (() -> Fn.Concat("surname", Fn.Value(Minute(1057))), "a duration literal"),
+    (() -> Fn.Concat(Fn.Value("|"), _CF("number") * 1057.25), "arithmetic over a Float64 literal"),
+    (() -> Fn.Cast(Fn.Value(1057.25), Models.IntegerField()), "a Float64 literal"),
+    (() -> Fn.Cast(_CF("number") + 1057.25, "numeric(10,0)"), "arithmetic over a Float64 literal"),
+    (() -> Fn.Cast(Fn.Max(Fn.Value(1057.25)), Models.CharField()), "`MAX(…)` over a Float64 literal"),
+    (() -> Fn.Round(Fn.Value(Float32(1057.25)), 2), "a Float32 literal"),
+    (() -> Fn.Round(_CF("number") * 1057.25, 2), "arithmetic over a Float64 literal"),
+  )
+  for (build, named) in cases, conn in _CCD_ENGINES
+    err = try _ccd_render(build(); conn = conn); nothing catch e; e end
+    msg = _ccd_msg(err)
+    @test err isa QueryBuildError && occursin(named, msg)
+    @test !occursin("1057", msg) && !occursin("2057", msg)
   end
 end
 

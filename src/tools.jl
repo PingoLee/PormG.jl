@@ -248,7 +248,7 @@ const _UNRELEASED_VERSION = v"1000000.0.0"
 
 # `_UNRELEASED_VERSION` is an internal sort key, never a user-facing version. Render it as the
 # literal change-log token so output reads "0.3.0 → Unreleased" and not "0.3.0 → 1000000.0.0".
-_version_label(v::VersionNumber) = v == _UNRELEASED_VERSION ? "Unreleased" : string(v)
+_version_label(v::VersionNumber) = v == _UNRELEASED_VERSION ? "Unreleased" : string(v)   # refusal-value-ok: a PormG release, not a bound value
 
 const _UpgradeEntry = @NamedTuple{version::VersionNumber, title::String, body::String}
 

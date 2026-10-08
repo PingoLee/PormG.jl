@@ -473,6 +473,30 @@ function PormG.backend_is_connection_error(pool::PormGPostgres, e)
   #     57P05, which step (1) reads, and the codeless form libpq builds after the socket closes
   #     carries libpq's own line too ("server closed the connection" or "SSL connection has been
   #     closed unexpectedly", as in the #442 capture), and that line matches in any server locale.
+  #
+  #     The transport phrases (#1025) are how libpq reports the socket under the session failing, and
+  #     each one is a session that is gone. A middlebox that closes TCP under a TLS session — a proxy
+  #     or load balancer cutting idle connections — skips the TLS close_notify, and the client gets
+  #     `PQResultError{CUN, EUNOWN}("SSL SYSCALL error: EOF detected\n")`, captured live mid-query and
+  #     idle alike. (A server that shuts down cleanly sends 57P01 and close_notify instead: the #442
+  #     shape above.) libpq diverts EPIPE / ECONNRESET to "server closed the connection unexpectedly"
+  #     (captured too: a reset mid-query gives that line with TLS and without, an idle one EOF detected),
+  #     so the errno forms — "SSL SYSCALL error: %s" and the plain-TCP "could not receive/send data …
+  #     server: %s" — carry the rest: a keepalive or user timeout, an unreachable host. A failed
+  #     socket read or write leaves libpq's connection bad either way. "unexpected eof while reading"
+  #     is OpenSSL 3's reason for the missing close_notify, rendered after libpq's "SSL error: " by a
+  #     libpq build that does not map it to EOF detected. The shipped LibPQ_jll build does (the
+  #     capture), so this phrase is for other builds.
+  #     The bare "ssl error:" prefix is deliberately NOT matched: "SSL error: certificate verify failed"
+  #     is a configuration failure, not a dropped session.
+  #
+  #     These feed `fetch`'s retry exactly as the phrases above do — they are the same event in other
+  #     words. Like "server closed the connection", they can arrive after the statement reached the
+  #     server, so the "never ran" bar of `_PG_LOST_CONNECTION_ERRORS` does not hold for any codeless
+  #     phrase. That is a property of the codeless fallback as a whole, not of these phrases (#1042).
+  #     The two PostgreSQL drivers also differ on a socket timeout: it is a lost connection here,
+  #     while the Postgres.jl extension's `_LOST_SOCKET_ERRNOS` leaves ETIMEDOUT out. #1042 owns the
+  #     one rule for both.
   msg = lowercase(string(e))
   # server-text-match-ok: libpq's own client text (untranslated in LibPQ_jll); a codeless error has no SQLSTATE to read (#1010)
   return (e isa LibPQ.Errors.UnknownError && string(e) == "LibPQ.Errors.UnknownError(\"\")") ||
@@ -481,7 +505,11 @@ function PormG.backend_is_connection_error(pool::PormGPostgres, e)
          occursin("terminating connection", msg) ||   # server-text-match-ok: English-only extra; the 57P01 SQLSTATE and libpq's own line above cover a localized server (#1010)
          occursin("connection to server was lost", msg) ||
          occursin("ssl connection has been closed unexpectedly", msg) ||
-         occursin("no connection to the server", msg)
+         occursin("no connection to the server", msg) ||
+         occursin("ssl syscall error", msg) ||
+         occursin("unexpected eof while reading", msg) ||
+         occursin("could not receive data from server", msg) ||
+         occursin("could not send data to server", msg)
 end
 
 # Is `e` a *permanent* connect failure (won't succeed on retry) rather than transient? Scoped to

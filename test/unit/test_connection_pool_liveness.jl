@@ -453,6 +453,52 @@ SSL connection has been closed unexpectedly",
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# (12) A TLS session cut without close_notify is a dropped connection (#1025).
+#
+# A proxy or load balancer cutting idle connections closes TCP under a TLS session without the TLS
+# goodbye. libpq then reports the transport failing, not the server leaving, and none of the #442
+# phrases matched — so `fetch` neither retried nor renewed the dead slot. The first case
+# below is verbatim from a live capture: LibPQ through a relay to PostgreSQL 16 over TLSv1.3, the
+# relay closing its sockets mid-`pg_sleep` and, separately, while the connection sat idle. Both
+# arrived as exactly this codeless result error.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "backend_is_connection_error recognizes a TLS or TCP transport drop (#1025)" begin
+  pg = CP.PostgresConnectionPool("host=localhost dbname=x user=y")
+  E = LibPQ.Errors
+  codeless(msg) = E.PQResultError{E.CUN, E.EUNOWN}(msg, nothing)
+
+  # The live capture, trailing newline and all.
+  captured = codeless("SSL SYSCALL error: EOF detected\n")
+  @test PormG.backend_is_connection_error(pg, captured)
+  # It must reach the caller as operational, not as a statement the server refused.
+  @test PormG.backend_classify_error(pg, captured) === :operational
+
+  # libpq's other renderings of a dead transport, one per phrase so each is pinned on its own. The
+  # errno forms use errnos libpq really prints there: it diverts EPIPE / ECONNRESET to "server closed
+  # the connection unexpectedly", already matched by #442. OpenSSL 3's reason for the missing
+  # close_notify comes from a libpq build that does not report it as EOF detected.
+  @test PormG.backend_is_connection_error(pg, codeless("SSL SYSCALL error: Connection timed out\n"))
+  @test PormG.backend_is_connection_error(pg, codeless("SSL error: unexpected eof while reading\n"))
+  @test PormG.backend_is_connection_error(pg, codeless("could not receive data from server: Connection timed out\n"))
+  @test PormG.backend_is_connection_error(pg, codeless("could not send data to server: No route to host\n"))
+
+  # NOT a dropped connection: an "SSL error:" that is configuration, not transport. Matching the
+  # bare prefix would send a bad certificate through the retry and the idle-slot sweep.
+  @test !PormG.backend_is_connection_error(pg,
+    E.PQConnectionError("connection to server at \"db\" (10.0.0.5), port 5432 failed: " *
+                        "SSL error: certificate verify failed"))
+
+  # The #442 trap again, with the new bait: a coded error is decided by its SQLSTATE, so a DETAIL
+  # quoting a stored log line never reaches the transport phrases.
+  poisoned = E.UniqueViolation(
+    "ERROR:  duplicate key value violates unique constraint \"log_msg_key\"\n" *
+    "DETAIL:  Key (msg)=(SSL SYSCALL error: EOF detected) already exists.", nothing)
+  @test occursin("ssl syscall error", lowercase(string(poisoned)))   # the bait is really there
+  @test !PormG.backend_is_connection_error(pg, poisoned)
+  @test PormG.backend_classify_error(pg, poisoned) === :integrity
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # (10) The retry never renews a slot it could not claim (#584).
 #
 # `await_result`'s finally releases the failed connection BEFORE `fetch`'s catch runs, so a parked

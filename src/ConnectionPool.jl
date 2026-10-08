@@ -1840,7 +1840,7 @@ is handed `rollback_error` values that already crossed a seam (`migrations/runne
 `querybuilder/deletion.jl`), so `_driver_cause` is load-bearing here (#268).
 """
 _is_benign_rollback_error(pool::Union{PormGPostgres, PormGSQLite}, e) =
-  pool isa PormGSQLite &&
+  pool isa PormGSQLite &&   # server-text-match-ok: SQLite only; it attaches no code here and never localizes
   occursin("no transaction is active", string(_driver_cause(_unwrap_async_exception(e))))
 
 """

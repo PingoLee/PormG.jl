@@ -461,11 +461,24 @@ function PormG.backend_is_connection_error(pool::PormGPostgres, e)
 
   # (3) No usable SQLSTATE: fall back to libpq's own message fingerprints. Every phrase here is text
   #     libpq or the server generates about the SESSION, never a value an app would store.
+  #
+  #     All but one are libpq's own client-side text, which does not depend on the server's
+  #     `lc_messages`. The libpq that LibPQ_jll ships is built without translations (no `.mo`
+  #     catalogs, no gettext symbols), so those phrases are English in any client locale too. A
+  #     system libpq built with NLS, run under a non-English `LANG`, would translate them, and this
+  #     fallback would then miss a dropped connection (#1010).
+  #
+  #     "terminating connection" is the one SERVER phrase, so a localized server never sends it in
+  #     English. It is redundant rather than load-bearing: the server sends it with SQLSTATE 57P01 /
+  #     57P05, which step (1) reads, and the codeless form libpq builds after the socket closes
+  #     carries libpq's own line too ("server closed the connection" or "SSL connection has been
+  #     closed unexpectedly", as in the #442 capture), and that line matches in any server locale.
   msg = lowercase(string(e))
+  # server-text-match-ok: libpq's own client text (untranslated in LibPQ_jll); a codeless error has no SQLSTATE to read (#1010)
   return (e isa LibPQ.Errors.UnknownError && string(e) == "LibPQ.Errors.UnknownError(\"\")") ||
          occursin("server closed the connection", msg) ||
          occursin("connection not open", msg) ||
-         occursin("terminating connection", msg) ||
+         occursin("terminating connection", msg) ||   # server-text-match-ok: English-only extra; the 57P01 SQLSTATE and libpq's own line above cover a localized server (#1010)
          occursin("connection to server was lost", msg) ||
          occursin("ssl connection has been closed unexpectedly", msg) ||
          occursin("no connection to the server", msg)
@@ -476,11 +489,21 @@ end
 # Host/DNS/network failures are deliberately NOT matched: they can be a transient blip during a deploy,
 # so they degrade to the normal wait-to-deadline path. LibPQ raises the same `PQConnectionError` (message
 # only, no SQLSTATE) for auth and host failures alike, so this is message-substring based (#72).
+#
+# Every phrase below is SERVER text, and the server localizes it by `lc_messages` (#1010). On a
+# server set to, say, `pt_BR`, none of them matches, and a wrong password degrades to the ambiguous
+# path: it waits out `pool_timeout`, then raises the same `PoolConnectError`. That is slower but
+# never wrong, so it is a documented limitation rather than a fix (docs/src/configuration/advanced.md,
+# *Connect failures*). It cannot be fixed here: libpq exposes no SQLSTATE for a failed connect (no
+# public call returns it, and at the default verbosity it is not in the text either), and LibPQ.jl
+# offers no hook to raise the verbosity before connecting. The Postgres.jl driver reads the code
+# (`_PERMANENT_CONNECT_CODES` in `PormGPostgresExt`) and is unaffected.
 function PormG.backend_is_permanent_connect_error(pool::PormGPostgres, e)
   # A connection string `_preflight_conninfo` refused (NUL, unparseable) is the most permanent
   # failure there is: the same string fails the same way on every retry (#657).
   e isa PormG.InvalidConfigurationError && return true
   msg = lowercase(string(e))
+  # server-text-match-ok: libpq gives a failed connect no SQLSTATE; the lc_messages limit is documented in configuration/advanced.md (#1010)
   return occursin("password authentication failed", msg) ||
          occursin("no pg_hba.conf entry", msg) ||
          (occursin("role ", msg) && occursin("does not exist", msg)) ||
@@ -540,7 +563,7 @@ function PormG.backend_error_fields(e::LibPQ.Errors.PQResultError)
   e isa LibPQ.Errors.PQResultError{LibPQ.Errors.CUN} && return PormG._NO_ERROR_FIELDS
   sqlstate = chopprefix(string(LibPQ.Errors.error_code(e)), "E")
   line = first(split(e.msg, '\n'; limit = 2))
-  sep = findfirst(":  ", line)
+  sep = findfirst(":  ", line)   # server-text-match-ok: the severity separator, the same in every locale (above)
   primary = strip(sep === nothing ? line : line[nextind(line, last(sep)):end])
   return (sqlstate = sqlstate, constraint = nothing, table = nothing, column = nothing,
           message = PormG._safe_server_message(sqlstate, primary))

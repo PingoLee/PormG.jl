@@ -428,6 +428,10 @@ function _finish_column_spec(table_name, probe::ColumnSpec, raw_default,
                     probe.reference, probe.checks, probe.identity, probe.raw)
 end
 
+_with_default(s::ColumnSpec, default::ColumnDefault)::ColumnSpec =
+  ColumnSpec(s.name, s.type, s.nullable, s.primary_key, s.unique, default, s.reference, s.checks,
+             s.identity, s.raw)
+
 # PormG's `on_delete === nothing` and `DO_NOTHING` both render as SQL `ON DELETE NO ACTION`
 # (`_foreign_key_on_delete_sql`, Models.jl since #498), so a "NO ACTION" read back out of a
 # database is ambiguous — and `NO ACTION` is also what a backend stores when no action was declared
@@ -1768,6 +1772,9 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
             'notnull', a.attnotnull,
             'default', CASE WHEN ad.adbin IS NOT NULL
                             THEN pg_get_expr(ad.adbin, ad.adrelid) END,
+            -- #1037: the column comment, which carries the `pormg:default:` ownership marker of an
+            -- expression default PormG applied. NULL when there is none.
+            'comment', col_description(c.oid, a.attnum),
             -- `attidentity` is the internal "char" type; cast so the JSON value is a predictable
             -- ""/"a"/"d" rather than whatever json_build_object makes of an unknown scalar. This
             -- replaces the version-gated GENE_*_IDENTITY marker fragment (see the note above the
@@ -4551,7 +4558,16 @@ function _pg_live_table(row::DataFrameRow)::LiveTable
                ColumnIdentity(true, identity_code == "a", false) : nothing
     probe = ColumnSpec(col_name, ctype, is_pk ? false : !not_null, is_pk, spec_unique, NoDefault(),
                        reference, _reader_checks(found, ctype), identity, raw_type)
-    columns[col_name] = _finish_column_spec(table_name, probe, get(col, "default", nothing), engine)
+    raw_default = get(col, "default", nothing)
+    spec = _finish_column_spec(table_name, probe, raw_default, engine)
+    # #1037: an expression default PormG applied carries the declared hash its marker vouches for,
+    # so the diff can tell the deparser's re-spelling of it from a real change. Checked against the
+    # RAW `pg_get_expr` text, which is what the server hashed when it stamped the marker.
+    if spec.default isa ExpressionDefault
+      owner = db_default_owner(get(col, "comment", nothing), raw_default)
+      owner === nothing || (spec = _with_default(spec, ExpressionDefault(spec.default.sql, owner)))
+    end
+    columns[col_name] = spec
   end
   return LiveTable(table_name, columns, indexes)
 end

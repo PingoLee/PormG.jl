@@ -46,6 +46,8 @@ import PormG.Models: normalize_sqlite_datetime_string
 # #742: declared table CHECKs, and the ownership marker rendered beside each one.
 import PormG.Models: declared_check_constraints, CheckConstraint
 import PormG: check_marker
+# #1037: the expression-default ownership marker, stamped beside every expression DEFAULT PormG applies.
+import PormG: DB_DEFAULT_MARKER_PREFIX, DB_DEFAULT_MARKER_RE, db_default_hash
 # `_foreign_key_on_delete_sql` lives in `Models` since #498 — see the note where it used to be defined.
 import PormG.Models: _foreign_key_on_delete_sql
 # #1021: the one writer of `to_tsvector(…)` and its config check (Kernel), shared with the index helper.
@@ -1859,7 +1861,9 @@ function create_table(conn::PormGPostgres, model::PormGModel)
     push!(columns, field_to_column(field_name |> string, field, conn))
   end
 
-  return create_table(conn, model_table_name(model), columns)
+  table_name = model_table_name(model)
+  # #1037: each expression DEFAULT is stamped with its ownership marker in the same entry.
+  return create_table(conn, table_name, columns) * _db_default_stamps(conn, table_name, model)
 end
 
 """
@@ -2191,6 +2195,8 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   # so the lookups ask for `catalog_table` and the statements name `table_name`. The two are equal
   # everywhere else, which is why it defaults to `table_name`.
   raw_table_name = string(catalog_table)
+  # The NEW name, unescaped, for `stamp_db_default` — which escapes it itself (#1037).
+  ddl_table_name = string(table_name)
   table_name = _quote_table_ddl(string(table_name))
 
   # THE COLUMN THE CATALOG KNOWS, which is not always the column being altered.
@@ -2414,6 +2420,8 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" SET DEFAULT $default_value;""")
     elseif new_default isa ExpressionDefault
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" SET DEFAULT $(new_default.sql);""")
+      # #1037: and the ownership marker, so the deparser's re-spelling of it is not churn next run.
+      push!(sql_statements, stamp_db_default(conn, ddl_table_name, string(field_name), new_default.sql))
     else
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" DROP DEFAULT;""")
     end
@@ -2564,7 +2572,12 @@ end
 # a named `ALTER TABLE … ADD CONSTRAINT … DEFERRABLE INITIALLY DEFERRED`, which an inline clause here
 # would duplicate.
 function add_field(conn::PormGPostgres, table_name::Union{String,Symbol}, field_name::String, field::PormGField; temporary_default::Any=nothing, model::Union{PormGModel,Nothing}=nothing)
-  return """ALTER TABLE "$(_quote_table_ddl(table_name))" ADD COLUMN $(field_to_column(field_name, field, conn, temporary_default=temporary_default));"""
+  sql = """ALTER TABLE "$(_quote_table_ddl(table_name))" ADD COLUMN $(field_to_column(field_name, field, conn, temporary_default=temporary_default));"""
+  # #1037: `field_to_column` renders a `db_default` ahead of any temporary default, so an expression
+  # here is always the column's own and is stamped with its ownership marker in the same entry.
+  db_expr = db_default_sql(field, conn)
+  db_expr === nothing && return sql
+  return sql * "\n" * stamp_db_default(conn, string(table_name), field_db_column(field, field_name), db_expr)
 end
 
 # #514: SQLite can only declare a foreign key inside a `CREATE TABLE` — or, in the one case above,
@@ -2802,6 +2815,79 @@ function comment_check_constraint(conn::PormGPostgres, table_name::String, c::Ch
   marker = check_marker(c.condition)
   text = (keep === nothing || isempty(strip(keep))) ? marker : string(rstrip(keep), " ", marker)
   return """COMMENT ON CONSTRAINT "$(_quote_table_ddl(c.name))" ON "$(_quote_table_ddl(table_name))" IS '$(replace(text, "'" => "''"))';"""
+end
+
+"""
+    stamp_db_default(conn::PormGPostgres, table_name, column, declared_sql) -> String
+
+The `DO` block that stamps an expression column default's ownership marker (#1037), rendered right
+after every statement that gives a column an expression `DEFAULT` on PostgreSQL — `CREATE TABLE`,
+`ADD COLUMN` and `alter_field`'s `SET DEFAULT` — in the **same plan entry**, so it runs in the
+migration's transaction and a default PormG applied never exists without the marker that says so.
+
+Why a `DO` block and not a `COMMENT ON COLUMN`: the marker's second half is the hash of what
+`pg_get_expr` prints for the default PormG just set, and only the server knows that text. The block
+reads it, hashes it with the digest [`live_default_hash`](@ref) computes in Julia, and writes the
+comment through `format(… %L)`. Whatever comment was already there is **kept** — a previous
+`pormg:default:` marker is removed from it and the new one appended — the rule
+`comment_check_constraint` follows, because `COMMENT ON` replaces the whole comment.
+
+Only hex digits and the two names reach the block: the declared expression is hashed here, not
+embedded. Each name is a SQL string literal (quotes doubled) inside a dollar quote whose tag is
+chosen not to occur in the body, so no name can close it. Like every literal PormG renders
+(`comment_check_constraint`, and the `_split_pg_statements` the executor cuts the entry with), it
+assumes `standard_conforming_strings = on`, PostgreSQL's default since 9.1.
+
+**What the stamp vouches for is the default the column has when the block runs**, which is the
+one the statement before it set — with one exception it cannot see: `CREATE TABLE IF NOT EXISTS`
+on a table that already exists creates nothing, and the stamp then vouches for whatever default
+that table had. `migrate` refuses that plan before it runs — its fingerprint recorded the table as
+absent (#739) — so the window is a plan applied without that check.
+"""
+function stamp_db_default(conn::PormGPostgres, table_name::String, column::String, declared_sql::String)::String
+  lit(s) = "'" * replace(s, "'" => "''") * "'"
+  # `'"<table>"'::regclass` resolves the table through the search path exactly as the unqualified
+  # `ALTER TABLE "<table>"` before it did, and `%s` of a regclass re-quotes (and schema-qualifies)
+  # it correctly.
+  rel = lit("\"" * _quote_table_ddl(table_name) * "\"") * "::regclass"
+  col = lit(column)
+  # `[[:space:]]*` swallows the separator a previous append left, so re-stamping does not grow the
+  # comment.
+  strip_re = lit("[[:space:]]*" * DB_DEFAULT_MARKER_RE.pattern)
+  body = """
+DECLARE
+  live text;
+  kept text;
+BEGIN
+  SELECT pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum) INTO live, kept
+    FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+   WHERE a.attrelid = $rel AND a.attname = $col;
+  kept := btrim(regexp_replace(coalesce(kept, ''), $strip_re, '', 'g'));
+  EXECUTE format('COMMENT ON COLUMN %s.%I IS %L', $rel, $col,
+    concat_ws(' ', nullif(kept, ''),
+              $(lit(DB_DEFAULT_MARKER_PREFIX * db_default_hash(declared_sql) * ":")) ||
+              left(encode(sha256(convert_to(live, 'UTF8')), 'hex'), 16)));
+END
+"""
+  tag, n = "\$pormg\$", 0
+  while occursin(tag, body)
+    n += 1
+    tag = "\$pormg$(n)\$"
+  end
+  return "DO $tag\n$body$tag;"
+end
+
+# The stamps for every column of a `CREATE TABLE` whose `DEFAULT` is an expression — one per column,
+# after the statement, in the same entry.
+function _db_default_stamps(conn::PormGPostgres, table_name::String, model::PormGModel)::String
+  out = String[]
+  for (field_name, field) in model.fields
+    field isa sManyToManyField && continue
+    sql = db_default_sql(field, conn)
+    sql === nothing && continue
+    push!(out, stamp_db_default(conn, table_name, field_db_column(field, string(field_name)), sql))
+  end
+  return isempty(out) ? "" : "\n" * join(out, "\n")
 end
 
 # `IF EXISTS`, and not for tidiness: PostgreSQL drops a CHECK together with a column it names, so a

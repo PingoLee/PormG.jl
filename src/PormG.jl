@@ -86,6 +86,9 @@ import .Kernel: PORTABLE_DB_DEFAULTS, canonical_db_default, db_default_is_portab
 # both to import, like the `db_default` vocabulary above.
 import .Kernel: CHECK_MARKER_PREFIX, CHECK_MARKER_RE, canonical_check_condition, check_condition_hash,
                 check_marker
+# #1037's expression-default ownership marker — stamped by `Dialect`, read back by `Migrations`.
+import .Kernel: DB_DEFAULT_MARKER_PREFIX, DB_DEFAULT_MARKER_RE, db_default_hash, live_default_hash,
+                db_default_owner
 # #29's index vocabulary — validated by `Models`, rendered by `Dialect`, read back by `Migrations`.
 import .Kernel: INDEX_METHODS, INDEX_OPCLASS_RE, INDEX_MARKER, INDEX_MARKER_RE,
   canonical_index_text, index_text_hash, index_text_marker

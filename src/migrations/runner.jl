@@ -282,6 +282,16 @@ function _fp_term(io::IO, d::LiteralDefault)
   _fp_literal(io, d.value)
   print(io, ')')
 end
+# `owned` (#1037) is written only when the column carries a marker that vouches for something, so a
+# table without one serializes exactly as it did before the slot existed and no plan generated then
+# is refused for it. A column that does carry one is a different schema for a plan to run on — the
+# fingerprint is stricter than the diff, as its docstring says — so then it is part of the digest.
+function _fp_term(io::IO, d::ExpressionDefault)
+  print(io, "ExpressionDefault(sql=")
+  _fp_term(io, d.sql)
+  d.owned === nothing || (print(io, ",owned="); _fp_term(io, d.owned))
+  print(io, ')')
+end
 function _fp_term(io::IO, x::Union{CanonicalType, ColumnDefault, CheckKind, ColumnIdentity, ForeignKeyRef,
                                    LiveComposite, LiveCheck})
   T = typeof(x)

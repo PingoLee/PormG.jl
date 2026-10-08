@@ -50,6 +50,8 @@ using PormG.ConnectionPool: SQLiteConnectionPool, fetch, close_pool!
 using InteractiveUtils: subtypes
 using Logging
 using SQLite      # loads the weakdep extension the temp-file cases below need
+using DataFrames  # a synthetic PostgreSQL catalog row (#1037)
+using JSON
 
 struct MockPg496 <: PormG.PormGPostgres end
 struct MockSl496 <: PormG.PormGSQLite end
@@ -979,5 +981,156 @@ end
             pin = engine === :postgres ? (postgres = text,) : (sqlite = text,)
             @test Models.TextField(db_default = db_default_is_portable(text) ? text : pin) isa Models.sTextField
         end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# An expression default the deparser re-spells converges through its ownership marker (#1037)
+# PostgreSQL stores a parse tree and `pg_get_expr` prints it back with casts the declaration did not
+# have — `lower('OPEN')` reads back `lower('OPEN'::text)` — so the text compare planned `SET DEFAULT`
+# on every run. PormG now stamps `pormg:default:<declared>:<live>` in the column comment when it
+# applies the default, and the diff accepts that marker in place of equal text while the live default
+# still prints to what the server hashed. Hermetic: the reader runs on a synthetic catalog row and the
+# stamp is read as SQL; that the server's `sha256` agrees with `live_default_hash` is the live half,
+# test/integration/test_importers_introspection.jl.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an expression default the deparser re-spells converges through its marker (#1037)" begin
+    q = DBD_Q
+    declared_text = "lower($(q)OPEN$(q))"
+    raw = "lower($(q)OPEN$(q)::text)"          # pg_get_expr, measured on PostgreSQL 16 (#1037)
+    marker(decl, live_raw) = PormG.DB_DEFAULT_MARKER_PREFIX * PormG.db_default_hash(decl) * ":" *
+                             PormG.live_default_hash(live_raw)
+
+    @testset "the marker: two hashes, bounded, found anywhere in a comment" begin
+        # The declared half is canonicalised, so spellings the declared side already calls equal
+        # hash equal; the live half is NOT, because the server hashes `pg_get_expr` as printed.
+        @test PormG.db_default_hash("($declared_text)") == PormG.db_default_hash(declared_text)
+        @test occursin(r"^[0-9a-f]{16}$", PormG.db_default_hash(declared_text))
+        @test PormG.live_default_hash("($raw)") != PormG.live_default_hash(raw)
+        m = marker(declared_text, raw)
+        own = PormG.db_default_hash(declared_text)
+        @test PormG.db_default_owner(m, raw) == own
+        @test PormG.db_default_owner("Race status. $m", raw) == own
+        @test PormG.db_default_owner("$m (kept by the steward)", raw) == own
+        # Bounded on both sides: a longer token is not the marker.
+        @test PormG.db_default_owner("x$m", raw) === nothing
+        @test PormG.db_default_owner(m * "0", raw) === nothing
+        @test PormG.db_default_owner(replace(m, "pormg:default:" => "pormg:defaults:"), raw) === nothing
+        # It vouches only while the live default still prints to what was hashed — a hand change.
+        @test PormG.db_default_owner(m, "lower($(q)CLOSED$(q)::text)") === nothing
+        @test PormG.db_default_owner(nothing, raw) === nothing
+        @test PormG.db_default_owner(m, nothing) === nothing
+    end
+
+    @testset "the diff: equal text, or a marker that vouches for the declaration" begin
+        decl = ExpressionDefault(canonical_db_default(declared_text))
+        owned = ExpressionDefault(raw, PormG.db_default_hash(declared_text))
+        @test PormG.Kernel._defaults_equal(decl, owned) && PormG.Kernel._defaults_equal(owned, decl)
+        # No marker: the text compare, exactly as before — this is the churn the marker removes.
+        @test !PormG.Kernel._defaults_equal(decl, ExpressionDefault(raw))
+        # A changed declaration: the marker vouches for the OLD one.
+        @test !PormG.Kernel._defaults_equal(ExpressionDefault("upper($(q)open$(q))"), owned)
+        # Pasting the catalog's spelling (`check` / `inspectdb`) still converges by text.
+        @test PormG.Kernel._defaults_equal(ExpressionDefault(raw), owned)
+        # Through the comparator table, both directions, and `==`/`hash` on the spec agree.
+        base = Migrations.column_spec(Models.CharField(max_length = 20, null = true,
+                                                       db_default = (postgres = declared_text,)),
+                                      PG496; name = "status")
+        live = ColumnSpec((f === :default ? owned : getfield(base, f) for f in fieldnames(ColumnSpec))...)
+        stale = ColumnSpec((f === :default ? ExpressionDefault(raw) : getfield(base, f)
+                            for f in fieldnames(ColumnSpec))...)
+        @test column_delta(base, live) == Symbol[]
+        @test column_delta(base, stale) == [:default]
+        @test base == live && hash(base) == hash(live)
+    end
+
+    @testset "the PostgreSQL reader carries the declared hash only from a valid marker" begin
+        col(name, default, comment) = Dict{String, Any}("name" => name, "type" => "character varying(20)",
+            "notnull" => false, "default" => default, "comment" => comment, "identity" => "",
+            "unique" => false, "non_negative_check" => false, "byte_limit" => nothing)
+        id = Dict{String, Any}("name" => "id", "type" => "bigint", "notnull" => true, "default" => nothing,
+                               "identity" => "d", "unique" => false, "non_negative_check" => false,
+                               "byte_limit" => nothing)
+        ts_raw = "to_tsvector($(q)simple$(q)::regconfig, $(q)$(q)::text)"
+        ts_decl = "to_tsvector($(q)simple$(q), $(q)$(q))"
+        # A top-level operator prints with outer parentheses the canonical form strips, so this is the
+        # row that tells the RAW text from the canonical one: the server hashed the raw (found in review).
+        op_raw = "(lower($(q)a$(q)::text) || $(q)b$(q)::text)"
+        op_decl = "lower($(q)a$(q)) || $(q)b$(q)"
+        @test canonical_db_default(op_raw) != op_raw
+        row = DataFrame(table_name = ["race_status"],
+                        columns = [JSON.json([id,
+                            col("status", raw, "Race status " * marker(declared_text, raw)),
+                            col("doc", ts_raw, marker(ts_decl, ts_raw)),
+                            col("joined", op_raw, marker(op_decl, op_raw)),
+                            col("joined_canon", op_raw, marker(op_decl, canonical_db_default(op_raw))),
+                            col("stale", raw, marker(declared_text, "lower($(q)CLOSED$(q)::text)")),
+                            col("bare", raw, nothing),
+                            # A literal default is not an expression, so a marker means nothing to it.
+                            col("label", "$(q)open$(q)::character varying", marker(declared_text, raw))])],
+                        primary_keys = [JSON.json(["id"])], foreign_keys = [missing], indexes = [missing])[1, :]
+        live = Migrations._pg_live_table(row)
+        @test live.columns["status"].default == ExpressionDefault(raw, PormG.db_default_hash(declared_text))
+        @test live.columns["doc"].default.owned == PormG.db_default_hash(ts_decl)
+        @test live.columns["joined"].default.owned == PormG.db_default_hash(op_decl)
+        @test live.columns["joined_canon"].default.owned === nothing
+        @test live.columns["stale"].default == ExpressionDefault(raw)
+        @test live.columns["bare"].default == ExpressionDefault(raw)
+        @test live.columns["label"].default == LiteralDefault("open")
+        # The planner's entry point: the issue's two shapes converge, the stale one still plans.
+        for (name, text) in (("status", declared_text), ("doc", ts_decl), ("joined", op_decl),
+                             ("stale", declared_text))
+            declared = Migrations.column_spec(Models.CharField(max_length = 20, null = true,
+                                                               db_default = (postgres = text,)),
+                                              PG496; name = name)
+            @test column_delta(declared, live.columns[name]) == (name == "stale" ? [:default] : Symbol[])
+        end
+    end
+
+    @testset "PostgreSQL stamps every expression DEFAULT it applies, in the same entry" begin
+        field = Models.CharField(max_length = 20, null = true, db_default = (postgres = declared_text,))
+        stamp = Dialect.stamp_db_default(PG496, "race_status", "status", declared_text)
+        @test startswith(stamp, "DO \$pormg\$\n") && endswith(stamp, "\$pormg\$;")
+        # The declared expression is hashed, never embedded; the live half is the server's digest.
+        @test occursin("$(q)pormg:default:$(PormG.db_default_hash(declared_text)):$(q) ||", stamp)
+        @test !occursin("OPEN", stamp)
+        @test occursin("left(encode(sha256(convert_to(live, $(q)UTF8$(q))), $(q)hex$(q)), 16)", stamp)
+        # Names are literals inside the block, quotes doubled — and no name can close the dollar quote.
+        odd = Dialect.stamp_db_default(PG496, "Ev\"il", "st$(q)atus", declared_text)
+        @test occursin("$(q)\"Ev\"\"il\"$(q)::regclass", odd) && occursin("$(q)st$(q)$(q)atus$(q)", odd)
+        tagged = Dialect.stamp_db_default(PG496, "t\$pormg\$x", "c", declared_text)
+        @test startswith(tagged, "DO \$pormg1\$\n") && endswith(tagged, "\$pormg1\$;")
+
+        # ALTER, ADD COLUMN and CREATE TABLE all carry it, and the executor's splitter keeps the block
+        # whole: two statements, the second the entire `DO`.
+        base = Migrations.column_spec(Models.CharField(max_length = 20, null = true), PG496; name = "status")
+        target = Migrations.column_spec(field, PG496; name = "status")
+        alter = Dialect.alter_field(PG496, "race_status", "status", field, ColumnDelta(target, base, [:default]))
+        parts = Migrations._split_pg_statements(alter)
+        @test length(parts) == 2 && parts[2] == chop(stamp)
+        @test occursin(stamp, Dialect.add_field(PG496, "race_status", "status", field))
+        # The PHYSICAL column is stamped — `db_column` (#50) — not the field name.
+        renamed = Models.CharField(max_length = 20, null = true, db_column = "status_code",
+                                   db_default = (postgres = declared_text,))
+        @test occursin("a.attname = $(q)status_code$(q)", Dialect.add_field(PG496, "race_status", "status", renamed))
+        model = Models.Model("race_status"; id = Models.IDField(), status = field,
+                             label = Models.CharField(max_length = 20, default = "open"))
+        create = Dialect.create_table(PG496, model)
+        @test count("DO \$pormg\$", create) == 1 && occursin(stamp, create)
+        # A literal default is PormG's own rendering and needs no marker; SQLite gets none at all.
+        lit = ColumnSpec((f === :default ? LiteralDefault("open") : getfield(base, f)
+                          for f in fieldnames(ColumnSpec))...)
+        @test !occursin("DO \$", Dialect.alter_field(PG496, "race_status", "status",
+            Models.CharField(max_length = 20, null = true, default = "open"), ColumnDelta(lit, base, [:default])))
+        sl_model = Models.Model("race_status"; id = Models.IDField(),
+            status = Models.CharField(max_length = 20, null = true, db_default = (sqlite = declared_text,)))
+        @test !occursin("DO \$", Dialect.create_table(SL496, sl_model))
+    end
+
+    @testset "a plan's fingerprint changes only for a column that carries a marker" begin
+        io = IOBuffer(); Migrations._fp_term(io, ExpressionDefault("now()"))
+        @test String(take!(io)) == "ExpressionDefault(sql=\"now()\")"
+        Migrations._fp_term(io, ExpressionDefault(raw, "0123456789abcdef"))
+        @test endswith(String(take!(io)), ",owned=\"0123456789abcdef\")")
     end
 end

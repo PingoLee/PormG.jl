@@ -129,14 +129,30 @@ construction sites are required to go through it. That is not tidiness: the two 
 as strings, so a column whose declared spelling normalised differently from its live one would
 differ from itself on every run, which is the #325 churn class. One normaliser, applied twice.
 
-Equality is plain `String` comparison and is left that way on purpose — the IR must not claim two
-different expressions are the same. The one place the diff is lenient is the `NoDefault` /
-`ExpressionDefault` pair, and that lives in `_defaults_equal` beside the comparator table, where it
-is visible as an action rule rather than hidden in a type's `==`.
+Equality is plain comparison of both slots and is left that way on purpose — the IR must not claim
+two different expressions are the same. The places the diff is lenient live in `_defaults_equal`
+beside the comparator table, where they are visible as action rules rather than hidden in a type's
+`==`: the `NoDefault` / `ExpressionDefault` pair (#496), and the ownership marker below (#1037).
+
+`owned` is set on the **live** side only, and only by the PostgreSQL reader: it is the declared hash
+of a valid [`DB_DEFAULT_MARKER_PREFIX`](@ref) marker on the column, the record that PormG applied a
+declaration hashing to it and that the default has not changed since ([`db_default_owner`](@ref)).
+It is evidence about a history, not a claim that two texts mean the same: PostgreSQL re-prints a
+stored default through its deparser (`lower('OPEN')` reads back `lower('OPEN'::text)`), so the text
+alone cannot say whether the live default is the declared one, and the marker can.
 """
 struct ExpressionDefault <: ColumnDefault
   sql::String
+  owned::Union{Nothing, String}
 end
+ExpressionDefault(sql::AbstractString) = ExpressionDefault(String(sql), nothing)
+
+Base.:(==)(a::ExpressionDefault, b::ExpressionDefault)::Bool = a.sql == b.sql && a.owned == b.owned
+# Coarser than `==` on purpose: `ColumnSpec`'s `==` asks `_defaults_equal`, which calls a declared
+# `lower('OPEN')` equal to an owned live `lower('OPEN'::text)` (#1037), and for that pair two specs it
+# calls equal must hash equal. Folding the text in would break it. (The #496 `NoDefault` /
+# `ExpressionDefault` pair is not one: `ColumnSpec`'s `==` asks in both directions, so it is unequal.)
+Base.hash(::ExpressionDefault, h::UInt) = hash(:ExpressionDefault, h)
 
 # `isequal`, not `==`: a `missing` default would make `==` return `missing`, and `if missing` throws.
 # The old attribute loop in `_alter_table_fields` had no `catch` around its `!=`, so that was a live
@@ -965,6 +981,73 @@ check_marker(sql::AbstractString)::String = CHECK_MARKER_PREFIX * check_conditio
 # `_PG_UNMARKED_CHECK` interpolates it into SQL.
 const CHECK_MARKER_RE = Regex("(?<![0-9A-Za-z_:])" * CHECK_MARKER_PREFIX * "[0-9a-f]{16}(?![0-9A-Za-z_:])")
 
+# ── Expression column defaults (#1037) ───────────────────────────────────────────────────────────
+#
+# The third catalog object whose text PostgreSQL's deparser rewrites. A `db_default` expression is
+# stored as a parse tree and `pg_get_expr` prints it back with casts the declaration did not have —
+# `lower('OPEN')` reads back `lower('OPEN'::text)`, `to_tsvector('simple', '')` reads back
+# `to_tsvector('simple'::regconfig, ''::text)` — so the text compare planned `SET DEFAULT` on every
+# run. Emulating the deparser in Julia means re-implementing PostgreSQL's type resolution for
+# function arguments; the CHECK (#742) and index (#29/#934) markers already answer the same question
+# without one, by recording what PormG applied instead of comparing what the catalog prints.
+#
+# A default needs TWO hashes where a CHECK needs one. A CHECK edited by hand is dropped and recreated
+# and loses its comment; `ALTER COLUMN … SET DEFAULT` by hand KEEPS the column comment, so a marker
+# holding only the declared hash would read a hand change as converged. The second hash is of the
+# deparsed text PostgreSQL printed right after PormG applied the default — computed by the server,
+# in the same plan entry (`Dialect.stamp_db_default`) — and it is honoured only while the live
+# default still prints to it. PostgreSQL only: SQLite keeps the declared text verbatim, so its text
+# compare already converges.
+
+"""
+    DB_DEFAULT_MARKER_PREFIX
+
+The text the ownership marker of an expression column default starts with: `pormg:default:`, then
+the 16-hex-digit hash of the declared expression ([`db_default_hash`](@ref)), a `:`, and the
+16-hex-digit hash of the text `pg_get_expr` printed right after PormG applied it
+([`live_default_hash`](@ref)). It lives in `COMMENT ON COLUMN`, anywhere in the comment.
+"""
+const DB_DEFAULT_MARKER_PREFIX = "pormg:default:"
+
+"""
+    db_default_hash(sql) -> String
+
+The first 16 hex digits of the SHA-256 of [`canonical_db_default`](@ref)`(sql)` — the declared half
+of the marker. Canonicalised first, so the spellings the declared side already calls equal hash
+equal.
+"""
+db_default_hash(sql::AbstractString)::String = bytes2hex(SHA.sha256(canonical_db_default(sql)))[1:16]
+
+"""
+    live_default_hash(raw) -> String
+
+The first 16 hex digits of the SHA-256 of `raw`, the text `pg_get_expr` prints — **not**
+canonicalised, because the server computes the same digest in SQL when it stamps the marker
+(`left(encode(sha256(convert_to(…, 'UTF8')), 'hex'), 16)`), and SQL has no `canonical_db_default`.
+"""
+live_default_hash(raw::AbstractString)::String = bytes2hex(SHA.sha256(String(raw)))[1:16]
+
+# Bounded on both sides like `CHECK_MARKER_RE`, and in the same PostgreSQL/PCRE subset, because
+# `Dialect.stamp_db_default` interpolates it into SQL to strip a previous marker from the comment.
+const DB_DEFAULT_MARKER_RE = Regex("(?<![0-9A-Za-z_:])" * DB_DEFAULT_MARKER_PREFIX *
+                                   "([0-9a-f]{16}):([0-9a-f]{16})(?![0-9A-Za-z_:])")
+
+"""
+    db_default_owner(comment, raw_default) -> Union{String, Nothing}
+
+The declared hash a live column's marker vouches for, or `nothing` when it vouches for none: no
+comment, no marker in it, no default, or a default that no longer prints to the text the marker was
+stamped against (changed by hand, or re-printed differently by a newer server). `nothing` is the
+safe answer every time — the diff then compares the text, as it did before #1037, and plans one
+`SET DEFAULT` that re-stamps the marker.
+"""
+function db_default_owner(comment, raw_default)::Union{String, Nothing}
+  comment isa AbstractString && raw_default isa AbstractString || return nothing
+  m = match(DB_DEFAULT_MARKER_RE, comment)
+  m === nothing && return nothing
+  return m.captures[2] == live_default_hash(raw_default) ? String(m.captures[1]) : nothing
+end
+
 # ── Index access methods, operator classes and ownership (#29) ───────────────────────────────────
 #
 # A plain `Models.Index` — b-tree, ascending, default operator classes — is owned the way every
@@ -1350,8 +1433,18 @@ _references_equal(a, b)::Bool = false
 #   ExpressionDefault → other expression  changing one is planned
 #   ExpressionDefault → LiteralDefault    #475's quoting distinction survives
 #   LiteralDefault → ExpressionDefault    ditto, in the other direction
+#
+# And one lenient arm between two expressions (#1037): they agree when the text does, OR when one
+# side is a live default whose ownership marker vouches for the other's declaration — PormG applied
+# exactly that declaration and the default has not changed since. A marker that vouches for nothing
+# (`owned === nothing`) leaves the text compare as it was, which is what keeps a column PormG never
+# stamped planning exactly what it planned before.
 _defaults_equal(a::ColumnDefault, b::ColumnDefault)::Bool = a == b
 _defaults_equal(::NoDefault, ::ExpressionDefault)::Bool = true
+_defaults_equal(a::ExpressionDefault, b::ExpressionDefault)::Bool =
+  a.sql == b.sql || _vouches_for(a, b) || _vouches_for(b, a)
+_vouches_for(live::ExpressionDefault, declared::ExpressionDefault)::Bool =
+  live.owned !== nothing && live.owned == db_default_hash(declared.sql)
 
 """
     COLUMN_DELTA_COMPARATORS

@@ -1125,6 +1125,100 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# An expression default the deparser re-spells converges through its ownership marker (#1037)
+# PostgreSQL prints `lower('OPEN')` back as `lower('OPEN'::text)`, so the text compare planned
+# `SET DEFAULT` on every run. PormG now stamps `pormg:default:<declared>:<live>` in the column comment
+# when it applies the default, the live half hashed BY THE SERVER — so `owned !== nothing` below is
+# also the proof that PostgreSQL's `sha256` and Julia's `live_default_hash` agree. Plan → apply →
+# read → replan, the #751 pattern, then the three ways a marker stops vouching. SQLite keeps the
+# declared text verbatim and gets no marker; its arm pins that it still converges.
+# Mutation gate: the unit twin (test/unit/test_db_default.jl) carries it; this is the live half.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "An expression default the deparser re-spells converges through its marker (#1037)" begin
+  pool = PormG.config[PORMG_DB_FOLDER].connections
+  is_pg = adapter_name == "PostgreSQL"
+  M1037 = PormG.Models
+  tbl = "pormg_it_1037"
+  ddl(sql) = PormG.ConnectionPool.fetch(pool, sql)
+  drop1037!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
+  pin(s) = is_pg ? (postgres = s,) : (sqlite = s,)
+  model1037 = M1037.Model(tbl; id = M1037.IDField(),
+    status = M1037.CharField(max_length = 20, null = true, db_default = pin("lower('OPEN')")),
+    code   = M1037.CharField(max_length = 20, null = true, db_default = pin("replace('P-1', '-', '')")),
+    # A top-level operator: printed with outer parentheses the canonical form strips, so it is the
+    # column that tells the raw `pg_get_expr` text from the canonical one (found in review).
+    tag    = M1037.CharField(max_length = 20, null = true, db_default = pin("lower('A') || 'b'")))
+  schema1037 = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+    Symbol(tbl) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => model1037, :exist => false))
+  settings1037 = (s = PormG.Configuration.Settings(); s.change_db = true; s)
+  plan1037(live) = get(PormG.Migrations.get_migration_plan(live, schema1037, pool, settings1037;
+                                                           interactive = false), Symbol(tbl), Dict())
+  split1037 = is_pg ? PormG.Migrations._split_pg_statements : PormG.Migrations._split_sqlite_statements
+  apply1037!(plan) = foreach(sql -> foreach(ddl, split1037(sql)), values(plan))
+  read1037() = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
+  comment1037() = only(DataFrame(ddl("SELECT col_description('\"$(tbl)\"'::regclass, " *
+                           "(SELECT attnum FROM pg_attribute WHERE attrelid = '\"$(tbl)\"'::regclass " *
+                           "AND attname = 'status')) AS c")).c)
+
+  drop1037!()
+  try
+    first_plan = plan1037(PormG.Migrations.LiveTable[])
+    # A pinned expression renders verbatim; PostgreSQL also gets the stamp, SQLite none.
+    @test occursin("DO \$pormg\$", join(values(first_plan), "\n")) == is_pg
+    apply1037!(first_plan)
+    live = read1037()
+    @test live.columns["status"].default isa PormG.ExpressionDefault
+    if is_pg
+      # The deparser's spelling, which is what made the text compare churn…
+      @test live.columns["status"].default.sql == "lower('OPEN'::text)"
+      @test live.columns["code"].default.sql == "replace('P-1'::text, '-'::text, ''::text)"
+      # …vouched for by a marker whose live half the server computed.
+      @test live.columns["status"].default.owned == PormG.db_default_hash("lower('OPEN')")
+      @test live.columns["code"].default.owned == PormG.db_default_hash("replace('P-1', '-', '')")
+      @test live.columns["tag"].default.owned == PormG.db_default_hash("lower('A') || 'b'")
+    end
+    # THE convergence assertion: nothing is planned against the table just created.
+    @test isempty(plan1037([live]))
+
+    if is_pg
+      # 1. A comment written over the marker: the column is compared as text again, exactly as
+      #    before #1037, so it plans; applying that re-stamps and KEEPS the user's text.
+      ddl("COMMENT ON COLUMN \"$(tbl)\".status IS 'Race status, set by the steward'")
+      unmarked = read1037()
+      @test unmarked.columns["status"].default.owned === nothing
+      replan = plan1037([unmarked])
+      @test collect(keys(replan)) == ["Alter field: status"]
+      apply1037!(replan)
+      @test startswith(comment1037(), "Race status, set by the steward pormg:default:")
+      @test isempty(plan1037([read1037()]))
+      # Re-stamping replaces the marker rather than appending a second one.
+      apply1037!(replan)
+      @test count("pormg:default:", comment1037()) == 1
+
+      # 2. A default changed by hand keeps the comment, and the live half is what notices.
+      ddl("ALTER TABLE \"$(tbl)\" ALTER COLUMN status SET DEFAULT lower('CLOSED')")
+      by_hand = read1037()
+      @test by_hand.columns["status"].default.owned === nothing
+      replan = plan1037([by_hand])
+      @test collect(keys(replan)) == ["Alter field: status"]
+      apply1037!(replan)
+      @test read1037().columns["status"].default.sql == "lower('OPEN'::text)"
+      @test isempty(plan1037([read1037()]))
+
+      # 3. A changed declaration: the marker vouches for the OLD one, so the new one plans.
+      model_b = M1037.Model(tbl; id = M1037.IDField(),
+        status = M1037.CharField(max_length = 20, null = true, db_default = pin("upper('open')")),
+        code   = M1037.CharField(max_length = 20, null = true, db_default = pin("replace('P-1', '-', '')")),
+        tag    = M1037.CharField(max_length = 20, null = true, db_default = pin("lower('A') || 'b'")))
+      schema1037[Symbol(tbl)][:model] = model_b
+      @test collect(keys(plan1037([read1037()]))) == ["Alter field: status"]
+    end
+  finally
+    drop1037!()
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Introspection ownership on PostgreSQL: partitions, extension tables and views are not read (#730)
 # `relkind = 'r'` admitted every partition of a partitioned table and every table an extension
 # owns, so `makemigrations` planned a `DROP TABLE` for each — and for an extension member the DROP

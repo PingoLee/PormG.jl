@@ -150,7 +150,7 @@ function delete(objct::SQLObjectHandler;
   # check if is allowed to delete
   !settings.change_data && throw(_write_not_allowed("delete", conn_key))
 
-  if objct.object.limit > 0 || objct.object.offset > 0 || !isempty(objct.object.order)
+  if objct.object.limit !== nothing || objct.object.offset > 0 || !isempty(objct.object.order)
     throw(UnsafeMutationError(
       "Cannot call delete() on a query that has limit(), offset(), or order_by() set. " *
       "The deletion collector operates on complete filtered object sets so counts, cascades, " *

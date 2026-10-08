@@ -21,9 +21,8 @@ This covers `first()`, `last()` and `get()` too, which apply a limit internally 
 `LIMIT 2`). `exists()` keeps its own literal `LIMIT 1` and binds only an offset you set. The
 `EXISTS (… LIMIT 1)` predicate does not change.
 
-A zero of a non-`Int` integer type now counts as "no limit", like `0` always did:
-`limit(Int32(0))` used to render `LIMIT 0` (zero rows), because the old check compared the type as
-well as the value. It now applies no limit: every row, or every row past an offset you set.
+`limit(0)` and `limit(Int32(0))` both bind `0` and return zero rows. The rest of that change is the
+#1049 entry in this release: `0` is no longer a "no limit" value, and "no limit" is `limit(nothing)`.
 
 Also fixed in the same change: on SQLite, an offset with no limit (`q.offset(5)`) rendered a bare
 `OFFSET`, which SQLite rejects as a syntax error. It now renders `LIMIT -1 OFFSET ?`, SQLite's

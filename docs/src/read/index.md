@@ -325,8 +325,8 @@ These methods modify the query builder and return the handler for further chaini
 | `.filter(key => value, ...)` | Add WHERE conditions. Multiple pairs are ANDed. | **Accumulates** (ANDed) |
 | `.values("field1", "field2", ...)` | Select specific columns. Use `"*"` for all main-table columns. | **Replaces** previous call |
 | `.order_by("field", "-field")` | Sort results. Prefix with `-` for descending. | **Replaces** previous call |
-| `.limit(n)` | Limit the number of returned rows. | Last value wins |
-| `.offset(n)` | Skip the first `n` rows. | Last value wins |
+| `.limit(n)` | Limit the number of returned rows. `.limit(0)` returns no rows; `.limit(nothing)` removes a limit. A negative value or a `Bool` raises `QueryBuildError`. | Last value wins |
+| `.offset(n)` | Skip the first `n` rows. A negative value or a `Bool` raises `QueryBuildError`. | Last value wins |
 | `.page(limit)` / `.page(limit, offset)` | Pagination in one call. `.page(n)` sets `LIMIT` only and leaves `.offset()` untouched; `.page(n, m)` sets both. Any other shape raises `QueryBuildError`. | Last value wins |
 | `.distinct()` | Add `SELECT DISTINCT` to the query. | Last value wins |
 | `.db("key")` | Route the query to a different connection pool. | Last value wins |
@@ -370,6 +370,20 @@ page2_alt = M.Driver.objects.order_by("surname").page(20, 20).list()
 
 # .page(n) is limit-only: it sets LIMIT and leaves any offset already on the handler alone
 top20 = M.Driver.objects.order_by("surname").page(20).list()
+```
+
+A page size of `0` is a real limit: `.limit(0)` returns no rows, the same as `LIMIT 0` in SQL and
+`qs[:0]` in Django. To remove a limit already on a handler, use `.limit(nothing)`. A negative value
+or a `Bool` (`true` is an `Integer` in Julia) raises `QueryBuildError` for `.limit()`, `.offset()`
+and `.page()` alike: PostgreSQL rejects a negative LIMIT, while SQLite would read it as "no limit"
+and return every row.
+
+```julia
+n = 0                                             # e.g. a page size computed from a selection
+M.Driver.objects.order_by("surname").limit(n).list()   # → no rows
+
+q = M.Driver.objects.order_by("surname").limit(20)
+q.limit(nothing)                                  # removes the limit again: every row
 ```
 
 ### Distinct Results

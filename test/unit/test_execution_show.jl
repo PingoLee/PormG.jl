@@ -231,6 +231,16 @@ end
   @test err_limit isa PormGError
   @test occursin("limit", lowercase(sprint(showerror, err_limit)))
 
+  # limit(0) is a real slice since #1049 (zero rows), not "no limit": updating the whole filtered set
+  # under it would write rows the same handler's list() does not return.
+  err_limit0 = try
+    TestDriver.objects.filter("id__@gt" => 0).limit(0).update("forename" => "X")
+    nothing
+  catch e
+    e
+  end
+  @test err_limit0 isa PormG.UnsafeMutationError
+
   # offset() must be rejected — fresh handler, no prior limit
   err_offset = try
     TestDriver.objects.filter("id__@gt" => 0).offset(2).update("forename" => "X")

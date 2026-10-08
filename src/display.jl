@@ -627,14 +627,13 @@ function Base.show(io::IO, ::MIME"text/plain", h::QueryBuilder.ObjectHandler)
   append!(joins, keys(getfield(q, :alias_join)))
   isempty(joins) || println(io, lbl("cjoin"), _d_join_capped(joins, 6))
 
-  # `limit == 0` is PormG's NO-LIMIT sentinel (`select_nodes.jl`: `has_limit = …limit != 0`), while
-  # in SQL `LIMIT 0` means zero rows. Rendering the sentinel printed `limit 0, offset 25` for an
-  # offset-only query — a limit the query does not have, spelled as the one value that would mean
-  # something else. Each half is now printed only when it is set.
+  # Each half is printed only when it is set. No limit is `nothing`; `limit 0` is a real limit, zero
+  # rows (#1049), so it prints. An offset of 0 is no offset. Printing an unset limit used to show
+  # `limit 0, offset 25` for an offset-only query.
   lim, off = getfield(q, :limit), getfield(q, :offset)
-  if lim != 0 || off != 0
+  if lim !== nothing || off != 0
     parts = String[]
-    lim == 0 || push!(parts, "limit $(lim)")
+    lim === nothing || push!(parts, "limit $(lim)")
     off == 0 || push!(parts, "offset $(off)")
     println(io, lbl("page"), join(parts, ", "))
   end

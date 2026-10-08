@@ -961,7 +961,7 @@ end
 function _reject_unsafe_mutation_shape(q::SQLObject, op::String)
   # limit(), offset(), and order_by(): standard SQL UPDATE does not support these clauses. To
   # update a bounded set of rows, filter by primary key explicitly or compose a subquery.
-  if q.limit > 0 || q.offset > 0 || !isempty(q.order)
+  if q.limit !== nothing || q.offset > 0 || !isempty(q.order)
     throw(UnsafeMutationError(
       "Cannot call $op on a query that has limit(), offset(), or order_by() set. " *
       "Standard SQL UPDATE does not support these clauses, and silently dropping them " *

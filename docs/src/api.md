@@ -29,9 +29,9 @@ These methods modify the query builder and return the handler for further chaini
 | `.filter(key => value, ...)` | Add WHERE conditions (AND). Repeated calls **accumulate**, unlike `.values()`/`.order_by()` which replace. | `.filter("nationality" => "British")` |
 | `.values("field1", "field2", ...)` | Select specific columns. Use `"*"` for all main-table columns. | `.values("*", "driverid__surname")` |
 | `.order_by("field", "-field")` | Sort results. Prefix with `-` for descending. | `.order_by("-points", "surname")` |
-| `.limit(n)` | Limit the number of returned rows. | `.limit(10)` |
-| `.offset(n)` | Skip the first `n` rows. | `.offset(20)` |
-| `.page(limit)` / `.page(limit, offset)` | Limit, or limit and offset in one call. The one-argument form leaves any `.offset()` already set untouched. | `.page(20, 40)` / `.page(20)` |
+| `.limit(n)` | Limit the number of returned rows. `.limit(0)` returns no rows, as in SQL; `.limit(nothing)` removes a limit. A negative value or a `Bool` raises `QueryBuildError`. | `.limit(10)` |
+| `.offset(n)` | Skip the first `n` rows. A negative value or a `Bool` raises `QueryBuildError`. | `.offset(20)` |
+| `.page(limit)` / `.page(limit, offset)` | Limit, or limit and offset in one call. The one-argument form leaves any `.offset()` already set untouched. Integers only: a negative value or a `Bool` raises `QueryBuildError`, and `nothing` is `.limit()`'s alone. | `.page(20, 40)` / `.page(20)` |
 | `.distinct()` | Add `DISTINCT` to the SELECT. | `.distinct()` |
 | `.db("key")` | Route the query to a different connection pool. | `.db("tenant_42")` |
 | `.on("path", key => value; join_type)` | Add predicates to the ON clause of a join path, joining it if nothing else in the query does. Does **not** change the join type unless `join_type` is passed. | `.on("driverid", "nationality" => "British")` |

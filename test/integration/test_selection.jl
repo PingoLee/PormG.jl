@@ -1075,6 +1075,22 @@ end
     @test nrow(df) <= 10
     @test "country" in names(df)
   end
+
+  @testset "limit(0) is zero rows, limit(nothing) is every row (#1049)" begin
+    # `0` used to be the no-limit sentinel: a page size computed as 0 returned the whole table.
+    # The oracle is the unsliced query's own row count.
+    query = M.Status.objects
+    query.values("statusid")
+    query.order_by("statusid")
+    total = length(query.copy().list())
+    @test total > 0
+    @test isempty(query.copy().limit(0).list())
+    @test isempty(query.copy().page(0, 3).list())
+    @test length(query.copy().limit(5).limit(nothing).list()) == total
+    # Refused before any SQL: on SQLite a negative LIMIT returned every row, on PostgreSQL it raised.
+    @test_throws PormG.QueryBuildError query.copy().limit(-5)
+    @test_throws PormG.QueryBuildError query.copy().limit(true)
+  end
 end
 
 

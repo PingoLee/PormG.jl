@@ -82,7 +82,7 @@ end
 # Handler semantics: first() does not mutate the handler (#199)
 # first() used to permanently set limit(1) on the handler, breaking reuse (and
 # making a follow-up update() throw "UPDATE with LIMIT"). It now executes on an
-# internal copy: the handler keeps limit=0 and re-executes with all rows.
+# internal copy: the handler keeps no limit (`nothing`) and re-executes with all rows.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "first() leaves the handler unchanged" begin
     q = M.Driver.objects.filter("nationality" => "British")
@@ -92,7 +92,7 @@ end
     d = q.first()
     @test d isa PormGRow
 
-    @test q.object.limit == 0              # no limit(1) leaked into the handler
+    @test q.object.limit === nothing        # no limit(1) leaked into the handler
     @test length(q.list()) == total        # re-execution still returns every row
 end
 

@@ -197,29 +197,36 @@ query's.
 ## Indexing
 
 Without an index, every search reads and parses each row's text. A GIN index on the same expression
-the query renders lets PostgreSQL find the matching rows directly. Declare it with `Models.Index`,
-and write the expression **exactly** as PormG renders it, configuration included:
+the query renders lets PostgreSQL find the matching rows directly. PostgreSQL uses the index only
+when the two expressions are the same, and a wrong configuration or column still makes a valid index
+that is simply never used. So declare the expression with `Models.search_vector_expression`, which
+returns the text the query itself renders, rather than typing it by hand:
 
 ```julia
 Driver = Models.Model("driver",
     driverid = Models.IDField(),
     forename = Models.CharField(),
     surname  = Models.CharField(),
-    indexes  = [Models.Index(expressions = ("to_tsvector('simple', surname)",),
+    indexes  = [Models.Index(expressions = (Models.search_vector_expression("surname"; config = "simple"),),
                              method = "gin", name = "driver_surname_tsv")],
 )
+
+Models.search_vector_expression("surname"; config = "simple")
+# "to_tsvector('simple'::regconfig, \"surname\")"
 
 # Served by driver_surname_tsv: the same configuration, the same column
 M.Driver.objects.filter("surname__@search" => SearchQuery("senna"; config = "simple"))
 ```
 
-| The lookup | The index expression it needs |
+| The query | The index expression it needs |
 | :--- | :--- |
-| `"col__@search" => SearchQuery(…; config = "cfg")` | `to_tsvector('cfg', col)` |
+| `"col__@search" => SearchQuery(…; config = "cfg")` | `search_vector_expression("col"; config = "cfg")` |
 | `"col__@search" => "text"` (no configuration) | none: one-argument `to_tsvector` depends on a server setting, so PostgreSQL refuses to index it |
 
-The second row is the reason to always pass a configuration on a large table. The `'cfg'` in an
-index and the `'cfg'::regconfig` PormG renders are the same expression to PostgreSQL.
+The second row is the reason to always pass a configuration on a large table. The configuration you
+give the helper must be the query's. Its columns are database column names, a field's `db_column`
+where it sets one. A configuration that is not a name raises `InvalidValueError`, as it does in the
+query, and a column that is not an identifier raises `ModelDefinitionError`.
 
 Only the lookup uses an index. `SearchRank` and `SearchHeadline` are computed for each row the query
 keeps, so filter with an indexed `@search` first and rank or headline what is left.

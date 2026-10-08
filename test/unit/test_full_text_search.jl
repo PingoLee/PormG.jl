@@ -1,6 +1,7 @@
 """
 Unit coverage for PostgreSQL full-text search (#31, part 1): the `@search` lookup and `SearchQuery`,
-`SearchVector`, `SearchRank` and `SearchHeadline`.
+`SearchVector`, `SearchRank` and `SearchHeadline`. Part 2 (#1021), in its own outer testset at the end:
+`Models.search_vector_expression`, the index text that cannot drift from the query's.
 
 PostgreSQL only. SQLite's FTS5 is a separate index table with its own query syntax and ranking, so
 every piece raises `BackendCapabilityError` there when the query is built rather than being emulated.
@@ -379,5 +380,68 @@ end
     end
     @test _err31(() -> PormG.Dialect.search(_FTS_SL, "a", "b")) isa BackendCapabilityError
     @test _err31(() -> PormG.Dialect.ts_vector_sql("a", nothing, _FTS_SL)) isa BackendCapabilityError
+  end
+end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Part 2 (#1021)
+# ═════════════════════════════════════════════════════════════════════════════
+
+# The `to_tsvector(…)` a rendered query holds, with the table qualification dropped — the text an
+# expression index must equal to serve it. `"Tb"."surname"` is `"surname"` to the index, which names
+# the column of its own table.
+function _tsvector_of1021(sql::AbstractString)
+  start = findfirst("to_tsvector(", sql)
+  start === nothing && return nothing
+  depth, i = 0, first(start)
+  for j in first(start):lastindex(sql)
+    sql[j] == '(' && (depth += 1)
+    sql[j] == ')' && (depth -= 1; depth == 0 && (i = j; break))
+  end
+  return replace(sql[first(start):i], r"\"Tb(?:_\d+)?\"\." => "")
+end
+
+@testset "Full-text search, part 2 (#1021)" begin
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Index helper: search_vector_expression is the query's own to_tsvector text
+  # One column is the @search lookup's expression, several are SearchVector's. Both come from the
+  # Kernel function the query is rendered with, so the index and the query cannot drift apart — a
+  # config or cast that differs is still a valid index, just one PostgreSQL never uses (#1021).
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "search_vector_expression equals the rendered to_tsvector, per config and shape" begin
+    for config in (nothing, "simple", "pg_catalog.english")
+      # One column: the lookup's bare form, parsed with the query's config.
+      r = _q31("surname__@search" => SearchQuery("senna"; config = config))
+      @test Models.search_vector_expression("surname"; config = config) == _tsvector_of1021(r[:sql_text])
+      # Several columns: SearchVector's COALESCE'd document, as SearchRank renders it.
+      vec = SearchVector("forename", "surname"; config = config)
+      r = _q31(; vals = Any["driverid", "r" => SearchRank(vec, SearchQuery("senna"; config = config))])
+      @test Models.search_vector_expression("forename", "surname"; config = config) ==
+            _tsvector_of1021(r[:sql_text])
+    end
+    @test Models.search_vector_expression("surname"; config = "simple") ==
+          "to_tsvector('simple'::regconfig, \"surname\")"
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Index helper: what it produces is a declarable GIN index, and its inputs are checked
+  # The text has to pass Index's own expression check (it is SQL a migration will run), and an input
+  # the query would refuse — a config that is not a name — is refused here too, with the same type.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "search_vector_expression declares an Index; bad columns and configs are refused" begin
+    expr = Models.search_vector_expression("forename", "surname"; config = "simple")
+    idx = Models.Index(expressions = (expr,), method = "gin", name = "driver_name_tsv")
+    @test idx.expressions == [expr]
+    # A config the lookup refuses is refused with the lookup's error type.
+    @test _err31(() -> Models.search_vector_expression("surname"; config = "simple'); DROP TABLE x; --")) isa InvalidValueError
+    # A column is an identifier: nothing the helper would have to escape inside its quotes.
+    for bad in ("sur\"name", "surname)", "a b", "", "1abc", "\"surname\"")
+      @test _err31(() -> Models.search_vector_expression(bad)) isa ModelDefinitionError
+    end
+    @test _err31(() -> Models.search_vector_expression()) isa ModelDefinitionError
+    @test _err31(() -> Models.search_vector_expression(:surname)) isa ModelDefinitionError
+    # The function is the published spelling: `Models.search_vector_expression`.
+    @test Base.ispublic(Models, :search_vector_expression)
   end
 end

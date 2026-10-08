@@ -48,6 +48,8 @@ import PormG.Models: declared_check_constraints, CheckConstraint
 import PormG: check_marker
 # `_foreign_key_on_delete_sql` lives in `Models` since #498 — see the note where it used to be defined.
 import PormG.Models: _foreign_key_on_delete_sql
+# #1021: the one writer of `to_tsvector(…)` and its config check (Kernel), shared with the index helper.
+import PormG: ts_config_name, ts_config_prefix, ts_lookup_document_sql, ts_vector_document_sql
 
 import PormG: @pormg_debug
 
@@ -3162,44 +3164,22 @@ end
 # table with its own query syntax and ranking, so an emulation would answer a different question; each
 # arm below refuses there instead, as the regex and array lookups do.
 #
-# The text-search config is a LITERAL, `'english'::regconfig`, not a bound parameter. That is the
-# maintainer's call on #31: PostgreSQL matches an expression index by its text, so only a literal config
-# lets `to_tsvector('english'::regconfig, "Tb"."name")` use an index on `to_tsvector('english', name)`.
-# It is safe to print because it is a NAME, checked here against an identifier pattern that admits no
-# quote, space or semicolon — and checked again at every render, since the node's `kwargs` is a mutable
-# Dict. The search text and the headline options are always bound.
+# The config, the `to_tsvector(…)` text and its validation live in Kernel (`src/column_ir.jl`, #1021):
+# `Models.search_vector_expression` writes the index from the same functions this file writes the query
+# with, so the two cannot drift apart. `ts_config_name` is bound here too, as `Dialect.ts_config_name`.
+# The search text and the headline options are always bound.
 # ──────────────────────────────────────────────────────────────────────────────
-const _TS_CONFIG_RE = r"\A[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?\z"
-
 fts_capability_error(what::AbstractString) = BackendCapabilityError(
   "$(what) requires PostgreSQL full-text search: SQLite has no tsvector or tsquery, and PormG does " *
   "not emulate full-text search (#31).")
 
-"""
-    ts_config_name(config) -> Union{Nothing,String}
-
-The validated text-search config (`"english"`, `"pg_catalog.portuguese"`), or `nothing` for none.
-Anything that is not a plain or schema-qualified identifier raises `InvalidValueError`.
-"""
-function ts_config_name(config)::Union{Nothing,String}
-  config === nothing && return nothing
-  (config isa AbstractString && occursin(_TS_CONFIG_RE, config)) && return String(config)
-  throw(InvalidValueError(
-    "A text-search config is the name of one, such as \"english\" or \"pg_catalog.portuguese\": " *
-    "letters, digits and underscores, optionally schema-qualified (#31).", :format))
-end
-_ts_config_prefix(config) = (c = ts_config_name(config); c === nothing ? "" : "'$(c)'::regconfig, ")
-
 const _TS_QUERY_FUNCTIONS = Dict("plain" => "plainto_tsquery", "phrase" => "phraseto_tsquery",
                                  "websearch" => "websearch_to_tsquery", "raw" => "to_tsquery")
 
-# The left side of the `@search` lookup: the column's document, parsed with the query's config. No
-# `COALESCE`, unlike `SEARCH_VECTOR` below — a NULL document makes the predicate NULL, which drops the
-# row exactly as `false` would, and the bare call is the expression an index on `to_tsvector('cfg',
-# col)` is written with. The connection is the LAST argument so this helper never takes the shape of a
+# The left side of the `@search` lookup: the column's document, parsed with the query's config
+# (`ts_lookup_document_sql`, which says why it has no `COALESCE`). The connection is the LAST argument so this helper never takes the shape of a
 # lookup renderer, `(conn, column, value)`, which `test_operators.jl` reads back by reflection.
-ts_vector_sql(column::AbstractString, config, conn::PormGPostgres) =
-  "to_tsvector($(_ts_config_prefix(config))$(column))"
+ts_vector_sql(column::AbstractString, config, conn::PormGPostgres) = ts_lookup_document_sql(column, config)
 ts_vector_sql(column::AbstractString, config, conn::PormGAbstractType) =
   throw(fts_capability_error("The @search lookup"))
 
@@ -3209,13 +3189,10 @@ search(conn::PormGSQLite, vector::AbstractString, query::AbstractString) =
 search(conn::PormGAbstractType, vector::AbstractString, query) =
   throw(fts_capability_error("The @search lookup"))
 
-# Django's document: every operand cast to text and NULL-safe, joined by a space, so a row whose
-# `forename` is NULL still matches on its `surname`. Indexing this needs the same expression, cast and
-# `COALESCE` included (docs/src/read/full_text_search.md → Indexing).
-function SEARCH_VECTOR(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
-  document = join(("COALESCE(($(c))::text, '')" for c in columns), " || ' ' || ")
-  return "to_tsvector($(_ts_config_prefix(get(format, "config", nothing)))$(document))"
-end
+# Django's document (`ts_vector_document_sql`). `Models.search_vector_expression` writes an index on
+# it from the same function (docs/src/read/full_text_search.md → Indexing).
+SEARCH_VECTOR(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres) =
+  ts_vector_document_sql(columns, get(format, "config", nothing))
 SEARCH_VECTOR(column::String, format::Dict{String,Any}, conn::PormGPostgres) =
   SEARCH_VECTOR(Any[column], format, conn)
 
@@ -3223,7 +3200,7 @@ function SEARCH_QUERY(columns::Vector{Any}, format::Dict{String,Any}, conn::Porm
   fn = get(_TS_QUERY_FUNCTIONS, get(format, "search_type", "plain"), nothing)
   fn === nothing && throw(InvalidValueError(
     "search_type is one of \"plain\", \"phrase\", \"websearch\" or \"raw\" (#31).", :format))
-  return "$(fn)($(_ts_config_prefix(get(format, "config", nothing)))$(columns[1]))"
+  return "$(fn)($(ts_config_prefix(get(format, "config", nothing)))$(columns[1]))"
 end
 SEARCH_QUERY(column::String, format::Dict{String,Any}, conn::PormGPostgres) =
   SEARCH_QUERY(Any[column], format, conn)
@@ -3245,7 +3222,7 @@ end
 # number column or a rank would otherwise fail at the server rather than read as its text.
 function SEARCH_HEADLINE(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
   args = Any["($(columns[1]))::text", columns[2:end]...]
-  return "ts_headline($(_ts_config_prefix(get(format, "config", nothing)))$(join(args, ", ")))"
+  return "ts_headline($(ts_config_prefix(get(format, "config", nothing)))$(join(args, ", ")))"
 end
 
 # The build refuses all four on SQLite first (`_render_function_typed`); these are the backstop that

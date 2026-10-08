@@ -10,7 +10,7 @@
 # (`test/unit/test_full_text_search.jl`) pins the SQL; only the server can say it means what it says.
 #
 # The last testset is the reason the config is a literal: a GIN index built on `to_tsvector('simple',
-# body)` serves the lookup. It builds a scratch table through the planner, so the shared fixture never
+# body)` — declared through `Models.search_vector_expression` (#1021) — serves the lookup. It builds a scratch table through the planner, so the shared fixture never
 # sees it, and drops it in a `finally`.
 #
 #   julia -t auto --project=test/integration test/integration/test_full_text_search.jl
@@ -171,13 +171,15 @@ _fts31_err(f) = try f(); nothing catch e; e end
         # an index scan here means the lookup's expression matches the index's.
         # ─────────────────────────────────────────────────────────────────────
         # A CharField, as in the docs' example: the varchar column reaches `to_tsvector` through the
-        # same implicit cast in the index and in the query, so the two expressions still match.
-        @testset "a GIN index on to_tsvector('simple', body) serves @search" begin
+        # same implicit cast in the index and in the query, so the two expressions still match. The
+        # index is declared through `Models.search_vector_expression` (#1021), the text the lookup
+        # itself renders, rather than a hand-typed copy of it.
+        @testset "a GIN index from search_vector_expression(\"body\") serves @search" begin
             drop() = try; PormG.ConnectionPool.fetch(pool, Dialect.drop_table(pool, FTS31_TABLE)); catch; end
             model = Models.Model(FTS31_TABLE;
                 id   = Models.IDField(),
                 body = Models.CharField(max_length = 200),
-                indexes = [Models.Index(expressions = ("to_tsvector('simple', body)",), method = "gin",
+                indexes = [Models.Index(expressions = (Models.search_vector_expression("body"; config = "simple"),), method = "gin",
                                         name = "pormg_fts31_body_tsv")])
             model.connect_key = PORMG_DB_FOLDER
             schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(

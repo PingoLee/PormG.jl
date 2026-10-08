@@ -348,7 +348,8 @@ end
                                    :inspect_query, :last, :latest, :list, :save, :show_query],
             # Models: the 27 field constructors #289 declared, plus the three entry points #295
             # added (`Model`, `set_models`, `UniqueConstraint`), `Index` (#347),
-            # `CheckConstraint` (#742), the two network-address fields (#28) and `ArrayField` (#28) = 35.
+            # `CheckConstraint` (#742), the two network-address fields (#28), `ArrayField` (#28) and
+            # `search_vector_expression` (#1021), the text a full-text index is declared with = 36.
             # `Model_Type` is deliberately absent — it is documented but NOT public: users hold one
             # as `M.Driver`, never name it.
             PormG.Models       => [:ArrayField, :AutoField, :BigIntegerField, :BinaryField, :BooleanField,
@@ -358,7 +359,7 @@ end
                                    :IntegerField,
                                    :JSONField, :ManyToManyField, :Model, :OneToOneField,
                                    :PasswordField, :PositiveIntegerField,
-                                   :PositiveSmallIntegerField, :SlugField,
+                                   :PositiveSmallIntegerField, :search_vector_expression, :SlugField,
                                    :TextField, :TimeField, :UniqueConstraint, :URLField, :UUIDField,
                                    :set_models],
             PormG.Migrations   => [:MIGRATION_FORMAT_VERSION],

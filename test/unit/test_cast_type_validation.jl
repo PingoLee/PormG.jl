@@ -281,7 +281,8 @@ end
   # is upper-cased as written (`Dialect._map_cast_name`).
   for (ctor, pg_fn, sl_fn) in ((Coalesce, "COALESCE(", "COALESCE("), (Greatest, "GREATEST(", "MAX("),
                                (Least, "LEAST(", "MIN("))
-    q = _c696_q(); q.values("c" => ctor("points", Value(0); output_field = "numeric(10,2)"))
+    # #1040: over an integer column — a float cast to a scaled numeric is refused.
+    q = _c696_q(); q.values("c" => ctor("positionorder", Value(0); output_field = "numeric(10,2)"))
     pg = _c696_sql(q, _CPG)
     @test occursin("($(pg_fn)", pg) && occursin(")::numeric(10,2)", pg)
     @test occursin("CAST($(sl_fn)", _c696_sql(q, _CSL)) && occursin("AS NUMERIC(10,2))", _c696_sql(q, _CSL))

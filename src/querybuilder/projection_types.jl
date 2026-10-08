@@ -658,12 +658,104 @@ function _integral_valued(p, instruc::SQLInstruction)
 end
 _whole_number(x, instruc::SQLInstruction) = _integral_valued(x, instruc) || _concat_textless_operand(x, instruc) === nothing
 
+# #1040 — the scale a declared numeric type rounds to, or `nothing` for a type with none. PostgreSQL
+# rounds a value cast to `numeric(p, s)` to `s` digits (half away from zero) and `numeric(p)` to a
+# whole number; SQLite reads either as a type name with NUMERIC affinity and keeps every digit.
+# Measured on PostgreSQL 16.15 and SQLite 3.45.1: `1.5` at `numeric(10,0)` is `2` and `1.5`, `1.555`
+# at `numeric(10,2)` is `1.56` and `1.555`. An unscaled `numeric` (and `DecimalField().type`,
+# `"DECIMAL"`) keeps the value on both, and an array is not a number, so neither has a scale here.
+# The name is `Dialect.cast_type_name`'s validated spelling, so the size is plain digits.
+function _numeric_cast_scale(type_name::AbstractString)::Union{Int,Nothing}
+  # `dec` is PostgreSQL's third spelling of `numeric` (its grammar's `DEC opt_type_modifiers`).
+  m = match(r"^(?i:numeric|decimal|dec)\((\d+)(?:,(\d+))?\)$", type_name)
+  m === nothing && return nothing
+  return m.captures[2] === nothing ? 0 : parse(Int, m.captures[2])
+end
+
+# #1040 — an operand of a cast to `numeric(p, s)` that can carry more than `s` fractional digits, as
+# `(kind, what)`, or `nothing` when PostgreSQL's rounding cannot change it. Rounding first is NOT an
+# escape beyond whole numbers: `Round(x, 2)` is `ROUND(x::numeric, 2)` on PostgreSQL, which rounds the
+# float's 15-digit decimal form, and `ROUND(x, 2)` on SQLite, which rounds the binary double, so
+# `2.675` is `2.68` on one and `2.67` on the other (`1.555`, `1.005` likewise). It is classified as the
+# `numeric` function it is. `Round(x)`, `Floor` and `Ceil` agree (every `Result.points` row, ±0.5,
+# ±1.5, ±2.5), so a whole number passes any scale.
+#
+# Bounded: a whole number (`_integral_valued`, and any operand with no fractional kind — an integer
+# column, a type PormG cannot name), a `DecimalField` column of at most `s` places, a `Decimal`
+# literal of at most `s` digits, and a nested cast to a scale of at most `s`. Unbounded: a float, a
+# non-whole float literal, a `numeric` function, a decimal of unknown scale, and text — PostgreSQL
+# parses `'1.555'` and rounds it, SQLite converts it and keeps it — including a JSON value. An operand
+# PormG cannot type (an untyped `Case`, a `Subquery`) passes, as it does for #1028.
+const _SCALE_PRESERVING_FUNCTIONS = ("MAX", "MIN", "ABS", "COALESCE", "GREATEST", "LEAST", "NULLIF")
+function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing}
+  _integral_valued(p, instruc) && return nothing
+  operand = p isa SQLField ? p.field : p isa FExpression && p.operation === nothing ? p.field_name : p
+  if operand isa SQLText
+    x = operand.field
+    x isa AbstractString && return (:text, "the string literal $(repr(x))")
+    x isa AbstractFloat && isinteger(x) && return nothing
+    if x isa Decimals.Decimal
+      digits = _decimal_scale(x)
+      return digits <= scale ? nothing : (:decimal, "the Decimal literal $(x) ($(digits) decimal places)")
+    end
+  end
+  if operand isa Union{String,JoinedReference,CTEReference}
+    field = _alias_column_field(operand, instruc)
+    # A JSON value is text to PostgreSQL's cast (`#>>` returns text, and `jsonb::numeric` parses the
+    # scalar), which rounds it; SQLite's `json_extract` hands over the number, which keeps every digit.
+    field isa Models.sJSONField && return (:text, "the JSONField `$(_concat_operand_label(operand))`")
+  end
+  if operand isa Union{String,JoinedReference}
+    field = _alias_column_field(operand, instruc)
+    if field isa Models.sDecimalField
+      places = field.decimal_places
+      return places <= scale ? nothing :
+        (:decimal, "the DecimalField `$(_concat_operand_label(operand))` ($(places) decimal places)")
+    end
+  end
+  if operand isa FObject && operand.function_name in _DECLARED_CAST_FUNCTIONS
+    declared = get(operand.kwargs, operand.function_name == "CAST" ? "type" : "output_field", nothing)
+    inner = declared isa AbstractString ? _numeric_cast_scale(declared) : nothing
+    inner === nothing || return inner <= scale ? nothing : (:decimal, "a value cast to $(declared)")
+  end
+  # A function whose value is one of its operands' values gains no digits: `Max("price")` of a
+  # two-place DecimalField has two. With an `output_field` it is a cast, read above or below.
+  if operand isa FObject && operand.function_name in _SCALE_PRESERVING_FUNCTIONS &&
+     !(get(operand.kwargs, "output_field", nothing) isa AbstractString)
+    for x in (operand.column isa AbstractVector ? operand.column : (operand.column,))
+      side = _scale_divergent_operand(x, scale, instruc)
+      side === nothing || return (side[1], "`$(operand.function_name)(…)` over $(side[2])")
+    end
+    return nothing
+  end
+  # A cast to an integer or a float is typed here too (`_textless_number` reads its declared type). A
+  # boolean, a timestamp or an interval is not rounded: PostgreSQL has no cast from one to `numeric`.
+  side = _concat_textless_operand(p, instruc)
+  side !== nothing && side[1] in (:float, :decimal, :numeric) && return side
+  # Text: a text column or function (`_expression_formatter` names every one), or a text CTE column.
+  _expression_formatter(p, instruc) === Models.format_text_sql && return (:text, _text_operand_label(p))
+  return nothing
+end
+# The digits a `Decimal` needs after the point: `1.50` needs one, `25` none.
+function _decimal_scale(x::Decimals.Decimal)::Int
+  c, q = x.c, x.q
+  while q < 0 && !iszero(c) && iszero(c % 10)
+    c, q = c ÷ 10, q + 1
+  end
+  return max(0, -q)
+end
+_text_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "a text expression" : "the text column `$(l)`")
+
 # #1028 — a declared cast to text or to an integer over an operand the engines convert differently:
 # `(kind, what, target, flag)`, or `nothing`. To text, every operand `Concat` refuses (the conversion
 # is the same output function: `true::varchar` is `'true'` on PostgreSQL and `'1'` on SQLite, a float
 # `'25'` and `'25.0'`). To an integer, a fractional number only: PostgreSQL rounds it (`float8` half to
 # even, `numeric` half away from zero) and SQLite truncates, so `1.5` is `2` on one and `1` on the
 # other. A boolean is `1`/`0` on both, and passes.
+#
+# #1040 adds a third target, `:scale`: a `numeric(p, s)` cast over an operand with more than `s`
+# fractional digits (`_scale_divergent_operand`). Its fourth slot is the declared type, which the
+# message names, instead of a column flag.
 #
 # The OPERAND is classified, not the node: the node's own declared type is what makes it a text or an
 # integer, which `_textless_number` reads as an acceptable `Concat` operand once this has passed it.
@@ -675,6 +767,15 @@ _declared_cast_label(v::FObject) = v.function_name == "CAST" ? "Cast" :
 function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::AbstractVector = Any[])
   declared = get(v.kwargs, v.function_name == "CAST" ? "type" : "output_field", nothing)
   (declared isa AbstractString && !isempty(declared)) || return nothing
+  # #1040: a scaled numeric target rounds on PostgreSQL only.
+  scale = _numeric_cast_scale(declared)
+  if scale !== nothing
+    for operand in (v.column isa AbstractVector ? v.column : (v.column,))
+      side = _scale_divergent_operand(operand, scale, instruc)
+      side === nothing || return (side[1], side[2], :scale, declared)
+    end
+    return nothing
+  end
   target = _sql_type_field(declared)
   to_integer = target isa Union{Models.sIntegerField,Models.sBigIntegerField}
   (to_integer || target isa Union{Models.sCharField,Models.sTextField}) || return nothing

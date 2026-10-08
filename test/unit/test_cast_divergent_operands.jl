@@ -22,6 +22,17 @@ JSON document (`{"a": [1, 2]}` against `{"a":[1,2]}`). A date, a time and a uuid
 column built from `Sum`/`Avg` is now classified by the body's own projection, so it is refused like
 the aggregate written directly.
 
+#1040 adds a third target. A cast to `numeric(p, s)` rounds to `s` digits on PostgreSQL and keeps
+every digit on SQLite, measured on the same servers:
+
+| expression                                   | PostgreSQL | SQLite  |
+|----------------------------------------------|------------|---------|
+| `Cast(<float> 1.5, "numeric(10,0)")`         | `2`        | `1.5`   |
+| `Cast(<float> 1.555, "numeric(10,2)")`       | `1.56`     | `1.555` |
+| `Cast(<text> '1.555', "numeric(10,2)")`      | `1.56`     | `1.555` |
+| `Round(<float> 2.675 / 1.555 / 1.005, 2)`    | `2.68` / `1.56` / `1.01` | `2.67` / `1.55` / `1.0` |
+| `Round(x)`, and `Cast(x, "numeric")` unscaled | equal on both (±1.5, ±2.5, 1.555, 2.675, 25.0, every `points` row) | |
+
 Everything renders through mock connections — no live database, no fixture.
 
 julia -O0 --project=test/integration test/unit/test_cast_divergent_operands.jl
@@ -166,7 +177,7 @@ end
   for operand in to_text, conn in _CCD_ENGINES
     @test !isempty(_ccd_render(Fn.Cast(operand, Models.CharField()); conn = conn))
   end
-  for (operand, target) in ("points" => "numeric(10,2)", "points" => "double precision",
+  for (operand, target) in ("points" => "numeric", "points" => "double precision",   # #1040: unscaled
                             "price" => Models.FloatField(), "active" => "boolean"),
       conn in _CCD_ENGINES
     @test !isempty(_ccd_render(Fn.Cast(operand, target); conn = conn))
@@ -422,5 +433,97 @@ end
     q.with("c" => body, join_field = "id" => "team")
     q.values("x" => Fn.Concat(Fn.Value("|"), PormG.CTE("c", "drv")))
     @test !isempty(_ccd_sql(q; conn = conn))
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1040: a cast to numeric(p, s) refuses an operand with more than s fractional digits
+# PostgreSQL rounds to the scale (half away from zero) and SQLite keeps every digit, measured on
+# PostgreSQL 16.15 / SQLite 3.45.1: `1.5` at `numeric(10,0)` is `2` / `1.5`, `1.555` at
+# `numeric(10,2)` is `1.56` / `1.555`, and the text `'1.555'` the same. `Round(x, 2)` is no escape:
+# `2.675`, `1.555`, `1.005` round to `2.68`/`1.56`/`1.01` on PostgreSQL and `2.67`/`1.55`/`1.0` on
+# SQLite. A whole number (`Round(x)`, `Floor`, `Ceil`) and an unscaled `numeric` agree.
+# ─────────────────────────────────────────────────────────────────────────────
+_is_1040(e) = e isa QueryBuildError && occursin("(#1040)", _ccd_msg(e))
+
+@testset "#1040: Cast to a scaled numeric refuses an operand it would round" begin
+  refused = [
+    "points"              => "FloatField `points`",
+    "team__rating"        => "FloatField `team__rating`",
+    Fn.Value(1.5)         => "Float64 literal 1.5",
+    _CF("points") * 2     => "arithmetic over the FloatField `points`",
+    Fn.Avg("number")      => "`AVG(…)`",
+    Fn.Round("points", 2) => "`ROUND(…)`",                   # digits round differently per engine
+    Fn.Cast("points", "numeric") => "a value cast to numeric",
+    Fn.Cast(Fn.Round("price", 0), "numeric(10,3)") => "a value cast to numeric(10,3)",
+    "surname"             => "text column `surname`",        # PostgreSQL parses '1.555' and rounds it
+    Fn.Value("1.555")     => "string literal \"1.555\"",
+    Fn.Lower("surname")   => "a text expression",
+    Fn.Value(Decimal(0, 1555, -3)) => "Decimal literal",
+    # A JSON value is text to PostgreSQL's cast (`#>>`, `jsonb::numeric`) and a number to SQLite's.
+    "payload"             => "JSONField `payload`",
+    "payload__score"      => "JSONField `payload__score`",
+    Fn.Max("points")      => "`MAX(…)` over the FloatField `points`",
+    Fn.Coalesce(Fn.Sum("price"), 0) => "`COALESCE(…)` over",   # the recursion still refuses a sum
+  ]
+  for (operand, named) in refused, target in ("numeric(10,2)", "decimal(8, 1)", "numeric(10,0)", "numeric(10)", "dec(10,2)"),
+      conn in _CCD_ENGINES
+    err = _ccd_refusal(Fn.Cast(operand, target); conn = conn)
+    @test _is_1040(err)
+    msg = _ccd_msg(err)
+    @test occursin("Cast cannot make the same number from", msg)
+    @test occursin(named, msg)
+    # The message names the escapes that agree, and warns off the one that does not.
+    @test occursin("round(x; digits = 2)", msg) && occursin("Round(x, 2) is no way out", msg)
+  end
+  # A DecimalField is bounded by its own places: `price` has two.
+  for (target, refuses) in ("numeric(10,0)" => true, "numeric(10,1)" => true, "numeric(10,2)" => false,
+                            "numeric(12,4)" => false),
+      operand in ("price", _CF("price"), Fn.Max("price"), Fn.Coalesce("price", 0), Fn.Abs("price")), conn in _CCD_ENGINES
+    err = _ccd_refusal(Fn.Cast(operand, target); conn = conn)
+    @test refuses ? (_is_1040(err) && occursin("DecimalField `price` (2 decimal places)", _ccd_msg(err))) : err === nothing
+  end
+end
+
+@testset "#1040: Cast to a scaled numeric passes what it cannot round" begin
+  allowed = ["number", Fn.Round("points"), Fn.Floor("points"), Fn.Ceil("price"), Fn.Round("price", 0),
+             Fn.Count("id"), _CF("number") + 1, Fn.Mod("number", 3), Fn.Value(25.0), Fn.Value(7),
+             Fn.Value(Decimal(0, 150, -2)),                  # 1.50 needs one digit
+             Fn.Cast(Fn.Round("points"), Models.IntegerField()), Fn.Cast(Fn.Round("price", 0), "numeric(10,1)")]
+  for operand in allowed, conn in _CCD_ENGINES
+    @test _ccd_refusal(Fn.Cast(operand, "numeric(10,1)"); conn = conn) === nothing
+  end
+  # PostgreSQL has no cast from a boolean, a timestamp or an interval to `numeric`, so the statement
+  # fails there when it runs; nothing is rounded, and this is not the #1040 refusal.
+  for operand in ("active", "start_at", "laptime"), conn in _CCD_ENGINES
+    @test !_is_1040(_ccd_refusal(Fn.Cast(operand, "numeric(10,1)"); conn = conn))
+  end
+  # An unscaled numeric keeps the value on both engines, so any operand passes; the escape renders.
+  for operand in ("points", "surname", Fn.Round("points", 2)),
+      target in ("numeric", "decimal", Models.DecimalField(max_digits = 10, decimal_places = 2)),
+      conn in _CCD_ENGINES
+    @test _ccd_refusal(Fn.Cast(operand, target); conn = conn) === nothing
+  end
+  for conn in _CCD_ENGINES
+    sql = _ccd_render(Fn.Cast(Fn.Round("points"), "numeric(10,0)"); conn = conn)
+    @test occursin(conn === _CCD_PG ? r"\)::numeric\(10,0\) as"i : r"AS NUMERIC\(10,0\)\)"i, sql)
+  end
+end
+
+@testset "#1040: an output_field numeric scale follows the same rule" begin
+  for (expr, fname) in ((Fn.Coalesce("points", 0; output_field = "numeric(10,2)"), "Coalesce(…; output_field = \"numeric(10,2)\")"),
+                        (Fn.Greatest("number", "price"; output_field = "numeric(10,1)"), "Greatest(…; output_field = \"numeric(10,1)\")"),
+                        (Fn.Least("surname", "surname"; output_field = "numeric(10)"), "Least(…; output_field = \"numeric(10)\")")),
+      conn in _CCD_ENGINES
+    err = _ccd_refusal(expr; conn = conn)
+    @test _is_1040(err)
+    @test occursin(fname, _ccd_msg(err))
+  end
+  for expr in (Fn.Coalesce("number", 0; output_field = "numeric(10,0)"),
+               Fn.Greatest("price", 25; output_field = "numeric(10,2)"),
+               Fn.Least(Fn.Floor("points"), "number"; output_field = "numeric(10,0)"),
+               Fn.Coalesce("points", 0; output_field = "numeric")),
+      conn in _CCD_ENGINES
+    @test _ccd_refusal(expr; conn = conn) === nothing
   end
 end

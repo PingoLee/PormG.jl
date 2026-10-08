@@ -60,6 +60,14 @@ Result = Models.Model("result",
   driverid = Models.ForeignKey("Driver"),
   points   = Models.FloatField(),
 )
+# #1021: a race report with its document stored, and a ForeignKey to reach it through.
+Report = Models.Model("report",
+  reportid = Models.IDField(),
+  raceid   = Models.ForeignKey("Race"),
+  title    = Models.CharField(max_length = 200),
+  body     = Models.TextField(),
+  search   = Models.SearchVectorField(null = true),
+)
 PormG.Models.set_models(@__MODULE__, "fts31")
 end
 const _F = FtsModels31
@@ -199,7 +207,10 @@ end
   end
 
   @testset "SearchRank's operands: a SearchVector, and a String or SearchQuery" begin
-    @test _err31(() -> SearchRank("surname", "senna")) isa QueryBuildError
+    # #1021: a String is the path of a SearchVectorField column, so a text column's path is refused
+    # where it resolves — at render — rather than when the rank is built.
+    @test _err31(() -> _q31(; vals = Any["driverid", "r" => SearchRank("surname", "senna")])) isa QueryBuildError
+    @test _err31(() -> SearchRank(1, "senna")) isa QueryBuildError
     @test _err31(() -> SearchRank(SearchVector("surname"), SearchVector("forename"))) isa QueryBuildError
     @test _err31(() -> SearchRank(SearchVector("surname"), 1)) isa QueryBuildError
     @test _err31(() -> SearchVector()) isa QueryBuildError
@@ -692,5 +703,137 @@ end
     @test occursin("GROUP BY 1", r[:sql_text])
     # On SQLite the projection and the alias search name PostgreSQL.
     @test _err31(() -> _q31("doc__@search" => "x"; vals = vals, conn = _FTS_SL)) isa BackendCapabilityError
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # SearchVectorField: @search on a stored document is `col @@ query`
+  # The column is already a tsvector, so the lookup puts no `to_tsvector` around it: the query's
+  # config parses the query alone. On a column reached through a ForeignKey too.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "@search on a SearchVectorField renders the column itself @@ the query" begin
+    r = _q31("search__@search" => SearchQuery("monaco"; config = "english"); model = _F.Report, vals = Any["reportid"])
+    @test occursin("WHERE \"Tb\".\"search\" @@ plainto_tsquery('english'::regconfig, \$1::text)", r[:sql_text])
+    @test !occursin("to_tsvector", r[:sql_text])
+    _assert_pg_text_order31(r, Any["monaco"])
+    # A bare string is a plain query under the server's default config, as on a text column.
+    r = _q31("search__@search" => "monaco"; model = _F.Report, vals = Any["reportid"])
+    @test occursin("\"Tb\".\"search\" @@ plainto_tsquery(\$1::text)", r[:sql_text])
+    # A combined query, and the reverse path from a race to its reports.
+    q = SearchQuery("monaco"; config = "english") & ~SearchQuery("rain"; config = "english")
+    r = _q31("search__@search" => q; model = _F.Report, vals = Any["reportid"])
+    @test occursin("\"Tb\".\"search\" @@ (plainto_tsquery('english'::regconfig, \$1::text) && (!!plainto_tsquery(", r[:sql_text])
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # SearchVectorField: SearchRank ranks the stored column by its path
+  # Django's `SearchRank(F("search"), q)`. The path is checked at render to be a SearchVectorField: a
+  # text column is not a document, and casting it to tsvector would read it as a literal.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "SearchRank(\"search\", q) ranks the stored document; a text path is refused" begin
+    r = _q31(; model = _F.Report, vals = Any["reportid", "rank" => SearchRank("search", SearchQuery("monaco"; config = "english"); weights = [0.1, 0.2, 0.4, 1.0])])
+    @test occursin("(ts_rank('{0.1,0.2,0.4,1.0}'::float4[], \"Tb\".\"search\", plainto_tsquery('english'::regconfig, \$1::text)))::double precision",
+                   r[:sql_text])
+    # A String query on a stored column has no vector config to borrow: the server's default.
+    r = _q31(; model = _F.Report, vals = Any["reportid", "rank" => SearchRank("search", "monaco")])
+    @test occursin("ts_rank(\"Tb\".\"search\", plainto_tsquery(\$1::text))", r[:sql_text])
+    # Ranked through the alias filter, the text binds twice, in text order.
+    r = _q31("rank__@gte" => 0.01; model = _F.Report, vals = Any["reportid", "rank" => SearchRank("search", "monaco")])
+    _assert_pg_text_order31(r, Any["monaco", "monaco", "0.01"])
+    for path in ("title", "body", "reportid")
+      e = _err31(() -> _q31(; model = _F.Report, vals = Any["reportid", "r" => SearchRank(path, "x")]))
+      @test e isa QueryBuildError
+      @test occursin("SearchRank(SearchVector(\"$(path)\")", _plain31(sprint(showerror, e)))
+    end
+  end
+
+  @testset "a SearchVectorField is not text: SearchVector, SearchHeadline and pattern lookups refuse it" begin
+    e = _err31(() -> _q31(; model = _F.Report, vals = Any["reportid", "r" => SearchRank(SearchVector("title", "search"), "x")]))
+    @test e isa QueryBuildError
+    @test occursin("already a document", _plain31(sprint(showerror, e)))
+    e = _err31(() -> _q31(; model = _F.Report, vals = Any["reportid", "h" => SearchHeadline("search", "x")]))
+    @test e isa QueryBuildError
+    @test occursin("SearchHeadline marks words in TEXT", _plain31(sprint(showerror, e)))
+    for op in ("@contains", "@icontains", "@startswith", "@regex")
+      e = _err31(() -> _q31("search__$(op)" => "mon"; model = _F.Report, vals = Any["reportid"]))
+      @test e isa FilterError
+      @test occursin("Search it with \"search__@search\"", _plain31(sprint(showerror, e)))
+    end
+    # A number column is still not searchable, and the message now names both kinds.
+    @test occursin("or a SearchVectorField", _msg31(() -> _q31("number__@search" => "1")))
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # SearchVectorField: update fills it from a SearchVector
+  # Django's `update(search=SearchVector(…))`. The vector renders as the document it is — past the
+  # "operand, not a value" refusal — and only into a SearchVectorField; a SearchQuery, or a vector
+  # into any other column, is refused before anything runs.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "update(\"search\" => SearchVector(…)) writes the document into the column" begin
+    q = _F.Report.objects
+    q.filter("raceid" => 7)
+    vec = SearchVector("title"; config = "english", weight = "A") + SearchVector("body"; config = "english", weight = "B")
+    res = q.update("search" => vec, show_query = :dict)
+    @test occursin(r"SET \"search\" = \(setweight\(to_tsvector\('english'::regconfig, COALESCE\(\(\"?[A-Za-z_]*\"?\.?\"title\"\)::text, ''\)\), 'A'\) \|\| setweight\(",
+                   res[:sql_text])
+    @test !occursin("::tsvector", res[:sql_text])
+    # One binding operand. PostgreSQL numbers its markers: the WHERE value is bound when the scope is
+    # built ($1), and the SET operand after it ($2) — the order #668 pins for every update.
+    q = _F.Report.objects
+    q.filter("raceid" => 7)
+    res = q.update("search" => SearchVector(Concat("title", Value(" report")); config = "simple"), show_query = :dict)
+    @test res[:parameters] == Any[7, " report"]
+    @test occursin("SET \"search\" = to_tsvector('simple'::regconfig, COALESCE((CONCAT(\"Tb\".\"title\", \$2::text))::text, ''))",
+                   replace(res[:sql_text], r"\s+" => " "))
+    @test occursin(r"\"raceid\" = \$1\b", res[:sql_text])
+    # Refused: a vector into a text column, a query anywhere, and the raw value types the column
+    # does not hold.
+    for (field, value) in (("title", SearchVector("body")), ("search", SearchQuery("x")), ("title", SearchQuery("x")))
+      q = _F.Report.objects
+      q.filter("raceid" => 7)
+      e = _err31(() -> q.update(field => value, show_query = :dict))
+      @test e isa QueryBuildError
+      @test occursin("a SearchVector fills a SearchVectorField column", _plain31(sprint(showerror, e)))
+    end
+    q = _F.Report.objects
+    q.filter("raceid" => 7)
+    @test occursin("SET \"search\" = \$", q.update("search" => "'monaco':1", show_query = :dict)[:sql_text])
+    q = _F.Report.objects
+    q.filter("raceid" => 7)
+    @test _err31(() -> q.update("search" => 1, show_query = :dict)) isa InvalidValueError
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # SearchVectorField: the column — DDL, the canonical type, SQLite, inspectdb, the model file
+  # `tsvector` on PostgreSQL; refused on SQLite at both sites the #648 pattern names; read back as its
+  # own kind, so a declared field equals its live column; and a model file round-trips it.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "SearchVectorField renders tsvector, is refused on SQLite, and round-trips" begin
+    field = Models.SearchVectorField(null = true)
+    @test PormG.Dialect._get_column_type(field, _FTS_PG) == "tsvector"
+    e = _err31(() -> PormG.Dialect.field_to_column("search", field, _FTS_SL))
+    @test e isa BackendCapabilityError
+    @test occursin("SearchVectorField \"search\"", _plain31(sprint(showerror, e)))
+    @test PormG.Migrations.column_spec(field, _FTS_PG).type == PormG.CTsVector()
+    @test PormG.Migrations.parse_canonical_type("tsvector", _FTS_PG) == PormG.CTsVector()
+    # inspectdb writes the field back from the live column's kind.
+    spec = PormG.Migrations.column_spec(field, _FTS_PG)
+    back = PormG.Migrations._inspectdb_field(spec, "report", _FTS_PG, false, nothing)
+    @test back isa Models.sSearchVectorField && back.null
+    # A generated model file declares it by its constructor.
+    @test occursin("search = Models.SearchVectorField(null=true)", PormG.Models.Model_to_str(_F.Report))
+    # A default is a document's text, nothing else.
+    @test Models.SearchVectorField(default = "'monaco':1").default == "'monaco':1"
+    @test _err31(() -> Models.SearchVectorField(default = 1)) isa FieldValidationError
+  end
+
+  @testset "a retype into tsvector is refused; out of it, only to text" begin
+    nic = PormG.Migrations._pg_no_implicit_cast
+    @test nic(PormG.CText(), PormG.CTsVector())
+    @test nic(PormG.CVarChar(200), PormG.CTsVector())
+    @test nic(PormG.CInt32(), PormG.CTsVector())
+    @test !nic(PormG.CTsVector(), PormG.CText())
+    @test nic(PormG.CTsVector(), PormG.CInt32())
+    # No USING is written for it: `CAST(col AS tsvector)` would read the text as a tsvector literal.
+    @test PormG.Dialect._postgres_retype_using("c", PormG.CText(), PormG.CTsVector(), "tsvector") === nothing
   end
 end

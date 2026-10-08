@@ -275,6 +275,65 @@ query's.
     `ts_headline` reads the whole text of every row it returns, and it cannot use an index. Narrow
     the rows with `@search` and `limit` before projecting a headline.
 
+## A stored document: `SearchVectorField`
+
+Every query above parses the text of every row it reads. A `SearchVectorField` stores the parsed
+document in a `tsvector` column instead, as Django's does, so a search reads the stored document:
+
+```julia
+Race_report = Models.Model("race_report",
+    id     = Models.IDField(),
+    title  = Models.CharField(max_length = 200),
+    body   = Models.TextField(null = true),
+    search = Models.SearchVectorField(null = true),
+    indexes = [Models.Index(fields = ("search",), method = "gin", name = "race_report_search_gin")],
+)
+```
+
+Fill it from the text columns with `update` and a `SearchVector`. Weights and sums work here too:
+
+```julia
+M.Race_report.objects.filter("id__@gte" => 0).
+    update("search" => SearchVector("title"; config = "simple", weight = "A") +
+                       SearchVector("body"; config = "simple", weight = "B"))
+# UPDATE "race_report" AS "Tb"
+# SET "search" = (setweight(to_tsvector('simple'::regconfig, COALESCE(("Tb"."title")::text, '')), 'A') || …)
+```
+
+Then search it with `@search`, which on this column renders `"search" @@ <query>` with no
+`to_tsvector`, and rank it by its path, Django's `SearchRank(F("search"), …)`:
+
+```julia
+M.Race_report.objects.filter("search__@search" => SearchQuery("senna"; config = "simple"))
+
+M.Race_report.objects.
+    values("title", "rank" => SearchRank("search", SearchQuery("senna"; config = "simple"))).
+    filter("rank__@gte" => 0.01).
+    order_by("-rank") |> DataFrame
+#  Row │ title              rank
+# ─────┼───────────────────────────────
+#    1 │ Senna at Suzuka    0.607927
+#    2 │ Monaco Grand Prix  0.243171
+```
+
+- **The column does not refresh itself.** Run the `update` again after the text changes, for the
+  rows that changed. A generated column (`GENERATED ALWAYS AS (…) STORED`) is not supported yet.
+- **Search with the configuration the document was built with.** The stored document does not
+  record it, so a `SearchQuery` without one is parsed with the server's default, and an `english`
+  document searched with a `simple` query misses every stemmed word.
+- The column reads as the `tsvector`'s text, a `String`: `'at':2A 'senna':1A 'suzuka':3A`. A
+  `String` written to it is parsed as that text, not as words. Use `update` with a `SearchVector`
+  to build it from words.
+- A GIN index on the column (`Models.Index(fields = ("search",), method = "gin", …)`) serves
+  `@search`, with no expression to match.
+- `SearchVector`, `SearchHeadline` and the pattern lookups (`@contains`, …) do not take the column.
+  It is already a document, so they raise `QueryBuildError` or `FilterError`. So does a
+  `SearchVector` written to any other column, or a `SearchQuery` written to any column.
+- PostgreSQL only: on SQLite, `makemigrations` raises `BackendCapabilityError` for a model that
+  declares one. A retype from text into `tsvector` is refused, because `CAST(text AS tsvector)`
+  reads the text as a document literal rather than parsing its words. Add a new column and fill it
+  with `update` instead.
+
 ## Indexing
 
 Without an index, every search reads and parses each row's text. A GIN index on the same expression
@@ -324,5 +383,6 @@ These are deliberate for now. Each is refused with a typed error, not run as som
 - **A single-column `SearchVector` alias is not the lookup's expression.** `SearchVector("surname")`
   is `COALESCE`d and cast, so an index on `search_vector_expression("surname")` serves
   `"surname__@search"` but not that alias. Search the column itself.
-- **No stored `tsvector` column.** A model has no `SearchVectorField` yet, so a document is always
-  computed from its text columns. Use an expression index (above) to make that fast.
+- **No generated `tsvector` column.** A `SearchVectorField` is filled by `update`, not by the
+  database. A column that keeps itself current (`GENERATED ALWAYS AS (to_tsvector(…)) STORED`) is
+  not supported yet.

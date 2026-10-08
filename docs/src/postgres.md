@@ -112,6 +112,24 @@ Pit_wall_session = Models.Model("pit_wall_session",
 
 Reference: **[Fields → Network Address Fields](fields.md#Network-Address-Fields)**.
 
+### `SearchVectorField` — `tsvector`
+
+```julia
+Race_report = Models.Model("race_report",
+  id = Models.IDField(),
+  title = Models.CharField(max_length = 200),
+  search = Models.SearchVectorField(null = true),   # a stored full-text document
+)
+```
+
+- A stored document, filled by `update("search" => SearchVector(…))` and searched with `@search`,
+  which reads it as it is, with no `to_tsvector`. A GIN index on it serves the search.
+- A text → `tsvector` retype is refused: `CAST(text AS tsvector)` reads text as a document literal,
+  not as words. Add the column and fill it with `update`.
+- Why SQLite is refused: it has no `tsvector`, and its FTS5 is a separate index table.
+
+Reference: **[Full-Text Search → A stored document](read/full_text_search.md#A-stored-document:-SearchVectorField)**.
+
 ### `ArrayField` — `integer[]`, `character varying(n)[]`, …
 
 ```julia
@@ -174,7 +192,7 @@ returns a different answer, so a test suite running on SQLite fails where produc
   M.Driver.objects.filter("surname__@regex" => "^Ver")   # surnames starting with "Ver"
   ```
 - **Full-text search** — the `@search` lookup and `SearchQuery`, `SearchVector`, `SearchRank` and
-  `SearchHeadline`, over `tsvector`/`tsquery`. SQLite's FTS5 is a separate index table with its own
+  `SearchHeadline`, over `tsvector`/`tsquery`, and a stored document in a `SearchVectorField`. SQLite's FTS5 is a separate index table with its own
   syntax and ranking, so PormG does not emulate it. See [Full-Text Search](read/full_text_search.md).
   ```julia
   M.Driver.objects.filter("surname__@search" => SearchQuery("senna"; config = "simple"))
@@ -231,6 +249,7 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 | **`UUIDField` storage** | native `UUID` | `TEXT` |
 | **`GenericIPAddressField` / `CIDRField`** | native `inet` / `cidr` | not supported — `makemigrations` raises `BackendCapabilityError` |
 | **`ArrayField`** | native arrays (`integer[]`, …) | not supported — `makemigrations` raises `BackendCapabilityError` |
+| **`SearchVectorField`** | native `tsvector` | not supported — `makemigrations` raises `BackendCapabilityError` |
 | **`DecimalField` width** | `numeric`, exact at any `max_digits` | `NUMERIC` affinity, exact up to `max_digits = 15`; a wider declaration raises `BackendCapabilityError` at `makemigrations` |
 | **Window frames** | explicit `frame=` clauses | default frame only |
 | **JSONB lookups** (`@jcontains`, `@has_key`, `@has_any_keys`, `@has_keys`) | JSONB operators | `BackendCapabilityError` — `__` key paths still work |

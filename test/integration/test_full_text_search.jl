@@ -321,3 +321,122 @@ _fts31_err(f) = try f(); nothing catch e; e end
         end
     end
 end
+
+# ==============================================================================
+# SearchVectorField (#1021): a stored document, filled by update, searched, ranked and indexed
+#
+# A scratch table built through the planner, as the index testset above builds one, and dropped in a
+# `finally`. Every search result is compared with the tokenized rows, as above. On SQLite the planner
+# refuses the column at `makemigrations`, before a plan exists.
+# ==============================================================================
+const FTS1021_TABLE = "pormg_fts1021_report"
+
+@testset "SearchVectorField, live ($(PORMG_DB_FOLDER)) (#1021)" begin
+    pool = PormG.config[PORMG_DB_FOLDER].connections
+    is_pg = pool isa PormG.PormGPostgres
+    drop() = try; PormG.ConnectionPool.fetch(pool, Dialect.drop_table(pool, FTS1021_TABLE)); catch; end
+    model = Models.Model(FTS1021_TABLE;
+        id     = Models.IDField(),
+        title  = Models.CharField(max_length = 200),
+        body   = Models.TextField(null = true),
+        search = Models.SearchVectorField(null = true),
+        indexes = [Models.Index(fields = ("search",), method = "gin", name = "pormg_fts1021_search_gin")])
+    model.connect_key = PORMG_DB_FOLDER
+    schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+        Symbol(FTS1021_TABLE) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => model, :exist => false))
+    settings() = (s = PormG.Configuration.Settings(); s.change_db = true; s)
+    live() = PormG.Migrations.read_live_schema(pool; include_table = [FTS1021_TABLE])
+
+    if !is_pg
+        @testset "SQLite refuses the column at makemigrations" begin
+            drop()
+            err = _fts31_err(() -> get_migration_plan(LiveTable[], schema, pool, settings(); interactive = false))
+            @test err isa PormG.BackendCapabilityError
+            @test err !== nothing && occursin("SearchVectorField \"search\"", sprint(showerror, err))
+            @test isempty(live())
+        end
+    else
+        drop()
+        try
+            plan = get_migration_plan(LiveTable[], schema, pool, settings(); interactive = false)
+            ordered, _ = _order_statements([plan[k] for k in keys(plan)])
+            _, ddl_conn = _fts31_tx(pool, "BEGIN;")
+            try
+                _execute_statements_pg(pool, ordered; conn = ddl_conn)
+                _fts31_tx(pool, "COMMIT;", conn = ddl_conn, release_conn = false)
+            catch
+                _fts31_tx(pool, "ROLLBACK;", conn = ddl_conn, release_conn = false)
+                rethrow()
+            finally
+                finalize_transaction_connection!(pool, ddl_conn)
+            end
+            reports = [("Monaco Grand Prix", "Senna wins in the rain"), ("Imola report", "Prost on pole"),
+                       ("Senna at Suzuka", nothing), ("Monza", "A dry race")]
+            for (title, body) in reports
+                model.objects.create("title" => title, "body" => body)
+            end
+
+            # ─────────────────────────────────────────────────────────────────
+            # The column: `tsvector`, its kind read back, and a plan that converges
+            # ─────────────────────────────────────────────────────────────────
+            @testset "the column is tsvector and its declaration converges" begin
+                col = only(live()).columns["search"]
+                @test col.raw == "tsvector"
+                @test col.type == PormG.CTsVector()
+                @test isempty(get_migration_plan(live(), schema, pool, settings(); interactive = false))
+            end
+
+            # ─────────────────────────────────────────────────────────────────
+            # update fills it; @search reads it; SearchRank ranks it
+            # The weighted document puts a title word above a body word, which the rank shows.
+            # ─────────────────────────────────────────────────────────────────
+            @testset "update fills the document, and @search and SearchRank read it" begin
+                q = model.objects
+                q.filter("id__@gte" => 0)
+                q.update("search" => SearchVector("title"; config = "simple", weight = "A") +
+                                     SearchVector("body"; config = "simple", weight = "B"))
+                rows = model.objects.values("id", "title", "body", "search").list()
+                @test all(r -> r["search"] isa String, rows)
+                words(r) = vcat(_fts31_words(r["title"]), r["body"] === missing || r["body"] === nothing ? String[] : _fts31_words(r["body"]))
+                expected = Set(r["id"] for r in rows if "senna" in words(r))
+                @test length(expected) == 2
+                got = model.objects.filter("search__@search" => SearchQuery("senna"; config = "simple")).values("id").list()
+                @test Set(r["id"] for r in got) == expected
+                # The title is labelled A and the body B, so the title match ranks first.
+                ranked = model.objects.
+                    values("title", "rank" => SearchRank("search", SearchQuery("senna"; config = "simple"))).
+                    filter("rank__@gte" => 0.01).
+                    order_by("-rank").
+                    list()
+                @test [r["title"] for r in ranked] == ["Senna at Suzuka", "Monaco Grand Prix"]
+                @test ranked[1]["rank"] > ranked[2]["rank"]
+                # The stored text is what a String write puts back, and a NULL body adds nothing.
+                one = model.objects.filter("title" => "Senna at Suzuka").values("search").list()[1]["search"]
+                @test one == "'at':2A 'senna':1A 'suzuka':3A"
+            end
+
+            # ─────────────────────────────────────────────────────────────────
+            # The GIN index on the column serves @search
+            # ─────────────────────────────────────────────────────────────────
+            @testset "a GIN index on the column serves @search" begin
+                q = model.objects
+                q.filter("search__@search" => SearchQuery("senna"; config = "simple")).values("id")
+                sql = PormG.QueryBuilder.inspect_query(q)[:sql_text]
+                explain = "EXPLAIN " * replace(sql, "\$1::text" => "'senna'::text")
+                _, conn = _fts31_tx(pool, "BEGIN;")
+                plan_text = try
+                    with_tx_context(pool, conn) do
+                        PormG.ConnectionPool.fetch(pool, "SET LOCAL enable_seqscan = off")
+                        join((PormG.ConnectionPool.fetch(pool, explain) |> DataFrame)[:, 1], "\n")
+                    end
+                finally
+                    _fts31_tx(pool, "ROLLBACK;", conn = conn, release_conn = false)
+                    finalize_transaction_connection!(pool, conn)
+                end
+                @test occursin("pormg_fts1021_search_gin", plan_text)
+            end
+        finally
+            drop()
+        end
+    end
+end

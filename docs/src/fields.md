@@ -383,6 +383,34 @@ M.Pit_wall_session.objects.
 
 ---
 
+## Search Vector Field
+
+`SearchVectorField` stores a full-text document, PostgreSQL's `tsvector`. It is Django's
+`SearchVectorField`, from `django.contrib.postgres.search`.
+
+| Field | Holds | PostgreSQL | SQLite |
+|---|---|---|---|
+| `SearchVectorField()` | a parsed document: lexemes, their positions and weights | `tsvector` | not supported |
+
+**PostgreSQL only.** SQLite's full-text search is a separate index table, and PormG does not emulate
+it: on SQLite, `makemigrations` raises `BackendCapabilityError` for a model that declares one.
+
+Fill it with `update("search" => SearchVector(…))`, search it with `"search__@search" => …`, rank it
+with `SearchRank("search", …)` and index it with a GIN `Models.Index`. It reads and writes as the
+`tsvector`'s text, a `String`. A text → `tsvector` retype is refused. See
+[Full-Text Search → A stored document](read/full_text_search.md#A-stored-document:-SearchVectorField).
+
+```julia
+Race_report = Models.Model("race_report",
+    id     = Models.IDField(),
+    title  = Models.CharField(max_length = 200),
+    search = Models.SearchVectorField(null = true),
+    indexes = [Models.Index(fields = ("search",), method = "gin", name = "race_report_search_gin")],
+)
+```
+
+---
+
 ## Array Fields
 
 `ArrayField` holds a one-dimensional PostgreSQL array of another field's values. It is Django's

@@ -62,6 +62,8 @@ struct CBytes   <: CanonicalType end
 # there — so the SQLite parser never produces these kinds.
 struct CInet    <: CanonicalType end
 struct CCidr    <: CanonicalType end
+# A stored full-text document (#1021): `SearchVectorField` renders `tsvector`. The same template.
+struct CTsVector <: CanonicalType end
 
 # `nothing` = the type carried no length modifier. PormG always renders one for a char-family field,
 # so `nothing` only arises for a spelling PormG did not write (a hand-made table, an imported one).

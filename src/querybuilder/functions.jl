@@ -1384,11 +1384,13 @@ _search_query_operand(q, config) = _is_fts_node(q, "SEARCH_QUERY") ? q : throw(Q
   "The query is a SearchQuery(...), or the search text as a String (#31)."))
 
 """
-    SearchRank(vector::SearchVector, query; normalization = nothing, cover_density = false, weights = nothing)
+    SearchRank(vector, query; normalization = nothing, cover_density = false, weights = nothing)
 
 How well each row's document matches a query (PostgreSQL only), as a `Float64`: `ts_rank`, or
-`ts_rank_cd` with `cover_density = true`. `query` is a `SearchQuery`, or the search text as a String,
-which is parsed with the vector's config. `normalization` is PostgreSQL's integer bitmask (0 to 63)
+`ts_rank_cd` with `cover_density = true`. `vector` is a `SearchVector`, or the path of a
+`SearchVectorField` column (#1021), a stored document: `SearchRank("search", q)`, Django's
+`SearchRank(F("search"), q)`. `query` is a `SearchQuery`, or the search text as a String, which is
+parsed with the vector's config (with none, for a stored column, which does not record one). `normalization` is PostgreSQL's integer bitmask (0 to 63)
 for weighing the document's length; any other value raises `InvalidValueError`.
 
 `weights` scores a word by its `SearchVector` weight label: four numbers from 0 to 1 for the labels
@@ -1421,17 +1423,22 @@ Filter on a threshold rather than `> 0`: for a query of several words, a row tha
 score a tiny positive value (`1e-20`) instead of `0`.
 """
 function SearchRank(vector, query; normalization = nothing, cover_density = false, weights = nothing)
-  _is_fts_node(vector, "SEARCH_VECTOR") || throw(QueryBuildError(
-    "SearchRank ranks a SearchVector(...); pass the columns to rank as one (#31)."))
+  # #1021: a String is the path of a SearchVectorField column, checked to be one at render, where the
+  # path resolves (`_check_fts_column_operands`).
+  stored = vector isa AbstractString
+  (stored || _is_fts_node(vector, "SEARCH_VECTOR")) || throw(QueryBuildError(
+    "SearchRank ranks a SearchVector(...), or a SearchVectorField column by its path; pass the columns " *
+    "to rank as a SearchVector (#1021)."))
+  stored && (vector = String(vector))
   w = Dialect.ts_rank_weights(weights)
   normalization === nothing || (normalization isa Integer && 0 <= normalization <= 63) ||
     throw(InvalidValueError("SearchRank's normalization is an integer bitmask from 0 to 63 (#31).", :range))
   cover_density isa Bool ||
     throw(InvalidValueError("SearchRank's cover_density is true or false (#31).", :type))
-  get(vector.kwargs, "mixed_config", false) === true && query isa AbstractString && throw(QueryBuildError(
+  !stored && get(vector.kwargs, "mixed_config", false) === true && query isa AbstractString && throw(QueryBuildError(
     "This SearchVector adds vectors with different configs, so a query written as a String has no " *
     "config to be parsed with. Pass a SearchQuery(text; config = …) (#1021)."))
-  q = _search_query_operand(query, vector.kwargs["config"])
+  q = _search_query_operand(query, stored ? nothing : vector.kwargs["config"])
   column = Any[vector, q]
   return FObject(function_name = "SEARCH_RANK", column = column, aggregate = _any_agg(column),
                  formatter = Models.format_number_sql,

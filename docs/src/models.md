@@ -800,6 +800,7 @@ PormG provides comprehensive field types for all common database scenarios:
 - **Other Types**: `BooleanField`, `ImageField`, `BinaryField`, `UUIDField`, `JSONField`
 - **Network Address Fields** (PostgreSQL only): `GenericIPAddressField`, `CIDRField`
 - **Array Fields** (PostgreSQL only): `ArrayField`
+- **Full-Text Search** (PostgreSQL only): `SearchVectorField`
 - **Relationship Fields**: `ForeignKey`, `OneToOneField`
 
 For detailed documentation on each field type, including parameters, examples, and best practices, see [Field Types Reference](fields.md).

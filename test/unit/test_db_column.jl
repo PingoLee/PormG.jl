@@ -129,10 +129,11 @@ Entry.connect_key = "default"
     # field type added or removed) and drops an ordering dependency that was silent until it broke.
     concrete = filter(T -> isconcretetype(T) && parentmodule(T) === PormG.Models,
                       subtypes(PormG.PormGField))
-    @test length(concrete) == 28                        # fails loudly when a field type is added or
+    @test length(concrete) == 29                        # fails loudly when a field type is added or
                                                         # removed (26 until #408 retired sAutoField,
                                                         # 25 until #28 added the network fields, 27
-                                                        # until it added ArrayField) —
+                                                        # until it added ArrayField, 28 until #1021
+                                                        # added SearchVectorField) —
     for T in concrete                                   # exactly when this helper wants re-reading
       @test length(methods(T)) == 2                     # no inner constructor in front of the rebuild
     end

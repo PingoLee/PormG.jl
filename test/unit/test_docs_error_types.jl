@@ -1074,9 +1074,11 @@ const DOCERR_CASES = [
         () -> SearchHeadline("surname", "senna"; max_words = 10, min_words = 10),
     ),
     (
-        "read/full_text_search.md — SearchRank's vector must be a SearchVector",
+        "read/full_text_search.md — SearchRank's vector must be a SearchVector or a SearchVectorField column",
         QueryBuildError,
-        () -> SearchRank("surname", "senna"),
+        # #1021: a String is a column path now, checked to be a SearchVectorField when it renders.
+        () -> DOCERR_DRIVER_PG.objects.values("r" => SearchRank("surname", "senna")).
+            list(show_query = :dict),
     ),
     (
         "read/full_text_search.md — `@search` on a column that is not text raises FilterError",
@@ -1141,6 +1143,19 @@ const DOCERR_CASES = [
         "read/full_text_search.md — combined queries must share one config",
         QueryBuildError,
         () -> SearchQuery("senna"; config = "simple") | SearchQuery("prost"),
+    ),
+    # #1021 — SearchVectorField: refused on SQLite at the column, not a text column for SearchVector,
+    # and filled only from a SearchVector into itself.
+    (
+        "fields.md + postgres.md + read/full_text_search.md — SearchVectorField on SQLite raises BackendCapabilityError",
+        BackendCapabilityError,
+        () -> PormG.Dialect.field_to_column("search", PormG.Models.SearchVectorField(null = true), DocErrMockSQLite()),
+    ),
+    (
+        "read/full_text_search.md — a SearchVector written to a column that is not a SearchVectorField",
+        QueryBuildError,
+        () -> DOCERR_DRIVER_PG.objects.filter("driverid" => 1).
+            update("surname" => SearchVector("forename"), show_query = :dict),
     ),
     (
         "read/full_text_search.md + Models.search_vector_expression — a column that is not an identifier",

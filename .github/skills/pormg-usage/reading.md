@@ -290,6 +290,10 @@ M.Race.objects.
   wrapped in another function, and `@search` takes a CharField/TextField column or a SearchVector alias.
 - Index a search with `Models.Index(expressions = (Models.search_vector_expression("surname"; config = "simple"),), method = "gin", name = …)`:
   the helper returns the `to_tsvector(…)` the query renders (several columns: the SearchVector's).
+- A stored document: `search = Models.SearchVectorField(null = true)`, filled with
+  `filter(…).update("search" => SearchVector("title"; config = "simple"))` (it does not refresh
+  itself), searched with `"search__@search"` (no `to_tsvector`), ranked with `SearchRank("search", q)`,
+  indexed with `Models.Index(fields = ("search",), method = "gin", name = …)`. Reads as tsvector text.
 
 ## Aliases
 

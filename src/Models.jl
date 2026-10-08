@@ -66,8 +66,8 @@ import PormG: @pormg_debug
 public ArrayField, AutoField, BigIntegerField, BinaryField, BooleanField, CharField, CIDRField, DateField,
   DateTimeField, DecimalField, DurationField, EmailField, FileField, FloatField, ForeignKey,
   GenericIPAddressField, IDField, ImageField, IntegerField, JSONField, ManyToManyField,
-  OneToOneField, PasswordField, PositiveIntegerField, PositiveSmallIntegerField, SlugField,
-  TextField, TimeField, URLField, UUIDField
+  OneToOneField, PasswordField, PositiveIntegerField, PositiveSmallIntegerField, SearchVectorField,
+  SlugField, TextField, TimeField, URLField, UUIDField
 
 # The module's ENTRY POINTS (#295), declared separately because they are a different category from
 # the field constructors above: a field is a column, these define and register the model itself.

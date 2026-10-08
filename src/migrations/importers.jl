@@ -4485,11 +4485,13 @@ end
 # `ArrayField` is the one type read through any call target, not just `models.` (#943): Django ships
 # it in `django.contrib.postgres.fields`, so the idiomatic spelling is a bare `ArrayField(...)` (or
 # `fields.ArrayField(...)` after `from django.contrib.postgres import fields`), which `_FIELD_CALL_RE`
-# never matches. Only this name is widened — reading every bare `XField(...)` is #340's question, and
-# `_looks_like_a_field_call` keeps reporting the rest.
+# never matches. `SearchVectorField` (#1021) is the second, for the same reason: it lives in
+# `django.contrib.postgres.search`. Only these names are widened — reading every bare `XField(...)` is
+# #340's question, and `_looks_like_a_field_call` keeps reporting the rest.
+const _POSTGRES_CONTRIB_FIELDS = ("ArrayField", "SearchVectorField")
 function _array_field_target(rhs::AbstractString)::Union{String, Nothing}
   m = match(_CALL_TARGET_RE, rhs)
-  return m !== nothing && m.captures[1] == "ArrayField" ? "ArrayField" : nothing
+  return m !== nothing && m.captures[1] in _POSTGRES_CONTRIB_FIELDS ? String(m.captures[1]) : nothing
 end
 
 """

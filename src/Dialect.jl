@@ -1149,7 +1149,7 @@ end
 # ---
 # Convert PormGField to SQL column string
 # ---
-import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sRelationalColumn, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField, sBinaryField, sImageField, sGenericIPAddressField, sCIDRField, sArrayField
+import PormG.Models: sIDField, sCharField, sTextField, sBooleanField, sIntegerField, sBigIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField, sFloatField, sDecimalField, sDateField, sDateTimeField, sTimeField, sDurationField, sRelationalColumn, sManyToManyField, sUUIDField, sURLField, sSlugField, sJSONField, sBinaryField, sImageField, sGenericIPAddressField, sCIDRField, sArrayField, sSearchVectorField
 
 """
     db_default_sql(field, conn) -> Union{String, Nothing}
@@ -1467,6 +1467,8 @@ function _get_column_type(field::PormGField, conn::PormGPostgres; type_map::Dict
     return type_map[field.type]
   elseif field isa Union{sGenericIPAddressField, sCIDRField}
     return type_map[field.type]   # `inet` / `cidr` (#28)
+  elseif field isa sSearchVectorField
+    return type_map[field.type]   # `tsvector` (#1021)
   elseif field isa sArrayField
     # #28: the element's own type, then `[]`. No size and no dimension count: PostgreSQL enforces
     # neither and `format_type` prints neither, so rendering one would differ from the catalog on
@@ -1523,8 +1525,8 @@ function _get_column_type(field::PormGField, conn::PormGSQLite; type_map::Dict{S
     return sql_type
   elseif field isa sJSONField
     return sql_type
-  elseif field isa Union{sGenericIPAddressField, sCIDRField, sArrayField}
-    # #28: for the migration compiler only — `field_to_column` refuses these on SQLite, so no DDL
+  elseif field isa Union{sGenericIPAddressField, sCIDRField, sArrayField, sSearchVectorField}
+    # #28 (and #1021's `tsvector`): for the migration compiler only — `field_to_column` refuses these on SQLite, so no DDL
     # PormG writes carries it. See `_refuse_specialized_sqlite_type`.
     return sql_type
   elseif field isa sBinaryField
@@ -1633,6 +1635,10 @@ function _refuse_specialized_sqlite_type(col_name::AbstractString, field::PormGF
       "SQLite rather than emulate it as text. Run this model on PostgreSQL, or keep the elements in " *
       "a related model (a ForeignKey per element) if it must run on SQLite."))
   end
+  field isa sSearchVectorField && throw(BackendCapabilityError(
+    "SearchVectorField \"$(col_name)\" is PostgreSQL's native `tsvector`, a stored full-text document, " *
+    "and SQLite has no such type: its FTS5 is a separate index table with its own query syntax. PormG " *
+    "refuses the column on SQLite rather than emulate it (#1021). Run this model on PostgreSQL."))
   field isa Union{sGenericIPAddressField, sCIDRField} || return nothing
   name = field isa sCIDRField ? "CIDRField" : "GenericIPAddressField"
   pg = field isa sCIDRField ? "cidr" : "inet"
@@ -1737,7 +1743,7 @@ Raises `BackendCapabilityError` for a `DecimalField` with `max_digits` above
 declared digits (#648). Every caller renders the desired model, so an existing wide column is
 never refused on its own — only when PormG would create or re-create it.
 
-Raises `BackendCapabilityError` for a `GenericIPAddressField` or `CIDRField` too: SQLite has no
+Raises `BackendCapabilityError` for a `GenericIPAddressField`, `CIDRField` or `SearchVectorField` (#1021) too: SQLite has no
 column for PostgreSQL's `inet`/`cidr`, and PormG refuses rather than emulates them (#28).
 """
 function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite;

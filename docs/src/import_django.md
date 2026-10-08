@@ -461,6 +461,7 @@ column.
 - `FileField` → `FileField`
 - `ImageField` → `ImageField`
 - `ArrayField` → `ArrayField`, read through its element (PostgreSQL only — see below)
+- `SearchVectorField` → `SearchVectorField`, bare or `search.`-qualified as `django.contrib.postgres.search` spells it (PostgreSQL only: on SQLite, `makemigrations` refuses it)
 
 !!! note "An `ArrayField` is read through its element"
     Django's `ArrayField` takes its element as a field call, and the importer reads that call like

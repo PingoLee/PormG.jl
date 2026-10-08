@@ -281,7 +281,9 @@ const sqlite_type_map_reverse = Dict{String, String}(
   "CIDR" => "TEXT",
   # #28, the same arrangement for `ArrayField`: SQLite has no array type and `field_to_column`
   # refuses it there, so this only keeps the compiled spec a `CText`.
-  "ARRAY" => "TEXT"
+  "ARRAY" => "TEXT",
+  # #1021, and again for `SearchVectorField`: SQLite has no `tsvector`.
+  "TSVECTOR" => "TEXT"
 )
 
 const postgres_type_map_reverse = Dict{String, String}(
@@ -321,6 +323,7 @@ const postgres_type_map_reverse = Dict{String, String}(
   "CIRCLE" => "circle",
   "CIDR" => "cidr",
   "INET" => "inet",
+  "TSVECTOR" => "tsvector",   # SearchVectorField (#1021)
   "MACADDR" => "macaddr",
   "BIT" => "bit",
   "VARBIT" => "varbit",

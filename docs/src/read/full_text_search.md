@@ -250,6 +250,9 @@ M.Race.objects.
 #  ⋮
 ```
 
+HTML markers are fine for a column you control, like a race's name. Before you put a headline from
+user-written text into a web page, read [Showing a headline in a web page](#Showing-a-headline-in-a-web-page).
+
 The options are PostgreSQL's, written in snake case. They are checked when the expression is built
 and sent as **one bound parameter**, so a quote, a comma or a backslash in a marker arrives as
 written:
@@ -266,14 +269,50 @@ written:
 A value of the wrong type or out of range raises `InvalidValueError`. `config` defaults to the
 query's.
 
-!!! warning "The headline is not HTML-escaped"
-    `ts_headline` returns the column's own text with the markers inserted around matches; nothing
-    in it is escaped. A headline shown in a web page is stored text like any other: escape it, then
-    put the markers back, or pick markers that survive your escaping.
-
 !!! tip "Filter and limit first"
     `ts_headline` reads the whole text of every row it returns, and it cannot use an index. Narrow
     the rows with `@search` and `limit` before projecting a headline.
+
+### Showing a headline in a web page
+
+!!! warning "The headline is not HTML-escaped"
+    `ts_headline` returns the column's own text with the markers inserted around matches, and it
+    escapes nothing. If the column holds text a user wrote, rendering the headline as HTML is a
+    stored XSS. Use the recipe below.
+
+Escaping the headline afterwards does not work, because it escapes the `<b>` markers too. Instead,
+mark the matches with characters that are not HTML and do not occur in ordinary text, escape the
+whole headline in Julia, and only then turn the markers into tags. The example searches the `body`
+of the `Race_report` model from [A stored document](#A-stored-document:-SearchVectorField), text a
+user wrote:
+
+```julia
+const HL_START, HL_STOP = "\x01", "\x02"
+
+escape_html(s) = replace(s, '&' => "&amp;", '<' => "&lt;", '>' => "&gt;", '"' => "&quot;", '\'' => "&#39;")
+headline_html(hl) = replace(escape_html(hl), HL_START => "<b>", HL_STOP => "</b>")
+
+query = SearchQuery("senna"; config = "simple")
+rows = M.Race_report.objects.
+    filter("body__@search" => query).
+    values("title", "hl" => SearchHeadline("body", query; start_sel = HL_START, stop_sel = HL_STOP)).
+    list()
+
+rows[1]["hl"]                 # "\x01Senna\x02 & Prost collide <img src=x onerror=alert(1)>"
+headline_html(rows[1]["hl"])  # "<b>Senna</b> &amp; Prost collide &lt;img src=x onerror=alert(1)&gt;"
+```
+
+- **Why these markers.** Neither the escaping nor PostgreSQL changes them, so the only `<b>` and
+  `</b>` in the result are the ones `headline_html` writes. PostgreSQL text can hold a `\x01`. If a
+  user types one, the worst case is a stray `<b>` or `</b>`, which has no attributes and runs nothing.
+- **`ts_headline` dropping some tags is not protection.** Without `highlight_all`, PostgreSQL's
+  parser leaves out what it reads as a tag. `<script>alert(1)</script>` comes back as ` alert(1) `,
+  but `<img src=x onerror=alert(1)>` comes back whole, as above. With `highlight_all = true` nothing
+  is dropped.
+- **The escaper.** Julia's standard library has no HTML escaper, so the recipe defines one. If your
+  web framework has one, use it.
+- **Plain text needs none of this.** When the client shows the headline as text and never as HTML,
+  as a JSON API's client usually does, nothing in it can run.
 
 ## A stored document: `SearchVectorField`
 

@@ -310,7 +310,8 @@ SELECT CONCAT("driver"."forename", $1::text, "driver"."surname")  AS full_name,
        UPPER("driver"."surname")                                  AS name_upper,
        LENGTH("driver"."surname")                                 AS name_length
 FROM "driver"
-LIMIT 5
+LIMIT $2
+-- parameters: [" ", 5]
 ```
 
 Output:
@@ -800,8 +801,8 @@ INNER JOIN "driver" ON "driver_standings"."driverid" = "driver"."driverid"
 INNER JOIN "race"   ON "driver_standings"."raceid"   = "race"."raceid"
 WHERE "race"."year" = $4
 ORDER BY "points" DESC
-LIMIT 5
--- parameters: [16, "Yes", "No", 2023]
+LIMIT $5
+-- parameters: [16, "Yes", "No", 2023, 5]
 ```
 
 Output:
@@ -1019,8 +1020,8 @@ WHERE "result"."positionorder" <= CASE
     ELSE $3::bigint
 END
 ORDER BY raceid__year ASC, positionorder ASC
-LIMIT 5
--- parameters: [2010, 10, 8]
+LIMIT $4
+-- parameters: [2010, 10, 8, 5]
 ```
 
 Output:
@@ -1065,7 +1066,8 @@ SELECT UPPER("driver"."nationality") AS region,
 FROM "driver"
 GROUP BY 1
 ORDER BY "driver_count" DESC
-LIMIT 10
+LIMIT $1
+-- parameters: [10]
 ```
 
 Output:

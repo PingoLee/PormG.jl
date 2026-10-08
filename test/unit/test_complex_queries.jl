@@ -172,8 +172,10 @@ ResultNoPrefixModel._module = Main
 
     @test res isa Dict
     @test contains(res[:sql_text], "ORDER BY")
-    @test contains(res[:sql_text], "LIMIT 10")
-    @test contains(res[:sql_text], "OFFSET 5")
+    # #46: both values bind, in text order — LIMIT before OFFSET, after everything else.
+    @test contains(res[:sql_text], "LIMIT \$1")
+    @test contains(res[:sql_text], "OFFSET \$2")
+    @test res[:parameters] == [10, 5]
   end
 
   # ===== Section 3b: Django-style join spelling compatibility =====
@@ -412,8 +414,9 @@ ResultNoPrefixModel._module = Main
     @test contains(res[:sql_text], "SELECT")
     @test contains(res[:sql_text], "WHERE")
     @test contains(res[:sql_text], "\"id\" = \$1")
-    @test contains(res[:sql_text], "LIMIT")
-    @test res[:parameters] == [42]
+    @test contains(res[:sql_text], "LIMIT \$2")
+    # #46: get()'s probe LIMIT (2, to tell one row from many) binds after the filter value.
+    @test res[:parameters] == [42, 2]
     @test res[:operation] === :select
   end
 
@@ -458,8 +461,8 @@ ResultNoPrefixModel._module = Main
     @test res isa Dict
     @test contains(res[:sql_text], "WHERE")
     @test contains(res[:sql_text], "ORDER BY")
-    @test contains(res[:sql_text], "LIMIT 5")
-    @test res[:parameters] == ["Dutch"]
+    @test contains(res[:sql_text], "LIMIT \$2")
+    @test res[:parameters] == ["Dutch", 5]
   end
 
   # ===== Section 11: Filter Combinations =====
@@ -497,12 +500,12 @@ ResultNoPrefixModel._module = Main
     @test sql isa String
     @test contains(sql, "SELECT")
     @test contains(sql, "ORDER BY")
-    @test contains(sql, "LIMIT 20")
-    @test contains(sql, "OFFSET 10")
+    @test contains(sql, "LIMIT \$2")
+    @test contains(sql, "OFFSET \$3")
 
-    # Get just the parameters
+    # Get just the parameters — LIMIT and OFFSET bind after the filter value (#46)
     params = q.list(show_query=:params)
-    @test params == ["Italian"]
+    @test params == ["Italian", 20, 10]
 
     # Get full structure
     full = q.list(show_query=:dict)

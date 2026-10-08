@@ -2117,6 +2117,30 @@ function for_update_clause(nowait::Bool, skip_locked::Bool, no_key::Bool, conn::
   return ""  # SQLite: no row-level locking — silent no-op (documented divergence, #26)
 end
 
+"""
+    limit_offset_clause(limit_sql, offset_sql, conn) -> String
+
+Render the LIMIT / OFFSET tail of a SELECT (#46). The caller binds both values and passes their
+placeholders (`\$N` or `?`); `nothing` means the query has no such clause. Neither is ever an
+interpolated value: the only literal this renders is SQLite's no-limit spelling below.
+
+- **PostgreSQL** → `LIMIT <limit_sql>` and/or `OFFSET <offset_sql>`; `OFFSET` stands alone.
+- **SQLite** → the same, except an offset with no limit renders `LIMIT -1 OFFSET <offset_sql>`.
+  SQLite's grammar has no standalone `OFFSET` (it is `LIMIT expr [OFFSET expr]`), and a negative
+  LIMIT means "no limit" there — Django's SQLite backend spells it the same way (`no_limit_value`).
+"""
+function limit_offset_clause(limit_sql::Union{Nothing,AbstractString},
+                             offset_sql::Union{Nothing,AbstractString}, conn::PormGPostgres)::String
+  return _limit_offset_tail(limit_sql, offset_sql)
+end
+function limit_offset_clause(limit_sql::Union{Nothing,AbstractString},
+                             offset_sql::Union{Nothing,AbstractString}, conn::PormGSQLite)::String
+  (limit_sql === nothing && offset_sql !== nothing) && (limit_sql = "-1")
+  return _limit_offset_tail(limit_sql, offset_sql)
+end
+_limit_offset_tail(limit_sql::Union{Nothing,AbstractString}, offset_sql::Union{Nothing,AbstractString})::String =
+  string(limit_sql === nothing ? "" : "LIMIT $(limit_sql) \n", offset_sql === nothing ? "" : "OFFSET $(offset_sql) \n")
+
 # `table_name` is QUOTED here (#59) — the caller pre-quotes every other identifier it passes but not
 # this one, which made it the last bare `ALTER TABLE` target in this file. Harmless while every table
 # name was lowercase; a mixed-case `db_table` would fold to lowercase on PostgreSQL and the statement

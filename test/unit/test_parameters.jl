@@ -48,12 +48,13 @@ const QB = PormG.QueryBuilder
     QB.add_parameter!(params, "group_val")
 
     # 3. Verify final concatenation order matches SQL clause order:
-    # CTE -> SELECT -> UPDATE -> JOIN -> WHERE -> GROUP -> HAVING -> ORDER
+    # CTE -> SELECT -> UPDATE -> JOIN -> WHERE -> GROUP -> HAVING -> ORDER (-> LIMIT, #46: empty here)
     final_params = QB.get_final_parameters(params)
     @test length(final_params) == 8
     @test final_params == ["cte_val", "select_val", "update_val", "join_val", "where_val", "group_val", "having_val", "order_val"]
-    # The tuple every consumer reads is pinned at exactly these eight, in this order.
-    @test QB._BUCKET_ORDER == (:cte, :select, :update, :join, :where, :group, :having, :order)
+    # The tuple every consumer reads is pinned at exactly these nine, in this order. `:limit` (#46)
+    # is last because LIMIT / OFFSET print after ORDER BY.
+    @test QB._BUCKET_ORDER == (:cte, :select, :update, :join, :where, :group, :having, :order, :limit)
     @test params.parameter_count == 8
 
     # 4. Property access compatibility

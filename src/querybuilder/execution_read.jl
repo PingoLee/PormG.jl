@@ -38,16 +38,11 @@ function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing
     
     bucket_breakdown = Dict{Symbol, Vector{Any}}()
     if parameters isa PormGSQLiteParam
-       bucket_breakdown = Dict(
-        :cte => parameters.cte_params,
-        :select => parameters.select_params,
-        :update => parameters.update_params,
-        :join => parameters.join_params,
-        :where => parameters.where_params,
-        :group => parameters.group_params,
-        :having => parameters.having_params,
-        :order => parameters.order_params
-      )
+      # Every slot `_BUCKET_ORDER` names, so a bucket added there is reported here without a second
+      # list. This was a hand-written copy, and #46's `:limit` would have been missing from it.
+      for ctx in _BUCKET_ORDER
+        bucket_breakdown[ctx] = _bucket_for(parameters, ctx)
+      end
     end
 
     return Dict(
@@ -152,6 +147,21 @@ function inspect_query(q::SQLObjectHandler; connection::Union{Nothing, PormGPost
   end
 end
 inspect_query(; kwargs...) = (objct) -> inspect_query(objct; kwargs...)
+
+# #46: the LIMIT / OFFSET tail of a SELECT, bound like every other user value. Both bind under
+# `:limit`, the last bucket in `_BUCKET_ORDER`, because their text is the last that carries a marker —
+# and in a nested render (a `Subquery`, an `__@in` list, a CTE body) the caller lifts the run out in
+# that same clause order, so an inner LIMIT lands inside its parent's run, not at the statement's
+# tail. `0` is the no-limit / no-offset sentinel (`select_nodes.jl`, `display.jl`) and binds nothing.
+function _limit_offset_sql(limit::Integer, offset::Integer, parameters::AbstractPormGParam,
+                           connection::Union{PormGPostgres,PormGSQLite})::String
+  (limit == 0 && offset == 0) && return ""
+  return with_bucket(parameters, :limit) do
+    limit_sql = limit == 0 ? nothing : add_parameter!(parameters, limit)
+    offset_sql = offset == 0 ? nothing : add_parameter!(parameters, offset)
+    Dialect.limit_offset_clause(limit_sql, offset_sql, connection)
+  end
+end
 
 function query(q::SQLObjectHandler; 
   table_alias::Union{Nothing, SQLTableAlias} = nothing,
@@ -264,13 +274,7 @@ function query(q::SQLObjectHandler;
     print(io, "\n")
   end
   
-  if q.object.limit !== 0
-    print(io, "LIMIT ", q.object.limit, " \n")
-  end
-  
-  if q.object.offset !== 0
-    print(io, "OFFSET ", q.object.offset, " \n")
-  end
+  print(io, _limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))
 
   # #26: row-level locking clause (FOR UPDATE …) must follow ORDER BY / LIMIT / OFFSET. No-op on
   # SQLite (Dialect.for_update_clause renders "" there). PostgreSQL rejects FOR UPDATE with
@@ -507,8 +511,11 @@ function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias
 
     # Main query continues from where CTE numbering left off.
     instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters)
+    # `LIMIT 1` is this query's own shape, not a user value, so it stays literal; the OFFSET the
+    # caller set binds (#46). A non-positive offset was always dropped here, and still is.
     limit_clause = "LIMIT 1"
-    offset_clause = q.object.offset > 0 ? "OFFSET $(q.object.offset)" : ""
+    offset_clause = q.object.offset > 0 ?
+      with_bucket(() -> "OFFSET " * add_parameter!(parameters, q.object.offset), parameters, :limit) : ""
     
     # Quote table name and alias to prevent SQL injection
     safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)

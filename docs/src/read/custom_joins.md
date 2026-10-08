@@ -512,7 +512,7 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
      INNER JOIN "driver" AS "best" ON ("best"."driverid" = "R1"."driverid")
     WHERE "R1"."raceid" = ?
     ORDER BY "points" DESC NULLS FIRST
-    LIMIT 5
+    LIMIT ?
     ```
 
     Until [#474](https://github.com/PingoLee/PormG.jl/issues/474) this was refused, because join

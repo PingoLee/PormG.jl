@@ -58,11 +58,14 @@ mutable struct SQLiteParameterizedQuery <: PormGSQLiteParam
   group_params::Vector{Any}
   having_params::Vector{Any}
   order_params::Vector{Any}
+  # #46: LIMIT and OFFSET, bound like every other user value. Last, because their text is: the only
+  # thing printed after them is the `FOR UPDATE` lock clause, which binds nothing.
+  limit_params::Vector{Any}
   # Active bucket selector
   current_context::Symbol
 
   function SQLiteParameterizedQuery(sql::String="", current_context::Symbol=:where)
-    new(sql, Any[], Any[], Any[], Any[], Any[], Any[], Any[], Any[], current_context)
+    new(sql, Any[], Any[], Any[], Any[], Any[], Any[], Any[], Any[], Any[], current_context)
   end
 end
 get_parameter(connection::PormGSQLite) = SQLiteParameterizedQuery()
@@ -80,6 +83,7 @@ function _current_bucket(sq::SQLiteParameterizedQuery)::Vector{Any}
   ctx === :group && return sq.group_params
   ctx === :having && return sq.having_params
   ctx === :order && return sq.order_params
+  ctx === :limit && return sq.limit_params
   # Fallback – warn about unknown context and route to :where so nothing silently breaks
   @warn "Unknown parameter context $(repr(ctx)), falling back to :where" ctx
   return sq.where_params
@@ -92,7 +96,8 @@ end
     set_context!(params::AbstractPormGParam, context::Symbol)
 
 Switch the active parameter bucket for positional-parameter backends (SQLite).
-Valid contexts: `:cte`, `:select`, `:update`, `:join`, `:where`, `:group`, `:having`, `:order`.
+Valid contexts: `:cte`, `:select`, `:update`, `:join`, `:where`, `:group`, `:having`, `:order`,
+`:limit`.
 
 For numbered-parameter backends (PostgreSQL) this is a no-op.
 """
@@ -240,8 +245,9 @@ end
 # when a bucket is added — the maintenance checklist in the QueryBuilder skill points here.
 #
 # `:group` and `:order` (#587) sit where their text does — GROUP BY between WHERE and HAVING,
-# ORDER BY last. The statement renderer in `execution_read.jl` (`query`) prints in exactly this order.
-const _BUCKET_ORDER = (:cte, :select, :update, :join, :where, :group, :having, :order)
+# ORDER BY after HAVING. `:limit` (#46) holds LIMIT then OFFSET, which print after ORDER BY. The
+# statement renderer in `execution_read.jl` (`query`) prints in exactly this order.
+const _BUCKET_ORDER = (:cte, :select, :update, :join, :where, :group, :having, :order, :limit)
 
 # Deliberately mirrors `_current_bucket`'s fallback rather than defining its own: an unrecognized
 # context must land in the same bucket and warn the same way from both helpers, or a future bucket
@@ -255,6 +261,7 @@ function _bucket_for(sq::PormGSQLiteParam, ctx::Symbol)::Vector{Any}
   ctx === :group && return sq.group_params
   ctx === :having && return sq.having_params
   ctx === :order && return sq.order_params
+  ctx === :limit && return sq.limit_params
   @warn "Unknown parameter context $(repr(ctx)), falling back to :where" ctx
   return sq.where_params
 end
@@ -457,7 +464,7 @@ Return all collected parameter values in the order expected by the final SQL str
 
 - **PostgreSQL**: returns the single linear vector (order already matches `\$N` numbering).
 - **SQLite**: concatenates buckets in standard SQL clause order, single-sourced from
-  `_BUCKET_ORDER`: `cte → select → update → join → where → group → having → order`
+  `_BUCKET_ORDER`: `cte → select → update → join → where → group → having → order → limit`
   so that each positional `?` aligns with its value.
 """
 get_final_parameters(p::PormGPostgresParam)::Vector{Any} = p.parameters isa Vector{Any} ? p.parameters : collect(p.parameters)
@@ -514,7 +521,7 @@ end
 
 function Base.hasproperty(::SQLiteParameterizedQuery, name::Symbol)
   return name in (:sql, :cte_params, :select_params, :update_params, :join_params, :where_params,
-                  :group_params, :having_params, :order_params, :current_context, :parameter_count, :parameters)
+                  :group_params, :having_params, :order_params, :limit_params, :current_context, :parameter_count, :parameters)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

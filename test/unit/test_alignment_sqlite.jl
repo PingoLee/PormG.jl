@@ -602,30 +602,30 @@ end
 end
 
 @testset "Alignment Verification - LIMIT with Parameter" begin
-    # Test LIMIT clause integration
-    # LIMIT/OFFSET are rendered as literals, not as '?' parameters, by design.
-    # No placeholder is expected for them.
+    # #46: LIMIT binds under its own `:limit` bucket, which flattens after `:where`.
     q = M.Result.objects.filter("points" => 10).limit(5)
 
     insp = q |> inspect_query
 
-    where_params = insp[:parameter_buckets][:where]
-    @test 10 in where_params
-    # LIMIT parameters (if any) should be in appropriate bucket
-    @test contains(insp[:sql_text], "LIMIT")
+    @test insp[:parameter_buckets][:where] == [10]
+    @test insp[:parameter_buckets][:limit] == [5]
+    @test insp[:parameters] == [10, 5]
+    @test contains(insp[:sql_text], "LIMIT ?")
+    @test count(==('?'), insp[:sql_text]) == 2
 end
 
 @testset "Alignment Verification - OFFSET with Parameter" begin
-    # Test OFFSET clause integration
-    # LIMIT/OFFSET are rendered as literals, not as '?' parameters, by design.
-    # No placeholder is expected for them.
+    # #46: an offset with no limit. SQLite has no standalone OFFSET, so the renderer supplies its
+    # no-limit spelling, `LIMIT -1` — a constant, not a bound value.
     q = M.Result.objects.filter("points__@gt" => 5).offset(10)
 
     insp = q |> inspect_query
 
-    where_params = insp[:parameter_buckets][:where]
-    @test 5 in where_params
-    @test contains(insp[:sql_text], "OFFSET") || contains(insp[:sql_text], "LIMIT")
+    @test insp[:parameter_buckets][:where] == [5]
+    @test insp[:parameter_buckets][:limit] == [10]
+    @test insp[:parameters] == [5, 10]
+    @test contains(insp[:sql_text], "LIMIT -1 \nOFFSET ?")
+    @test count(==('?'), insp[:sql_text]) == 2
 end
 
 @testset "Alignment Verification - UPDATE Parameter Alignment" begin
@@ -1660,24 +1660,20 @@ end
     @test count(==('?'), insp[:sql_text]) == length(expected_order)
 end
 
-@testset "Alignment Verification - LIMIT/OFFSET Documentation" begin
-    # LIMIT and OFFSET are currently rendered as integer literals in the SQL string,
-    # not as parameterized '?' values. This is safe by design because the SQLObject
-    # strictly enforces Integer types for these fields, eliminating injection risk.
-    # This test documents this expected behavior.
-
+@testset "Alignment Verification - LIMIT/OFFSET bind as parameters (#46)" begin
+    # Until #46 LIMIT and OFFSET were printed into the SQL as integer literals — safe, since the
+    # setters only take an Integer, but the statement text then differed per page size. They now
+    # bind like every other user value: LIMIT first, then OFFSET, after everything else.
     q = M.Driver.objects.filter("nationality" => "British")
     q.limit(10).offset(5)
 
     insp = q |> inspect_query
 
-    # Only the filter parameter is present
-    @test insp[:parameters] == ["British"]
-    @test count(==('?'), insp[:sql_text]) == 1
-
-    # But both LIMIT and OFFSET are woven into the raw SQL string
-    @test contains(insp[:sql_text], "LIMIT 10")
-    @test contains(insp[:sql_text], "OFFSET 5")
+    @test insp[:parameters] == ["British", 10, 5]
+    @test insp[:parameter_buckets][:limit] == [10, 5]
+    @test count(==('?'), insp[:sql_text]) == 3
+    @test contains(insp[:sql_text], "LIMIT ? \nOFFSET ?")
+    @test !occursin(r"LIMIT \d|OFFSET \d", insp[:sql_text])
 end
 
 @testset "Alignment Verification - deepcopy Isolation Test" begin
@@ -3081,7 +3077,8 @@ end
 
     @test contains(sql, "\"R1\".\"position\"")                       # plain column projection
     @test contains(sql, "ORDER BY \"R1\".\"driverstandingsid\" DESC") # inner ORDER BY preserved
-    @test occursin(r"LIMIT 1\s*\n?\) as \"latest_position\""s, sql)   # inner LIMIT inside the paren wrap
+    @test occursin(r"LIMIT \?\s*\n?\) as \"latest_position\""s, sql)   # inner LIMIT inside the paren wrap
+    @test insp[:parameters] == [1]                                    # and bound (#46)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3359,7 +3356,7 @@ end
         @test sl[:parameters] == label_ops
     end
 
-    # LIMIT / OFFSET are interpolated literals, never bound — nothing lands after `:order`.
+    # LIMIT / OFFSET bind under `:limit` (#46), which flattens after `:order` — their text is last.
     sl = _assert_order_by_aligned() do
         q = M.Race.objects
         q.values("name")
@@ -3369,8 +3366,8 @@ end
         q.offset(2)
         q
     end
-    @test sl[:parameters] == vcat(Any["Monza"], label_ops)
-    @test occursin("LIMIT 5", sl[:sql_text]) && occursin("OFFSET 2", sl[:sql_text])
+    @test sl[:parameters] == vcat(Any["Monza"], label_ops, Any[5, 2])
+    @test sl[:parameter_buckets][:limit] == [5, 2]
 
     # Shape 2 — aggregate ordering by an unprojected expression. The term is pushed into GROUP BY
     # as well, so the text prints the nine `?` twice: once under GROUP BY (before HAVING) and once
@@ -3502,6 +3499,86 @@ function _assert_predicate_binds_once(build)
     refs = sort(unique(parse(Int, m.match[2:end]) for m in eachmatch(r"\$\d+", pg[:sql_text])))
     @test refs == collect(1:length(pg[:parameters]))
     return sl
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LIMIT / OFFSET bind under `:limit` (#46)
+#
+# `:limit` is last in `_BUCKET_ORDER`, so a top-level LIMIT flattens after every other clause — the
+# #587 testset above covers that. The shapes that can go wrong are the NESTED ones: an inner query's
+# LIMIT binds into the same collector's `:limit` bucket while its text sits inside the parent's
+# SELECT, WHERE or WITH. Only the nested-run lift (`detach_nested_run!`) moves it into the parent's
+# run; without it the inner value would flatten at the statement's tail, after the parent's own
+# values, with the count still right. Each shape is checked against PostgreSQL's `$N` walk (the
+# differential) and against the vector spelled out, so a defect shared by both engines still fails.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "LIMIT / OFFSET bind in text position, nested renders included (#46)" begin
+    # A projected scalar Subquery carrying its own LIMIT, under an outer WHERE + LIMIT/OFFSET.
+    sl = _assert_order_by_aligned() do
+        inner = M.Driver_standings.objects
+        inner.filter("driverid" => OuterRef("driverid"), "position__@lte" => 3)
+        inner.values("position")
+        inner.order_by("-driverstandingsid")
+        inner.limit(1)
+        q = M.Driver.objects
+        q.values("surname", "best" => Subquery(inner))
+        q.filter("nationality" => "Brazilian")
+        q.limit(10)
+        q.offset(20)
+        q
+    end
+    @test sl[:parameters] == Any[3, 1, "Brazilian", 10, 20]
+    @test sl[:parameter_buckets][:select] == [3, 1]   # the inner LIMIT rides inside SELECT's run
+    @test sl[:parameter_buckets][:limit] == [10, 20]
+
+    # An `__@in` subquery with a LIMIT, between two outer WHERE values.
+    sl = _assert_order_by_aligned() do
+        inner = M.Result.objects.filter("positionorder" => 1).values("driverid").limit(5)
+        q = M.Driver.objects
+        q.values("surname")
+        q.filter("nationality" => "Brazilian")
+        q.filter("driverid__@in" => inner)
+        q.filter("surname__@startswith" => "S")
+        q.limit(3)
+        q
+    end
+    @test sl[:parameters] == Any["Brazilian", 1, 5, "S%", 3]
+    @test sl[:parameter_buckets][:where] == Any["Brazilian", 1, 5, "S%"]
+
+    # A CTE body with a LIMIT: its values belong to the WITH clause, ahead of the main WHERE.
+    sl = _assert_order_by_aligned() do
+        races = M.Race.objects.filter("year" => 1991).values("raceid")
+        races.order_by("raceid")
+        races.limit(4)
+        q = M.Result.objects.filter("positionorder" => 1)
+        q.values("resultid")
+        _with(q, "r91", races, join_field = "raceid" => "raceid")
+        q.limit(2)
+        q
+    end
+    @test sl[:parameters] == Any[1991, 4, 1, 2]
+    @test sl[:parameter_buckets][:cte] == [1991, 4]
+end
+
+@testset "offset() alone renders on both engines (#46)" begin
+    # SQLite's grammar has no standalone OFFSET (`LIMIT expr [OFFSET expr]`), so before #46 an
+    # offset-only query was a syntax error there. It now renders SQLite's no-limit spelling, a
+    # constant `-1`; PostgreSQL keeps the bare OFFSET.
+    build() = (q = M.Driver.objects; q.values("surname"); q.filter("nationality" => "German"); q.offset(7); q)
+    sl = inspect_query(build())
+    pg = inspect_query(build(); connection = _ALIGN_PG)
+    assert_marker_count(sl, :sqlite)
+    assert_marker_count(pg, :postgres)
+    @test occursin("LIMIT -1 \nOFFSET ?", sl[:sql_text])
+    @test sl[:parameters] == Any["German", 7]
+    @test occursin("OFFSET \$2", pg[:sql_text])
+    @test !occursin("LIMIT", pg[:sql_text])
+    @test pg[:parameters] == Any["German", 7]
+
+    # exists() keeps its own constant `LIMIT 1` and binds only the caller's OFFSET.
+    ex = (q = build(); q.exists(show_query = :dict))
+    @test occursin(r"LIMIT 1\s+OFFSET \?", ex[:sql_text])
+    @test ex[:parameters] == Any["German", 7]
 end
 
 @testset "a composite transform in a predicate binds once (#586)" begin

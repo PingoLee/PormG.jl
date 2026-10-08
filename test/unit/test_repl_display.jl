@@ -436,12 +436,17 @@ const CEILINGS = Dict{String,Tuple{Int,Int}}(
     paged.limit(20)
     @test occursin("limit 20", _plain(paged))
 
-    # `limit == 0` is PormG's NO-LIMIT sentinel, and `LIMIT 0` in SQL means zero rows. An
-    # offset-only query must not claim a limit it does not have.
+    # An offset-only query must not claim a limit it does not have: no limit is `nothing`.
     offs = RS.Rs_driver.objects
     offs.offset(25)
     @test occursin("offset 25", _plain(offs))
     @test !occursin("limit", _plain(offs))
+
+    # …while `limit(0)` is a real limit, zero rows, as in SQL (#1049). It used to be the no-limit
+    # sentinel, so the card hid it and the query returned every row.
+    zero = RS.Rs_driver.objects
+    zero.limit(0)
+    @test occursin("limit 0", _plain(zero))
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

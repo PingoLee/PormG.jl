@@ -164,7 +164,7 @@ end
   q3.order_by("points")
   q3.last(show_query = :sql)
   @test isempty(q3.object.filter)          # untouched
-  @test q3.object.limit == 0               # limit(1) applied only to the internal copy
+  @test q3.object.limit === nothing         # limit(1) applied only to the internal copy
   @test length(q3.object.order) == 1 && q3.object.order[1].orientation == "ASC"  # still ASC
 end
 
@@ -193,7 +193,7 @@ end
   # The `page` docstring had always advertised `query.page(20)`, but only
   # _page!(::SQLObject, ::Tuple{Integer, Integer}) existed, so the single-argument form raised a bare
   # MethodError. Asserted on the rendered statement, not just the handler field, because
-  # execution_read.jl only emits each clause when the field is non-zero.
+  # execution_read.jl only emits each clause when the field is set.
   q2 = GocPg.objects
   q2.page(20, 10)
   @test q2.object.limit == 20
@@ -281,8 +281,97 @@ end
   @test_throws PormG.QueryBuildError q.offset(1, 2)
 
   # A rejected call must not half-apply — the handler is untouched by every throw above.
-  @test q.object.limit == 0
+  @test q.object.limit === nothing
   @test q.object.offset == 0
+end
+
+# #1049: a negative or `Bool` LIMIT / OFFSET reached the SQL, where the engines disagree — PostgreSQL
+# raises, SQLite reads a negative LIMIT as "no limit" (every row) and binds `true` as 1. Confirmed
+# live on both engines before the fix. Refused at the call instead, on both mocks alike.
+@testset "limit()/offset()/page() refuse a negative or Bool value (#1049)" begin
+  for model in (GocPg, GocSl)
+    refused = (
+      "limit(-1)"         => q -> q.limit(-1),
+      "limit(true)"       => q -> q.limit(true),
+      "limit(false)"      => q -> q.limit(false),
+      "offset(-1)"        => q -> q.offset(-1),
+      "offset(false)"     => q -> q.offset(false),
+      "page(-1)"          => q -> q.page(-1),
+      "page(true)"        => q -> q.page(true),
+      "page(10, -1)"      => q -> q.page(10, -1),
+      "page(10, true)"    => q -> q.page(10, true),
+      "page(-1, 10)"      => q -> q.page(-1, 10),
+      # the un-exported function forms, which test_fluent_parity pins to the fluent ones
+      "page(h, -1)"       => q -> PormG.QueryBuilder.page(q, -1),
+      "page(h, 10, -1)"   => q -> PormG.QueryBuilder.page(q, 10, -1),
+      "page(h; offset=-1)" => q -> PormG.QueryBuilder.page(q; limit = 10, offset = -1),
+      "page(h; limit=true)" => q -> PormG.QueryBuilder.page(q; limit = true),
+    )
+    for (label, call) in refused
+      q = model.objects
+      q.limit(7).offset(3)
+      err = try
+        call(q); nothing
+      catch e
+        e
+      end
+      @test err isa PormG.QueryBuildError
+      # Nothing half-applies: page(10, -1) must not leave limit 10 behind its refused offset.
+      @test (q.object.limit, q.object.offset) == (7, 3)
+    end
+
+    # Message, not only type — the tokens that identify THIS guard and its value.
+    q = model.objects
+    neg = _p208_error(() -> q.limit(-5))
+    @test occursin("limit() must not be negative, got -5", neg)
+    @test occursin("limit(nothing)", neg)                       # names the no-limit spelling
+    off = _p208_error(() -> q.page(5, -2))
+    @test occursin("page()'s offset must not be negative, got -2", off)
+    @test occursin("For no offset, pass 0", off)                # an offset's own fix…
+    @test !occursin("limit(nothing)", off)                      # …not the limit's
+    @test occursin("offset() takes an Integer row count, got the Bool true", _p208_error(() -> q.offset(true)))
+  end
+end
+
+# #1049: `0` used to be the no-limit sentinel, so `limit(0)` — a page size computed as zero —
+# returned every row, where SQL's LIMIT 0 and Django's `qs[:0]` return none. It now binds 0, and
+# "no limit" is `nothing`.
+@testset "limit(0) is zero rows; limit(nothing) is no limit (#1049)" begin
+  for (model, marker) in ((GocPg, "\$1"), (GocSl, "?"))
+    q0 = model.objects
+    q0.limit(0)
+    @test q0.object.limit == 0
+    @test occursin("LIMIT $(marker)", q0.list(show_query = :sql))
+    @test q0.list(show_query = :params) == [0]
+
+    # Any zero Integer — #46 had briefly made Int32(0) the sentinel too.
+    qi = model.objects
+    qi.limit(Int32(0))
+    @test qi.list(show_query = :params) == [0]
+
+    # limit(nothing) clears a limit already set, and binds nothing.
+    qn = model.objects
+    qn.limit(5).limit(nothing)
+    @test qn.object.limit === nothing
+    @test !occursin("LIMIT", qn.list(show_query = :sql))
+    @test isempty(qn.list(show_query = :params))
+
+    # page(0, n) is a real zero-row page, both values bound.
+    qp = model.objects
+    qp.page(0, 20)
+    @test qp.list(show_query = :params) == [0, 20]
+
+    # An aggregate drops the handler's slice on its copy: a limit(0) left there would render LIMIT 0
+    # and return no aggregate row at all.
+    @test !occursin("LIMIT", model.objects.limit(0).aggregate("n" => Count("id"), show_query = :sql))
+  end
+
+  # An offset with no limit keeps SQLite's no-limit spelling (#46): the `nothing` limit, not 0.
+  qo = GocSl.objects
+  qo.offset(5)
+  @test occursin("LIMIT -1 \nOFFSET ?", qo.list(show_query = :sql))
+  @test qo.list(show_query = :params) == [5]
+  @test !occursin("LIMIT", GocPg.objects.offset(5).list(show_query = :sql))
 end
 
 @testset "ChainCaller rejects keyword arguments as a PormGError (#272)" begin
@@ -332,7 +421,7 @@ end
   end
 
   # Rejected before the mutator runs: nothing is half-applied.
-  @test qk.object.limit == 0
+  @test qk.object.limit === nothing
   @test qk.object.offset == 0
   @test isempty(qk.object.filter)
 

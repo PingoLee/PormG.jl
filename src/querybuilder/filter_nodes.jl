@@ -74,7 +74,7 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
   q = deepcopy(subquery)
   q.object.values = []
   q.object.order = []
-  q.object.limit = 0
+  q.object.limit = nothing
   q.object.offset = 0
 
   # #432: the inner build scatters its values across its own clause buckets while this EXISTS text is

@@ -769,8 +769,8 @@ mutable struct SQLObjectQuery <: SQLObject
   values::Vector{Union{SQLTypeText,SQLTypeField}}
   filter::Vector{FilterType} # filters to be used in the query
   insert::OrderedCollections.OrderedDict{String,Any} # values to be used to create or insert (ordered so INSERT/UPDATE column lists follow call order — #97)
-  limit::Integer
-  offset::Integer
+  limit::Union{Nothing,Integer} # `nothing` = no LIMIT; `0` is LIMIT 0, zero rows (#1049)
+  offset::Integer               # `0` = no OFFSET, which is what OFFSET 0 means anyway
   order::Vector{SQLTypeOrder}
   group::Vector{String}
   having::Vector{String}
@@ -807,7 +807,7 @@ mutable struct SQLObjectQuery <: SQLObject
   # re-projected would describe columns that no longer exist.
   projection_kinds::Dict{Symbol,CanonicalType}
 
-  SQLObjectQuery(; model=nothing, connect_key=nothing, values=[], filter=[], insert=OrderedCollections.OrderedDict{String,Any}(), limit=0, offset=0,
+  SQLObjectQuery(; model=nothing, connect_key=nothing, values=[], filter=[], insert=OrderedCollections.OrderedDict{String,Any}(), limit=nothing, offset=0,
     order=[], group=[], having=[], list_joins=[], distinct=false, for_update=nothing, ctes=OrderedCollections.OrderedDict{String,CTEDict}(),
     custom_join=OrderedCollections.OrderedDict{String,PathJoin}(), alias_join=OrderedCollections.OrderedDict{String,AliasJoin}(), parameters=nothing,
     projection_kinds=Dict{Symbol,CanonicalType}()) =
@@ -1872,7 +1872,9 @@ Each mutates the handler and returns it, so calls can be chained or accumulated 
 - `.order_by(fields...)` — sort; prefix `-` for descending. Accepts a field path or an alias
   declared by `.values()` (#423). **Replaces** its previous call, matching Django's *each
   `order_by()` clears previous ordering* (#199)
-- `.limit(n)` / `.offset(n)` — pagination, one clause each
+- `.limit(n)` / `.offset(n)` — pagination, one clause each. `.limit(0)` is zero rows, as in SQL;
+  `.limit(nothing)` removes a limit. A negative value or a `Bool` raises `QueryBuildError`, for
+  `.page(...)` too (#1049)
 - `.page(limit)` / `.page(limit, offset)` — pagination in one call; `.page(n)` sets the limit only
   and leaves any offset already on the handler in place. Those are the only two arities — anything
   else (no argument, three arguments, a non-`Integer`, a keyword) raises `QueryBuildError`, same as

@@ -866,19 +866,44 @@ end
 # Sets BOTH clauses (offset falls back to its 0 default). Unreachable from the chain: `ChainCaller`
 # forwards positional arguments only, so no keyword can arrive on the fluent path.
 function page(object::SQLObjectHandler; limit::Integer = 10, offset::Integer = 0)
-  object.object.limit = limit
-  object.object.offset = offset
+  _page!(object.object, (limit, offset))
   return object
 end
 # Limit-only: the offset already on the handler is left alone. `_page!`'s 1-tuple method mirrors this.
 function page(object::SQLObjectHandler, limit::Integer)
-  object.object.limit = limit
+  _page!(object.object, (limit,))
   return object
 end
 function page(object::SQLObjectHandler, limit::Integer, offset::Integer)
-  object.object.limit = limit
-  object.object.offset = offset
+  _page!(object.object, (limit, offset))
   return object
+end
+
+# #1049: the one check every LIMIT / OFFSET entry point goes through, run BEFORE anything is
+# assigned so a refused call leaves the handler as it was. Both values are bound (#46), and the two
+# engines read the same bad value differently — so refusing here is what keeps them aligned:
+# - negative: PostgreSQL rejects it at execution (SQLSTATE 2201W / 2201X), while SQLite reads a
+#   negative LIMIT as "no limit" (every row) and a negative OFFSET as 0 (rows from the start);
+# - `Bool`: `Bool <: Integer` in Julia (the trap #876 / #949 closed for values). SQLite bound `true`
+#   as 1 row; PostgreSQL rejected it as the text "true" where a bigint goes (SQLSTATE 22P02).
+# `0` is accepted and means zero rows, as in SQL and Django (`qs[:0]`); "no limit" is `nothing`.
+# The messages echo `v` on purpose: it is an `Integer` row count (a Bool or a negative) — at worst a
+# page number derived from a request, and no secret can take that shape, so #971's no-value rule does
+# not apply — hence the markers.
+function _check_slice_value(what::String, v::Integer)
+  v isa Bool && throw(QueryBuildError(  # refusal-value-ok: a Bool row count; no secret takes that shape
+    "$(what) takes an Integer row count, got the Bool $(v) — a Bool is an Integer in Julia, so it " *
+    "would bind as a row count on SQLite and be rejected by PostgreSQL. Pass a number, e.g. 20."))
+  if v < 0
+    occursin("offset", what) && throw(QueryBuildError(  # refusal-value-ok: a negative row count; no secret takes that shape
+      "$(what) must not be negative, got $(v) — PostgreSQL rejects a negative OFFSET, while SQLite " *
+      "reads it as 0. For no offset, pass 0."))
+    throw(QueryBuildError(  # refusal-value-ok: a negative row count; no secret takes that shape
+      "$(what) must not be negative, got $(v) — PostgreSQL rejects a negative LIMIT, while SQLite " *
+      "reads it as \"no limit\" and returns every row. For no limit, use limit(nothing) or leave " *
+      "limit() out."))
+  end
+  return v
 end
 
 # ---
@@ -890,24 +915,32 @@ end
 # user gets a bare `MethodError` naming `_page!` and a `Tuple{String, String}` — neither of which
 # appears anywhere in their code — and `catch PormGError` (#231/#239) does not cover it (#272).
 function _limit!(object::SQLObject, limit::Tuple{Integer})
-  object.limit = limit[1]
+  object.limit = _check_slice_value("limit()", limit[1])
+end
+# `nothing` is "no limit" (#1049) — the spelling that clears a limit already on the handler. `0` is
+# not: it renders LIMIT 0, zero rows.
+function _limit!(object::SQLObject, limit::Tuple{Nothing})
+  object.limit = nothing
 end
 function _limit!(object::SQLObject, limit)
-  throw(QueryBuildError("Invalid limit() arguments: $(limit) (::$(typeof(limit))) — limit() takes exactly one Integer, e.g. limit(20)."))
+  throw(QueryBuildError("Invalid limit() arguments: $(limit) (::$(typeof(limit))) — limit() takes exactly one Integer, e.g. limit(20), or nothing for no limit."))
 end
 function _offset!(object::SQLObject, offset::Tuple{Integer})
-  object.offset = offset[1]
+  object.offset = _check_slice_value("offset()", offset[1])
 end
 function _offset!(object::SQLObject, offset)
   throw(QueryBuildError("Invalid offset() arguments: $(offset) (::$(typeof(offset))) — offset() takes exactly one Integer, e.g. offset(40)."))
 end
 # page(n) is limit-only — the offset already on the handler survives, matching page(object, limit).
 function _page!(object::SQLObject, v::Tuple{Integer})
-  object.limit = v[1]
+  object.limit = _check_slice_value("page()'s limit", v[1])
 end
 function _page!(object::SQLObject, v::Tuple{Integer, Integer})
-  object.limit = v[1]
-  object.offset = v[2]
+  # Both checked before either is assigned: a refused offset must not leave a new limit behind.
+  limit = _check_slice_value("page()'s limit", v[1])
+  offset = _check_slice_value("page()'s offset", v[2])
+  object.limit = limit
+  object.offset = offset
 end
 function _page!(object::SQLObject, v)
   throw(QueryBuildError("Invalid page() arguments: a $(typeof(v)) — page() takes one Integer (limit) or two Integers (limit, offset), e.g. page(20) or page(20, 40)."))

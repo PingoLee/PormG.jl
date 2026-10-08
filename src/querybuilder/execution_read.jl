@@ -152,12 +152,14 @@ inspect_query(; kwargs...) = (objct) -> inspect_query(objct; kwargs...)
 # `:limit`, the last bucket in `_BUCKET_ORDER`, because their text is the last that carries a marker —
 # and in a nested render (a `Subquery`, an `__@in` list, a CTE body) the caller lifts the run out in
 # that same clause order, so an inner LIMIT lands inside its parent's run, not at the statement's
-# tail. `0` is the no-limit / no-offset sentinel (`select_nodes.jl`, `display.jl`) and binds nothing.
-function _limit_offset_sql(limit::Integer, offset::Integer, parameters::AbstractPormGParam,
+# tail. A `nothing` limit is "no LIMIT" and binds nothing; `0` binds, and is zero rows — SQL's and
+# Django's meaning (#1049; it used to be the no-limit sentinel and returned every row). An offset of
+# `0` binds nothing because OFFSET 0 is a no-op anyway.
+function _limit_offset_sql(limit::Union{Nothing,Integer}, offset::Integer, parameters::AbstractPormGParam,
                            connection::Union{PormGPostgres,PormGSQLite})::String
-  (limit == 0 && offset == 0) && return ""
+  (limit === nothing && offset == 0) && return ""
   return with_bucket(parameters, :limit) do
-    limit_sql = limit == 0 ? nothing : add_parameter!(parameters, limit)
+    limit_sql = limit === nothing ? nothing : add_parameter!(parameters, limit)
     offset_sql = offset == 0 ? nothing : add_parameter!(parameters, offset)
     Dialect.limit_offset_clause(limit_sql, offset_sql, connection)
   end
@@ -377,7 +379,7 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
     cq = deepcopy(oq)
     cq.object.order = []
     cq.object.distinct = false      # DISTINCT belongs to COUNT(col), not the row set
-    cq.object.limit = 0
+    cq.object.limit = nothing
     cq.object.offset = 0
     # No `__` in the alias: `_values!` refuses one (#757). The result is read positionally below.
     _values!(cq.object, Any["pormg_count" => Count(String(column); distinct = distinct)])
@@ -473,7 +475,7 @@ function _aggregate(oq::SQLObjectHandler; pairs, show_query::Symbol = :execute)
 
   cq = deepcopy(oq)
   cq.object.order = []
-  cq.object.limit = 0
+  cq.object.limit = nothing
   cq.object.offset = 0
   cq.object.distinct = false
   # Inject the aggregate projections through the shared values() path (column resolution, joins and

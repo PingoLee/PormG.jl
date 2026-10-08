@@ -1298,14 +1298,44 @@ const DOCERR_CASES = [
             without_foreign_keys(() -> nothing, DocErrMockPostgres())
         end,
     ),
+    # #1049 — `api.md`, `read/index.md` (method table and *Pagination*) and the `object` docstring
+    # promise QueryBuildError for a negative or `Bool` LIMIT / OFFSET, on `.page()` too.
+    (
+        "read/index.md + api.md — limit() rejects a negative value (#1049)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.limit(-1),
+    ),
+    (
+        "read/index.md + api.md — limit() rejects a Bool (#1049)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.limit(true),
+    ),
+    (
+        "read/index.md + api.md — offset() rejects a negative value (#1049)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.offset(-1),
+    ),
+    (
+        "read/index.md + api.md — page() rejects a negative offset (#1049)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.page(20, -1),
+    ),
     # #213 — the delete guards. `write/delete.md` and `errors.md` both promise UnsafeMutationError
     # for each of these query shapes; every one is refused before SQL is generated, so a mock
-    # connection is enough. The four are separate cases on purpose: they are four independent
-    # checks in `deletion.jl`, and collapsing them would let three regress unnoticed.
+    # connection is enough. The cases are separate on purpose: they are four independent checks in
+    # `deletion.jl` (limit(0) is a second case of the limit check, #1049), and collapsing them would
+    # let three regress unnoticed.
     (
         "write/delete.md — delete() rejects limit()",
         UnsafeMutationError,
         () -> DOCERR_RESULT_PG.objects.filter("points" => 0).limit(10).delete(show_query = :dict),
+    ),
+    (
+        # #1049: limit(0) is a real slice (zero rows), not "no limit" — deleting the whole filtered
+        # set under it would remove rows the same handler's list() does not return.
+        "write/delete.md (\"a handler carrying limit()\") — delete() rejects limit(0) (#1049)",
+        UnsafeMutationError,
+        () -> DOCERR_RESULT_PG.objects.filter("points" => 0).limit(0).delete(show_query = :dict),
     ),
     (
         "write/delete.md — delete() rejects offset()",

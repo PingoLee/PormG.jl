@@ -662,7 +662,7 @@ function _warn_if_possible_multirow(handler::SQLObjectHandler)
   vals = handler.object.values
   length(vals) == 1 || return nothing
   is_agg = _projection_is_aggregate(vals[1])
-  has_limit = handler.object.limit != 0
+  has_limit = handler.object.limit !== nothing
   (!is_agg && !has_limit) && @warn(_emsg(
     "Subquery(...) projects a non-aggregate column with no LIMIT; if the correlation matches more than " *
     "one row the database raises \"more than one row returned by a subquery used as an expression\". " *

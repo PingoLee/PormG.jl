@@ -1226,6 +1226,222 @@ function Mod(x, y)
   return FObject(function_name = "MOD", column = column, aggregate = _any_agg(column), formatter = Models.format_number_sql)
 end
 
+# ──────────────────────────────────────────────────────────────────────────────
+# #31: PostgreSQL full-text search, after `django.contrib.postgres.search`. Four `FObject`s, rendered by
+# `Dialect.SEARCH_*`; every one raises `BackendCapabilityError` on SQLite when the query is built.
+#
+# A `SearchVector` and a `SearchQuery` are OPERANDS — of the `@search` lookup, `SearchRank` and
+# `SearchHeadline` — never values: projecting a tsvector or a tsquery, or comparing one, is refused
+# (`_render_function_typed`, select_nodes.jl), because neither has a Julia reading yet. The three
+# consumers render them through `_render_fts_operand`, past that refusal.
+#
+# The config is a validated literal (`Dialect.ts_config_name`, and the maintainer's call on #31); the
+# search text is always bound. Where one side is written as a bare string, it takes its config from
+# the side written as an object: `"surname__@search" => SearchQuery("senna"; config = "simple")`
+# parses the column with `simple` too, and so does a string query given to `SearchRank`.
+# ──────────────────────────────────────────────────────────────────────────────
+const _FTS_OPERANDS = ("SEARCH_VECTOR", "SEARCH_QUERY")
+_is_fts_node(x, name::AbstractString) = x isa FObject && x.function_name == name
+_is_fts_operand(x) = x isa FObject && x.function_name in _FTS_OPERANDS
+
+const _SEARCH_TYPES = ("plain", "phrase", "websearch", "raw")
+
+"""
+    SearchQuery(text; config = nothing, search_type = "plain")
+
+The query side of a full-text search (PostgreSQL only): `text` parsed into a `tsquery`. It is the
+right-hand side of the `@search` lookup and the query of `SearchRank` and `SearchHeadline`.
+
+`search_type` picks the parser PostgreSQL applies to `text`:
+
+| `search_type` | renders | `text` is read as |
+|---|---|---|
+| `"plain"` | `plainto_tsquery` | words, all required |
+| `"phrase"` | `phraseto_tsquery` | words, in this order |
+| `"websearch"` | `websearch_to_tsquery` | search-engine syntax: `"a phrase"`, `or`, `-word` |
+| `"raw"` | `to_tsquery` | `tsquery` syntax: `senn:* & !prost`. A syntax error is the server's, at execution |
+
+`config` names a text-search configuration (`"english"`, `"simple"`, `"pg_catalog.portuguese"`); with
+none, the server's `default_text_search_config` applies. The text is bound as a parameter; the config
+is checked to be a name and written into the SQL, which is what lets PostgreSQL use an index built on
+`to_tsvector('english', col)`. A config that is not a name, or an unknown `search_type`, raises
+`InvalidValueError` here, as does text containing a NUL character.
+
+```julia
+M.Driver.objects.filter("surname__@search" => SearchQuery("senna"; config = "simple"))
+M.Race.objects.filter("name__@search" => SearchQuery("\\"grand prix\\" -british"; search_type = "websearch"))
+```
+"""
+function SearchQuery(text::AbstractString; config = nothing, search_type = "plain")
+  cfg = Dialect.ts_config_name(config)
+  (search_type isa AbstractString && search_type in _SEARCH_TYPES) || throw(InvalidValueError(
+    "SearchQuery's search_type is one of \"plain\", \"phrase\", \"websearch\" or \"raw\" (#31).", :format))
+  occursin('\0', text) && throw(InvalidValueError(
+    "SearchQuery's text contains a NUL character, which PostgreSQL text cannot hold.", :nul))
+  return FObject(function_name = "SEARCH_QUERY", column = Any[Value(String(text))],
+                 kwargs = Dict{String,Any}("config" => cfg, "search_type" => String(search_type)))
+end
+SearchQuery(x; kwargs...) = throw(QueryBuildError(
+  "SearchQuery takes the search text as a String; got a $(typeof(x)). To search a column, use the " *
+  "lookup: \e[4m\e[32m\"surname__@search\" => SearchQuery(\"senna\")\e[0m (#31)."))
+
+"""
+    SearchVector(fields...; config = nothing)
+
+The document side of a full-text search (PostgreSQL only): one or more columns, each cast to text,
+NULL-safe and joined by a space, then parsed into a `tsvector`. It is the vector of `SearchRank`.
+
+```julia
+SearchVector("forename", "surname"; config = "simple")
+# to_tsvector('simple'::regconfig, COALESCE(("Tb"."forename")::text, '') || ' ' || COALESCE(("Tb"."surname")::text, ''))
+```
+
+A field is a column path or an expression, as for `Lower`. A `SearchVector` is an operand, not a
+value: projecting one, comparing it or wrapping it in another function raises `QueryBuildError`, and
+putting one on the right of a filter pair raises `FilterError`. To filter a single column, use the
+`@search` lookup on it.
+"""
+function SearchVector(fields::_ScalarOperand...; config = nothing, weight = nothing)
+  isempty(fields) && throw(QueryBuildError("SearchVector takes at least one field (#31)."))
+  weight === nothing || throw(QueryBuildError(
+    "SearchVector's weight is not supported yet; every lexeme carries the default weight (#31)."))
+  any(_is_fts_operand, fields) && throw(QueryBuildError(
+    "A SearchVector's fields are text columns or expressions; a SearchVector or SearchQuery cannot be one (#31)."))
+  column = Any[_norm_fn_arg(f) for f in fields]
+  return FObject(function_name = "SEARCH_VECTOR", column = column, aggregate = _any_agg(column),
+                 kwargs = Dict{String,Any}("config" => Dialect.ts_config_name(config)))
+end
+SearchVector(fields...; kwargs...) = throw(QueryBuildError(
+  "SearchVector takes column paths (strings) or expressions as its fields (#31)."))
+
+# A query written as a bare string takes the config of the side written as an object.
+_search_query_operand(q::AbstractString, config) = SearchQuery(q; config = config)
+_search_query_operand(q, config) = _is_fts_node(q, "SEARCH_QUERY") ? q : throw(QueryBuildError(
+  "The query is a SearchQuery(...), or the search text as a String (#31)."))
+
+"""
+    SearchRank(vector::SearchVector, query; normalization = nothing, cover_density = false)
+
+How well each row's document matches a query (PostgreSQL only), as a `Float64`: `ts_rank`, or
+`ts_rank_cd` with `cover_density = true`. `query` is a `SearchQuery`, or the search text as a String,
+which is parsed with the vector's config. `normalization` is PostgreSQL's integer bitmask (0 to 63)
+for weighing the document's length; any other value raises `InvalidValueError`.
+
+Project it under a name, then filter and order by that name:
+
+```julia
+using PormG.Functions: SearchRank, SearchVector, SearchQuery
+
+M.Driver.objects.
+  values("forename", "surname",
+         "rank" => SearchRank(SearchVector("forename", "surname"; config = "simple"), "ayrton senna")).
+  filter("rank__@gte" => 0.01).
+  order_by("-rank")
+```
+
+Filter on a threshold rather than `> 0`: for a query of several words, a row that misses them can
+score a tiny positive value (`1e-20`) instead of `0`.
+"""
+function SearchRank(vector, query; normalization = nothing, cover_density = false, weights = nothing)
+  _is_fts_node(vector, "SEARCH_VECTOR") || throw(QueryBuildError(
+    "SearchRank ranks a SearchVector(...); pass the columns to rank as one (#31)."))
+  weights === nothing || throw(QueryBuildError(
+    "SearchRank's weights are not supported yet: SearchVector has no weight to apply them to (#31)."))
+  normalization === nothing || (normalization isa Integer && 0 <= normalization <= 63) ||
+    throw(InvalidValueError("SearchRank's normalization is an integer bitmask from 0 to 63 (#31).", :range))
+  cover_density isa Bool ||
+    throw(InvalidValueError("SearchRank's cover_density is true or false (#31).", :type))
+  q = _search_query_operand(query, vector.kwargs["config"])
+  column = Any[vector, q]
+  return FObject(function_name = "SEARCH_RANK", column = column, aggregate = _any_agg(column),
+                 formatter = Models.format_number_sql,
+                 kwargs = Dict{String,Any}("normalization" => normalization, "cover_density" => cover_density))
+end
+
+# PostgreSQL's ts_headline option names, in the order they are written. The values are checked here
+# and bound as ONE text parameter, never written into the SQL.
+const _HEADLINE_OPTIONS = (:start_sel => "StartSel", :stop_sel => "StopSel", :max_words => "MaxWords",
+                           :min_words => "MinWords", :short_word => "ShortWord",
+                           :highlight_all => "HighlightAll", :max_fragments => "MaxFragments",
+                           :fragment_delimiter => "FragmentDelimiter")
+const _HEADLINE_TEXT_OPTIONS = (:start_sel, :stop_sel, :fragment_delimiter)
+
+# One option as PostgreSQL's option parser (`deserialize_deflist`) reads it: a bare boolean, a bare
+# integer, or a quoted string with `'` doubled and `\` doubled. The parser reads `\\` inside quotes as
+# one backslash, so an undoubled pair arrived halved (measured on #31's review); this is PostgreSQL's
+# own `serialize_deflist` escaping.
+_headline_option_value(o::Bool) = o ? "true" : "false"
+_headline_option_value(o::Integer) = string(Int(o))
+_headline_option_value(o::AbstractString) = "'" * replace(o, "\\" => "\\\\", "'" => "''") * "'"
+
+function _headline_options(opts::NamedTuple)::Union{Nothing,String}
+  parts = String[]
+  for (key, name) in _HEADLINE_OPTIONS
+    o = opts[key]
+    o === nothing && continue
+    if key in _HEADLINE_TEXT_OPTIONS
+      o isa AbstractString || throw(InvalidValueError("SearchHeadline's $(key) is a String (#31).", :type))
+      occursin('\0', o) && throw(InvalidValueError("SearchHeadline's $(key) contains a NUL character.", :nul))
+    elseif key == :highlight_all
+      o isa Bool || throw(InvalidValueError("SearchHeadline's highlight_all is true or false (#31).", :type))
+    else
+      # PostgreSQL reads each as an int32, so a wider value is refused here rather than by the server.
+      (o isa Integer && !(o isa Bool) && 0 <= o <= typemax(Int32)) ||
+        throw(InvalidValueError("SearchHeadline's $(key) is a non-negative integer that fits an int32 (#31).", :range))
+    end
+    push!(parts, "$(name)=$(_headline_option_value(o))")
+  end
+  # PostgreSQL's own check, made here so it fails when the expression is built: 0 < MinWords < MaxWords,
+  # with its defaults of 15 and 35 standing in for the one not given. Skipped under HighlightAll, which
+  # ignores both, as PostgreSQL skips it.
+  max_w = something(opts.max_words, 35)
+  min_w = something(opts.min_words, 15)
+  (opts.highlight_all === true || (max_w > 0 && min_w > 0 && min_w < max_w)) || throw(InvalidValueError(
+    "SearchHeadline needs 0 < min_words < max_words; PostgreSQL's defaults are 15 and 35 (#31).", :range))
+  return isempty(parts) ? nothing : join(parts, ", ")
+end
+
+"""
+    SearchHeadline(expression, query; config = nothing, start_sel = nothing, stop_sel = nothing,
+                   max_words = nothing, min_words = nothing, short_word = nothing,
+                   highlight_all = nothing, max_fragments = nothing, fragment_delimiter = nothing)
+
+`expression`'s text with the words `query` matches marked (PostgreSQL only): `ts_headline`, as a
+`String`. The expression is cast to text, as each `SearchVector` field is. `query` is a `SearchQuery`, or the search text as a String. `config` defaults to the query's.
+
+The options are PostgreSQL's (`StartSel`, `StopSel`, `MaxWords`, …), written in snake case. They are
+checked when the expression is built and sent as one bound parameter: `start_sel`, `stop_sel` and
+`fragment_delimiter` are strings, `highlight_all` a `Bool`, and the rest non-negative integers with
+`0 < min_words < max_words`. Anything else raises `InvalidValueError`.
+
+```julia
+M.Race.objects.
+  filter("name__@search" => SearchQuery("grand prix"; config = "english")).
+  values("year", "hl" => SearchHeadline("name", SearchQuery("grand prix"; config = "english");
+                                        start_sel = "<b>", stop_sel = "</b>"))
+```
+
+`ts_headline` reads the whole document for every row it returns, so filter and limit the rows first.
+"""
+function SearchHeadline(expression::_ScalarOperand, query; config = nothing, start_sel = nothing,
+                        stop_sel = nothing, max_words = nothing, min_words = nothing,
+                        short_word = nothing, highlight_all = nothing, max_fragments = nothing,
+                        fragment_delimiter = nothing)
+  _is_fts_operand(expression) && throw(QueryBuildError(
+    "SearchHeadline marks up a text column or expression; a SearchVector or SearchQuery is not one (#31)."))
+  cfg = Dialect.ts_config_name(config)
+  q = _search_query_operand(query, cfg)
+  cfg = something(cfg, Some(q.kwargs["config"]))
+  options = _headline_options((; start_sel, stop_sel, max_words, min_words, short_word,
+                                 highlight_all, max_fragments, fragment_delimiter))
+  column = Any[_norm_fn_arg(expression), q]
+  options === nothing || push!(column, Value(options))
+  return FObject(function_name = "SEARCH_HEADLINE", column = column, aggregate = _any_agg(column),
+                 formatter = Models.format_text_sql, kwargs = Dict{String,Any}("config" => cfg))
+end
+SearchHeadline(expression, query; kwargs...) = throw(QueryBuildError(
+  "SearchHeadline marks up a column path (a string) or an expression (#31)."))
+
 
 MONTH(x) = Extract(x, "MONTH", formatter = Models.format_number_sql)
 YEAR(x) = Extract(x, "YEAR", formatter = Models.format_number_sql)

@@ -838,6 +838,10 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   if v.operator in ARRAY_CONTAINMENT_OPERATORS
     return _render_array_operator(v, column, instruc)
   end
+  # #31: full-text search — the same shape again, ahead of the JSON path and value arms below.
+  if v.operator in SEARCH_LOOKUP_OPERATORS
+    return _render_search_operator(v, column, instruc)
+  end
   # #27: comparison against a JSON path lookup (payload__key). Resolving `column` above populated
   # json_lookup_paths; the dedicated branch binds the RHS as plain text (the generic path would run
   # the JSON formatter on the RHS and throw on plain strings) and applies the PG numeric cast for </>.

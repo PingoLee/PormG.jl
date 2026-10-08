@@ -109,7 +109,7 @@ function _check_if_field_is_a_operator(field::String)
   common_operators = [PATTERN_LOOKUP_OPERATORS...,
     "exact", "in", "gt", "gte", "lt", "lte", "range", "nrange", "date", "isnull",
     "year", "iso_year", "quarter", "month", "day", "week", "week_day", "iso_week_day",
-    "hour", "minute", "second"]
+    "hour", "minute", "second", "search"]
   field in common_operators || return nothing
 
   # Reachability is COMPUTED from the registries, never listed a third time. That is the whole

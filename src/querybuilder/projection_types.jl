@@ -240,6 +240,9 @@ const _ALIAS_UNSUPPORTED_OPERATORS = Dict("jcontains" => "@jcontains", "has_key"
                                           "acontains" => "@acontains",
                                           "contained_by" => "@contained_by",
                                           "overlap" => "@overlap",
+                                          # #31: `@search` parses a text COLUMN, and an alias has no
+                                          # field to say it projects one.
+                                          "search" => "@search",
                                           (op => "@$(op)" for op in NETWORK_LOOKUP_OPERATORS)...)
 function _guard_alias_clause_operator(v::SQLTypeOper, label::AbstractString)
   spelling = get(_ALIAS_UNSUPPORTED_OPERATORS, v.operator, nothing)

@@ -120,7 +120,18 @@ const _AGG_WRAPPER_OTHER_SLOTS = (
 # a window function is never an aggregate (`_is_agg(::WindowFunction) = false`), it is evaluated
 # after GROUP BY rather than defining one.
 const _AGG_NOT_WRAPPERS = (:Value, :WindowOver, :WindowSpec, :Rank, :DenseRank, :RowNumber, :Lag,
-                           :Lead, :FirstValue, :LastValue, :NthValue)
+                           :Lead, :FirstValue, :LastValue, :NthValue,
+                           # #31: a `SearchQuery` wraps the search TEXT, a literal, never a column.
+                           :SearchQuery)
+
+# #31: the full-text wrappers. They carry the flag like every wrapper above, but they are PostgreSQL
+# only — SQLite refuses them at build — so the rendered GROUP BY check runs them on the PostgreSQL mock
+# alone, in a testset of their own.
+const _AGG_PG_ONLY_WRAPPERS = Dict{Symbol,Function}(
+  :SearchVector   => inner -> SearchVector(inner),
+  :SearchRank     => inner -> SearchRank(SearchVector(inner), "senna"),
+  :SearchHeadline => inner -> SearchHeadline(inner, "senna"),
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Enumeration guard: every `PormG.Functions` export is classified
@@ -130,12 +141,14 @@ const _AGG_NOT_WRAPPERS = (:Value, :WindowOver, :WindowSpec, :Rank, :DenseRank, 
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#702: every PormG.Functions export is classified" begin
   exported = Set(n for n in names(PormG.Functions) if n !== :Functions)
-  classified = union(Set(_AGG_AGGREGATES), Set(keys(_AGG_WRAPPERS)), Set(_AGG_NOT_WRAPPERS))
+  classified = union(Set(_AGG_AGGREGATES), Set(keys(_AGG_WRAPPERS)), Set(_AGG_NOT_WRAPPERS),
+                     Set(keys(_AGG_PG_ONLY_WRAPPERS)))
   # An unclassified export is the failure this file exists for; a stale entry is a typo.
   @test setdiff(exported, classified) == Set{Symbol}()
   @test setdiff(classified, exported) == Set{Symbol}()
   # The three lists are disjoint, so no export is classified twice.
-  @test length(classified) == length(_AGG_AGGREGATES) + length(_AGG_WRAPPERS) + length(_AGG_NOT_WRAPPERS)
+  @test length(classified) == length(_AGG_AGGREGATES) + length(_AGG_WRAPPERS) + length(_AGG_NOT_WRAPPERS) +
+                              length(_AGG_PG_ONLY_WRAPPERS)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -162,6 +175,12 @@ end
     @testset "$label" begin
       @test _is_agg(build(Sum("points"))) === true
       @test _is_agg(build(Value(1))) === false
+    end
+  end
+  for (name, build) in sort!(collect(_AGG_PG_ONLY_WRAPPERS), by = first)
+    @testset "$name (PostgreSQL only)" begin
+      @test _is_agg(build(Max("surname"))) === true
+      @test _is_agg(build("surname")) === false
     end
   end
   @testset "window functions stay non-aggregate" begin
@@ -235,6 +254,22 @@ end
         @test occursin(r"GROUP BY 1\s*$", insp[:sql_text])
         assert_marker_count(insp, backend)
       end
+    end
+  end
+end
+
+# #31: the same check for the PostgreSQL-only full-text wrappers, on the PostgreSQL mock.
+@testset "#31: a full-text wrapper over an aggregate is left out of GROUP BY" begin
+  Model_ = _AGG_FLAG_MODELS[1][2]
+  # A bare `SearchVector` is an operand, never a projection; it is rendered here inside `SearchRank`.
+  for (name, build) in sort!(collect(_AGG_PG_ONLY_WRAPPERS), by = first)
+    name === :SearchVector && continue
+    @testset "postgres — $name" begin
+      q = Model_.objects
+      q.values("raceid", "x" => build(Max("surname")))
+      insp = inspect_query(q)
+      @test occursin(r"GROUP BY 1\s*$", insp[:sql_text])
+      assert_marker_count(insp, :postgres)
     end
   end
 end

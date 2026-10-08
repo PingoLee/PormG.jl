@@ -37,7 +37,8 @@ import PormG: PormGError, FieldAccessError, UnknownFieldError, AmbiguousFieldErr
 import PormG: with_location
 import PormG: PormGsuffix, PormGtransform, JSON_CONTAINMENT_OPERATORS, ARRAY_CONTAINMENT_OPERATORS,
               run_in_transaction,
-              NETWORK_CONTAINMENT_OPERATORS, NETWORK_LOOKUP_OPERATORS   # #904
+              NETWORK_CONTAINMENT_OPERATORS, NETWORK_LOOKUP_OPERATORS,  # #904
+              SEARCH_LOOKUP_OPERATORS                                   # #31
 # #604: the LIKE-family operator sets. Exporting them from `Kernel` is not enough — this explicit
 # import is what binds them inside `QueryBuilder`, where `_apply_like_wildcards` (parameters.jl) and
 # the render dispatch (filter_nodes.jl, filter_pairs.jl, field_resolution.jl) read them.
@@ -144,6 +145,7 @@ export Sum, Avg, Count, Max, Min, When, F, Exists, OuterRef, Subquery, CTE, Join
 export WindowOver, WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
 export Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim
 export Floor, Ceil, Sqrt, Exp, Ln, Power, Mod
+export SearchQuery, SearchVector, SearchRank, SearchHeadline   # #31
 
 
 # TODO: finish this function to get the joins from filters

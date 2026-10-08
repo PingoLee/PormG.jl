@@ -73,7 +73,23 @@ function _check_fixed_shape_lookup(suffix::AbstractString, value)
   suffix in ARRAY_CONTAINMENT_OPERATORS && !(value isa SQLType) &&
     throw(FilterError("Error in filter, '$(suffix)' takes a list of elements, even for one: " *
                       "wrap the value in a Vector, \e[4m\e[32m[value]\e[0m; got a single $(typeof(value))"))
+  # #31: full-text search matches a query, so its value is the search text or a `SearchQuery` — not
+  # a column, a number, or any other expression, each of which would be parsed as a tsquery.
+  suffix in SEARCH_LOOKUP_OPERATORS && !(value isa AbstractString || _is_fts_node(value, "SEARCH_QUERY")) &&
+    throw(FilterError("Error in filter, '$(suffix)' takes the search text (a String) or a " *
+                      "\e[4m\e[32mSearchQuery(...)\e[0m; got " *
+                      "$(value isa SQLType ? "a column expression" : "a $(typeof(value))")"))
   return nothing
+end
+
+# #31: a `SearchVector`/`SearchQuery` on the right of any lookup but `@search`. Refused at parse, in
+# the caller's words, rather than as the render-time "not a value" error it would otherwise reach.
+function _check_fts_rhs(path::Vector{String}, value)
+  _is_fts_operand(value) || return nothing
+  path[end] in SEARCH_LOOKUP_OPERATORS && _is_fts_node(value, "SEARCH_QUERY") && return nothing
+  throw(FilterError("Error in filter '$(join(path, "__@"))': a SearchVector or SearchQuery is not a " *
+                    "value to compare. Match a text column with " *
+                    "\e[4m\e[32m\"surname__@search\" => SearchQuery(…)\e[0m (#31)."))
 end
 
 # #997: true for the `@yyyy_q` / `@yyyy_quad` label column — a `Concat` node that `Y_Q` / `Y_QUAD`
@@ -288,6 +304,7 @@ function _get_pair_to_oper(x::Pair{Vector{String},SubqueryObject})
 end
 # Allow Case/When and other FObject expressions as filter RHS values
 function _get_pair_to_oper(x::Pair{Vector{String},T}) where T<:SQLTypeFunction
+  _check_fts_rhs(x.first, x.second)   # #31
   if haskey(PormGsuffix, x.first[end])
     _check_fixed_shape_lookup(x.first[end], x.second)
     _check_column_rhs_lookup(x.first)

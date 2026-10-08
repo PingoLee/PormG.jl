@@ -182,8 +182,34 @@ function _render_array_operator(v::SQLTypeOper, column::String, instruc::SQLInst
   return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, placeholder)
 end
 
+# #31: render the `@search` lookup — `to_tsvector(<config>, col) @@ <tsquery>` — on a text column: a
+# bare one, or one reached through a ForeignKey or a CTE (read after `column` renders, as the array
+# lookups are). The value is the search text, parsed as a plain `SearchQuery` with no config as in
+# Django, or a `SearchQuery`, whose config the column is parsed with too.
+#
+# A text column is the only operand today. Part 2 of #31 adds a stored tsvector column, which is
+# searched as it is rather than through `to_tsvector`; that is the branch on `field.type` below.
+function _render_search_operator(v::SQLTypeOper, column::String, instruc::SQLInstruction)::String
+  instruc.connection isa PormGSQLite && throw(Dialect.fts_capability_error("The @search lookup"))
+  field, _ = _operand_field(v, instruc)
+  (field !== nothing && field.type in ("VARCHAR", "TEXT")) ||
+    throw(FilterError("The \e[31m@search\e[0m lookup searches a text column (a CharField or " *
+                      "TextField), and \e[31m$(_array_lookup_label(v))\e[0m is not one. To search " *
+                      "several columns, or an expression, rank them: " *
+                      "\e[4m\e[32mSearchRank(SearchVector(…), SearchQuery(…))\e[0m (#31)."))
+  # The parse ladder admits only these two (`_check_fixed_shape_lookup`); this is the fail-safe for a
+  # spelling that bypasses it.
+  query = v.values isa AbstractString ? SearchQuery(v.values) : v.values
+  _is_fts_node(query, "SEARCH_QUERY") ||
+    throw(FilterError("The \e[31m@search\e[0m lookup takes the search text or a SearchQuery(...) (#31)."))
+  vector = Dialect.ts_vector_sql(column, query.kwargs["config"], instruc.connection)
+  rendered = _on_join_right(() -> _render_fts_operand(query, instruc), instruc)
+  return Dialect.search(instruc.connection, vector, rendered)
+end
+
 # The path an array lookup names, for its messages: the field path the caller wrote, or the memo
 # key's path for a joined or CTE column. `"this expression"` for an operand with neither (`@len`).
+# The `@search` lookup's messages use it too (#31).
 function _array_lookup_label(v::SQLTypeOper)::String
   c = v.column
   c isa SQLField && c.field isa String && return c.field

@@ -60,6 +60,8 @@ using PormG.Functions: Extract
 using PormG.Functions: Cast
 # #903 — the `Value(ip"…")` SQLite claim on the fields page.
 using PormG.Functions: Value
+# #31 — the full-text search claims on read/full_text_search.md, postgres.md and errors.md.
+using PormG.Functions: SearchQuery, SearchVector, SearchRank, SearchHeadline
 import Sockets
 import DataFrames
 # #733 — the repair-op claim reads a history table, so it needs the SQLite driver (idempotent reload).
@@ -982,6 +984,87 @@ const DOCERR_CASES = [
         BackendCapabilityError,
         () -> DOCERR_DRIVER_SL.objects.filter("surname__@nregex" => "nen\$").
             list(show_query = :dict),
+    ),
+    # #31 — full-text search. Every claim the page makes, one row each: the SQLite refusals (the lookup
+    # and both value functions are separate arms), the config's identifier check, and the operand and
+    # column refusals on PostgreSQL.
+    (
+        "read/full_text_search.md + postgres.md + errors.md — `@search` requires PostgreSQL",
+        BackendCapabilityError,
+        () -> DOCERR_DRIVER_SL.objects.filter("surname__@search" => "senna").
+            list(show_query = :dict),
+    ),
+    (
+        "read/full_text_search.md + errors.md — `SearchRank` requires PostgreSQL",
+        BackendCapabilityError,
+        () -> DOCERR_DRIVER_SL.objects.values("r" => SearchRank(SearchVector("surname"), "senna")).
+            list(show_query = :dict),
+    ),
+    (
+        "read/full_text_search.md + errors.md — `SearchHeadline` requires PostgreSQL",
+        BackendCapabilityError,
+        () -> DOCERR_DRIVER_SL.objects.values("h" => SearchHeadline("surname", "senna")).
+            list(show_query = :dict),
+    ),
+    (
+        "read/full_text_search.md — a config that is not a name raises InvalidValueError",
+        InvalidValueError,
+        () -> SearchQuery("senna"; config = "english'::regconfig, 'x"),
+    ),
+    (
+        "read/full_text_search.md — an unknown search_type raises InvalidValueError",
+        InvalidValueError,
+        () -> SearchQuery("senna"; search_type = "fuzzy"),
+    ),
+    (
+        "read/full_text_search.md — SearchRank normalization outside 0..63 raises InvalidValueError",
+        InvalidValueError,
+        () -> SearchRank(SearchVector("surname"), "senna"; normalization = 64),
+    ),
+    (
+        "read/full_text_search.md — a bad SearchHeadline option raises InvalidValueError",
+        InvalidValueError,
+        () -> SearchHeadline("surname", "senna"; max_words = 10, min_words = 10),
+    ),
+    (
+        "read/full_text_search.md — SearchRank's vector must be a SearchVector",
+        QueryBuildError,
+        () -> SearchRank("surname", "senna"),
+    ),
+    (
+        "read/full_text_search.md — `@search` on a column that is not text raises FilterError",
+        FilterError,
+        () -> DOCERR_DRIVER_PG.objects.filter("driverid__@search" => "1").
+            list(show_query = :dict),
+    ),
+    (
+        "read/full_text_search.md — `@search` takes the text or a SearchQuery",
+        FilterError,
+        () -> DOCERR_DRIVER_PG.objects.filter("surname__@search" => 1).
+            list(show_query = :dict),
+    ),
+    (
+        "read/full_text_search.md — a SearchVector projected raises QueryBuildError",
+        QueryBuildError,
+        () -> DOCERR_DRIVER_PG.objects.values("v" => SearchVector("surname")).
+            list(show_query = :dict),
+    ),
+    (
+        "read/full_text_search.md — a SearchQuery on the right of another lookup raises FilterError",
+        FilterError,
+        () -> DOCERR_DRIVER_PG.objects.filter("surname" => SearchQuery("senna")).
+            list(show_query = :dict),
+    ),
+    (
+        "read/full_text_search.md — weights raise QueryBuildError",
+        QueryBuildError,
+        () -> SearchVector("surname"; weight = "A"),
+    ),
+    (
+        "read/full_text_search.md — `@search` on a projection alias raises FilterError",
+        FilterError,
+        () -> DOCERR_DRIVER_PG.objects.values("s" => PormG.Functions.Lower("surname")).
+            filter("s__@search" => "senna").list(show_query = :dict),
     ),
     # #635 — the filters page says a Julia `Regex` value is refused with `FilterError`.
     (

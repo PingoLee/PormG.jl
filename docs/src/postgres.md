@@ -173,6 +173,12 @@ returns a different answer, so a test suite running on SQLite fails where produc
   ```julia
   M.Driver.objects.filter("surname__@regex" => "^Ver")   # surnames starting with "Ver"
   ```
+- **Full-text search** — the `@search` lookup and `SearchQuery`, `SearchVector`, `SearchRank` and
+  `SearchHeadline`, over `tsvector`/`tsquery`. SQLite's FTS5 is a separate index table with its own
+  syntax and ranking, so PormG does not emulate it. See [Full-Text Search](read/full_text_search.md).
+  ```julia
+  M.Driver.objects.filter("surname__@search" => SearchQuery("senna"; config = "simple"))
+  ```
 - **Network containment** — `@net_contained` (`<<`), `@net_contained_or_equal` (`<<=`),
   `@net_contains` (`>>`), `@net_contains_or_equals` (`>>=`), `@net_overlaps` (`&&`), `@family` and
   `@prefixlen`, on a `GenericIPAddressField` or `CIDRField` column. See
@@ -232,6 +238,7 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 | **Network lookups** (`@net_contained`, `@net_contains`, `@net_overlaps`, …, `@family`, `@prefixlen`) | `inet` operators | `BackendCapabilityError` |
 | **Accent-insensitive lookups** (`@iunaccent_*`, `@niunaccent_*`) | `unaccent` extension | `BackendCapabilityError` |
 | **Regex lookups** (`@regex`, `@iregex`, `@nregex`, `@niregex`) | POSIX `~` / `~*` | `BackendCapabilityError` |
+| **Full-text search** (`@search`, `SearchQuery`, `SearchVector`, `SearchRank`, `SearchHeadline`) | `tsvector` / `tsquery` | `BackendCapabilityError` |
 | **`Cast` to a time type** | `::date`, `::timestamp`, `::time`, `::interval` | `date` renders `date(x)`; the others raise `BackendCapabilityError` |
 | **`ToChar` formats** | any `to_char` template | the portable table only; others raise `BackendCapabilityError` |
 | **`Extract` parts** | every PostgreSQL `EXTRACT` field, any case; a non-field raises `InvalidValueError` | `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY`, any case; other PostgreSQL fields raise `BackendCapabilityError`, a non-field `InvalidValueError` |

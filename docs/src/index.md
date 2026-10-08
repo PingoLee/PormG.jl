@@ -325,6 +325,7 @@ This documentation is organized into the following sections:
 |  [Functions and Dates](read/functions_and_dates.md) | SQL functions and date-oriented querying. |
 |  [Subqueries and CTEs](read/subqueries_and_ctes.md) | `IN` subqueries, `.with(...)` CTEs, and their `"<cte>__<column>"` columns. |
 |  [Field Expressions](read/field_expressions.md) | `F()` expressions, column arithmetic, aggregate ratios. |
+|  [Full-Text Search](read/full_text_search.md) | PostgreSQL full-text search: `@search`, ranking and headlines. |
 |  [Q Objects](read/q_objects.md) | Complex boolean logic with `Q`, `Qor`, and `NOT`. |
 | [Import from Django](import_django.md) | Migrating models and data from Django projects. |
 | [Async & Concurrency](async.md) | Task-based concurrent queries, fan-out patterns, `fetch_async`, pool interplay. |

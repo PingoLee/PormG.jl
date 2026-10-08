@@ -199,6 +199,10 @@ An `ArrayField` (PostgreSQL only) takes `@acontains` (`@>`), `@contained_by` (`<
 (`&&`) with a `Vector` value, an index (`"tyre_compounds__0"`, 0-based) and a slice
 (`"pit_laps__0_2"`). See [Filters and Aggregates](read/filters_and_aggregates.md) → *Array Lookups*.
 
+`field__@search` (PostgreSQL only) is full-text search on a text column:
+`"surname__@search" => "senna"`, or `=> SearchQuery("senna"; config = "simple")` for a config and a
+search type. See [Full-Text Search](read/full_text_search.md).
+
 ### Transform Functions
 
 | Transform | Description | Example |
@@ -352,6 +356,18 @@ df = M.Result.objects.values(
 | `Cast("field", type)` | Type casting — a field object or a [type string](read/functions_and_dates.md#Cast-—-Type-Conversion) | `Cast("points", IntegerField())`, `Cast("points", "numeric(10,2)")` |
 | `Extract("field", "part")` | Extract date/time part | `Extract("dob", "year")` |
 | `ToChar("field", fmt)` | Format to string | `ToChar("dob", "YYYY-MM")` |
+
+### Full-Text Search Functions (PostgreSQL)
+
+| Function | Description | Example |
+| :--- | :--- | :--- |
+| `SearchQuery(text; config, search_type)` | The query: `plainto_tsquery`, `phraseto_tsquery`, `websearch_to_tsquery` or `to_tsquery` | `"surname__@search" => SearchQuery("senna"; config = "simple")` |
+| `SearchVector(fields...; config)` | The document: the fields cast to text, NULL-safe, joined by a space | `SearchVector("forename", "surname"; config = "simple")` |
+| `SearchRank(vector, query; normalization, cover_density)` | `ts_rank` / `ts_rank_cd`, as a `Float64` | `"rank" => SearchRank(SearchVector("forename", "surname"), "senna")` |
+| `SearchHeadline(field, query; config, start_sel, stop_sel, …)` | `ts_headline`: the text with the matched words marked | `"hl" => SearchHeadline("name", "grand prix"; start_sel = "<b>", stop_sel = "</b>")` |
+
+Each raises `BackendCapabilityError` on SQLite when the query is built. The config, the search types
+and the options are in [Full-Text Search](read/full_text_search.md).
 
 An operand of `Coalesce`, `Greatest`, `Least`, `NullIf`, `Power`, `Mod` and `Concat` is read by its type. A string is a column path. A number, a `Bool`, or a date or time (`Date`, `DateTime`, `ZonedDateTime`, `Time`) is a literal that is bound as a parameter, so `Coalesce("points", 0)` means `Coalesce("points", Value(0))`. Wrap a string literal in `Value`, as in `NullIf("code", Value(""))`. Any other value raises `QueryBuildError` when the expression is built.
 
@@ -989,6 +1005,8 @@ The library in full — the same index `?PormG.Functions` prints in the REPL:
 **Math** — `Abs`, `Round`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Power`, `Mod`
 
 **Type / value** — `Cast`, `Extract`, `ToChar`, `Value`, `Coalesce`, `Greatest`, `Least`, `NullIf`
+
+**Full-text search** (PostgreSQL) — `SearchQuery`, `SearchVector`, `SearchRank`, `SearchHeadline` — see [Full-Text Search](read/full_text_search.md)
 
 ### Result-shape contract for `list()`
 

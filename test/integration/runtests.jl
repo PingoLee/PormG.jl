@@ -70,6 +70,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "Network Address Fields (#28)" begin include("test_network_address_fields.jl") end
     @testset "Array Field (#28)"            begin include("test_array_field.jl")         end
     @testset "JSON/JSONB Lookups (#27)"      begin include("test_json_fields.jl")         end
+    @testset "Full-Text Search (#31)"        begin include("test_full_text_search.jl")    end
     @testset "Django Data-Type Contracts"   begin include("test_django_contract.jl")    end
     @testset "Importer / Introspection"     begin include("test_importers_introspection.jl") end
     @testset "Table Rename (#615)"          begin include("test_migration_rename_table.jl") end

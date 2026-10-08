@@ -20,6 +20,7 @@ const _SQLITE_LOCK_RETRY_MAX_DELAY = 0.25
 
 function _is_sqlite_locked_error(e)::Bool
   msg = lowercase(string(e))
+  # server-text-match-ok: SQLite has no SQLSTATE here and never localizes its messages
   return occursin("database is locked", msg) || occursin("database table is locked", msg)
 end
 
@@ -138,6 +139,7 @@ end
 
 function PormG.backend_is_connection_error(pool::PormGSQLite, e)
   msg = lowercase(string(e))
+  # server-text-match-ok: SQLite has no SQLSTATE here and never localizes its messages
   return occursin("database is closed", msg) ||
          occursin("database connection is closed", msg) ||
          occursin("disk i/o error", msg)
@@ -150,6 +152,7 @@ end
 # `SQLiteException` type for every open failure, so type-matching can't separate causes (#72).
 function PormG.backend_is_permanent_connect_error(pool::PormGSQLite, e)
   msg = lowercase(string(e))
+  # server-text-match-ok: SQLite has no SQLSTATE here and never localizes its messages
   return occursin("unable to open database file", msg)
 end
 
@@ -199,13 +202,14 @@ function PormG.backend_classify_error(pool::PormGSQLite, e::SQLite.SQLiteExcepti
   PormG.backend_is_connection_error(pool, e) && return :operational
   msg = lowercase(string(e.msg))
   # SQLite spells every constraint failure "<KIND> constraint failed[: table.column]".
+  # server-text-match-ok: SQLite's own literal constraint text; no result code reaches here (above)
   occursin("constraint failed", msg) && return :integrity
   # Contention. `_sqlite_with_retry` above already burns 20 attempts on these, so reaching here
   # means the lock never cleared — transient, and the caller may reasonably retry.
-  (occursin("database is locked", msg) || occursin("database table is locked", msg)) && return :operational
-  occursin("no such table", msg) && return :statement
-  occursin("no such column", msg) && return :statement
-  occursin("syntax error", msg) && return :statement
+  (occursin("database is locked", msg) || occursin("database table is locked", msg)) && return :operational  # server-text-match-ok: SQLite, as above
+  occursin("no such table", msg) && return :statement    # server-text-match-ok: SQLite, as above
+  occursin("no such column", msg) && return :statement   # server-text-match-ok: SQLite, as above
+  occursin("syntax error", msg) && return :statement     # server-text-match-ok: SQLite, as above
   # Unrecognized: core maps :unknown onto StatementError, so the umbrella still has no hole.
   return :unknown
 end

@@ -322,6 +322,7 @@ end
 function _is_conflict_target_error(e)
   e isa DatabaseError && e.sqlstate !== nothing && return e.sqlstate == "42P10"
   low = lowercase(sprint(showerror, e))
+  # server-text-match-ok: SQLite's arm (a PostgreSQL error with a SQLSTATE returned above); SQLite has no SQLSTATE and never localizes
   return occursin("on conflict", low) && (occursin("unique", low) || occursin("exclusion", low) ||
          occursin("does not match", low) || occursin("no primary key", low))
 end

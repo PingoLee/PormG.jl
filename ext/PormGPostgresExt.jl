@@ -99,7 +99,7 @@ function _parse_failure(e)::InvalidConfigurationError
   msg = e.msg
   keyword = ""
   for pattern in _KEYWORD_POSITIONS
-    m = match(pattern, msg)
+    m = match(pattern, msg)   # server-text-match-ok: Postgres.jl's own parse message, client-side text
     if m !== nothing && m[1] in _CONNINFO_KEYWORDS
       keyword = " (parameter `$(m[1])`)"
       break
@@ -369,6 +369,7 @@ function _is_lost_connection(e, depth::Int = 4)::Bool
   e isa CompositeException && return any(inner -> _is_lost_connection(inner, depth), e.exceptions)
   # The server named a code: trust it over any text (a DETAIL can quote stored user data).
   e isa Postgres.Error && return e.code in _LOST_CONNECTION_CODES
+  # server-text-match-ok: Postgres.jl's own client-side text, not a server message
   e isa Postgres.PostgresInterfaceError && return startswith(e.msg, _CLOSED_CONNECTION_PREFIX)
   (e isa EOFError || e isa Base.IOError) && return true
   # The socket layer (Reseau) reports a reset or a closed socket as a `SystemError` carrying the errno,

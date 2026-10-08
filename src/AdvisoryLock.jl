@@ -16,7 +16,7 @@ import PormG.ConnectionPool: NUL_REFUSAL_REASON
 # Ctrl-C leaves it holding a connection the driver has not let go of — and unlike a plain query, a
 # session-level advisory lock is still held on it. Renewal is what releases that lock.
 import PormG.ConnectionPool: _await_abandoned, _recover_abandoned_connection!
-import PormG: PormGError, OperationalError, BackendCapabilityError, InvalidValueError
+import PormG: PormGError, DatabaseError, OperationalError, BackendCapabilityError, InvalidValueError
 
 import PormG: @pormg_debug
 export with_advisory_lock
@@ -231,18 +231,25 @@ function with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractStrin
       _await_lock_handle(pool, await_state,
                          backend_execute_async(pool, conn, "SET statement_timeout = $(timeout_ms)", nothing))
 
+      # Taken before the lock query is sent, so the server's statement clock starts after this one.
+      started = time_ns()
       try
         got_lock = _exec_lock_query(pool, conn, BLOCK_SQL, key, await_state)
       catch e
-        # `sprint(showerror, e)`, not `string(e)` — and this was a latent bug, not just style.
-        # `_exec_lock_query` awaits an async handle, so a server-side cancellation used to arrive
-        # here as a `TaskFailedException`, whose `string()` does NOT include the inner driver
-        # message (the same fact `_is_benign_rollback_error`'s docstring records). The substring
-        # below therefore never matched and this branch had never once fired: the LibPQ
-        # `QueryCanceled` propagated instead of degrading to `got_lock = false`. The seam added
-        # above now unwraps, and `showerror` renders the cause (#268).
-        msg = lowercase(sprint(showerror, e))
-        if occursin("canceling statement due to statement timeout", msg)
+        # The timeout is recognized by SQLSTATE, never by the message (#1010): PostgreSQL localizes
+        # "canceling statement due to statement timeout" by `lc_messages`, so on a `pt_BR` server
+        # a text match never fired and the raw `57014` replaced the lock-holder error (#737).
+        #
+        # `57014` alone is not enough, because every cancel shares it. Two guards keep it meaning
+        # `statement_timeout`:
+        #   * an ABANDONED await is PormG's own #315 cancel, which the `finally` must see as such;
+        #   * a timeout cannot fire before `timeout_ms` has passed on the server, and the server's
+        #     clock started after `started`. A `57014` that arrives sooner is an external cancel
+        #     (`pg_cancel_backend`), and it propagates as it did before. `timeout_ms = 0` disables
+        #     `statement_timeout` altogether, so there every `57014` is an external cancel.
+        timed_out = e isa DatabaseError && e.sqlstate == "57014" && !await_state.abandoned &&
+                    timeout_ms > 0 && (time_ns() - started) ÷ 1_000_000 >= timeout_ms
+        if timed_out
           @warn "Advisory lock timed out on server-side statement_timeout" key=key timeout_ms=timeout_ms
           got_lock = false
         else

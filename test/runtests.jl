@@ -213,6 +213,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Pool Stats Snapshot (#127)" include("unit/test_connection_pool_stats.jl")
     @testset "Connection-Leak Detection (#127)" include("unit/test_connection_pool_leak.jl")
     @testset "Pool Liveness After a Server-Side Kill (#442)" include("unit/test_connection_pool_liveness.jl")
+    @testset "No Decision Keys on a Localized Server Message (#1010)" include("unit/test_localized_server_text.jl")
     @testset "Savepoint Naming (#26)" include("unit/test_savepoint_naming.jl")
     @testset "Sequence Sync (Postgres + SQLite)" include("unit/test_sequence_sync.jl")
     @testset "Sequence Resync as an Operation (#358)" include("unit/test_resync_sequences.jl")

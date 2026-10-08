@@ -3119,6 +3119,7 @@ try
   live_schema = read_live_schema(connection; ignore_table = ignore)
 catch e
   error_message = sprint(showerror, e)
+  # server-text-match-ok: dead arm, nothing raises this phrase; #1018 removes it
   if occursin("Table definition not found", error_message)
     @info("The database is empty, that is migrate all tables") # TODO, impruve this message
   else

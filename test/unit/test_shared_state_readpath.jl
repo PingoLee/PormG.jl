@@ -178,7 +178,8 @@ end
     limit_before = q.object.limit
     sql = q.first(show_query = :sql)
     @test sql isa String && occursin("WITH", sql)
-    @test occursin("LIMIT 1", sql)                 # first() applied limit(1) to its internal copy
+    @test occursin(r"LIMIT (\$\d+|\?)", sql)     # first() applied limit(1) to its internal copy,
+    @test last(q.first(show_query = :params)) == 1  # bound like every LIMIT (#46)
     @test q.object.limit == limit_before            # #199: copy-first — caller's limit is untouched
     @test q.object.parameters === nothing           # parameters did NOT leak
     @test !haskey(q.object.ctes["agg"], "model")    # and the CTE "model" did NOT leak

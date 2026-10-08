@@ -158,7 +158,7 @@ println(inspection[:dialect])    # :postgresql or :sqlite
 ```
 
 !!! note
-    `LIMIT` and `OFFSET` values are rendered as literal integers in the SQL string. They do **not** appear in `inspection[:parameter_buckets]` or `inspection[:parameters]`. This is by design.
+    `LIMIT` and `OFFSET` values are bound parameters like every other value (#46), so one statement text serves every page size. They come last in `inspection[:parameters]` — LIMIT, then OFFSET — and on SQLite they sit in their own `inspection[:parameter_buckets][:limit]` bucket. An offset with no limit renders `LIMIT -1 OFFSET ?` on SQLite, whose grammar has no standalone `OFFSET`; PostgreSQL keeps the bare `OFFSET $N`.
 
 ---
 

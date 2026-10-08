@@ -136,7 +136,8 @@ end
   q.order_by("points")
   sql = q.last(show_query = :sql)
   @test occursin("DESC", sql)
-  @test occursin("LIMIT 1", sql)
+  @test occursin("LIMIT \$1", sql)
+  @test q.last(show_query = :params) == [1]   # the LIMIT binds (#46)
 
   # Explicit DESC ordering ("-points") → last() renders ASC.
   q2 = GocPg.objects
@@ -146,7 +147,7 @@ end
   # No ordering → falls back to primary-key DESC so last() is well-defined (Django parity).
   sql_pk = GocPg.objects.last(show_query = :sql)
   @test occursin("\"id\" DESC", sql_pk)
-  @test occursin("LIMIT 1", sql_pk)
+  @test occursin("LIMIT \$1", sql_pk)
 
   # NULLS placement must invert together with the direction: ASC NULLS FIRST → DESC NULLS LAST.
   # (Guards the `_invert_order` bug — `_invert_order!` before #540 — where two sequential `&&`
@@ -198,8 +199,9 @@ end
   @test q2.object.limit == 20
   @test q2.object.offset == 10
   sql2 = q2.list(show_query = :sql)
-  @test occursin("LIMIT 20", sql2)
-  @test occursin("OFFSET 10", sql2)
+  @test occursin("LIMIT \$1", sql2)
+  @test occursin("OFFSET \$2", sql2)
+  @test q2.list(show_query = :params) == [20, 10]   # bound, LIMIT first (#46)
 
   # One-argument form: LIMIT only. offset stays 0, so NO OFFSET clause is emitted at all.
   q1 = GocPg.objects
@@ -207,8 +209,9 @@ end
   @test q1.object.limit == 20
   @test q1.object.offset == 0
   sql1 = q1.list(show_query = :sql)
-  @test occursin("LIMIT 20", sql1)
+  @test occursin("LIMIT \$1", sql1)
   @test !occursin("OFFSET", sql1)
+  @test q1.list(show_query = :params) == [20]
 
   # page(n) is limit-only, NOT a pagination reset: an offset already on the handler survives it.
   # This is the contract that separates it from page(limit, offset).
@@ -217,7 +220,8 @@ end
   q3.page(5)
   @test q3.object.limit == 5
   @test q3.object.offset == 30
-  @test occursin("OFFSET 30", q3.list(show_query = :sql))
+  @test occursin("OFFSET \$2", q3.list(show_query = :sql))
+  @test q3.list(show_query = :params) == [5, 30]
 
   # Chainable: the ChainCaller returns the handler, so page() composes like every other mutator.
   q4 = GocPg.objects

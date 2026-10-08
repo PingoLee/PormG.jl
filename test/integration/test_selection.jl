@@ -1020,6 +1020,49 @@ end
     @test df[1, :resultid] == 1
   end
 
+  @testset "offset alone, exists() past an offset, and a limited Subquery (#46)" begin
+    # #46: LIMIT / OFFSET bind as parameters. An offset with no limit was a syntax error on SQLite,
+    # whose grammar has no standalone OFFSET; it now renders `LIMIT -1 OFFSET ?` there.
+    query = M.Result.objects
+    query.filter("statusid__status" => "Finished")
+    query.values("resultid")
+    query.order_by("resultid")
+    all_ids = (query.copy() |> DataFrame).resultid
+    @test length(all_ids) > 5
+    @test (query.copy().offset(5) |> DataFrame).resultid == all_ids[6:end]
+
+    # exists() keeps its own LIMIT 1 and binds the caller's offset: the last row is still there,
+    # one past it is not.
+    @test query.copy().offset(length(all_ids) - 1).exists()
+    @test !query.copy().offset(length(all_ids)).exists()
+
+    # A scalar Subquery carrying its own bound LIMIT, under an outer bound LIMIT. The oracle is the
+    # standings table read whole and reduced in Julia, not a second LIMIT query.
+    latest = M.Driver_standings.objects
+    latest.filter("driverid" => OuterRef("driverid"))
+    latest.values("position")
+    latest.order_by("-driverstandingsid")
+    latest.limit(1)
+    drivers = M.Driver.objects
+    drivers.filter("nationality" => "Brazilian")
+    drivers.values("driverid", "latest" => Subquery(latest))
+    drivers.order_by("driverid")
+    drivers.limit(3)
+    df = drivers |> DataFrame
+    @test nrow(df) == 3
+
+    brazilian = M.Driver.objects.filter("nationality" => "Brazilian").values("driverid") |> DataFrame
+    @test df.driverid == sort(brazilian.driverid)[1:3]
+    standings = M.Driver_standings.objects.
+      filter("driverid__@in" => df.driverid).
+      values("driverid", "driverstandingsid", "position") |> DataFrame
+    for row in eachrow(df)
+      mine = standings[standings.driverid .== row.driverid, :]
+      expected = isempty(mine) ? missing : mine[argmax(mine.driverstandingsid), :position]
+      @test isequal(row.latest, expected)
+    end
+  end
+
   @testset "page in one-liner query chain" begin
     df = M.Circuit.objects.filter(
       "country__@icontains" => "a"

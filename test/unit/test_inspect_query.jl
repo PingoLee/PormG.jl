@@ -238,10 +238,11 @@ PormG.config["default"] = MockSettings
     @test res[:sql_text] isa String
     @test contains(res[:sql_text], "DISTINCT")
     @test contains(res[:sql_text], "ORDER BY")
-    @test contains(res[:sql_text], "LIMIT 10")
-    @test contains(res[:sql_text], "OFFSET 5")
-    @test res[:parameters] == ["Dutch"]
-    @test res[:parameter_count] == 1
+    # #46: LIMIT and OFFSET bind after the filter value, in text order.
+    @test contains(res[:sql_text], "LIMIT \$2")
+    @test contains(res[:sql_text], "OFFSET \$3")
+    @test res[:parameters] == ["Dutch", 10, 5]
+    @test res[:parameter_count] == 3
   end
 
   # ===== Section 6: Query Projection (Values) =====

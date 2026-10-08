@@ -122,10 +122,11 @@ end
 # before any queryset exists.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1027: a Bool, Float or Decimal literal is refused at construction" begin
-  for (lit, named) in (true => "the literal true", false => "the literal false",
-                       1.5 => "Float64 literal 1.5", Float32(2) => "Float32 literal 2.0",
-                       Fn.Value(true) => "the literal true", Fn.Value(25.0) => "Float64 literal 25.0",
-                       Fn.Value(Decimal(1.5)) => "Decimal literal")
+  # Named by its type, never its value (#971, #1057).
+  for (lit, named) in (true => "a Bool literal", false => "a Bool literal",
+                       1.5 => "a Float64 literal", Float32(2) => "a Float32 literal",
+                       Fn.Value(true) => "a Bool literal", Fn.Value(25.0) => "a Float64 literal",
+                       Fn.Value(Decimal(1.5)) => "a Decimal literal")
     err = try
       Fn.Concat("surname", lit)
       nothing

@@ -407,7 +407,7 @@ function _locate_filter_refusal(e, label, type_label; subject::AbstractString = 
                         field_type = _opt_label(type_label)))
 end
 
-_opt_label(x) = x === nothing ? nothing : string(x)
+_opt_label(x) = x === nothing ? nothing : string(x)   # refusal-value-ok: a field-type label, not a bound value
 
 # #576: the guarded form of the format step. `_locate_filter_refusal` above fixed the `catch`
 # body; this fixes the `try`. #467 was never a missing message -- it was a branch that formatted

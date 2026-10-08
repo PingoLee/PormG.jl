@@ -1091,6 +1091,38 @@ end
     @test_throws PormG.QueryBuildError query.copy().limit(-5)
     @test_throws PormG.QueryBuildError query.copy().limit(true)
   end
+
+  @testset "read terminals work inside a slice, or refuse it (#1053)" begin
+    # Each terminal used to replace or clear the caller's limit on its copy, so `limit(0).exists()`
+    # was true for the rows `limit(0).list()` does not return. The oracle is the unsliced list.
+    query = M.Status.objects
+    query.order_by("statusid")
+    ids = [r[:statusid] for r in query.copy().values("statusid").list(:dict)]
+    @test length(ids) > 5
+
+    @test !query.copy().limit(0).exists()
+    @test query.copy().limit(0).first() === nothing
+    @test_throws PormG.DoesNotExist query.copy().limit(0).get()
+    @test query.copy().limit(0).count() == 0
+    @test query.copy().limit(3).count() == 3
+    @test query.copy().offset(length(ids) - 2).count() == 2
+    @test query.copy().limit(10).offset(length(ids) - 4).count() == 4
+    @test query.copy().offset(2).first().statusid == ids[3]
+    @test query.copy().limit(1).offset(4).get().statusid == ids[5]
+    @test_throws PormG.QueryBuildError query.copy().limit(3).last()
+    @test_throws PormG.QueryBuildError query.copy().limit(3).aggregate("n" => Count("statusid"))
+
+    # Exists(sub) keeps the subquery's slice. With offset(1) it asks for a SECOND matching result,
+    # so the oracle is every status with at least two results, counted in Julia.
+    per_status = Dict{Int,Int}()
+    for r in M.Result.objects.values("statusid").list(:dict)
+      per_status[r[:statusid]] = get(per_status, r[:statusid], 0) + 1
+    end
+    results_of = () -> M.Result.objects.filter("statusid" => OuterRef("statusid"))
+    has_two = M.Status.objects.filter(Exists(results_of().offset(1))).values("statusid").list(:dict)
+    @test sort([r[:statusid] for r in has_two]) == sort([k for (k, n) in per_status if n >= 2])
+    @test isempty(M.Status.objects.filter(Exists(results_of().limit(0))).values("statusid").list())
+  end
 end
 
 

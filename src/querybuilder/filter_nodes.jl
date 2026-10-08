@@ -74,8 +74,12 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
   q = deepcopy(subquery)
   q.object.values = []
   q.object.order = []
-  q.object.limit = nothing
-  q.object.offset = 0
+  # #1053: the subquery's own slice is kept. It used to be reset here, so `Exists(sub.limit(0))`
+  # was true whenever `sub` had a row. The probe is `LIMIT 0` or `LIMIT 1` — the smaller of the
+  # caller's limit and 1, a literal the code chooses — and the caller's OFFSET binds, as `exists()`'s
+  # does (#46). The ordering is still dropped: an EXISTS answer cannot depend on it.
+  probe_limit = _probe_limit(q.object.limit, 1)
+  offset = q.object.offset
 
   # #432: the inner build scatters its values across its own clause buckets while this EXISTS text is
   # spliced into ONE of the parent's clauses. Mark every bucket, then re-emit what it bound as one
@@ -90,6 +94,10 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
     parameters=instruc.parameters,
     outer=instruc,
   )
+  # Bound before the run is detached, so the OFFSET value travels with the rest of this subquery's
+  # values — under `:limit`, the last role, which is where its text sits inside the parentheses.
+  offset_clause = offset > 0 ?
+    with_bucket(() -> "OFFSET " * add_parameter!(instruc.parameters, offset), instruc.parameters, :limit) : ""
   reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
 
   safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
@@ -124,7 +132,9 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
     print(io, "\n")
   end
 
-  print(io, "LIMIT 1)")
+  print(io, probe_limit == 0 ? "LIMIT 0" : "LIMIT 1")
+  isempty(offset_clause) || print(io, " ", offset_clause)
+  print(io, ")")
   return String(take!(io))
 end
 

@@ -1337,6 +1337,34 @@ const DOCERR_CASES = [
         QueryBuildError,
         () -> DOCERR_RESULT_PG.objects.page(20, -1),
     ),
+    # #1053 — `read/index.md` (*Read terminals on a sliced query*) and the `last`/`earliest`
+    # docstrings promise QueryBuildError for the terminals that refuse a slice. One case per
+    # refusing terminal: each has its own call to the shared check.
+    (
+        "read/index.md + api.md + last docstring — last() refuses a sliced query (#1053)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.limit(5).last(show_query = :sql),
+    ),
+    (
+        "read/index.md + api.md + earliest docstring — earliest() refuses a sliced query (#1053)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.offset(1).earliest("points"; show_query = :sql),
+    ),
+    (
+        "read/index.md + api.md + latest docstring — latest() refuses a sliced query (#1053)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.limit(0).latest("points"; show_query = :sql),
+    ),
+    (
+        "read/index.md + api.md — count(column) refuses a sliced query (#1053)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.limit(5).count("points"; show_query = :sql),
+    ),
+    (
+        "read/index.md + api.md — aggregate() refuses a sliced query (#1053)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.limit(5).aggregate("n" => Count("resultid"); show_query = :sql),
+    ),
     # #213 — the delete guards. `write/delete.md` and `errors.md` both promise UnsafeMutationError
     # for each of these query shapes; every one is refused before SQL is generated, so a mock
     # connection is enough. The cases are separate on purpose: they are four independent checks in

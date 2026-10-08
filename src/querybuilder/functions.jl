@@ -662,14 +662,18 @@ A cast the two engines apply differently raises `QueryBuildError` when the query
   JSON document;
 - to an integer, a float, a decimal or a `numeric` function: PostgreSQL rounds it and SQLite
   truncates it. Round it first — `Cast(Round(x), IntegerField())`, `Floor(x)` or `Ceil(x)` read the
-  same integer on both engines. A boolean casts to `1`/`0` on both and passes.
+  same integer on both engines. A boolean casts to `1`/`0` on both and passes;
+- to `numeric(p, s)` (or `numeric(p)`, scale 0), an operand with more than `s` digits after the
+  point — a float, text, a `numeric` function, a decimal with more places (#1040): PostgreSQL rounds
+  to the scale and SQLite keeps every digit. `Round(x, 2)` rounds differently on the two engines, so
+  it is no escape; cast to an unscaled `"numeric"`, cast a whole number, or round in Julia.
 
 ```julia
 using PormG.Functions: Cast, Round
 using PormG.Models: IntegerField
 
 M.Result.objects.values("resultid", "points_int" => Cast(Round("points"), IntegerField()))
-M.Result.objects.values("resultid", "points_2dp" => Cast("points", "numeric(10,2)"))
+M.Result.objects.values("resultid", "points_num" => Cast("points", "numeric"))
 ```
 
 See also [Functions and Dates](@ref).
@@ -801,6 +805,18 @@ _divergent_text_fix(kind::Symbol, flag::AbstractString) =
 # To an integer the way out is to say how to round, which `Round`/`Floor`/`Ceil` do on both engines.
 function _cast_divergent_refusal(fname::AbstractString, kind::Symbol, what::AbstractString,
                                  target::Symbol, flag::AbstractString)
+  # #1040: `flag` is the declared type. No SQL rounding agrees beyond whole numbers (`Round(x, 2)`
+  # rounds the decimal form on PostgreSQL and the binary double on SQLite), so the way out is an
+  # unscaled `numeric`, a whole number, or Julia.
+  if target === :scale
+    why = "PostgreSQL rounds a value cast to $(flag) to its scale (`1.555` → `1.56` at scale 2, `1.5` → `2` at scale 0) and SQLite keeps every digit"
+    fix = "Cast to an unscaled \e[32m\"numeric\"\e[0m, which keeps the value on both engines, or round to a whole number " *
+          "first (\e[32mCast(Round(x), \"numeric(10,0)\")\e[0m, \e[32mFloor(x)\e[0m, \e[32mCeil(x)\e[0m), or fetch the value " *
+          "and round it in Julia (\e[32mround(x; digits = 2)\e[0m). \e[32mRound(x, 2)\e[0m is no way out: it rounds " *
+          "differently on the two engines (`2.675` → `2.68` and `2.67`)."
+    return QueryBuildError(
+      "\e[4m\e[31m$(fname)\e[0m cannot make the same number from $(what) on both engines: $(why) (#1040). $(fix)")
+  end
   if target === :integer
     why = "PostgreSQL rounds a fractional number cast to an integer (`1.5` → `2`) and SQLite truncates it (`1.5` → `1`)"
     fix = "Say how to round it: \e[32mCast(Round(x), IntegerField())\e[0m, \e[32mFloor(x)\e[0m or \e[32mCeil(x)\e[0m read the same integer on both engines."
@@ -1058,7 +1074,7 @@ argument that won.
 a filter on it, and a CTE column typed by it all agree. On SQLite a `date` renders `date(…)`, and the
 other temporal types and arrays raise `BackendCapabilityError`, as for [`Cast`](@ref). A text or
 integer `output_field` refuses the operands [`Cast`](@ref) refuses (#1028): over a float, round first
-(`Floor("points")`).
+(`Floor("points")`). So does a scaled `numeric(p, s)` one (#1040).
 """
 function Coalesce(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696
@@ -1088,7 +1104,7 @@ argument that won.
 a filter on it, and a CTE column typed by it all agree. On SQLite a `date` renders `date(…)`, and the
 other temporal types and arrays raise `BackendCapabilityError`, as for [`Cast`](@ref). A text or
 integer `output_field` refuses the operands [`Cast`](@ref) refuses (#1028): over a float, round first
-(`Floor("points")`).
+(`Floor("points")`). So does a scaled `numeric(p, s)` one (#1040).
 """
 function Greatest(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696
@@ -1118,7 +1134,7 @@ argument that won.
 a filter on it, and a CTE column typed by it all agree. On SQLite a `date` renders `date(…)`, and the
 other temporal types and arrays raise `BackendCapabilityError`, as for [`Cast`](@ref). A text or
 integer `output_field` refuses the operands [`Cast`](@ref) refuses (#1028): over a float, round first
-(`Floor("points")`).
+(`Floor("points")`). So does a scaled `numeric(p, s)` one (#1040).
 """
 function Least(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696

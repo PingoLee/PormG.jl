@@ -1458,7 +1458,9 @@ end
     q.values(
         "resultid",
         "points",
-        "p_2dp" => Cast("points", "numeric(10,2)"),
+        # #1040: a float cast to a scaled numeric is refused (PostgreSQL rounds to the scale, SQLite
+        # keeps every digit); a whole number has nothing to round, so the modifier still executes.
+        "p_2dp" => Cast(Round("points"), "numeric(10,2)"),
         "p_dbl" => Cast("points", "double precision"),
         # #1028: a float cast to an integer is refused; `Round` first reads the same on both engines.
         "p_int" => Cast(Round("points"), PormG.Models.IntegerField()),
@@ -1471,7 +1473,7 @@ end
     @test size(df, 1) == M.Result.objects.filter("raceid" => 1).count()
     # The cast values agree with the stored float; the integer is the float rounded half away from
     # zero, on both engines (#1028).
-    @test all(isapprox(Float64(r.p_2dp), round(r.points; digits = 2)) for r in eachrow(df))
+    @test all(Float64(r.p_2dp) == round(r.points, RoundNearestTiesAway) for r in eachrow(df))
     @test all(isapprox(Float64(r.p_dbl), r.points) for r in eachrow(df))
     @test all(Int(r.p_int) == round(Int, r.points, RoundNearestTiesAway) for r in eachrow(df))
     # Exactly one winner in race 1: the CASE and its bind-cast default both executed.
@@ -1869,4 +1871,35 @@ end
     # The timestamp escape: race 1's start, named in a format both engines write.
     df = proj(M.Race, Concat(Value("|"), ToChar("start_at", "YYYY-MM-DD HH:MI:SS")))()
     @test df[1, :x] == "|2009-03-29 06:00:00"
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cast to a scaled numeric, on both engines (#1040)
+# Measured on PostgreSQL 16.15 and SQLite 3.45.1: `Cast(points, "numeric(10,0)")` is 2 for 1.5 on one
+# and 1.5 on the other. The refusal fires against the live schema on both engines; the escapes — an
+# unscaled `numeric`, and a whole number before a scaled cast — read the value Julia computes.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1040: a cast to numeric(p, s) PostgreSQL would round is refused on both engines" begin
+    refusal(f) = try f(); nothing catch e; e end
+    is_1040(e) = e isa PormG.QueryBuildError && occursin("#1040", sprint(showerror, e))
+    proj(expr) = () -> (q = M.Result.objects; q.filter("raceid" => 2); q.values("x" => expr); q |> DataFrame)
+    @test is_1040(refusal(proj(Cast("points", "numeric(10,0)"))))
+    @test is_1040(refusal(proj(Cast("points", "numeric(10,2)"))))
+    @test is_1040(refusal(proj(Cast(Round("points", 2), "numeric(10,2)"))))
+    @test is_1040(refusal(proj(Coalesce("points", 0; output_field = "numeric(10,1)"))))
+    @test is_1040(refusal(() -> (q = M.Driver.objects; q.filter("driverid" => 1); q.values("x" => Cast("driverref", "numeric(10,2)")); q |> DataFrame)))
+
+    # The escapes, over race 2 (the 2009 Malaysian GP, half points): the fractional rows are exercised.
+    q = M.Result.objects
+    q.filter("raceid" => 2)
+    q.values("resultid", "points",
+             "plain" => Cast("points", "numeric"),
+             "whole" => Cast(Round("points"), "numeric(10,0)"),
+             "floor" => Cast(Floor("points"), "numeric(10,2)"))
+    df = q |> DataFrame
+    @test any(p -> !isinteger(p), df.points)
+    wrong = [r.resultid for r in eachrow(df) if
+             (Float64(r.plain), Float64(r.whole), Float64(r.floor)) !=
+             (r.points, round(r.points, RoundNearestTiesAway), floor(r.points))]
+    @test isempty(wrong)
 end

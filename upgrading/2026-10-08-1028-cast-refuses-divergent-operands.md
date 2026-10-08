@@ -36,8 +36,10 @@ Now refused, when the query is built, on both engines:
   `Cast` used to let through because the CTE typed it as an integer.
 
 Unchanged: a cast of an integer, text, date, time or uuid; a boolean cast to an integer; a cast to
-any other type (`"numeric(10,2)"`, `"double precision"`, `"date"`); a JSON key lookup
-(`"payload__driver"`, which agrees when the value is a string); `Case(…; output_field)`; and the
+any other type (`"numeric"`, `"double precision"`, `"date"`; a scaled `"numeric(10,2)"` is checked
+since #1040); a JSON key lookup
+(`"payload__driver"`, which agrees when the value is a string; refused for a scaled numeric since
+#1040); `Case(…; output_field)`; and the
 `@yyyy_q` / `@yyyy_quad` labels.
 
 ### Who this affects

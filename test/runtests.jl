@@ -242,6 +242,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Field Kwargs Equivalence (#260)" include("unit/test_field_kwargs_equivalence.jl")
     @testset "Django Model Importer" include("unit/test_import_django_models.jl")
     @testset "Django Multi-App Project Importer (#346)" include("unit/test_import_django_project.jl")
+    @testset "Django Custom Field Classes (#1041)" include("unit/test_import_django_field_subclass.jl")
     @testset "Schema Importers (key resolution)" include("unit/test_importers.jl")
     @testset "inspectdb include_views (#767)" include("unit/test_import_views.jl")
     @testset "Discard Pending Migration" include("unit/test_discard_pending_migration.jl")

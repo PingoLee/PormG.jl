@@ -725,6 +725,10 @@ nested classes.
 Nested bodies are held separately rather than inlined into `body`, which is what retires the
 `inside_class` flag: that flag was set once and never reset, so a nested `class Status(TextChoices)`
 and any module-level code following the last model both leaked into the previous model's content.
+
+`methods` names the class's own `def`s, and only those — their bodies never reach `body`. A model
+does not need them; a custom FIELD class does (#1041), because a `db_type` or `__init__` override
+is what decides whether the field can be imported as its base type.
 """
 struct PyClass
   name::String
@@ -733,10 +737,11 @@ struct PyClass
   body::Vector{PyStmt}
   meta::Vector{PyStmt}
   nested::Vector{PyClass}
+  methods::Vector{String}
 end
 
 const _CLASS_HEADER_RE = r"^class\s+(\w+)\s*(?:\((.*)\))?\s*:"
-const _DEF_HEADER_RE = r"^(?:async\s+)?def\s+\w+"
+const _DEF_HEADER_RE = r"^(?:async\s+)?def\s+(\w+)"
 
 """
     _py_classes(stmts) -> Vector{PyClass}
@@ -760,7 +765,10 @@ function _py_classes(stmts::Vector{PyStmt})::Vector{PyClass}
     end
     inside_def = !isempty(stack) && stack[end][1] === nothing
 
-    if match(_DEF_HEADER_RE, s.text) !== nothing
+    dm = match(_DEF_HEADER_RE, s.text)
+    if dm !== nothing
+      # A class's OWN method, never a function nested inside one of them.
+      (!isempty(stack) && !inside_def) && push!(stack[end][1].methods, String(dm.captures[1]))
       push!(stack, (nothing, s.indent))
       continue
     end
@@ -774,7 +782,7 @@ function _py_classes(stmts::Vector{PyStmt})::Vector{PyClass}
       end
       cls = PyClass(String(m.captures[1]),
                     m.captures[2] === nothing ? "" : String(strip(m.captures[2])),
-                    s.lineno, PyStmt[], PyStmt[], PyClass[])
+                    s.lineno, PyStmt[], PyStmt[], PyClass[], String[])
       parent = isempty(stack) ? nothing : stack[end][1]
       parent === nothing ? push!(roots, cls) : push!(parent.nested, cls)
       push!(stack, (cls, s.indent))
@@ -2136,6 +2144,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
 
       # Initialize fields_dict
       fields_dict = Dict{Symbol, Any}()
+      # Filled by `process_class_fields!`, emitted after the relation pass below (#1041).
+      subclass_notes = OrderedDict{Symbol, Any}()
 
       # Process fields separately
       # `class_name` and `class_label` both go down, and they are not interchangeable: the first is
@@ -2148,7 +2158,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
                               strict_fields = strict_fields,
                               enum_aliases = graph.enum_aliases,
                               own_owner = (graph.self, String(class_name)),
-                              consts = graph.scopes)
+                              consts = graph.scopes,
+                              subclass_notes = subclass_notes)
 
       # Django's implicit `id`, added only when nothing claimed the key — DERIVED, per field, from
       # what was built and from what the models.py declared, never tracked with a class-wide flag
@@ -2278,6 +2289,15 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       # built — degrading a field is a plain replace/`delete!` on this Dict, and `field_names` is
       # then computed once from the final set.
       _resolve_relation_targets!(fields_dict, entry, index, strict_relations, markers)
+
+      # The custom-field-class notes (#1041), now that the relation pass has had its say: a note is
+      # emitted only for a column that is still there with the type it was built as. A dropped
+      # ManyToMany or a ForeignKey degraded to a plain column has its own marker, and "imported as
+      # ForeignKey" beside it would contradict it.
+      for (key, (n, built)) in subclass_notes
+        (haskey(fields_dict, key) && typeof(fields_dict[key]) === built) || continue
+        _emit_subclass_note!(markers, class_label, n)
+      end
 
       # Collect all create instructions
       # THE symmetric half of the index guard above, and the more dangerous direction (#346). Pass 1
@@ -3272,6 +3292,132 @@ function _resolve_imported(scopes::Vector{_AppScope}, idx::Int, token::String,
   return nothing
 end
 
+# ── Custom field classes (#1041) ─────────────────────────────────────────────────────────────────
+# `class LoteField(models.CharField)` with `lote = LoteField(max_length=50)` used to take the
+# "field-shaped call the importer cannot read" path: the column was dropped, and the marker said the
+# next `makemigrations` would propose DROPPING it. The base type is in the source, so it is read.
+
+# Methods that make the column something other than the base's. Any of them on a class in the chain
+# refuses the import: the base type is then provably not the column type, and declaring it anyway
+# hands `makemigrations` a wrong ALTER. `contribute_to_class` is here because it can add columns
+# (django-money's currency column is the classic case).
+const _FIELD_SCHEMA_HOOKS = ("db_type", "db_parameters", "get_internal_type", "rel_db_type",
+                             "contribute_to_class")
+
+# Modules a bare base may be imported from and still name a Django model field.
+const _DJANGO_FIELD_MODULES = ("django.db.models", "django.db.models.fields",
+                               "django.db.models.fields.related", "django.db.models.fields.json")
+
+# `models.CharField`, `db.models.CharField`, `django.db.models.CharField` — the namespaces
+# `_MODEL_FIELD_NAMESPACES` accepts, minus the bare form, which needs its import checked instead.
+const _DOTTED_MODEL_FIELD_RE = r"^(?:django\s*\.\s*db\s*\.\s*models|db\s*\.\s*models|models)\s*\.\s*(\w+)$"
+
+# The Django model-field type a base token names in app `app`'s module, or `nothing` when it names
+# none. A bare name counts only when that module imported it from Django: `CharField` bound by
+# `from mylib import CharField` is somebody else's class.
+function _django_field_base(scopes::Vector{_AppScope}, app::Int, token::AbstractString)
+  m = match(_DOTTED_MODEL_FIELD_RE, token)
+  m === nothing || return String(m.captures[1])
+  entry = get(scopes[app].imports.names, String(token), nothing)
+  entry !== nothing && entry[1] in _DJANGO_FIELD_MODULES && return entry[2]
+  return nothing
+end
+
+# A column type is knowable from the name alone only for a concrete field. `models.Field` (and the
+# equally abstract `RelatedField`) has no column type of its own — a direct subclass says what it stores through `db_type`, which the
+# importer cannot evaluate.
+const _ABSTRACT_DJANGO_FIELDS = ("Field", "RelatedField")
+_is_concrete_field_name(x::AbstractString) =
+  !(x in _ABSTRACT_DJANGO_FIELDS) && any(sfx -> endswith(x, sfx), _FIELD_NAME_SUFFIXES)
+
+# True when `token`, in app `app`'s module, names a Django field class — concrete or `Field` itself.
+function _is_field_class_base(scopes::Vector{_AppScope}, app::Int, token::AbstractString)::Bool
+  x = _django_field_base(scopes, app, token)
+  return x !== nothing && (x in _ABSTRACT_DJANGO_FIELDS || _is_concrete_field_name(x))
+end
+
+"""
+    _resolve_field_subclass(scopes, app, token) -> Union{Nothing, NamedTuple}
+
+Resolve a custom field class `token`, called from app `app`, to the Django model-field type it
+subclasses (#1041). The chain is walked transitively, and across apps through the import table:
+`class A(models.CharField)` then `class B(A)` gives `CharField` for both.
+
+`nothing` when no Django field type is reachable — the call target is not a class in scope, or every
+base is third-party or another module the import does not cover. The caller keeps its "cannot read"
+marker unchanged for those.
+
+Otherwise `(base, written, chain, init_override, refusal)`:
+
+- `base` — the Django type (`"CharField"`), and `written` the base token as the source spelled it;
+- `chain` — the classes walked, the call target first, ending at the one that names `base`;
+- `init_override` — some class in the chain defines `__init__`, which may fill in options
+  (`kwargs.setdefault("max_length", 50)`) that the call site does not show;
+- `refusal` — `nothing`, or why the base type cannot stand for the column: a class in the chain
+  overrides one of `_FIELD_SCHEMA_HOOKS`, or inherits a base the importer cannot see and which could
+  do the same.
+"""
+function _resolve_field_subclass(scopes::Vector{_AppScope}, app::Int, token::AbstractString)
+  found = Ref{Any}(nothing)        # (chain, base, written) of the first Django field base reached
+  init_override = Ref(false)
+  hooks = Tuple{String, String}[]  # (class, method)
+  unseen = Tuple{String, String}[]  # (class, base it names that nothing in scope defines)
+  seen = Set{Tuple{Int, String}}()
+
+  function walk(a::Int, tok::AbstractString, path::Vector{String})
+    r = _resolve_base(scopes, a, tok)
+    r === nothing && return false
+    (ba, cls) = r
+    (ba, cls.name) in seen && return true      # a diamond or a cycle: already walked
+    push!(seen, (ba, cls.name))
+    here = vcat(path, cls.name)
+    "__init__" in cls.methods && (init_override[] = true)
+    for meth in cls.methods
+      meth in _FIELD_SCHEMA_HOOKS && push!(hooks, (cls.name, meth))
+    end
+    for b in _class_bases(cls)
+      b == "object" && continue
+      x = _django_field_base(scopes, ba, b)
+      if x !== nothing
+        # Django's own non-concrete bases (`models.Field`, a mixin from `django.db.models`) add no
+        # column of their own and override nothing a concrete field defines, so they are neither the
+        # base nor a reason to refuse.
+        _is_concrete_field_name(x) && found[] === nothing && (found[] = (here, x, b))
+        continue
+      end
+      # Every base is walked, a mixin too: Python's MRO puts a mixin's `db_type` ahead of the
+      # field's, so a hook anywhere in the hierarchy decides the column.
+      walk(ba, b, here) || push!(unseen, (cls.name, b))
+    end
+    return true
+  end
+
+  walk(app, token, String[]) || return nothing
+  found[] === nothing && return nothing
+  (chain, base, written) = found[]
+
+  refusal = if !isempty(hooks)
+    (c, meth) = first(hooks)
+    "'$(c)' overrides $(meth)(), so its column is not necessarily a $(base)"
+  elseif !isempty(unseen)
+    join(("'$(c)' inherits '$(b)'" for (c, b) in unique(unseen)), ", ") *
+      ", which the importer cannot see — it may override the column type"
+  else
+    nothing
+  end
+  return (base = String(base), written = String(written), chain = chain,
+          init_override = init_override[], refusal = refusal)
+end
+
+# Emit one "imported as <base>" note (#1041): the `@warn` and the `# PormG:` marker, together, as
+# every annotated row of the import contract does. `n` is `(marker, field, class, line, base)`.
+function _emit_subclass_note!(markers::Vector{String}, class_label::AbstractString, n)
+  (note, fname, ctype, line, base) = n
+  @warn "import: custom field class imported as its Django base type; its Python-side behaviour is not replicated" field=fname class=class_label line=line custom_type=ctype base=base
+  push!(markers, note)
+  return markers
+end
+
 """
     _ClassifyState
 
@@ -3427,9 +3573,15 @@ function _classify_class!(st::_ClassifyState, app::Int, cls::PyClass)::_ClassInf
   # exists for. The module name goes into the message instead: naming `model_utils.managers` lets a
   # reader dismiss a library in one glance, and naming `core.models` tells them which pair is
   # missing. A comment too many is recoverable; a model that vanished silently is not.
+  #
+  # A base that is a Django FIELD class bound from Django itself (#1041) — `class
+  # CircuitRefField(CharField)` after `from django.db.models import CharField` — makes this a custom
+  # field, not a model with lost ancestry, so "if it is a model…" would be noise on every such class.
+  # Only the report is suppressed; `unresolved` and `kind` are untouched.
   ancestry_lost = kind === :not_a_model && !isempty(unresolved) &&
                   !describes_a_model && !non_model && !poisoned &&
-                  all(b -> !occursin('.', b), unresolved)
+                  all(b -> !occursin('.', b), unresolved) &&
+                  !any(b -> _is_field_class_base(st.scopes, app, b), unresolved)
 
   ci = _ClassInfo(kind, bases, parents, unresolved, mti_parent, meta, is_auth, proxy, ancestry_lost)
   st.info[key] = ci
@@ -4594,7 +4746,14 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
                                own_owner::Tuple{Int, String} = (1, String(class_name)),
                                # #948: every app's `_AppScope`, for bare-name option values. A
                                # keyword for #512's reason; `nothing` resolves no name.
-                               consts::Union{Nothing, Vector{_AppScope}} = nothing)
+                               consts::Union{Nothing, Vector{_AppScope}} = nothing,
+                               # #1041: when given, the surviving "imported as <base>" notes are
+                               # handed back here instead of emitted, each with the type of the
+                               # field built, so the caller can emit them AFTER
+                               # `_resolve_relation_targets!` — which may still drop a ManyToMany or
+                               # degrade a ForeignKey to a plain column, and a note pushed before
+                               # that would contradict the marker that reports it.
+                               subclass_notes::Union{Nothing, OrderedDict{Symbol, Any}} = nothing)
   # Django's `AbstractUser` columns. A Bool rather than the base-list STRING it used to compare
   # against (#341): the base list is now parsed, so `class User(AbstractUser, SomeMixin)` and a
   # class reaching `AbstractUser` through an abstract base both qualify — an equality test on the
@@ -4680,7 +4839,14 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
   #     Django rejects this too: abstract-base fields are COPIED into the child, so they are in
   #     `cls._meta.local_fields`, which is exactly what `_check_column_name_clashes` iterates, and
   #     models.E007 fires. The earlier claim that this shape was legal Django was simply wrong.
-  claimed = Dict{Symbol, Tuple{Tuple{Int, String}, String, String, Int}}()
+  claimed = Dict{Symbol, Tuple{Tuple{Int, String}, String, String, Int, Union{Nothing, String}}}()
+
+  # #1041: the "imported as <base>" note of each custom-field-class statement, keyed by the column it
+  # wrote. Held back until the loop ends, because a LATER statement can still replace that column —
+  # most often silently, a child re-declaring a field it inherited — and a note pushed on the spot
+  # then describes a declaration the file does not contain. Any later statement on the key cancels
+  # it; the flush after the loop emits only what survived and was actually built.
+  pending_subclass_notes = OrderedDict{Symbol, Tuple{String, String, String, Int, String}}()
 
   if is_auth_user
       fields_dict[:password] = Models.CharField()
@@ -4713,6 +4879,49 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
       Tuple{Int, String}[(stmt_owner[1], stmt_owner[2]), (stmt_owner[1], "")]
     end
 
+    # The custom field class this statement calls, when it was resolved to a Django type (#1041).
+    # `nothing` for every ordinary `models.X(...)` statement.
+    custom_type = nothing
+    # Its informational marker, pushed only once the column is known to be IMPORTED — after the
+    # `autofields_ignore` and #410 skips, either of which would make "imported as X" false.
+    subclass_note = nothing
+    # A custom field class defined in this import's scope (#1041): `lote = LoteField(max_length=50)`
+    # over `class LoteField(models.CharField)`. Read as its base, with the call's own options — the
+    # base is in the source, and the column type, length, nullability and default are all in the
+    # call. Only a BARE target is looked up, as a base token is: a dotted one names a module this
+    # file never had, and `_resolve_base` resolves names, not attribute paths.
+    #
+    # Read off the OWNER's app, not the class's: a statement merged in from an abstract base in
+    # another app names classes in that base's module, as Python does (#402).
+    field_subclass_refusal = nothing
+    #
+    # Not gated on `_looks_like_a_field_call`: `salary = Money(max_digits=10, decimal_places=2)` over
+    # `class Money(models.DecimalField)` is a field whatever its name, and resolution is already the
+    # discriminator — a Manager, an enum or a model class reaches no concrete Django field type, so it
+    # resolves to `nothing` and stays as quiet as it was.
+    if parsed.type === nothing && consts !== nothing && _field_call_namespace(parsed.args) == ""
+      target = String(match(_CALL_TARGET_RE, parsed.args).captures[1])
+      sub = _resolve_field_subclass(consts, stmt_owner[1], target)
+      sub_args = sub === nothing ? nothing : _balanced_group(parsed.args)
+      if sub !== nothing && sub.refusal !== nothing
+        field_subclass_refusal = (target, sub)
+      elseif sub !== nothing && sub_args !== nothing
+        custom_type = target
+        spelled = join(sub.chain, "(") * "(" * sub.written * ")"^length(sub.chain)
+        subclass_note = (
+          "# PormG: field '$(parsed.name)' on '$(class_label)' (models.py line $(stmt.lineno)) " *
+          "is $(spelled) — imported as $(sub.base) with the call's own options. Any Python-side " *
+          "behaviour of '$(target)' (pre_save, get_prep_value, validators) is not replicated by " *
+          "PormG." *
+          (sub.init_override ?
+             " Its class chain also overrides __init__, which may supply options (max_length, " *
+             "default, …) the call does not show — compare this declaration against the column " *
+             "before you migrate." : ""),
+          sub.base)
+        parsed = (name = parsed.name, type = sub.base, args = sub_args)
+      end
+    end
+
     if parsed.type === nothing
       # #340's actual requirement: never drop a FIELD in silence. An assignment whose right-hand
       # side is a field-shaped call the importer cannot read (`tags = HStoreField()` — a field
@@ -4729,15 +4938,26 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
       # claiming on the NAME would suppress an implicit `id` the Django table really does want.
       # Reporting the wrong one of those two is worse than reporting neither, and the field's own
       # marker above already tells the reader the column is missing.
-      if _looks_like_a_field_call(parsed.args)
-        @warn "import: field-shaped call the importer cannot read; not imported — declare it in PormG by hand" field=parsed.name class=class_label line=stmt.lineno
+      # A later declaration of this NAME replaces any custom-field column an earlier one wrote, as
+      # far as Django is concerned, so that one's "imported as" note no longer describes the file
+      # (#1041). Matched on the name because the key of an unreadable call is unknowable (below).
+      filter!(kv -> kv.second[2] != parsed.name, pending_subclass_notes)
+      # A refused custom field class is a field even when its name does not look like one.
+      if _looks_like_a_field_call(parsed.args) || field_subclass_refusal !== nothing
+        @warn "import: field-shaped call the importer cannot read; not imported — declare it in PormG by hand" field=parsed.name class=class_label line=stmt.lineno reason=(field_subclass_refusal === nothing ? "" : field_subclass_refusal[2].refusal)
         # ...and a marker in the generated file, not the warning alone (#341). A console warning
         # scrolls away; whoever opens the generated file months later needs to see the gap there.
+        #
+        # A custom field class that WAS resolved but refused (#1041) says why, so the reader does
+        # not go looking for a parsing limitation: its base type is known and is not the column.
+        why = field_subclass_refusal === nothing ? "" :
+              " '$(field_subclass_refusal[1])' subclasses $(field_subclass_refusal[2].base), but " *
+              "$(field_subclass_refusal[2].refusal), so it is not imported as one."
         push!(markers, "# PormG: field '$(parsed.name)' on '$(class_label)' (models.py line " *
                        "$(stmt.lineno)) is a field-shaped call the importer cannot read — NOT " *
-                       "imported. Declare it in PormG by hand; until you do, the column is still " *
-                       "in the database and absent from this model, so makemigrations reads it as " *
-                       "drift and proposes DROPPING it.")
+                       "imported." * why * " Declare it in PormG by hand; until you do, the column " *
+                       "is still in the database and absent from this model, so makemigrations " *
+                       "reads it as drift and proposes DROPPING it.")
       end
       continue
     end
@@ -4765,6 +4985,12 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     # lines up, so moving it earlier crosses no dependency.
     field_key = field_type in ["ForeignKey", "OneToOneField"] ? Symbol("$(field_name)_id") :
                                                                 Symbol(field_name)
+    # This statement writes or claims `field_key`, whatever happens to it below, so an earlier custom
+    # field's "imported as" note on that column is no longer true (#1041). The NAME cancels too: a
+    # child's `code = models.ForeignKey(…)` replaces an inherited `code = CodeField(…)` in Django
+    # although the two write different keys (`code_id` vs `code`).
+    delete!(pending_subclass_notes, field_key)
+    filter!(kv -> kv.second[2] != field_name, pending_subclass_notes)
 
     # A Django field type PormG does not implement (#410). DECIDED here, ACTED on below — the two
     # cannot be one statement, and the gap between them is the whole design (#429 moved the decision
@@ -4804,7 +5030,14 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     # What a skipped column IS, for the three reports below that name it. Byte-identical to the
     # pre-#943 wording for every non-array type.
     unsupported_what = array_reason !== nothing ? array_reason :
+                       custom_type !== nothing ?
+                         "a $(custom_type), a subclass of models.$(django_type), which PormG does " *
+                         "not implement" :
                        "a models.$(django_type), a field type PormG does not implement"
+    # `autofields_ignore` is in the author's vocabulary, and a custom field class is a name the
+    # author typed (#1041): either its own name or its Django base drops it.
+    is_ignored = django_type in autofields_ignore ||
+                 (custom_type !== nothing && custom_type in autofields_ignore)
 
     # Two statements from ONE class body writing one key (#429). Reported here, before either skip
     # branch acts, so the report does not depend on which half of the pair happened to be buildable:
@@ -4832,8 +5065,15 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     # takes both to leave a legitimate override silent while catching the cross-body clobber.
     prior = get(claimed, field_key, nothing)
     if prior !== nothing && (prior[1] == stmt_owner || prior[2] != field_name)
-      (_, prior_name, prior_type, prior_line) = prior
-      later_ignored = django_type in autofields_ignore
+      (_, prior_name, prior_type, prior_line, prior_custom) = prior
+      # What each declaration's TYPE is called in the report: the class the author typed when it was
+      # a custom field class (#1041), never the base the importer read it as. `prior_type` itself
+      # stays the Django type, because the ManyToMany test below is about what the field IS.
+      prior_shown = something(prior_custom, prior_type)
+      this_shown = something(custom_type, django_type)
+      prior_call = prior_custom === nothing ? "models.$(prior_type)" : prior_custom
+      this_call = custom_type === nothing ? "models.$(django_type)" : custom_type
+      later_ignored = is_ignored
       same_body = prior[1] == stmt_owner
       same_name = prior_name == field_name
       # A ManyToManyField takes a NAME but declares no column on this table — its data lives in a
@@ -4890,9 +5130,9 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
         "Django rejects this itself (models.E007), so it can only reach here from a models.py that " *
         "never passed `manage.py check` — rename one of the two fields."
 
-      @warn "import: two declarations collide on one name; one of them is lost" class=class_label name=String(field_key) first="$(prior_name) = models.$(prior_type)()" first_line=prior_line second="$(field_name) = models.$(django_type)()" second_line=stmt.lineno same_class_body=same_body first_written_in=prior[1][2] second_written_in=stmt_owner[2] later_dropped=(later_ignored ? "autofields_ignore" : array_reason !== nothing ? "unholdable ArrayField element" : unsupported_type ? "unimplemented type" : "")
-      push!(markers, "# PormG: '$(class_label)' declares '$(prior_name)' ($(prior_type), models.py " *
-                     "line $(prior_line)) and '$(field_name)' ($(django_type), line " *
+      @warn "import: two declarations collide on one name; one of them is lost" class=class_label name=String(field_key) first="$(prior_name) = $(prior_call)()" first_line=prior_line second="$(field_name) = $(this_call)()" second_line=stmt.lineno same_class_body=same_body first_written_in=prior[1][2] second_written_in=stmt_owner[2] later_dropped=(later_ignored ? "autofields_ignore" : array_reason !== nothing ? "unholdable ArrayField element" : unsupported_type ? "unimplemented type" : "")
+      push!(markers, "# PormG: '$(class_label)' declares '$(prior_name)' ($(prior_shown), models.py " *
+                     "line $(prior_line)) and '$(field_name)' ($(this_shown), line " *
                      "$(stmt.lineno))" * origin * ", and both " *
                      (m2m_involved ? "take the name" : "write the column") * " '$(field_key)'" *
                      # Only worth saying when the `_id` suffix is what made two differently spelled
@@ -4909,7 +5149,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
                         "and keeps its data in a through table. " : "") *
                      outcome * verdict)
     end
-    claimed[field_key] = (stmt_owner, field_name, django_type, stmt.lineno)
+    claimed[field_key] = (stmt_owner, field_name, django_type, stmt.lineno, custom_type)
 
     # Parse field arguments
     parse_args() = parse_field_args(field_args_str, django_type, parameters_ignore;
@@ -4941,7 +5181,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     # caller's guard, which then wrote a BIGINT auto key over a VARCHAR column, with no marker
     # anywhere. The caller asked for that column to be dropped; it did not ask for a differently
     # typed one to be invented under its name.
-    if django_type in autofields_ignore
+    if is_ignored
       # Last-write-wins, the same rule the trio below applies: this statement overrides whatever an
       # ancestor wrote at this key, so an earlier #410 claim on it is no longer the reason the column
       # is missing and must not be the one reported. Done here rather than by moving those `delete!`s
@@ -5006,7 +5246,8 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
       strict_fields && throw(InvalidMigrationError(
         "import: field '$(field_name)' in class '$(class_label)' (models.py line $(stmt.lineno)) is " *
         "$(unsupported_what), and strict_fields = true. " *
-        "Declare that column by hand, add \"$(django_type)\" to autofields_ignore to drop it " *
+        "Declare that column by hand, add \"$(something(custom_type, django_type))\" to " *
+        "autofields_ignore to drop it " *
         "deliberately" *
         # `autofields_ignore` matches the Django TYPE, so for an array it drops every ArrayField in
         # the import — the holdable ones too. Say so rather than hand out a broader cut than asked.
@@ -5056,6 +5297,12 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
                         "wrong." : "") *
                      " Pass strict_fields = true to fail the import instead of skipping a column.")
       continue
+    end
+
+    # The column survived both skips, so "imported as X" is now true (#1041).
+    if subclass_note !== nothing
+      pending_subclass_notes[field_key] =
+        (subclass_note[1], field_name, String(custom_type), stmt.lineno, subclass_note[2])
     end
 
     # #420. `related_name` is the one option whose value has to survive as a lookup-path SEGMENT, and
@@ -5215,6 +5462,17 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
       e isa InvalidValueError && throw(InvalidValueError(ctx * e.msg))
       e isa PormGError && rethrow()
       throw(InvalidMigrationError(ctx * "$(e)"))
+    end
+  end
+
+  # The custom-field notes no later statement overrode (#1041). `haskey` is belt and braces: every
+  # path past the deferral builds the column or throws.
+  for (key, n) in pending_subclass_notes
+    haskey(fields_dict, key) || continue
+    if subclass_notes === nothing
+      _emit_subclass_note!(markers, class_label, n)
+    else
+      subclass_notes[key] = (n, typeof(fields_dict[key]))
     end
   end
 

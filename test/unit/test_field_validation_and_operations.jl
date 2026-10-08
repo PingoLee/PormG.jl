@@ -2207,7 +2207,7 @@ end
             "lower_name" => QB.Lower(QB.SQLField("forename")),
             "trimmed_name" => QB.Trim(QB.SQLField("forename")),
             "name_len" => QB.Length(QB.SQLField("forename")),
-            "rounded_pts" => QB.Round(QB.SQLField("points"), 2),
+            "rounded_pts" => QB.Round(QB.SQLField("id"), 2),   # #1044: a float rounded to places is refused
             "absolute_pts" => QB.Abs(QB.SQLField("points")),
             "floored_pts" => QB.Floor(QB.SQLField("points")),
             "sqrt_pts" => QB.Sqrt(QB.SQLField("points")),
@@ -2247,7 +2247,8 @@ end
         q = AggregateContractModel.objects
         q.values(
             "team",
-            "avg_points_round" => QB.Round(QB.Sum("points") / QB.Count("id"), 1)
+            # #1044: a fractional value rounded to places is refused, so to a whole number.
+            "avg_points_round" => QB.Round(QB.Sum("points") / QB.Count("id"), 0)
         )
         q.order_by("team")
 
@@ -2260,7 +2261,7 @@ end
         @test contains(sql, "GROUP BY 1")
         @test !contains(sql, "GROUP BY ROUND")
         @test !contains(sql, "GROUP BY SUM")
-        @test 1 in insp[:parameters]
+        @test 0 in insp[:parameters]
 
         wrapped_avg = QB.Round(QB.Sum("points") / QB.Count("id"), 1)
         @test wrapped_avg.aggregate === true

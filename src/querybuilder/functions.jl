@@ -664,7 +664,8 @@ A cast the two engines apply differently raises `QueryBuildError` when the query
   truncates it. Round it first — `Cast(Round(x), IntegerField())`, `Floor(x)` or `Ceil(x)` read the
   same integer on both engines. A boolean casts to `1`/`0` on both and passes;
 - to `numeric(p, s)` (or `numeric(p)`, scale 0), an operand with more than `s` digits after the
-  point — a float, text, a `numeric` function, a decimal with more places (#1040): PostgreSQL rounds
+  point — a float column, a float literal with more places (#1050), text, a `numeric` function, a
+  decimal with more places (#1040): PostgreSQL rounds
   to the scale and SQLite keeps every digit. `Round(x, 2)` rounds differently on the two engines, so
   it is no escape; cast to an unscaled `"numeric"`, cast a whole number, or round in Julia.
 
@@ -812,8 +813,8 @@ function _cast_divergent_refusal(fname::AbstractString, kind::Symbol, what::Abst
     why = "PostgreSQL rounds a value cast to $(flag) to its scale (`1.555` → `1.56` at scale 2, `1.5` → `2` at scale 0) and SQLite keeps every digit"
     fix = "Cast to an unscaled \e[32m\"numeric\"\e[0m, which keeps the value on both engines, or round to a whole number " *
           "first (\e[32mCast(Round(x), \"numeric(10,0)\")\e[0m, \e[32mFloor(x)\e[0m, \e[32mCeil(x)\e[0m), or fetch the value " *
-          "and round it in Julia (\e[32mround(x; digits = 2)\e[0m). \e[32mRound(x, 2)\e[0m is no way out: it rounds " *
-          "differently on the two engines (`2.675` → `2.68` and `2.67`)."
+          "and round it in Julia (\e[32mround(x, RoundNearestTiesAway; digits = 2)\e[0m). \e[32mRound(x, 2)\e[0m is no way " *
+          "out over a float: it rounds differently on the two engines (`2.675` → `2.68` and `2.67`, #1044)."
     return QueryBuildError(
       "\e[4m\e[31m$(fname)\e[0m cannot make the same number from $(what) on both engines: $(why) (#1040). $(fix)")
   end
@@ -827,6 +828,21 @@ function _cast_divergent_refusal(fname::AbstractString, kind::Symbol, what::Abst
   return QueryBuildError(
     "\e[4m\e[31m$(fname)\e[0m cannot make the same text from $(what) on both engines: $(why) (#1028). " *
     _divergent_text_fix(kind, flag))
+end
+
+# #1044 — `Round(x, d)` over an operand that can carry more than `d` places (`_scale_divergent_operand`,
+# the #1040 classifier with `d` as the scale). PostgreSQL rounds the decimal form (a float converts
+# to `numeric` at 15 significant digits) and SQLite the binary double, so `2.675` is `2.68` and `2.67`.
+# No SQL spelling rounds the same on both, so the way out is Julia, or a whole number.
+function _round_divergent_refusal(digits::Integer, kind::Symbol, what::AbstractString)
+  return QueryBuildError(
+    "\e[4m\e[31mRound(…, $(digits))\e[0m cannot round $(what) to the same number on both engines: " *
+    "PostgreSQL rounds its decimal form and SQLite its binary double, so `2.675` is `2.68` on one and " *
+    "`2.67` on the other (#1044). Fetch the value and round it in Julia " *
+    "(\e[32mround(x, RoundNearestTiesAway; digits = $(digits))\e[0m: one answer whichever engine " *
+    "served the row), or round to a whole number (\e[32mRound(x)\e[0m), " *
+    "which agrees on both engines. An integer, a DecimalField with at most $(digits) places, or a " *
+    "literal that fits passes.")
 end
 
 # Variadic convenience: Concat("forename", Value(" "), "surname") → same as vector form
@@ -1184,9 +1200,29 @@ end
 """
     Round(column, precision=0)
 
-Rounds a number to the specified precision.
+Rounds a number to `precision` decimal places, half away from zero.
+
+`Round(x)` (no places) gives the same whole number on PostgreSQL and SQLite. With places, the two
+engines round different values: PostgreSQL renders `ROUND(x::numeric, d)`, which rounds the value's
+decimal form, and SQLite `ROUND(x, d)`, which rounds the binary double, so `Round(2.675, 2)` is
+`2.68` on one and `2.67` on the other. So `Round(x, d)` raises `QueryBuildError` when the query is
+built, on both engines, when `x` can carry more than `d` places: a float column, a float literal
+with more places, a function PostgreSQL computes as `numeric` (`Avg`, `Sqrt`, …), a `DecimalField`
+with more than `d` places, or text (#1044). An integer, a whole number, a `DecimalField` with at most
+`d` places and a literal that fits pass. To round a float to places, fetch it and round in Julia
+(`round(x, RoundNearestTiesAway; digits = 2)`: one answer whichever engine served the row, though
+not always either engine's old one: `1.005` gives `1.0`, where PostgreSQL gave `1.01`).
+
+A negative `precision` raises `InvalidValueError` when the expression is built: PostgreSQL rounds
+`Round(125, -1)` to `130` and SQLite takes a negative precision as 0.
 """
 function Round(x::_ScalarOperand, precision::Integer = 0)
+  # #1044: SQLite reads a negative precision as 0, PostgreSQL rounds to tens, hundreds, … — an
+  # integer operand diverges too, so it is refused before any operand is typed.
+  precision < 0 && throw(InvalidValueError(
+    "\e[31mRound(…, $(precision))\e[0m: SQLite takes a negative precision as 0 (`Round(125, -1)` is " *
+    "`125.0`) and PostgreSQL rounds to it (`130`), so the two engines disagree (#1044). Fetch the value " *
+    "and round it in Julia: \e[32mround(x, RoundNearestTiesAway; digits = $(precision))\e[0m.", :range))
   return FObject(function_name = "ROUND", column = _norm_fn_arg(x), aggregate = _any_agg(x), kwargs = Dict{String, Any}("precision" => precision), formatter = Models.format_number_sql)
 end
 

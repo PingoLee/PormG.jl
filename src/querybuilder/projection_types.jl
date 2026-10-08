@@ -677,13 +677,21 @@ end
 # escape beyond whole numbers: `Round(x, 2)` is `ROUND(x::numeric, 2)` on PostgreSQL, which rounds the
 # float's 15-digit decimal form, and `ROUND(x, 2)` on SQLite, which rounds the binary double, so
 # `2.675` is `2.68` on one and `2.67` on the other (`1.555`, `1.005` likewise). It is classified as the
-# `numeric` function it is. `Round(x)`, `Floor` and `Ceil` agree (every `Result.points` row, ±0.5,
-# ±1.5, ±2.5), so a whole number passes any scale.
+# `numeric` function it is. #1044 asks this same question of `Round(x, d)` itself, with `d` as the
+# scale (`_render_function_body`), so over a float it is refused before any cast reads it; a
+# `Round(x, d)` that renders therefore has at most `d` places, and passes a scale of at least `d`.
+# `Round(x)`, `Floor` and `Ceil` agree (every `Result.points` row, ±0.5, ±1.5, ±2.5), so a whole
+# number passes any scale.
+#
+# A literal is named by its type and its digits, never its value: it is a bound value, and a refusal
+# never prints one (#971).
 #
 # Bounded: a whole number (`_integral_valued`, and any operand with no fractional kind — an integer
 # column, a type PormG cannot name), a `DecimalField` column of at most `s` places, a `Decimal`
-# literal of at most `s` digits, and a nested cast to a scale of at most `s`. Unbounded: a float, a
-# non-whole float literal, a `numeric` function, a decimal of unknown scale, and text — PostgreSQL
+# literal of at most `s` digits, a `Float64` literal whose shortest form has at most `s` places and 15
+# significant digits (#1050: `1.5` at scale 2 reads `1.5` on both engines, there is nothing to round),
+# and a nested cast to a scale of at most `s`. Unbounded: a float column, a float literal with more
+# places or digits, a `numeric` function, a decimal of unknown scale, and text — PostgreSQL
 # parses `'1.555'` and rounds it, SQLite converts it and keeps it — including a JSON value. An operand
 # PormG cannot type (an untyped `Case`, a `Subquery`) passes, as it does for #1028.
 const _SCALE_PRESERVING_FUNCTIONS = ("MAX", "MIN", "ABS", "COALESCE", "GREATEST", "LEAST", "NULLIF")
@@ -692,11 +700,19 @@ function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union
   operand = p isa SQLField ? p.field : p isa FExpression && p.operation === nothing ? p.field_name : p
   if operand isa SQLText
     x = operand.field
-    x isa AbstractString && return (:text, "the string literal $(repr(x))")
+    x isa AbstractString && return (:text, "a string literal")
+    if x isa Float64 && isfinite(x)
+      places, significant = _float_literal_digits(x)
+      places <= scale && significant <= 15 && return nothing
+      return (:float, significant > 15 ? "a Float64 literal with $(significant) significant digits" :
+                                         "a Float64 literal with $(places) decimal places")
+    end
+    # Another float type binds through its own type, which was not measured: a whole one passes, as a
+    # whole number does anywhere here, and a fraction is refused below.
     x isa AbstractFloat && isinteger(x) && return nothing
     if x isa Decimals.Decimal
       digits = _decimal_scale(x)
-      return digits <= scale ? nothing : (:decimal, "the Decimal literal $(x) ($(digits) decimal places)")
+      return digits <= scale ? nothing : (:decimal, "a Decimal literal with $(digits) decimal places")
     end
   end
   if operand isa Union{String,JoinedReference,CTEReference}
@@ -717,6 +733,15 @@ function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union
     declared = get(operand.kwargs, operand.function_name == "CAST" ? "type" : "output_field", nothing)
     inner = declared isa AbstractString ? _numeric_cast_scale(declared) : nothing
     inner === nothing || return inner <= scale ? nothing : (:decimal, "a value cast to $(declared)")
+  end
+  # #1044: `Round(x, d)` renders only where both engines agree on it, so its value has at most `d`
+  # places; a wider `d` is still a `numeric` function's value, read below. Only over an operand PormG
+  # types: one it cannot (a `Subquery`, an untyped `Case`) passed #1044 unread, and stays refused here.
+  if operand isa FObject && operand.function_name == "ROUND"
+    d = get(operand.kwargs, "precision", 0)
+    inner = operand.column isa SQLField ? operand.column.field : operand.column
+    untyped = inner isa SubqueryObject || (inner isa FObject && inner.function_name == "CASE")
+    !untyped && d isa Integer && 0 < d <= scale && return nothing
   end
   # A function whose value is one of its operands' values gains no digits: `Max("price")` of a
   # two-place DecimalField has two. With an `output_field` it is a cast, read above or below.
@@ -743,6 +768,18 @@ function _decimal_scale(x::Decimals.Decimal)::Int
     c, q = c ÷ 10, q + 1
   end
   return max(0, -q)
+end
+# #1050 — the digits a float literal's shortest decimal form needs, `(places, significant)`: `1.5` is
+# `(1, 2)`, `2.675` `(3, 4)`, `1.0e-5` `(5, 1)`, `12345678901234.56` `(2, 16)`. That form is the value
+# both engines read, as long as it has at most 15 significant digits: PostgreSQL converts `float8` to
+# `numeric` at 15 (`12345678901234.56` becomes `12345678901234.6` before any scale applies), and
+# SQLite keeps the double.
+function _float_literal_digits(x::Float64)::Tuple{Int,Int}
+  m = match(r"^-?(\d+)(?:\.(\d+))?(?:e(-?\d+))?$", string(x))
+  whole, frac = m.captures[1], rstrip(something(m.captures[2], ""), '0')
+  exponent = m.captures[3] === nothing ? 0 : parse(Int, m.captures[3])
+  digits = rstrip(lstrip(whole * frac, '0'), '0')
+  return (max(0, length(frac) - exponent), max(1, length(digits)))
 end
 _text_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "a text expression" : "the text column `$(l)`")
 

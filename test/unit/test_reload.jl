@@ -40,10 +40,49 @@ function _write_scratch_project(pkg_root::String, pkg_name::String, uuid::String
     end
 end
 
+# The manifest the running tests resolved: the `Pkg.test` sandbox's, or `test/integration`'s. `nothing`
+# only for an invocation with no environment carrying one, in which case the child resolves on its own.
+function _parent_manifest_path()
+    for env in Base.load_path()
+        isfile(env) || continue
+        manifest = Base.project_file_manifest_path(env)
+        manifest === nothing || return manifest
+    end
+    return nothing
+end
+
+# #1060: the child resolves what the parent resolved. Left to itself, the scratch package's
+# `Pkg.instantiate` resolves NEWEST-allowed versions, so on CI's floor-resolve job (a floor-pinned
+# parent) it precompiled a second ~40-package tree cold and the 300 s budget ran out before the test
+# body did — while testing nothing at the floor. Seeding the parent's manifest and `Pkg.resolve()`
+# (UPLEVEL_FIXED: seeded versions stay, only what the parent lacks, e.g. Revise, is added) reuses the
+# warm cache and makes the subprocess run at the versions under test. Relative `path` entries are
+# made absolute: test/integration records PormG as "../..", which dangles in a temp dir. `Pkg.TOML`,
+# not `TOML`: under `Pkg.test` the child can load only what its project lists. Prints two markers;
+# MANIFEST_DRIFT is empty when every seeded package kept its version.
+const _CHILD_SEED_AND_INSTANTIATE = """
+seed_path = ARGS[2]
+seeded = Dict{String,String}()
+if !isempty(seed_path)
+    manifest = Pkg.TOML.parsefile(seed_path)
+    for (name, entries) in manifest["deps"], entry in entries
+        haskey(entry, "path") && (entry["path"] = normpath(joinpath(dirname(seed_path), entry["path"])))
+        haskey(entry, "version") && (seeded[name] = entry["version"])
+    end
+    open(io -> Pkg.TOML.print(io, manifest), "Manifest.toml", "w")
+    Pkg.resolve()
+end
+Pkg.instantiate(; update_registry=false)
+resolved = Dict(info.name => string(info.version) for info in values(Pkg.dependencies()) if info.version !== nothing)
+println("MANIFEST_SEEDED:", !isempty(seed_path))
+println("MANIFEST_DRIFT:", join(sort([name for (name, v) in seeded if get(resolved, name, v) != v]), ","))
+"""
+
 # Run `script` in a fresh Julia with the scratch project active. stdout and stderr are merged so a
 # marker and the error that explains it land in one transcript. Returns (ok, output, timed_out).
 function _run_child_julia(pkg_root::String, script::String; timeout::Float64 = 300.0)
-    cmd = `$(Base.julia_cmd()) --project=$(pkg_root) -e $script $pkg_root`
+    seed_manifest = something(_parent_manifest_path(), "")
+    cmd = `$(Base.julia_cmd()) --project=$(pkg_root) -e $script $pkg_root $seed_manifest`
     output_buffer = PipeBuffer()
     process = run(pipeline(ignorestatus(cmd), stdout=output_buffer, stderr=output_buffer), wait=false)
     wait_status = Base.timedwait(() -> !process_running(process), timeout)
@@ -121,7 +160,7 @@ function _run_import_models_package_regression()
         using Pkg
         cd(ARGS[1])
         ENV[\"JULIA_PKG_PRECOMPILE_AUTO\"] = \"0\"
-        Pkg.instantiate(; update_registry=false)
+        $(_CHILD_SEED_AND_INSTANTIATE)
         using Revise
         using TempReloadPkg
         println(\"SUBPROCESS_OK:\", TempReloadPkg.MODEL_OK)
@@ -208,7 +247,7 @@ function _run_boot_pattern_regression()
         using Pkg
         cd(ARGS[1])
         ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
-        Pkg.instantiate(; update_registry=false)
+        $(_CHILD_SEED_AND_INSTANTIATE)
         pkgid = Base.PkgId(Base.UUID("$(_BOOT_APP_UUID)"), "$(pkg_name)")
         println("BOOT_PRECOMPILED_BEFORE:", Base.isprecompiled(pkgid))
         # Leave the package root before `using`, so neither the precompile worker (it inherits this
@@ -298,10 +337,15 @@ end
 
 @testset "@import_models Package Regression" begin
     ok, output, timed_out = _run_import_models_package_regression()
+    output = replace(output, "\r\n" => "\n")
 
     @test !timed_out
     @test ok
     @test occursin("SUBPROCESS_OK:true", output)
+    # #1060: the child ran at the parent's resolved versions. Discriminating only where the two
+    # would differ (CI's floor-resolve job); on a newest-version parent both sides agree anyway.
+    @test occursin("MANIFEST_SEEDED:true\n", output)
+    @test occursin("MANIFEST_DRIFT:\n", output)
     @test !occursin("Evaluation into the closed module", output)
     @test !occursin("UndefVarError: `sch_models` not defined", output)
     @test !occursin("world prior to its definition world", output)
@@ -325,6 +369,8 @@ end
 
     @test !timed_out
     @test ok
+    @test occursin("MANIFEST_SEEDED:true\n", output)
+    @test occursin("MANIFEST_DRIFT:\n", output)
 
     # The image was really restored here: the body ran in the precompile worker (a different pid),
     # `__init__` ran in this process, and the cache exists afterwards. Without these three a green

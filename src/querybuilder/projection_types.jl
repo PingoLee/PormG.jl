@@ -515,6 +515,95 @@ _operand_kind(p::CTEReference, instruc::SQLInstruction) = _cte_column_kind(p, in
 _operand_kind(p::SubqueryObject, instruc::SQLInstruction) = _subquery_kind(p, instruc)
 _operand_kind(::Any, ::SQLInstruction) = nothing
 
+# #1027 — a `Concat` operand that has no single text: `(kind, what)`, `kind` one of `:bool`, `:float`,
+# `:decimal`, `:numeric`, or `nothing`. PostgreSQL's `CONCAT` writes each operand through its type's
+# output function and SQLite's `||` through its own number formatting, on top of PormG's SQLite
+# storage (a boolean is `0`/`1`, a decimal an integer or a REAL, #648): `true` reads `t` and `1`, a
+# float `25` and `25.0`, a decimal `3.00` and `3`. #860/#876 refused these three as a TEXT value for
+# that reason, and `Concat` makes text from its operands, so it refuses the same three as operands.
+#
+# Only a type that is KNOWN is answered, as everywhere in this file: an operand whose type cannot be
+# named (a `Subquery`, an untyped `Case`, a function PormG does not type) is let through, not guessed
+# at. Read after the operands render, so a joined path's field memo exists (`_alias_column_field`).
+# A CTE column is its body's inferred field, which `_set_field_from_sql_function` types as the
+# operand's own for `Avg` and as an integer for `Sum`, so `Concat` over such a column is let through.
+#
+# `:numeric` is the functions PostgreSQL computes as `numeric` whatever the operand (`Dialect` casts
+# each operand `::numeric`, and `avg` of an integer is numeric too) while SQLite answers a REAL:
+# `Mod(7, 3)` reads `1` and `1.0`. Measured on SQLite 3.45.1 for #1027.
+const _FRACTIONAL_FUNCTIONS = ("AVG", "ROUND", "MOD", "SQRT", "EXP", "LN", "POWER")
+# Functions whose value has their operands' type: one boolean, float or decimal operand makes the
+# result one (PostgreSQL's numeric promotion for a number), so any operand decides. `FLOOR`/`CEIL` are
+# `numeric` on PostgreSQL but agree with SQLite's integer over an integer operand, so they are here,
+# not above.
+const _NUMERIC_OPERAND_FUNCTIONS = ("MAX", "MIN", "SUM", "ABS", "FLOOR", "CEIL", "COALESCE", "GREATEST",
+                                    "LEAST", "NULLIF", "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE")
+function _concat_textless_operand(p, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing}
+  p isa SQLText && return _textless_literal(p.field)
+  # A `Q(...)` / `Qor(...)` renders a predicate, which is a boolean.
+  p isa Union{SQLTypeQ,SQLTypeQor} && return (:bool, "a Q(…) condition")
+  # A boolean column, a comparison, `Exists`, a boolean `Case`, an extremum over one: the one reader
+  # that already types all of them.
+  if p isa Union{SQLObject,SQLType,AbstractString}
+    if _expression_formatter(p, instruc) === Models.format_bool_sql
+      label = _concat_operand_label(p)
+      return (:bool, label === nothing ? "a boolean expression" : "the BooleanField `$(label)`")
+    end
+  end
+  return _textless_number(p, instruc)
+end
+_textless_literal(x::Bool) = (:bool, "the literal $(x)")
+_textless_literal(x::AbstractFloat) = (:float, "the $(typeof(x)) literal $(x)")
+_textless_literal(x::Decimals.Decimal) = (:decimal, "the Decimal literal $(x)")
+_textless_literal(::Any) = nothing
+
+# The column an operand names, as the caller spelled it, or `nothing` for any other expression.
+# `_concat_flag` hands a path to the refusal's `Case(When("<path>" => true, …))` suggestion.
+_concat_operand_label(p::AbstractString) = String(p)
+_concat_operand_label(p::CTEReference) = "CTE(\"$(p.name)\", \"$(p.path)\")"
+_concat_operand_label(p::JoinedReference) = "Joined(\"$(p.alias)\", \"$(p.path)\")"
+_concat_operand_label(p::SQLField) = _concat_operand_label(p.field)
+_concat_operand_label(p::FExpression) = p.operation === nothing ? _concat_operand_label(p.field_name) : nothing
+_concat_operand_label(::Any) = nothing
+_concat_flag(p) = (l = _concat_operand_label(p); l isa String && !occursin('(', l) ? l : "<flag>")
+
+function _textless_number(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction)
+  field = _alias_column_field(p, instruc)
+  field isa Models.sFloatField && return (:float, "the FloatField `$(_concat_operand_label(p))`")
+  field isa Models.sDecimalField && return (:decimal, "the DecimalField `$(_concat_operand_label(p))`")
+  return nothing
+end
+_textless_number(p::SQLField, instruc::SQLInstruction) = _textless_number(p.field, instruc)
+function _textless_number(p::FExpression, instruc::SQLInstruction)
+  p.operation === nothing && return _textless_number(p.field_name, instruc)
+  side = something(_textless_number(p.field_name, instruc), _textless_number(p.operand, instruc), Some(nothing))
+  return side === nothing ? nothing : (side[1], "arithmetic over $(side[2])")
+end
+function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
+  name = p.function_name
+  # A declared type is the cast the SQL renders, so it decides alone: `Cast(points, IntegerField())`
+  # is an integer whatever `points` is.
+  declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
+  if declared isa AbstractString && !isempty(declared)
+    field = _sql_type_field(declared)
+    field isa Models.sFloatField && return (:float, "a value cast to $(declared)")
+    field isa Models.sDecimalField && return (:decimal, "a value cast to $(declared)")
+    return nothing
+  end
+  name in _FRACTIONAL_FUNCTIONS && return (:numeric, "`$(name)(…)`")
+  name in _NUMERIC_OPERAND_FUNCTIONS || return nothing
+  # The whole classifier, not only the number half: `Lag("active")` is the boolean's own value, and
+  # `_expression_formatter` does not type a window value function.
+  for operand in (p.column isa AbstractVector ? p.column : (p.column,))
+    side = _concat_textless_operand(operand, instruc)
+    side === nothing || return (side[1], "`$(name)(…)` over $(side[2])")
+  end
+  return nothing
+end
+_textless_number(x::Union{Bool,AbstractFloat,Decimals.Decimal}, ::SQLInstruction) = _textless_literal(x)
+_textless_number(p::SQLText, ::SQLInstruction) = _textless_literal(p.field)
+_textless_number(::Any, ::SQLInstruction) = nothing
+
 # #824 — the read kind of a CTE column. The body is built before the outer query (`build_cte_clause`
 # runs first), and building it recorded the kind of each of its own projections under the same
 # output name the CTE model gives the column — so that record IS the answer, by the same rule, on the

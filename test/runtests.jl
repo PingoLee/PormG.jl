@@ -89,6 +89,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Date/Time Function SQL Parity (#25)" include("unit/test_date_functions_sql.jl")
     @testset "Cast / output_field Type Names (#696)" include("unit/test_cast_type_validation.jl")
     @testset "Transform Ladder Parity (#562)" include("unit/test_transform_ladder_parity.jl")
+    @testset "Concat Operands With No Single Text (#1027)" include("unit/test_concat_textless_operands.jl")
     @testset "Deep FK Traversal (3 hops)" include("unit/test_deep_fk_traversal.jl")
     @testset "Window Function SQL Generation" include("unit/test_window_functions.jl")
     @testset "Window Frame Grammar (#713)" include("unit/test_window_frame_validation.jl")

@@ -324,7 +324,7 @@ df = M.Result.objects.values(
 | `Lower("field")` | Convert to lowercase | `"name_lower" => Lower("surname")` |
 | `Upper("field")` | Convert to uppercase | `"name_upper" => Upper("surname")` |
 | `Length("field")` | String length | `"name_len" => Length("surname")` |
-| `Concat(args...)` | Concatenate values; a NULL operand is skipped | `"full" => Concat("forename", Value(" "), "surname")` |
+| `Concat(args...)` | Concatenate values; a NULL operand is skipped, a Bool/Float/Decimal one refused | `"full" => Concat("forename", Value(" "), "surname")` |
 | `Trim("field")` | Trim whitespace | `"clean" => Trim("name")` |
 | `LTrim("field")` | Left trim | `"clean" => LTrim("name")` |
 | `RTrim("field")` | Right trim | `"clean" => RTrim("name")` |
@@ -369,7 +369,7 @@ df = M.Result.objects.values(
 Each raises `BackendCapabilityError` on SQLite when the query is built. The config, the search types
 and the options are in [Full-Text Search](read/full_text_search.md).
 
-An operand of `Coalesce`, `Greatest`, `Least`, `NullIf`, `Power`, `Mod` and `Concat` is read by its type. A string is a column path. A number, a `Bool`, or a date or time (`Date`, `DateTime`, `ZonedDateTime`, `Time`) is a literal that is bound as a parameter, so `Coalesce("points", 0)` means `Coalesce("points", Value(0))`. Wrap a string literal in `Value`, as in `NullIf("code", Value(""))`. Any other value raises `QueryBuildError` when the expression is built.
+An operand of `Coalesce`, `Greatest`, `Least`, `NullIf`, `Power`, `Mod` and `Concat` is read by its type. A string is a column path. A number, a `Bool`, or a date or time (`Date`, `DateTime`, `ZonedDateTime`, `Time`) is a literal that is bound as a parameter, so `Coalesce("points", 0)` means `Coalesce("points", Value(0))`. Wrap a string literal in `Value`, as in `NullIf("code", Value(""))`. Any other value raises `QueryBuildError` when the expression is built. `Concat` is narrower: a `Bool`, float or `Decimal` operand, as a literal, a column or an expression, raises `QueryBuildError` too, since PostgreSQL and SQLite would write it differently (#1027).
 
 ### Case Expressions
 

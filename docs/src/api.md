@@ -75,6 +75,7 @@ These methods finalize the query and execute it against the database:
 | `.update_or_create(lookup...; defaults)` | `(PormGRow, Bool)` | Row-level upsert: inserts on a fresh lookup or updates `defaults` on conflict; returns `(row, created)`. See [Update or Create](write/create.md#update-or-create). |
 | `.delete()` | — | Deletes all matching records. |
 | `.inspect()` | `Dict` | Full query metadata without executing — the `inspect_query` shape (see Query Inspection & Debugging below). |
+| `.explain(; analyze, buffers, verbose)` | `Dict` | The database's plan for the `SELECT` — the `explain_query` shape (see Query Inspection & Debugging below). `analyze = true` executes the query. |
 
 ### `PormGRow` Instance Methods
 
@@ -125,7 +126,8 @@ An integrated switch available on all terminal methods to toggle between executi
 | :--- | :--- |
 | `:execute` | Default. Executes the query and returns results. |
 | `:sql` | Returns the SQL string only. Minimal overhead for benchmarking. |
-| `:dict` | Returns full metadata dictionary (sql, parameters, dialect, model, operation, etc.). |
+| `:pretty` | Returns the SQL string reflowed one clause per line, for logs and the REPL. Only whitespace between tokens changes, so it runs exactly as `:sql` does. |
+| `:dict` | Returns the metadata dictionary — the eight keys below. |
 | `:inspection` | Alias of `:dict`. Useful when you want the same rich metadata shape used by `inspect_query()`. |
 | `:params` | Returns the parameters array only. |
 | `:none` | Returns `nothing`. Zero-overhead mode for benchmarking the builder itself. |
@@ -141,7 +143,27 @@ sql = query.list(show_query=:sql)
 
 # Get full metadata
 meta = query.list(show_query=:dict)
+
+# Readable SQL for a log line
+@info "drivers query" sql = query.list(show_query=:pretty)
 ```
+
+`:dict` / `:inspection` return the same eight keys for **every** operation — a read, `count`/`exists`,
+`create`, `update`, each `delete` step and each bulk form:
+
+| Key | Value |
+| :--- | :--- |
+| `:sql_text` | The SQL string — exactly what executes (on PostgreSQL, `create()` includes its `RETURNING *`). |
+| `:parameters` | The bound values, in bucket order. |
+| `:parameter_count` | `length(:parameters)`. |
+| `:parameter_buckets` | SQLite: the values per positional bucket (`:select`, `:where`, `:limit`, …). PostgreSQL: empty. |
+| `:dialect` | `:postgresql` or `:sqlite`. |
+| `:bucketing` | `:numbered` (`$1`, PostgreSQL) or `:positional` (`?`, SQLite). |
+| `:model` | The model / table name. |
+| `:operation` | `:select`, `:insert`, `:update` or `:delete`; a cascading delete also has `:lock` steps on PostgreSQL, and `bulk_copy` reports `:bulk_copy`. |
+
+A statement that runs in several steps — a cascading `delete()`, a chunked bulk call — returns a
+`Vector` of these, one per step.
 
 ### `inspect_query`
 
@@ -159,6 +181,53 @@ println(inspection[:dialect])    # :postgresql or :sqlite
 
 !!! note
     `LIMIT` and `OFFSET` values are bound parameters like every other value (#46), so one statement text serves every page size. They come last in `inspection[:parameters]` — LIMIT, then OFFSET — and on SQLite they sit in their own `inspection[:parameter_buckets][:limit]` bucket. An offset with no limit renders `LIMIT -1 OFFSET ?` on SQLite, whose grammar has no standalone `OFFSET`; PostgreSQL keeps the bare `OFFSET $N`.
+
+
+### `explain_query`
+
+The database's plan for the `SELECT` a query builds — Django's `QuerySet.explain()`. It is
+read-only: it explains the statement `show_query(q)` renders, and writes are terminals, not something
+a query can be explained as. The fluent form is `.explain()`.
+
+```julia
+plan = M.Result.objects.
+    filter("driverid__surname" => "Senna").
+    values("raceid", "points").
+    explain()
+
+plan[:indexes_used]    # ["result_driverid_lunjedbf_idx"]
+plan[:seq_scans]       # ["driver"]
+plan[:total_cost]      # 167.35   (PostgreSQL's estimate; nothing on SQLite)
+plan[:estimated_rows]  # 62
+```
+
+The result is the `inspect_query` dictionary plus these keys, present on both engines:
+
+| Key | PostgreSQL | SQLite |
+| :--- | :--- | :--- |
+| `:explain_sql` | The `EXPLAIN (FORMAT JSON …)` statement that ran. | The `EXPLAIN QUERY PLAN` statement that ran. |
+| `:plan` | The parsed JSON plan document. | The plan rows, as `Dict`s of `:id`, `:parent`, `:detail`. |
+| `:indexes_used` | Every `Index Name` in the plan tree. | Each `USING [COVERING] INDEX` name; `"INTEGER PRIMARY KEY"` / `"PRIMARY KEY"` for a key lookup; `"AUTOMATIC INDEX"` for a transient index SQLite builds for the one statement. |
+| `:seq_scans` | Each table read by a `Seq Scan`. | Each `SCAN` step that uses no index — named by the query's **alias** (`Tb`, `Tb_1`, …). |
+| `:total_cost`, `:estimated_rows` | The root node's estimates. | `nothing` |
+| `:planning_time_ms`, `:execution_time_ms` | Measured, with `analyze = true`. | `nothing` |
+| `:analyze` | Whether the query was executed. | `false` |
+
+| Keyword | Effect |
+| :--- | :--- |
+| `analyze = false` | `true` runs `EXPLAIN ANALYZE`, which **executes the query** to measure it. |
+| `buffers = false` | Adds PostgreSQL's buffer usage to `:plan`. |
+| `verbose = false` | Adds PostgreSQL's `VERBOSE` detail to `:plan`. |
+
+SQLite has only `EXPLAIN QUERY PLAN`: passing any of the three keywords there raises
+`BackendCapabilityError`.
+
+A `select_for_update()` query needs a transaction on PostgreSQL to be explained — with or without
+`analyze` — exactly as it does to run, and raises `QueryBuildError` outside one.
+
+The facts are what the plan states — PormG does not warn about a "missing" index. A sequential scan
+is often the right plan (a small table, or a filter that matches most rows), and the planner already
+weighed the indexes it has.
 
 ---
 
@@ -783,7 +852,7 @@ scope — the SQL function constructors are *not* among them (see
 [SQL function library](#sql-function-library-pormgfunctions)).
 
 ### Query Builder
-`object`, `get`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Subquery`, `CTE`, `Joined`, `Interval`, `show_query`, `inspect_query`
+`object`, `get`, `Q`, `Qor`, `F`, `Exists`, `OuterRef`, `Subquery`, `CTE`, `Joined`, `Interval`, `show_query`, `inspect_query`, `explain_query`
 
 ### Rows & exceptions
 `PormGRow`, `pk`, `DoesNotExist`, `MultipleObjectsReturned`

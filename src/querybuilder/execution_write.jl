@@ -138,8 +138,12 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
   )
   """
 
+  # What executes, so inspection shows it (#48): PostgreSQL appends `RETURNING *`, SQLite runs the
+  # plain INSERT and reads the row back out-of-band (see below). `_update_or_create` already showed
+  # its RETURNING; this terminal showed SQL it never sent.
+  exec_sql = connection isa PormGPostgres ? sql * " RETURNING *;" : sql
   if show_query !== :execute
-    return _show_query_result(show_query, sql, connection, model.name, :insert; 
+    return _show_query_result(show_query, exec_sql, connection, model.name, :insert;
                             parameters=parameters)
   end
 
@@ -148,7 +152,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
   # .save(). `_row_to_field_keyed_dict` still builds the Dict; we wrap it. RETURNING */SELECT *
   # include every column (incl. the pk), so the row is .save()-able; `_dirty` starts empty.
   if connection isa PormGPostgres
-    result = fetch(settings, sql * " RETURNING *;", parameters)
+    result = fetch(settings, exec_sql, parameters)
     # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
     # write supplied an explicit primary key.
     return PormGRow(_row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model, connection), model)
@@ -407,7 +411,9 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
     # out-of-band SELECTs). Mirrors _update_or_create's inspect contract.
     parameters = get_parameter(connection)
     insert_sql = build_insert(parameters)
-    return _show_query_result(show_query, insert_sql, connection, model.name, :insert; parameters = parameters)
+    # #48: PostgreSQL sends it with `RETURNING *` (below), so that is what inspection shows.
+    shown_sql = connection isa PormGPostgres ? insert_sql * " RETURNING *;" : insert_sql
+    return _show_query_result(show_query, shown_sql, connection, model.name, :insert; parameters = parameters)
   end
 
   do_goc = () -> begin

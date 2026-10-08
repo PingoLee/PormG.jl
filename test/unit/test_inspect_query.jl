@@ -117,6 +117,58 @@ PormG.config["default"] = MockSettings
     
   end
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # :inspection contract: one key set for every operation (#48)
+  # Every terminal funnels into the same dispatcher, so a debugging or logging caller can read the
+  # same eight keys whatever it inspected — a read, count/exists, each write, a delete step, each
+  # bulk form. `:inspection` is the same Dict as `:dict`, and `:operation` takes only the documented
+  # values. Pinned as an exact set so a key added to one path and not the others fails here.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "Inspection key contract across operations (#48)" begin
+    contract = Set([:sql_text, :parameters, :dialect, :model, :operation, :bucketing,
+                    :parameter_count, :parameter_buckets])
+    q = DriverModel.objects
+    q.filter("nationality" => "British")
+    df = DataFrames.DataFrame(forename=["Lewis"], surname=["Hamilton"])
+    results = [
+      q.list(show_query=:inspection),
+      q.count(show_query=:inspection),
+      q.exists(show_query=:inspection),
+      DriverModel.objects.create("forename" => "Ayrton", "surname" => "Senna", show_query=:inspection),
+      DriverModel.objects.get_or_create("surname" => "Senna"; defaults = Dict("forename" => "Ayrton"), show_query=:inspection),
+      DriverModel.objects.update_or_create("surname" => "Senna"; defaults = Dict("forename" => "Ayrton"), show_query=:inspection),
+      q.update("forename" => "Lewis", show_query=:inspection),
+      q.delete(show_query=:inspection),
+      bulk_insert(DriverModel.objects, df, show_query=:inspection),
+      bulk_update(DriverModel.objects, df, columns=["forename"], match_on=["surname"], show_query=:inspection),
+      PormG.QueryBuilder.bulk_copy(DriverModel.objects, df, show_query=:inspection),
+      inspect_query(q),
+    ]
+    for res in results
+      @test res isa Dict
+      @test Set(keys(res)) == contract
+      @test res[:operation] in (:select, :insert, :update, :delete, :lock, :bulk_copy)
+    end
+    # `:inspection` and `:dict` are one mode under two names.
+    @test q.list(show_query=:inspection) == q.list(show_query=:dict)
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Inspection shows what executes: PostgreSQL create() (#48)
+  # On PostgreSQL create() and get_or_create() send `INSERT … RETURNING *;` so the new row comes
+  # back; inspection used to show the INSERT without it. update_or_create() already showed its
+  # RETURNING, so the three terminals now agree with each other and with the wire.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "PostgreSQL create()/get_or_create() inspection shows RETURNING (#48)" begin
+    sql = DriverModel.objects.create("forename" => "Ayrton", "surname" => "Senna", show_query=:sql)
+    @test endswith(rstrip(sql), "RETURNING *;")
+    res = DriverModel.objects.create("forename" => "Ayrton", "surname" => "Senna", show_query=:dict)
+    @test res[:sql_text] == sql && res[:parameters] == ["Ayrton", "Senna"]
+    # get_or_create() inserts on a miss with the same RETURNING, and showed it without too.
+    goc = DriverModel.objects.get_or_create("surname" => "Senna"; defaults = Dict("forename" => "Ayrton"), show_query=:sql)
+    @test occursin("ON CONFLICT", goc) && endswith(rstrip(goc), "RETURNING *;")
+  end
+
   # Test: DELETE Inspection: Verify SQL and Metadata
   @testset "DELETE Inspection: Detailed Verification" begin
       q_del = DriverModel.objects;

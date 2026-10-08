@@ -24,7 +24,7 @@ const EXPECTED_TOPLEVEL = Set([
     # Query builder
     # `CTE` (#444) is a CTE-column reference object, a query primitive like F/OuterRef/Subquery.
     # `Joined` (#481) is the same thing for a `cjoin_on` joined copy, replacing `F("alias.col")`.
-    :object, :get, :Q, :Qor, :F, :Exists, :OuterRef, :Subquery, :CTE, :Joined, :Interval, :show_query, :inspect_query,
+    :object, :get, :Q, :Qor, :F, :Exists, :OuterRef, :Subquery, :CTE, :Joined, :Interval, :show_query, :inspect_query, :explain_query,
     # Rows & exceptions
     :PormGRow, :pk, :DoesNotExist, :MultipleObjectsReturned, :PoolTimeoutError, :PoolConnectError, :pool_stats,
     # Semantic error taxonomy (#231): PormGError root + query-builder subtypes

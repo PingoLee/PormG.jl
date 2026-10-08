@@ -508,12 +508,62 @@ println(inspection[:operation])  # => :select
 | :--- | :--- |
 | `:execute` | Default — executes the query and returns results. |
 | `:sql` | SQL string only (`String`). |
-| `:dict` | Full metadata dictionary (`Dict`) with keys `:sql_text` (the SQL string), `:parameters` (the bound values array), `:dialect`, and `:operation`. |
+| `:pretty` | The SQL string reflowed one clause per line (`String`). Only whitespace changes. |
+| `:dict` | Metadata dictionary (`Dict`) with the same eight keys for every operation: `:sql_text`, `:parameters`, `:parameter_count`, `:parameter_buckets`, `:dialect`, `:bucketing`, `:model` and `:operation`. The [API reference](../api.md#show_query) describes each. |
 | `:inspection` | Alias of `:dict`, provided for inspection-focused workflows that want the same metadata shape as `inspect_query()`. |
 | `:params` | Parameters array only. |
 | `:none` | `nothing` (zero-overhead benchmarking). |
 
-`show_query` is supported on terminal methods such as `list()`, `first()`, `get()`, `count()`, `exists()`, `delete()`, `update()`, `bulk_insert()`, and `bulk_update()`.
+`show_query` is supported on terminal methods such as `list()`, `first()`, `get()`, `count()`, `exists()`, `create()`, `delete()`, `update()`, `bulk_insert()`, and `bulk_update()`.
+
+`:pretty` is the readable form of `:sql` — for a log line, or to read a long join at the REPL:
+
+```julia
+query = M.Result.objects.
+    filter("driverid__surname" => "Senna", "raceid__year__@gte" => 1990).
+    values("raceid__name", "points").
+    order_by("-points")
+
+println(query.list(show_query = :pretty))
+```
+
+```sql
+SELECT
+  "Tb_1"."name" as "raceid__name",
+  "Tb"."points" as "points"
+FROM "result" as "Tb"
+INNER JOIN "race" AS "Tb_1" ON "Tb"."raceid" = "Tb_1"."raceid"
+INNER JOIN "driver" AS "Tb_2" ON "Tb"."driverid" = "Tb_2"."driverid"
+WHERE "Tb_2"."surname" = $1
+  AND "Tb_1"."year" >= $2
+ORDER BY "points" DESC NULLS FIRST
+```
+
+### The query plan: `explain()`
+
+`show_query` shows what PormG *sends*; `.explain()` asks the database how it would *run* it — which
+indexes it uses and which tables it reads in full. Like Django's `QuerySet.explain()`, it explains
+the `SELECT` and never a write.
+
+```julia
+plan = M.Result.objects.
+    filter("driverid__surname" => "Senna").
+    values("raceid", "points").
+    explain()
+
+plan[:indexes_used]   # ["result_driverid_lunjedbf_idx"] — Senna's results, found by driver
+plan[:seq_scans]      # ["driver"] — the surname filter reads the driver table in full
+```
+
+On PostgreSQL, `explain(analyze = true)` **executes the query** and adds measured timing
+(`:execution_time_ms`, `:planning_time_ms`); `buffers = true` and `verbose = true` add PostgreSQL's
+detail to `:plan`. SQLite has only `EXPLAIN QUERY PLAN` — it reports the indexes and scans, names
+tables by the query's alias (`Tb_1` rather than `driver`), has no cost or timing, and raises
+`BackendCapabilityError` for any of the three options.
+
+PormG reports what the plan states and does not guess at missing indexes: a full scan of a small
+table is the plan a database should choose. The [API reference](../api.md#explain_query) lists every
+key.
 
 ---
 

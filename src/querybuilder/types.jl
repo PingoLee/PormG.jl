@@ -1903,9 +1903,10 @@ Each mutates the handler and returns it, so calls can be chained or accumulated 
 
 # Terminal methods
 
-Each executes and returns a result. Every one below except `.inspect()` takes
-`show_query = :sql` / `:dict` / `:params` to render instead of executing; `.inspect()` is already
-an inspection call and takes `operation =` / `connection =` instead.
+Each executes and returns a result. Every one below except `.inspect()` and `.explain()` takes
+`show_query = :sql` / `:pretty` / `:dict` / `:params` to render instead of executing; `.inspect()` is
+already an inspection call and takes `operation =` / `connection =` instead, and `.explain()` takes
+`analyze =` / `buffers =` / `verbose =`.
 
 - `.list()` → `Vector{PormGRow}`; `.list(:dict)` → `Vector{Dict}`; `.list(:json)` → JSON `String`
 - `query |> DataFrame` — preferred for analytical queries
@@ -1922,6 +1923,7 @@ an inspection call and takes `operation =` / `connection =` instead.
 - `.get_or_create(lookup...; defaults)` / `.update_or_create(lookup...; defaults)` → `(row, created)`
 - `.delete()` — delete every matching row
 - `.inspect()` — the [`inspect_query`](@ref) metadata `Dict`
+- `.explain(; analyze = false)` — the database's plan for the `SELECT`, as an [`explain_query`](@ref) `Dict`
 
 # Examples
 

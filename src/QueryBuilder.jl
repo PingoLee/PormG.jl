@@ -116,9 +116,15 @@ include("querybuilder/build_query.jl")
 # #130: rendering an `F(...)` expression to SQL, and its typed temporal / interval path.
 include("querybuilder/expression_render.jl")
 
+# #48: `show_query = :pretty` — reflow rendered SQL one clause per line, whitespace only.
+include("querybuilder/sql_format.jl")
+
 # #130: executing a statement, split by direction — reads, then single-row and queryset writes.
 include("querybuilder/execution_read.jl")
 include("querybuilder/execution_write.jl")
+
+# #48: `explain_query` / `.explain()` — the database's plan for the SELECT a handler builds.
+include("querybuilder/explain.jl")
 
 include("querybuilder/execution_bulk.jl")
 
@@ -189,9 +195,9 @@ export bulk_insert, bulk_update, bulk_copy, allocate_primary_keys, resync_sequen
 # It is also load-bearing for the docs build: `docs/src/api.md`'s `@autodocs` sets `Private = false`,
 # and Documenter decides public/private with `Base.ispublic(mod, name)` against the module the
 # docstring was attached in — never PormG's export list. Anything user-facing here that is not
-# `public` silently vanishes from the API reference. `show_query`/`inspect_query` are the sharp case:
+# `public` silently vanishes from the API reference. `show_query`/`inspect_query`/`explain_query` are the sharp case:
 # exported from `PormG`, but defined here, so only this declaration keeps them on the page.
-public delete, list, save, earliest, latest, ObjectHandler, inspect_query, show_query
+public delete, list, save, earliest, latest, ObjectHandler, inspect_query, show_query, explain_query
 
 # Foreign bindings whose docstrings live in this module's meta: the `.first()` / `.last()` terminals
 # and `query |> DataFrame`. `public` works on an imported name (it marks the binding in THIS module),

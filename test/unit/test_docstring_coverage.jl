@@ -344,7 +344,7 @@ end
     @testset "the `public`-but-unexported surface is exactly the declared set" begin
         expected = Dict(
             PormG              => [:install_ai_skills, :setup],
-            PormG.QueryBuilder => [:DataFrame, :ObjectHandler, :delete, :earliest, :first,
+            PormG.QueryBuilder => [:DataFrame, :ObjectHandler, :delete, :earliest, :explain_query, :first,
                                    :inspect_query, :last, :latest, :list, :save, :show_query],
             # Models: the 27 field constructors #289 declared, plus the three entry points #295
             # added (`Model`, `set_models`, `UniqueConstraint`), `Index` (#347),

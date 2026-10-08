@@ -1044,6 +1044,21 @@ const DOCERR_CASES = [
         QueryBuildError,
         () -> DOCERR_RACE_PG.objects.values("name", "c" => PormG.Functions.When("raceid" => 1, then = 1)).list(show_query = :dict),
     ),
+    # #48 — explain(): SQLite has only EXPLAIN QUERY PLAN, so each PostgreSQL option is refused
+    # (read/index.md, api.md, the explain_query docstring). The refusal comes before any fetch, so
+    # the bare mock needs no driver.
+    (
+        "read/index.md + api.md — explain(analyze/buffers/verbose = true) is PostgreSQL-only on SQLite",
+        BackendCapabilityError,
+        () -> DOCERR_DRIVER_SL.objects.explain(analyze = true),
+    ),
+    # #48 — a select_for_update() query needs a transaction on PostgreSQL to be explained (api.md,
+    # the explain_query docstring), with or without analyze — the build's own guard.
+    (
+        "api.md — explain() of select_for_update() outside a transaction raises QueryBuildError",
+        QueryBuildError,
+        () -> DOCERR_DRIVER_PG.objects.filter("driverid" => 1).select_for_update().explain(),
+    ),
     # Intentional PG/SQLite divergence: these pages tell the reader the lookup is PostgreSQL-only
     # and raises on SQLite. Asserting it on the SQLite mock keeps the documented divergence honest.
     (

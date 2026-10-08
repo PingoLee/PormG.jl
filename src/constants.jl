@@ -210,12 +210,19 @@ const PormGtransform = Dict{String,Union{Int64, String}}(
   # names shaped like the `@yyyy_mm` bucket it belongs beside.
   "yyyy_q" => "Y_Q",
   "yyyy_quad" => "Y_QUAD",
-  # #636: the time parts of a `DateTimeField` / `TimeField`. The week parts (`week`, `week_day`,
-  # `iso_week_day`, `iso_year`) are deliberately absent — the two engines number weeks differently,
-  # and which numbering each name promises is still an open decision on #636.
+  # #636: the time parts of a `DateTimeField` / `TimeField`.
   "hour" => "HOUR",
   "minute" => "MINUTE",
   "second" => "SECOND",
+  # #636: the week parts, numbered as Django numbers them — `week` is the ISO-8601 week (1-53),
+  # `week_day` runs 1 = Sunday … 7 = Saturday, `iso_week_day` 1 = Monday … 7 = Sunday, and `iso_year`
+  # is the ISO week-numbering year. The engines' native spellings disagree (SQLite's `%W` is not the
+  # ISO week, and PostgreSQL's `DOW` is 0-based), so `Dialect` renders each to that one numbering
+  # rather than to either engine's default.
+  "week" => "WEEK",
+  "week_day" => "WEEK_DAY",
+  "iso_week_day" => "ISO_WEEK_DAY",
+  "iso_year" => "ISO_YEAR",
   # #28: an `ArrayField`'s element count, Django's `len`. A transform rather than an operator, so it
   # chains like the date parts do: `"pit_laps__@len__@gte" => 2`. PostgreSQL only.
   "len" => "ARRAY_LEN",

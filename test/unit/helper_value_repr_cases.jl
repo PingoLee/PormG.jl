@@ -511,6 +511,13 @@ const VR_LADDER_ORACLE = Dict{String,Function}(
   # collision predates #579, which moved the expansion without touching it.
   "yyyy_q"    => v -> string(year(_vr_utc_naive(v)), "-Q", cld(month(_vr_utc_naive(v)), 3)),
   "yyyy_quad" => v -> string(year(_vr_utc_naive(v)), "-Q", cld(month(_vr_utc_naive(v)), 4)),
+  # #636: the week parts on Django's numbering, from Julia's calendar rather than either engine's.
+  # `Dates.week` is the ISO-8601 week and `Dates.dayofweek` is 1 = Monday; the ISO year is the year of
+  # the Thursday of that Monday-started week; `@week_day` is Sunday-first, 1 = Sunday.
+  "week"         => v -> week(_vr_utc_naive(v)),
+  "iso_year"     => v -> (d = Date(_vr_utc_naive(v)); year(d + Day(4 - dayofweek(d)))),
+  "iso_week_day" => v -> dayofweek(_vr_utc_naive(v)),
+  "week_day"     => v -> dayofweek(_vr_utc_naive(v)) % 7 + 1,
 )
 
 # Per engine: which transforms DISAGREE between the two spellings (parity), and for which the `F`

@@ -4010,6 +4010,10 @@ format_quadrimester_sql(value) = _format_period_sql(value, 1, 3, "quadrimester")
 format_hour_sql(value) = _format_period_sql(value, 0, 23, "hour")
 format_minute_sql(value) = _format_period_sql(value, 0, 59, "minute")
 format_second_sql(value) = _format_period_sql(value, 0, 59, "second")
+# #636: the week parts. Week 53 exists in ISO years that start on a Thursday (or a leap year starting
+# on a Wednesday); `@week_day` and `@iso_week_day` are both 1-based, they differ only in which day is 1.
+format_week_sql(value) = _format_period_sql(value, 1, 53, "week")
+format_week_day_sql(value) = _format_period_sql(value, 1, 7, "week day")
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Comparison Tools

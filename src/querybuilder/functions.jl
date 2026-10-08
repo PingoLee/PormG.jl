@@ -864,8 +864,8 @@ Extracts a component (`"year"`, `"month"`, `"dow"`, …) from a date/time column
 `MILLISECONDS`, `MINUTE`, `MONTH`, `QUARTER`, `SECOND`, `TIMEZONE`, `TIMEZONE_HOUR`,
 `TIMEZONE_MINUTE`, `WEEK`, `YEAR`. Anything else — PostgreSQL's synonyms such as `"years"` or
 `"hr"` included — raises `InvalidValueError` when the expression is built, on both engines.
-SQLite runs `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY` and raises
-`BackendCapabilityError` for the rest.
+SQLite runs `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY` `WEEK` `ISOYEAR` `ISODOW`,
+numbered as PostgreSQL numbers them, and raises `BackendCapabilityError` for the rest.
 
 To change the result type, wrap it in [`Cast`](@ref) — e.g. on PostgreSQL,
 `Cast(Extract("date", "epoch"), "bigint")`.
@@ -1676,6 +1676,15 @@ DAY(x) = Extract(x, "DAY", formatter = Models.format_number_sql)
 HOUR(x) = Extract(x, "HOUR", formatter = Models.format_hour_sql)
 MINUTE(x) = Extract(x, "MINUTE", formatter = Models.format_minute_sql)
 SECOND(x) = Extract(x, "SECOND", formatter = Models.format_second_sql)
+# #636: the week parts, on Django's numbering. Three are PostgreSQL `EXTRACT` fields with that exact
+# numbering (`WEEK` and `ISOYEAR` are ISO-8601, `ISODOW` is 1 = Monday), so they go through `Extract`
+# and `Dialect.EXTRACT` gives SQLite the matching arithmetic. `week_day` (1 = Sunday) is no EXTRACT
+# field on either engine — `DOW` is 0-based — so it is a node of its own, like `QUARTER` below.
+WEEK(x) = Extract(x, "WEEK", formatter = Models.format_week_sql)
+ISO_YEAR(x) = Extract(x, "ISOYEAR", formatter = Models.format_number_sql)
+ISO_WEEK_DAY(x) = Extract(x, "ISODOW", formatter = Models.format_week_day_sql)
+WEEK_DAY(x) = (y = _transform_operand("WEEK_DAY", x);
+               FObject(function_name = "WEEK_DAY", column = y, aggregate = _any_agg(y), formatter = Models.format_week_day_sql))
 Y_M(x) = ToChar(x, "YYYY-MM", formatter = Models.format_yyyy_mm)
 # #562: `@date` no longer goes through `ToChar`. A `ToChar` node carries the format mask as SQL
 # text, which forces one spelling on both engines; `DATE` is the one transform where the correct

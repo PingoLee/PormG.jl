@@ -21,6 +21,10 @@ PormG provides date-related modifiers through the `__@` suffix system. These wor
 | `@hour` | Extract hour (0-23) | `"start_at__@hour"` | `"start_at__@hour" => 13` |
 | `@minute` | Extract minute (0-59) | `"start_at__@minute"` | `"start_at__@minute" => 30` |
 | `@second` | Extract whole second (0-59) | `"time__@second"` | `"time__@second" => 0` |
+| `@week` | ISO-8601 week of the year (1-53) | `"date__@week"` | `"date__@week" => 10` |
+| `@week_day` | Day of the week, 1 = Sunday … 7 = Saturday | `"date__@week_day"` | `"date__@week_day" => 1` |
+| `@iso_week_day` | ISO day of the week, 1 = Monday … 7 = Sunday | `"date__@iso_week_day"` | `"date__@iso_week_day" => 7` |
+| `@iso_year` | ISO-8601 week-numbering year | `"date__@iso_year"` | `"date__@iso_year" => 2021` |
 | `@yyyy_mm` | Year-month as string | `"date__@yyyy_mm"` | `"date__@yyyy_mm" => "1991-10"` |
 | `@yyyy_q` | Year-quarter as string | `"date__@yyyy_q"` | `"date__@yyyy_q" => "1991-Q1"` |
 | `@yyyy_quad` | Year-quadrimester as string | `"date__@yyyy_quad"` | `"date__@yyyy_quad" => "1991-Q1"` |
@@ -150,9 +154,41 @@ instead of building SQL that silently matches nothing.
     `DateField`, SQLite returns `0` while PostgreSQL rejects the query, so do not rely on either
     result.
 
-The week parts Django offers (`week`, `week_day`, `iso_week_day`, `iso_year`) are not available yet:
-the two engines number weeks differently, and the numbering each name should promise is still
-being decided.
+### Weeks (`@week`, `@week_day`, `@iso_week_day`, `@iso_year`)
+
+The week parts use Django's numbering, and they return the same number on PostgreSQL and SQLite:
+
+| Transform | Returns | Numbering |
+| :--- | :--- | :--- |
+| `@week` | the ISO-8601 week | `1`–`53`; week 1 is the week holding the year's first Thursday |
+| `@iso_year` | the ISO-8601 week-numbering year | the year that week belongs to |
+| `@iso_week_day` | the ISO day of the week | `1` = Monday … `7` = Sunday |
+| `@week_day` | the day of the week | `1` = Sunday … `7` = Saturday |
+
+The engines' own functions do not agree on these numbers. SQLite's `%W` is not the ISO week, and
+PostgreSQL's `DOW` counts from `0`. PormG renders each part to the numbering in the table, not to
+either engine's default.
+
+`@week` and `@iso_year` belong together. Near New Year a date can sit in a week of the neighbouring
+year: 2021-01-01 is in ISO week 53 of **2020**, and 2024-12-30 is in week 1 of **2025**. To group by
+week across seasons, group by both. `@year` alongside `@week` would split such a week in two.
+
+```julia
+# Races held on a Sunday (`date` is a DateField)
+M.Race.objects.filter("date__@week_day" => 1)
+
+# The same question in ISO numbering, where Sunday is 7
+M.Race.objects.filter("date__@iso_week_day" => 7)
+
+# How many races each ISO week of the 2021 season held
+q = M.Race.objects
+q.filter("date__@iso_year" => 2021)
+q.values("week" => "date__@week", "races" => Count("raceid"))
+q.order_by("week")
+```
+
+A week outside `1`–`53`, a day outside `1`–`7`, a fraction, or a value that is not a number raises
+`InvalidValueError`, the same as the other period transforms.
 
 ### Grouped Date Query
 
@@ -755,8 +791,9 @@ query.values(
 ```
 
 The part is case-insensitive (`"year"` and `"YEAR"` are the same). `YEAR`, `MONTH`, `DAY`, `HOUR`,
-`MINUTE`, `SECOND`, `DOW` and `DOY` run on both engines; any other PostgreSQL `EXTRACT` field raises
-`BackendCapabilityError` on SQLite — see [PostgreSQL](../postgres.md).
+`MINUTE`, `SECOND`, `DOW`, `DOY`, `WEEK`, `ISOYEAR` and `ISODOW` run on both engines, numbered as
+PostgreSQL numbers them. Any other PostgreSQL `EXTRACT` field raises `BackendCapabilityError` on
+SQLite — see [PostgreSQL](../postgres.md).
 
 A part that is not an `EXTRACT` field at all raises `InvalidValueError` when the expression is
 built, on both engines. The field is a keyword in the SQL and cannot be a bind parameter, so PormG

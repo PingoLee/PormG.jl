@@ -336,6 +336,97 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# The week-part transforms (#636): Django's numbering, identical on both engines.
+# `@week` is the ISO-8601 week (1-53), `@iso_year` the ISO week-numbering year, `@iso_week_day` runs
+# 1 = Monday … 7 = Sunday and `@week_day` 1 = Sunday … 7 = Saturday. Neither engine's default spelling
+# gives that on its own — SQLite's `%W` is not the ISO week and PostgreSQL's `DOW` is 0-based — so the
+# SQL is quoted literally, and the SQLite arithmetic is then EXECUTED in memory against Julia's own
+# `Dates.week` / `Dates.dayofweek`: a third source neither ladder can satisfy by agreeing with the
+# other. The PostgreSQL arms are the server's own ISO fields, whose numbering is PostgreSQL's
+# documented contract; `test/integration/test_sql_functions.jl` reads them back from db_2.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#636: the week-part transforms render, validate and number like Django" begin
+  thursday = "date(\"Tb\".\"ts\", '-3 days', 'weekday 4')"
+  expected = Dict(
+    (:sqlite, "week")         => "((CAST(strftime('%j', $(thursday)) AS INTEGER) - 1) / 7 + 1)",
+    (:sqlite, "iso_year")     => "CAST(strftime('%Y', $(thursday)) AS INTEGER)",
+    (:sqlite, "iso_week_day") => "((CAST(strftime('%w', \"Tb\".\"ts\") AS INTEGER) + 6) % 7 + 1)",
+    (:sqlite, "week_day")     => "(CAST(strftime('%w', \"Tb\".\"ts\") AS INTEGER) + 1)",
+    (:postgres, "week")         => "EXTRACT(WEEK FROM \"Tb\".\"ts\")::integer",
+    (:postgres, "iso_year")     => "EXTRACT(ISOYEAR FROM \"Tb\".\"ts\")::integer",
+    (:postgres, "iso_week_day") => "EXTRACT(ISODOW FROM \"Tb\".\"ts\")::integer",
+    (:postgres, "week_day")     => "(EXTRACT(DOW FROM \"Tb\".\"ts\")::integer + 1)",
+  )
+  # Both spellings reach the same rendering (the #562 contract, quoted rather than only compared).
+  for (engine, conn) in ((:sqlite, _TLP_SL), (:postgres, _TLP_PG))
+    for key in ("week", "iso_year", "iso_week_day", "week_day")
+      want = expected[(engine, key)]
+      @test occursin(want, _tlp_string_route("ts", key, conn))
+      @test occursin(want, _tlp_f_route("ts", key, conn))
+    end
+  end
+
+  # Range refusal, as for the time parts (#579): a week or a day no calendar has is refused, never
+  # bound. `@iso_year` is a year, so like `@year` it only has to be an integer.
+  for (backend, conn) in _TLP_BACKENDS
+    for (key, lo, hi) in (("week", 1, 53), ("week_day", 1, 7), ("iso_week_day", 1, 7))
+      build(v) = (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)" => v); q)
+      for bad in (lo - 1, hi + 1, 1.5, "abc")
+        @test_throws PormG.InvalidValueError _tlp_sql(build(bad); conn = conn)
+      end
+      @test _tlp_params(build(lo); conn = conn) == [lo]
+      @test _tlp_params(build(hi); conn = conn) == [hi]
+      @test_throws PormG.InvalidValueError _tlp_sql(
+        (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@$(key)__@in" => [lo, hi + 1]); q); conn = conn)
+    end
+    @test _tlp_params(
+      (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@iso_year" => 2020); q); conn = conn) == [2020]
+    @test_throws PormG.InvalidValueError _tlp_sql(
+      (q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@iso_year" => "abc"); q); conn = conn)
+  end
+
+  # The numbering itself, executed. The dates straddle the year ends where ISO and calendar
+  # numbering part ways: 2020 has an ISO week 53 that runs into 2021-01-03, 2024-12-30 is already
+  # week 1 of ISO 2025, and 2027-01-01 is still week 53 of ISO 2026. Each row is stored the way
+  # PormG writes it — the canonical UTC text for `ts`, `YYYY-MM-DD` for `seen` — and at 23:30, so a
+  # rendering that read the clock instead of the date would show up as an off-by-one day.
+  isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+  days = [Date(2020, 12, 24):Day(1):Date(2021, 1, 12);
+          Date(2024, 12, 27):Day(1):Date(2025, 1, 6);
+          Date(2026, 12, 26):Day(1):Date(2027, 1, 5);
+          Date(2015, 12, 31); Date(2032, 2, 29)]
+  # Julia's ISO year: the year of the Thursday of the date's Monday-started week.
+  iso_year(d) = year(d + Day(4 - dayofweek(d)))
+  db = Main.SQLite.DB()
+  try
+    Main.SQLite.DBInterface.execute(db, "CREATE TABLE tlp_row (id INTEGER, seen TEXT, ts TEXT, note TEXT)")
+    for (i, d) in enumerate(days)
+      Main.SQLite.DBInterface.execute(db, "INSERT INTO tlp_row VALUES (?, ?, ?, NULL)",
+        [i, string(d), string(d, "T23:30:00.000+00:00")])
+    end
+    for col in ("seen", "ts")
+      insp = inspect_query((q = TLP.Tlp_row.objects;
+                            q.values("id", "w" => "$(col)__@week", "y" => "$(col)__@iso_year",
+                                     "iwd" => "$(col)__@iso_week_day", "wd" => "$(col)__@week_day");
+                            q); connection = _TLP_SL)
+      # Read inside the iteration: a SQLite row is a view of the cursor.
+      got = Dict(r.id => (r.w, r.y, r.iwd, r.wd)
+                 for r in Main.SQLite.DBInterface.execute(db, insp[:sql_text], insp[:parameters]))
+      for (i, d) in enumerate(days)
+        @test got[i] == (week(d), iso_year(d), dayofweek(d), dayofweek(d) % 7 + 1)
+      end
+    end
+    # And the comparison side: the bound week number selects exactly the days Julia puts in it.
+    insp = inspect_query((q = TLP.Tlp_row.objects; q.values("id"); q.filter("ts__@week" => 53); q);
+                         connection = _TLP_SL)
+    ids = sort([r.id for r in Main.SQLite.DBInterface.execute(db, insp[:sql_text], insp[:parameters])])
+    @test ids == sort([i for (i, d) in enumerate(days) if week(d) == 53])
+  finally
+    close(db)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # The label transforms bind correctly in every position (#586, #587).
 # Two pre-existing parameter defects became reachable through a documented spelling once `@yyyy_q`
 # and `@yyyy_quad` existed — a predicate rendered the expansion twice and kept both sets of

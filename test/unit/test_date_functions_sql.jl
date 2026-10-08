@@ -79,8 +79,18 @@ end
       @test Dialect.EXTRACT(_COL, fmt, _PG) == pgwant
       @test Dialect.EXTRACT(_COL, fmt, _SL) == "CAST(strftime('$slcode', $(_COL)) AS INTEGER)"
     end
+    # #636: the ISO parts have no `strftime` code before SQLite 3.46, so they render as arithmetic on
+    # the week's Thursday — numbered as PostgreSQL's `WEEK` / `ISOYEAR` / `ISODOW`. Their values are
+    # executed against Julia's calendar in `test_transform_ladder_parity.jl`.
+    thursday = "date($(_COL), '-3 days', 'weekday 4')"
+    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "WEEK"), _SL) ==
+          "((CAST(strftime('%j', $(thursday)) AS INTEGER) - 1) / 7 + 1)"
+    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "ISOYEAR"), _SL) ==
+          "CAST(strftime('%Y', $(thursday)) AS INTEGER)"
+    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "ISODOW"), _SL) ==
+          "((CAST(strftime('%w', $(_COL)) AS INTEGER) + 6) % 7 + 1)"
     # The SQLite whitelist is fail-closed: an unsupported part must throw, not emit garbage.
-    @test_throws PormG.BackendCapabilityError Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "WEEK"), _SL)
+    @test_throws PormG.BackendCapabilityError Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "CENTURY"), _SL)
     # #571: PG-only parts that are fractional by definition stay bare — a cast would be lossy and
     # there is no SQLite twin to keep parity with. Any other PG-only part (WEEK, ISOYEAR, …) casts.
     for part in ("EPOCH", "JULIAN", "MILLISECONDS", "MICROSECONDS")
@@ -99,9 +109,13 @@ end
       @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => spelling), _SL) ==
             Dialect.EXTRACT(_COL, Dict{String, Any}("part" => canon), _SL)
     end
-    err = try Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "week"), _SL); nothing catch e; e end
+    # A real field SQLite cannot spell is still a capability gap. (`week` was the control here until
+    # #636 gave SQLite the ISO week; `century` has no SQLite arm.)
+    err = try Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "century"), _SL); nothing catch e; e end
     @test err isa PormG.BackendCapabilityError
-    @test occursin("week", PormG.error_message(err))   # the caller's own spelling, not ours
+    @test occursin("century", PormG.error_message(err))   # the caller's own spelling, not ours
+    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "week"), _SL) ==
+          Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "WEEK"), _SL)
     # The fold is ASCII-only: Julia's `uppercase("ſecond") == "SECOND"`, and PostgreSQL rejects it.
     # Since #691 that is `InvalidValueError` — it is no field at all, not a SQLite capability gap.
     @test_throws PormG.InvalidValueError Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "ſecond"), _SL)
@@ -146,7 +160,7 @@ end
     @test !occursin('\e', PormG.error_message(err)) && !occursin('\n', PormG.error_message(err))
 
     # A real field SQLite cannot spell keeps the capability error.
-    @test_throws PormG.BackendCapabilityError Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "isoyear"), _SL)
+    @test_throws PormG.BackendCapabilityError Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "century"), _SL)
 
     # The 3-arg raw cast suffix is retired; `Cast` is the one way to retype the result.
     @test_throws MethodError Extract("date", "epoch", "::bigint")

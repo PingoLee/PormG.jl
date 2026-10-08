@@ -97,6 +97,10 @@ without inverting the logic by hand.
 | `@hour` | Extract hour (0-23) | `"start_at__@hour" => 13` | `"start_at__@hour"` |
 | `@minute` | Extract minute (0-59) | `"start_at__@minute" => 30` | `"start_at__@minute"` |
 | `@second` | Extract whole second (0-59) | `"time__@second" => 0` | `"time__@second"` |
+| `@week` | ISO-8601 week (1-53) | `"date__@week" => 10` | `"date__@week"` |
+| `@week_day` | Day of the week, 1 = Sunday … 7 = Saturday | `"date__@week_day" => 1` | `"date__@week_day"` |
+| `@iso_week_day` | ISO day of the week, 1 = Monday … 7 = Sunday | `"date__@iso_week_day" => 7` | `"date__@iso_week_day"` |
+| `@iso_year` | ISO-8601 week-numbering year | `"date__@iso_year" => 2021` | `"date__@iso_year"` |
 | `@yyyy_mm` | Year-month string | `"date__@yyyy_mm" => "1991-10"` | `"date__@yyyy_mm"` |
 | `@yyyy_q` | Year-quarter label | `"date__@yyyy_q" => "1991-Q1"` | `"date__@yyyy_q"` |
 | `@yyyy_quad` | Year-quadrimester label | `"date__@yyyy_quad" => "1991-Q1"` | `"date__@yyyy_quad"` |
@@ -108,7 +112,8 @@ and `1` through `3` — so `filter("date__@quarter" => 1)` selects the first qua
 `@yyyy_q` and `@yyyy_quad` build the year-qualified **label** (`"1991-Q1"`), which is what you want as
 a `values()` grouping key when each year's quarters must stay separate. A value outside the period's
 range raises `InvalidValueError` rather than matching nothing. The same goes for the time parts `@hour`,
-`@minute` and `@second` — see [Time of day](functions_and_dates.md#Time-of-day-(@hour,-@minute,-@second)).
+`@minute` and `@second` — see [Time of day](functions_and_dates.md#Time-of-day-(@hour,-@minute,-@second)) —
+and for the week parts, whose numbering is pinned in [Weeks](functions_and_dates.md#Weeks-(@week,-@week_day,-@iso_week_day,-@iso_year)).
 
 A label filter compares the whole `"YYYY-Qn"` string, so `filter("date__@yyyy_q" => "1991-Q1")`
 selects one quarter of one season, where `filter("date__@quarter" => 1)` selects that quarter of

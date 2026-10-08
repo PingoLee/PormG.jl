@@ -79,6 +79,8 @@ import PormG: _ExpressionDefault, _quoted_literal, _unquote_literal, _is_sql_lit
               _strip_sqlite_default_wrapper, _sqlite_blob_literal_bytes, _pg_bytea_literal_bytes, _normalize_sqlite_default
 # #742: the table-CHECK ownership marker — rendered by `Dialect`, read back and compared here.
 import PormG: CHECK_MARKER_PREFIX, CHECK_MARKER_RE, canonical_check_condition, check_marker
+# #1037: the expression-default ownership marker — stamped by `Dialect`, read back here.
+import PormG: db_default_owner
 # #29: index access methods, operator classes and the `pormg:index` ownership marker.
 import PormG: INDEX_METHODS, INDEX_OPCLASS_RE, INDEX_MARKER, INDEX_MARKER_RE,
   canonical_index_text, index_text_marker

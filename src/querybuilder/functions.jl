@@ -683,6 +683,13 @@ This follows Django's `Concat`. PostgreSQL renders `CONCAT(…)`, which skips a 
 SQLite renders `COALESCE(operand, '') || …`. To get NULL when a column is NULL, test it explicitly:
 `Case(When("number__@isnull" => false, then = Concat(…)))` — a `Case` with no match is NULL.
 
+Text, integer and date operands read the same on both engines. A boolean, a float or a decimal
+operand raises `QueryBuildError` — a literal (`true`, `1.5`, a `Decimal`) when the expression is
+built, a `BooleanField`/`FloatField`/`DecimalField` column or an expression of those types when the
+query is — because PostgreSQL's `CONCAT` writes `t`, `25`, `3.00` where SQLite's `||` writes `1`,
+`25.0`, `3`. Write the text yourself: a `Case` for a boolean, and for a number, format the fetched
+value in Julia (`Cast(…, CharField())` is not engine-neutral either).
+
 The result is text on both engines, so `output_field`, when given, must be a text type
 (`CharField()`, `TextField()`, `"text"`, `"varchar(20)"`). Any other type raises
 `InvalidValueError` when the expression is built. `Concat` renders no cast, so a number declared
@@ -721,6 +728,12 @@ function Concat(x::Vector; output_field::Union{N, AbstractString, Nothing} where
   # the same way; `_function_operand` now stores a string bare for all of them.
   # #705: a number part is a literal (`Value`), as in the other operand-taking constructors.
   processed_cols = Any[_function_operand(v) for v in x]
+  # #1027: a literal's type is known now, so it is refused when the expression is built. A column's is
+  # known only once its path resolves, which the render checks (`_render_function_body`).
+  for col in processed_cols
+    textless = col isa SQLText ? _textless_literal(col.field) : nothing
+    textless === nothing || throw(_concat_textless_refusal(textless...))
+  end
   return FObject(function_name = "CONCAT", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field, "as" => String(_as)))
 end
 # #835: `CONCAT(…)` / `a || b` is text on both engines, and `Dialect.CONCAT` renders no cast, so a
@@ -736,6 +749,25 @@ function _check_concat_output_field(t::Union{String,Nothing})
   throw(InvalidValueError(
     "Concat returns text on both engines and renders no cast, so its output_field cannot be " *
     "\e[31m$(t)\e[0m. Cast the result instead: \e[32mCast(Concat(…), \"$(lowercase(t))\")\e[0m (#835)."))
+end
+
+# #1027 — the one message for a `Concat` operand with no single text (`_concat_textless_operand`,
+# projection_types.jl), raised at construction for a literal and at render for a column. The way out
+# is the caller's own text. For a boolean, a `Case` writes it on both engines. For a number there is
+# no SQL spelling that agrees: `Cast(x, CharField())` is `'25'` on PostgreSQL and `'25.0'` on SQLite,
+# and `Cast(x, IntegerField())` rounds on one and truncates on the other. So the advice is to format
+# it in Julia, where the caller chooses the digits.
+function _concat_textless_refusal(kind::Symbol, what::AbstractString; flag::AbstractString = "<flag>")
+  why = kind === :bool ? "a boolean reads `t` on PostgreSQL and `1` on SQLite" :
+        kind === :float ? "a float reads `25` on PostgreSQL and `25.0` on SQLite" :
+        kind === :decimal ? "a decimal reads `3.00` on PostgreSQL and `3` on SQLite" :
+                            "PostgreSQL computes it as `numeric` (`1`) and SQLite as a REAL (`1.0`)"
+  fix = kind === :bool ?
+    "Write the text you mean: \e[32mCase(When(\"$(flag)\" => true, then = Value(\"yes\")), default = \"no\")\e[0m." :
+    "PormG does not choose a number's text: fetch the value and format it in Julia " *
+    "(\e[32mstring(row.points)\e[0m, \e[32mround(x; digits = 2)\e[0m)."
+  return QueryBuildError(
+    "\e[4m\e[31mConcat\e[0m cannot make the same text from $(what) on both engines: $(why) (#1027). $(fix)")
 end
 
 # Variadic convenience: Concat("forename", Value(" "), "surname") → same as vector form

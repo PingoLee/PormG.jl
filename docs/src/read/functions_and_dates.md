@@ -339,6 +339,37 @@ q = M.Driver.objects
 q.values("driverref", "car" => Case(When("number__@isnull" => false, then = Concat(Value("#"), "number"))))
 ```
 
+Text, integer and date operands read the same on both engines. A boolean, a float or a decimal
+operand raises `QueryBuildError`, because each engine writes it differently: PostgreSQL's `CONCAT`
+gives `t`, `25` and `3.00` where SQLite's `||` gives `1`, `25.0` and `3`. A concatenated value could
+otherwise read one way in tests on SQLite and another in production. The refusal covers a
+`BooleanField`, `FloatField` or `DecimalField` column (joined paths too), a `true`/`1.5`/`Decimal`
+literal, and an expression of one of those types: a comparison or `Q(...)` condition, a `Cast` to a
+float or decimal type, arithmetic, an extremum or a window value over a float, and the functions
+PostgreSQL computes as `numeric` (`Avg`, `Round`, `Mod`, `Sqrt`, `Exp`, `Ln`, `Power`), which SQLite
+answers as a REAL (`1` vs `1.0`). A literal is refused when the `Concat` is built, and a column when
+the query is. The check is limited to these three types: an operand PormG cannot type (a `Subquery`
+over a number, an untyped `Case`) passes, and so does a timestamp, time or JSON operand, whose text
+may still differ between the engines.
+
+`Cast(…, CharField())` is not a way around this. It writes `25` on PostgreSQL and `25.0` on SQLite,
+the same split. Write the text you mean instead. For a boolean, use a `Case`. For a number, fetch it
+and format it in Julia, where you choose the digits:
+
+```julia
+using PormG.Functions: Case, When, Concat, Value
+
+q = M.Result.objects
+q.filter("raceid" => 18)
+# A yes/no: name its two texts with a `Case`.
+q.values("driverid__driverref", "points",
+         "outcome" => Concat("driverid__driverref", Value(": "),
+                             Case(When("points__@gt" => 0, then = Value("scored")), default = "no points")))
+df = q |> DataFrame
+# A number: `points` is a FloatField (1.5 for a shared fastest lap), so its text is yours to choose.
+df.label = df.driverid__driverref .* "-" .* string.(df.points)
+```
+
 `Concat` takes its operands either variadically or as a single vector — the two spellings build the
 same expression and render the same SQL. Each example below starts from a fresh handle, because
 `values()` **replaces** the projection rather than adding to it:

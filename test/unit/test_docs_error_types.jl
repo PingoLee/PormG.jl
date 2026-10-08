@@ -590,6 +590,22 @@ const DOCERR_CASES = [
         () -> PormG.Functions.Concat("year", PormG.Functions.Value("0"), "round"; output_field = "integer"),
     ),
     (
+        # #1027. A float literal has no single text (`25` vs `25.0`), so `Concat` refuses it when the
+        # expression is built.
+        "read/functions_and_dates.md — a float literal operand of Concat raises (#1027)",
+        QueryBuildError,
+        () -> PormG.Functions.Concat("surname", PormG.Functions.Value("-"), 1.5),
+    ),
+    (
+        # #1027. The column half: an operand typed `numeric` on PostgreSQL and REAL on SQLite (`Avg`)
+        # is refused once the query renders it, on both engines.
+        "read/functions_and_dates.md — a fractional expression operand of Concat raises (#1027)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_SL.objects.
+            values("x" => PormG.Functions.Concat(PormG.Functions.Value("avg "), PormG.Functions.Avg("points"))).
+            list(show_query = :dict),
+    ),
+    (
         # #859. `Coalesce`, `Greatest` and `Least` take two or more arguments; one argument is
         # refused when the expression is built (on SQLite it rendered the aggregate `MAX(x)`).
         "read/functions_and_dates.md — Greatest with fewer than two arguments raises (#859)",

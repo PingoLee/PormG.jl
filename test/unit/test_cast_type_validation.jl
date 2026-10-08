@@ -74,7 +74,9 @@ _c696_q() = Cast696Models.Cast696_result.objects
 # build and still render no cast: the value already is text.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#835: Concat refuses a non-text output_field" begin
-  parts = ["points", Value("-")]
+  # An integer operand: `points` is a FloatField here, and since #1027 a float operand is refused when
+  # the query renders (`'25'` on PostgreSQL, `'25.0'` on SQLite), which is not what this testset is about.
+  parts = ["positionorder", Value("-")]
   # Every non-text family `_sql_type_field` names, as a string and as a field object, plus types it
   # names no family for at all (a timestamp, a user enum) and arrays — of text too: `_sql_type_field`
   # reads `"varchar(20)[]"` as `varchar`, which the guard must not take for text.

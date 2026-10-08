@@ -1781,3 +1781,42 @@ end
                  !isequal(r.car, ismissing(r.number) ? missing : "#" * num(r.number))]
     @test isempty(wrong_car)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Concat: a boolean, float or decimal operand is refused on both engines (#1027)
+# PostgreSQL's CONCAT writes `t` / `25` / `3.00` where SQLite's `||` writes `1` / `25.0` / `3`, so
+# `Concat("driverref", "-", "points")` read 'hamilton-10' on one engine and 'hamilton-10.0' on the
+# other. The #1006 test above uses `Driver.number`, an integer — the one numeric type where the engines
+# agree. Here a FloatField (`Result.points`) and a BooleanField (`New_join_position.boolean_field`)
+# are refused against the live schema, and the documented escape for a yes/no reads the same text on
+# both engines.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1027: Concat refuses a Bool, Float or Decimal operand on both engines" begin
+    # The refusal itself, not any `QueryBuildError`: a renamed field would raise one too.
+    refusal(f) = try f(); nothing catch e; e end
+    is_1027(e) = e isa PormG.QueryBuildError && occursin("#1027", sprint(showerror, e))
+    # A float column, through a join as the docs write it.
+    q = M.Result.objects
+    q.values("x" => Concat("driverid__driverref", Value("-"), "points"))
+    @test is_1027(refusal(() -> q |> DataFrame))
+    # A boolean column.
+    q = M.New_join_position.objects
+    q.values("x" => Concat("description", Value(": "), "boolean_field"))
+    @test is_1027(refusal(() -> q |> DataFrame))
+    # A float literal is refused before any query exists.
+    @test is_1027(refusal(() -> Concat("driverref", Value("-"), 1.5)))
+
+    # The escape: a `Case` names the two texts, so the value is the same string on both engines. The
+    # expected text is computed in Julia from the projected points column.
+    q = M.Result.objects
+    q.filter("raceid" => 18)
+    q.values("resultid", "driverid__driverref", "points",
+             "outcome" => Concat("driverid__driverref", Value(": "),
+                                 Case(When("points__@gt" => 0, then = Value("scored")), default = "no points")))
+    df = q |> DataFrame
+    @test nrow(df) > 0
+    @test any(>(0), df.points) && any(==(0), df.points)   # both branches are exercised
+    wrong = [r.resultid for r in eachrow(df) if
+             r.outcome != r.driverid__driverref * ": " * (r.points > 0 ? "scored" : "no points")]
+    @test isempty(wrong)
+end

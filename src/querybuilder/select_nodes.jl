@@ -453,6 +453,17 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   v.function_name == "ARRAY_LEN" && !(_expression_formatter(v.column, instruc) isa Models.ArrayFormatter) &&
     throw(FilterError("The \e[31m@len\e[0m transform counts the elements of an ArrayField, and " *
                       "\e[31m$(_len_operand_label(v.column))\e[0m is not one."))
+  # #1027: a `Concat` operand with no single text — a boolean, a float or a decimal column, or an
+  # expression of one — read once the operands render, as the checks around it are. A literal was
+  # refused when the `Concat` was built. This is the one site every `Concat` renders through, the
+  # `@yyyy_q` labels included (their operands are text and integers, so they pass).
+  if v.function_name == "CONCAT" && v.column isa AbstractVector
+    for operand in v.column
+      textless = _concat_textless_operand(operand, instruc)
+      textless === nothing && continue
+      throw(_concat_textless_refusal(textless...; flag = _concat_flag(operand)))
+    end
+  end
   # #953: an aggregate over a boolean, read once its column resolves (as the check above is).
   # PostgreSQL has none of `max/min/sum/avg(boolean)`, so each failed there when it ran, while SQLite
   # answered over its stored 0/1. An extremum keeps its meaning — any true, all true — so it renders

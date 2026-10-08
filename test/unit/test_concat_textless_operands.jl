@@ -224,8 +224,8 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # Concat: integer, text and date operands, and explicit text, pass unchanged
 # The refusal is narrow by design: an integer has one base-10 text and a date its ISO text on both
-# engines, and a cast to text or integer is the caller's own choice of type (its own per-engine text
-# is tracked separately). Each renders on both engines, and the SQLite form is the #1006 COALESCE
+# engines, and a cast to text or an integer passes when its operand has one text (#1028 refuses the
+# rest at the cast). Each renders on both engines, and the SQLite form is the #1006 COALESCE
 # shape, so the check added no SQL.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1027: integer, text, date and explicit-text operands pass" begin
@@ -233,8 +233,10 @@ end
   allowed = [
     "number", "surname", "born", "born__@year", "team__name", F("number"), F("number") + 1,
     Fn.Value("-"), Fn.Value(7), 7, Date(2024, 1, 5),
-    Fn.Cast("points", Models.CharField()),             # explicit text: the caller's choice
-    Fn.Cast("price", Models.IntegerField()),           # explicit integer
+    # #1028: a cast to text or an integer passes only when the engines agree on it; a float cast to
+    # text (`'25'` vs `'25.0'`) is refused by the cast itself — `test_cast_divergent_operands.jl`.
+    Fn.Cast("number", Models.CharField()),             # explicit text over an integer
+    Fn.Cast(Fn.Round("price"), Models.IntegerField()), # explicit integer, rounded first
     Fn.Floor("number"),                                # integer operand: '7' on both
     Fn.Max("number"), Fn.Count("id"), Fn.Length("surname"),
     Fn.Case(Fn.When("active" => true, then = Fn.Value("yes")), default = "no"),  # the documented escape

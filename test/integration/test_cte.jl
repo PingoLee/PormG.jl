@@ -798,7 +798,9 @@ end
 
         q = M.Result.objects
         q.filter("raceid" => 1)
-        q.values("resultid", "pts" => Greatest("points", 0; output_field = "integer"))
+        # #1028: over `Floor`, because a float cast to an integer rounds on PostgreSQL and truncates
+        # on SQLite, and is refused. Race 1's points are whole numbers, so the filter is unchanged.
+        q.values("resultid", "pts" => Greatest(Floor("points"), 0; output_field = "integer"))
         q.filter("pts" => 10)
         df = q |> DataFrame
         @test sort(df.resultid) == expected

@@ -1460,7 +1460,8 @@ end
         "points",
         "p_2dp" => Cast("points", "numeric(10,2)"),
         "p_dbl" => Cast("points", "double precision"),
-        "p_int" => Cast("points", PormG.Models.IntegerField()),
+        # #1028: a float cast to an integer is refused; `Round` first reads the same on both engines.
+        "p_int" => Cast(Round("points"), PormG.Models.IntegerField()),
         "is_win" => Case([When("positionorder" => 1, then = 1)]; default = 0,
                          output_field = PormG.Models.IntegerField()),
     )
@@ -1468,11 +1469,11 @@ end
     q.order_by("resultid")
     df = q |> DataFrame
     @test size(df, 1) == M.Result.objects.filter("raceid" => 1).count()
-    # The cast values agree with the stored float; the integer cast rounds on PostgreSQL and
-    # truncates on SQLite, so it is compared against both.
+    # The cast values agree with the stored float; the integer is the float rounded half away from
+    # zero, on both engines (#1028).
     @test all(isapprox(Float64(r.p_2dp), round(r.points; digits = 2)) for r in eachrow(df))
     @test all(isapprox(Float64(r.p_dbl), r.points) for r in eachrow(df))
-    @test all(Int(r.p_int) in (floor(Int, r.points), round(Int, r.points)) for r in eachrow(df))
+    @test all(Int(r.p_int) == round(Int, r.points, RoundNearestTiesAway) for r in eachrow(df))
     # Exactly one winner in race 1: the CASE and its bind-cast default both executed.
     @test sum(Int.(df.is_win)) == 1
 
@@ -1819,4 +1820,53 @@ end
     wrong = [r.resultid for r in eachrow(df) if
              r.outcome != r.driverid__driverref * ": " * (r.points > 0 ? "scored" : "no points")]
     @test isempty(wrong)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cast to text or an integer, and Concat's timestamp / interval / JSON operands, on both engines (#1028)
+# Measured on PostgreSQL 16.15 and SQLite 3.45.1: `Cast(points, CharField())` is '10' on one and
+# '10.0' on the other, `Cast(1.5, IntegerField())` 2 and 1, and `Concat("|", start_at)` writes
+# '2009-03-29 06:00:00+00' against '2009-03-29T06:00:00.000+00:00'. Each is refused against the live
+# schema, as is a CTE column built from `Sum`. The documented escapes — `Round`/`Floor`/`Ceil` before an
+# integer cast, `ToChar` for a timestamp — read the same value on both engines, checked against Julia.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1028: divergent casts and Concat operands are refused on both engines" begin
+    refusal(f) = try f(); nothing catch e; e end
+    is_1028(e) = e isa PormG.QueryBuildError && occursin("#1028", sprint(showerror, e))
+    proj(model, expr) = () -> (q = model.objects; q.filter(model === M.Result ? ("raceid" => 18) : ("raceid" => 1));
+                               q.values("x" => expr); q |> DataFrame)
+    # A float column cast to text and to an integer, directly and through an output_field.
+    @test is_1028(refusal(proj(M.Result, Cast("points", PormG.Models.CharField()))))
+    @test is_1028(refusal(proj(M.Result, Concat("driverid__driverref", Value("-"), Cast("points", PormG.Models.CharField())))))
+    @test is_1028(refusal(proj(M.Result, Cast("points", PormG.Models.IntegerField()))))
+    @test is_1028(refusal(proj(M.Result, Greatest("points", 0; output_field = "integer"))))
+    # A timestamp and an interval operand of Concat, and a JSON document (refused at render, so no
+    # scratch row is needed).
+    @test is_1028(refusal(proj(M.Race, Concat(Value("|"), "start_at"))))
+    @test is_1028(refusal(() -> (q = M.Lap_times.objects; q.filter("raceid" => 841); q.values("x" => Concat(Value("|"), "time")); q |> DataFrame)))
+    @test is_1028(refusal(() -> (q = M.Field_validation_scratch.objects; q.values("x" => Concat(Value("|"), "payload")); q |> DataFrame)))
+    # A CTE column built from `Sum("points")`, which the CTE types as an integer.
+    q = M.Driver.objects
+    body = M.Result.objects
+    body.values("driverid", "total" => Sum("points"))
+    q.with("c" => body, join_field = "driverid" => "driverid")
+    q.values("x" => Concat("driverref", Value("-"), CTE("c", "total")))
+    err = refusal(() -> q |> DataFrame)
+    @test err isa PormG.QueryBuildError && occursin("the CTE column `CTE(\"c\", \"total\")`", sprint(showerror, err))
+
+    # The integer escape: every rounding function reads what Julia computes, over rows with a fraction.
+    q = M.Result.objects
+    q.filter("raceid__@lte" => 50)
+    q.values("resultid", "points",
+             "r" => Cast(Round("points"), PormG.Models.IntegerField()),
+             "f" => Cast(Floor("points"), PormG.Models.IntegerField()),
+             "c" => Cast(Ceil("points"), PormG.Models.IntegerField()))
+    df = q |> DataFrame
+    @test any(p -> !isinteger(p), df.points)   # the fractional rows are exercised
+    wrong = [r.resultid for r in eachrow(df) if
+             (r.r, r.f, r.c) != (round(Int, r.points, RoundNearestTiesAway), floor(Int, r.points), ceil(Int, r.points))]
+    @test isempty(wrong)
+    # The timestamp escape: race 1's start, named in a format both engines write.
+    df = proj(M.Race, Concat(Value("|"), ToChar("start_at", "YYYY-MM-DD HH:MI:SS")))()
+    @test df[1, :x] == "|2009-03-29 06:00:00"
 end

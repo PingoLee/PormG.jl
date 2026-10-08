@@ -1010,6 +1010,11 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   # describes its columns in that same order instead of a hash of the aliases.
   fields = OrderedCollections.OrderedDict{String,PormGField}()
   selected_field_names = String[]
+  # #1028: each computed column's text classification, read from the body's own projection while this
+  # — the body's instruction — can still resolve its paths. The field below cannot carry it: a `Sum` column
+  # is typed as an integer and an `Avg` one as its operand's field, so `Concat` and `Cast` over the
+  # column would let through what they refuse when the same aggregate is written directly.
+  textless = Dict{String,Tuple{Symbol,String}}()
   @pormg_debug false
   for value_part in values
     # fields[value_part.field] = _set_field_from_sql_function(value_part.field, value_part._as, instruct)
@@ -1042,6 +1047,19 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
               _set_field_from_sql_function(value_part.field, value_part._as, instruct)
       fields[key_new] = Models.field_without_db_column(typed)
       push!(selected_field_names, key_new)
+      # A plain column path is typed right by its field already, and keeps that field's own wording —
+      # except a JSON key lookup, typed by its JSONField although it holds the value at the key.
+      source = value_part isa SQLText ? value_part : value_part.field
+      path = source isa AbstractString ? String(source) :
+             source isa SQLField && source.field isa AbstractString ? String(source.field) :
+             source isa FExpression && source.operation === nothing && source.field_name isa String ? source.field_name :
+             nothing
+      if path === nothing
+        side = _concat_textless_operand(source, instruct)
+        side === nothing || (textless[key_new] = side)
+      elseif memo_json_lookup(instruct, memo_key(:base, path))
+        textless[key_new] = (:json_value, "")
+      end
     catch e
       @pormg_debug false
       throw(e)
@@ -1056,5 +1074,6 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
     _module = instruct.object.model._module,
     connect_key = instruct.object.model.connect_key
   )
+  cte["textless"] = textless
 
 end

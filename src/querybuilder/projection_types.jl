@@ -532,8 +532,14 @@ _operand_kind(::Any, ::SQLInstruction) = nothing
 # Only a type that is KNOWN is answered, as everywhere in this file: an operand whose type cannot be
 # named (a `Subquery`, an untyped `Case`, a function PormG does not type) is let through, not guessed
 # at. Read after the operands render, so a joined path's field memo exists (`_alias_column_field`).
-# A CTE column is its body's inferred field, which `_set_field_from_sql_function` types as the
-# operand's own for `Avg` and as an integer for `Sum`, so `Concat` over such a column is let through.
+#
+# #1028 adds three kinds, measured on PostgreSQL 16.15 and SQLite 3.45.1 through the F1 fixture:
+# `:timestamp` (`2009-03-29 06:00:00+00` against the stored `2009-03-29T06:00:00.000+00:00`),
+# `:interval` (PostgreSQL writes its `IntervalStyle`, `PT25.021S` on the test server, SQLite the
+# stored `00:00:26.898`) and `:json` (`jsonb` re-renders `{"a": [1, 2]}`, SQLite keeps `{"a":[1,2]}`).
+# A date, a time and a uuid read the same text on both, and pass. A CTE column is classified by its
+# body's own projection (`_cte_textless_record`), not by the field `_set_field_from_sql_function`
+# gives it: that types a `Sum` column as an integer and an `Avg` one as its operand's field.
 #
 # `:numeric` is the functions PostgreSQL computes as `numeric` whatever the operand (`Dialect` casts
 # each operand `::numeric`, and `avg` of an integer is numeric too) while SQLite answers a REAL:
@@ -556,12 +562,144 @@ function _concat_textless_operand(p, instruc::SQLInstruction)::Union{Tuple{Symbo
       label = _concat_operand_label(p)
       return (:bool, label === nothing ? "a boolean expression" : "the BooleanField `$(label)`")
     end
+    recorded = _cte_textless_record(p, instruc)
+    recorded === nothing || return recorded
+    temporal = _textless_temporal(p, instruc)
+    temporal === nothing || return temporal
   end
   return _textless_number(p, instruc)
 end
+
+# #1028 — a timestamp, an interval or a JSON document: each has a text of its own on each engine (the
+# measurements above). The kind comes from `_operand_kind`, which already names it for a column, a
+# joined or CTE handle, a transform and a typed function (`Max("start_at")`, `Max("lap")`). Arithmetic
+# over a timestamp or a duration, and `Sum(duration)`, have no kind there: the renderer says those are
+# intervals (`_render_function_body` passes it to both refusals).
+#
+# A JSON operand is refused as the WHOLE document only. A key lookup (`"payload__driver"`) resolves to
+# the same field, but renders `#>>` / `json_extract`, the value at that key. That value has one text
+# when it is a string; a boolean or a nested value can still differ (`'true'` vs `1`), but PormG cannot
+# know which a key holds, so a lookup is let through, as an operand of unknown type is.
+function _textless_temporal(p, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing}
+  label = _concat_operand_label(p)
+  kind = _operand_kind(p, instruc)
+  kind isa CDateTime && return (:timestamp, label === nothing ? "a timestamp expression" : "the DateTimeField `$(label)`")
+  kind isa CInterval && return (:interval, label === nothing ? "an interval expression" : "the DurationField `$(label)`")
+  _json_document_operand(p, instruc) && return (:json, "the JSONField `$(label)`")
+  return nothing
+end
+_json_document_operand(p::SQLField, instruc::SQLInstruction) = _json_document_operand(p.field, instruc)
+_json_document_operand(p::FExpression, instruc::SQLInstruction) =
+  p.operation === nothing && _json_document_operand(p.field_name, instruc)
+function _json_document_operand(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction)
+  _alias_column_field(p, instruc) isa Models.sJSONField || return false
+  # A CTE column the body projected as a key lookup holds that value; its field is the JSONField all
+  # the same, so the body's record says which (`_build_cte_custom_model`).
+  p isa CTEReference && _cte_record_kind(p, instruc) === :json_value && return false
+  # The join walk records every key lookup it renders (`_render_json_lookup`); any other path to a
+  # JSONField names the column. A handle whose path goes on past the column is let through.
+  p isa String || occursin("__", p.path) && return false
+  return !memo_json_lookup(instruc, p isa String ? memo_key(:base, p) : memo_key(p))
+end
+_json_document_operand(::Any, ::SQLInstruction) = false
+
+# #1028 — the classification of a CTE column, as `_build_cte_custom_model` recorded it from the body's
+# own projection while the body's instruction was live. `nothing` for anything else, for a path that
+# hops on through the column (it ends at a real model field, which the field memo answers), and for a
+# column the record has no entry for (a body not built in this pass, or a column with a single text).
+function _cte_textless_record(p::CTEReference, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing}
+  occursin("__", p.path) && return nothing
+  cte = get(instruc.object.ctes, p.name, nothing)
+  cte === nothing && return nothing
+  record = get(cte, "textless", nothing)
+  record isa Dict || return nothing
+  side = get(record, p.path, nothing)
+  (side === nothing || side[1] === :json_value) && return nothing
+  return (side[1], "the CTE column `$(_concat_operand_label(p))` ($(side[2]))")
+end
+_cte_textless_record(p::SQLField, instruc::SQLInstruction) = _cte_textless_record(p.field, instruc)
+function _cte_record_kind(p::CTEReference, instruc::SQLInstruction)::Union{Symbol,Nothing}
+  cte = get(instruc.object.ctes, p.name, nothing)
+  record = cte === nothing ? nothing : get(cte, "textless", nothing)
+  record isa Dict || return nothing
+  side = get(record, p.path, nothing)
+  return side === nothing ? nothing : side[1]
+end
+_cte_textless_record(::Any, ::SQLInstruction) = nothing
+
+# #1028 — the declared casts a function renders: `Cast`'s type and the `output_field` of the three that
+# apply theirs (`Dialect._output_field_cast`). `Case` casts its `output_field` too, but its value is a
+# branch, which this does not type, so it stays fail-open; `Concat` renders no cast (#835).
+const _DECLARED_CAST_FUNCTIONS = ("CAST", "COALESCE", "GREATEST", "LEAST")
+# The operands whose value is a whole number on both engines, so a cast to an integer has nothing to
+# round: `Floor`/`Ceil`, and `Round` to no digits. Measured equal on PostgreSQL and SQLite for every
+# `Result.points` row and for ±0.5, ±1.5, ±2.5 (PostgreSQL's `round` is the `numeric` one PormG renders,
+# half away from zero, as SQLite's is). `Round(x, 2)` keeps a fraction, so it is not here.
+#
+# A whole number stays one through `Mod` and through `+`, `-`, `*`: PostgreSQL's `numeric` and SQLite's
+# REAL only SPELL `1` differently (`1` vs `1.0`), which a cast to an integer removes. So
+# `Cast(Mod("number", 3), IntegerField())` and `Cast(Floor("points") * 2, IntegerField())` pass. An
+# operand counts as whole when it is one of these, or has no fractional kind (an integer column, an
+# integer literal, a type PormG cannot name, which is let through anyway).
+function _integral_valued(p, instruc::SQLInstruction)
+  if p isa FObject
+    p.function_name in ("FLOOR", "CEIL") && return true
+    if p.function_name == "ROUND"
+      precision = get(p.kwargs, "precision", 0)
+      return precision isa Integer && precision == 0
+    end
+    p.function_name == "MOD" && p.column isa AbstractVector && return all(x -> _whole_number(x, instruc), p.column)
+    return false
+  end
+  p isa SQLField && return _integral_valued(p.field, instruc)
+  p isa FExpression && p.operation in ("+", "-", "*") &&
+    return _whole_number(p.field_name, instruc) && _whole_number(p.operand, instruc)
+  return false
+end
+_whole_number(x, instruc::SQLInstruction) = _integral_valued(x, instruc) || _concat_textless_operand(x, instruc) === nothing
+
+# #1028 — a declared cast to text or to an integer over an operand the engines convert differently:
+# `(kind, what, target, flag)`, or `nothing`. To text, every operand `Concat` refuses (the conversion
+# is the same output function: `true::varchar` is `'true'` on PostgreSQL and `'1'` on SQLite, a float
+# `'25'` and `'25.0'`). To an integer, a fractional number only: PostgreSQL rounds it (`float8` half to
+# even, `numeric` half away from zero) and SQLite truncates, so `1.5` is `2` on one and `1` on the
+# other. A boolean is `1`/`0` on both, and passes.
+#
+# The OPERAND is classified, not the node: the node's own declared type is what makes it a text or an
+# integer, which `_textless_number` reads as an acceptable `Concat` operand once this has passed it.
+_declared_cast_label(v::FObject) = v.function_name == "CAST" ? "Cast" :
+  "$(uppercasefirst(lowercase(v.function_name)))(…; output_field = \"$(v.kwargs["output_field"])\")"
+#
+# `rendered` holds each operand's kind as its render computed it (`_render_operand_kind`): a timestamp
+# or an interval no type reader names (arithmetic, `Sum(duration)`), which matters to a text target.
+function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::AbstractVector = Any[])
+  declared = get(v.kwargs, v.function_name == "CAST" ? "type" : "output_field", nothing)
+  (declared isa AbstractString && !isempty(declared)) || return nothing
+  target = _sql_type_field(declared)
+  to_integer = target isa Union{Models.sIntegerField,Models.sBigIntegerField}
+  (to_integer || target isa Union{Models.sCharField,Models.sTextField}) || return nothing
+  for (i, operand) in enumerate(v.column isa AbstractVector ? v.column : (v.column,))
+    to_integer && _integral_valued(operand, instruc) && continue
+    side = _concat_textless_operand(operand, instruc)
+    side === nothing && !to_integer && (side = _rendered_kind_textless(get(rendered, i, nothing)))
+    side === nothing && continue
+    to_integer && !(side[1] in (:float, :decimal, :numeric)) && continue
+    return (side[1], side[2], to_integer ? :integer : :text, _concat_flag(operand))
+  end
+  return nothing
+end
+# A rendered kind no type reader gave (`_render_operand_kind`), as a `_concat_textless_operand` answer.
+_rendered_kind_textless(kind) =
+  kind isa CDateTime ? (:timestamp, "a timestamp expression") :
+  kind isa CInterval ? (:interval, "an interval expression") : nothing
 _textless_literal(x::Bool) = (:bool, "the literal $(x)")
 _textless_literal(x::AbstractFloat) = (:float, "the $(typeof(x)) literal $(x)")
 _textless_literal(x::Decimals.Decimal) = (:decimal, "the Decimal literal $(x)")
+# #1028: PostgreSQL binds a timestamp as `$1::timestamp` and writes `2009-03-29 06:00:00`, SQLite binds
+# the stored text `2009-03-29T06:00:00.000+00:00`; a duration is an `interval` on one and the
+# `HH:MM:SS` text on the other. A `Date` and a `Time` bind the same text on both, and pass.
+_textless_literal(x::Union{DateTime,ZonedDateTime}) = (:timestamp, "the $(nameof(typeof(x))) literal $(x)")
+_textless_literal(x::Union{Dates.Period,Dates.CompoundPeriod,Interval}) = (:interval, "the duration literal $(x)")
 _textless_literal(::Any) = nothing
 
 # The column an operand names, as the caller spelled it, or `nothing` for any other expression.

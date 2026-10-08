@@ -642,7 +642,7 @@ Casts a column or expression to a SQL type — PostgreSQL `(x)::type`, SQLite `C
 SQLite has no time types: a `date` target renders `date(x)` there, and `timestamp`, `timestamptz`,
 `time` and `interval` raise `BackendCapabilityError` (#822).
 
-`type` is preferably a field object (`Cast("points", IntegerField())`), which renders in each
+`type` is preferably a field object (`Cast("grid", BigIntegerField())`), which renders in each
 engine's own spelling. A string is accepted when it is a single type name (`"integer"`, `"bigint"`,
 `"text"`, `"timestamptz"`), one of the multi-word names `"double precision"`,
 `"character varying"`, `"bit varying"`, `"timestamp with time zone"` (and `without`, and the `time`
@@ -655,11 +655,20 @@ bind parameter, and PormG only writes a spelling it has parsed. The same rule ap
 The expression may be a column path, an `F(...)` expression, another function or a
 `Subquery(...)` — `Cast(Subquery(s), "date")` casts the one value the subquery returns per row.
 
+A cast the two engines apply differently raises `QueryBuildError` when the query is built (#1028):
+
+- to text (`CharField()`, `"text"`, …), any operand `Concat` refuses: a boolean (`'true'` vs `'1'`),
+  a float (`'25'` vs `'25.0'`), a decimal, a `numeric` function, a timestamp, an interval or a whole
+  JSON document;
+- to an integer, a float, a decimal or a `numeric` function: PostgreSQL rounds it and SQLite
+  truncates it. Round it first — `Cast(Round(x), IntegerField())`, `Floor(x)` or `Ceil(x)` read the
+  same integer on both engines. A boolean casts to `1`/`0` on both and passes.
+
 ```julia
-using PormG.Functions: Cast
+using PormG.Functions: Cast, Round
 using PormG.Models: IntegerField
 
-M.Result.objects.values("resultid", "points_int" => Cast("points", IntegerField()))
+M.Result.objects.values("resultid", "points_int" => Cast(Round("points"), IntegerField()))
 M.Result.objects.values("resultid", "points_2dp" => Cast("points", "numeric(10,2)"))
 ```
 
@@ -683,12 +692,14 @@ This follows Django's `Concat`. PostgreSQL renders `CONCAT(…)`, which skips a 
 SQLite renders `COALESCE(operand, '') || …`. To get NULL when a column is NULL, test it explicitly:
 `Case(When("number__@isnull" => false, then = Concat(…)))` — a `Case` with no match is NULL.
 
-Text, integer and date operands read the same on both engines. A boolean, a float or a decimal
-operand raises `QueryBuildError` — a literal (`true`, `1.5`, a `Decimal`) when the expression is
-built, a `BooleanField`/`FloatField`/`DecimalField` column or an expression of those types when the
+Text, integer, date, time and uuid operands read the same on both engines. A boolean, a float or a
+decimal operand raises `QueryBuildError` — a literal (`true`, `1.5`, a `Decimal`) when the expression
+is built, a `BooleanField`/`FloatField`/`DecimalField` column or an expression of those types when the
 query is — because PostgreSQL's `CONCAT` writes `t`, `25`, `3.00` where SQLite's `||` writes `1`,
-`25.0`, `3`. Write the text yourself: a `Case` for a boolean, and for a number, format the fetched
-value in Julia (`Cast(…, CharField())` is not engine-neutral either).
+`25.0`, `3` (#1027). So does a timestamp, an interval or a whole JSON document (#1028), whose text
+differs the same way. Write the text yourself: a `Case` for a boolean, `ToChar(x, "YYYY-MM-DD
+HH:MI:SS")` for a timestamp, and for the rest, format the fetched value in Julia.
+`Cast(…, CharField())` is refused over the same operands, for the same reason.
 
 The result is text on both engines, so `output_field`, when given, must be a text type
 (`CharField()`, `TextField()`, `"text"`, `"varchar(20)"`). Any other type raises
@@ -758,16 +769,48 @@ end
 # and `Cast(x, IntegerField())` rounds on one and truncates on the other. So the advice is to format
 # it in Julia, where the caller chooses the digits.
 function _concat_textless_refusal(kind::Symbol, what::AbstractString; flag::AbstractString = "<flag>")
-  why = kind === :bool ? "a boolean reads `t` on PostgreSQL and `1` on SQLite" :
-        kind === :float ? "a float reads `25` on PostgreSQL and `25.0` on SQLite" :
-        kind === :decimal ? "a decimal reads `3.00` on PostgreSQL and `3` on SQLite" :
-                            "PostgreSQL computes it as `numeric` (`1`) and SQLite as a REAL (`1.0`)"
-  fix = kind === :bool ?
+  why = kind === :bool ? "a boolean reads `t` on PostgreSQL and `1` on SQLite" : _divergent_text_why(kind)
+  issue = kind in (:timestamp, :interval, :json) ? "#1028" : "#1027"
+  return QueryBuildError(
+    "\e[4m\e[31mConcat\e[0m cannot make the same text from $(what) on both engines: $(why) ($(issue)). " *
+    _divergent_text_fix(kind, flag))
+end
+
+# #1028 — the text each engine makes of an operand `_concat_textless_operand` classifies, for both
+# refusals. A boolean differs between them: `CONCAT` writes PostgreSQL's output form `t`, a cast to
+# text the word `true`, so each caller words its own.
+_divergent_text_why(kind::Symbol) =
+  kind === :float ? "a float reads `25` on PostgreSQL and `25.0` on SQLite" :
+  kind === :decimal ? "a decimal reads `3.00` on PostgreSQL and `3` on SQLite" :
+  kind === :timestamp ? "a timestamp reads `2009-03-29 06:00:00+00` on PostgreSQL and `2009-03-29T06:00:00.000+00:00` on SQLite" :
+  kind === :interval ? "PostgreSQL writes an interval in its `IntervalStyle` (`PT25.021S`, `1 day 02:00:00`) and SQLite as PormG stored it (`00:00:25.021`)" :
+  kind === :json ? "PostgreSQL's `jsonb` re-renders a document (`{\"a\": [1, 2]}`) and SQLite keeps the stored text (`{\"a\":[1,2]}`)" :
+                   "PostgreSQL computes it as `numeric` (`1`) and SQLite as a REAL (`1.0`)"
+_divergent_text_fix(kind::Symbol, flag::AbstractString) =
+  kind === :bool ?
     "Write the text you mean: \e[32mCase(When(\"$(flag)\" => true, then = Value(\"yes\")), default = \"no\")\e[0m." :
+  kind === :timestamp ?
+    "Name the format: \e[32mToChar(\"$(flag)\", \"YYYY-MM-DD HH:MI:SS\")\e[0m reads the same on both engines." :
+  kind in (:interval, :json) ?
+    "PormG does not choose its text: fetch the value and format it in Julia." :
     "PormG does not choose a number's text: fetch the value and format it in Julia " *
     "(\e[32mstring(row.points)\e[0m, \e[32mround(x; digits = 2)\e[0m)."
+
+# #1028 — the one message for a declared cast the engines apply differently (`_cast_divergent_operand`,
+# projection_types.jl), raised when the query renders. `fname` is the function as the caller wrote it.
+# To an integer the way out is to say how to round, which `Round`/`Floor`/`Ceil` do on both engines.
+function _cast_divergent_refusal(fname::AbstractString, kind::Symbol, what::AbstractString,
+                                 target::Symbol, flag::AbstractString)
+  if target === :integer
+    why = "PostgreSQL rounds a fractional number cast to an integer (`1.5` → `2`) and SQLite truncates it (`1.5` → `1`)"
+    fix = "Say how to round it: \e[32mCast(Round(x), IntegerField())\e[0m, \e[32mFloor(x)\e[0m or \e[32mCeil(x)\e[0m read the same integer on both engines."
+    return QueryBuildError(
+      "\e[4m\e[31m$(fname)\e[0m cannot make the same integer from $(what) on both engines: $(why) (#1028). $(fix)")
+  end
+  why = kind === :bool ? "a boolean cast to text reads `true` on PostgreSQL and `1` on SQLite" : _divergent_text_why(kind)
   return QueryBuildError(
-    "\e[4m\e[31mConcat\e[0m cannot make the same text from $(what) on both engines: $(why) (#1027). $(fix)")
+    "\e[4m\e[31m$(fname)\e[0m cannot make the same text from $(what) on both engines: $(why) (#1028). " *
+    _divergent_text_fix(kind, flag))
 end
 
 # Variadic convenience: Concat("forename", Value(" "), "surname") → same as vector form
@@ -1011,9 +1054,11 @@ differ, the value comes back as the engine delivers it (#824): on SQLite, the st
 argument that won.
 
 `output_field` casts the result to the type it names, on both engines (#852):
-`Coalesce("points", 0; output_field = "integer")` renders `(…)::integer` on PostgreSQL and `CAST(… AS INTEGER)` on SQLite, so the value,
+`Coalesce("number", 0; output_field = "integer")` renders `(…)::integer` on PostgreSQL and `CAST(… AS INTEGER)` on SQLite, so the value,
 a filter on it, and a CTE column typed by it all agree. On SQLite a `date` renders `date(…)`, and the
-other temporal types and arrays raise `BackendCapabilityError`, as for [`Cast`](@ref).
+other temporal types and arrays raise `BackendCapabilityError`, as for [`Cast`](@ref). A text or
+integer `output_field` refuses the operands [`Cast`](@ref) refuses (#1028): over a float, round first
+(`Floor("points")`).
 """
 function Coalesce(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696
@@ -1039,9 +1084,11 @@ differ, the value comes back as the engine delivers it (#824): on SQLite, the st
 argument that won.
 
 `output_field` casts the result to the type it names, on both engines (#852):
-`Greatest("points", 0; output_field = "integer")` renders `(…)::integer` on PostgreSQL and `CAST(… AS INTEGER)` on SQLite, so the value,
+`Greatest("grid", 1; output_field = "integer")` renders `(…)::integer` on PostgreSQL and `CAST(… AS INTEGER)` on SQLite, so the value,
 a filter on it, and a CTE column typed by it all agree. On SQLite a `date` renders `date(…)`, and the
-other temporal types and arrays raise `BackendCapabilityError`, as for [`Cast`](@ref).
+other temporal types and arrays raise `BackendCapabilityError`, as for [`Cast`](@ref). A text or
+integer `output_field` refuses the operands [`Cast`](@ref) refuses (#1028): over a float, round first
+(`Floor("points")`).
 """
 function Greatest(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696
@@ -1067,9 +1114,11 @@ differ, the value comes back as the engine delivers it (#824): on SQLite, the st
 argument that won.
 
 `output_field` casts the result to the type it names, on both engines (#852):
-`Least("points", 25; output_field = "integer")` renders `(…)::integer` on PostgreSQL and `CAST(… AS INTEGER)` on SQLite, so the value,
+`Least("grid", 25; output_field = "integer")` renders `(…)::integer` on PostgreSQL and `CAST(… AS INTEGER)` on SQLite, so the value,
 a filter on it, and a CTE column typed by it all agree. On SQLite a `date` renders `date(…)`, and the
-other temporal types and arrays raise `BackendCapabilityError`, as for [`Cast`](@ref).
+other temporal types and arrays raise `BackendCapabilityError`, as for [`Cast`](@ref). A text or
+integer `output_field` refuses the operands [`Cast`](@ref) refuses (#1028): over a float, round first
+(`Floor("points")`).
 """
 function Least(x...; output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696

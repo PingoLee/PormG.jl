@@ -61,6 +61,13 @@ import .Kernel: _fk_targets_equal, _references_equal, _has_non_negative, _byte_b
 # `migrations/introspection.jl` and moved to Kernel because a FIELD CONSTRUCTOR (include step 107)
 # now normalises a declared `db_default`, and `Migrations` is step 226.
 import .Kernel: _wrapped_in_parens
+# #1033: the schema readers' DEFAULT cleaners, moved to Kernel for the same reason — a field
+# constructor refuses a `db_default` the catalog would read back as a literal, using the reader's own
+# classification (`_db_default_read_back`), and `Migrations` imports the cleaners back from here.
+import .Kernel: _ExpressionDefault, _quoted_literal, _unquote_literal, _is_sql_literal_token,
+                _pg_strip_trailing_casts, _pg_single_quoted_literal, _pg_clean_default,
+                _strip_sqlite_default_wrapper, _sqlite_blob_literal_bytes, _pg_bytea_literal_bytes, _normalize_sqlite_default,
+                _db_default_read_back
 # The canonical column IR itself (#507). Bound here rather than exported by `Kernel`, so that
 # `Dialect.alter_field` and `Migrations.column_spec` can `import PormG: …` it while a
 # `using PormG.Kernel` elsewhere does not inherit two dozen `C*` type names.

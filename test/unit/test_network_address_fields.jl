@@ -537,12 +537,12 @@ const NET28_CIDR_CORPUS = [
     @test Migrations._parse_lossy_alter_header(chopprefix(header, Migrations.LOSSY_ALTER_HEADER), "p.jl") == f_h
     @test !occursin("USING", retype(g, c)) && isempty(kinds(g, c))
     @test :drop_default in kinds(NA.CIDRField(null = true),
-                                 NA.GenericIPAddressField(null = true, db_default = (postgres = "'10.0.0.1'::inet",)))
+                                 NA.GenericIPAddressField(null = true, db_default = (postgres = "'10.0.0.0'::inet + 1",)))
 
     # `alter_field` drops the old default before ANY `USING`, `abbrev` included — so a live expression
     # default the model does not declare is lost, and that is a finding needing the opt-in, exactly as
     # for the castless pairs (#828).
-    live_with_default = NA.GenericIPAddressField(null = true, db_default = (postgres = "'10.0.0.1'::inet",))
+    live_with_default = NA.GenericIPAddressField(null = true, db_default = (postgres = "'10.0.0.0'::inet + 1",))
     @test :drop_default in kinds(NA.TextField(null = true), live_with_default)
     @test occursin("DROP DEFAULT", retype(NA.TextField(null = true), live_with_default))
 

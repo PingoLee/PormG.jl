@@ -255,6 +255,96 @@ field by walking `1:fieldcount(T)`) and every hand-written constructor call depe
 """
 const DbDefault = Union{String, NamedTuple, Nothing}
 
+# The field types that refuse a `default=` of their own, so a refused literal `db_default` cannot be
+# redirected there (#1033). `SearchVectorField` refuses one because a stored `tsvector` literal is
+# rewritten by PostgreSQL (#1021).
+const _NO_LITERAL_DEFAULT_FIELDS = ("SearchVectorField",)
+
+# #1033: refuse a pinned `db_default` the schema reader would read back as a LITERAL. The live column
+# then compiles to a `LiteralDefault` and the declaration to an `ExpressionDefault`, which
+# `_defaults_equal` keeps apart on purpose (#475) — so `makemigrations` planned `SET DEFAULT` on every
+# run (a full table rebuild on SQLite), `migrate()` never reported "nothing pending" and `check`
+# flagged the column, forever. The judgement is `_db_default_read_back`, the reader's own cleaner run
+# on the declared text: a separate classifier here would drift from the reader, and the drift is the
+# defect.
+#
+# Refused rather than converged, deliberately (decided on #1033): `default = <value>` already renders
+# the same `DEFAULT` clause and reads back as the same `LiteralDefault`, and it is the spelling
+# `inspectdb` writes for such a column. Accepting a second spelling for one fact is the choice
+# `db_default`'s docs (#496) avoid.
+function _refuse_literal_db_default(field_type::AbstractString, engine::Symbol, sql::AbstractString,
+                                    probe_kwargs::NamedTuple = NamedTuple())
+  read_back = _db_default_read_back(sql, engine, field_type)
+  read_back isa _ExpressionDefault && return nothing
+  head = "$field_type: 'db_default' for `$engine` is a literal value, $(repr(String(sql))), not an " *
+         "expression. The database stores it as a value and PormG reads it back as one, so the " *
+         "column would never match this declaration and every `makemigrations` would plan it again (#1033)."
+  if read_back === nothing
+    # The reader's "no default" is `NULL`, or a literal this column type cannot hold (a SQLite blob
+    # column with a text default) — two different mistakes, so two different messages.
+    uppercase(_pg_strip_trailing_casts(canonical_db_default(sql))) == "NULL" && throw(_fielderr(
+      "$head `NULL` is no default at all: omit `db_default`, or pass `$engine = nothing`."))
+    throw(_fielderr("$head It is not a value a $field_type can hold either, so it reads back as no " *
+                    "default at all: omit it, or declare the value the field accepts as `default`."))
+  end
+  field_type in _NO_LITERAL_DEFAULT_FIELDS && throw(_fielderr(
+    "$head A $field_type takes no `default` either, so its column cannot carry a literal database " *
+    "default: use an expression, or no default."))
+  hint = _literal_default_hint(field_type, read_back, occursin('\'', sql), probe_kwargs)
+  throw(_fielderr(hint === nothing ?
+    "$head Declare the value as `default` instead, in the form this field accepts: PormG renders that " *
+    "as the same `DEFAULT` clause, and it reads back unchanged." :
+    "$head Declare it as `default = $hint` instead: PormG renders that as the same `DEFAULT` clause, " *
+    "and it reads back unchanged."))
+end
+
+# The `default = …` a refused literal `db_default` should be written as, as Julia source, or `nothing`
+# when no candidate builds. Every candidate is CHECKED by building the field with it, together with
+# the declaration's other keywords (`probe_kwargs`: its `max_length`, its `choices`), so the advice is
+# never a value the declared field then refuses. The reader returns text, and which Julia value a
+# field takes for it (`"t"` → `true` on a `BooleanField`, `"0"` → `0` on an `IntegerField` but `"0"`
+# on a `CharField`, an ISO duration → nothing a `DurationField` parses) is the field's business, not
+# the reader's. `quoted` (the declared text held a quote) puts the string reading first, so a quoted
+# `'0'` on a text column is suggested as the text it is; a numeric field takes the number first either
+# way. A field that needs positional arguments (`ForeignKey`, `ArrayField`) cannot be built this way
+# and gets the generic advice.
+function _literal_default_hint(field_type::AbstractString, read_back, quoted::Bool,
+                               probe_kwargs::NamedTuple = NamedTuple())::Union{String, Nothing}
+  sym = Symbol(field_type)
+  isdefined(@__MODULE__, sym) || return nothing
+  ctor = getfield(@__MODULE__, sym)
+  candidates = Any[]
+  if read_back isa AbstractString
+    text = String(read_back)
+    token = lowercase(strip(text))
+    if field_type == "BooleanField"
+      token in ("t", "true", "1", "y", "yes", "on") && push!(candidates, true)
+      token in ("f", "false", "0", "n", "no", "off") && push!(candidates, false)
+    end
+    parsed = token in ("true", "false") ? (token == "true") :
+             _is_sql_literal_token(text) ? something(tryparse(Int64, text), tryparse(Float64, text), Some(nothing)) :
+             nothing
+    numeric = endswith(field_type, "IntegerField") || field_type in ("FloatField", "DecimalField")
+    if quoted && !numeric
+      push!(candidates, text); parsed === nothing || push!(candidates, parsed)
+    else
+      parsed === nothing || push!(candidates, parsed); push!(candidates, text)
+    end
+  else
+    push!(candidates, read_back)
+  end
+  for c in candidates
+    built = try
+      ctor(; probe_kwargs..., default = c); true
+    catch e
+      (e isa InterruptException || e isa StackOverflowError) && rethrow()
+      false
+    end
+    built && return c isa Union{Bool, Number} ? string(c) : repr(c)
+  end
+  return nothing
+end
+
 """
     _db_default_kwarg(field_type, value) -> Union{String, NamedTuple, Nothing}
 
@@ -273,7 +363,7 @@ and Julia's own `show` escapes the strings inside it, so the round trip needs no
 Every accepted expression is stored in its [`canonical_db_default`](@ref) form, which is what the
 live side is also stored in; that shared normalisation is what makes a column converge with itself.
 """
-function _db_default_kwarg(field_type::AbstractString, value)
+function _db_default_kwarg(field_type::AbstractString, value; probe_kwargs::NamedTuple = NamedTuple())
   value === nothing && return nothing
 
   _one(engine, sql) = begin
@@ -285,7 +375,8 @@ function _db_default_kwarg(field_type::AbstractString, value)
       "`,`, a `--` or `/*` comment, an unterminated quote, unbalanced parentheses or brackets, an " *
       "`E'…'` string, a backslash right before a quote, a dollar quote or a backtick " *
       "— each of those silently changes the statement around it rather than failing. Quote them " *
-      "if they are data (`'a;b'` and `'a,b'` are both fine)."))
+      "if they are data (`concat('a;b', x)` and `lower('a,b')` are both fine)."))
+    engine === :both || _refuse_literal_db_default(field_type, engine, sql, probe_kwargs)
     return canonical_db_default(sql)
   end
 
@@ -420,7 +511,10 @@ function _common_kwargs(field_type::AbstractString, kwargs;
   # #496. Extracted HERE rather than by each constructor the way `:default` is, because unlike
   # `default` — whose accepted Julia type varies per field (`Int64`, `Date`, `Vector{UInt8}`, …) —
   # a `db_default` is raw schema text with one contract for every field type. One validator, not 23.
-  db_default = _db_default_kwarg(field_type, _take(:db_default, nothing))
+  # The declaration's other accepted keywords ride along so a refused literal's `default = …` hint is
+  # checked against the field as declared (its `max_length`, its `choices`), not a bare one (#1033).
+  probe_kwargs = NamedTuple(k => v for (k, v) in kwargs if k in accepted && !(k in (:db_default, :default)))
+  db_default = _db_default_kwarg(field_type, _take(:db_default, nothing); probe_kwargs)
   # `default` and `db_default` are mutually exclusive, which is a departure from Django and the
   # reason is PormG-specific. Django's `default` never touches DDL, so the two are orthogonal there.
   # PormG's `default` is BOTH rendered into the column definition and filled in Julia on the insert
@@ -3214,7 +3308,7 @@ belongs in a [`CIDRField`](@ref). An empty string is refused too; store `nothing
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{String, Nothing} = nothing`: Default address, normalized like a written value
-- `db_default::Union{NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). Pin it to PostgreSQL — `(postgres = "'10.0.0.1'::inet",)`; the portable spellings (`"CURRENT_TIMESTAMP"`, …) are not addresses. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). Pin it to PostgreSQL — `(postgres = "inet_client_addr()",)`. A fixed address is a literal, not an expression: declare it as `default`, since a literal `db_default` (`'10.0.0.1'::inet`) is refused (#1033). The portable spellings (`"CURRENT_TIMESTAMP"`, …) are not addresses. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = true`: Whether the field should be editable in forms
 
 # Database Mapping
@@ -3301,7 +3395,7 @@ it: `10.0.0.1/24` is a host inside `10.0.0.0/24`, and the message names that net
 - `null::Bool = false`: Whether the database column can store NULL values
 - `db_index::Bool = false`: Whether to create a database index on this field
 - `default::Union{String, Nothing} = nothing`: Default network, normalized like a written value
-- `db_default::Union{NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). Pin it to PostgreSQL — `(postgres = "'10.0.0.0/8'::cidr",)`; the portable spellings (`"CURRENT_TIMESTAMP"`, …) are not addresses. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
+- `db_default::Union{NamedTuple, Nothing} = nothing`: A database-side expression default, rendered verbatim into the DDL (#496). Pin it to PostgreSQL. A fixed network is a literal, not an expression: declare it as `default`, since a literal `db_default` (`'10.0.0.0/8'::cidr`) is refused (#1033). The portable spellings (`"CURRENT_TIMESTAMP"`, …) are not addresses. Mutually exclusive with `default`. Full rules: the *Column defaults* section of the Schema Conventions guide
 - `editable::Bool = true`: Whether the field should be editable in forms
 
 # Database Mapping
@@ -3399,8 +3493,9 @@ column (`GENERATED ALWAYS AS (to_tsvector(…)) STORED`) is not supported yet.
   PostgreSQL rewrites it to, so a declared one would never compare equal to the column. Every row's
   document comes from its own text, through `update`: declare the column `null = true` and fill it
 - `db_default::Union{NamedTuple, Nothing} = nothing`: accepted as on every field (#496), but not a way
-  to give the column a document. A literal one (`''::tsvector`) reads back from the catalog as a
-  value rather than the expression declared, so `makemigrations` would plan it again each time
+  to give the column a document. A literal one (`''::tsvector`) raises `FieldValidationError`: it
+  reads back from the catalog as a value rather than the expression declared, so `makemigrations`
+  would plan it again each time (#1033)
 - `editable::Bool = false`: Whether the field should be editable in forms
 
 # Database Mapping

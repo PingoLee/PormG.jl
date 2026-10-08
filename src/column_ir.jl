@@ -489,6 +489,415 @@ function _sql_text_scan(s::AbstractString, sqlite_brackets::Bool)::Bool
   return !in_single && !in_double && !in_bracket && depth == 0
 end
 
+# ── Reading a column DEFAULT back (#475, moved here in #1033) ────────────────────────────────────
+#
+# The two cleaners that reduce a catalog's DEFAULT text — `pg_get_expr`'s on PostgreSQL, `PRAGMA
+# table_info`'s on SQLite — to a literal value or an `_ExpressionDefault` tag, and the helpers they
+# share. They lived in `migrations/introspection.jl` beside their only caller until #1033, which gave
+# them a second one: `Models._db_default_kwarg` refuses a declared `db_default` that the catalog would
+# read back as a LITERAL, because the live side then compiles to a `LiteralDefault`, the declared side
+# to an `ExpressionDefault`, and `_defaults_equal` keeps those apart on purpose (#475) — so the column
+# never converged with its own declaration. The judgement is only sound if it is THE READER'S, applied
+# to the declared text: a second classifier would drift from this one, and drift here is the churn.
+# The field constructors are include step 107 and `Migrations` is step 226, so the reader moved down —
+# the journey `_wrapped_in_parens` made in #496. Plain string logic; neither backend is in it.
+
+# A column DEFAULT that is a SQL EXPRESSION rather than a literal value, carried out of the two
+# cleaners as its own type so the reader arms can route on it (#475).
+#
+# WHY A TYPE, AND NOT A CLASSIFIER OVER THE CLEANED STRING. Both cleaners UNQUOTE a literal, and
+# after that step an expression and a literal are the same bytes: `_pg_clean_default` turns BOTH
+# `'now()'::text` and `now()` into `"now()"`, and `_normalize_sqlite_default` turns both
+# `'CURRENT_TIMESTAMP'` and `CURRENT_TIMESTAMP` into `"CURRENT_TIMESTAMP"`. A classifier applied to
+# the RESULT is therefore forced to be wrong in one direction or the other — keep a real expression,
+# or drop the string a user deliberately quoted. The quoting is visible only INSIDE the cleaner, so
+# that is where the question has to be answered.
+#
+# Returned INSTEAD of the value rather than tagging every value with a `(value, kind)` pair: a
+# literal then flows through byte-for-byte unchanged, and no call site that handles one needs to
+# know this type exists.
+struct _ExpressionDefault
+  sql::String
+end
+
+# `string` so both `@warn ... default = string(default_val)` sites keep printing the expression text
+# with no change. `==`/`hash` so tests can compare tags directly. `==` is deliberately NOT defined
+# against `AbstractString`: a tag must never silently satisfy an assertion written for the old
+# string-returning behaviour.
+Base.string(d::_ExpressionDefault) = d.sql
+Base.:(==)(a::_ExpressionDefault, b::_ExpressionDefault) = a.sql == b.sql
+Base.hash(d::_ExpressionDefault, h::UInt) = hash(d.sql, hash(:_ExpressionDefault, h))
+Base.show(io::IO, d::_ExpressionDefault) = print(io, "_ExpressionDefault(", repr(d.sql), ")")
+
+# True when `s` is ONE `q`-quoted literal — every interior quote doubled. The `r"^'(.+)'$"` this
+# replaces also matched `'a' || 'b'`, which is a concatenation of two.
+#
+# Shared by BOTH engines and therefore kept with the other cross-backend helpers (#475) — the same
+# journey `_wrapped_in_parens` made in #472, and the same defect at the end of it. SQLite tested
+# `startswith(s, "'") && endswith(s, "'")`, which is true of `'a' || 'b'`, so a CONCATENATION was
+# read as one literal and unquoted to the mangled `a' || 'b`. A textual column then KEPT that value
+# and `Model_to_str` wrote it into the generated models file, where it re-renders as
+# `DEFAULT 'a'' || ''b'`. PostgreSQL has used this predicate since #455 and never had the bug, so
+# the two engines disagreed on exactly the shape #475 exists to make them agree on.
+#
+# UTF-8 safe: it walks with `nextind` rather than indexing bytes.
+function _quoted_literal(s::AbstractString, q::Char)::Bool
+  (ncodeunits(s) >= 2 && first(s) == q && last(s) == q) || return false
+  last_i = lastindex(s)
+  i = nextind(s, firstindex(s))
+  while i < last_i
+    if s[i] == q
+      j = nextind(s, i)
+      (j <= last_i && s[j] == q) || return false
+      i = nextind(s, j); continue
+    end
+    i = nextind(s, i)
+  end
+  return true
+end
+
+# The content of a `q`-quoted literal, with doubled interior quotes collapsed.
+#
+# `nextind`/`prevind`, never `s[2:end-1]` (#475). Those are BYTE offsets, so `end-1` lands on a
+# UTF-8 continuation byte whenever the character before the closing quote is multibyte — and
+# `DEFAULT 'São José'` then raised `StringIndexError` from inside the SQLite cleaner, aborting the
+# WHOLE `convert_schema_to_models` read over one ordinary column. That is precisely the failure
+# mode #472 exists to eliminate, and the PostgreSQL cleaner had always used the safe form.
+function _unquote_literal(s::AbstractString, q::Char)::String
+  inner = ncodeunits(s) == 2 ? "" : s[nextind(s, firstindex(s)):prevind(s, lastindex(s))]
+  return replace(inner, string(q, q) => string(q))
+end
+
+const _SQL_NUMERIC_LITERAL = r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$"
+
+# Is `s` one unquoted SQL literal — a number, or a boolean keyword?
+#
+# Deliberately narrow, and sound ONLY because of where it is called: both cleaners run it on their
+# final fallthrough, after every quoted form, bare `NULL`, the SQLite `X'…'` blob literal and the
+# SQLite boolean keywords have already been claimed by a branch above. The only inputs it ever
+# judges are therefore BARE tokens, where the whole literal vocabulary is a number or `TRUE`/`FALSE`.
+# It is not a general SQL-literal test and must not be reused as one.
+#
+# Its existence is the reason the fix is not "drop the fallthrough": that branch carries unquoted
+# LITERALS too. `DEFAULT 5` reaches `IntegerField` as the *string* `"5"` and only becomes `5`
+# because the converter is `format2int64`; `DEFAULT true` reaches `BooleanField` as `"true"` and is
+# parsed there. Dropping the branch wholesale would take both with it.
+#
+# `0x1F`, `1_000` and other non-decimal or separated spellings are classified as EXPRESSIONS.
+# `parse(Int64, "0x1F")` happens to succeed in Julia, but the same token on a `FloatField` or
+# `DecimalField` column does not, and reject-rather-than-reinterpret is the rule at every other
+# introspection boundary (#296's blob literals, #455's identifiers). A dropped default is reported
+# and recoverable; silently importing 31 as a default the user never wrote is neither.
+function _is_sql_literal_token(s::AbstractString)::Bool
+  t = strip(s)
+  lowercase(t) in ("true", "false") && return true
+  return occursin(_SQL_NUMERIC_LITERAL, t)
+end
+
+function _strip_sqlite_default_wrapper(default_val)
+  default_val === nothing && return nothing
+  ismissing(default_val) && return nothing
+
+  stripped = strip(String(default_val))
+  # `_wrapped_in_parens` rather than `startswith("(") && endswith(")")` (#472). The textual test
+  # is true for `(a) + (b)`, where the opening paren does NOT close on the final character, so it
+  # unwrapped to `a) + (b` — two unbalanced fragments. That was survivable only while such a value
+  # went on to throw: SQLite defaults now degrade to a `String` and a text column KEEPS the value,
+  # so a mangled one would be written into the generated model as a literal default and re-rendered
+  # as `DEFAULT 'a) + (b'`. The PostgreSQL cleaner hit this exact bug and fixed it with this
+  # predicate; the SQLite twin was left behind.
+  while _wrapped_in_parens(stripped)
+    inner = strip(stripped[nextind(stripped, firstindex(stripped)):prevind(stripped, lastindex(stripped))])
+    inner == stripped && break
+    stripped = inner
+  end
+
+  return stripped
+end
+
+"""
+    _sqlite_blob_literal_bytes(s) -> Union{Vector{UInt8}, Nothing}
+
+Decode SQLite's `X'0102'` blob-literal syntax into bytes, or `nothing` if `s` is not one.
+
+Normalizing here rather than loosening `BinaryField(default = …)` is deliberate: introspection is
+the import layer, and the repo's rule is to normalize dirty inputs there instead of weakening a
+field contract to accept them.
+"""
+function _sqlite_blob_literal_bytes(s::AbstractString)::Union{Vector{UInt8}, Nothing}
+  m = match(r"^[Xx]'([0-9A-Fa-f]*)'$", strip(s))
+  m === nothing && return nothing
+  hex = m.captures[1]
+  isodd(length(hex)) && return nothing   # malformed; treat as "no recoverable default"
+  return hex2bytes(hex)
+end
+
+"""
+    _pg_bytea_literal_bytes(s) -> Union{Vector{UInt8}, Nothing}
+
+Decode PostgreSQL's hex `bytea` output form (`\\x0102`) into bytes, or `nothing` if `s` is not one.
+
+The PostgreSQL twin of [`_sqlite_blob_literal_bytes`](@ref); see there for why the normalization
+belongs in introspection rather than in the field constructor.
+"""
+function _pg_bytea_literal_bytes(s::AbstractString)::Union{Vector{UInt8}, Nothing}
+  m = match(r"^\\\\?x([0-9A-Fa-f]*)$", strip(s))
+  m === nothing && return nothing
+  hex = m.captures[1]
+  isodd(length(hex)) && return nothing
+  return hex2bytes(hex)
+end
+
+function _normalize_sqlite_default(default_val, type_sym::Symbol)
+  stripped = _strip_sqlite_default_wrapper(default_val)
+  stripped === nothing && return nothing
+
+  uppercase(stripped) == "NULL" && return nothing
+
+  # A BinaryField default is written as `X'…'` and must come back as bytes (#296). Before this,
+  # every branch below returned a String, and `BinaryField(default = <String>)` raises — so
+  # introspecting a BLOB column with a DEFAULT would have crashed the whole schema read. That was
+  # unreachable only while PormG never emitted a BLOB column.
+  #
+  # An unrecognized literal degrades to `nothing` (no default) rather than raising: a hand-written
+  # or foreign table must stay introspectable, matching how `Model_to_str` degrades a field it
+  # cannot render instead of failing the run.
+  if type_sym == :BinaryField
+    bytes = _sqlite_blob_literal_bytes(stripped)
+    bytes !== nothing && return bytes
+    # #475: an UNQUOTED token that is not blob syntax is an EXPRESSION (`(randomblob(16))`, which
+    # `_strip_sqlite_default_wrapper` has already unwrapped), and gets the same drop-and-warn as
+    # every other column type — otherwise the "uniform on every column type" rule this issue
+    # establishes would have a silent hole on exactly the engine that cannot express it either.
+    #
+    # A LITERAL that simply is not valid blob syntax still degrades to "no default" with no warning:
+    # a quoted string, and equally an `X'…'`-shaped token that is malformed (odd-length or non-hex,
+    # which `_sqlite_blob_literal_bytes` rejects). Both are literals the field type cannot take,
+    # which is #296's axis and contract, not #475's — reporting `X'010'` as "a SQL expression" would
+    # be a false diagnosis in a warning the user cannot check.
+    #
+    # The `X'…'` test is ANCHORED and forbids an interior quote, matching
+    # `_sqlite_blob_literal_bytes`'s own regex. `startswith(s, "X'") && endswith(s, "'")` is the
+    # naive shape this whole issue exists to remove: it is equally true of
+    # `X'0102' || X'03'` — a CONCATENATION, and a genuine expression — which it would then swallow
+    # in silence. Found in review, after that exact bug was introduced here by the first draft.
+    (_quoted_literal(stripped, '\'') || _quoted_literal(stripped, '"')) && return nothing
+    occursin(r"^[Xx]'[^']*'$", stripped) && return nothing
+    return _is_sql_literal_token(stripped) ? nothing : _ExpressionDefault(String(stripped))
+  end
+
+  if type_sym == :BooleanField
+    lowered = lowercase(replace(stripped, "'" => "", "\"" => ""))
+    lowered in ["1", "true", "t"] && return true
+    lowered in ["0", "false", "f"] && return false
+  end
+
+  # BALANCED, not `startswith`/`endswith` (#475). The textual test is true for `'a' || 'b'` — a
+  # CONCATENATION of two literals, whose first and last characters merely happen to be quotes — and
+  # unquoting it produced the mangled `a' || 'b`, which a textual column then KEPT. PostgreSQL has
+  # used the balanced predicate since #455; this is the same fix on the other engine.
+  if _quoted_literal(stripped, '\'')
+    return _unquote_literal(stripped, '\'')
+  elseif _quoted_literal(stripped, '"')
+    return _unquote_literal(stripped, '"')
+  end
+
+  # `String`, not the `SubString` `strip` produced (#472). `TextField`/`EmailField`/`ImageField`/
+  # `FileField` validate against `Union{String, Nothing}` and their converter is `parse(String, x)`,
+  # which has NO method for any input — so a `SubString` reached the throw path and an UNQUOTED
+  # default aborted the read even on a text column. The two branches above already widen to `String`
+  # (via `replace`), which is why every quoted-literal fixture passed and this went unnoticed.
+  # Widening here makes the engines agree: `_pg_clean_default` reduces a quoted literal the same way.
+  s = String(stripped)
+
+  # …and whatever is left UNQUOTED is either a bare literal or a SQL EXPRESSION (#475). Until this,
+  # the whole fallthrough returned a String, so whether an expression survived was decided by the
+  # FIELD TYPE rather than by the schema: `TextField` validates against `Union{String, Nothing}` and
+  # accepts anything, so `TEXT DEFAULT CURRENT_TIMESTAMP` was kept as a 17-character literal and
+  # `Model_to_str` wrote it into the generated models file — where re-applying it renders
+  # `DEFAULT 'CURRENT_TIMESTAMP'` and stores that text in every new row. The SAME expression on a
+  # DATETIME column was dropped with a warning. Tagging here is what makes the two agree.
+  return _is_sql_literal_token(s) ? s : _ExpressionDefault(s)
+end
+
+_pg_single_quoted_literal(s::AbstractString)::Bool = _quoted_literal(s, '\'')
+
+# A cast at the END of an expression: `::text`, `::character varying`, `::numeric(10,2)`,
+# `::integer[]`, `::"MyEnum"`, `::public.my_enum`. ANCHORED on purpose — the global
+# `r"::[a-zA-Z_]+"` this replaces turned `'{1,2}'::integer[]` into `'{1,2}'[]`, silently losing an
+# array default.
+const _PG_TRAILING_CAST = r"::(?:\"[^\"]*\"|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?(?:\s+[A-Za-z_][A-Za-z0-9_]*)*)(?:\s*\(\s*\d+(?:\s*,\s*\d+)?\s*\))?(?:\s*\[\s*\])*\s*$"
+
+function _pg_strip_trailing_casts(s::AbstractString)::String
+  out = String(strip(s))
+  for _ in 1:8   # `((x)::text)::varchar` — bounded so a pathological string cannot spin
+    stripped = String(strip(replace(out, _PG_TRAILING_CAST => "")))
+    stripped == out && break
+    out = stripped
+  end
+  return out
+end
+
+# Undo `pg_get_expr`'s rendering of a column DEFAULT.
+#
+# Takes the WHOLE expression. The regex this replaces was WHITESPACE-TERMINATED
+# (`r"DEFAULT\s+((?:\([^)]+\)|[^:\s]+)(?:::[a-zA-Z_]+)?)"`), so any default containing a space was
+# truncated before the unwrapping below ever saw it — `DEFAULT 'Ferrari, Scuderia'::text` cleaned to
+# `'Ferrari`. That is a SEPARATE defect from the aggregate tear #455 is about, and it survives the
+# JSON move on its own: fixing where the string comes from does not fix a parser that stops at the
+# first space.
+#
+# An expression this cannot reduce to a literal (`concat('a', 'b')`, `nextval('s'::regclass)`,
+# `now()`, `now() - '1 day'::interval`) is returned WHOLE, which is what the field constructors then
+# judge. "Whole" is load-bearing and is the reason the inner re-strip below is conditional — see
+# there.
+#
+# A bare `NULL` (`DEFAULT NULL::character varying`, which pg_dump emits routinely) is "no default",
+# not the four-character string `"NULL"`. That is the answer `_normalize_sqlite_default` already
+# gives for the same input, and the engines have to agree.
+const _PG_NEGATED = r"^-\s*(.+)$"s
+
+function _pg_clean_default(expr)::Union{String, Nothing, _ExpressionDefault}
+  expr === nothing && return nothing
+  s = _pg_strip_trailing_casts(String(expr))
+  isempty(s) && return nothing
+  # `(0)::numeric` → strip the cast → `(0)` → unwrap → `0`.
+  #
+  # The inner value may carry its OWN cast (`('x'::text)`), but re-stripping unconditionally is
+  # wrong: `pg_get_expr` parenthesizes every non-trivial expression, so the inner text is usually a
+  # COMPOUND expression whose trailing cast belongs to its last OPERAND. Stripping it there turns
+  # `('x'::text || 'y'::text)` into `'x'::text || 'y'` — a mangled expression rather than an
+  # unrecognized one. So the re-stripped form is kept only when it actually reduced to a literal.
+  if _wrapped_in_parens(s)
+    inner = s[nextind(s, firstindex(s)):prevind(s, lastindex(s))]
+    stripped = _pg_strip_trailing_casts(inner)
+    s = _pg_single_quoted_literal(stripped) ? stripped : String(strip(inner))
+  end
+  if _pg_single_quoted_literal(s)
+    # Shared with the SQLite cleaner (#475). Both engines unquote identically, and keeping two
+    # copies of the logic is how they drifted apart twice already — once on the balanced-quote
+    # test, once on byte-vs-character slicing.
+    return _unquote_literal(s, '\'')
+  end
+  uppercase(s) == "NULL" && return nothing
+  # A minus applied to a number is a constant too (#1033). PostgreSQL folds a bare `- 1` into
+  # `'-1'::integer` itself, but stores `-1::integer` (which parses as `-(1::integer)`) as the operator
+  # and prints it `(- 1)`; measured on PostgreSQL 16. Both are the value -1, and reading the second
+  # as an expression made `inspectdb` write a `db_default` the constructor refuses. A unary `+` is
+  # never folded (`+1` is stored as `(+ 1)`), so it stays an expression on both sides.
+  # The operand's own casts and quotes are the constant's spelling, not an operation on it:
+  # `(- (1)::bigint)` and `(- '1'::integer)` are -1 too, and stripping them is also what keeps the
+  # reader idempotent on its own output (`- (1)::bigint` re-read would otherwise fold where the
+  # parenthesised form did not; found in delta review).
+  # Matched on the canonical form, so a negation that kept its own parentheses through the single
+  # unwrap above (`((- 1))::bigint` → `(- 1)`) folds too and the reader stays idempotent on it.
+  m = match(_PG_NEGATED, canonical_db_default(s))
+  if m !== nothing
+    number = canonical_db_default(_pg_strip_trailing_casts(m.captures[1]))
+    _pg_single_quoted_literal(number) && (number = _unquote_literal(number, '\''))
+    (occursin(_SQL_NUMERIC_LITERAL, number) && !startswith(number, ('+', '-'))) && return "-" * number
+  end
+  # Whatever did not reduce to a literal above is a SQL EXPRESSION — `now()`, `nextval('s')`,
+  # `'x'::text || 'y'::text`. Tagged rather than returned as a bare String so the reader arms route
+  # on the SCHEMA rather than on whether the target field type happens to refuse the value (#475).
+  # See `_ExpressionDefault` for why this cannot be decided from the returned value afterwards.
+  return _is_sql_literal_token(s) ? s : _ExpressionDefault(s)
+end
+
+# The spellings of a constant that PostgreSQL's deparser rewrites into a form `_pg_clean_default`
+# reads as a literal. Measured on PostgreSQL 16 (#1033), declared → `pg_get_expr`:
+#
+#   CAST(0 AS integer)               → 0                       CAST((0) AS integer)  → 0
+#   CAST(CAST(0 AS int) AS bigint)   → (0)::bigint
+#   DATE '2024-01-01'                → '2024-01-01'::date      pg_catalog.date '…'   → '…'::date
+#   varchar(10) 'x'                  → 'x'::character varying(10)
+#   double precision '1.5'           → '1.5'::double precision "char" 'x'           → 'x'::"char"
+#   INTERVAL '1' DAY                 → 'P1D'::interval
+#
+# Applied to the DECLARED text only, because the catalog never hands the reader any of these
+# spellings — so this is the deparser's rewrite, not a second classifier, and anything it does not
+# recognise is returned unchanged for `_pg_clean_default` to judge. SQLite needs no twin: `PRAGMA
+# table_info` echoes the declared text, so `CAST(0 AS integer)` reads back as that expression and
+# converges as one.
+#
+# The type name is PostgreSQL's own grammar for a typed literal (`ConstTypename`) — one name, possibly
+# schema-qualified or quoted, with a type modifier, or one of the fixed multi-word names — and NOT
+# "any words before a quote". That looser shape read `CURRENT_TIMESTAMP AT TIME ZONE 'UTC'` as a
+# typed literal of type `CURRENT_TIMESTAMP AT TIME ZONE` and refused an expression; found in review.
+# `NOT 'f'` is the one single-word operator with the same shape, hence its exclusion.
+const _PG_TYPMOD = raw"(?:\s*\(\s*\d+(?:\s*,\s*\d+)?\s*\))?"
+const _PG_MULTIWORD_TYPE = raw"double\s+precision|(?:character|char|bit)\s+varying|" *
+                           raw"national\s+(?:character|char)(?:\s+varying)?|" *
+                           raw"(?:time|timestamp)(?:\s*\(\s*\d+\s*\))?\s+with(?:out)?\s+time\s+zone"
+const _PG_ONEWORD_TYPE = raw"(?:[A-Za-z_][A-Za-z0-9_]*\.)?(?:\"(?:[^\"]|\"\")+\"|[A-Za-z_][A-Za-z0-9_]*)"
+const _PG_INTERVAL_FIELD = raw"(?:year|month|day|hour|minute|second)(?:\s*\(\s*\d+\s*\))?"
+# The literal is matched as `'.*'` and then checked with `_pg_single_quoted_literal`, rather than with
+# a repeated `(?:[^']|'')*` group, which costs PCRE's JIT stack per character.
+const _PG_TYPED_LITERAL = Regex(
+  "^((?:$_PG_MULTIWORD_TYPE)$_PG_TYPMOD|$_PG_ONEWORD_TYPE$_PG_TYPMOD)\\s*('.*')" *
+  "(\\s+$_PG_INTERVAL_FIELD(?:\\s+to\\s+$_PG_INTERVAL_FIELD)?)?\$", "is")
+const _PG_CAST_CALL = r"^CAST\s*\((.*)\)$"is
+# GREEDY operand, so the split is at the LAST ` AS `: an ` AS ` inside a quoted operand is data, and
+# a nested `CAST(… AS …)` stays whole for the recursion below.
+const _PG_CAST_BODY = r"^\s*(.+)\s+AS\s+(.+?)\s*$"is
+
+function _pg_deparse_literal_forms(sql::AbstractString, depth::Int = 0)::String
+  s = String(strip(sql))
+  # Bounded: a CAST nested deeper than any real default is left for the reader to judge, rather than
+  # recursing until the stack overflows (found in review, at ~10,000 levels).
+  depth > 8 && return s
+  m = match(_PG_CAST_CALL, s)
+  # The parenthesis after `CAST` must close on the final character: `CAST(0 AS int) + CAST(1 AS int)`
+  # matches the regex too, and is a sum.
+  if m !== nothing && _wrapped_in_parens(String(strip(s[nextind(s, firstindex(s), 4):end])))
+    body = match(_PG_CAST_BODY, m.captures[1])
+    body === nothing && return s
+    # The operand is judged by the same rewrite, so `(0)` and a nested `CAST` reduce too.
+    operand = _pg_deparse_literal_forms(canonical_db_default(body.captures[1]), depth + 1)
+    _pg_clean_default(operand) isa _ExpressionDefault && return s
+    return string(operand, "::", body.captures[2])
+  end
+  m = match(_PG_TYPED_LITERAL, s)
+  m === nothing && return s
+  type_name = m.captures[1]
+  uppercase(type_name) == "NOT" && return s
+  _pg_single_quoted_literal(m.captures[2]) || return s
+  m.captures[3] === nothing && return string(m.captures[2], "::", type_name)
+  # A field qualifier (`DAY`, `YEAR TO MONTH`) belongs to `INTERVAL` alone, and it is part of the
+  # value: `INTERVAL '1' DAY` is one day. It is kept inside the literal (`'1 DAY'::interval`) so the
+  # value the refusal quotes back is not the bare `1`.
+  lowercase(type_name) == "interval" || return s
+  return string(chop(m.captures[2]), " ", strip(m.captures[3]), "'::", type_name)
+end
+
+"""
+    _db_default_read_back(sql, engine::Symbol, field_type) -> Union{_ExpressionDefault, Any}
+
+What the schema reader on `engine` (`:postgres` or `:sqlite`) makes of the column default a declared
+`db_default` renders: an `_ExpressionDefault` when it stays an expression, otherwise the LITERAL the
+reader reduces it to — a `String`, a `Bool`, bytes, or `nothing` when it reads back as no default
+(#1033).
+
+`Models._db_default_kwarg` refuses everything but the first. A literal read back compiles to a
+`LiteralDefault` on the live side while the declaration compiles to an `ExpressionDefault`, and
+`_defaults_equal` keeps those apart on purpose (#475), so such a column replanned `SET DEFAULT` (and,
+on SQLite, a whole table rebuild) on every `makemigrations`. It is the reader's own cleaner applied to
+the declared text, so the two cannot drift apart. `field_type` is the public field name; it selects
+the readers' bytes and boolean arms exactly as `Migrations._clean_default` does from the column's
+canonical type.
+"""
+function _db_default_read_back(sql::AbstractString, engine::Symbol, field_type::AbstractString)
+  text = canonical_db_default(sql)
+  if engine === :postgres
+    cleaned = _pg_clean_default(_pg_deparse_literal_forms(text))
+    # `_clean_default`'s bytea step: the hex text decoded, or "no default" when it is not hex.
+    (cleaned isa AbstractString && field_type == "BinaryField") && return _pg_bytea_literal_bytes(cleaned)
+    return cleaned
+  end
+  type_sym = field_type == "BinaryField" ? :BinaryField : field_type == "BooleanField" ? :BooleanField : :TextField
+  return _normalize_sqlite_default(text, type_sym)
+end
+
 # ── Table-level CHECK constraints (#742) ─────────────────────────────────────────────────────────
 #
 # A declared `Models.CheckConstraint` is identified by its NAME, and whether the live constraint

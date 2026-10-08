@@ -1250,16 +1250,16 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#828 review: a USING retype that would silently drop an undeclared expression default is a finding" begin
     M = Models
-    @test _la803_kinds(M.IntegerField(), M.CharField(max_length = 5, db_default = (postgres = "'0'",)), PG_LA803) ==
+    @test _la803_kinds(M.IntegerField(), M.CharField(max_length = 5, db_default = (postgres = "lower('0')",)), PG_LA803) ==
           [:text_cast, :drop_default]
     @test lossy_alter_class(LossyAlter(:drop_default, "t", "c", "a", "b")) === :silent
     # Declared on the new side: it is set back after the retype, so nothing is lost.
-    @test _la803_kinds(M.IntegerField(db_default = (postgres = "0",)), M.CharField(max_length = 5, db_default = (postgres = "'0'",)), PG_LA803) ==
+    @test _la803_kinds(M.IntegerField(db_default = (postgres = "0 + 0",)), M.CharField(max_length = 5, db_default = (postgres = "lower('0')",)), PG_LA803) ==
           [:text_cast]
     # A literal default is a `:default` delta like any other, dropped by the plan on purpose.
     @test _la803_kinds(M.IntegerField(), M.CharField(max_length = 5, default = "0"), PG_LA803) == [:text_cast]
     # No USING, no forced drop.
-    @test isempty(_la803_kinds(M.TextField(), M.IntegerField(db_default = (postgres = "0",)), PG_LA803))
+    @test isempty(_la803_kinds(M.TextField(), M.IntegerField(db_default = (postgres = "0 + 0",)), PG_LA803))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

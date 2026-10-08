@@ -39,6 +39,8 @@ using PormG.Models: DecimalField
 using PormG.Models: GenericIPAddressField, CIDRField
 # #28 — the ArrayField claims on `fields.md` and `postgres.md`, and the element fields they name.
 using PormG.Models: ArrayField
+# #1033 — the SearchVectorField docstring's literal-db_default claim.
+using PormG.Models: SearchVectorField
 # #632 — the same bullet's `Decimal` rule, which needs the type to state its refusing half.
 import Decimals
 using PormG.QueryBuilder: bulk_insert, bulk_update
@@ -1564,6 +1566,24 @@ const DOCERR_CASES = [
         BackendCapabilityError,
         () -> PormG.Dialect.field_to_column("uid", UUIDField(db_default = (postgres = "gen_random_uuid()",)),
                                             DocErrMockSQLite()),
+    ),
+    # #1033. The *Column defaults* section's "A literal is a `default`, not a `db_default`" block, the
+    # upgrade entry and the SearchVectorField docstring all name the type a constant `db_default`
+    # raises at construction.
+    (
+        "schema_conventions.md + upgrading/ — a constant pinned db_default raises (#1033)",
+        FieldValidationError,
+        () -> IntegerField(db_default = (postgres = "0",)),
+    ),
+    (
+        "schema_conventions.md — a typed-literal db_default PostgreSQL stores as a constant raises (#1033)",
+        FieldValidationError,
+        () -> DateField(db_default = (postgres = "DATE '2024-01-01'",)),
+    ),
+    (
+        "src/models/fields.jl — SearchVectorField docstring: a literal db_default raises (#1033)",
+        FieldValidationError,
+        () -> SearchVectorField(null = true, db_default = (postgres = "''::tsvector",)),
     ),
     # #648. `fields.md`, `postgres.md` and `errors.md` all name the type a too-wide DecimalField
     # raises on SQLite. Driven one layer down, at the SQLite renderer every DDL path shares, the way

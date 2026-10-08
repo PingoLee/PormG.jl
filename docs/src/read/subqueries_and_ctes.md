@@ -260,7 +260,7 @@ query.values("surname", "latest_position" => Coalesce(Subquery(latest), 0))
 df = query |> DataFrame
 ```
 
-The one-argument functions take it the same way. Each driver's points in the standings, averaged over every race they appear in and rounded to one decimal place:
+The one-argument functions take it the same way. Each driver's points in the standings, averaged over every race they appear in and rounded to a whole number:
 
 ```julia
 using PormG.Functions: Avg, Round
@@ -271,7 +271,7 @@ avg_points.values("t" => Avg("points"))
 
 query = M.Driver.objects
 query.filter("driverid__@lte" => 3)
-query.values("surname", "avg_points" => Round(Subquery(avg_points), 1))
+query.values("surname", "avg_points" => Round(Subquery(avg_points)))
 df = query |> DataFrame
 ```
 

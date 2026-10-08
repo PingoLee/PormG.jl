@@ -414,7 +414,7 @@ PormG supports math through explicit function calls:
 | Function | Description | Example |
 | :--- | :--- | :--- |
 | `Abs("field")` | Absolute value | `Abs("points")` |
-| `Round(expr, n)` | Round to `n` decimal places | `Round(Value(10.556), 2)` |
+| `Round(expr, n)` | Round to `n` decimal places (to a whole number by default) | `Round("points")` |
 | `Floor("field")` | Floor (round down) | `Floor("points")` |
 | `Ceil("field")` | Ceiling (round up) | `Ceil("points")` |
 | `Sqrt("field")` | Square root | `Sqrt("driverid")` |
@@ -430,15 +430,51 @@ query = M.Driver.objects
 query.values(
     "driverid",
     "squared" => Power("driverid", 2),
-    "precise" => Round(Value(10.556), 2),
+    "rounded" => Round(Value(10.556)),        # 11 on both engines
     "abs_val" => Abs("number")
 )
 query.filter("driverid" => 1)
 df = query |> DataFrame
 ```
 
-!!! note
-    For cross-database compatibility, avoid examples that depend on ambiguous floating-point half-rounding behavior (e.g., rounding `0.5`).
+### Rounding to decimal places
+
+`Round(x)` gives the same whole number on PostgreSQL and SQLite. `Round(x, n)` with `n > 0` does not,
+for a value with more than `n` places: PostgreSQL renders `ROUND(x::numeric, n)`, which rounds the
+value's decimal form, and SQLite `ROUND(x, n)`, which rounds the binary double. Measured on
+PostgreSQL 16.15 and SQLite 3.45.1:
+
+| `Round(v, 2)` | PostgreSQL | SQLite |
+|---|---|---|
+| `2.675` | `2.68` | `2.67` |
+| `1.555` | `1.56` | `1.55` |
+| `1.005` | `1.01` | `1.0` |
+| a `numeric(10,3)` `2.675` | `2.68` | `2.67` (SQLite holds a REAL) |
+
+So `Round(x, n)` raises `QueryBuildError` when the query is built, on both engines, when `x` can carry
+more than `n` places: a float column, a float literal with more places, arithmetic over one, a
+function PostgreSQL computes as `numeric` (`Avg`, `Sqrt`, …), a `DecimalField` with more than `n`
+places, or text (#1044). An integer, a whole number, a `DecimalField` with at most `n` places and a
+literal that fits pass. An operand PormG cannot type (an untyped `Case`, a `Subquery`) passes too, as
+it does for the cast rules below, so rounding one to places is yours to check. A negative `n`
+raises `InvalidValueError` when the expression is built: SQLite takes it as 0 (`Round(125, -1)` is
+`125.0`) and PostgreSQL rounds to tens (`130`).
+
+To round a float to places, fetch it and round in Julia, which gives one answer whichever engine
+served the row. `RoundNearestTiesAway` rounds an exact half away from zero, as both engines' `round`
+does (Julia's default rounds it to even: `round(0.125; digits = 2)` is `0.12`). Julia's answer is
+its own and need not match either engine's old one: `2.675` gives `2.68`, as PostgreSQL did, and
+`1.005` gives `1.0`, as SQLite did:
+
+```julia
+# Round("points", 1) is refused: 2.675-style values would round differently on each engine.
+# Race 2, the 2009 Malaysian GP, was stopped early and scored half points.
+query = M.Result.objects
+query.filter("raceid" => 2)
+query.values("resultid", "points")
+df = query |> DataFrame
+df.points_1dp = round.(df.points, RoundNearestTiesAway; digits = 1)
+```
 
 ---
 
@@ -623,7 +659,7 @@ So PormG raises `QueryBuildError` when the query is built, on both engines, for:
   that can carry more than `s` digits after the point: a float column, a float literal with more
   than `s` places or more than 15 significant digits (PostgreSQL converts a float to `numeric` at
   15, so `12345678901234.56` is `12345678901234.6` there), a
-  function PostgreSQL computes as `numeric` (`Round(x, 2)` included), a decimal with more places
+  function PostgreSQL computes as `numeric` (`Round(x, d)` with `d` above `s` included), a decimal with more places
   than `s` or of unknown scale, and text, which PostgreSQL parses and rounds while SQLite keeps it
   (#1040). A JSON value counts as text: PostgreSQL casts the key's text, SQLite the number.
   `dec(p, s)` is the same type as `numeric(p, s)`. PostgreSQL rounds to the scale and SQLite reads the type name only, so a filter or a
@@ -637,7 +673,7 @@ To get an integer, say how to round first. `Round(x)`, `Floor(x)` and `Ceil(x)` 
 number on both engines for every stored value measured (PostgreSQL's `round` is the `numeric` one,
 half away from zero, as SQLite's is), so a cast over them passes. `Mod` of whole numbers and `+`,
 `-`, `*` of them pass too, since they have nothing to round. `Round(x, 2)` keeps a fraction, so a
-cast over it is refused. One caveat: PostgreSQL turns a float into `numeric` at 15 significant digits
+cast to an integer over it is refused (and over a float, `Round(x, 2)` is refused on its own, above). One caveat: PostgreSQL turns a float into `numeric` at 15 significant digits
 before it rounds, so a computed value a hair below a half (`2.4999999999999996`) can still round up
 there and down on SQLite. For
 text, the way out is the same as for `Concat`: a `Case` for a boolean, `ToChar` for a timestamp, and
@@ -646,9 +682,14 @@ Julia formatting for the rest.
 For a scaled `numeric`, no SQL rounding agrees beyond whole numbers. `Round(x, 2)` renders
 `ROUND(x::numeric, 2)` on PostgreSQL, which rounds the float's 15-digit decimal form, and
 `ROUND(x, 2)` on SQLite, which rounds the binary double, so `2.675`, `1.555` and `1.005` round up on
-one engine and down on the other. Cast to an unscaled `"numeric"` (or `DecimalField()`), which keeps
+one engine and down on the other, which is why `Round(x, 2)` over a float is refused on its own
+(#1044, *Rounding to decimal places* above). Cast to an unscaled `"numeric"` (or `DecimalField()`), which keeps
 the value on both engines; cast a whole number (`Cast(Round(x), "numeric(10,0)")`); or fetch the
-value and round it in Julia (`round(x; digits = 2)`).
+value and round it in Julia (`round(x, RoundNearestTiesAway; digits = 2)`). A `Round(x, d)` over
+an operand PormG types has at most `d` places once it renders, so a cast to a scale of at least `d`
+passes (over a `Subquery` or an untyped `Case` it stays refused):
+`Cast(Round("points", 2), "numeric(10,2)")` over `Constructor_standings.points`, a two-place
+`DecimalField`.
 
 A cast to any other type (`"numeric"`, `"double precision"`, `"date"`) is not checked: it is not a
 text conversion, and `Concat` refuses the result if you then use it as text.

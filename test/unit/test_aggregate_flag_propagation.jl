@@ -244,7 +244,8 @@ end
   arg_for = Dict(:Extract => "born", :ToChar => "born", :Lower => "surname", :Upper => "surname",
                  :Length => "surname", :Replace => "surname", :Trim => "surname",
                  :LTrim => "surname", :RTrim => "surname", :Concat => "surname",
-                 :Cast => "raceid")   # #1028: a float cast to an integer is refused
+                 :Cast => "raceid",   # #1028: a float cast to an integer is refused
+                 :Round => "raceid")  # #1044: a float rounded to places is refused
   for (backend, Model_) in _AGG_FLAG_MODELS
     for (name, build) in sort!(collect(_AGG_WRAPPERS), by = first)
       @testset "$backend — $name" begin

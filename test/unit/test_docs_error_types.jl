@@ -608,6 +608,23 @@ const DOCERR_CASES = [
             list(show_query = :dict),
     ),
     (
+        # #1044. `Round(x, n)` over an operand with more than `n` places rounds the decimal form on
+        # PostgreSQL and the binary double on SQLite; `Avg` is `numeric` on PostgreSQL, so it is
+        # refused once the query renders it. The same claim is in api.md and the `Round` docstring.
+        "read/functions_and_dates.md + api.md + Round docstring — Round(x, n) over a value with more places raises (#1044)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_SL.objects.
+            values("x" => PormG.Functions.Round(PormG.Functions.Avg("points"), 1)).
+            list(show_query = :dict),
+    ),
+    (
+        # #1044. A negative precision is SQLite's 0 and PostgreSQL's tens, so it is refused when the
+        # expression is built, whatever the operand.
+        "read/functions_and_dates.md + Round docstring — a negative Round precision raises (#1044)",
+        InvalidValueError,
+        () -> PormG.Functions.Round("points", -1),
+    ),
+    (
         # #859. `Coalesce`, `Greatest` and `Least` take two or more arguments; one argument is
         # refused when the expression is built (on SQLite it rendered the aggregate `MAX(x)`).
         "read/functions_and_dates.md — Greatest with fewer than two arguments raises (#859)",

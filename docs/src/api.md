@@ -335,7 +335,7 @@ df = M.Result.objects.values(
 | Function | Description |
 | :--- | :--- |
 | `Abs("field")` | Absolute value |
-| `Round("field", precision)` | Round to precision |
+| `Round("field", precision)` | Round to `precision` places; over a value with more places (a float, `Avg`, …) raises `QueryBuildError` (#1044) |
 | `Floor("field")` | Floor |
 | `Ceil("field")` | Ceiling |
 | `Sqrt("field")` | Square root |

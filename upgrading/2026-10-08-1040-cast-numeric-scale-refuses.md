@@ -23,7 +23,7 @@ unrounded ones on SQLite. Measured on PostgreSQL 16.15 and SQLite 3.45.1:
 Now refused, when the query is built, on both engines: a cast to `numeric(p, s)`, `decimal(p, s)`,
 `dec(p, s)` or `numeric(p)` of a float, a float literal with more than `s` places or more than 15
 significant digits (#1050 narrowed this from every non-whole literal), a function PostgreSQL computes as
-`numeric` (`Avg`, `Round(x, 2)`, …), a decimal with more places than `s` or of unknown scale, text,
+`numeric` (`Avg`, `Round(x, d)` with `d` above `s`, …), a decimal with more places than `s` or of unknown scale, text,
 or a JSON value (a whole document or a key lookup).
 
 Unchanged: an unscaled `"numeric"`/`"decimal"` or `DecimalField()` target, and an operand that has

@@ -242,12 +242,19 @@ const _ALIAS_UNSUPPORTED_OPERATORS = Dict("jcontains" => "@jcontains", "has_key"
                                           "contained_by" => "@contained_by",
                                           "overlap" => "@overlap",
                                           # #31: `@search` parses a text COLUMN, and an alias has no
-                                          # field to say it projects one.
+                                          # field to say it projects one. #1021: a `SearchVector`
+                                          # alias is the exception, and is routed before this guard
+                                          # (`_render_alias_search`).
                                           "search" => "@search",
                                           (op => "@$(op)" for op in NETWORK_LOOKUP_OPERATORS)...)
 function _guard_alias_clause_operator(v::SQLTypeOper, label::AbstractString)
   spelling = get(_ALIAS_UNSUPPORTED_OPERATORS, v.operator, nothing)
   spelling === nothing && return nothing
+  v.operator == "search" && throw(FilterError(
+    "The \e[31m@search\e[0m lookup is not supported on the projection alias \e[31m$(label)\e[0m: it " *
+    "searches a text column, or an alias that projects a SearchVector — " *
+    "\e[32mvalues(\"doc\" => SearchVector(\"forename\", \"surname\")).filter(\"doc__@search\" => \"senna\")\e[0m. " *
+    "Filter the underlying field instead (#1021)."))
   throw(FilterError(
     "The \e[31m$(spelling)\e[0m lookup is not supported on the projection alias " *
     "\e[31m$(label)\e[0m. It is available on a column — filter the underlying field instead, " *
@@ -662,6 +669,9 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   # is a home for it — see `_guard_window_alias_predicate`. First of the guards, so it refuses
   # before anything below resolves, renders or binds.
   _guard_window_alias_predicate(_projected_source(having_key, instruc), having_key[2], instruc)
+  # #1021: an alias projecting a `SearchVector` takes `@search` and nothing else.
+  searched = _render_alias_search(v, _projected_source(having_key, instruc), having_key[2], instruc)
+  searched === nothing || return searched
   # The guards run BEFORE the left-hand side is resolved. None depends on anything the render
   # produces, and `_alias_lhs` can bind (#595) — so refusing afterwards would file a binding
   # projection's operands into the clause's bucket and then throw them away. Waste rather than a
@@ -705,6 +715,36 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   # unknown-operator refusal that was missing here entirely.
   return _render_predicate(string(field), v.operator, placeholder, instruc;
                            expression = isnull_aggregate)
+end
+
+# #1021 — `values("doc" => SearchVector(…)).filter("doc__@search" => q)`, Django's multi-column search.
+# The vector renders again in the predicate's clause (it binds there, if it binds at all — a
+# `Value(…)` inside it), then the query: `<vector> @@ <query>`, in text order. A query written as a
+# String takes the vector's config, as `SearchRank`'s does; a sum of vectors with mixed configs has
+# none to lend it. `nothing` for an alias that is not a SearchVector, which the caller renders as it
+# always did — `@search` on one is refused by `_guard_alias_clause_operator`.
+#
+# An index serves this when it is declared on the same document: `Models.search_vector_expression`
+# with the vector's columns and config renders it.
+function _render_alias_search(v::SQLTypeOper, source, label::AbstractString, instruc::SQLInstruction)
+  (source isa SQLTypeField && _is_fts_node(source.field, "SEARCH_VECTOR")) || return nothing
+  vector = source.field
+  v.operator == "search" || throw(FilterError(
+    "The projection alias \e[31m$(label)\e[0m is a SearchVector, and the only lookup on it is " *
+    "\e[32m@search\e[0m: \e[32m\"$(label)__@search\" => SearchQuery(…)\e[0m. A tsvector has no order or " *
+    "equality worth filtering on (#1021)."))
+  instruc.connection isa PormGSQLite && throw(Dialect.fts_capability_error("The @search lookup"))
+  query = v.values
+  if query isa AbstractString
+    get(vector.kwargs, "mixed_config", false) === true && throw(FilterError(
+      "The SearchVector projected as \e[31m$(label)\e[0m adds vectors with different configs, so a " *
+      "query written as a String has no config to be parsed with. Pass a SearchQuery(text; config = …) (#1021)."))
+    query = SearchQuery(query; config = vector.kwargs["config"])
+  end
+  _is_fts_node(query, "SEARCH_QUERY") || throw(FilterError(
+    "The \e[31m@search\e[0m lookup takes the search text (a String) or a SearchQuery(...) (#1021)."))
+  rendered_vector = _render_fts_operand(vector, instruc; _as = source._as)
+  return Dialect.search(instruc.connection, rendered_vector, _render_fts_operand(query, instruc))
 end
 
 # #894 — an interval alias compared with a duration compares milliseconds on SQLite: the alias's own

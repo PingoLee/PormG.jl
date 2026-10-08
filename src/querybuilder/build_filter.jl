@@ -74,7 +74,7 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         # typed renderer would hand the node to a value formatter and die with a `MethodError`, as
         # this spelling always did, over a row alias (WHERE) and an aggregate one (HAVING) alike.
         # Same rule as `_row_alias_leaf` and `_get_having_query`, so both spellings agree.
-        if _expression_operand(v.values)
+        if _compared_operand(v)
           _guard_window_alias_predicate(source, having_key[2], instruc)   # #685, as the typed path does
           clause === :where && _guard_where_operand(v, instruc)   # #895: a row alias against an aggregate
           with_bucket(instruc, clause) do
@@ -642,7 +642,7 @@ _having_leaf_label(q::SQLTypeQor) = _having_leaf_label(first(q.or))
 # `_get_filter_query(::SQLTypeQ/::SQLTypeQor)`. The caller holds the `:having` context.
 function _get_having_query(v::SQLTypeOper, instruc::SQLInstruction)::String
   # #707: an expression on the right is a comparison, not a value to type — see the top-level branch.
-  if _expression_operand(v.values)
+  if _compared_operand(v)
     # #926 (review): a subquery on the right is evaluated after GROUP BY here — see `RenderScope`. The
     # caller set the `:group` phase; this names the alias the predicate compares.
     return with_scope(() -> _get_filter_query(v, instruc), instruc;
@@ -692,6 +692,11 @@ _get_where_query(v, instruc::SQLInstruction)::String = _get_filter_query(v, inst
 # one takes the WHERE renderer, not the typed binder, which handed the node to a value formatter.
 _expression_operand(x) = x isa Union{SQLTypeF,SQLTypeFunction,SQLTypeCTE,SQLTypeJoined,SQLObjectHandler,SubqueryObject}
 _expression_operand(x::AbstractVector) = any(_expression_operand, x)
+# Is the predicate a comparison between two expressions, which the WHERE path renders, rather than an
+# alias against a value, which `_render_alias_predicate` types? #1021: `@search`'s right-hand side is
+# a `SearchQuery` — the lookup's operand, not a second expression to compare — so a `"doc__@search"`
+# pair always takes the alias renderer, where `_render_alias_search` routes it.
+_compared_operand(v::SQLTypeOper) = v.operator != "search" && _expression_operand(v.values)
 
 # `(key, cached)` when `v` compares a projection alias the WHERE half of a split holds — a plain key
 # naming no field, memoized under its own output name. `_split_having` has already moved every
@@ -701,7 +706,7 @@ function _row_alias_leaf(v::SQLTypeOper, instruc::SQLInstruction)
   # An expression on the right is a column comparison, not a value to type: the WHERE path renders
   # it (`WHERE ("Tb"."points" = "Tb"."grid")`), and did before #707. Routing it here handed the
   # node to a value formatter — a `MethodError`, or worse, the node bound as a parameter.
-  _expression_operand(v.values) && return nothing
+  _compared_operand(v) && return nothing
   col = v.column
   _alias_filter_key(col, instruc) === nothing && return nothing
   key = memo_key(col)

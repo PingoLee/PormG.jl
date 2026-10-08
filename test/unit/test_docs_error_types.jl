@@ -1090,11 +1090,19 @@ const DOCERR_CASES = [
         () -> DOCERR_DRIVER_PG.objects.filter("surname__@search" => 1).
             list(show_query = :dict),
     ),
+    # #1021: projecting a SearchVector under a name became legal (the alias route), so the claim
+    # this row pins is now "wrapping or comparing one raises", not "projecting one raises".
     (
-        "read/full_text_search.md — a SearchVector projected raises QueryBuildError",
+        "read/full_text_search.md — a SearchVector wrapped in another function raises QueryBuildError",
         QueryBuildError,
-        () -> DOCERR_DRIVER_PG.objects.values("v" => SearchVector("surname")).
+        () -> DOCERR_DRIVER_PG.objects.values("v" => PormG.Functions.Lower(SearchVector("surname"))).
             list(show_query = :dict),
+    ),
+    (
+        "read/full_text_search.md — a SearchVector alias takes @search and no other lookup",
+        FilterError,
+        () -> DOCERR_DRIVER_PG.objects.values("doc" => SearchVector("surname")).
+            filter("doc__@gt" => 1).list(show_query = :dict),
     ),
     (
         "read/full_text_search.md — a SearchQuery on the right of another lookup raises FilterError",

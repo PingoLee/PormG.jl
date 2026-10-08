@@ -297,6 +297,13 @@ function _check_fts_render(v::SQLTypeFunction, instruc::SQLInstruction)
   name = get(_FTS_FUNCTION_NAMES, v.function_name, nothing)
   name === nothing && return nothing
   instruc.connection isa PormGSQLite && throw(Dialect.fts_capability_error(name))
+  # #1021: a SearchVector may be PROJECTED under a name (`build_select.jl` renders it past this
+  # check), so the message says what is left: comparing and wrapping.
+  v.function_name == "SEARCH_VECTOR" && throw(QueryBuildError(
+    "A SearchVector is an operand of the \e[4m\e[32m@search\e[0m lookup or SearchRank, not a value: " *
+    "it cannot be compared or wrapped in another function. Project it under a " *
+    "name and search that, \e[4m\e[32mvalues(\"doc\" => SearchVector(…)).filter(\"doc__@search\" => …)\e[0m, " *
+    "or score rows with \e[4m\e[32mSearchRank(SearchVector(…), SearchQuery(…))\e[0m (#1021)."))
   v.function_name in _FTS_OPERANDS && throw(QueryBuildError(
     "A $(name) is an operand of the \e[4m\e[32m@search\e[0m lookup, SearchRank or SearchHeadline, " *
     "not a value: it cannot be projected, compared or wrapped in another function. Search a column " *

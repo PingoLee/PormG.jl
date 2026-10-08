@@ -238,7 +238,14 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
           # both engines. `_operand_kind` cannot type `Max(F("start_at") - F("date"))` (arithmetic
           # answers `nothing`), so the kind is taken from the same call that renders, as above.
           interval = false
-          if original isa FObject
+          if _is_fts_node(original, "SEARCH_VECTOR")
+            # #1021: a `SearchVector` may be projected under a name — what `"doc__@search"` filters on,
+            # Django's annotate-then-filter — and reads as its `tsvector` text. Only HERE, at the top
+            # of the SELECT list, past `_check_fts_render`: wrapped, compared or ordered by, it is still
+            # refused, because every other site renders it through `_render_function_typed`.
+            instruc.connection isa PormGSQLite && throw(Dialect.fts_capability_error("SearchVector"))
+            v_copy.field = _render_fts_operand(original, instruc; _as = memo_name(v_copy))
+          elseif original isa FObject
             # #1004: the memo NAME, not the output name. A transform's `_as` (`raceid__year`) spells
             # the related path, and the column render below refreshes the field memo under whatever
             # it is handed — so `_as` filed the FK's own field under the path to the race's `year`.

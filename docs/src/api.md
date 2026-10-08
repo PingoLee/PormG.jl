@@ -369,7 +369,9 @@ df = M.Result.objects.values(
 Each raises `BackendCapabilityError` on SQLite when the query is built. The config, the search types
 and the options are in [Full-Text Search](read/full_text_search.md). To index a search, declare the
 expression with `Models.search_vector_expression(columns...; config)`, which returns the
-`to_tsvector(…)` text the query renders (see *Indexing* on that page).
+`to_tsvector(…)` text the query renders (see *Indexing* on that page). To search several columns,
+project a `SearchVector` under a name and filter it: `values("doc" => SearchVector("forename",
+"surname")).filter("doc__@search" => "lewis")`.
 
 An operand of `Coalesce`, `Greatest`, `Least`, `NullIf`, `Power`, `Mod` and `Concat` is read by its type. A string is a column path. A number, a `Bool`, or a date or time (`Date`, `DateTime`, `ZonedDateTime`, `Time`) is a literal that is bound as a parameter, so `Coalesce("points", 0)` means `Coalesce("points", Value(0))`. Wrap a string literal in `Value`, as in `NullIf("code", Value(""))`. Any other value raises `QueryBuildError` when the expression is built.
 

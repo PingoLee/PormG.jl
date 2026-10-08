@@ -283,8 +283,13 @@ M.Race.objects.
 - Weights: `SearchVector(col; weight = "A")` labels a column's words (`"A"`–`"D"`), `+` adds two
   vectors into one document, and `SearchRank(…; weights = [d, c, b, a])` scores the labels (D
   first, as PostgreSQL takes them). Summed vectors with different configs need a `SearchQuery`.
-- A `SearchVector` or `SearchQuery` is an operand, not a value. It cannot be projected, compared, or
-  wrapped in another function; `@search` takes a CharField/TextField column, not an alias.
+- To search several columns, project a vector and filter its name:
+  `values("doc" => SearchVector("forename", "surname"; config = "simple")).filter("doc__@search" => "lewis")`.
+  `@search` is the only lookup on such an alias, and the alias reads as the tsvector's text.
+- Otherwise a `SearchVector` or `SearchQuery` is an operand, not a value: it cannot be compared or
+  wrapped in another function, and `@search` takes a CharField/TextField column or a SearchVector alias.
+- Index a search with `Models.Index(expressions = (Models.search_vector_expression("surname"; config = "simple"),), method = "gin", name = …)`:
+  the helper returns the `to_tsvector(…)` the query renders (several columns: the SearchVector's).
 
 ## Aliases
 

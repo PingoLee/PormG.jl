@@ -261,6 +261,9 @@ function _register_types!(conn::Postgres.Connection)
   for oid in (869, 650)
     Postgres.register_type!(conn, oid, String)
   end
+  # tsvector (#1021): a projected `SearchVector` alias, later a `SearchVectorField` column. Its text,
+  # as LibPQ reads it, pinned for the reason above.
+  Postgres.register_type!(conn, 3614, String)
   return conn
 end
 

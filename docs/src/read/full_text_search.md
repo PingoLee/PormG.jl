@@ -174,6 +174,29 @@ M.Driver.objects.
 
 A comparison works too, with no alias: `filter(SearchRank(SearchVector("surname"), "senna") > 0.5)`.
 
+### Searching several columns
+
+To match a word in any of several columns, project a `SearchVector` under a name and filter that
+name with `@search`, as Django's annotate-then-filter does:
+
+```julia
+M.Driver.objects.
+    values("forename", "surname", "doc" => SearchVector("forename", "surname"; config = "simple")).
+    filter("doc__@search" => "lewis") |> DataFrame
+#  Row │ forename  surname      doc
+# ─────┼──────────────────────────────────────────────
+#    1 │ Lewis     Hamilton     'hamilton':2 'lewis':1
+#    2 │ Jackie    Lewis        'jackie':1 'lewis':2
+#    3 │ Stuart    Lewis-Evans  'evans':4 'lewis':3 'lewis-evans':2 'stuart':1
+# renders:  WHERE to_tsvector('simple'::regconfig, COALESCE(("Tb"."forename")::text, '') || ' ' ||
+#                 COALESCE(("Tb"."surname")::text, '')) @@ plainto_tsquery('simple'::regconfig, $1::text)
+```
+
+The alias reads as the `tsvector`'s text, a `String`. A query written as a String takes the
+vector's configuration, as in `SearchRank`. `@search` is the only lookup on such an alias, and any
+other raises `FilterError`. `@search` on an alias that is not a `SearchVector` raises `FilterError`
+too. Weighted and summed vectors work here as well.
+
 ### Weights
 
 A match in one column can count for more than a match in another. Label each column's words with a
@@ -280,6 +303,8 @@ M.Driver.objects.filter("surname__@search" => SearchQuery("senna"; config = "sim
 | :--- | :--- |
 | `"col__@search" => SearchQuery(…; config = "cfg")` | `search_vector_expression("col"; config = "cfg")` |
 | `"col__@search" => "text"` (no configuration) | none: one-argument `to_tsvector` depends on a server setting, so PostgreSQL refuses to index it |
+| `"doc__@search"` on `"doc" => SearchVector("a", "b"; config = "cfg")` | `search_vector_expression("a", "b"; config = "cfg")` |
+| the same with `weight = "A"` | `search_vector_expression("a", "b"; config = "cfg", weight = "A")` |
 
 The second row is the reason to always pass a configuration on a large table. The configuration you
 give the helper must be the query's. Its columns are database column names, a field's `db_column`
@@ -293,9 +318,11 @@ keeps, so filter with an indexed `@search` first and rank or headline what is le
 
 These are deliberate for now. Each is refused with a typed error, not run as something else:
 
-- **A `SearchVector` or `SearchQuery` is not a value.** Projecting one, comparing it, or wrapping it
-  in another function raises `QueryBuildError`. Putting one on the right of any lookup but `@search`
-  raises `FilterError`. Neither has a Julia reading yet.
+- **A `SearchVector` or `SearchQuery` is not a value.** A `SearchVector` may be projected under a
+  name (above). Otherwise, projecting either, comparing it, or wrapping it in another function raises
+  `QueryBuildError`, and putting one on the right of any lookup but `@search` raises `FilterError`.
+- **A single-column `SearchVector` alias is not the lookup's expression.** `SearchVector("surname")`
+  is `COALESCE`d and cast, so an index on `search_vector_expression("surname")` serves
+  `"surname__@search"` but not that alias. Search the column itself.
 - **No stored `tsvector` column.** A model has no `SearchVectorField` yet, so a document is always
   computed from its text columns. Use an expression index (above) to make that fast.
-- **`@search` on a projection alias** raises `FilterError`. Search the column itself.

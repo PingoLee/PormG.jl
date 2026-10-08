@@ -301,7 +301,6 @@ end
   @testset "a SearchVector or SearchQuery used as a value raises QueryBuildError" begin
     sv, sq = SearchVector("surname"), SearchQuery("senna")
     spellings = (
-      () -> _q31(; vals = Any["driverid", "v" => sv]),
       () -> _q31(; vals = Any["driverid", "q" => sq]),
       () -> _q31(; vals = Any["driverid", "x" => Lower(sq)]),
       () -> _q31(; vals = Any["driverid", "x" => Coalesce(sv, Value(""))]),
@@ -617,5 +616,81 @@ end
     # The integer bitwise operators are untouched.
     r = _q31(; vals = Any["driverid", "m" => PormG.F("number") & 3])
     @test occursin("&", r[:sql_text]) && !occursin("&&", r[:sql_text])
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # @search on a projection alias: values("doc" => SearchVector(…)).filter("doc__@search" => q)
+  # Django's multi-column search. The vector is projected (its tsvector text) and rendered again in
+  # WHERE, then the query: `<vector> @@ <query>`. A String query takes the vector's config.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a SearchVector alias is projected, and @search on it renders vector @@ query" begin
+    vec = SearchVector("forename", "surname"; config = "simple")
+    r = _q31("doc__@search" => "senna"; vals = Any["driverid", "doc" => vec])
+    doc = "to_tsvector('simple'::regconfig, COALESCE((\"Tb\".\"forename\")::text, '') || ' ' || " *
+          "COALESCE((\"Tb\".\"surname\")::text, ''))"
+    @test occursin("$(doc) as \"doc\"", r[:sql_text])
+    @test occursin("WHERE $(doc) @@ plainto_tsquery('simple'::regconfig, \$1::text)", r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna"])
+    # The index helper's text for the same columns and config is the predicate's document.
+    @test Models.search_vector_expression("forename", "surname"; config = "simple") ==
+          replace(doc, r"\"Tb\"\." => "")
+    # A projected vector with no filter on it builds too, and reads as its text.
+    r = _q31(; vals = Any["driverid", "doc" => vec])
+    @test occursin("$(doc) as \"doc\"", r[:sql_text])
+  end
+
+  @testset "alias @search: a SearchQuery, a combination, a weighted sum, a binding operand, inside Q" begin
+    # A SearchQuery keeps its own parser and config; the vector keeps its own.
+    q = SearchQuery("senna"; config = "english", search_type = "websearch")
+    r = _q31("doc__@search" => q; vals = Any["driverid", "doc" => SearchVector("surname"; config = "simple")])
+    @test occursin("WHERE to_tsvector('simple'::regconfig, COALESCE((\"Tb\".\"surname\")::text, '')) @@ " *
+                   "websearch_to_tsquery('english'::regconfig, \$1::text)", r[:sql_text])
+    # A combined query and a weighted sum of vectors.
+    both = SearchQuery("senna"; config = "simple") | SearchQuery("prost"; config = "simple")
+    sum = SearchVector("surname"; config = "simple", weight = "A") + SearchVector("forename"; config = "simple", weight = "D")
+    r = _q31("doc__@search" => both; vals = Any["driverid", "doc" => sum])
+    @test occursin("WHERE (setweight(", r[:sql_text])
+    @test occursin("'D')) @@ (plainto_tsquery('simple'::regconfig, \$1::text) || plainto_tsquery('simple'::regconfig, \$2::text))",
+                   r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna", "prost"])
+    # A vector whose operand binds: it binds once in SELECT and again in WHERE, ahead of the query.
+    vec = SearchVector("forename", Concat("surname", Value(" jr")); config = "simple")
+    r = _q31("doc__@search" => "senna"; vals = Any["driverid", "doc" => vec])
+    _assert_pg_text_order31(r, Any[" jr", " jr", "senna"])
+    # Inside Q, beside a column predicate, in text order.
+    r = _q31(PormG.Q("doc__@search" => "senna", "forename" => "Bruno");
+             vals = Any["driverid", "doc" => SearchVector("surname"; config = "simple")])
+    @test occursin("@@ plainto_tsquery('simple'::regconfig, \$1::text)", r[:sql_text])
+    _assert_pg_text_order31(r, Any["senna", "Bruno"])
+  end
+
+  @testset "a SearchVector alias takes @search and nothing else; other aliases still refuse @search" begin
+    vals = Any["driverid", "doc" => SearchVector("surname")]
+    for pair in ("doc__@gt" => 1, "doc" => "senna", "doc__@icontains" => "senna", "doc__@isnull" => true)
+      e = _err31(() -> _q31(pair; vals = vals))
+      @test e isa FilterError
+      @test occursin("the only lookup on it is @search", _plain31(sprint(showerror, e)))
+    end
+    # @search on an alias that is not a SearchVector, in words that name the SearchVector route.
+    msg = _msg31(() -> _q31("n__@search" => "senna"; vals = Any["driverid", "n" => Lower("surname")]))
+    @test occursin("an alias that projects a SearchVector", msg)
+    # A sum with mixed configs has no config for a String query.
+    mixed = SearchVector("forename"; config = "simple") + SearchVector("surname"; config = "english")
+    e = _err31(() -> _q31("doc__@search" => "senna"; vals = Any["driverid", "doc" => mixed]))
+    @test e isa FilterError
+    @test occursin("different configs", _plain31(sprint(showerror, e)))
+    # Projected is the one new use: wrapped or compared, it is still not a value.
+    for f in (() -> _q31(; vals = Any["driverid", "x" => Coalesce(SearchVector("surname"), Value(""))]),
+              () -> _q31(SearchVector("surname") == "x"))
+      e = _err31(f)
+      @test e isa QueryBuildError
+      @test occursin("cannot be compared or wrapped", _plain31(sprint(showerror, e)))
+    end
+    # Beside an aggregate it is a grouping key, named by its position — the projection is not
+    # rendered again, so nothing re-checks it there (tsvector has equality, so PostgreSQL groups it).
+    r = _q31(; vals = Any["doc" => SearchVector("surname"), "n" => PormG.Functions.Count("driverid")])
+    @test occursin("GROUP BY 1", r[:sql_text])
+    # On SQLite the projection and the alias search name PostgreSQL.
+    @test _err31(() -> _q31("doc__@search" => "x"; vals = vals, conn = _FTS_SL)) isa BackendCapabilityError
   end
 end

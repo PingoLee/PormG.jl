@@ -182,6 +182,24 @@ _fts31_err(f) = try f(); nothing catch e; e end
         end
 
         # ─────────────────────────────────────────────────────────────────────
+        # @search on a SearchVector alias (#1021): a word in either column
+        # "lewis" is a forename for one driver and a surname for others, so the two-column document
+        # finds both kinds, exactly the drivers whose forename or surname tokenizes to it.
+        # ─────────────────────────────────────────────────────────────────────
+        @testset "@search on a SearchVector alias finds a word in any of its columns" begin
+            names = M.Driver.objects.values("driverid", "forename", "surname").list()
+            expected = Set(r["driverid"] for r in names
+                           if "lewis" in _fts31_words(r["forename"]) || "lewis" in _fts31_words(r["surname"]))
+            @test length(expected) >= 2
+            rows = M.Driver.objects.
+                values("driverid", "doc" => SearchVector("forename", "surname"; config = "simple")).
+                filter("doc__@search" => "lewis").
+                list()
+            @test ids(rows, "driverid") == expected
+            @test all(r -> r["doc"] isa String && occursin("'lewis'", r["doc"]), rows)
+        end
+
+        # ─────────────────────────────────────────────────────────────────────
         # SearchHeadline: the markup, and options that survive PostgreSQL's option parser
         # ─────────────────────────────────────────────────────────────────────
         @testset "SearchHeadline marks the matched words" begin
@@ -217,13 +235,19 @@ _fts31_err(f) = try f(); nothing catch e; e end
         # same implicit cast in the index and in the query, so the two expressions still match. The
         # index is declared through `Models.search_vector_expression` (#1021), the text the lookup
         # itself renders, rather than a hand-typed copy of it.
-        @testset "a GIN index from search_vector_expression(\"body\") serves @search" begin
+        #
+        # #1021: a second index, on the two-column document, serves `@search` on a SearchVector alias —
+        # the same helper, the same text the alias predicate renders.
+        @testset "GIN indexes from search_vector_expression serve @search, on a column and on an alias" begin
             drop() = try; PormG.ConnectionPool.fetch(pool, Dialect.drop_table(pool, FTS31_TABLE)); catch; end
             model = Models.Model(FTS31_TABLE;
                 id   = Models.IDField(),
                 body = Models.CharField(max_length = 200),
+                title = Models.CharField(max_length = 100, null = true),
                 indexes = [Models.Index(expressions = (Models.search_vector_expression("body"; config = "simple"),), method = "gin",
-                                        name = "pormg_fts31_body_tsv")])
+                                        name = "pormg_fts31_body_tsv"),
+                           Models.Index(expressions = (Models.search_vector_expression("title", "body"; config = "simple"),),
+                                        method = "gin", name = "pormg_fts31_doc_tsv")])
             model.connect_key = PORMG_DB_FOLDER
             schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
                 Symbol(FTS31_TABLE) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => model, :exist => false))
@@ -242,8 +266,9 @@ _fts31_err(f) = try f(); nothing catch e; e end
                 finally
                     finalize_transaction_connection!(pool, ddl_conn)
                 end
-                for body in ("Ayrton Senna wins at Monaco", "Alain Prost wins at Imola", "Senna on pole")
-                    model.objects.create("body" => body)
+                for (title, body) in (("Monaco", "Ayrton Senna wins at Monaco"), ("Senna", "Alain Prost wins at Imola"),
+                                      (nothing, "Senna on pole"), ("Imola", "Alain Prost on pole"))
+                    model.objects.create("body" => body, "title" => title)
                 end
                 q = model.objects
                 q.filter("body__@search" => SearchQuery("senna"; config = "simple")).values("id")
@@ -273,6 +298,23 @@ _fts31_err(f) = try f(); nothing catch e; e end
                 bare = model.objects
                 bare.filter("body__@search" => "senna").values("id")
                 @test !occursin("pormg_fts31_body_tsv", plan_of(bare))
+
+                # The alias route: three rows have "senna" in the title or the body, one of them
+                # (title NULL) only through the COALESCE. The projected document reads as its text.
+                doc = model.objects
+                doc.values("id", "doc" => SearchVector("title", "body"; config = "simple")).
+                    filter("doc__@search" => "senna")
+                rows = doc.list()
+                @test length(rows) == 3
+                @test all(r -> r["doc"] isa String && occursin("'senna'", r["doc"]), rows)
+                @test occursin("pormg_fts31_doc_tsv", plan_of(doc))
+                # The control: the same columns in the other order are another document, and another
+                # expression, so the index does not serve it.
+                swapped = model.objects
+                swapped.values("id", "doc" => SearchVector("body", "title"; config = "simple")).
+                    filter("doc__@search" => "senna")
+                @test length(swapped.list()) == 3
+                @test !occursin("pormg_fts31_doc_tsv", plan_of(swapped))
             finally
                 drop()
             end

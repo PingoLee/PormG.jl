@@ -1667,25 +1667,35 @@ SearchHeadline(expression, query; kwargs...) = throw(QueryBuildError(
   "SearchHeadline marks up a column path (a string) or an expression (#31)."))
 
 
-MONTH(x) = Extract(x, "MONTH", formatter = Models.format_number_sql)
-YEAR(x) = Extract(x, "YEAR", formatter = Models.format_number_sql)
-DAY(x) = Extract(x, "DAY", formatter = Models.format_number_sql)
+# #955: every node the `__@` ladder builds carries the transform's own name under `"transform"`. Two
+# readers need it and neither can recover it from the node: the field-type gate
+# (`_check_transform_operand`), which must not touch a public `Extract`/`ToChar` building the same
+# `EXTRACT` node — `Extract(duration, "epoch")` is legitimate — and the refusal message, which names
+# the caller's `@hour` rather than the `EXTRACT` the node renders. `Dialect` never reads the key.
+function _transform(f::FObject, key::String)
+  f.kwargs["transform"] = key
+  return f
+end
+MONTH(x) = _transform(Extract(x, "MONTH", formatter = Models.format_number_sql), "month")
+YEAR(x) = _transform(Extract(x, "YEAR", formatter = Models.format_number_sql), "year")
+DAY(x) = _transform(Extract(x, "DAY", formatter = Models.format_number_sql), "day")
 # #636: the time parts. `Dialect.EXTRACT` already renders all three on both engines — PostgreSQL
 # `trunc`s `SECOND` so a fractional timestamp agrees with SQLite's `%S` — so only the range-checking
 # formatter is new: a value no clock can show is refused rather than silently matching nothing (#579).
-HOUR(x) = Extract(x, "HOUR", formatter = Models.format_hour_sql)
-MINUTE(x) = Extract(x, "MINUTE", formatter = Models.format_minute_sql)
-SECOND(x) = Extract(x, "SECOND", formatter = Models.format_second_sql)
+HOUR(x) = _transform(Extract(x, "HOUR", formatter = Models.format_hour_sql), "hour")
+MINUTE(x) = _transform(Extract(x, "MINUTE", formatter = Models.format_minute_sql), "minute")
+SECOND(x) = _transform(Extract(x, "SECOND", formatter = Models.format_second_sql), "second")
 # #636: the week parts, on Django's numbering. Three are PostgreSQL `EXTRACT` fields with that exact
 # numbering (`WEEK` and `ISOYEAR` are ISO-8601, `ISODOW` is 1 = Monday), so they go through `Extract`
 # and `Dialect.EXTRACT` gives SQLite the matching arithmetic. `week_day` (1 = Sunday) is no EXTRACT
 # field on either engine — `DOW` is 0-based — so it is a node of its own, like `QUARTER` below.
-WEEK(x) = Extract(x, "WEEK", formatter = Models.format_week_sql)
-ISO_YEAR(x) = Extract(x, "ISOYEAR", formatter = Models.format_number_sql)
-ISO_WEEK_DAY(x) = Extract(x, "ISODOW", formatter = Models.format_week_day_sql)
+WEEK(x) = _transform(Extract(x, "WEEK", formatter = Models.format_week_sql), "week")
+ISO_YEAR(x) = _transform(Extract(x, "ISOYEAR", formatter = Models.format_number_sql), "iso_year")
+ISO_WEEK_DAY(x) = _transform(Extract(x, "ISODOW", formatter = Models.format_week_day_sql), "iso_week_day")
 WEEK_DAY(x) = (y = _transform_operand("WEEK_DAY", x);
-               FObject(function_name = "WEEK_DAY", column = y, aggregate = _any_agg(y), formatter = Models.format_week_day_sql))
-Y_M(x) = ToChar(x, "YYYY-MM", formatter = Models.format_yyyy_mm)
+               _transform(FObject(function_name = "WEEK_DAY", column = y, aggregate = _any_agg(y),
+                                  formatter = Models.format_week_day_sql), "week_day"))
+Y_M(x) = _transform(ToChar(x, "YYYY-MM", formatter = Models.format_yyyy_mm), "yyyy_mm")
 # #562: `@date` no longer goes through `ToChar`. A `ToChar` node carries the format mask as SQL
 # text, which forces one spelling on both engines; `DATE` is the one transform where the correct
 # spelling differs (`(col)::date` on PostgreSQL, `strftime` on SQLite — see `Dialect.DATE`). Naming
@@ -1709,7 +1719,7 @@ function _transform_operand(fn::String, x)
     "— \e[4m\e[32m\"col__@$(lowercase(fn))\"\e[0m (#878)."))
 end
 DATE(x) = (y = _transform_operand("DATE", x);
-           FObject(function_name = "DATE", column = y, aggregate = _any_agg(y), formatter = Models.format_date_sql))
+           _transform(FObject(function_name = "DATE", column = y, aggregate = _any_agg(y), formatter = Models.format_date_sql), "date"))
 # Same that function CAST in django ORM
 # # relatorio = relatorio.annotate(quarter=functions.Concat(functions.Cast(f'{data}__year', CharField()), Value('-Q'), Case(
 # # 					When(**{ f'{data}__month__lte': 4 }, then=Value('1')),
@@ -1749,11 +1759,11 @@ function _null_propagating(f::FObject)
 end
 function Y_QUAD(x)
   return _null_propagating(Concat([
-                Cast(YEAR(x), CharField()), 
+                Cast(_transform(YEAR(x), "yyyy_quad"), CharField()), 
                 Value("-Q"), 
-                Case([When(OP(MONTH(x), "<=", 4), then = 1), 
-                      When(OP(MONTH(x), "<=", 8), then = 2), 
-                      When(OP(MONTH(x), "<=", 12), then = 3)
+                Case([When(OP(_transform(MONTH(x), "yyyy_quad"), "<=", 4), then = 1), 
+                      When(OP(_transform(MONTH(x), "yyyy_quad"), "<=", 8), then = 2), 
+                      When(OP(_transform(MONTH(x), "yyyy_quad"), "<=", 12), then = 3)
                       ], 
                       output_field = CharField())
                 ], 
@@ -1762,12 +1772,12 @@ function Y_QUAD(x)
 end
 function Y_Q(x)
   return _null_propagating(Concat([
-                Cast(YEAR(x), CharField()), 
+                Cast(_transform(YEAR(x), "yyyy_q"), CharField()), 
                 Value("-Q"), 
-                Case([When(OP(MONTH(x), "<=", 3), then = 1), 
-                      When(OP(MONTH(x), "<=", 6), then = 2), 
-                      When(OP(MONTH(x), "<=", 9), then = 3), 
-                      When(OP(MONTH(x), "<=", 12), then = 4)
+                Case([When(OP(_transform(MONTH(x), "yyyy_q"), "<=", 3), then = 1), 
+                      When(OP(_transform(MONTH(x), "yyyy_q"), "<=", 6), then = 2), 
+                      When(OP(_transform(MONTH(x), "yyyy_q"), "<=", 9), then = 3), 
+                      When(OP(_transform(MONTH(x), "yyyy_q"), "<=", 12), then = 4)
                       ], 
                       output_field = CharField())
                 ],
@@ -1781,9 +1791,9 @@ end
 # string and matched nothing instead of raising.
 # #878: through `_transform_operand` (above `DATE`), for the same reason.
 QUARTER(x) = (y = _transform_operand("QUARTER", x);
-              FObject(function_name = "QUARTER", column = y, aggregate = _any_agg(y), formatter = Models.format_quarter_sql))
+              _transform(FObject(function_name = "QUARTER", column = y, aggregate = _any_agg(y), formatter = Models.format_quarter_sql), "quarter"))
 QUADRIMESTER(x) = (y = _transform_operand("QUADRIMESTER", x);
-                   FObject(function_name = "QUADRIMESTER", column = y, aggregate = _any_agg(y), formatter = Models.format_quadrimester_sql))
+                   _transform(FObject(function_name = "QUADRIMESTER", column = y, aggregate = _any_agg(y), formatter = Models.format_quadrimester_sql), "quadrimester"))
 # #28: `@len`, an `ArrayField`'s element count (`Dialect.ARRAY_LEN`). A count, so its right-hand side
 # is a number. Unlike the date parts it is checked against its operand's type when it renders
 # (`_get_select_query(::FObject)`): `cardinality` over a column that is not an array is an error only

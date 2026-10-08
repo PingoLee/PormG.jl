@@ -141,18 +141,28 @@ Each part validates its comparison value the same way `@quarter` does. An hour o
 minute or second outside `0`–`59`, a fraction, or a value that is not a number raises `InvalidValueError`,
 instead of building SQL that silently matches nothing.
 
-!!! warning "Time zones"
-    On SQLite a `DateTimeField` is stored in UTC, so `@hour` is the UTC hour. On PostgreSQL a
-    `DateTimeField` is a `timestamptz` by default, and `EXTRACT` reads it in the connection's
-    **session** time zone, which PormG does not set. The two engines agree only when that session
-    time zone is UTC. A `DateTimeField(type="TIMESTAMP")` and a `TimeField` carry no time zone, so
-    they return the stored wall-clock value on both engines. `@date` and `@day` share this caveat
-    near midnight.
+!!! note "Transforms read a timestamp in UTC"
+    Every transform reads a `DateTimeField` in **UTC**, on both engines. SQLite stores the
+    timestamp in UTC. On PostgreSQL a `DateTimeField` is a `timestamptz` by default, read in the
+    connection's session time zone, and both PostgreSQL drivers open every connection with
+    `TimeZone=UTC`. So `start_at__@hour` is the UTC hour, and `@date` and `@day` are the UTC day.
+    A `DateTimeField(type="TIMESTAMP")` and a `TimeField` carry no time zone, so they return the
+    stored wall-clock value on both engines.
+
+    Do not add `-c TimeZone=…` to the connection's `options`. PostgreSQL would then read every
+    `timestamptz` in that zone, and `@hour`, `@date`, `@day` and `ToChar` would return different
+    values from SQLite. With the `LibPQ` driver, **any** `options=` in the connection string
+    replaces the driver's own session settings, even one that only sets `search_path`. If you
+    need `options`, start it with all three:
+    `-c DateStyle=ISO,YMD -c IntervalStyle=iso_8601 -c TimeZone=UTC`. Without the first two,
+    reading dates and `DurationField` values breaks as well. The `Postgres` driver keeps its own
+    settings and appends your `options` after them. The `time_zone` setting in `connection.yml` does not change this; it only
+    sets the clock for `auto_now` / `auto_now_add` values.
 
 !!! note "A plain `DateField` has no time of day"
-    `@hour`, `@minute` and `@second` are meant for a `DateTimeField` or a `TimeField`. On a
-    `DateField`, SQLite returns `0` while PostgreSQL rejects the query, so do not rely on either
-    result.
+    `@hour`, `@minute` and `@second` read a `DateTimeField` or a `TimeField`. On a `DateField`
+    they raise `QueryBuildError` when the query is built — see
+    [Which columns a transform reads](#Which-columns-a-transform-reads).
 
 ### Weeks (`@week`, `@week_day`, `@iso_week_day`, `@iso_year`)
 
@@ -189,6 +199,37 @@ q.order_by("week")
 
 A week outside `1`–`53`, a day outside `1`–`7`, a fraction, or a value that is not a number raises
 `InvalidValueError`, the same as the other period transforms.
+
+### Which columns a transform reads
+
+Each transform checks its column when the query is built, in `values()`, `filter()` and
+`order_by()` alike:
+
+| Transforms | Column |
+| :--- | :--- |
+| `@hour`, `@minute`, `@second` | a `DateTimeField` or a `TimeField` |
+| every other date transform — `@year`, `@month`, `@day`, `@date`, `@quarter`, `@quadrimester`, the week parts and the `@yyyy_*` labels | a `DateField` or a `DateTimeField` |
+
+Any other model field raises `QueryBuildError` naming the column and its type. Over text or a
+number that SQL used to fail on PostgreSQL, while SQLite read whatever the column's text happened
+to hold, so a date stored in a `CharField` worked there and nowhere else. A `DurationField` is
+refused too: PostgreSQL extracts from an interval, but SQLite reads its stored text as a clock,
+so the engines disagreed. `Extract` (below) still reads a duration on PostgreSQL.
+
+```julia
+M.Driver.objects.filter("surname__@month" => 3)   # QueryBuildError: `surname` is a CharField
+M.Race.objects.values("h" => "date__@hour")       # QueryBuildError: a DateField has no time of day
+```
+
+The check covers columns PormG can name a field for: a model field, or one reached through a
+join (`"raceid__date__@week"`). A column of unknown type, such as an expression or a subquery, is
+passed through as written. A relation is passed through too, because its value is the related
+row's key. The public `Extract` and `ToChar` functions are not
+transforms and are not checked: `Extract("duration", "epoch")` on a `DurationField` is valid
+PostgreSQL.
+
+A period transform also refuses a `Bool` value. `"start_at__@hour" => true` raises
+`InvalidValueError` rather than meaning `1`.
 
 ### Grouped Date Query
 
@@ -850,7 +891,8 @@ query.list(:dict)   # [Dict(:start => "2009-03-29T06:00:00.000")]
     A format outside the table is passed to `to_char` as written — a native template such as
     `"HH12:MI AM"` works on PostgreSQL — and raises `BackendCapabilityError` on SQLite, naming
     the supported formats. On PostgreSQL `to_char` renders a `timestamptz` in the session time
-    zone; keep the session in UTC for the two engines to agree on the hour.
+    zone, which PormG opens in UTC. Do not override it with `-c TimeZone=…` in the connection's
+    `options`, or the two engines will disagree on the hour.
 
 ---
 

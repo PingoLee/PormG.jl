@@ -62,6 +62,15 @@ Tlp_row = Models.Model("tlp_row",
   note = Models.CharField(null = true),
 )
 
+# #955: the column kinds the field-type gate tells apart beyond a date and a timestamp — a time of
+# day, a duration (which a public `Extract` may read), and a relation to `Tlp_row`.
+Tlp_clock = Models.Model("tlp_clock",
+  id    = Models.IDField(),
+  clock = Models.TimeField(null = true),
+  span  = Models.DurationField(null = true),
+  rowid = Models.ForeignKey(Tlp_row, pk_field = "id", on_delete = "CASCADE"),
+)
+
 PormG.Models.set_models(@__MODULE__, "tlp_mock")
 end
 
@@ -79,6 +88,11 @@ const _TLP_BACKENDS = (("PostgreSQL", _TLP_PG), ("SQLite", _TLP_SL))
 # transform joins the loops by itself.
 const _TLP_DATE_TRANSFORMS = sort(filter(!=("len"), collect(keys(PormG.PormGtransform))))
 
+# Since #955 a time-of-day transform over a plain `DateField` is refused when the query is built — a
+# date has no hour — so the loops that run every transform over both columns skip those pairs. The
+# refusal itself is asserted in the #955 testset below; every other pair still runs on both columns.
+_tlp_reads(col, key) = !(col == "seen" && key in ("hour", "minute", "second"))
+
 # The projection through each spelling, aliased identically so only the EXPRESSION can differ.
 _tlp_string_route(col, key, conn) =
   _tlp_sql((q = TLP.Tlp_row.objects; q.values("x" => "$(col)__@$(key)"); q); conn = conn)
@@ -94,6 +108,7 @@ _tlp_f_route(col, key, conn) =
   for (backend, conn) in _TLP_BACKENDS
     for key in _TLP_DATE_TRANSFORMS
       for col in ("seen", "ts")
+        _tlp_reads(col, key) || continue
         string_sql = _tlp_string_route(col, key, conn)
         f_sql      = _tlp_f_route(col, key, conn)
         @test string_sql == f_sql
@@ -521,6 +536,7 @@ const _TLP_843_CTORS = (
 @testset "#843: a transform in a function's string operand renders like its F spelling" begin
   for (backend, conn) in _TLP_BACKENDS, (name, ctor) in _TLP_843_CTORS
     for key in _TLP_DATE_TRANSFORMS, col in ("seen", "ts")
+      _tlp_reads(col, key) || continue
       path = "$(col)__@$(key)"
       a = TLP.Tlp_row.objects; a.values("x" => ctor(path))
       b = TLP.Tlp_row.objects; b.values("x" => ctor(F(path)))
@@ -804,6 +820,7 @@ _tlp_972_spellings = (
 # #972 refused `@isnull` after them until then.
 @testset "#972: @isnull after a transform renders IS [NOT] NULL and binds nothing" begin
   for (backend, conn) in _TLP_BACKENDS, key in _TLP_DATE_TRANSFORMS, col in ("seen", "ts")
+    _tlp_reads(col, key) || continue
     lhs, lhs_params = _tlp_transform_lhs(col, key, conn)
     for (spelling, filter!, where) in _tlp_972_spellings, (polarity, tail) in ((true, "IS NULL"), (false, "IS NOT NULL"))
       @testset "$backend $(col)__@$(key) $spelling $polarity" begin
@@ -832,6 +849,7 @@ end
                   key in _TLP_LABEL_TRANSFORMS ? (["2020-Q1", "2020-Q2"], ["2020-Q1", "2020-Q2"]) :
                   ([1, 3], [1, 3])
   for (backend, conn) in _TLP_BACKENDS, key in _TLP_DATE_TRANSFORMS, col in ("seen", "ts")
+    _tlp_reads(col, key) || continue
     lhs, lhs_params = _tlp_transform_lhs(col, key, conn)
     given, bound = operands(key)
     n = length(lhs_params)
@@ -940,4 +958,105 @@ end
   nested = (q = TLP.Tlp_row.objects;
             q.values("x" => Fn.Case(Fn.When("note__@isnull" => false, then = Fn.Concat("note", Fn.Value("!"))))); q)
   @test occursin("COALESCE(\"Tb\".\"note\", '') ||", _tlp_sql(nested; conn = _TLP_SL))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #955: a date or time transform refuses a column it cannot read, when the query is built.
+# Before, nothing checked: `"note__@month"` built and failed (or matched nothing) only at the
+# database, and `@hour` on a plain `DateField` answered `0` on SQLite while PostgreSQL rejected it.
+# The gate sits where every position renders a function — a projection, a filter, an ORDER BY — and
+# fails OPEN: a column it cannot name a field for passes, and so does a relation, and so does the
+# public `Extract`, which builds the same node but is not a transform.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#955: a transform over a column of the wrong type is refused at build time" begin
+  plain(e) = replace(PormG.error_message(e), r"\e\[[0-9;]*m" => "")
+  refused(build, conn) = (try _tlp_sql(build(); conn = conn); nothing catch e; e end)
+  for (backend, conn) in _TLP_BACKENDS
+    @testset "$backend" begin
+      # A text column under a date part, in every position and through both spellings.
+      for build in (() -> (q = TLP.Tlp_row.objects; q.values("x" => "note__@month"); q),
+                    () -> (q = TLP.Tlp_row.objects; q.values("x" => F("note__@month")); q),
+                    () -> (q = TLP.Tlp_row.objects; q.values("id"); q.filter("note__@month" => 3); q),
+                    () -> (q = TLP.Tlp_row.objects; q.values("id"); q.order_by("note__@month"); q))
+        e = refused(build, conn)
+        @test e isa PormG.QueryBuildError
+        @test occursin("@month", plain(e)) && occursin("note", plain(e)) && occursin("CharField", plain(e))
+      end
+      # A time-of-day part over a date: the date has no hour.
+      e = refused(() -> (q = TLP.Tlp_row.objects; q.values("x" => "seen__@hour"); q), conn)
+      @test e isa PormG.QueryBuildError
+      @test occursin("time of day", plain(e)) && occursin("DateField", plain(e))
+      # A calendar part over a time of day, including a week part (#636) and a label (`@yyyy_q`,
+      # whose `Concat` holds the gated year and month nodes).
+      for key in ("week", "year", "date", "yyyy_q")
+        e = refused(() -> (q = TLP.Tlp_clock.objects; q.values("x" => "clock__@$(key)"); q), conn)
+        @test e isa PormG.QueryBuildError
+        @test occursin("@$(key)", plain(e)) && occursin("TimeField", plain(e))
+      end
+      # A joined path is checked against the field at its end.
+      e = refused(() -> (q = TLP.Tlp_clock.objects; q.values("x" => "rowid__note__@year"); q), conn)
+      @test e isa PormG.QueryBuildError
+
+      # Every transform the registry holds is checked, not only the spellings above: a constructor
+      # that lost its `"transform"` key would build here.
+      for key in _TLP_DATE_TRANSFORMS
+        e = refused(() -> (q = TLP.Tlp_row.objects; q.values("x" => "note__@$(key)"); q), conn)
+        @test e isa PormG.QueryBuildError
+        @test occursin("@$(key)", plain(e))
+      end
+      # A `DurationField` holds no date or time of day either (PostgreSQL extracts from an interval,
+      # SQLite reads the stored text as a clock): refused, where the public `Extract` below is not.
+      @test refused(() -> (q = TLP.Tlp_clock.objects; q.values("x" => "span__@hour"); q), conn) isa PormG.QueryBuildError
+
+      # What still builds: each part on a column it reads…
+      @test occursin("Tb", _tlp_sql((q = TLP.Tlp_clock.objects; q.values("x" => "clock__@hour"); q); conn = conn))
+      @test occursin("Tb", _tlp_sql((q = TLP.Tlp_clock.objects; q.values("x" => "rowid__seen__@week"); q); conn = conn))
+      # …a relation, whose value is the related key (fails open, as before #955)…
+      @test occursin("Tb", _tlp_sql((q = TLP.Tlp_clock.objects; q.values("x" => "rowid__@year"); q); conn = conn))
+      # …and the public `Extract`, which is not a transform: a duration's hours are a real question.
+      @test occursin("Tb", _tlp_sql((q = TLP.Tlp_clock.objects; q.values("x" => PormG.Functions.Extract("span", "hour")); q); conn = conn))
+      @test occursin("Tb", _tlp_sql((q = TLP.Tlp_row.objects; q.values("x" => PormG.Functions.Extract("note", "year")); q); conn = conn))
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #955: a period transform refuses a Bool, and its refusal names the transform the caller wrote.
+# `format_number_sql` maps `true` to `1` on purpose, so `"ts__@hour" => true` silently meant 1 AM and
+# `@quarter => true` the first quarter. And the out-of-range message called every part an `EXTRACT
+# transform` — the Dialect function, the same for `@year` and `@hour`, never a spelling the caller
+# typed. It keeps the formatter's range and, since #971, never quotes the value.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#955: a period transform refuses a Bool and names itself in the refusal" begin
+  plain(e) = replace(PormG.error_message(e), r"\e\[[0-9;]*m" => "")
+  for (backend, conn) in _TLP_BACKENDS
+    # `Any[...]`: a literal `[5, true]` promotes to `[5, 1]` before PormG sees it.
+    for (path, v) in (("ts__@hour", true), ("ts__@quarter", true), ("seen__@week_day", true),
+                      ("ts__@minute__@in", Any[5, true]))
+      @test_throws PormG.InvalidValueError _tlp_sql(
+        (q = TLP.Tlp_row.objects; q.values("note"); q.filter(path => v); q); conn = conn)
+    end
+    e = try _tlp_sql((q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@hour" => 24); q); conn = conn); nothing catch e; e end
+    @test e isa PormG.InvalidValueError
+    @test occursin("@hour transform", plain(e))
+    @test occursin("integer from 0 to 23", plain(e))
+    @test !occursin("EXTRACT", plain(e))
+    @test !occursin("24", plain(e))
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #955: the `"transform"` key is a tag, not part of what the node computes.
+# The #798 grouping check matches a grouped projection against the same expression elsewhere by a
+# structural signature of the node, kwargs included. A `"seen__@year"` node carries the tag and a
+# public `Extract("seen", "YEAR")` does not, so with the tag in the signature the two stopped
+# matching and a valid mixed projection was refused.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#955: the transform tag does not split a grouped expression from its Extract twin" begin
+  Fn = PormG.Functions
+  for (backend, conn) in _TLP_BACKENDS
+    q = TLP.Tlp_row.objects
+    q.values("y" => "seen__@year", "x" => Fn.Coalesce(Fn.Extract("seen", "YEAR"), PormG.QueryBuilder.Count("id")))
+    @test occursin("GROUP BY", _tlp_sql(q; conn = conn))
+  end
 end

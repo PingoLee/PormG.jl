@@ -463,13 +463,21 @@ end
 # exactly the dead spelling #619 exists to tell users does not work; a reader pasting it back got
 # "requires '@' prefix". `fobj.column` is a live spelling in every case, including a joined path
 # (`driverid__dob`). `_as` stays as the fallback for a node whose column is not a plain String.
+#
+# #955: the subject names the transform the caller wrote — `the start_at @hour transform` — from the
+# `"transform"` key the `__@` ladder stamps on its nodes (`functions.jl`). It said `EXTRACT
+# transform`, the Dialect function the node renders, which is the same for `@year`, `@hour` and
+# `@week` and is a spelling the caller never typed. A node without the key (a public `Extract`)
+# keeps the function name.
 function _transform_filter_labels(node, formatter)
   fobj = node isa SQLTypeField ? node.field : node
   name = (fobj.column isa AbstractString && !isempty(fobj.column)) ? fobj.column :
          fobj._as !== nothing                                      ? fobj._as :
          (node isa SQLTypeField && node._as !== nothing)           ? node._as :
                                                                      string(fobj.column)
-  return (name, _formatter_type_label(formatter), "$(fobj.function_name) transform")
+  key = fobj isa FObject ? get(fobj.kwargs, "transform", nothing) : nothing
+  return (name, _formatter_type_label(formatter),
+          key isa String ? "@$(key) transform" : "$(fobj.function_name) transform")
 end
 
 # The single renderer for `IN` / `NOT IN` (#411). Extracted so the WHERE path and the HAVING path

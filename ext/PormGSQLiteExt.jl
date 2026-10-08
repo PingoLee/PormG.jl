@@ -137,6 +137,11 @@ function PormG.backend_execute(pool::PormGSQLite, conn::SQLite.DB, sql::String, 
   return _sqlite_with_retry(() -> _sqlite_execute_materialized(conn, sql, resolved))
 end
 
+# No `backend_is_retry_safe` method: on SQLite, core's default (`false`) holds for every failure, so
+# `fetch` renews the connection and never re-runs the statement (#1042). The one match below that
+# libsqlite3 produces, "disk I/O error", can come from a commit whose outcome is unknown. Neither
+# "closed" phrase appears in libsqlite3's string table or in SQLite.jl, so no "never ran" signal
+# exists to recognize.
 function PormG.backend_is_connection_error(pool::PormGSQLite, e)
   msg = lowercase(string(e))
   # server-text-match-ok: SQLite has no SQLSTATE here and never localizes its messages

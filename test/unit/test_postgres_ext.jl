@@ -58,6 +58,9 @@ struct NetClosingError <: Exception end
     (PormG.backend_execute, (PostgresPool, PgConn, String, Any)),
     (PormG.backend_execute_async, (PostgresPool, PgConn, String, Any)),
     (PormG.backend_is_connection_error, (PostgresPool, Any)),
+    # Typed on the driver's exceptions (#1042); any other type falls to core's `false`, not to LibPQ.
+    (PormG.backend_is_retry_safe, (PostgresPool, Postgres.Error)),
+    (PormG.backend_is_retry_safe, (PostgresPool, Postgres.PostgresInterfaceError)),
     (PormG.backend_is_permanent_connect_error, (PostgresPool, Any)),
     (PormG.backend_classify_error, (PostgresPool, Postgres.Error)),
     (PormG.backend_cancel_query!, (PostgresPool, PgConn)),
@@ -280,6 +283,51 @@ end
   @test PormG.backend_is_permanent_connect_error(pool, _pg_error("3D000"))
   @test PormG.backend_is_permanent_connect_error(pool, PormG.InvalidConfigurationError("x"))
   @test !PormG.backend_is_permanent_connect_error(pool, _pg_error("57P01"))
+end
+
+# The same retry rule as the LibPQ extension (#1042): every lost connection is renewed and swept, but
+# `fetch` re-runs a statement only when it provably never ran. The socket-level shapes can come after
+# the server received the statement, so none of them is retry-safe.
+@testset "only a statement that never ran is retry-safe — Postgres.jl (#1042)" begin
+  pool = CP.PostgresConnectionPool("host=h"; driver = :postgres)
+  lost(e) = PormG.backend_is_connection_error(pool, e)
+  safe(e) = PormG.backend_is_retry_safe(pool, e)
+
+  # The server named the backend gone.
+  for code in ("57P01", "57P02", "57P03", "57P05", "08000", "08006")
+    @test lost(_pg_error(code)) && safe(_pg_error(code))
+  end
+  # Postgres.jl refused before writing: `checkconn` found the socket closed.
+  for msg in ("postgres connection has been closed or disconnected",
+              "postgres connection has been closed or disconnected; reconnect disabled")
+    @test lost(Postgres.PostgresInterfaceError(msg)) && safe(Postgres.PostgresInterfaceError(msg))
+  end
+
+  # The socket went away: lost, renewed and swept, but never re-run.
+  for e in (EOFError(), Base.IOError("read: connection reset by peer", -104),
+            SystemError("read", Libc.ECONNRESET), SystemError("write", Libc.EPIPE), NetClosingError(),
+            _CauseWrapper788(EOFError()), _ErrWrapper788(SystemError("read", Libc.ECONNRESET)))
+    @test lost(e) && !safe(e)
+  end
+  # A socket timeout or an unreachable host is a lost connection on both drivers, as LibPQ's
+  # "could not receive data from server: <errno>" is. It used to be operational only here.
+  for errno in (Libc.ETIMEDOUT, Libc.EHOSTUNREACH, Libc.ENETUNREACH)
+    e = SystemError("read", errno)
+    @test lost(e) && !safe(e)
+    @test PormG.backend_classify_error(pool, e) === :operational
+  end
+  @test !lost(SystemError("connect", Libc.ECONNREFUSED))
+
+  # Codes outside the lost-connection set, a spoofed DETAIL and an interface error quoting SQL: never.
+  for code in ("08P01", "08007", "57014", "40001", "40P01", "23505")
+    @test !safe(_pg_error(code))
+  end
+  @test !safe(_pg_error("23505"; detail = "Key (msg)=(FATAL: terminating connection) already exists."))
+  @test !safe(Postgres.PostgresInterfaceError("number of parameters provided (1) does not match number of placeholders (2) in sql: postgres connection has been closed or disconnected"))
+
+  # A multi-result failure is retry-safe when the server named one of its errors.
+  @test safe(CompositeException([EOFError(), _pg_error("57P01")]))
+  @test !safe(CompositeException([EOFError()]))
 end
 
 @testset "an interrupt wrapped by the TLS layer is an abandoned await (#788)" begin

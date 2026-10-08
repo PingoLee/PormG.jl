@@ -289,7 +289,9 @@ end
 #     simple-query protocol stops at the first error, so the last result is that error. The one case
 #     with two is a terminated backend — 57P01, then libpq's own "server closed the connection" with no
 #     SQLSTATE — and that second one still classifies as a dropped connection on its message
-#     (`backend_is_connection_error`, step 3), so the kind and `fetch`'s retry are unchanged.
+#     (`backend_is_connection_error`, step 3), so the kind and the slot renewal are unchanged. It is not
+#     retried, because a codeless line cannot show the statement never ran (`backend_is_retry_safe`,
+#     #1042).
 #   * LibPQ logs the failure through its Memento logger at `warn` instead of `error`.
 
 const _FAILED_RESULT_STATUSES = (LibPQ.libpq_c.PGRES_BAD_RESPONSE, LibPQ.libpq_c.PGRES_FATAL_ERROR)
@@ -383,8 +385,8 @@ function PormG.backend_execute_async(pool::PormGPostgres, conn::LibPQ.Connection
 end
 
 # SQLSTATEs that mean THE BACKEND IS GONE AND THE STATEMENT NEVER RAN. That second half is the bar,
-# not just "the connection is broken": `backend_is_connection_error` gates `fetch`'s transparent
-# retry, so anything listed here may be silently re-executed.
+# not just "the connection is broken": `backend_is_retry_safe` reads this set to gate `fetch`'s
+# transparent retry (#1042), so anything listed here may be silently re-executed.
 #
 # Deliberately EXCLUDED from class 08, which is not uniformly safe:
 #   08007 transaction_resolution_unknown — the commit outcome is UNKNOWN. Re-running double-applies.
@@ -414,8 +416,9 @@ const _PG_LOST_CONNECTION_ERRORS = Union{
   LibPQ.Errors.IdleSessionTimeout,                             # 57P05 — the one that targets IDLE POOLED conns
 }
 
-# Is `e` a DROPPED connection (retryable by `fetch`, and the trigger for retiring the pool's other
-# idle connections) rather than a statement-level failure?
+# Is `e` a DROPPED connection (the trigger for renewing the slot and retiring the pool's other idle
+# connections) rather than a statement-level failure? Whether `fetch` also re-runs the statement is
+# the narrower question `backend_is_retry_safe` answers below (#1042).
 #
 # SQLSTATE FIRST, message fingerprints only as the fallback. LibPQ parameterizes its result
 # exceptions on the code (`PQResultError{Class, Code}`), so when the server handed one back we
@@ -490,13 +493,12 @@ function PormG.backend_is_connection_error(pool::PormGPostgres, e)
   #     The bare "ssl error:" prefix is deliberately NOT matched: "SSL error: certificate verify failed"
   #     is a configuration failure, not a dropped session.
   #
-  #     These feed `fetch`'s retry exactly as the phrases above do — they are the same event in other
-  #     words. Like "server closed the connection", they can arrive after the statement reached the
-  #     server, so the "never ran" bar of `_PG_LOST_CONNECTION_ERRORS` does not hold for any codeless
-  #     phrase. That is a property of the codeless fallback as a whole, not of these phrases (#1042).
-  #     The two PostgreSQL drivers also differ on a socket timeout: it is a lost connection here,
-  #     while the Postgres.jl extension's `_LOST_SOCKET_ERRNOS` leaves ETIMEDOUT out. #1042 owns the
-  #     one rule for both.
+  #     Every phrase here renews the slot and sweeps the idle ones, but none of them is retried.
+  #     Like "server closed the connection", they can arrive after the statement reached the server,
+  #     so the "never ran" bar of `_PG_LOST_CONNECTION_ERRORS` does not hold for any codeless phrase.
+  #     `backend_is_retry_safe` below is the retry's own gate (#1042). A socket timeout is a lost
+  #     connection on both PostgreSQL drivers: the Postgres.jl extension's `_LOST_SOCKET_ERRNOS`
+  #     carries ETIMEDOUT for this reason.
   msg = lowercase(string(e))
   # server-text-match-ok: libpq's own client text (untranslated in LibPQ_jll); a codeless error has no SQLSTATE to read (#1010)
   return (e isa LibPQ.Errors.UnknownError && string(e) == "LibPQ.Errors.UnknownError(\"\")") ||
@@ -510,6 +512,31 @@ function PormG.backend_is_connection_error(pool::PormGPostgres, e)
          occursin("unexpected eof while reading", msg) ||
          occursin("could not receive data from server", msg) ||
          occursin("could not send data to server", msg)
+end
+
+# Did the statement provably NEVER RUN? This is the gate on `fetch`'s retry (#1042), and it is
+# narrower than `backend_is_connection_error` above. Two cases meet it:
+#
+#   * The server named one of `_PG_LOST_CONNECTION_ERRORS`. That set is defined by this bar.
+#   * libpq refused to send. `PQsendQueryStart` checks the connection status before writing a byte,
+#     and "no connection to the server" is the message it appends on that refusal. In libpq's source
+#     (`src/interfaces/libpq/fe-exec.c`) this message has no other producer except
+#     `PQsendFlushRequest`, which PormG never calls, and it is checked before any bytes are written as
+#     well. LibPQ.jl raises it as `PQConnectionError` from the async submission. A mid-statement
+#     failure raises the same type, but libpq clears the connection's error message when a query
+#     starts, so that failure's text never carries this phrase. It is libpq's own client text,
+#     untranslated in LibPQ_jll (#1010).
+#
+# Every codeless drop that is not a refusal fails the bar, so it is renewed and swept, and the error
+# propagates. One case is lost to this on purpose. A backend terminated mid-statement sends 57P01,
+# then libpq adds its own codeless line, and `throw_error = false` hands back the LAST result (see
+# above). The code was there, but the codeless line is what arrives, so it is not retried. That is
+# the safe direction. An IDLE backend terminated the same way never reaches a statement: the
+# checkout probe (`backend_is_alive`, #442) retires it first.
+function PormG.backend_is_retry_safe(pool::PormGPostgres, e::LibPQ.Errors.LibPQException)
+  e isa _PG_LOST_CONNECTION_ERRORS && return true
+  # server-text-match-ok: libpq's own client text (untranslated in LibPQ_jll); a refusal to send carries no SQLSTATE (#1010)
+  return e isa LibPQ.Errors.PQConnectionError && startswith(lowercase(e.msg), "no connection to the server")
 end
 
 # Is `e` a *permanent* connect failure (won't succeed on retry) rather than transient? Scoped to

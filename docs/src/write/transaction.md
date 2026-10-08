@@ -482,8 +482,10 @@ catch e
 end
 ```
 
-Outside transactions, plain queries still recover transparently: the pooled connection is
-renewed and the statement retried once.
+Outside transactions the pool still recovers on its own: the pooled connection is renewed and
+the idle ones retired. The statement is retried once only when it provably never ran; any other
+dropped connection raises `OperationalError`, because the statement may already have committed
+(see *Dropped connections* in [Advanced configuration](../configuration/advanced.md)).
 
 ### Misusing the transaction API
 

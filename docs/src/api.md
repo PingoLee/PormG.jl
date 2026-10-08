@@ -885,7 +885,7 @@ report what the **database** refused once it got there. Each carries `adapter` (
 | :--- | :--- |
 | `DatabaseError` *(abstract)* | Umbrella for every failure raised by the database itself. `catch DatabaseError` covers all three below without naming a driver package. |
 | `IntegrityError` | A constraint said no — `UNIQUE`, `FOREIGN KEY`, `NOT NULL`, `CHECK`, or an exclusion constraint. The one database failure applications routinely *handle* rather than propagate. |
-| `OperationalError` | Transient, and retrying may succeed — the connection dropped mid-query, a deadlock, a serialization failure, or a lock that could not be acquired (including a `with_advisory_lock` timeout). |
+| `OperationalError` | Transient, and retrying may succeed — the connection dropped mid-query, a deadlock, a serialization failure, or a lock that could not be acquired (including a `with_advisory_lock` timeout). After a dropped connection a write may already have committed, so repeat only work that is safe to run twice ([Dropped connections](configuration/advanced.md)). |
 | `StatementError` | The statement could not be executed — invalid SQL, unknown table/column, a rejected type, or insufficient privileges. Also the landing type for anything the backend could not classify, so the umbrella has no holes. |
 | `TransactionError` | Not a database error: the *transaction API* was used in a way that cannot work — `atomic(durable=true)` or `without_foreign_keys` nested inside an open transaction on the same database, or touching a model bound to one connection while a transaction is open on another. Nothing was sent. |
 
@@ -894,7 +894,7 @@ try
     M.Driver.objects.create("driverref" => "senna", "code" => "SEN")
 catch e
     e isa IntegrityError   && return conflict(error_message(e))   # a constraint refused it
-    e isa OperationalError && return retry_later()                # transient — try again
+    e isa OperationalError && return service_unavailable(error_message(e))  # the row may exist: don't resend blindly
     rethrow()
 end
 ```

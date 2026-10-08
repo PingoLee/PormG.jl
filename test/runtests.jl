@@ -206,6 +206,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Module Init & atexit Cleanup (#203)" include("unit/test_module_init.jl")
     @testset "Failed Rollback → Connection Renewed/Discarded (#71)" include("unit/test_transaction_rollback_renewal.jl")
     @testset "No Lost-Connection Retry Inside Transactions (#138)" include("unit/test_fetch_retry_transaction.jl")
+    @testset "Lost-Connection Retry Only When the Statement Never Ran (#1042)" include("unit/test_fetch_retry_safety.jl")
     @testset "Transaction Context Scoped To Its Own Pool (#831)" include("unit/test_tx_context_pool_scope.jl")
     @testset "Task Outliving Its Transaction Block (#839)" include("unit/test_tx_context_leaked_task.jl")
     @testset "Abandoned Await Never Releases a Dirty Connection (#315)" include("unit/test_await_result_interrupt.jl")

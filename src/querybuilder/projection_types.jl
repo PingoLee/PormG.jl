@@ -682,8 +682,10 @@ end
 #
 # Bounded: a whole number (`_integral_valued`, and any operand with no fractional kind — an integer
 # column, a type PormG cannot name), a `DecimalField` column of at most `s` places, a `Decimal`
-# literal of at most `s` digits, and a nested cast to a scale of at most `s`. Unbounded: a float, a
-# non-whole float literal, a `numeric` function, a decimal of unknown scale, and text — PostgreSQL
+# literal of at most `s` digits, a `Float64` literal whose shortest form has at most `s` places and 15
+# significant digits (#1050: `1.5` at scale 2 reads `1.5` on both engines, there is nothing to round),
+# and a nested cast to a scale of at most `s`. Unbounded: a float column, a float literal with more
+# places or digits, a `numeric` function, a decimal of unknown scale, and text — PostgreSQL
 # parses `'1.555'` and rounds it, SQLite converts it and keeps it — including a JSON value. An operand
 # PormG cannot type (an untyped `Case`, a `Subquery`) passes, as it does for #1028.
 const _SCALE_PRESERVING_FUNCTIONS = ("MAX", "MIN", "ABS", "COALESCE", "GREATEST", "LEAST", "NULLIF")
@@ -693,6 +695,14 @@ function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union
   if operand isa SQLText
     x = operand.field
     x isa AbstractString && return (:text, "the string literal $(repr(x))")
+    if x isa Float64 && isfinite(x)
+      places, significant = _float_literal_digits(x)
+      places <= scale && significant <= 15 && return nothing
+      return (:float, significant > 15 ? "the Float64 literal $(x) ($(significant) significant digits)" :
+                                         "the Float64 literal $(x) ($(places) decimal places)")
+    end
+    # Another float type binds through its own type, which was not measured: a whole one passes, as a
+    # whole number does anywhere here, and a fraction is refused below.
     x isa AbstractFloat && isinteger(x) && return nothing
     if x isa Decimals.Decimal
       digits = _decimal_scale(x)
@@ -743,6 +753,18 @@ function _decimal_scale(x::Decimals.Decimal)::Int
     c, q = c ÷ 10, q + 1
   end
   return max(0, -q)
+end
+# #1050 — the digits a float literal's shortest decimal form needs, `(places, significant)`: `1.5` is
+# `(1, 2)`, `2.675` `(3, 4)`, `1.0e-5` `(5, 1)`, `12345678901234.56` `(2, 16)`. That form is the value
+# both engines read, as long as it has at most 15 significant digits: PostgreSQL converts `float8` to
+# `numeric` at 15 (`12345678901234.56` becomes `12345678901234.6` before any scale applies), and
+# SQLite keeps the double.
+function _float_literal_digits(x::Float64)::Tuple{Int,Int}
+  m = match(r"^-?(\d+)(?:\.(\d+))?(?:e(-?\d+))?$", string(x))
+  whole, frac = m.captures[1], rstrip(something(m.captures[2], ""), '0')
+  exponent = m.captures[3] === nothing ? 0 : parse(Int, m.captures[3])
+  digits = rstrip(lstrip(whole * frac, '0'), '0')
+  return (max(0, length(frac) - exponent), max(1, length(digits)))
 end
 _text_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "a text expression" : "the text column `$(l)`")
 

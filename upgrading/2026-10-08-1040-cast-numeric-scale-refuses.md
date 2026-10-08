@@ -21,14 +21,15 @@ unrounded ones on SQLite. Measured on PostgreSQL 16.15 and SQLite 3.45.1:
 | `Round(x)`, `Cast(x, "numeric")` | same on both | same on both |
 
 Now refused, when the query is built, on both engines: a cast to `numeric(p, s)`, `decimal(p, s)`,
-`dec(p, s)` or `numeric(p)` of a float, a non-whole float literal, a function PostgreSQL computes as
+`dec(p, s)` or `numeric(p)` of a float, a float literal with more than `s` places or more than 15
+significant digits (#1050 narrowed this from every non-whole literal), a function PostgreSQL computes as
 `numeric` (`Avg`, `Round(x, 2)`, …), a decimal with more places than `s` or of unknown scale, text,
 or a JSON value (a whole document or a key lookup).
 
 Unchanged: an unscaled `"numeric"`/`"decimal"` or `DecimalField()` target, and an operand that has
 nothing to round: an integer, `Round(x)`, `Floor(x)`, `Ceil(x)`, a `DecimalField` with at most `s`
 places (and `Max`/`Min`/`Abs`/`Coalesce` of one), a `Decimal` literal with at most `s` digits, a
-whole float literal.
+`Float64` literal with at most `s` places and 15 significant digits (`Value(1.5)` at scale 2, #1050).
 
 Not checked, as for #1028: `Case(…; output_field = "numeric(p,s)")`, whose value is a branch, and an
 operand PormG cannot type (an untyped `Case`, a `Subquery`). PostgreSQL still rounds those.

@@ -664,7 +664,8 @@ A cast the two engines apply differently raises `QueryBuildError` when the query
   truncates it. Round it first — `Cast(Round(x), IntegerField())`, `Floor(x)` or `Ceil(x)` read the
   same integer on both engines. A boolean casts to `1`/`0` on both and passes;
 - to `numeric(p, s)` (or `numeric(p)`, scale 0), an operand with more than `s` digits after the
-  point — a float, text, a `numeric` function, a decimal with more places (#1040): PostgreSQL rounds
+  point — a float column, a float literal with more places (#1050), text, a `numeric` function, a
+  decimal with more places (#1040): PostgreSQL rounds
   to the scale and SQLite keeps every digit. `Round(x, 2)` rounds differently on the two engines, so
   it is no escape; cast to an unscaled `"numeric"`, cast a whole number, or round in Julia.
 

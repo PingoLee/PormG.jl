@@ -1903,3 +1903,26 @@ end
              (r.points, round(r.points, RoundNearestTiesAway), floor(r.points))]
     @test isempty(wrong)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A float literal that fits the scale, on both engines (#1050)
+# `1.5`, `0.1` and `2.25` have at most two places, so `numeric(10,2)` has nothing to round: both
+# engines read the literal's own value (a `Decimal` on PostgreSQL, a `Float64` on SQLite). One with
+# more places is still refused.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1050: a float literal within the scale reads the same value on both engines" begin
+    q = M.Driver.objects
+    q.filter("driverid" => 1)
+    q.values("a" => Cast(Value(1.5), "numeric(10,2)"),
+             "b" => Cast(Value(0.1), "numeric(10,2)"),
+             "c" => Coalesce(Value(2.25), Value(0.0); output_field = "numeric(10,2)"))
+    df = q |> DataFrame
+    @test (Float64(df[1, :a]), Float64(df[1, :b]), Float64(df[1, :c])) == (1.5, 0.1, 2.25)
+    err = try
+        q = M.Driver.objects; q.filter("driverid" => 1); q.values("x" => Cast(Value(2.675), "numeric(10,2)")); q |> DataFrame
+        nothing
+    catch e
+        e
+    end
+    @test err isa PormG.QueryBuildError && occursin("2.675 (3 decimal places)", sprint(showerror, err))
+end

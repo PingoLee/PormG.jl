@@ -33,6 +33,10 @@ every digit on SQLite, measured on the same servers:
 | `Round(<float> 2.675 / 1.555 / 1.005, 2)`    | `2.68` / `1.56` / `1.01` | `2.67` / `1.55` / `1.0` |
 | `Round(x)`, and `Cast(x, "numeric")` unscaled | equal on both (±1.5, ±2.5, 1.555, 2.675, 25.0, every `points` row) | |
 
+#1050 narrows the float-literal arm to what diverges: `Cast(Value(1.5 / 0.1 / 2.25), "numeric(10,2)")`
+reads the same on both engines, so only a literal with more than `s` places, or more than 15
+significant digits, is refused.
+
 Everything renders through mock connections — no live database, no fixture.
 
 julia -O0 --project=test/integration test/unit/test_cast_divergent_operands.jl
@@ -450,7 +454,8 @@ _is_1040(e) = e isa QueryBuildError && occursin("(#1040)", _ccd_msg(e))
   refused = [
     "points"              => "FloatField `points`",
     "team__rating"        => "FloatField `team__rating`",
-    Fn.Value(1.5)         => "Float64 literal 1.5",
+    # #1050: a float literal is refused for its places, which 1.555 has more of than any target here.
+    Fn.Value(1.555)       => "Float64 literal 1.555 (3 decimal places)",
     _CF("points") * 2     => "arithmetic over the FloatField `points`",
     Fn.Avg("number")      => "`AVG(…)`",
     Fn.Round("points", 2) => "`ROUND(…)`",                   # digits round differently per engine
@@ -526,4 +531,47 @@ end
       conn in _CCD_ENGINES
     @test _ccd_refusal(expr; conn = conn) === nothing
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1050: a float literal that fits the scale passes, as a Decimal literal does
+# What diverges is a literal with more fractional digits than `s`, or more than the 15 significant
+# digits PostgreSQL converts `float8` to `numeric` at. Measured on PostgreSQL 16.15 / SQLite 3.45.1:
+# `1.5`, `0.1`, `2.25` read the same at scale 2; `2.675` at scale 2 is `2.68` / `2.675`; and
+# `12345678901234.56` becomes `12345678901234.6` on PostgreSQL before any scale applies.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1050: a float literal is bounded by its shortest decimal form" begin
+  # A cast and the shared classifier's other route, an output_field.
+  shapes = (v -> Fn.Cast(Fn.Value(v), "numeric(10,2)"),
+            v -> Fn.Coalesce(Fn.Value(v), 0; output_field = "numeric(16,2)"),
+            v -> Fn.Greatest(Fn.Value(v), "number"; output_field = "numeric(16,2)"),
+            v -> Fn.Least(Fn.Value(v), "number"; output_field = "numeric(16,2)"))
+  for v in (1.5, 0.1, 2.25, -2.25, 0.0, 1.0e-2, 25.0), shape in shapes, conn in _CCD_ENGINES
+    @test _ccd_refusal(shape(v); conn = conn) === nothing
+  end
+  for (v, named) in (2.675 => "Float64 literal 2.675 (3 decimal places)",
+                     1.555 => "Float64 literal 1.555 (3 decimal places)",
+                     1.0e-5 => "Float64 literal 1.0e-5 (5 decimal places)",
+                     12345678901234.56 => "Float64 literal 1.234567890123456e13 (16 significant digits)",
+                     # Whole, but not at 15 digits: PostgreSQL reads 12345678901234600.
+                     12345678901234567.0 => "(17 significant digits)"),
+      shape in shapes, conn in _CCD_ENGINES
+    err = _ccd_refusal(shape(v); conn = conn)
+    @test _is_1040(err)
+    @test occursin(named, _ccd_msg(err))
+  end
+  # The significant-digit bound holds at any scale, and the place bound moves with it.
+  for conn in _CCD_ENGINES
+    @test _is_1040(_ccd_refusal(Fn.Cast(Fn.Value(12345678901234.56), "numeric(30,8)"); conn = conn))
+    @test _ccd_refusal(Fn.Cast(Fn.Value(2.675), "numeric(10,3)"); conn = conn) === nothing
+    @test _is_1040(_ccd_refusal(Fn.Cast(Fn.Value(0.1), "numeric(10,0)"); conn = conn))
+  end
+  # The digit count itself, through the exponent forms `string` writes.
+  @test PormG.QueryBuilder._float_literal_digits(1.5) == (1, 2)
+  @test PormG.QueryBuilder._float_literal_digits(2.675) == (3, 4)
+  @test PormG.QueryBuilder._float_literal_digits(1.0e-5) == (5, 1)
+  @test PormG.QueryBuilder._float_literal_digits(1.5e-7) == (8, 2)
+  @test PormG.QueryBuilder._float_literal_digits(12345678901234.56) == (2, 16)
+  @test PormG.QueryBuilder._float_literal_digits(1.0e20) == (0, 1)
+  @test PormG.QueryBuilder._float_literal_digits(-0.125) == (3, 3)
 end

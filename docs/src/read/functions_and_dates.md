@@ -620,14 +620,16 @@ So PormG raises `QueryBuildError` when the query is built, on both engines, for:
   …) of a float, a decimal or a `numeric` function. A boolean casts to `1`/`0` on both engines and
   passes;
 - a cast to `numeric(p, s)` or `decimal(p, s)` (and `numeric(p)`, whose scale is 0) of an operand
-  that can carry more than `s` digits after the point: a float, a non-whole float literal, a
+  that can carry more than `s` digits after the point: a float column, a float literal with more
+  than `s` places or more than 15 significant digits (PostgreSQL converts a float to `numeric` at
+  15, so `12345678901234.56` is `12345678901234.6` there), a
   function PostgreSQL computes as `numeric` (`Round(x, 2)` included), a decimal with more places
   than `s` or of unknown scale, and text, which PostgreSQL parses and rounds while SQLite keeps it
   (#1040). A JSON value counts as text: PostgreSQL casts the key's text, SQLite the number.
   `dec(p, s)` is the same type as `numeric(p, s)`. PostgreSQL rounds to the scale and SQLite reads the type name only, so a filter or a
   `GROUP BY` over the cast would see different values. An integer, a whole number (`Round(x)`,
-  `Floor`, `Ceil`), a `DecimalField` with at most `s` places, and a `Decimal` literal with at most
-  `s` digits pass, and so does a function whose value is one of them (`Max`, `Min`, `Abs`,
+  `Floor`, `Ceil`), a `DecimalField` with at most `s` places, and a `Decimal` or float literal with
+  at most `s` digits after the point (`Value(1.5)` at scale 2 reads `1.5` on both, #1050) pass, and so does a function whose value is one of them (`Max`, `Min`, `Abs`,
   `Coalesce`, `Greatest`, `Least`, `NullIf`). An operand PormG cannot
   type (an untyped `Case`, a `Subquery`) passes, as it does for the other two rules.
 

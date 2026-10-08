@@ -51,7 +51,8 @@ When a lock is already held by another session, you can choose how PormG should 
 
 The `timeout_ms` parameter ensures your application doesn't hang indefinitely. 
 - In `:poll` strategy, the timeout is managed by Julia.
-- In `:block` strategy, PormG temporarily sets the PostgreSQL `statement_timeout` for that specific acquisition.
+- In `:block` strategy, PormG temporarily sets the PostgreSQL `lock_timeout` for that specific acquisition and restores it when the call returns. `lock_timeout` bounds only the wait for the lock, so a `statement_timeout` you set on the session is left alone. When the wait runs out, the server reports it as a lock timeout, and PormG raises the same `OperationalError` as `:poll`, naming the session that holds the lock.
+- If the session's `statement_timeout` is shorter than `timeout_ms`, it ends the `:block` wait first. That surfaces as a query-canceled `OperationalError` (SQLSTATE `57014`) without the lock-holder detail, because PostgreSQL cancelled the statement rather than the lock wait.
 
 ## Implementation Details
 

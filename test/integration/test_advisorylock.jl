@@ -69,9 +69,9 @@ else
     got_error = false
     timeout_exc = nothing
 
-    # Suppress noisy internal errors from LibPQ by using a temporary logger
-    logger = Base.CoreLogging.SimpleLogger(IOBuffer(), Base.CoreLogging.Error)
-    Base.CoreLogging.with_logger(logger) do
+    # Capture rather than print: the timeout's `@warn` is asserted below.
+    logger = Test.TestLogger(min_level = Base.CoreLogging.Warn)
+    waited_s = @elapsed Base.CoreLogging.with_logger(logger) do
       try
         PormG.with_advisory_lock(dbname, key; wait=true, strategy=:block, timeout_ms=1_000) do
           @info "This should not print, as lock acquisition should time out"
@@ -86,6 +86,15 @@ else
     # @info "Expected timeout error caught" exception=timeout_exc
     @info "Expected timeout error caught"
     @test got_error
+    # The server's `lock_timeout` ended the wait (#1024): its 55P03 becomes the lock-holder error
+    # (#737), raised well before the holder's 5 s release. Any other error propagates as it is.
+    @test timeout_exc isa PormG.OperationalError
+    @test occursin("within 1000 ms", timeout_exc.message)
+    @test occursin("held by pid", timeout_exc.message)
+    @test waited_s < 4
+    # The one assertion only `lock_timeout` satisfies: under `statement_timeout` the same wait
+    # ended with a 57014, and its warning named that knob instead.
+    @test any(r -> occursin("server-side lock_timeout", string(r.message)), logger.logs)
 
     # Wait for the lock holder to finish
 

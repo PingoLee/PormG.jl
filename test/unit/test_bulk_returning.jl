@@ -41,10 +41,10 @@ function br671_with_sqlite(f)
     try
       fetch(pool, """CREATE TABLE br671_result (
         id INTEGER PRIMARY KEY AUTOINCREMENT, driver TEXT NOT NULL, year INTEGER NOT NULL,
-        points INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'classified', UNIQUE (driver, year));""")
+        points INTEGER NOT NULL, status TEXT NOT NULL DEFAULT (lower('CLASSIFIED')), UNIQUE (driver, year));""")
       model = Model("br671_result",
         id = IDField(), driver = CharField(), year = IntegerField(), points = IntegerField(),
-        status = CharField(db_default = (postgres = "'classified'", sqlite = "'classified'")))
+        status = CharField(db_default = (postgres = "lower('CLASSIFIED')", sqlite = "lower('CLASSIFIED')")))
       model.connect_key = key
       f(pool, model)
     finally

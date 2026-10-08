@@ -1040,6 +1040,16 @@ end
     # churn class — would pass while testing nothing.
     @test compared == length(expected_cols)
 
+    # 6c'. #1033 (after the round trip above): every imported `db_default` passes the constructor's literal refusal, judged from the
+    #     catalog's real spelling. `inspectdb` writes these into a models file, so one the
+    #     constructor refused would make a freshly generated file fail to load. `_db_default_kwarg`
+    #     is the validator every field constructor runs on the keyword.
+    for (col, f) in expr_model.fields
+      # `IDField` has no slot at all (a key column cannot carry a `DEFAULT` beside its identity).
+      (hasfield(typeof(f), :db_default) && f.db_default !== nothing) || continue
+      @test PormG.Models._db_default_kwarg(string(nameof(typeof(f)))[2:end], f.db_default) == f.db_default
+    end
+
     # ── 6b. check() reports the same columns, against the live engine (#475) ─────
     # The unit twin proves the two agree on a temp SQLite database. This proves it on whichever
     # engine the suite is running, through the real schema query rather than PRAGMA output alone —
@@ -1055,6 +1065,62 @@ end
   finally
     PormG._EXTRA_IGNORE_TABLES[] = saved_ignore   # never leak registry state
     drop_fixtures()
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A constant column default: declared as `default`, applied, read back, replanned empty (#1033)
+# A constant written as a `db_default` used to be accepted, and the catalog reads it back as a value,
+# so every `makemigrations` replanned `SET DEFAULT` (a table rebuild on SQLite) — measured on both
+# engines before the fix. The constructor now refuses that spelling; this pins, against a real
+# catalog, that the `default = …` it points to converges, and that an expression the catalog prints
+# back unchanged still converges as a `db_default`. Plan → apply → read → replan, the #751 pattern.
+# Mutation gate: the unit twin (test/unit/test_db_default.jl) carries it; this is the live half.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Constant column default: the default= spelling converges, the db_default one is refused (#1033)" begin
+  pool = PormG.config[PORMG_DB_FOLDER].connections
+  is_pg = adapter_name == "PostgreSQL"
+  M1033 = PormG.Models
+  tbl = "pormg_it_1033"
+  ddl(sql) = PormG.ConnectionPool.fetch(pool, sql)
+  drop1033!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
+  pin(s) = is_pg ? (postgres = s,) : (sqlite = s,)
+  cols = Pair{Symbol, Any}[
+    :laps     => M1033.IntegerField(null = true, default = 0),
+    :status   => M1033.CharField(max_length = 20, null = true, default = "Finished"),
+    :race_day => M1033.DateField(null = true, default = "2024-03-02"),
+    :classified => M1033.BooleanField(null = true, default = true),
+    # An expression both catalogs print back as written, so it stays a `db_default` and converges.
+    :grid     => M1033.IntegerField(null = true, db_default = pin("0 + 0")),
+  ]
+  # PostgreSQL only: the GenericIPAddressField docstring's own example, which replaced the literal
+  # `'10.0.0.1'::inet` it used to recommend. SQLite refuses the type (#28).
+  is_pg && push!(cols, :client => M1033.GenericIPAddressField(null = true, db_default = pin("inet_client_addr()")))
+  model1033 = M1033.Model(tbl; id = M1033.IDField(), cols...)
+  schema1033 = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
+    Symbol(tbl) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => model1033, :exist => false))
+  settings1033 = (s = PormG.Configuration.Settings(); s.change_db = true; s)
+  plan1033(live) = PormG.Migrations.get_migration_plan(live, schema1033, pool, settings1033; interactive = false)
+  split1033 = is_pg ? PormG.Migrations._split_pg_statements : PormG.Migrations._split_sqlite_statements
+
+  # The spelling this issue retires is refused at declaration, on the engine under test.
+  @test_throws PormG.FieldValidationError M1033.IntegerField(db_default = pin("0"))
+  @test_throws PormG.FieldValidationError M1033.CharField(db_default = pin("'Finished'"))
+
+  drop1033!()
+  try
+    for (_, sql) in get(plan1033(PormG.Migrations.LiveTable[]), Symbol(tbl), [])
+      foreach(ddl, split1033(sql))
+    end
+    live = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
+    # The constants read back as literals, and the expression as an expression…
+    @test live.columns["laps"].default == PormG.LiteralDefault(0)
+    @test live.columns["status"].default == PormG.LiteralDefault("Finished")
+    @test live.columns["grid"].default isa PormG.ExpressionDefault
+    # …and THE convergence assertion: nothing is planned against the table just created.
+    @test isempty(get(plan1033([live]), Symbol(tbl), Dict()))
+  finally
+    drop1033!()
   end
 end
 

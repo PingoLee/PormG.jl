@@ -168,7 +168,7 @@ const ARR28_BASES = [
     @test AF.ArrayField(AF.DecimalField(max_digits = 5, decimal_places = 2); default = Float32[1.5]).default == "{1.5}"
     # `db_default` and `default` stay exclusive.
     @test_throws PormG.FieldValidationError AF.ArrayField(AF.IntegerField(); default = Int[],
-                                                          db_default = (postgres = "'{}'::integer[]",))
+                                                          db_default = (postgres = "ARRAY[]::integer[]",))
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

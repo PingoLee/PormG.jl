@@ -36,6 +36,8 @@ import PormG: ModelDefinitionError, InvalidValueError, FieldValidationError
 # `Dialect` (step 118) beside the renderer that also reads them.
 import PormG: PORTABLE_DB_DEFAULTS, canonical_db_default, db_default_is_portable,
               is_valid_db_default_sql
+# #1033: what the schema reader will make of a declared `db_default` — refused when it is a literal.
+import PormG: _ExpressionDefault, _db_default_read_back, _is_sql_literal_token, _pg_strip_trailing_casts
 # #29: the access methods and operator-class shape `Index` validates against (Kernel, layer 1).
 import PormG: INDEX_METHODS, INDEX_OPCLASS_RE
 # #1021: the one writer of `to_tsvector(…)` (Kernel) — `search_vector_expression` writes an index with

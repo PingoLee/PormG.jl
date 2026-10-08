@@ -71,6 +71,12 @@ import PormG: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CBool, CText, CDa
 # named here.
 import PormG: PORTABLE_DB_DEFAULTS, canonical_db_default, db_default_is_portable,
               is_valid_db_default_sql, _wrapped_in_parens
+# #1033: the DEFAULT cleaners `_default_or_drop` reads the catalog with. They lived in
+# `migrations/introspection.jl` and moved to Kernel so a field constructor can classify a declared
+# `db_default` with the same code; imported back so every reader and test keeps naming them here.
+import PormG: _ExpressionDefault, _quoted_literal, _unquote_literal, _is_sql_literal_token,
+              _pg_strip_trailing_casts, _pg_single_quoted_literal, _pg_clean_default,
+              _strip_sqlite_default_wrapper, _sqlite_blob_literal_bytes, _pg_bytea_literal_bytes, _normalize_sqlite_default
 # #742: the table-CHECK ownership marker — rendered by `Dialect`, read back and compared here.
 import PormG: CHECK_MARKER_PREFIX, CHECK_MARKER_RE, canonical_check_condition, check_marker
 # #29: index access methods, operator classes and the `pormg:index` ownership marker.

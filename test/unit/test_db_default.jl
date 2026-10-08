@@ -361,8 +361,8 @@ end
         @test f.default === nothing
     end
     # …and `ArrayField` (#28), which takes its element field positionally.
-    f = Models.ArrayField(Models.IntegerField(); db_default = (postgres = "'{}'::integer[]",))
-    @test f.db_default == (postgres = "'{}'::integer[]",)
+    f = Models.ArrayField(Models.IntegerField(); db_default = (postgres = "ARRAY[]::integer[]",))
+    @test f.db_default == (postgres = "ARRAY[]::integer[]",)
     @test f.default === nothing
 end
 
@@ -749,6 +749,235 @@ end
             @test !any(startswith(k, "Backfill db_default:") for k in keys(plan2[:lap]))
         finally
             close_pool!(pool)
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A literal db_default is refused, by the reader's own judgement (#1033)
+# A constant written as a `db_default` is stored by the database as a value and read back as one, so
+# the live column compiled to a `LiteralDefault` against a declared `ExpressionDefault` and
+# `makemigrations` replanned `SET DEFAULT` forever (a table rebuild on SQLite). The constructor now
+# refuses it, judged by `_db_default_read_back` — the schema reader's cleaner applied to the declared
+# text — and points to `default = …`, which renders the same clause and reads back unchanged.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a db_default the catalog reads back as a literal is refused (#1033)" begin
+    q = DBD_Q
+    refused(f) = try
+        f(); nothing
+    catch e
+        e isa PormG.FieldValidationError || rethrow()
+        sprint(showerror, e)
+    end
+
+    # THE PREMISE, kept as an assertion so the refusal cannot outlive its reason: a declared
+    # expression against the literal the catalog reports is a `:default` difference by design (#475),
+    # so a literal declared as a `db_default` could never converge.
+    probe = Migrations.column_spec(Models.IntegerField(default = 0), PG496; name = "c")
+    as_expr = ColumnSpec((f === :default ? ExpressionDefault("0") : getfield(probe, f)
+                          for f in fieldnames(ColumnSpec))...)
+    @test column_delta(as_expr, probe) == [:default]
+
+    # PostgreSQL: every shape `pg_get_expr` prints a constant in, plus the two spellings its deparser
+    # REWRITES into one (`CAST(…)`, a typed literal — measured on PostgreSQL 16: `CAST(0 AS integer)`
+    # is stored as `0`, `DATE '2024-01-01'` as `'2024-01-01'::date`). Each refusal names the
+    # `default = …` to write instead, built from the value the reader would have produced.
+    pg_cases = [
+        (() -> Models.IntegerField(db_default = (postgres = "0",)),                        "default = 0"),
+        (() -> Models.FloatField(db_default = (postgres = "-1.5",)),                       "default = -1.5"),
+        (() -> Models.BooleanField(db_default = (postgres = "true",)),                     "default = true"),
+        (() -> Models.CharField(db_default = (postgres = "$(q)open$(q)",)),                "default = \"open\""),
+        (() -> Models.CharField(db_default = (postgres = "($(q)open$(q))",)),              "default = \"open\""),
+        (() -> Models.CharField(db_default = (postgres = "$(q)open$(q)::character varying",)), "default = \"open\""),
+        (() -> Models.FloatField(db_default = (postgres = "(0)::numeric",)),               "default = 0"),
+        (() -> Models.IntegerField(db_default = (postgres = "CAST(0 AS integer)",)),       "default = 0"),
+        (() -> Models.TextField(db_default = (postgres = "CAST($(q)x AS y$(q) AS text)",)), "default = \"x AS y\""),
+        (() -> Models.DateField(db_default = (postgres = "DATE $(q)2024-01-01$(q)",)),     "default = \"2024-01-01\""),
+        (() -> Models.TextField(db_default = (postgres = "text $(q)x$(q)",)),              "default = \"x\""),
+        # A field built with a positional argument cannot be test-built for a hint: generic advice.
+        (() -> Models.ArrayField(Models.IntegerField(); db_default = (postgres = "$(q){}$(q)::integer[]",)), nothing),
+        (() -> Models.GenericIPAddressField(db_default = (postgres = "$(q)10.0.0.1$(q)::inet",)), "default = \"10.0.0.1\""),
+        # #475's distinction, from the refused side: the QUOTED `now()` is five characters of text.
+        (() -> Models.TextField(db_default = (postgres = "$(q)now()$(q)",)),               "default = \"now()\""),
+        # Measured in review: each of these is stored by PostgreSQL 16 as a constant too —
+        # `'x'::character varying(10)`, `'2024-01-01'::date`, `'x'::"char"`, `0`, `(0)::bigint`,
+        # `'-1'::integer`, `'1.5'::double precision`.
+        (() -> Models.CharField(db_default = (postgres = "varchar(10) $(q)x$(q)",)),       "default = \"x\""),
+        (() -> Models.DateField(db_default = (postgres = "pg_catalog.date $(q)2024-01-01$(q)",)), "default = \"2024-01-01\""),
+        (() -> Models.CharField(db_default = (postgres = "\"char\" $(q)x$(q)",)),         "default = \"x\""),
+        (() -> Models.IntegerField(db_default = (postgres = "CAST((0) AS integer)",)),     "default = 0"),
+        (() -> Models.TextField(db_default = (postgres = "CAST(($(q)x$(q)) AS text)",)),   "default = \"x\""),
+        (() -> Models.BigIntegerField(db_default = (postgres = "CAST(CAST(0 AS int) AS bigint)",)), "default = 0"),
+        (() -> Models.IntegerField(db_default = (postgres = "- 1",)),                      "default = -1"),
+        (() -> Models.IntegerField(db_default = (postgres = "-(1)",)),                     "default = -1"),
+        (() -> Models.FloatField(db_default = (postgres = "double precision $(q)1.5$(q)",)), "default = 1.5"),
+        # The suggestion is the Julia value the FIELD takes, checked by building it: `'t'` is `true`
+        # on a BooleanField, `'true'` stays text on a CharField, bytea hex is bytes (found in review).
+        (() -> Models.BooleanField(db_default = (postgres = "TRUE",)),                     "default = true"),
+        (() -> Models.BooleanField(db_default = (postgres = "$(q)t$(q)::boolean",)),       "default = true"),
+        (() -> Models.CharField(db_default = (postgres = "$(q)true$(q)::text",)),          "default = \"true\""),
+        (() -> Models.CharField(db_default = (postgres = "$(q)0$(q)",)),                   "default = \"0\""),
+        (() -> Models.BinaryField(db_default = (postgres = "$(q)\\x0102$(q)::bytea",)),  "default = UInt8[0x01, 0x02]"),
+    ]
+    for (f, hint) in pg_cases
+        msg = refused(f)
+        @test msg !== nothing
+        msg === nothing && continue
+        @test occursin("is a literal value", msg)
+        @test occursin("`postgres`", msg)
+        @test hint === nothing ? occursin("Declare the value as `default` instead", msg) :
+                                 occursin("Declare it as `$hint`", msg)
+        @test occursin("#1033", msg)
+    end
+
+    # SQLite: `PRAGMA table_info` echoes the declared text without the parentheses PormG adds, and the
+    # SQLite reader's blob and boolean arms are keyed on the field type — so `X'01'` is a literal on
+    # a `BinaryField` and `1` is `true` on a `BooleanField`, exactly as `_clean_default` reads them.
+    sl_cases = [
+        (() -> Models.IntegerField(db_default = (sqlite = "0",)),               "default = 0"),
+        (() -> Models.IntegerField(db_default = (sqlite = "-1",)),              "default = -1"),
+        (() -> Models.CharField(db_default = (sqlite = "$(q)open$(q)",)),       "default = \"open\""),
+        (() -> Models.BooleanField(db_default = (sqlite = "1",)),               "default = true"),
+        (() -> Models.BinaryField(db_default = (sqlite = "X$(q)01$(q)",)),      "default = UInt8[0x01]"),
+    ]
+    for (f, hint) in sl_cases
+        msg = refused(f)
+        @test msg !== nothing
+        msg === nothing && continue
+        @test occursin("`sqlite`", msg)
+        @test occursin("Declare it as `$hint`", msg)
+    end
+
+    # A literal whose text no candidate value builds a field from (an ISO duration, a timestamp
+    # string) is still refused, but with the generic advice rather than a `default = …` the
+    # constructor would then reject. `INTERVAL '1' DAY` keeps its `DAY` in the value it quotes back.
+    for f in (() -> Models.DurationField(db_default = (postgres = "INTERVAL $(q)1$(q) DAY",)),
+              () -> Models.DurationField(db_default = (postgres = "$(q)1 day$(q)::interval",)),
+              () -> Models.DateTimeField(db_default = (postgres = "$(q)2024-01-01 00:00:00$(q)::timestamp",)))
+        msg = refused(f)
+        @test msg !== nothing && occursin("Declare the value as `default` instead", msg)
+    end
+    @test PormG.Kernel._pg_deparse_literal_forms("INTERVAL $(q)1$(q) DAY") == "$(q)1 DAY$(q)::INTERVAL"
+    # The hint is built against the field AS DECLARED: a `max_length` or `choices` the suggested value
+    # would break gets the generic advice instead (found in delta review).
+    for (f, generic) in ((() -> Models.CharField(max_length = 3, db_default = (postgres = "$(q)Finished$(q)",)), true),
+                         (() -> Models.CharField(choices = (("a", "A"),), db_default = (postgres = "$(q)z$(q)",)), true),
+                         (() -> Models.CharField(choices = (("a", "A"),), db_default = (postgres = "$(q)a$(q)",)), false))
+        msg = refused(f)
+        @test msg !== nothing
+        msg === nothing && continue
+        @test occursin("Declare the value as `default` instead", msg) == generic
+    end
+    # A literal the column type cannot hold reads back as NO default, which is not `NULL`.
+    blob = refused(() -> Models.BinaryField(db_default = (sqlite = "$(q)abc$(q)",)))
+    @test blob !== nothing && occursin("not a value a BinaryField can hold", blob) && !occursin("NULL", blob)
+
+    # The two refusals with no `default = …` to offer. `NULL` is no default at all, and a
+    # `SearchVectorField` refuses `default` itself (#1021), so redirecting there would be a dead end.
+    null_msg = refused(() -> Models.IntegerField(null = true, db_default = (postgres = "NULL",)))
+    @test null_msg !== nothing && occursin("omit `db_default`", null_msg) && !occursin("Declare it as", null_msg)
+    cast_null = refused(() -> Models.IntegerField(null = true, db_default = (postgres = "NULL::integer",)))
+    @test cast_null !== nothing && occursin("`NULL` is no default", cast_null)
+    tsv_msg = refused(() -> Models.SearchVectorField(null = true, db_default = (postgres = "$(q)$(q)::tsvector",)))
+    @test tsv_msg !== nothing && occursin("takes no `default` either", tsv_msg) && !occursin("Declare it as", tsv_msg)
+
+    # Each entry of a two-engine pin is judged by its own engine's reader: the PostgreSQL text is an
+    # expression, the SQLite one a constant, and the SQLite entry alone is what is refused.
+    two = refused(() -> Models.CharField(db_default = (postgres = "lower($(q)OPEN$(q))", sqlite = "$(q)open$(q)")))
+    @test two !== nothing && occursin("`sqlite`", two)
+
+    # The CAST rewrite only fires on ONE call: `CAST(…) + CAST(…)` matches the regex at both ends and
+    # is a sum, which the closing-paren check leaves untouched. Asserted on the rewrite itself,
+    # because the garbled text that check prevents would happen to classify as an expression anyway.
+    @test PormG.Kernel._pg_deparse_literal_forms("CAST(0 AS integer) + CAST(1 AS integer)") ==
+          "CAST(0 AS integer) + CAST(1 AS integer)"
+
+    # THE CONTROLS: expressions stay accepted, on both engines. `NOT 'f'` has the typed-literal shape
+    # but is an operator, and so do the `AT TIME ZONE` / `LIKE` / `AND` shapes, which the first draft
+    # refused by reading any run of words before a quote as a type name (found in review: PostgreSQL
+    # stores `CURRENT_TIMESTAMP AT TIME ZONE 'UTC'` as an expression). A sign on a non-number stays an
+    # expression. SQLite keeps `CAST(0 AS integer)` as written, so it converges there as one.
+    for f in (() -> Models.DateTimeField(db_default = (postgres = "now()",)),
+              () -> Models.TextField(db_default = (postgres = "now()",)),
+              () -> Models.IntegerField(db_default = (postgres = "0 + 0",)),
+              () -> Models.TextField(db_default = (postgres = "$(q)x$(q) || $(q)y$(q)",)),
+              () -> Models.IntegerField(db_default = (postgres = "CAST(0 AS integer) + CAST(1 AS integer)",)),
+              () -> Models.BooleanField(db_default = (postgres = "NOT $(q)f$(q)",)),
+              () -> Models.DateTimeField(db_default = (postgres = "(CURRENT_TIMESTAMP AT TIME ZONE $(q)UTC$(q))",)),
+              () -> Models.DateTimeField(db_default = (postgres = "LOCALTIMESTAMP AT TIME ZONE $(q)utc$(q)",)),
+              () -> Models.BooleanField(db_default = (postgres = "CURRENT_USER LIKE $(q)x$(q)",)),
+              () -> Models.BooleanField(db_default = (postgres = "true AND $(q)f$(q)",)),
+              () -> Models.BooleanField(db_default = (postgres = "NOT NOT $(q)f$(q)",)),
+              () -> Models.IntegerField(db_default = (postgres = "- abs(1)",)),
+              # PostgreSQL never folds a unary `+`: `+1` is stored and printed as `(+ 1)`.
+              () -> Models.IntegerField(db_default = (postgres = "+ 1",)),
+              () -> Models.ArrayField(Models.IntegerField(); db_default = (postgres = "ARRAY[]::integer[]",)),
+              () -> Models.SearchVectorField(null = true, db_default = (postgres = "to_tsvector($(q)simple$(q), $(q)$(q))",)),
+              () -> Models.IntegerField(db_default = (sqlite = "CAST(0 AS integer)",)),
+              () -> Models.IntegerField(db_default = (sqlite = "abs(random()) % 10",)),
+              () -> Models.BinaryField(db_default = (sqlite = "randomblob(16)",)),
+              () -> Models.DateTimeField(db_default = "CURRENT_TIMESTAMP"))
+        @test refused(f) === nothing
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The remedy converges, and inspectdb never writes what the constructor refuses (#1033)
+# `default = <value>` is the spelling the refusal points to, so it must compile to the same spec the
+# reader builds from the catalog. And every expression the reader carries as a `db_default` is
+# written into a generated models file, so the refusal must accept all of them: one that it did not
+# would make a freshly generated file fail to load.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the default= remedy converges, and every read-back expression is accepted (#1033)" begin
+    q = DBD_Q
+    # The live side, built by the production reader from the text each catalog really reports
+    # (measured on PostgreSQL 16 and SQLite in #1033), against the declaration the refusal suggests.
+    live_spec(declared, raw, conn) = ColumnSpec((f === :default ?
+        Migrations._default_or_drop("t", declared, raw, conn) : getfield(declared, f)
+        for f in fieldnames(ColumnSpec))...)
+    for (field, raw, conn) in [
+            (Models.IntegerField(default = 0),             "0",                                 PG496),
+            (Models.IntegerField(default = -1),            "$(q)-1$(q)::integer",               PG496),
+            (Models.CharField(default = "open"),           "$(q)open$(q)::character varying",   PG496),
+            (Models.DateField(default = "2024-01-01"),     "$(q)2024-01-01$(q)::date",          PG496),
+            # `-1::integer` is stored as the operator and printed `(- 1)` (measured, PostgreSQL 16);
+            # the reader reads it as the constant it is, so `default = -1` converges against it.
+            (Models.IntegerField(default = -1),            "(- 1)",                             PG496),
+            (Models.FloatField(default = -1.5),            "(- 1.5)",                           PG496),
+            (Models.BigIntegerField(default = -1),         "(- (1)::bigint)",                   PG496),
+            (Models.IntegerField(default = -1),            "(- $(q)1$(q)::integer)",            PG496),
+            # A negation inside an assignment cast keeps its own parentheses through the reader's one
+            # unwrap; folded all the same (found in review; not printed by the PostgreSQL 16 cases
+            # measured, so guarded rather than observed).
+            (Models.BigIntegerField(default = -1),         "((- 1))::bigint",                   PG496),
+            (Models.TextField(default = "-1"),             "((- 1))::text",                     PG496),
+            (Models.IntegerField(default = 0),             "0",                                 SL496),
+            (Models.CharField(default = "open"),           "$(q)open$(q)",                      SL496),
+            (Models.BooleanField(default = true),          "1",                                 SL496),
+            (Models.BinaryField(default = UInt8[0x01]),    "X$(q)01$(q)",                       SL496)]
+        declared = Migrations.column_spec(field, conn; name = "c")
+        @test column_delta(declared, live_spec(declared, raw, conn)) == Symbol[]
+    end
+
+    # Every catalog spelling the readers classify as an EXPRESSION, in the canonical form `inspectdb`
+    # writes, builds a field without a refusal. PostgreSQL's are `pg_get_expr` output, casts included.
+    pg_expressions = ["now()", "nextval($(q)s$(q)::regclass)", "(0 + 0)", "lower($(q)OPEN$(q)::text)",
+                      "to_tsvector($(q)simple$(q)::regconfig, $(q)$(q)::text)", "gen_random_uuid()",
+                      "((random() * (10)::double precision))::integer", "($(q)x$(q)::text || $(q)y$(q)::text)",
+                      "concat($(q)a$(q)::text, $(q)b$(q)::text)", "ARRAY[]::integer[]",
+                      "(now() - $(q)1 day$(q)::interval)", "CURRENT_TIMESTAMP", "CURRENT_DATE",
+                      "(+ 1)", "(- random())", "(- $(q)x$(q)::text)",
+                      "(CURRENT_TIMESTAMP AT TIME ZONE $(q)UTC$(q)::text)"]
+    sl_expressions = ["CAST(0 AS integer)", "0 + 0", "abs(random()) % 10", "lower($(q)OPEN$(q))",
+                      "($(q)a$(q) || $(q)b$(q))", "CURRENT_TIMESTAMP", "(randomblob(16))"]
+    for (engine, raws) in ((:postgres, pg_expressions), (:sqlite, sl_expressions))
+        for raw in raws
+            read = engine === :postgres ? PormG._pg_clean_default(raw) : PormG._normalize_sqlite_default(raw, :TextField)
+            @test read isa PormG._ExpressionDefault
+            text = canonical_db_default(read.sql)
+            @test PormG._db_default_read_back(text, engine, "TextField") isa PormG._ExpressionDefault
+            pin = engine === :postgres ? (postgres = text,) : (sqlite = text,)
+            @test Models.TextField(db_default = db_default_is_portable(text) ? text : pin) isa Models.sTextField
         end
     end
 end

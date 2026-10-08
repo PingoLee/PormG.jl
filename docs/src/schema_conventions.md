@@ -564,6 +564,31 @@ when it inserts the row (and renders into the column definition), while `db_defa
 expression **the database** evaluates. A field carrying both would have its `db_default` exercised
 by no PormG-written insert at all.
 
+### A literal is a `default`, not a `db_default`
+
+A `db_default` must be an **expression**. A constant written there — a number, a boolean, `NULL`,
+a quoted string, with or without a cast — raises `FieldValidationError` when the field is built:
+
+```julia
+Models.IntegerField(db_default=(postgres="0",))                   # FieldValidationError
+Models.CharField(db_default=(postgres="'open'::character varying",))   # FieldValidationError
+Models.DateField(db_default=(postgres="DATE '2024-01-01'",))      # FieldValidationError
+
+Models.IntegerField(default=0)                                    # the same DEFAULT clause
+Models.CharField(default="open")
+Models.DateField(default="2024-01-01")
+```
+
+The database stores a constant as a value, and the schema reader reads it back as one, so the live
+column would never match a `db_default` declaration: every `makemigrations` would plan the same
+`SET DEFAULT` again (on SQLite, a table rebuild). `default=` renders the same `DEFAULT` clause and
+reads back unchanged, and it is what `inspectdb` writes for such a column. Whether a text counts as
+a constant is decided by the schema reader itself, so `CAST(0 AS integer)` and `DATE '2024-01-01'`
+are constants on PostgreSQL too: its catalog stores them as `0` and `'2024-01-01'::date`. Django
+accepts `db_default=0`; PormG compares the text, not an expression object, so it keeps one spelling
+per fact. A field that takes no `default=` at all (`SearchVectorField`) cannot carry a constant
+database default either.
+
 ### Portable, or pinned to one engine
 
 A `db_default` is raw SQL, so PormG cannot infer which engines it is valid on. The value's **type**
@@ -654,8 +679,8 @@ PormG does apply one cheap well-formedness check, and it is a guard against typo
 security boundary: an expression containing a bare `;`, a top-level `,`, a `--` or `/*` comment
 marker, an unterminated quote, or unbalanced parentheses or brackets is refused, because each of
 those silently changes the statement *around* it — a `--` comments out every column after this one,
-and a `,` adds a column of its own. All of them remain legal inside a string literal, so
-`db_default=(postgres="'a;b'",)` is fine.
+and a `,` adds a column of its own. All of them remain legal inside a string literal, so an
+expression whose string argument holds a `;` or a `,` is fine.
 
 The same check refuses quoting whose end the two engines would find in different places, because
 there a `;` that looks quoted is not: an `E'…'` escape string, a backslash right before a quote

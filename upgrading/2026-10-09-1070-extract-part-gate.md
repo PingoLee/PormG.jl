@@ -43,7 +43,7 @@ checked against the same table, with the same message, and get the same range:
 | `filter("date__@quarter" => 1.5)` | `InvalidValueError` with `kind = :range` | `InvalidValueError` with `kind = :format`, on every operator (#1088) |
 | `filter(F("start_at__@hour") == 25)`, `filter(Extract("start_at", "HOUR") == 25)` | matched nothing | `InvalidValueError`, as `"start_at__@hour" => 25` (#1083) |
 | `filter(F("start_at__@hour") == true)`, `filter(F("start_at__@hour") > 1.5)` | bound `1` / `"1.5"` | `InvalidValueError` (`kind = :type` / `:format`) (#1083) |
-| `filter(F("start_at__@hour") > 25)` | every row | every row, unchanged: an ordering's value is a bound |
+| `filter(F("start_at__@hour") > 25)` | no row | no row, unchanged: an ordering's value is a bound, not refused |
 
 A refusal names the part rather than the spelling: "The `hour` part reads a time of day, …", and a
 refused filter value is located on "the `start_at` hour part" instead of "the `start_at` @hour

@@ -97,6 +97,7 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
     parameters=instruc.parameters,
     outer=instruc,
   )
+  _refuse_degenerate_probe(instruction, keep_values, "Exists(...)")
   # Bound before the run is detached, so the OFFSET value travels with the rest of this subquery's
   # values — under `:limit`, the last role, which is where its text sits inside the parentheses.
   offset_clause = offset > 0 ?

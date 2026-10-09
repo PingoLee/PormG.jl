@@ -1,7 +1,7 @@
 using Test
 using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField
-using PormG.Functions: Sum, Count, Avg, Coalesce, Value
+using PormG.Functions: Sum, Count, Avg, Coalesce, Value, Rank, WindowOver
 using PormG.QueryBuilder: SQLOrder, SQLField
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -535,9 +535,129 @@ end
     @test qb().exists(show_query = :params) == qb().list(show_query = :params)
     # A non-aggregating probe still drops it.
     @test !occursin("ORDER BY", model.objects.values("code").distinct().order_by("code").count(show_query = :sql))
-    # A whole-table aggregate is one row: counted through the derived table, with no GROUP BY.
+    # A whole-table aggregate is one row whatever matched, so it is not kept: count() counts the
+    # matched rows (#1082, which reversed #1066's derived-table count of that single row).
     sql_w = model.objects.values("n" => Count("id")).count(show_query = :sql)
-    @test occursin("FROM (", sql_w) && !occursin("GROUP BY", sql_w)
+    @test !occursin("FROM (", sql_w) && !occursin("GROUP BY", sql_w)
+  end
+end
+
+# #1082: an aggregate projection with no GROUP BY and no HAVING is exactly one row whatever matched
+# (`COUNT` over no rows is 0, not zero rows). #1066 kept it, so `Exists(sub)` and `exists()` were always
+# true and `count()` always 1. It is cleared again, as v0.7.0 cleared every projection: all three ask
+# about the matched rows, which is what keeps `exists() == (count() > 0)`. A HAVING makes the one row
+# optional, and any grouping makes the rows the groups, so both keep the #1066 path.
+@testset "count/exists drop an ungrouped aggregate projection with no HAVING (#1082)" begin
+  for (model, m) in ((GocPg, i -> "\$$(i)"), (GocSl, _ -> "?"))
+    deg = () -> model.objects.filter("points" => 3).values("n" => Count("id"))
+    # Both terminals probe the matched rows, with the same WHERE and the same values: the invariant.
+    sql_c = deg().count(show_query = :sql)
+    @test occursin(Regex("^SELECT\\n  COUNT\\(\\*\\)\\nFROM \"goc_driver\""), sql_c)
+    @test !occursin("FROM (", sql_c) && !occursin("COUNT(\"Tb\"", sql_c)
+    sql_e = deg().exists(show_query = :sql)
+    @test startswith(sql_e, "SELECT 1\n") && !occursin("COUNT(", sql_e)
+    @test occursin(Regex("WHERE \"Tb\"\\.\"points\" = \\Q$(m(1))\\E"), sql_c)
+    @test occursin(Regex("WHERE \"Tb\"\\.\"points\" = \\Q$(m(1))\\E"), sql_e)
+    @test deg().count(show_query = :params) == deg().exists(show_query = :params) == Any[3]
+    # Exists(sub), correlated — the documented Subquery/Exists shared-handle shape: the plain probe.
+    sub = model.objects.filter("code" => OuterRef("code")).values("t" => Count("id"))
+    sql_x = model.objects.filter(Exists(sub)).list(show_query = :sql)
+    @test occursin("EXISTS (SELECT 1\nFROM \"goc_driver\" as \"R1\"", sql_x)
+    @test !occursin("__pormg_exists", sql_x) && !occursin("COUNT(", sql_x)
+    # distinct() and a slice collapse nothing in one row, so neither keeps it.
+    @test !occursin("COUNT(\"Tb\"", deg().distinct().count(show_query = :sql))
+    @test startswith(deg().distinct().offset(2).exists(show_query = :sql), "SELECT 1\n")
+    # An order_by() on the alias is not a grouping term, so the shape is still degenerate.
+    @test !occursin("FROM (", deg().order_by("n").count(show_query = :sql))
+    # A window beside the aggregate can group by its OVER terms, so it is never treated as degenerate:
+    # list() groups by the window's order column, and count() counts those groups.
+    win = () -> model.objects.values("x" => Rank(over = WindowOver(order_by = ["points"])) + Sum("id"))
+    @test occursin("GROUP BY \"Tb\".\"points\"", win().list(show_query = :sql))
+    @test occursin("as \"__pormg_grouped_count\"", win().count(show_query = :sql))
+
+    # A HAVING (a filter on the alias, either spelling) makes the one row optional: kept, and bound as
+    # list() binds it.
+    for hv in (() -> deg().filter("n__@gt" => 2), () -> deg().filter(Q("n" => 2)))
+      sql_hc = hv().count(show_query = :sql)
+      @test occursin("SELECT COUNT(\"Tb\".\"id\") as \"n\"", sql_hc) && occursin("HAVING", sql_hc)
+      @test occursin("HAVING", hv().exists(show_query = :sql))
+      @test hv().count(show_query = :params) == hv().list(show_query = :params) == Any[3, 2]
+      @test hv().exists(show_query = :params) == Any[3, 2]
+    end
+    sql_hx = model.objects.filter(Exists(sub.filter("t__@gt" => 1))).list(show_query = :sql)
+    @test occursin(r"EXISTS \(SELECT 1 FROM \(SELECT COUNT\(\"R1\"\.\"id\"\) as \"t\"[\s\S]*HAVING[\s\S]*\) as \"__pormg_exists\"", sql_hx)
+
+    # Any grouping keeps the #1066 path: a grouping column, or an order_by() column it does not project.
+    @test occursin("GROUP BY 1", model.objects.values("code", "n" => Count("id")).exists(show_query = :sql))
+    @test occursin("GROUP BY \"Tb\".\"points\"", deg().order_by("points").count(show_query = :sql))
+
+    # A shape the pre-build check cannot answer, which still builds ungrouped, is refused rather than
+    # answered: a filter on a literal's alias keeps the projection, and the build has no GROUP BY.
+    lit = () -> model.objects.values("n" => Count("id"), "k" => Value(1)).filter("k" => 1)
+    for (terminal, run) in (("count()", () -> lit().count(show_query = :sql)),
+                            ("exists()", () -> lit().exists(show_query = :sql)),
+                            ("Exists(...)", () -> model.objects.filter(Exists(lit())).list(show_query = :sql)))
+      msg = _p208_error(run)
+      @test occursin("$(terminal) cannot answer for this query", msg)
+      @test occursin("no GROUP BY and no HAVING", msg)
+    end
+  end
+end
+
+# #1074: a filter on a values() alias resolves it through the projection, so clearing a plain
+# projection made count() and exists() raise UnknownFieldError on a query list() runs. The projection is
+# kept whenever a filter names its alias, and each alias takes list()'s route: a row alias in WHERE, an
+# aggregate one in HAVING (#1066), a window one into #685's refusal. Re-rendering the row alias in WHERE
+# without the projection would give the same rows; keeping it was chosen for cost and safety.
+@testset "count/exists keep a projection a filter names by alias (#1074)" begin
+  for (model, m) in ((GocPg, i -> "\$$(i)"), (GocSl, _ -> "?"))
+    q = () -> model.objects.filter("code" => "A").values("pts1" => F("points") + 1).filter("pts1__@gt" => 2)
+    # Same statement body as list(), so the same values in the same order.
+    @test q().count(show_query = :params) == q().exists(show_query = :params) == q().list(show_query = :params) ==
+          Any[1, "A", 1, 2]
+    sql_c = q().count(show_query = :sql)
+    @test occursin(Regex("SELECT COUNT\\(\\*\\) FROM \\(\\nSELECT \\(\"Tb\"\\.\"points\" \\+ \\Q$(m(1))\\E[^)]*\\) as \"pts1\""), sql_c)
+    @test occursin("as \"__pormg_projected_count\"", sql_c)
+    @test occursin(Regex("WHERE \"Tb\"\\.\"code\" = \\Q$(m(2))\\E AND \\n   \\(\"Tb\"\\.\"points\" \\+ \\Q$(m(3))\\E"), sql_c)
+    @test startswith(q().exists(show_query = :sql), "SELECT (\"Tb\".\"points\" + ")
+    # Exists(sub): through the derived table, its values one run between the outer ones.
+    qx = () -> model.objects.filter(Exists(q())).filter("code" => "Z")
+    @test occursin(r"EXISTS \(SELECT 1 FROM \(SELECT \(\"R1\"\.\"points\" \+ [\s\S]*\) as \"__pormg_exists\"\nLIMIT 1\)", qx().list(show_query = :sql))
+    @test qx().list(show_query = :params) == Any[1, "A", 1, 2, "Z"]
+    # The Q spelling, and distinct(), which already kept the projection.
+    qq = () -> model.objects.values("pts1" => F("points") + 1).filter(Q("pts1" => 2))
+    @test qq().count(show_query = :params) == qq().list(show_query = :params) == Any[1, 1, 2]
+    @test occursin("SELECT DISTINCT (", q().distinct().count(show_query = :sql))
+    # No filter on an alias: a plain projection is still cleared.
+    @test !occursin("FROM (", model.objects.values("pts1" => F("points") + 1).filter("points" => 2).count(show_query = :sql))
+
+    # A window alias reaches #685's refusal from every probe, as from list().
+    w = () -> model.objects.values("r" => Rank(over = WindowOver(order_by = ["points"]))).filter("r" => 1)
+    msg_list = _p208_error(() -> w().list(show_query = :sql))
+    @test occursin("projects a window function", msg_list)
+    @test _p208_error(() -> w().count(show_query = :sql)) == msg_list
+    @test _p208_error(() -> w().exists(show_query = :sql)) == msg_list
+    @test _p208_error(() -> model.objects.filter(Exists(w())).list(show_query = :sql)) == msg_list
+    # A key that names a model field AND a projection that is not that column is #703's ambiguity. Its
+    # guard reads the projection list, so every probe keeps the projection and refuses it as list()
+    # does, instead of filtering the column. The aggregate shape (`"points" => Sum("points")`) would
+    # otherwise be dropped as degenerate (#1082) and lose its HAVING silently.
+    for amb in (() -> model.objects.values("points" => Sum("points")).filter("points__@gt" => 5),
+                () -> model.objects.values("points" => F("id") + 1).filter(Q("points" => 5)))
+      msg_amb = _p208_error(() -> amb().list(show_query = :sql))
+      @test occursin("points", msg_amb)
+      @test _p208_error(() -> amb().count(show_query = :sql)) == msg_amb
+      @test _p208_error(() -> amb().exists(show_query = :sql)) == msg_amb
+      @test _p208_error(() -> model.objects.filter(Exists(amb())).list(show_query = :sql)) == msg_amb
+    end
+    # A projection that IS the column is not ambiguous, and is still cleared.
+    @test !occursin("FROM (", model.objects.values("code").filter("code" => "A").count(show_query = :sql))
+    # A name that is neither a field nor an alias gets list()'s UnknownFieldError, aliases listed.
+    t = () -> model.objects.values("pts1" => F("points") + 1).filter("pts2" => 1)
+    msg_t = _p208_error(() -> t().list(show_query = :sql))
+    @test occursin("declared aliases: pts1", msg_t)
+    @test _p208_error(() -> t().count(show_query = :sql)) == msg_t
+    @test _p208_error(() -> t().exists(show_query = :sql)) == msg_t
   end
 end
 

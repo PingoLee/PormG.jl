@@ -596,14 +596,15 @@ _function_operand(x) = throw(QueryBuildError(
   "path (a string), a number, a `Bool`, a `Date`/`DateTime`/`ZonedDateTime`/`Time`, or an expression " *
   "(a duration is not one); wrap any other literal as " *
   "\e[4m\e[32mValue(x)\e[0m (#705)."))
-# `Replace`'s `find`/`replace`: TEXT slots, so a string there is a literal. A number is refused
-# rather than converted — PostgreSQL has no `replace(text, bigint, bigint)`, and turning `1` into
-# `"1"` would be a guess the caller can spell for themselves.
-_text_operand(x::AbstractString) = Value(String(x))
-_text_operand(x::Union{Integer,Float16,Float32,Float64}) = throw(QueryBuildError(
-  "\e[4m\e[31mReplace\e[0m searches and replaces TEXT, and a $(typeof(x)) is a number. " *
+# `Replace`'s `find`/`replace` and `LPad`/`RPad`'s `fill` (#122): TEXT slots, so a string there is a
+# literal. A number is refused rather than converted — PostgreSQL has no `replace(text, bigint,
+# bigint)`, and turning `1` into `"1"` would be a guess the caller can spell for themselves. `does`
+# opens the refusal with what the function does with the slot.
+_text_operand(x::AbstractString, does::AbstractString) = Value(String(x))
+_text_operand(x::Union{Integer,Float16,Float32,Float64}, does::AbstractString) = throw(QueryBuildError(
+  "$(does), and a $(typeof(x)) is a number. " *
   "Write it as a string: \e[4m\e[32mstring(x)\e[0m (#705)."))
-_text_operand(x) = _function_operand(x)
+_text_operand(x, does::AbstractString) = _function_operand(x)
 
 # #878 — the operand of the one-argument scalar functions (`Lower`, `Upper`, `Trim`, `LTrim`,
 # `RTrim`, `Length`, `Abs`, `Round`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Cast`), named once. The
@@ -1257,7 +1258,8 @@ raises `QueryBuildError` naming its string spelling (#705).
 """
 function Replace(x, find, replace)
   # #705: `find`/`replace` are text, so a string there is a literal (`_text_operand`).
-  column = Any[_function_operand(x), _text_operand(find), _text_operand(replace)]
+  does = "\e[4m\e[31mReplace\e[0m searches and replaces TEXT"
+  column = Any[_function_operand(x), _text_operand(find, does), _text_operand(replace, does)]
   return FObject(function_name = "REPLACE", column = column, aggregate = _any_agg(column))
 end
 
@@ -1287,6 +1289,68 @@ Removes trailing whitespace from a string.
 function RTrim(x::_ScalarOperand)
   return FObject(function_name = "RTRIM", column = _norm_fn_arg(x), aggregate = _any_agg(x))
 end
+
+# #122 — `LPad`/`RPad`. All three arguments stay in `column`, in text order, so the two bound
+# parameters (`len`, then a literal `fill`) are numbered as they are written — a kwarg binds after
+# every operand (Phase 3 in `_render_function_body`), which would put `len` behind `fill`. `len` is
+# checked here because a negative width is never meant (Django refuses it too; PostgreSQL returns
+# `''`), and one past `_PAD_MAX_LEN` fails on PostgreSQL while the SQLite function would allocate it.
+# A `Bool` is an `Integer` to Julia, and never a width.
+#
+# `_PAD_MAX_LEN`: PostgreSQL sizes the result for the encoding's widest character before padding, so
+# in a UTF-8 database (4 bytes) any length from 268435455 up is "requested length too large" — the
+# 1 GB allocation limit. Measured on PostgreSQL 16, which refuses 268435455 and `typemax(Int32)` alike.
+const _PAD_MAX_LEN = 268_435_454
+function _pad_function(name::String, x, len::Integer, fill)
+  label = name == "LPAD" ? "LPad" : "RPad"
+  (len isa Bool || !(0 <= len <= _PAD_MAX_LEN)) && throw(InvalidValueError(
+    "\e[31m$(label)(…, $(len), …)\e[0m: the length is a number of characters from 0 to " *
+    "$(_PAD_MAX_LEN), PostgreSQL's limit in a UTF-8 database (#122).", :range))
+  does = "\e[4m\e[31m$(label)\e[0m pads with TEXT"
+  column = Any[_function_operand(x), Value(len), _text_operand(fill, does)]
+  return FObject(function_name = name, column = column, aggregate = _any_agg(column))
+end
+
+"""
+    LPad(column, len, fill = " ")
+
+Pads a string on the left with `fill` until it is `len` characters long — `LPad(Cast("number",
+"text"), 3, "0")` turns `44` into `"044"`. A string longer than `len` is cut to its first `len`
+characters, a `fill` of several characters repeats and is cut where the length is reached
+(`LPad("code", 6, "xy")` over `"HAM"` is `"xyxHAM"`), an empty `fill` pads nothing, and a NULL
+string is NULL. The same on PostgreSQL (`LPAD`) and SQLite, which has no `LPAD` and calls a
+function PormG registers on every connection it opens (`pormg_lpad`).
+
+`column` is a column path or an expression, and it must be text: PostgreSQL has no `lpad` over a
+number, a date, a time, a boolean, a uuid or a JSON document, so such a column raises
+`QueryBuildError` when the query is built, on both engines. Convert it to text first — an integer, a
+date, a time or a uuid with [`Cast`](@ref) (`Cast(x, "text")`), a timestamp with [`ToChar`](@ref).
+`fill` is text too: a string there is a literal, and a number, a date or a boolean (a literal or a
+column) raises `QueryBuildError`. A `len` below 0 or above 268435454 (PostgreSQL's limit in a UTF-8
+database) raises `InvalidValueError`.
+
+Zero-filling an integer column into a text column, in one statement:
+
+```julia
+M.Driver.objects.
+    filter("number__@isnull" => false).
+    update("code" => LPad(Cast("number", "text"), 3, "0"))
+```
+"""
+LPad(x, len::Integer, fill = " ") = _pad_function("LPAD", x, len, fill)
+
+"""
+    RPad(column, len, fill = " ")
+
+Pads a string on the right with `fill` until it is `len` characters long — `RPad("code", 5, ".")`
+turns `"HAM"` into `"HAM.."`. Like [`LPad`](@ref), a longer string is cut to its first `len`
+characters, a `fill` of several characters repeats and is cut, an empty `fill` pads nothing, and a
+NULL string is NULL, on PostgreSQL (`RPAD`) and SQLite (`pormg_rpad`) alike.
+
+`column` and `fill` must be text, as for [`LPad`](@ref): anything else raises `QueryBuildError` when
+the query is built, and a `len` below 0 or above 268435454 raises `InvalidValueError`.
+"""
+RPad(x, len::Integer, fill = " ") = _pad_function("RPAD", x, len, fill)
 
 """
     Floor(column)

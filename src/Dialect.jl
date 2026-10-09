@@ -1113,6 +1113,23 @@ function REPLACE(columns::Vector{Any}, format::Dict{String,Any}, conn::Union{Por
   return "REPLACE($(columns[1]), $(columns[2]), $(columns[3]))"
 end
 
+# #122: `LPad`/`RPad`. The length binds as `bigint`, and PostgreSQL has no `lpad(text, bigint, text)`
+# (it will not narrow a `bigint` to choose a function), so it is cast — the `POWER` pattern. SQLite
+# has no `lpad` at all: `pormg_lpad`/`pormg_rpad` are registered on every connection by the SQLite
+# extension, with PostgreSQL's semantics.
+function LPAD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
+  return "LPAD($(columns[1]), ($(columns[2]))::integer, $(columns[3]))"
+end
+function LPAD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
+  return "pormg_lpad($(columns[1]), $(columns[2]), $(columns[3]))"
+end
+function RPAD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
+  return "RPAD($(columns[1]), ($(columns[2]))::integer, $(columns[3]))"
+end
+function RPAD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
+  return "pormg_rpad($(columns[1]), $(columns[2]), $(columns[3]))"
+end
+
 function TRIM(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
   return "TRIM($(column))"
 end

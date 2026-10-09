@@ -367,6 +367,8 @@ numeric string. A value no single date can express (a fraction, a year outside t
 | `LTrim("field")` | Trim leading whitespace | `"clean" => LTrim("name")` |
 | `RTrim("field")` | Trim trailing whitespace | `"clean" => RTrim("name")` |
 | `Replace("field", old, new)` | Replace substring | `"fixed" => Replace("name", "-", " ")` |
+| `LPad("field", len, fill = " ")` | Pad on the left to `len` characters | `"car" => LPad(Cast("number", "text"), 3, "0")` |
+| `RPad("field", len, fill = " ")` | Pad on the right to `len` characters | `"code" => RPad("code", 5, ".")` |
 
 ```julia
 using PormG.Functions: Concat, Value, Lower, Upper, Length
@@ -481,6 +483,80 @@ cols = split("cols=forename,surname", "=")[2]
 q2 = M.Driver.objects
 q2.values("full_name" => Concat(collect(split(cols, ","))))
 ```
+
+### Padding: `LPad` and `RPad`
+
+`LPad(x, len, fill = " ")` pads a string on the left until it is `len` characters long, and `RPad`
+pads on the right. Both work in `values()`, in `update()`, and anywhere else an expression goes. The common case is a fixed-width
+code built from a number: zero-filling a car number into three characters. The column must be text,
+so convert a number with `Cast` first:
+
+```julia
+using PormG.Functions: LPad, RPad, Cast
+
+q = M.Driver.objects
+q.filter("driverid__@in" => [1, 4, 20, 830])
+q.values("driverref", "number",
+         "car"  => LPad(Cast("number", "text"), 3, "0"),
+         "code" => RPad("code", 5, "."))
+q.order_by("driverid")
+df = q |> DataFrame
+```
+
+Generated SQL (PostgreSQL):
+```sql
+SELECT "Tb"."driverref" AS "driverref",
+       "Tb"."number"    AS "number",
+       LPAD(("Tb"."number")::text, ($1::bigint)::integer, $2::text) AS "car",
+       RPAD("Tb"."code", ($3::bigint)::integer, $4::text)           AS "code"
+FROM "driver" AS "Tb"
+WHERE "Tb"."driverid" = ANY($5)
+ORDER BY "Tb"."driverid" ASC NULLS LAST
+-- parameters: [3, "0", 5, ".", [1, 4, 20, 830]]
+```
+
+Output:
+```
+4×4 DataFrame
+ Row │ driverref       number  car      code
+     │ String?         Int32?  String?  String?
+─────┼──────────────────────────────────────────
+   1 │ hamilton            44  044      HAM..
+   2 │ alonso              14  014      ALO..
+   3 │ vettel               5  005      VET..
+   4 │ max_verstappen      33  033      VER..
+```
+
+The same expression in `update()` writes the padded text into a column in one statement. You don't
+need to fetch the rows, pad them in Julia and `bulk_update` them:
+
+```julia
+q = M.Driver.objects
+q.filter("driverid" => 1)
+q.update("code" => LPad(Cast("number", "text"), 3, "0"))   # "HAM" becomes "044"
+```
+
+Both engines give the same value. PostgreSQL renders its own `LPAD`/`RPAD`. SQLite has neither, so
+PormG registers `pormg_lpad`/`pormg_rpad` on every SQLite connection it opens, and SQLite's
+`show_query` output names them. Those functions follow PostgreSQL's rules:
+
+- A string longer than `len` is cut to its first `len` characters, by `RPad` too.
+- A `fill` of several characters repeats and is cut where the length is reached.
+- An empty `fill` pads nothing.
+- A NULL string is NULL.
+- Lengths count characters, not bytes.
+
+These are refused when the query is built, on both engines:
+- **A value that is not text** raises `QueryBuildError`, because PostgreSQL has no `lpad` over one:
+  a number, a date, a time, a timestamp, an interval, a boolean, a uuid or a whole JSON document. A
+  JSON key lookup (`"payload__driver"`) is text and passes. Convert the rest to text first:
+  `Cast(x, "text")` for an integer, a date, a time or a uuid, `ToChar` for a timestamp, a `Case`
+  for a boolean. A float, a decimal, an interval or a document reads differently on each engine, so
+  fetch it and format it in Julia.
+- **A `fill` that is not text** raises `QueryBuildError` too: a number, a date or a boolean, as a
+  literal or as a column. Write the literal as a string: `"0"`, not `0`.
+- **A `len` below 0 or above 268435454** raises `InvalidValueError`. 268435454 is PostgreSQL's own
+  limit in a UTF-8 database, which refuses anything longer as "requested length too large".
 
 ---
 

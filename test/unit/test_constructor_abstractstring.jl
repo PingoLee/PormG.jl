@@ -211,6 +211,13 @@ end
       @test Concat(["a", "b"]; _as = probe("z")).kwargs["as"] == "z"
       @test Concat(["a", "b"]; _as = probe("z")).kwargs["as"] isa String
       @test Coalesce("points", "wins"; output_field = probe("INTEGER")).kwargs["output_field"] == "INTEGER"
+
+      # #122: `LPad`/`RPad` store the operand as a path and the fill as a `String` literal.
+      for pad in (LPad, RPad)
+        node = pad(probe("code"), 3, probe("0"))
+        @test node.column[1] isa String && node.column[1] == "code"
+        @test node.column[3].field isa String && node.column[3].field == "0"
+      end
     end
 
     # `Concat`'s vector ELEMENTS, and the container that holds them.

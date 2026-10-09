@@ -211,7 +211,7 @@ M.Driver.objects.
 
 | Group | Functions |
 | :--- | :--- |
-| String | `Concat(a, b, …)`, `Upper`, `Lower`, `Length`, `Replace(col, find, repl)`, `Trim`, `LTrim`, `RTrim` |
+| String | `Concat(a, b, …)`, `Upper`, `Lower`, `Length`, `Replace(col, find, repl)`, `Trim`, `LTrim`, `RTrim`, `LPad(col, len, fill)`, `RPad(col, len, fill)` |
 | Math | `Abs`, `Round(col, digits)`, `Floor`, `Ceil`, `Sqrt`, `Power(x, y)`, `Exp`, `Ln`, `Mod(a, b)` |
 | Null / compare | `Coalesce(a, b, …)`, `NullIf(a, b)`, `Greatest(a, b, …)`, `Least(a, b, …)` |
 | Type / format | `Cast(col, "INTEGER")`, `Extract(col, "YEAR")`, `ToChar(col, "YYYY-MM")`, `Value(x)` |

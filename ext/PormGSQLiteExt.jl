@@ -51,10 +51,36 @@ _pormg_lower(x::AbstractString) = lowercase(x)
 _pormg_lower(::Missing) = missing
 _pormg_lower(x) = lowercase(string(x))
 
+# `LPad`/`RPad` for SQLite (#122), which has no LPAD/RPAD. Registered per-connection (below) as
+# `pormg_lpad`/`pormg_rpad`, which src/Dialect.jl emits. PostgreSQL's semantics, character for
+# character: a string longer than `n` is cut to its first `n` characters (for both sides), a `fill`
+# repeats and is cut, an empty `fill` pads nothing, a negative `n` is 0, and a NULL argument is NULL.
+# A UDF is acceptable here where it was not for regex (#635): padding has one definition, so the
+# Julia function cannot disagree with PostgreSQL's the way PCRE and POSIX patterns do, and the value
+# is a projection or a SET value, so no index is lost to it. The query builder refuses a typed value
+# that is not text before SQL is written, and PostgreSQL fails on it anyway. What still arrives
+# untyped (a `Subquery`, an untyped `Case`) is converted with `string`, which is NOT SQLite's own
+# conversion for a float (`1.0e20`, where SQLite writes `1.0e+20`); a blob is read as its bytes.
+_pormg_pad_text(x::AbstractVector{UInt8}) = String(copy(x))
+_pormg_pad_text(x) = string(x)
+function _pormg_pad(s, n::Integer, fill, left::Bool)
+  s, fill, n = _pormg_pad_text(s), _pormg_pad_text(fill), max(Int(n), 0)
+  k = length(s)
+  k >= n && return first(s, n)
+  isempty(fill) && return s
+  pad = first(repeat(fill, cld(n - k, length(fill))), n - k)
+  return left ? pad * s : s * pad
+end
+_pormg_lpad(s, n, fill) = any(ismissing, (s, n, fill)) ? missing : _pormg_pad(s, n, fill, true)
+_pormg_rpad(s, n, fill) = any(ismissing, (s, n, fill)) ? missing : _pormg_pad(s, n, fill, false)
+
 function _create_sqlite_connection(connection_string::String; read_only::Bool = false)
   new_conn = SQLite.DB(connection_string)
   # Unicode-aware case folding for the i* lookups (#78). Deterministic so it stays index-eligible.
   SQLite.register(new_conn, _pormg_lower; nargs = 1, name = "pormg_lower", isdeterm = true)
+  # String padding for `LPad`/`RPad` (#122).
+  SQLite.register(new_conn, _pormg_lpad; nargs = 3, name = "pormg_lpad", isdeterm = true)
+  SQLite.register(new_conn, _pormg_rpad; nargs = 3, name = "pormg_rpad", isdeterm = true)
   SQLite.execute(new_conn, "PRAGMA journal_mode = WAL;")
   SQLite.execute(new_conn, "PRAGMA synchronous = NORMAL;")
   SQLite.execute(new_conn, "PRAGMA busy_timeout = 30000;")

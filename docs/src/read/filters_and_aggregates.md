@@ -665,7 +665,7 @@ Concretely, a non-`String` `AbstractString` is accepted by:
 - **Reads** — filter values and `__@in` lists; `values()` field names and aliases; `order_by()`, including the `"-field"` descending form; `db()`.
 - **Column references** — `F(...)`, and the right-hand side of any `F` or `Joined` comparison.
 - **Aggregates** — `Sum`, `Avg`, `Count`, `Max`, `Min`.
-- **Scalar and conversion functions** — `Lower`, `Upper`, `Length`, `Abs`, `Round`, `Trim`, `LTrim`, `RTrim`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Cast`, `Extract`, `ToChar`, `Concat`, `Coalesce`, `Greatest`, `Least`, `NullIf`, `Replace`, `Power`, `Mod`, together with their `output_field` and `_as` keywords.
+- **Scalar and conversion functions** — `Lower`, `Upper`, `Length`, `Abs`, `Round`, `Trim`, `LTrim`, `RTrim`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Cast`, `Extract`, `ToChar`, `Concat`, `Coalesce`, `Greatest`, `Least`, `NullIf`, `Replace`, `LPad`, `RPad`, `Power`, `Mod`, together with their `output_field` and `_as` keywords.
 - **Windows** — `WindowOver(partition_by = …, order_by = …, frame = …)`, `SQLOrder(...; orientation = …, _as = …)`, and the value functions `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue`.
 - **Bulk writes** — the `filters`, `columns` and `match_on` arguments.
 - **Rows** — `row[key]`, `haskey(row, key)` and `get(row, key, default)` on a `PormGRow`, alongside the `Symbol` and dot-access spellings.

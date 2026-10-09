@@ -319,7 +319,7 @@ end
 # checked first. #851 listed it here while the table keyed `TO_CHAR`, a name no node carries; #862
 # keyed the table by the node's name instead, so the type has one home. A `ToChar` built with its own
 # `formatter=` keeps it either way: `p.formatter` is checked before both.
-const _TEXT_OUTPUT_FUNCTIONS = ("LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "REPLACE", "CONCAT")
+const _TEXT_OUTPUT_FUNCTIONS = ("LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "REPLACE", "CONCAT", "LPAD", "RPAD")
 # Functions whose result has the type of their operands — the first one that names a type decides.
 const _OPERAND_TYPED_FUNCTIONS = ("MAX", "MIN", "COALESCE", "GREATEST", "LEAST", "NULLIF")
 

@@ -625,6 +625,35 @@ const DOCERR_CASES = [
         () -> PormG.Functions.Round("points", -1),
     ),
     (
+        # #122. PostgreSQL has no `lpad` over a number; SQLite's UDF would pad its text. Refused when
+        # the query is built, on both engines — the SQLite model here, the PostgreSQL one in its file.
+        "read/functions_and_dates.md + LPad docstring — LPad over a non-text column raises (#122)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_SL.objects.values("x" => PormG.Functions.LPad("points", 3, "0")).
+            list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md + LPad docstring — a number as the LPad fill raises (#122)",
+        QueryBuildError,
+        () -> PormG.Functions.LPad("surname", 3, 0),
+    ),
+    (
+        "read/functions_and_dates.md + LPad docstring — a negative LPad length raises (#122)",
+        InvalidValueError,
+        () -> PormG.Functions.LPad("surname", -1, "0"),
+    ),
+    (
+        "read/functions_and_dates.md + LPad docstring — an LPad length above 268435454 raises (#122)",
+        InvalidValueError,
+        () -> PormG.Functions.LPad("surname", 268_435_455, "0"),
+    ),
+    (
+        "read/functions_and_dates.md + LPad docstring — a non-text column as the LPad fill raises (#122)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.values("x" => PormG.Functions.LPad("driverid__surname", 6, F("points"))).
+            list(show_query = :dict),
+    ),
+    (
         # #859. `Coalesce`, `Greatest` and `Least` take two or more arguments; one argument is
         # refused when the expression is built (on SQLite it rendered the aggregate `MAX(x)`).
         "read/functions_and_dates.md — Greatest with fewer than two arguments raises (#859)",

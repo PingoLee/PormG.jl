@@ -973,6 +973,28 @@ const DOCERR_CASES = [
         InvalidValueError,
         () -> DOCERR_RACE_PG.objects.filter("date__@quarter" => "abc").list(show_query = :dict),
     ),
+    # #988. The filter's own value checks raise the type a field's formatter raises: the value is
+    # bound either way. Each claim was `FilterError` until then, and only the `@family` one ran here.
+    (
+        "read/functions_and_dates.md — a @year no date bound can express raises (#988)",
+        InvalidValueError,
+        () -> DOCERR_RACE_PG.objects.filter("date__@year__@gte" => 99999).list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md — a Bool @year raises (#988)",
+        InvalidValueError,
+        () -> DOCERR_RACE_PG.objects.filter("date__@year" => true).list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md — a @yyyy_mm that is not a calendar month raises (#988)",
+        InvalidValueError,
+        () -> DOCERR_RACE_PG.objects.filter("date__@yyyy_mm__@lte" => "1991-13").list(show_query = :dict),
+    ),
+    (
+        "read/filters_and_aggregates.md — a numeric JSON comparison against a non-number raises (#988)",
+        InvalidValueError,
+        () -> DOCERR_RESULT_PG.objects.filter("payload__wins__@gte" => "many").list(show_query = :dict),
+    ),
     # #654 — the *Which Lookups Work on an Aggregate Alias* section says `@isnull` on a `Count` alias
     # raises when the query is built: COUNT never returns NULL, so the lookup could never match. (The
     # three #618 entries that stood here — `@range` / `@nrange` / `@isnull` being WHERE-only — went
@@ -1885,11 +1907,19 @@ const DOCERR_CASES = [
         end,
     ),
     (
-        "fields.md — @family other than 4 or 6 raises (#904)",
-        FilterError,
+        "fields.md — @family other than 4 or 6 raises (#904, #988)",
+        InvalidValueError,
         () -> let m = Model("docerr_pitwall_904b", id = IDField(), client_ip = GenericIPAddressField())
             m.connect_key = "docerr_pg"; m._module = Main
             q = m.objects; q.filter("client_ip__@family" => 5); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — @prefixlen outside 0 to 128 raises (#988)",
+        InvalidValueError,
+        () -> let m = Model("docerr_pitwall_988a", id = IDField(), garage_lan = CIDRField())
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("garage_lan__@prefixlen" => 129); q.list(show_query = :dict)
         end,
     ),
     (

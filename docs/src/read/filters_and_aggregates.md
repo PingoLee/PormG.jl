@@ -349,7 +349,8 @@ M.Constructor.objects.filter("metadata__principal" => "Toto Wolff")
 # Array index then key: drivers[0].name
 M.Constructor.objects.filter("metadata__drivers__0__name" => "Russell")
 
-# Numeric comparison — PostgreSQL casts the extracted text to numeric; SQLite compares natively
+# Numeric comparison — PostgreSQL casts the extracted text to numeric; SQLite compares natively.
+# The value is a number, or base-10 numeric text ("100"); other text raises InvalidValueError.
 M.Constructor.objects.filter("metadata__wins__@gte" => 100)
 
 # Presence: a missing key extracts to NULL

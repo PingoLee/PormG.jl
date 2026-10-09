@@ -6,16 +6,22 @@
 # numerically (PostgreSQL casts the extracted text `::numeric`; SQLite's json_extract returns a
 # native number). Binding a string here would make SQLite compare number-vs-text and silently
 # invert every comparison.
+#
+# #988: the RHS is bound, so a refusal is an `InvalidValueError` with the reason alone; the caller
+# locates it through `_locate_filter_refusal`, as a formatter refusal is.
 function _json_numeric_rhs(value)
   value isa Bool && return Int(value)
   value isa Integer && return value
   value isa AbstractFloat && return value
   s = strip(string(value))
   # Base 10 only, as on every other numeric path (#773): the bare parsers read `"0x10"` as 16.
-  Models.is_base10_number(s) || throw(FilterError("A numeric JSON comparison requires a base-10 number; got a string that is not one."))
+  Models.is_base10_number(s) ||
+    throw(InvalidValueError("A numeric JSON comparison requires a base-10 number", :format))
   n = tryparse(Int, s); n !== nothing && return n
   f = tryparse(Float64, s); (f !== nothing && isfinite(f)) && return f
-  throw(FilterError("A numeric JSON comparison requires a number; got a $(typeof(value))."))
+  # Base-10 text that overflows `Float64` (`"1e400"`) parses to `Inf`: refused rather than bound as a
+  # value the caller never wrote. (A `Float64` the caller passes, `Inf` included, binds as it is.)
+  throw(InvalidValueError("A numeric JSON comparison requires a finite number", :range))
 end
 
 # #27: render a comparison against a JSON path lookup (e.g. `payload__driver`). The RHS binds
@@ -52,7 +58,12 @@ function _render_json_lookup_comparison(v::SQLTypeOper, column::String, instruc:
     return string(column, " ", op, " ", ph)
   elseif op in (">", ">=", "<", "<=")
     lhs = is_pg ? "($(column))::numeric" : column
-    ph = add_parameter!(instruc, _json_numeric_rhs(v.values))
+    rhs = try
+      _json_numeric_rhs(v.values)
+    catch e
+      _locate_filter_refusal(e, _filter_path_label(v), nothing)
+    end
+    ph = add_parameter!(instruc, rhs)
     return string(lhs, " ", op, " ", ph)
   else
     throw(FilterError("The operator \e[31m$(op)\e[0m is not supported on a JSON path lookup. Use =, !=, <, <=, >, >=, or __@isnull."))
@@ -129,10 +140,14 @@ function _render_network_operator(v::SQLTypeOper, column::String, operand_field,
     add_parameter!(instruc, _guarded_format(Models.format_inet_network_sql, v.values, op, label,
                                             operand_field.type); sql_type = "inet")
   else  # family / prefixlen
+    # #988: the value is bound, so a refusal is an `InvalidValueError`, located like a formatter's.
     # A `Bool` is an `Integer` in Julia, and `true` is not a family (#949's reasoning).
     allowed, what = op == "family" ? ((4, 6), "4 or 6") : (0:128, "a whole number from 0 to 128")
-    (v.values isa Integer && !(v.values isa Bool) && v.values in allowed) ||
-      throw(FilterError("Error in filter '$(lookup)': the @$(op) lookup takes $(what), got another $(typeof(v.values))."))
+    kind = !(v.values isa Integer) || v.values isa Bool ? :type :
+           v.values in allowed ? nothing : :range
+    kind === nothing ||
+      throw(with_location(InvalidValueError("The @$(op) lookup takes $(what)", kind);
+                          op = "filter", field = label, field_type = _opt_label(operand_field.type)))
     add_parameter!(instruc, Int(v.values))
   end
   return getfield(Dialect, Symbol(op))(instruc.connection, column, ph)
@@ -297,10 +312,9 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
     return string(column_sql, " ", v.operator, " ", bind(v.values))
   end
 
-  # `_year_bucket_bounds` raises `FilterError` on every rejection already, but
-  # `_yyyy_mm_bucket_bounds` opens with `Models.format_yyyy_mm(value)`, which raises
-  # `InvalidValueError` on a bad shape — the same leak, one call deeper. Guarded here rather than
-  # inside the helper, because the helper has no field to name.
+  # Both helpers refuse a value with an `InvalidValueError` carrying the reason alone — their own
+  # checks since #988, and `Models.format_yyyy_mm`'s on a bad shape — and neither has a field to
+  # name, so the location is attached here.
   first_of_period, next_period = try
     bucket == :yyyy_mm ? _yyyy_mm_bucket_bounds(v.values) : _year_bucket_bounds(v.values)
   catch e
@@ -422,14 +436,19 @@ end
 # Reuses Models.format_yyyy_mm for shape/type validation (String "YYYY-MM" regex, or 6-digit
 # Integer YYYYMM), then parses the normalized string for range math. format_yyyy_mm does NOT
 # validate the month is 01-12 (only the regex shape) — Dates.Date(y, m, 1) does, and its
-# ArgumentError is caught and rethrown as a FilterError so a filter-level defect isn't a bare
-# Dates.jl exception (consistent with the catch/rethrow pattern below for BETWEEN-style errors).
+# ArgumentError is caught and rethrown as an `InvalidValueError` so a bad month is not a bare
+# Dates.jl exception.
+#
+# #988: every refusal in these three helpers is an `InvalidValueError`, because the value they check
+# is bound. They used to raise `FilterError`, which made `"date" => "2026-13-45"` and
+# `"date__@yyyy_mm" => "1991-13"` two error types for one failure: a bad value. `FilterError` is for
+# what shapes the SQL — a lookup, an operator — and none of these does.
 # A year outside 1..9999 cannot be expressed as a date bound: `Dates.Date` happily accepts year 0
 # and negatives and stringifies them as "0000-01-01" / "-0005-01-01", which both backends reject at
 # execution with an opaque server-side error — and `format_date_sql(::Date)` is a bare `string(...)`
 # that validates nothing. Takes any `Real` so it can run before `Int(...)` narrowing.
 function _check_year_bound(y::Real)
-  (1 <= y <= 9999) || throw(FilterError("The year is out of the range a date bound can express (1-9999)."))
+  (1 <= y <= 9999) || throw(InvalidValueError("The year is out of the range a date bound can express (1-9999)", :range))
   return nothing
 end
 
@@ -443,7 +462,7 @@ function _yyyy_mm_bucket_bounds(value)::Tuple{Dates.Date,Dates.Date}
     first_of_period = Dates.Date(y, m, 1)
     return first_of_period, first_of_period + Dates.Month(1)
   catch e
-    throw(FilterError("The value is not a valid YYYY-MM bucket: it is not a calendar month."))
+    throw(InvalidValueError("The value is not a valid YYYY-MM bucket: it is not a calendar month", :range))
   end
 end
 
@@ -467,21 +486,21 @@ function _year_bucket_bounds(value)::Tuple{Dates.Date,Dates.Date}
   # never mentions a year filter. `isinteger(1e30)` is `true`, so the whole-year guard alone does
   # not stop it. Comparing first works on any Real — BigInt, BigFloat, Rational, Decimal.
   y = if value isa Bool
-    throw(FilterError("A __@year filter requires a year, not a Bool."))
+    throw(InvalidValueError("A __@year filter requires a year, not a Bool", :type))
   elseif value isa Integer
     _check_year_bound(value)
     Int(value)
   elseif value isa Real
-    isinteger(value) || throw(FilterError("The value is not a whole year for a __@year filter."))
+    isinteger(value) || throw(InvalidValueError("The value is not a whole year for a __@year filter", :range))
     _check_year_bound(value)
     Int(value)
   elseif value isa AbstractString
     n = tryparse(Int, strip(value), base=10)
-    n === nothing && throw(FilterError("The value is not a valid year for a __@year filter."))
+    n === nothing && throw(InvalidValueError("The value is not a valid year for a __@year filter", :format))
     _check_year_bound(n)
     n
   else
-    throw(FilterError("A __@year filter requires a year as an Integer, a whole Real, or a numeric String; got $(typeof(value))."))
+    throw(InvalidValueError("A __@year filter requires a year as an Integer, a whole Real, or a numeric String; got a $(typeof(value))", :type))
   end
   first_of_period = Dates.Date(y, 1, 1)
   return first_of_period, first_of_period + Dates.Year(1)

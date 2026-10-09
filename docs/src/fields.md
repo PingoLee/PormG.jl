@@ -373,13 +373,13 @@ M.Pit_wall_session.objects.
   `InvalidValueError`.
 - A **column on the right** (`F("garage_lan")`) is compared directly.
 - `@family` takes `4` or `6`, and `@prefixlen` a whole number from `0` to `128`. Anything else raises
-  `FilterError`.
+  `InvalidValueError`, like any other value the lookup cannot bind.
 - These lookups work on a network column only: the model's own, one reached through a relation
   (`"session__client_ip__@net_contained"`), or a CTE or `cjoin_on` column over one. On any other
   column, on a projection alias, or with a list of values, they raise `FilterError`.
 - **PostgreSQL only.** On SQLite, a lookup that is otherwise valid raises `BackendCapabilityError`,
   as the fields themselves do. The value checks above come first, so an invalid one still raises
-  its own error there (`InvalidValueError`, or `FilterError` for `@family` and `@prefixlen`).
+  its own error there (`InvalidValueError`).
 
 ---
 

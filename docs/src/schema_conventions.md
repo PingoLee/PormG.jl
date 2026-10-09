@@ -670,6 +670,11 @@ A state-based engine has no history to distinguish "never declared" from "delibe
 and of the two possible silences, the one that cannot destroy a database default is the right
 default.
 
+A generated column (`GENERATED ALWAYS AS (…) STORED`) follows the same rule. One that PormG did not
+create is left as it is under a plain declaration, and no `DROP EXPRESSION` is proposed. One that
+PormG created from a `SearchVectorField(generated_from = …)` carries a marker in its column comment,
+so removing `generated_from` is a change it acts on (#1032).
+
 **For `created_at`, `auto_now_add` is usually still the better answer.** It is the Django-shaped
 one, PormG applies it when the row is inserted, and it never renders into DDL — so it agrees with a
 live `DEFAULT now()` column instead of fighting it, and it works identically on both engines with no

@@ -28,7 +28,10 @@ import PormG.ConnectionPool: fetch, close_pool!, SQLiteConnectionPool
 # Suffixed name: `runtests.jl` includes every unit file into ONE module. Its catalog is empty, so
 # `read_live_schema` returns no tables and an empty models file diffs to an empty plan.
 struct StalePendingMockPg727 <: PormGPostgres end
-fetch(::StalePendingMockPg727, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) = DataFrame()
+# #1032: the schema reader asks the server version first (the PostgreSQL 12 floor); answered here
+# and not recorded, so the captured statements are the schema reads alone.
+fetch(::StalePendingMockPg727, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
+  occursin("server_version_num", sql) ? DataFrame(v = [160000]) : DataFrame()
 
 # The models file `makemigrations` reads: one F1 table, with or without the column under test.
 function _sp727_write_models(path::AbstractString; with_nickname::Bool)

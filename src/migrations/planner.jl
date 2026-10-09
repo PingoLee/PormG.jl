@@ -1518,6 +1518,15 @@ function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
                               catalog_table::Symbol = model_name,
                               lossy_alters::Vector{LossyAlter} = LossyAlter[])::Nothing
   isempty(delta) && old_column === nothing && return nothing
+  # #1032: a generated column is re-created, never altered, and only under its own name
+  # (`_generated_recreates`). Reached here, it is a renamed column that is also made generated or given
+  # another expression — two steps PormG will not guess an order for.
+  if :default in delta && delta.new_spec.default isa GeneratedExpression
+    throw(InvalidMigrationError(
+      "Column \"$(field_name)\" of table \"$(model_name)\" is renamed and made generated (or given " *
+      "another generation expression) in one plan. Rename it first and migrate, then change " *
+      "generated_from, config or weights in a second migration (#1032)."))
+  end
   # ONE source for "the column the live catalog knows", shared with the four constraint-name lookups
   # inside `Dialect.alter_field` (which read `delta.old_spec.name` for the same reason). On a rename
   # that is the PRE-rename column, because nothing has executed when the plan is built. The
@@ -1597,6 +1606,78 @@ struct RenameHints
   columns::Dict{String, Dict{String, Union{String, Nothing}}}
 end
 RenameHints() = RenameHints(Dict{String, Union{String, Nothing}}(), Dict{String, Dict{String, Union{String, Nothing}}}())
+
+# ── Generated columns: re-created, never altered (#1032) ─────────────────────────────────────────
+#
+# PostgreSQL has no ALTER that makes a column generated, and none that changes a generation
+# expression before 17 (`SET EXPRESSION`). So a declared generated column whose live column is not
+# that expression is DROPPED and ADDED again, in one plan:
+#
+#   * the live column is plain (or a default), and the declaration now has `generated_from`;
+#   * the live column is generated from another expression — a changed `generated_from`, `config` or
+#     `weights`, or a hand-made one whose deparsed text the declaration does not match;
+#   * a SOURCE column is retyped. PostgreSQL refuses `ALTER COLUMN … TYPE` on a column a generated
+#     one reads, so the generated column has to be out of the way first and back afterwards.
+#
+# PostgreSQL refuses `DROP COLUMN` on a source as well (SQLSTATE 2BP01, measured on 16: it does not
+# drop the generated column with it). That case needs no arm of its own: the model refuses a
+# `generated_from` naming a column it does not have, so a removed source is a changed expression,
+# and the generated column is dropped ahead of the `Remove field` step.
+#
+# The drop is registered before anything else on the table and the re-add after the column loop, so
+# within the table's entries (one bucket, registration order) a source retype, a source removal or a
+# new source column lands between them. `DROP COLUMN` takes the column's indexes and CHECKs with it, so the planner reads
+# a PRUNED live table from then on: those indexes are missing and are planned again, from the
+# declaration. The plan is destructive — the regex flags the `DROP` — so `migrate` runs it only with
+# `destructive = true`, and every stored document is recomputed by the `ADD COLUMN`.
+#
+# The other direction needs none of this: a generated column that is no longer declared generated is
+# `ALTER COLUMN … DROP EXPRESSION` (`Dialect.alter_field`), which keeps its data.
+function _generated_recreates(conn::PormGPostgres, model::PormGModel, live::LiveTable)::OrderedDict{String, String}
+  out = OrderedDict{String, String}()
+  columns = Dict{String, Tuple{String, PormGField}}()
+  for (key, field) in model.fields
+    Models.is_many_to_many_field(field) && continue
+    columns[Models.field_db_column(field, string(key))] = (string(key), field)
+  end
+  for (col, (key, field)) in columns
+    Models.is_generated_field(field) || continue
+    haskey(live.columns, col) || continue
+    changed = :default in column_delta(field, live.columns[col], conn; name = col)
+    source_retyped = any(field.generated_from) do src
+      haskey(columns, src) && haskey(live.columns, src) &&
+        :type in column_delta(last(columns[src]), live.columns[src], conn; name = src)
+    end
+    (changed || source_retyped) && (out[col] = key)
+  end
+  return out
+end
+_generated_recreates(::PormGSQLite, ::PormGModel, ::LiveTable) = OrderedDict{String, String}()
+
+# Does an index, CHECK or generation expression's SQL text name `col`? The same token scan the
+# CHECK-countability pass uses — a quoted token compares exactly, a bare one case-insensitively — on
+# the text with every cast's TYPE NAME removed first. PostgreSQL's deparser casts everywhere
+# (`(title)::text`, `'A'::"char"`, `'simple'::regconfig`), and read as a token that type would name a
+# column called `text`, `char` or `regconfig` (review of #1032).
+const _CAST_TYPE_NAME_RE = r"::\s*(?:\"[^\"]*\"|[A-Za-z_][A-Za-z0-9_]*(?:\s+(?:varying|precision|with(?:out)?\s+time\s+zone))?)(?:\s*\[\])*"
+_text_names_column(text::Nothing, col::AbstractString)::Bool = false
+_text_names_column(text::AbstractString, col::AbstractString)::Bool =
+  any(t -> t.quoted ? t.name == col : lowercase(t.name) == lowercase(col),
+      _sql_text_column_tokens(replace(text, _CAST_TYPE_NAME_RE => "")))
+
+# The live table as it will be once the re-created columns are dropped: same columns, without the
+# indexes, composites and CHECKs `DROP COLUMN` removes with them.
+function _prune_recreated(live::LiveTable, cols)::LiveTable
+  isempty(cols) && return live
+  gone = Set{String}(cols)
+  touches(c::LiveComposite) = any(in(gone), c.columns) || any(in(gone), c.include) ||
+                              any(e -> any(g -> _text_names_column(e, g), gone), c.expressions) ||
+                              any(g -> _text_names_column(c.condition, g), gone)
+  indexes = Dict{String, Union{String, Nothing}}(k => v for (k, v) in live.indexes if !(k in gone))
+  composites = filter(!touches, live.composites)
+  checks = filter(c -> !any(g -> _text_names_column(c.sql, g), gone), live.checks)
+  return LiveTable(live.name, live.columns, indexes, composites, checks)
+end
 
 function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_plan::OrderedDict{Symbol, OrderedDict{String, String}}, model_name::Symbol, live::LiveTable, current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, settings::PormGSettings; interactive::Bool = true,
                              composite_targets::Dict{String, Tuple{String, String}} = Dict{String, Tuple{String, String}}(),
@@ -1689,6 +1770,15 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
   # For the rebuild pass at the end of the plan — the map object itself, which is still filling.
   conn isa PormGSQLite && (sqlite_rebuild_context[model_name] = (catalog_table, sqlite_rename_map))
 
+  # #1032: generated columns that are re-created rather than altered — dropped FIRST, and read as gone
+  # by everything below. See `_generated_recreates`.
+  regenerated = _generated_recreates(conn, current_schema[model_name][:model], live)
+  for col in keys(regenerated)
+    _configure_order_dict_migration_plan(migration_plan, model_name, "Drop generated field: $col",
+      """ALTER TABLE "$(Dialect._quote_table_ddl(string(model_name)))" DROP COLUMN "$(Dialect._quote_table_ddl(col))";""")
+  end
+  live = _prune_recreated(live, keys(regenerated))
+
   # #742: the table CHECKs, first half — BEFORE the column pass. See the note above `_CheckPlan`.
   check_plan = _diff_checks(current_schema[model_name][:model], live.checks)
   _plan_check_drops!(conn, migration_plan, model_name, current_schema[model_name][:model], check_plan)
@@ -1769,10 +1859,15 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
       # nothing. The IR carries the whole constraint as one `:reference` facet, `alter_field` has no
       # branch for that facet and needs none, and `_fk_constraint_action` reads it directly — so the
       # filter has nothing left to remove.
-      _plan_column_change!(conn, migration_plan, model_name, current_schema[model_name][:model],
-                           field_name_stripped, field, delta, name;
-                           catalog_table = catalog_table, lossy_alters = lossy_alters)
-      :type in delta && push!(retyped, field_name_stripped)
+      # #1032: a re-created generated column has no ALTER — it is dropped above and added below —
+      # and no lossy finding, since nothing is converted. Its indexes still go through the blocks
+      # below, against the pruned live table, so the ones `DROP COLUMN` takes are planned again.
+      if !haskey(regenerated, field_name_stripped)
+        _plan_column_change!(conn, migration_plan, model_name, current_schema[model_name][:model],
+                             field_name_stripped, field, delta, name;
+                             catalog_table = catalog_table, lossy_alters = lossy_alters)
+        :type in delta && push!(retyped, field_name_stripped)
+      end
 
       # Index differences are RECORDED here and emitted after the loop — see `index_actions`.
 
@@ -1797,6 +1892,14 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
       end
     end
   end
+
+  # #1032: the re-created generated columns go back, and every NEW generated column moves behind the
+  # table's other column steps: both read columns this plan may add or retype, and PostgreSQL resolves
+  # a generation expression when the column is created. `_configure_order_dict_migration_plan` keeps a
+  # key where it was first registered, so a moved step is deleted and registered again.
+  _readd_generated_fields!(conn, migration_plan, model_name, current_schema[model_name][:model], regenerated)
+  # …and every OTHER live generated column stops reading its sources before any of them changes.
+  _release_generated_first!(conn, migration_plan, model_name, live, regenerated, sqlite_rename_map, retyped)
 
   # #161: the model-level composites — UniqueConstraint, Index, the join-table index — diffed against
   # `live.composites`. BEFORE the flush below, not after it: this may register the table's SQLite
@@ -1849,6 +1952,86 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
       _drop_index(conn, migration_plan, model_name, col, index_name=live_index_name, catalog_table=catalog_table)
     end
   end
+end
+
+# A live generated column the plan does not re-create still reads its sources while the table's other
+# steps run, and PostgreSQL refuses to retype or drop a column a generated one reads. Three cases:
+#
+#   * its expression is dropped (`generated_from` removed: `alter_field`'s DROP EXPRESSION) — that
+#     whole `Alter field:` entry moves to the front of the table's steps. Everything in it concerns the
+#     column itself, so it depends on no other step;
+#   * it is removed, and one of its sources is retyped or removed too — a `DROP EXPRESSION` is added at
+#     the front, so the source change no longer depends on which column the deletion loop meets first.
+#     Only then: an ordinary removal needs no PostgreSQL 13 statement;
+#   * it stays generated — renamed, or a hand-made column under a plain declaration — and one of its
+#     sources is retyped or removed: refused, because no order of this plan's steps can apply it.
+#
+# Its sources are read off the live expression with the same token scan the CHECK and index passes
+# use. A false positive (a token that names a column the expression does not read) can only add a
+# harmless `DROP EXPRESSION` or refuse a plan; it cannot reorder anything else.
+function _release_generated_first!(conn::PormGPostgres,
+                                   migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
+                                   model_name::Symbol, live::LiveTable, regenerated::AbstractDict{String, String},
+                                   renames::AbstractDict{String, String}, retyped::Set{String})::Nothing
+  haskey(migration_plan, model_name) || return nothing
+  steps = migration_plan[model_name]
+  removed = Set{String}(chopprefix(k, "Remove field: ") for k in keys(steps) if startswith(k, "Remove field: "))
+  # A renamed column's change is planned by the rename branch, not the column loop, so `retyped` does
+  # not hold it: read it off its `Alter field:` step. And the live expression names columns by their
+  # PRE-rename names, so every changed name is compared as the catalog knows it (review of #1032).
+  previous = Dict{String, String}(new => old for (old, new) in renames)
+  renamed_retyped = (new for new in keys(previous)
+                     if occursin(" TYPE ", get(steps, "Alter field: $(new)", "")))
+  changed = Set{String}(get(previous, c, c) for c in Iterators.flatten((removed, retyped, renamed_retyped)))
+  front = Pair{String, String}[]
+  for (col, spec) in live.columns
+    spec.default isa GeneratedExpression || continue
+    haskey(regenerated, col) && continue
+    reads_changed = any(c -> _text_names_column(spec.default.sql, c), setdiff(changed, (col,)))
+    alter_key = "Alter field: $(get(renames, col, col))"
+    if haskey(steps, alter_key) && occursin("DROP EXPRESSION", steps[alter_key])
+      push!(front, alter_key => steps[alter_key])
+      delete!(steps, alter_key)
+    elseif col in removed
+      reads_changed && push!(front, "Release generated field: $col" =>
+        """ALTER TABLE "$(Dialect._quote_table_ddl(string(model_name)))" ALTER COLUMN "$(Dialect._quote_table_ddl(col))" DROP EXPRESSION;""")
+    elseif reads_changed
+      throw(InvalidMigrationError(
+        "Column \"$(col)\" of table \"$(model_name)\" is a generated column that reads a column this plan " *
+        "retypes or removes ($(join(sort([c for c in changed if c != col && _text_names_column(spec.default.sql, c)]), ", "))), " *
+        "and PostgreSQL refuses that while it reads it. Declare it with generated_from (PormG then drops it and " *
+        "adds it back around the change), or make the change in two migrations, the renamed or generated " *
+        "column first (#1032)."))
+    end
+  end
+  isempty(front) && return nothing
+  rest = collect(steps)
+  empty!(steps)
+  for (k, v) in Iterators.flatten((front, rest))
+    steps[k] = v
+  end
+  return nothing
+end
+_release_generated_first!(::PormGSQLite, args...) = nothing
+
+function _readd_generated_fields!(conn::Union{PormGPostgres, PormGSQLite},
+                                  migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
+                                  model_name::Symbol, model::PormGModel, regenerated::AbstractDict{String, String})::Nothing
+  for (col, key) in regenerated
+    _configure_order_dict_migration_plan(migration_plan, model_name, "Re-add generated field: $col",
+      Dialect.add_field(conn, model_name, key, model.fields[key]; model = model))
+  end
+  haskey(migration_plan, model_name) || return nothing
+  steps = migration_plan[model_name]
+  for (key, field) in model.fields
+    Models.is_generated_field(field) || continue
+    label = "Add field: $key"
+    haskey(steps, label) || continue
+    sql = steps[label]
+    delete!(steps, label)
+    steps[label] = sql
+  end
+  return nothing
 end
 
 function _resolve_table_fields(

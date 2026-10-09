@@ -292,6 +292,16 @@ function _fp_term(io::IO, d::ExpressionDefault)
   d.owned === nothing || (print(io, ",owned="); _fp_term(io, d.owned))
   print(io, ')')
 end
+# #1032, written out for the same reason. A generated column read back before #1032 was an
+# `ExpressionDefault` (the reader did not ask `attgenerated`), so a plan made then for a table that
+# holds one carries a different digest and is refused: regenerate it. Tables without one are unchanged.
+function _fp_term(io::IO, d::GeneratedExpression)
+  print(io, "GeneratedExpression(sql=")
+  _fp_term(io, d.sql)
+  print(io, d.stored ? ",stored" : ",virtual")
+  d.owned === nothing || (print(io, ",owned="); _fp_term(io, d.owned))
+  print(io, ')')
+end
 function _fp_term(io::IO, x::Union{CanonicalType, ColumnDefault, CheckKind, ColumnIdentity, ForeignKeyRef,
                                    LiveComposite, LiveCheck})
   T = typeof(x)
@@ -884,7 +894,8 @@ function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
   return ("SELECT COUNT(*) AS n FROM \"$table\" WHERE $pred", params)
 end
 
-# `pg_input_is_valid` arrived in PostgreSQL 16 (`server_version_num` 160000); PormG's floor is 11.
+# `pg_input_is_valid` arrived in PostgreSQL 16 (`server_version_num` 160000); PormG's
+# schema-management floor is 12 (#1032).
 const _PG_INPUT_IS_VALID = 160000
 
 # PostgreSQL 11–15 has no `pg_input_is_valid`, so the `:text_cast` count falls back to the grammar of
@@ -2149,6 +2160,10 @@ function _pg_expression_default_findings(schemas::AbstractDataFrame;
                           something(_pg_json(row, :foreign_keys), Any[]))
     for col in something(_pg_json(row, :columns), Any[])
       col_name = String(col["name"])
+      # #1032: a generated column's `default` is its generation expression, and declaring it as a
+      # `db_default=` would be wrong advice: the reader carries it as generated, and a plain
+      # declaration leaves an unowned one alone.
+      something(get(col, "generated", ""), "") in ("s", "v") && continue
       ctype = parse_canonical_type(String(get(col, "type", "")), engine)
       finding = _expression_default_finding(row.table_name, col_name, get(col, "default", nothing),
                                             ctype, col_name in pk_set, col_name in fk_cols, engine)
@@ -2247,7 +2262,8 @@ end
 # paid for on every write, and silent from then on, because it is no longer invalid. PostgreSQL's
 # own advice for either is to drop it. For any other index the cause has to go first (a unique build
 # that failed on duplicates fails the same way again), and `REINDEX … CONCURRENTLY` is 12+ while
-# PormG's floor is 11, so it is the alternative, not the instruction.
+# PormG's floor was 11 when this was written, so it is the alternative, not the instruction. (#1032
+# raised the schema-management floor to 12; the advice was left as it was.)
 const _REINDEX_LEFTOVER_RE = r"_cc(new|old)\d*$"
 
 function _invalid_index_message(schema::AbstractString, index_name::AbstractString, unique::Bool,

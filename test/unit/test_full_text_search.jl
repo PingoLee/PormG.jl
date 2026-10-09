@@ -27,6 +27,7 @@ using PormG.Models
 import PormG.QueryBuilder: inspect_query
 using PormG.Functions: SearchQuery, SearchVector, SearchRank, SearchHeadline, Lower, Concat, Coalesce,
                        Value, When, Case
+using DataFrames: DataFrame
 
 include("helper_marker_alignment.jl")
 
@@ -67,6 +68,13 @@ Report = Models.Model("report",
   title    = Models.CharField(max_length = 200),
   body     = Models.TextField(),
   search   = Models.SearchVectorField(null = true),
+)
+# #1032: the same document as a generated column, which PostgreSQL keeps current itself.
+Story = Models.Model("story",
+  storyid  = Models.IDField(),
+  title    = Models.CharField(max_length = 200),
+  body     = Models.TextField(null = true),
+  search   = Models.SearchVectorField(generated_from = ("title", "body"), config = "english", weights = ("A", "B")),
 )
 PormG.Models.set_models(@__MODULE__, "fts31")
 end
@@ -494,6 +502,37 @@ end
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # Index helper: form = :vector is the one-column SearchVector alias's expression (#1032)
+  # One unweighted column has two renderings: the lookup's bare `to_tsvector(cfg, col)` and a
+  # SearchVector's COALESCE'd one. `form` names which query the index serves, so an index for
+  # `values("doc" => SearchVector("surname")).filter("doc__@search" => …)` is declarable.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "search_vector_expression(…; form = :vector) is the one-column alias's document" begin
+    vec = SearchVector("surname"; config = "simple")
+    r = _q31("doc__@search" => "senna"; vals = Any["driverid", "doc" => vec])
+    # The WHERE predicate's document, with the table alias stripped as an index expression has none.
+    where_doc = match(r"WHERE (to_tsvector\(.*?\)\)) @@", r[:sql_text]).captures[1]
+    @test Models.search_vector_expression("surname"; config = "simple", form = :vector) ==
+          replace(where_doc, r"\"Tb\"\." => "")
+    # The default is still the lookup's form, which that alias does NOT render.
+    @test Models.search_vector_expression("surname"; config = "simple") ==
+          Models.search_vector_expression("surname"; config = "simple", form = :lookup) ==
+          "to_tsvector('simple'::regconfig, \"surname\")"
+    @test Models.search_vector_expression("surname"; config = "simple") != replace(where_doc, r"\"Tb\"\." => "")
+    # Several columns, or a weight, have SearchVector's document alone: both forms give it.
+    for (cols, kw) in ((("forename", "surname"), (;)), (("surname",), (; weight = "A")))
+      @test Models.search_vector_expression(cols...; config = "simple", form = :vector, kw...) ==
+            Models.search_vector_expression(cols...; config = "simple", form = :lookup, kw...)
+    end
+    # Any other form, including the string spelling, is refused where the index is declared.
+    for bad in (:coalesce, "vector", nothing)
+      e = _err31(() -> Models.search_vector_expression("surname"; config = "simple", form = bad))
+      @test e isa ModelDefinitionError
+      @test occursin("form is :lookup", _plain31(sprint(showerror, e)))
+    end
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # Weights: v1 + v2 is one document, each half with its own config and weight
   # Django's CombinedSearchVector. It renders `(v1 || v2)` and binds nothing of its own, so the only
   # parameters are the operands' own, in text order, before the query's text.
@@ -868,5 +907,145 @@ end
     @test nic(PormG.CTsVector(), PormG.CInt32())
     # No USING is written for it: `CAST(col AS tsvector)` would read the text as a tsvector literal.
     @test PormG.Dialect._postgres_retype_using("c", PormG.CText(), PormG.CTsVector(), "tsvector") === nothing
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Generated SearchVectorField (#1032): the declaration and the expression it renders
+  # `generated_from`/`config`/`weights` render, through the Kernel writer `SearchVector` uses, the
+  # expression PostgreSQL computes the column from: one COALESCE'd document, or one weighted document
+  # per column joined by `||`. Every malformed declaration is refused where it is written.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a generated SearchVectorField renders SearchVector's document, and checks its arguments" begin
+    f = Models.SearchVectorField(generated_from = ["title", "body"], config = "simple", weights = ["A", "B"])
+    # A vector input is normalised to a tuple, which is what a models file prints back.
+    @test f.generated_from == ("title", "body") && f.weights == ("A", "B") && f.config == "simple"
+    @test Models.is_generated_field(f) && !Models.is_generated_field(Models.SearchVectorField(null = true))
+    @test Models.generated_sql(Models.SearchVectorField(null = true)) === nothing
+    # Weighted: what `SearchVector("title"; weight = "A") + SearchVector("body"; weight = "B")` renders.
+    sum = SearchVector("title"; config = "simple", weight = "A") + SearchVector("body"; config = "simple", weight = "B")
+    r = _q31(; model = _F.Report, vals = Any["reportid", "r" => SearchRank(sum, "x")])
+    rendered = match(r"ts_rank\(\((.*)\), plainto_tsquery", r[:sql_text]).captures[1]
+    @test Models.generated_sql(f) == replace(rendered, r"\"Tb\"\." => "")
+    # Unweighted: one document over every column, the index helper's `:vector` form for them.
+    g = Models.SearchVectorField(generated_from = ("title", "body"), config = "simple")
+    @test Models.generated_sql(g) == Models.search_vector_expression("title", "body"; config = "simple", form = :vector)
+    # One column is the COALESCE'd form too, never the lookup's NULL-propagating bare one.
+    @test Models.generated_sql(Models.SearchVectorField(generated_from = ("title",), config = "simple")) ==
+          "to_tsvector('simple'::regconfig, COALESCE((\"title\")::text, ''))"
+    # Refused at the constructor, as a FieldValidationError naming the keyword.
+    for (kw, needle) in (((generated_from = (), config = "simple"), "at least one column"),
+                         ((generated_from = ("a b",), config = "simple"), "database column names"),
+                         ((generated_from = ("a\")",), config = "simple"), "database column names"),
+                         ((generated_from = ("a", "a"), config = "simple"), "names a column twice"),
+                         ((generated_from = "title", config = "simple"), "tuple or vector of strings"),
+                         ((generated_from = ("title",),), "needs a config"),
+                         ((generated_from = ("title",), config = "simple'); --"), "name of a text-search config"),
+                         ((generated_from = ("a", "b"), config = "simple", weights = ("A",)), "one label per"),
+                         ((generated_from = ("a",), config = "simple", weights = ("E",)), "a weight is"),
+                         ((config = "simple",), "give generated_from too"),
+                         ((weights = ("A",),), "give generated_from too"),
+                         ((generated_from = ("a",), config = "simple",
+                           db_default = (postgres = "to_tsvector('simple'::regconfig, '')",)), "has no db_default"))
+      e = _err31(() -> Models.SearchVectorField(; kw...))
+      @test e isa FieldValidationError
+      @test occursin(needle, _plain31(sprint(showerror, e)))
+    end
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Generated SearchVectorField (#1032): its sources are columns of its own model
+  # PostgreSQL resolves the names when the column is created, so a typo would fail `migrate` after the
+  # plan was reviewed. Checked when the model is defined, against PHYSICAL column names.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "generated_from names other, ordinary columns of the same model" begin
+    story(; kw...) = Models.Model("story", storyid = Models.IDField(), title = Models.CharField(); kw...)
+    gen(cols...) = Models.SearchVectorField(generated_from = cols, config = "simple")
+    # A `db_column` is the name generated_from takes, not the field's.
+    m = story(heading = Models.CharField(db_column = "head"), search = gen("title", "head"))
+    @test Models.is_generated_field(m.fields["search"])
+    for (kw, needle) in (((search = gen("nope"),), "not a column of its model"),
+                         ((heading = Models.CharField(db_column = "head"), search = gen("heading")), "not a column of its model"),
+                         ((search = gen("search"),), "from itself"),
+                         ((a = gen("title"), b = gen("a")), "generated too"))
+      e = _err31(() -> story(; kw...))
+      @test e isa ModelDefinitionError
+      @test occursin(needle, _plain31(sprint(showerror, e)))
+    end
+    # `add_field!` checks the same, and leaves the model unchanged when it refuses.
+    m = story()
+    @test _err31(() -> Models.add_field!(m, "search", gen("nope"))) isa ModelDefinitionError
+    @test !haskey(m.fields, "search")
+    Models.add_field!(m, "search", gen("title"))
+    @test Models.is_generated_field(m.fields["search"])
+    # A models file declares it by its keywords, and loading that file builds the same field.
+    text = Models.Model_to_str(_F.Story)
+    decl = match(r"search = (Models\.SearchVectorField\(.*\))", text).captures[1]
+    @test decl == "Models.SearchVectorField(generated_from=(\"title\", \"body\"), config=\"english\", weights=(\"A\", \"B\"))"
+    back = Core.eval(@__MODULE__, Meta.parse(replace(decl, "Models." => "PormG.Models.")))
+    @test Models.generated_sql(back) == Models.generated_sql(_F.Story.fields["search"])
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Generated SearchVectorField (#1032): the column DDL
+  # `GENERATED ALWAYS AS (expr) STORED` and no DEFAULT, stamped with its own ownership marker after the
+  # CREATE TABLE or ADD COLUMN, in the same plan entry. SQLite still refuses the column itself.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a generated column renders GENERATED ALWAYS AS (…) STORED and stamps its marker" begin
+    f = _F.Story.fields["search"]
+    expr = Models.generated_sql(f)
+    col = PormG.Dialect.field_to_column("search", f, _FTS_PG)
+    @test col == "\"search\" tsvector NOT NULL GENERATED ALWAYS AS ($(expr)) STORED"
+    @test !occursin("DEFAULT", col)
+    add = PormG.Dialect.add_field(_FTS_PG, "story", "search", f)
+    parts = PormG.Migrations._split_pg_statements(add)
+    @test length(parts) == 2 && startswith(parts[2], "DO \$pormg\$")
+    @test occursin("'pormg:generated:$(PormG.db_default_hash(expr)):' ||", parts[2])
+    @test parts[2] == chop(PormG.Dialect.stamp_generated(_FTS_PG, "story", "search", expr))
+    # The generated stamp strips only its own marker, and the default stamp only its own: the two
+    # patterns are the two prefixes, so neither can remove the other.
+    @test occursin(PormG.GENERATED_MARKER_RE.pattern, parts[2])
+    @test !occursin(PormG.DB_DEFAULT_MARKER_RE.pattern, parts[2])
+    # CREATE TABLE stamps it after the statement, in the same entry.
+    ddl = PormG.Dialect.create_table(_FTS_PG, _F.Story)
+    @test occursin("GENERATED ALWAYS AS ($(expr)) STORED", ddl)
+    @test occursin("pormg:generated:$(PormG.db_default_hash(expr)):", ddl)
+    # SQLite: the column is refused, generated or not.
+    @test _err31(() -> PormG.Dialect.field_to_column("search", f, _FTS_SL)) isa BackendCapabilityError
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Generated SearchVectorField (#1032): PormG never writes it
+  # PostgreSQL computes the column and refuses a value for it. Named on any write path — a keyword, a
+  # SET, a `defaults`, a DataFrame column, `columns=` — it is refused with InvalidValueError before a
+  # statement is built; left out, it is neither filled nor required. Reading it back is allowed.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a generated column is refused when written and skipped when left out" begin
+    S = _F.Story
+    refused(f) = (e = _err31(f); e isa InvalidValueError && occursin("it is a generated column", _plain31(sprint(showerror, e))))
+    # Left out: the NOT NULL column is neither filled nor reported as missing.
+    sql = S.objects.create("title" => "Monaco", show_query = :dict)[:sql_text]
+    @test occursin("INSERT INTO \"story\"", sql) && !occursin("search", sql)
+    df_sql = bulk_insert(S.objects, DataFrame(title = ["Monaco"], body = ["Senna wins"]); show_query = :dict)[:sql_text]
+    @test !occursin("search", df_sql)
+    # Read back: `returning` names it, which is not a write.
+    ret = bulk_insert(S.objects, DataFrame(title = ["Monaco"]); returning = ["storyid", "search"], show_query = :dict)
+    @test occursin("RETURNING \"storyid\", \"search\"", ret[:sql_text])
+    # Named: refused on every writer, including the SearchVector branch of `update`, which the
+    # generated-column check runs ahead of.
+    upd(v) = (q = S.objects; q.filter("storyid" => 1); q.update("search" => v, show_query = :dict))
+    @test refused(() -> S.objects.create("title" => "Monaco", "search" => "'monaco':1", show_query = :dict))
+    @test refused(() -> upd("'monaco':1"))
+    @test refused(() -> upd(SearchVector("title"; config = "english")))
+    @test refused(() -> S.objects.get_or_create("title" => "Monaco"; defaults = ["search" => "x"], show_query = :dict))
+    @test refused(() -> S.objects.update_or_create("title" => "Monaco"; defaults = ["search" => "x"], show_query = :dict))
+    @test refused(() -> bulk_insert(S.objects, DataFrame(title = ["a"], search = ["x"]); show_query = :dict))
+    @test refused(() -> bulk_insert(S.objects, DataFrame(title = ["a"]); columns = ["title", "search"], show_query = :dict))
+    @test refused(() -> bulk_update(S.objects, DataFrame(storyid = [1], search = ["x"]); show_query = :dict))
+    @test refused(() -> bulk_copy(S.objects, DataFrame(title = ["a"], search = ["x"])))
+    # The control: the same writers with the column left out build.
+    @test occursin("SET \"title\"", bulk_update(S.objects, DataFrame(storyid = [1], title = ["x"]); show_query = :dict)[:sql_text])
+    # The message names the source columns and the fix, never the value.
+    msg = _msg31(() -> upd("'secret':1"))
+    @test occursin("from title, body", msg) && occursin("leave it out", msg) && !occursin("secret", msg)
   end
 end

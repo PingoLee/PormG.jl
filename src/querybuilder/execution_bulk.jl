@@ -833,6 +833,10 @@ function _prepare_bulk_df!(df::DataFrames.DataFrame, model::PormGModel,
           inject_fill_column!(field, f_meta, fill_value, per_row)
         elseif f_meta.primary_key
           # It's a PK, we'll collect it later
+        elseif Models.is_generated_field(f_meta)
+          # #1032: PostgreSQL computes it, and `columns=` named it — refused here, with the reason,
+          # since an absent column takes no part in the later per-column name check.
+          _validate_field_name(model, field, "bulk_$(operation)")
         elseif !f_meta.null && operation in [:insert, :copy]
           throw(InvalidValueError("Error in bulk_$operation, the field \e[4m\e[31m$(field)\e[0m does not allow null and has no default value"))
         end
@@ -1272,7 +1276,8 @@ function _normalize_bulk_returning(returning, model::PormGModel)
     name isa Union{AbstractString, Symbol} ||
       throw(QueryBuildError("Error in bulk_insert, returning entries must be field names, got $(typeof(name))"))
     field = String(name)
-    _validate_field_name(model, field, "bulk_insert")   # UnknownFieldError for a name the model lacks
+    # UnknownFieldError for a name the model lacks. Reading a generated column back is fine (#1032).
+    _validate_field_name(model, field, "bulk_insert"; allow_generated = true)
     field in fields || push!(fields, field)
   end
   return fields

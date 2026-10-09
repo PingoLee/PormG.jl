@@ -93,11 +93,16 @@ to be compared:
 
 `base_field` (`ArrayField`, #28) is read the way `max_length` is: through the rendered type, which
 is the element's type followed by `[]`, so a change of element type or modifier is a type delta.
+
+`generated_from`, `config` and `weights` (`SearchVectorField`, #1032) are read together, through
+`Models.generated_sql`: they render the expression a generated column is computed from, which
+compiles into the `:default` slot as a `GeneratedExpression`.
 """
 const SCHEMA_ATTRS = (:type, :primary_key, :unique, :null, :default, :db_default, :db_column,
                       :max_length, :max_digits, :decimal_places, :base_field,
                       :to, :to_table, :pk_field, :on_delete, :db_constraint,
-                      :generated, :generated_always, :auto_increment)
+                      :generated, :generated_always, :auto_increment,
+                      :generated_from, :config, :weights)
 
 # ── Type parsing: where engine equivalence lives, once ───────────────────────────────────────────
 
@@ -290,6 +295,11 @@ function _column_default(field::PormGField, conn::Union{PormGPostgres, PormGSQLi
   # engines. That is the point rather than a wasted round trip: the live side stores what the
   # catalog reports, and `PRAGMA table_info` reports those same parens already stripped, so passing
   # both sides through one normaliser is what makes the two spellings meet.
+  # #1032: a generated column first. It refuses `db_default` and `default` at construction, so the
+  # order decides nothing; asking here is what puts the expression in the `:default` slot, where the
+  # live side's reader puts what `pg_attrdef` holds for it. Declared generated columns are STORED.
+  generated = Models.generated_sql(field)
+  generated === nothing || return GeneratedExpression(canonical_db_default(generated), true, nothing)
   db_expr = Dialect.db_default_sql(field, conn)
   db_expr === nothing || return ExpressionDefault(canonical_db_default(db_expr))
   value = _slot(field, :default, nothing)
@@ -1576,9 +1586,61 @@ function field_from_spec(spec::ColumnSpec, table::LiveTable,
   # cannot fire because introspection always supplies a pin or a vocabulary spelling; and both
   # cannot be set at once because `_default_or_drop` returns either a literal or an expression,
   # never both.
-  return _field_or_drop_default(table.name, spec.name, default) do d
+  field = _field_or_drop_default(table.name, spec.name, default) do d
     _inspectdb_field(spec, table.name, conn, indexed, d, db_default)
   end
+  spec.default isa GeneratedExpression && _inspectdb_generated!(field, spec, table.name)
+  return field
+end
+
+# #1032: a live generated column. The declaration vocabulary has one generated field, a
+# `SearchVectorField` built by `generated_from`/`config`/`weights`; a column PormG created that way
+# carries a marker vouching for the expression's declared hash, so its keywords are recovered by a
+# LOOSE read of the deparsed text, accepted only when re-rendering them hashes to what the marker
+# vouches for. The hash is what makes the loose read safe: a misread renders a different text and is
+# discarded. Anything else — another type, a VIRTUAL column, a hand-made expression, a stale marker —
+# is written as the plain field with a warning, never silently: `_defaults_equal` lets an unowned
+# generated column converge against that plain declaration, so nothing is planned against it.
+function _inspectdb_generated!(field::PormGField, spec::ColumnSpec, table_name::AbstractString)::PormGField
+  g = spec.default::GeneratedExpression
+  if field isa Models.sSearchVectorField && g.stored && g.owned !== nothing
+    recovered = _recover_generated_search_vector(g.sql, g.owned)
+    if recovered !== nothing
+      field.generated_from, field.config, field.weights = recovered
+      return field
+    end
+  end
+  # An OWNED column whose keywords were not recovered is the one case the plain declaration is not
+  # safe for: `_defaults_equal` calls it a change, and the next plan drops its expression. Said so.
+  consequence = g.owned === nothing ?
+    "makemigrations leaves the column as it is." :
+    "PormG created it, so against this plain declaration makemigrations plans ALTER COLUMN … DROP " *
+    "EXPRESSION: declare generated_from, config and weights by hand to keep it generated."
+  @warn "inspectdb: column '$(spec.name)' of table '$(table_name)' is a generated column " *
+        "(GENERATED ALWAYS AS (…) $(g.stored ? "STORED" : "VIRTUAL")), and its expression could not be " *
+        "written as a field declaration. It is declared as a plain field; $(consequence) (#1032)" table = table_name column = spec.name expression = g.sql
+  return field
+end
+
+const _GENERATED_CONFIG_RE = r"'([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)'::regconfig"
+const _GENERATED_SOURCE_RE = r"COALESCE\(\(*(\"?)([A-Za-z_][A-Za-z0-9_]*)\1"
+const _GENERATED_WEIGHT_RE = r"'([A-D])'::\"char\""
+
+function _recover_generated_search_vector(sql::AbstractString, owned::AbstractString)
+  cfg = match(_GENERATED_CONFIG_RE, sql)
+  cfg === nothing && return nothing
+  columns = Tuple(String(m.captures[2]) for m in eachmatch(_GENERATED_SOURCE_RE, sql))
+  (isempty(columns) || !allunique(columns)) && return nothing
+  labels = Tuple(String(m.captures[1]) for m in eachmatch(_GENERATED_WEIGHT_RE, sql))
+  weights = isempty(labels) ? nothing : labels
+  weights === nothing || length(weights) == length(columns) || return nothing
+  # PostgreSQL prints a config without its schema when the schema is on the search path, so a declared
+  # `pg_catalog.english` reads back as `english`: both spellings are tried, and the hash picks.
+  quoted = ["\"$(c)\"" for c in columns]
+  for config in (String(cfg.captures[1]), "pg_catalog." * cfg.captures[1])
+    db_default_hash(ts_generated_document_sql(quoted, config, weights)) == owned && return (columns, config, weights)
+  end
+  return nothing
 end
 
 # The `db_default` an introspected column declares, or `nothing`.

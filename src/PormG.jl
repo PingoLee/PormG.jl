@@ -73,7 +73,7 @@ import .Kernel: _ExpressionDefault, _quoted_literal, _unquote_literal, _is_sql_l
 # `using PormG.Kernel` elsewhere does not inherit two dozen `C*` type names.
 import .Kernel: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CBool, CText, CDate, CTime,
                 CInterval, CUUID, CJSON, CBytes, CInet, CCidr, CTsVector, CArray, CVarChar, CDecimal, CDateTime, CUnsupported,
-                ColumnDefault, NoDefault, LiteralDefault, ExpressionDefault,
+                ColumnDefault, NoDefault, LiteralDefault, ExpressionDefault, GeneratedExpression,
                 CheckKind, NonNegativeCheck, ByteLengthCheck,
                 ColumnIdentity, ForeignKeyRef, ColumnSpec, ColumnDelta,
                 reference_delta, column_delta, COLUMN_DELTA_COMPARATORS, COLUMN_DELTA_SLOTS
@@ -89,13 +89,15 @@ import .Kernel: CHECK_MARKER_PREFIX, CHECK_MARKER_RE, canonical_check_condition,
 # #1037's expression-default ownership marker — stamped by `Dialect`, read back by `Migrations`.
 import .Kernel: DB_DEFAULT_MARKER_PREFIX, DB_DEFAULT_MARKER_RE, db_default_hash, live_default_hash,
                 db_default_owner
+# #1032's generated-column ownership marker, the same two hashes under its own prefix.
+import .Kernel: GENERATED_MARKER_PREFIX, GENERATED_MARKER_RE, generated_owner
 # #29's index vocabulary — validated by `Models`, rendered by `Dialect`, read back by `Migrations`.
 import .Kernel: INDEX_METHODS, INDEX_OPCLASS_RE, INDEX_MARKER, INDEX_MARKER_RE,
   canonical_index_text, index_text_hash, index_text_marker
 # #1021: the one writer of `to_tsvector(…)` — `Models` renders an index with it, `Dialect` the query
 # that index must serve.
 import .Kernel: TS_CONFIG_RE, ts_config_name, ts_config_prefix, ts_lookup_document_sql,
-  ts_vector_document_sql, TS_WEIGHTS, ts_weight_name, ts_weighted_sql
+  ts_vector_document_sql, TS_WEIGHTS, ts_weight_name, ts_weighted_sql, ts_generated_document_sql
 # Physical-table-name resolution (#59). Deliberately NOT exported — internal plumbing reached as
 # `PormG.model_table_name`, so it stays off the public surface guard. Lives in Kernel because
 # layer-2 `Configuration` needs it and is included before `Models`.

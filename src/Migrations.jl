@@ -60,7 +60,7 @@ import PormG: PormGModel, PormGField, PormGSettings, PormGBackend, PormGPostgres
 # the `(field, field, conn)` method to it.
 import PormG: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CBool, CText, CDate, CTime,
               CInterval, CUUID, CJSON, CBytes, CInet, CCidr, CTsVector, CArray, CVarChar, CDecimal, CDateTime, CUnsupported,
-              ColumnDefault, NoDefault, LiteralDefault, ExpressionDefault,
+              ColumnDefault, NoDefault, LiteralDefault, ExpressionDefault, GeneratedExpression,
               CheckKind, NonNegativeCheck, ByteLengthCheck,
               ColumnIdentity, ForeignKeyRef, ColumnSpec, ColumnDelta,
               reference_delta, column_delta, COLUMN_DELTA_COMPARATORS, COLUMN_DELTA_SLOTS
@@ -81,6 +81,8 @@ import PormG: _ExpressionDefault, _quoted_literal, _unquote_literal, _is_sql_lit
 import PormG: CHECK_MARKER_PREFIX, CHECK_MARKER_RE, canonical_check_condition, check_marker
 # #1037: the expression-default ownership marker — stamped by `Dialect`, read back here.
 import PormG: db_default_owner
+# #1032: the generated-column ownership marker — stamped by `Dialect`, read back here.
+import PormG: generated_owner, db_default_hash, ts_generated_document_sql
 # #29: index access methods, operator classes and the `pormg:index` ownership marker.
 import PormG: INDEX_METHODS, INDEX_OPCLASS_RE, INDEX_MARKER, INDEX_MARKER_RE,
   canonical_index_text, index_text_marker

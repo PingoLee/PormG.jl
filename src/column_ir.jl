@@ -154,6 +154,36 @@ Base.:(==)(a::ExpressionDefault, b::ExpressionDefault)::Bool = a.sql == b.sql &&
 # `ExpressionDefault` pair is not one: `ColumnSpec`'s `==` asks in both directions, so it is unequal.)
 Base.hash(::ExpressionDefault, h::UInt) = hash(:ExpressionDefault, h)
 
+"""
+    GeneratedExpression(sql, stored, owned) <: ColumnDefault
+
+A generated column's expression: `GENERATED ALWAYS AS (sql) STORED` (#1032). A variant of the
+default rather than a facet of its own, because PostgreSQL keeps it where it keeps a default — in
+`pg_attrdef`, printed by `pg_get_expr` — and a column has one or the other, never both. So it rides
+the `:default` delta slot, and a column moving between a default and a generation expression is one
+delta, not two that would have to agree.
+
+`sql` is canonical ([`canonical_db_default`](@ref)) on both sides, as `ExpressionDefault`'s is.
+`stored` is `true` for `STORED` and `false` for PostgreSQL 18's `VIRTUAL`; PormG declares only
+`STORED`, so a virtual column never equals a declaration. `owned` is set on the live side only, by
+the PostgreSQL reader: the declared hash a valid [`GENERATED_MARKER_PREFIX`](@ref) marker vouches
+for ([`generated_owner`](@ref)). PostgreSQL re-prints the expression through its deparser, so the
+marker, not the text, is what says the live expression is the declared one — the #1037 reasoning.
+
+The lenient pairs live in `_defaults_equal`, as `ExpressionDefault`'s do.
+"""
+struct GeneratedExpression <: ColumnDefault
+  sql::String
+  stored::Bool
+  owned::Union{Nothing, String}
+end
+
+Base.:(==)(a::GeneratedExpression, b::GeneratedExpression)::Bool =
+  a.sql == b.sql && a.stored == b.stored && a.owned == b.owned
+# Coarse for `ExpressionDefault`'s reason: `_defaults_equal` calls an owned live expression equal to
+# the declaration its marker vouches for, whatever the deparser printed.
+Base.hash(::GeneratedExpression, h::UInt) = hash(:GeneratedExpression, h)
+
 # `isequal`, not `==`: a `missing` default would make `==` return `missing`, and `if missing` throws.
 # The old attribute loop in `_alter_table_fields` had no `catch` around its `!=`, so that was a live
 # (if unlikely) crash path; the IR closes it rather than inheriting it.
@@ -1041,12 +1071,47 @@ stamped against (changed by hand, or re-printed differently by a newer server). 
 safe answer every time — the diff then compares the text, as it did before #1037, and plans one
 `SET DEFAULT` that re-stamps the marker.
 """
-function db_default_owner(comment, raw_default)::Union{String, Nothing}
-  comment isa AbstractString && raw_default isa AbstractString || return nothing
-  m = match(DB_DEFAULT_MARKER_RE, comment)
+db_default_owner(comment, raw_default)::Union{String, Nothing} =
+  _column_marker_owner(DB_DEFAULT_MARKER_RE, comment, raw_default)
+
+function _column_marker_owner(re::Regex, comment, raw)::Union{String, Nothing}
+  comment isa AbstractString && raw isa AbstractString || return nothing
+  m = match(re, comment)
   m === nothing && return nothing
-  return m.captures[2] == live_default_hash(raw_default) ? String(m.captures[1]) : nothing
+  return m.captures[2] == live_default_hash(raw) ? String(m.captures[1]) : nothing
 end
+
+# ── Generated columns (#1032) ────────────────────────────────────────────────────────────────────
+#
+# The #1037 marker, for a generation expression instead of a default. Its own prefix rather than the
+# default's, so each stamp strips only its own kind and the reader cannot take one for the other: a
+# marker left behind by `ALTER COLUMN … DROP EXPRESSION` names an expression the column no longer
+# has, and the reader consults it only while `attgenerated` says the column is generated.
+
+"""
+    GENERATED_MARKER_PREFIX
+
+The text the ownership marker of a generated column starts with: `pormg:generated:`, then the same
+two 16-hex-digit hashes as [`DB_DEFAULT_MARKER_PREFIX`](@ref)'s — of the declared expression
+([`db_default_hash`](@ref)) and of the text `pg_get_expr` printed right after PormG created the
+column ([`live_default_hash`](@ref)). It lives in `COMMENT ON COLUMN`, anywhere in the comment.
+"""
+const GENERATED_MARKER_PREFIX = "pormg:generated:"
+
+# Bounded and in the PostgreSQL/PCRE subset, as `DB_DEFAULT_MARKER_RE`: `Dialect.stamp_generated`
+# interpolates it into SQL to strip a previous marker from the comment.
+const GENERATED_MARKER_RE = Regex("(?<![0-9A-Za-z_:])" * GENERATED_MARKER_PREFIX *
+                                  "([0-9a-f]{16}):([0-9a-f]{16})(?![0-9A-Za-z_:])")
+
+"""
+    generated_owner(comment, raw_expression) -> Union{String, Nothing}
+
+[`db_default_owner`](@ref) for a generated column: the declared hash its marker vouches for, or
+`nothing` — no marker, or an expression that no longer prints to the text the marker was stamped
+against. `nothing` makes the column one PormG does not own, which a plain declaration leaves alone.
+"""
+generated_owner(comment, raw_expression)::Union{String, Nothing} =
+  _column_marker_owner(GENERATED_MARKER_RE, comment, raw_expression)
 
 # ── Index access methods, operator classes and ownership (#29) ───────────────────────────────────
 #
@@ -1139,7 +1204,7 @@ index_text_marker(expressions::AbstractVector{<:AbstractString}, condition::Unio
 # closing an SQLite column list. It is the only thing between a hand-made index and a planned DROP, so
 # it is bounded on both sides: the look-behind keeps `xpormg:index` from counting, the look-ahead
 # `pormg:indexes` or a longer hash. Written in the subset PostgreSQL's regex engine shares with PCRE
-# (look-behind is PostgreSQL 9.6+; the floor is 11), because the readers interpolate it into SQL
+# (look-behind is PostgreSQL 9.6+; the schema-management floor is 12), because the readers interpolate it into SQL
 # (`_PG_MARKED_INDEX` / `_PG_UNMARKED_INDEX`).
 const INDEX_MARKER_RE = Regex("(?<![0-9A-Za-z_:])" * INDEX_MARKER * "(?::[0-9a-f]{16})?(?![0-9A-Za-z_:])")
 
@@ -1215,6 +1280,20 @@ end
 # `document` labelled with `weight`: `setweight(document, 'A')`, or `document` itself for none.
 ts_weighted_sql(document::AbstractString, weight)::String =
   (w = ts_weight_name(weight); w === nothing ? String(document) : "setweight($(document), '$(w)')")
+
+"""
+    ts_generated_document_sql(columns, config, weights) -> String
+
+A generated `SearchVectorField`'s expression (#1032). Without weights it is `SearchVector`'s document
+over every column; with them, one weighted document per column joined by `||` — what
+`SearchVector("a"; weight = "A") + SearchVector("b"; weight = "B")` adds up to. Always the
+`COALESCE`d form, never the lookup's bare one, so a NULL column is an empty document and the column
+is never NULL.
+"""
+function ts_generated_document_sql(columns::AbstractVector, config, weights)::String
+  weights === nothing && return ts_vector_document_sql(columns, config)
+  return join((ts_weighted_sql(ts_vector_document_sql([c], config), w) for (c, w) in zip(columns, weights)), " || ")
+end
 
 # ── CHECK-expressed bounds ───────────────────────────────────────────────────────────────────────
 #
@@ -1439,12 +1518,31 @@ _references_equal(a, b)::Bool = false
 # exactly that declaration and the default has not changed since. A marker that vouches for nothing
 # (`owned === nothing`) leaves the text compare as it was, which is what keeps a column PormG never
 # stamped planning exactly what it planned before.
+#
+# Generated columns (#1032) extend the same two rules, and nothing else:
+#
+#   declared plain (any non-generated default)  vs  live generated, NOT owned  ⇒  AGREE
+#   generated  vs  generated                    ⇒  same STORED-ness, and the text or the marker agrees
+#
+# The first is #496 again. Before #1032 the reader did not know a column was generated, so a
+# generation expression read back as an `ExpressionDefault` and the arm above hid it. Now that the
+# reader can see it, calling every such column a change would plan `ALTER COLUMN … DROP EXPRESSION`
+# — not classified destructive — against every hand-made generated column on its first run after
+# upgrading, and the column would silently stop recomputing. So a plain declaration differs only
+# from a generated column PormG created (its `pormg:generated:` marker vouches for something), which
+# is the column a user turns back into a plain one by removing `generated_from`. Every other pairing
+# still plans: declaring `generated_from` against a plain column, or a different expression.
 _defaults_equal(a::ColumnDefault, b::ColumnDefault)::Bool = a == b
 _defaults_equal(::NoDefault, ::ExpressionDefault)::Bool = true
 _defaults_equal(a::ExpressionDefault, b::ExpressionDefault)::Bool =
   a.sql == b.sql || _vouches_for(a, b) || _vouches_for(b, a)
-_vouches_for(live::ExpressionDefault, declared::ExpressionDefault)::Bool =
-  live.owned !== nothing && live.owned == db_default_hash(declared.sql)
+_defaults_equal(::Union{NoDefault, LiteralDefault, ExpressionDefault}, live::GeneratedExpression)::Bool =
+  live.owned === nothing
+_defaults_equal(a::GeneratedExpression, b::GeneratedExpression)::Bool =
+  a.stored == b.stored && (a.sql == b.sql || _vouches_for(a, b) || _vouches_for(b, a))
+_vouches_for(live::Union{ExpressionDefault, GeneratedExpression},
+             declared::Union{ExpressionDefault, GeneratedExpression})::Bool =
+  typeof(live) === typeof(declared) && live.owned !== nothing && live.owned == db_default_hash(declared.sql)
 
 """
     COLUMN_DELTA_COMPARATORS

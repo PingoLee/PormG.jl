@@ -42,7 +42,8 @@ import PormG: _ExpressionDefault, _db_default_read_back, _is_sql_literal_token, 
 import PormG: INDEX_METHODS, INDEX_OPCLASS_RE
 # #1021: the one writer of `to_tsvector(…)` (Kernel) — `search_vector_expression` writes an index with
 # the text `Dialect` writes the query with.
-import PormG: ts_lookup_document_sql, ts_vector_document_sql, ts_weighted_sql
+import PormG: ts_lookup_document_sql, ts_vector_document_sql, ts_weighted_sql, ts_generated_document_sql,
+              ts_config_name, ts_weight_name, TS_WEIGHTS
 import PormG: PormGSettings, config, Configuration
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, DO_NOTHING, PROTECT
 using Printf
@@ -2418,7 +2419,7 @@ function _index_include_fields(f)::Vector{String}
 end
 
 """
-    search_vector_expression(columns...; config = nothing, weight = nothing) -> String
+    search_vector_expression(columns...; config = nothing, weight = nothing, form = :lookup) -> String
 
 The `to_tsvector(…)` text a full-text query renders, for a GIN index to be declared on (PostgreSQL
 only). PostgreSQL uses an expression index only when the query's expression is the index's, so write
@@ -2430,17 +2431,22 @@ with, and a config the query would refuse is refused here.
 | `"surname__@search" => SearchQuery(…; config = "simple")` | `search_vector_expression("surname"; config = "simple")` |
 | `"doc__@search"` on `"doc" => SearchVector("forename", "surname"; config = "simple")` | `search_vector_expression("forename", "surname"; config = "simple")` |
 | the same, with `SearchVector(…; weight = "A")` | `search_vector_expression(…; config = "simple", weight = "A")` |
+| `"doc__@search"` on `"doc" => SearchVector("surname"; config = "simple")` | `search_vector_expression("surname"; config = "simple", form = :vector)` |
 
-One column without a weight is the `@search` lookup's expression,
-`to_tsvector('simple'::regconfig, "surname")`. Otherwise it is `SearchVector`'s, each column cast to
-text, `COALESCE`d and joined by a space, inside `setweight(…, 'A')` when there is a weight. The
+One column without a weight has two expressions, and `form` names the query the index serves:
+`:lookup` (the default) is the `@search` lookup's, `to_tsvector('simple'::regconfig, "surname")`, and
+`:vector` is a `SearchVector`'s, `to_tsvector('simple'::regconfig, COALESCE(("surname")::text, ''))`.
+They differ on NULL: the lookup's is NULL for a NULL column, `SearchVector`'s is an empty document.
+Several columns, or a weight, have only `SearchVector`'s expression, so both forms give it: each
+column cast to text, `COALESCE`d and joined by a space, inside `setweight(…, 'A')` when there is a
+weight. The
 `config` must be the query's: `SearchQuery`'s, for the lookup. It is required: a query with no config
 uses the server's `default_text_search_config`, and PostgreSQL only indexes the two-argument
 `to_tsvector`, so there is no index to declare for it.
 
 `columns` are database column names (a field's `db_column` where it sets one), written bare; each is
-quoted in the result. A column that is not an identifier, or no `config`, raises
-`ModelDefinitionError`, and a config that is not a name or a weight other than `"A"` to `"D"` raises
+quoted in the result. A column that is not an identifier, no `config`, or a `form` other than
+`:lookup` or `:vector` raises `ModelDefinitionError`, and a config that is not a name or a weight other than `"A"` to `"D"` raises
 `InvalidValueError`.
 
 ```julia
@@ -2455,8 +2461,12 @@ Driver = Models.Model("driver",
 )
 ```
 """
-function search_vector_expression(columns::AbstractString...; config = nothing, weight = nothing)::String
+function search_vector_expression(columns::AbstractString...; config = nothing, weight = nothing,
+                                  form = :lookup)::String
   isempty(columns) && throw(ModelDefinitionError("search_vector_expression takes at least one column (#1021)."))
+  form in (:lookup, :vector) || throw(ModelDefinitionError(
+    "search_vector_expression's form is :lookup (the @search lookup's expression) or :vector (a " *
+    "SearchVector's); got $(repr(form)) (#1032)."))
   # One-argument `to_tsvector` reads a server setting, so it is not IMMUTABLE and `CREATE INDEX` refuses
   # it at migrate time. Refused here, where the declaration is, rather than there.
   config === nothing && throw(ModelDefinitionError(
@@ -2468,9 +2478,10 @@ function search_vector_expression(columns::AbstractString...; config = nothing, 
       "$(repr(c)) (#1021)."))
   end
   quoted = ["\"$(c)\"" for c in columns]
-  # The lookup has no weight, so a weighted index is always SearchVector's document.
-  document = length(quoted) == 1 && weight === nothing ? ts_lookup_document_sql(only(quoted), config) :
-                                                         ts_vector_document_sql(quoted, config)
+  # The lookup has one column and no weight, so any other shape is always SearchVector's document.
+  # `form = :vector` asks for that document for the one shape where the two differ (#1032).
+  lookup = form === :lookup && length(quoted) == 1 && weight === nothing
+  document = lookup ? ts_lookup_document_sql(only(quoted), config) : ts_vector_document_sql(quoted, config)
   return ts_weighted_sql(document, weight)
 end
 search_vector_expression(columns...; kwargs...) = throw(ModelDefinitionError(
@@ -2633,6 +2644,44 @@ function _apply_indexes!(model::Model_Type, indexes)::Model_Type
   end
   model.cache["composite_indexes"] = Dict{String, Any}("indexes" => list)
   return model
+end
+
+# A generated column's sources are other columns of its own model (#1032). PostgreSQL resolves the
+# names when the column is created, so a typo would otherwise surface as a failed `migrate`, after
+# the plan was written and reviewed. A source must be a concrete column, not the column itself, and
+# not another generated column, which PostgreSQL refuses outright. Matched by PHYSICAL column, the
+# name `generated_from` takes, as `search_vector_expression`'s columns are.
+#
+# Only on the declaration paths (the keyword `Model` forms and `add_field!`): the `Dict` forms are how
+# `inspectdb` and the Django importer build a model from names read out of a catalog, the #317 split.
+function _validate_generated_fields!(model::Model_Type)::Model_Type
+  for (name, field) in model.fields
+    _validate_generated_field(model.name, name, field, pairs(model.fields))
+  end
+  return model
+end
+
+function _validate_generated_field(model_name, name::AbstractString, field::PormGField, fields)::Nothing
+  is_generated_field(field) || return nothing
+  own = field_db_column(field, name)
+  columns = Dict{String, PormGField}()
+  for (other, f) in fields
+    is_many_to_many_field(f) && continue
+    columns[field_db_column(f, other)] = f
+  end
+  label = isempty(model_name) ? "'$(name)'" : "'$(model_name).$(name)'"
+  for source in field.generated_from
+    source == own && throw(ModelDefinitionError(
+      "Generated column $(label) cannot be generated from itself (#1032)."))
+    haskey(columns, source) || throw(ModelDefinitionError(
+      "Generated column $(label) names '$(source)' in generated_from, which is not a column of its " *
+      "model. generated_from takes database column names (a field's db_column where it sets one); " *
+      "the model's columns are $(sort(collect(keys(columns)))) (#1032)."))
+    is_generated_field(columns[source]) && throw(ModelDefinitionError(
+      "Generated column $(label) names '$(source)' in generated_from, which is generated too: " *
+      "PostgreSQL computes a generated column only from ordinary ones (#1032)."))
+  end
+  return nothing
 end
 
 # Store an explicit physical table name override (#59). Mirrors db_column's precedent
@@ -2861,6 +2910,7 @@ function Model(name::AbstractString; constraints = nothing, db_table = nothing, 
   model = _apply_managed!(model, managed)
   model = _apply_unique_constraints!(model, constraints)
   model = _apply_check_constraints!(model, constraints)
+  _validate_generated_fields!(model)
   return _apply_indexes!(model, indexes)
 end
 
@@ -2951,6 +3001,7 @@ function Model(; constraints = nothing, db_table = nothing, indexes = nothing, m
   model = _apply_managed!(model, managed)
   model = _apply_unique_constraints!(model, constraints)
   model = _apply_check_constraints!(model, constraints)
+  _validate_generated_fields!(model)
   return _apply_indexes!(model, indexes)
 end
 
@@ -3007,6 +3058,9 @@ function add_field!(model::PormGModel, field_name::Union{String, Symbol}, field:
     return nothing
   end
 
+  # Checked before the field is inserted, so a refused one leaves the model as it was.
+  _validate_generated_field(model.name, field_name, field,
+                            Iterators.flatten((pairs(model.fields), (field_name => field,))))
   model.fields[field_name] = field
   push!(model.field_names, field_name)
   return nothing

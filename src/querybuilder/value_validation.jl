@@ -486,7 +486,8 @@ function _refuse_collection(f_meta, field::AbstractString, value, op::AbstractSt
 end
 
 """
-    validate_field_data(model::PormGModel, field::String, value::Any, operation::String; allow_primary_key::Bool = true)
+    validate_field_data(model::PormGModel, field::String, value::Any, operation::String; allow_primary_key::Bool = true,
+                        allow_generated::Bool = false)
 
 Validates that a value is compatible with the model field definition before SQL generation.
 Checks:
@@ -498,12 +499,14 @@ Checks:
    digits (`max_digits - decimal_places`), as Django's `DecimalValidator` checks (#761).
 
 Returns `true` if valid. An unknown field **name** throws an `UnknownFieldError` (#462); every
-other rejection — a bad **value**, a protected primary key, a many-to-many relation — throws an
-`InvalidValueError` (#231; was `ErrorException`).
+other rejection — a bad **value**, a protected primary key, a many-to-many relation, a generated
+column (#1032) — throws an `InvalidValueError` (#231; was `ErrorException`).
 SQL expressions (SQLTypeF, SQLTypeFunction) skip data validation as they are evaluated by the DB.
 """
-function validate_field_data(model::PormGModel, field::String, value::Any, operation::String; allow_primary_key::Bool = true)
-    f_meta = _validate_field_name(model, field, operation; allow_primary_key = allow_primary_key)
+function validate_field_data(model::PormGModel, field::String, value::Any, operation::String; allow_primary_key::Bool = true,
+                             allow_generated::Bool = false)
+    f_meta = _validate_field_name(model, field, operation; allow_primary_key = allow_primary_key,
+                                  allow_generated = allow_generated)
     return _validate_field_value(model, field, f_meta, value, operation)
 end
 
@@ -514,7 +517,8 @@ end
 # check for check and message for message, so every other caller is unchanged.
 
 # Steps 1–2: the checks that depend only on `field`. Returns the field struct the value half reads.
-function _validate_field_name(model::PormGModel, field::String, operation::String; allow_primary_key::Bool = true)
+function _validate_field_name(model::PormGModel, field::String, operation::String; allow_primary_key::Bool = true,
+                              allow_generated::Bool = false)
     if haskey(model.fields, field) && Models.is_many_to_many_field(model.fields[field])
         _validation_error(operation, model, field, "many-to-many relations are not physical columns"; suggestion="use the many-to-many manager add, remove, clear, or set methods")
     end
@@ -536,6 +540,16 @@ function _validate_field_name(model::PormGModel, field::String, operation::Strin
     # 2. Primary key protection
     if !allow_primary_key && f_meta.primary_key
         _validation_error(operation, model, field, "primary keys cannot be modified in this operation")
+    end
+
+    # 2b. A generated column (#1032). PostgreSQL computes it and refuses a value for it, so it is
+    # refused here, by name, on every write path that reaches this check — before a statement is
+    # built. `allow_generated` is for the read-only use of a name, `bulk_insert(returning = …)`.
+    if !allow_generated && Models.is_generated_field(f_meta)
+        _validation_error(operation, model, field,
+            "it is a generated column, computed by PostgreSQL from " *
+            "$(join(f_meta.generated_from, ", ")) and never written";
+            suggestion = "leave it out: PostgreSQL fills it on every insert and update")
     end
 
     return f_meta

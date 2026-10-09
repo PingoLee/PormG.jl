@@ -51,6 +51,8 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
   # check if the fields are in objct.insert
   for field in fields
     if !haskey(real_obj.insert, field)
+      # #1032: a generated column is computed by PostgreSQL, never filled or required here.
+      Models.is_generated_field(model.fields[field]) && continue
       # check if field allow null or if exist a default value
       if model.fields[field].default !== nothing
         real_obj.insert[field] = model.fields[field].default

@@ -1249,6 +1249,26 @@ const DOCERR_CASES = [
         InvalidValueError,
         () -> PormG.Models.search_vector_expression("surname"; config = "simple'"),
     ),
+    # #1032 — a generated SearchVectorField: its declaration, its sources, and the writes it refuses.
+    (
+        "read/full_text_search.md + Models.SearchVectorField — a malformed generated declaration",
+        FieldValidationError,
+        () -> PormG.Models.SearchVectorField(generated_from = ("title",)),
+    ),
+    (
+        "read/full_text_search.md — a generated_from column the model does not have",
+        ModelDefinitionError,
+        () -> Model("docerr_story_1032", storyid = IDField(), title = CharField(),
+                    search = PormG.Models.SearchVectorField(generated_from = ("body",), config = "simple")),
+    ),
+    (
+        "read/full_text_search.md + postgres.md — naming a generated column in a write",
+        InvalidValueError,
+        () -> (m = Model("docerr_story_1032", storyid = IDField(), title = CharField(),
+                         search = PormG.Models.SearchVectorField(generated_from = ("title",), config = "simple"));
+               m.connect_key = "docerr_pg"; m._module = Main;
+               m.objects.create("title" => "Senna", "search" => "'senna':1", show_query = :dict)),
+    ),
     # #1032 — `form` names the query an index serves: `:lookup` or `:vector`, nothing else.
     (
         "read/full_text_search.md + Models.search_vector_expression — an unknown form",

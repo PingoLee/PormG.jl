@@ -14,7 +14,7 @@ import PormG: backend_sqlite_version  # SQLite library-version probe (driver bod
 #                                lookup, an extract part SQLite lacks, too old a SQLite library,
 #                                a DecimalField wider than SQLite stores exactly #648).
 #   QueryBuildError            — the caller passed an impossible argument shape (on_conflict_clause).
-import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError
+import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError, InvalidMigrationError
 # #496: the `db_default` vocabulary (Kernel, layer 1). `db_default_sql` below renders from it, and
 # `Migrations._column_default` compiles the declared side through the same function.
 import PormG: PORTABLE_DB_DEFAULTS
@@ -26,7 +26,7 @@ import PormG: postgres_type_map_reverse, date_format_map, sqlite_type_map_revers
 # these types live in `Kernel` (layer 1) rather than in `Migrations` — this module is included
 # BEFORE it, and a submodule resolves `import PormG: …` at include time. `_has_non_negative` and
 # `_byte_bound` are underscore-private, hence named explicitly.
-import PormG: ColumnDelta, LiteralDefault, ExpressionDefault, NoDefault
+import PormG: ColumnDelta, LiteralDefault, ExpressionDefault, NoDefault, GeneratedExpression
 # #522: the two `USING` casts in `alter_field` read the LIVE column's canonical type off the delta
 # instead of dispatching on a reconstructed field struct — the readers no longer build one.
 import PormG: CanonicalType, CInt16, CInt32, CInt64, CFloat64, CDecimal, CText, CVarChar, CTime
@@ -48,8 +48,12 @@ import PormG.Models: declared_check_constraints, CheckConstraint
 import PormG: check_marker
 # #1037: the expression-default ownership marker, stamped beside every expression DEFAULT PormG applies.
 import PormG: DB_DEFAULT_MARKER_PREFIX, DB_DEFAULT_MARKER_RE, db_default_hash
+# #1032: the generated-column ownership marker, stamped beside every generated column PormG creates.
+import PormG: GENERATED_MARKER_PREFIX, GENERATED_MARKER_RE
 # `_foreign_key_on_delete_sql` lives in `Models` since #498 — see the note where it used to be defined.
 import PormG.Models: _foreign_key_on_delete_sql
+# #1032: a generated column's expression, rendered into its DDL and stamped with its own marker.
+import PormG.Models: generated_sql
 # #1021: the one writer of `to_tsvector(…)` and its config check (Kernel), shared with the index helper.
 import PormG: ts_config_name, ts_config_prefix, ts_lookup_document_sql, ts_vector_document_sql,
               ts_weight_name, ts_weighted_sql
@@ -1744,7 +1748,12 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGPostgre
   # temporary one for an ADD COLUMN backfill. `db_default_sql` is also where a pinned expression
   # aimed at the other engine raises, so asking it first is what keeps the check unskippable.
   db_expr = db_default_sql(field, conn)
-  if db_expr !== nothing
+  # #1032: a generated column has no DEFAULT — PostgreSQL refuses both on one column — and needs no
+  # temporary one for an ADD COLUMN backfill: adding it computes every existing row.
+  generated = generated_sql(field)
+  if generated !== nothing
+    push!(constraints, "GENERATED ALWAYS AS ($(generated)) STORED")
+  elseif db_expr !== nothing
     push!(constraints, "DEFAULT $db_expr")
   elseif field.default !== nothing || temporary_default !== nothing
     default_value = field.default !== nothing ? field.default : temporary_default
@@ -1912,7 +1921,7 @@ function create_table(conn::PormGPostgres, model::PormGModel)
 
   table_name = model_table_name(model)
   # #1037: each expression DEFAULT is stamped with its ownership marker in the same entry.
-  return create_table(conn, table_name, columns) * _db_default_stamps(conn, table_name, model)
+  return create_table(conn, table_name, columns) * _column_marker_stamps(conn, table_name, model)
 end
 
 """
@@ -2269,6 +2278,22 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
 
   sql_statements = []
 
+  # #1032: a generated column. Only one direction is an ALTER: generated → not generated is
+  # `DROP EXPRESSION` (PostgreSQL 13+), which keeps every row's last computed value. It runs FIRST, so
+  # a type change below applies to an ordinary column and the DEFAULT step can set a new default.
+  # The other direction, and a changed expression, has no ALTER before PostgreSQL 17, so the planner
+  # drops and re-adds the column instead and never hands this function such a delta.
+  generated_dropped = false
+  if :default in delta
+    delta.new_spec.default isa GeneratedExpression && throw(InvalidMigrationError(
+      "alter_field cannot make column \"$(field_name)\" generated: the planner re-creates a generated " *
+      "column (DROP COLUMN + ADD COLUMN) rather than altering it (#1032)."))
+    if delta.old_spec.default isa GeneratedExpression
+      push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" DROP EXPRESSION;""")
+      generated_dropped = true
+    end
+  end
+
   # Non-negative CHECK constraint diffing on a type transition (Django-style).
   # PostgreSQL has no unsigned integer type, so positive integer fields are backed by a
   # CHECK (col >= 0). When the column type changes into or out of a positive integer
@@ -2368,7 +2393,8 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   default_dropped = false
   function retype!(type_sql::AbstractString)
     using_sql = _postgres_retype_using(field_name, delta.old_spec.type, delta.new_spec.type, type_sql)
-    if using_sql !== nothing && !(delta.old_spec.default isa NoDefault)
+    # A generation expression is not a default to drop: `DROP EXPRESSION` above already removed it.
+    if using_sql !== nothing && delta.old_spec.default isa Union{LiteralDefault, ExpressionDefault}
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" DROP DEFAULT;""")
       default_dropped = true
     end
@@ -2462,8 +2488,9 @@ function alter_field(conn::PormGPostgres, table_name::Union{Symbol,String}, fiel
   #     case as a `:drop_default` finding (#828), so it takes `destructive = true`.
   if :default in delta || default_dropped
     new_default = delta.new_spec.default
-    if new_default isa NoDefault && default_dropped
-      # Already dropped ahead of the retype.
+    if new_default isa NoDefault && (default_dropped || generated_dropped)
+      # Already dropped ahead of the retype, or the column had a generation expression and never a
+      # default: `DROP EXPRESSION` leaves none behind (#1032).
     elseif new_default isa LiteralDefault
       default_value = _format_default_sql_value(new_default.value, conn)
       push!(sql_statements, """ALTER TABLE "$table_name" ALTER COLUMN "$(_quote_table_ddl(field_name))" SET DEFAULT $default_value;""")
@@ -2624,6 +2651,10 @@ function add_field(conn::PormGPostgres, table_name::Union{String,Symbol}, field_
   sql = """ALTER TABLE "$(_quote_table_ddl(table_name))" ADD COLUMN $(field_to_column(field_name, field, conn, temporary_default=temporary_default));"""
   # #1037: `field_to_column` renders a `db_default` ahead of any temporary default, so an expression
   # here is always the column's own and is stamped with its ownership marker in the same entry.
+  # #1032: a generated column carries its own marker instead; it has no `db_default` to stamp.
+  generated = generated_sql(field)
+  generated === nothing ||
+    return sql * "\n" * stamp_generated(conn, string(table_name), field_db_column(field, field_name), generated)
   db_expr = db_default_sql(field, conn)
   db_expr === nothing && return sql
   return sql * "\n" * stamp_db_default(conn, string(table_name), field_db_column(field, field_name), db_expr)
@@ -2894,6 +2925,23 @@ that table had. `migrate` refuses that plan before it runs — its fingerprint r
 absent (#739) — so the window is a plan applied without that check.
 """
 function stamp_db_default(conn::PormGPostgres, table_name::String, column::String, declared_sql::String)::String
+  return _stamp_column_marker(conn, table_name, column, DB_DEFAULT_MARKER_PREFIX, DB_DEFAULT_MARKER_RE, declared_sql)
+end
+
+"""
+    stamp_generated(conn::PormGPostgres, table_name, column, declared_sql) -> String
+
+[`stamp_db_default`](@ref) for a generated column (#1032): the same `DO` block, writing a
+`pormg:generated:` marker instead. PostgreSQL keeps a generation expression where it keeps a default
+(`pg_attrdef`), so the block reads it the same way. Rendered after every statement that creates a
+generated column — `CREATE TABLE` and `ADD COLUMN` — in the same plan entry. Each stamp strips only
+its own kind of marker, so the two never remove each other.
+"""
+stamp_generated(conn::PormGPostgres, table_name::String, column::String, declared_sql::String)::String =
+  _stamp_column_marker(conn, table_name, column, GENERATED_MARKER_PREFIX, GENERATED_MARKER_RE, declared_sql)
+
+function _stamp_column_marker(conn::PormGPostgres, table_name::String, column::String, prefix::String,
+                              marker_re::Regex, declared_sql::String)::String
   lit(s) = "'" * replace(s, "'" => "''") * "'"
   # `'"<table>"'::regclass` resolves the table through the search path exactly as the unqualified
   # `ALTER TABLE "<table>"` before it did, and `%s` of a regclass re-quotes (and schema-qualifies)
@@ -2902,7 +2950,7 @@ function stamp_db_default(conn::PormGPostgres, table_name::String, column::Strin
   col = lit(column)
   # `[[:space:]]*` swallows the separator a previous append left, so re-stamping does not grow the
   # comment.
-  strip_re = lit("[[:space:]]*" * DB_DEFAULT_MARKER_RE.pattern)
+  strip_re = lit("[[:space:]]*" * marker_re.pattern)
   body = """
 DECLARE
   live text;
@@ -2914,7 +2962,7 @@ BEGIN
   kept := btrim(regexp_replace(coalesce(kept, ''), $strip_re, '', 'g'));
   EXECUTE format('COMMENT ON COLUMN %s.%I IS %L', $rel, $col,
     concat_ws(' ', nullif(kept, ''),
-              $(lit(DB_DEFAULT_MARKER_PREFIX * db_default_hash(declared_sql) * ":")) ||
+              $(lit(prefix * db_default_hash(declared_sql) * ":")) ||
               left(encode(sha256(convert_to(live, 'UTF8')), 'hex'), 16)));
 END
 """
@@ -2926,15 +2974,22 @@ END
   return "DO $tag\n$body$tag;"
 end
 
-# The stamps for every column of a `CREATE TABLE` whose `DEFAULT` is an expression — one per column,
-# after the statement, in the same entry.
-function _db_default_stamps(conn::PormGPostgres, table_name::String, model::PormGModel)::String
+# The stamps for every column of a `CREATE TABLE` whose `DEFAULT` is an expression, or that is
+# generated (#1032) — one per column, after the statement, in the same entry. A column has at most
+# one: a generated field refuses `db_default` at construction.
+function _column_marker_stamps(conn::PormGPostgres, table_name::String, model::PormGModel)::String
   out = String[]
   for (field_name, field) in model.fields
     field isa sManyToManyField && continue
+    column = field_db_column(field, string(field_name))
+    generated = generated_sql(field)
+    if generated !== nothing
+      push!(out, stamp_generated(conn, table_name, column, generated))
+      continue
+    end
     sql = db_default_sql(field, conn)
     sql === nothing && continue
-    push!(out, stamp_db_default(conn, table_name, field_db_column(field, string(field_name)), sql))
+    push!(out, stamp_db_default(conn, table_name, column, sql))
   end
   return isempty(out) ? "" : "\n" * join(out, "\n")
 end

@@ -42,7 +42,8 @@ import PormG: _ExpressionDefault, _db_default_read_back, _is_sql_literal_token, 
 import PormG: INDEX_METHODS, INDEX_OPCLASS_RE
 # #1021: the one writer of `to_tsvector(…)` (Kernel) — `search_vector_expression` writes an index with
 # the text `Dialect` writes the query with.
-import PormG: ts_lookup_document_sql, ts_vector_document_sql, ts_weighted_sql
+import PormG: ts_lookup_document_sql, ts_vector_document_sql, ts_weighted_sql, ts_generated_document_sql,
+              ts_config_name, ts_weight_name, TS_WEIGHTS
 import PormG: PormGSettings, config, Configuration
 import PormG: CASCADE, RESTRICT, SET_NULL, SET_DEFAULT, DO_NOTHING, PROTECT
 using Printf
@@ -2645,6 +2646,44 @@ function _apply_indexes!(model::Model_Type, indexes)::Model_Type
   return model
 end
 
+# A generated column's sources are other columns of its own model (#1032). PostgreSQL resolves the
+# names when the column is created, so a typo would otherwise surface as a failed `migrate`, after
+# the plan was written and reviewed. A source must be a concrete column, not the column itself, and
+# not another generated column, which PostgreSQL refuses outright. Matched by PHYSICAL column, the
+# name `generated_from` takes, as `search_vector_expression`'s columns are.
+#
+# Only on the declaration paths (the keyword `Model` forms and `add_field!`): the `Dict` forms are how
+# `inspectdb` and the Django importer build a model from names read out of a catalog, the #317 split.
+function _validate_generated_fields!(model::Model_Type)::Model_Type
+  for (name, field) in model.fields
+    _validate_generated_field(model.name, name, field, pairs(model.fields))
+  end
+  return model
+end
+
+function _validate_generated_field(model_name, name::AbstractString, field::PormGField, fields)::Nothing
+  is_generated_field(field) || return nothing
+  own = field_db_column(field, name)
+  columns = Dict{String, PormGField}()
+  for (other, f) in fields
+    is_many_to_many_field(f) && continue
+    columns[field_db_column(f, other)] = f
+  end
+  label = isempty(model_name) ? "'$(name)'" : "'$(model_name).$(name)'"
+  for source in field.generated_from
+    source == own && throw(ModelDefinitionError(
+      "Generated column $(label) cannot be generated from itself (#1032)."))
+    haskey(columns, source) || throw(ModelDefinitionError(
+      "Generated column $(label) names '$(source)' in generated_from, which is not a column of its " *
+      "model. generated_from takes database column names (a field's db_column where it sets one); " *
+      "the model's columns are $(sort(collect(keys(columns)))) (#1032)."))
+    is_generated_field(columns[source]) && throw(ModelDefinitionError(
+      "Generated column $(label) names '$(source)' in generated_from, which is generated too: " *
+      "PostgreSQL computes a generated column only from ordinary ones (#1032)."))
+  end
+  return nothing
+end
+
 # Store an explicit physical table name override (#59). Mirrors db_column's precedent
 # (field_db_column, below): type-check + empty-string-as-unset only, no identifier-shape
 # validation, no forced case fold — the whole point is to carry an arbitrary legacy spelling
@@ -2871,6 +2910,7 @@ function Model(name::AbstractString; constraints = nothing, db_table = nothing, 
   model = _apply_managed!(model, managed)
   model = _apply_unique_constraints!(model, constraints)
   model = _apply_check_constraints!(model, constraints)
+  _validate_generated_fields!(model)
   return _apply_indexes!(model, indexes)
 end
 
@@ -2961,6 +3001,7 @@ function Model(; constraints = nothing, db_table = nothing, indexes = nothing, m
   model = _apply_managed!(model, managed)
   model = _apply_unique_constraints!(model, constraints)
   model = _apply_check_constraints!(model, constraints)
+  _validate_generated_fields!(model)
   return _apply_indexes!(model, indexes)
 end
 
@@ -3017,6 +3058,9 @@ function add_field!(model::PormGModel, field_name::Union{String, Symbol}, field:
     return nothing
   end
 
+  # Checked before the field is inserted, so a refused one leaves the model as it was.
+  _validate_generated_field(model.name, field_name, field,
+                            Iterators.flatten((pairs(model.fields), (field_name => field,))))
   model.fields[field_name] = field
   push!(model.field_names, field_name)
   return nothing

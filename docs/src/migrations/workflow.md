@@ -333,6 +333,12 @@ seen. To apply a destructive plan you must explicitly opt in:
 PormG.Migrations.migrate("db", destructive=true)
 ```
 
+A generated column is the one case where `makemigrations` writes a `DROP` for a column the model still
+declares. PostgreSQL cannot make a column generated, change a generation expression (before 17), or
+retype or drop a column a generated one reads, so the plan drops the generated column and adds it
+back, with its indexes. Adding it computes every row again. See
+[Full-Text Search → A generated document](../read/full_text_search.md#A-generated-document).
+
 At an interactive terminal, a destructive plan without `destructive=true` prints a warning and aborts so you
 can re-run with the opt-in. In a **non-interactive** context (CI, `Pkg.test`, a deploy script, or piped
 stdin) the same plan throws a `DestructiveMigrationError` instead — automation fails loudly rather than

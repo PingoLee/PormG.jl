@@ -3450,6 +3450,14 @@ mutable struct sSearchVectorField <: PormGField
   editable::Bool
   type::String
   formatter::Function
+  # #1032: a generated column, `GENERATED ALWAYS AS (…) STORED`. BEFORE `db_default`, which stays the
+  # last slot by the rule above: `config` is a `Union{Nothing, String}` too, so beside `db_default` a
+  # swapped positional argument would type-check. Not named `generated`: that slot name means
+  # IDENTITY to `field_to_column` and the column compiler. `nothing` in all three is the column
+  # `update` fills.
+  generated_from::Union{Nothing, Tuple{Vararg{String}}}
+  config::Union{Nothing, String}
+  weights::Union{Nothing, Tuple{Vararg{String}}}
   db_default::DbDefault
 end
 
@@ -3469,9 +3477,18 @@ M.Race.objects.filter("search_vector__@search" => SearchQuery("grand prix"; conf
 M.Race.objects.values("name", "rank" => SearchRank("search_vector", SearchQuery("monaco"; config = "english")))
 ```
 
-The column does not refresh itself: re-run the `update` after the text changes. A query's config
-must be the one the document was built with, or a stemmed word will not match. A GIN index on the
-column (`Models.Index(fields = ("search_vector",), method = "gin", name = …)`) serves `@search`.
+Filled that way, the column does not refresh itself: re-run the `update` after the text changes.
+Declare it with `generated_from` instead and PostgreSQL keeps it current, as a generated column
+(`GENERATED ALWAYS AS (…) STORED`) computed from the named columns on every insert and update:
+
+```julia
+search_vector = Models.SearchVectorField(generated_from = ("title", "body"), config = "simple",
+                                         weights = ("A", "B"))
+```
+
+A query's config must be the one the document was built with, or a stemmed word will not match. A GIN
+index on the column (`Models.Index(fields = ("search_vector",), method = "gin", name = …)`) serves
+`@search`.
 
 It reads as the `tsvector`'s text, a `String` (`'grand':2 'monaco':1 'prix':3`), and a `String` it is
 given is that text, parsed by PostgreSQL as a `tsvector` literal. A pattern lookup (`@contains`, …)
@@ -3479,7 +3496,11 @@ on it raises `FilterError`: search it with `@search`. `SearchVector`, `SearchHea
 `to_tsvector` the lookup puts around a text column do not take it, since it is already a document.
 
 **PostgreSQL only**: on SQLite, rendering the column raises `BackendCapabilityError`. A generated
-column (`GENERATED ALWAYS AS (to_tsvector(…)) STORED`) is not supported yet.
+one needs PostgreSQL 12, and PormG writes nothing to it: naming it in `create`, `update`, `save` or a
+bulk write raises `InvalidValueError`, and leaving it out lets PostgreSQL compute it. Turning a
+generated column back into a plain one (removing `generated_from`) keeps its data and needs
+PostgreSQL 13. Turning a plain column into a generated one, or changing what it is generated from,
+drops and re-creates the column and its indexes, which `migrate` runs only with `destructive = true`.
 
 # Keyword Arguments
 - `verbose_name::Union{String, Nothing} = nothing`: A human-readable name for the field
@@ -3497,6 +3518,19 @@ column (`GENERATED ALWAYS AS (to_tsvector(…)) STORED`) is not supported yet.
   reads back from the catalog as a value rather than the expression declared, so `makemigrations`
   would plan it again each time (#1033)
 - `editable::Bool = false`: Whether the field should be editable in forms
+- `generated_from::Union{Tuple, Vector, Nothing} = nothing`: the database column names (a field's
+  `db_column` where it sets one) a generated column is computed from, in order. Each is cast to text
+  and `COALESCE`d, so a NULL one adds nothing. They must be other columns of the same model, and not
+  generated ones (`ModelDefinitionError`, when the model is defined)
+- `config::Union{String, Nothing} = nothing`: the text-search config of a generated column, such as
+  `"english"`. Required with `generated_from`: PostgreSQL computes a generated column only from an
+  expression that does not depend on a server setting
+- `weights::Union{Tuple, Vector, Nothing} = nothing`: one label from `"A"` to `"D"` per column of
+  `generated_from`, as `SearchVector`'s `weight`. Without it, the columns form one unweighted document
+
+A `generated_from` that is empty, names a column twice or names something that is not an identifier,
+a missing or invalid `config`, `weights` of another length or with another label, `config` or
+`weights` without `generated_from`, and a `db_default` beside it raise `FieldValidationError`.
 
 # Database Mapping
 - **PostgreSQL Type**: tsvector
@@ -3510,13 +3544,26 @@ Race = Models.Model("race",
   search_vector = Models.SearchVectorField(null = true),
   indexes = [Models.Index(fields = ("search_vector",), method = "gin", name = "race_search_vector_gin")],
 )
+
+# Generated: PostgreSQL computes the document from `name` on every write.
+Race = Models.Model("race",
+  raceid = Models.IDField(),
+  name   = Models.CharField(max_length = 255),
+  search_vector = Models.SearchVectorField(generated_from = ("name",), config = "english"),
+  indexes = [Models.Index(fields = ("search_vector",), method = "gin", name = "race_search_vector_gin")],
+)
 ```
 
 See also [`search_vector_expression`](@ref), which indexes a document computed at query time instead.
 """
 function SearchVectorField(; kwargs...)
   (; verbose_name, unique, blank, null, db_index, db_column, editable, db_default) =
-    _common_kwargs("SearchVectorField", kwargs; editable = false)
+    _common_kwargs("SearchVectorField", kwargs; editable = false, extra = (:generated_from, :config, :weights))
+  generated_from, config, weights = _generated_search_vector_kwargs(
+    get(kwargs, :generated_from, nothing), get(kwargs, :config, nothing), get(kwargs, :weights, nothing))
+  generated_from !== nothing && db_default !== nothing && throw(_fielderr(
+    "SearchVectorField: a generated column (generated_from) has no db_default: PostgreSQL computes " *
+    "every row's document from its columns (#1032)."))
 
   # A `tsvector` literal is stored rewritten (`'monaco:1'` reads back as `'monaco':1`, `'b a'` as
   # `'a' 'b'`), so a declared default would plan a `SET DEFAULT` on every `makemigrations`.
@@ -3536,9 +3583,77 @@ function SearchVectorField(; kwargs...)
     nothing, # default
     editable,
     "TSVECTOR",
-    format_tsvector_sql, db_default
+    format_tsvector_sql,
+    generated_from, config, weights,
+    db_default
   )
 end
+
+# A column name `generated_from` takes: an identifier, quoted into the expression and never escaped.
+# The same pattern as `search_vector_expression`'s (`Models._SEARCH_COLUMN_RE`), restated because
+# that constant is defined after this file is included.
+const _GENERATED_COLUMN_RE = r"\A[A-Za-z_][A-Za-z0-9_]*\z"
+
+# `generated_from` / `config` / `weights`, checked and normalised (#1032). A tuple or vector of strings
+# becomes a `Tuple{Vararg{String}}`, which `Model_to_str` prints back as a tuple the constructor
+# accepts. The config and the labels go through the Kernel checks the query uses, re-raised as
+# `FieldValidationError` so the constructor reports one category.
+function _generated_search_vector_kwargs(from, config, weights)
+  if from === nothing
+    (config === nothing && weights === nothing) || throw(_fielderr(
+      "SearchVectorField: config and weights describe a generated column; give generated_from too, or " *
+      "drop them (#1032)."))
+    return nothing, nothing, nothing
+  end
+  _strings(name, v) = (v isa Union{Tuple, AbstractVector} && all(x -> x isa AbstractString, v)) ?
+    Tuple(String(x) for x in v) :
+    throw(_fielderr("SearchVectorField: $(name) is a tuple or vector of strings, got $(repr(v)) (#1032)."))
+  columns = _strings("generated_from", from)
+  isempty(columns) && throw(_fielderr("SearchVectorField: generated_from names at least one column (#1032)."))
+  for c in columns
+    occursin(_GENERATED_COLUMN_RE, c) || throw(_fielderr(
+      "SearchVectorField: generated_from takes database column names (letters, digits and " *
+      "underscores); got $(repr(c)) (#1032)."))
+  end
+  allunique(columns) || throw(_fielderr("SearchVectorField: generated_from names a column twice (#1032)."))
+  config === nothing && throw(_fielderr(
+    "SearchVectorField: a generated column needs a config, such as config = \"english\": PostgreSQL " *
+    "computes a generated column only from an expression that does not depend on a server setting (#1032)."))
+  # Lower-cased: `'English'::regconfig` reads the name as an unquoted identifier and folds it, so the
+  # two spellings are one config — and PostgreSQL prints it back folded, which `inspectdb` re-renders
+  # and hashes against the column's marker (#1032).
+  cfg = try
+    lowercase(ts_config_name(config))
+  catch e
+    e isa InvalidValueError || rethrow()
+    throw(_fielderr("SearchVectorField: config is the name of a text-search config, such as \"english\" " *
+                    "or \"pg_catalog.portuguese\"; got $(repr(config)) (#1032)."))
+  end
+  weights === nothing && return columns, cfg, nothing
+  labels = _strings("weights", weights)
+  length(labels) == length(columns) || throw(_fielderr(
+    "SearchVectorField: weights gives one label per generated_from column; got $(length(labels)) for " *
+    "$(length(columns)) (#1032)."))
+  for w in labels
+    w in TS_WEIGHTS || throw(_fielderr(
+      "SearchVectorField: a weight is \"A\", \"B\", \"C\" or \"D\"; got $(repr(w)) (#1032)."))
+  end
+  return columns, cfg, labels
+end
+
+"""
+    generated_sql(field) -> Union{String, Nothing}
+
+The expression a generated column is computed from, with every column quoted, or `nothing` for a
+column that is not generated (#1032). Rendered by the Kernel writer the query's `SearchVector` uses.
+"""
+generated_sql(::PormGField)::Union{String, Nothing} = nothing
+generated_sql(f::sSearchVectorField)::Union{String, Nothing} =
+  f.generated_from === nothing ? nothing :
+  ts_generated_document_sql(["\"$(c)\"" for c in f.generated_from], f.config, f.weights)
+
+# Whether PostgreSQL computes the column, so PormG never writes it (#1032).
+is_generated_field(f)::Bool = generated_sql(f) !== nothing
 
 """
     format_tsvector_sql(value) -> Union{String, Missing}

@@ -355,8 +355,9 @@ M.Race_report.objects.
 #    2 │ Monaco Grand Prix  0.243171
 ```
 
-- **The column does not refresh itself.** Run the `update` again after the text changes, for the
-  rows that changed. A generated column (`GENERATED ALWAYS AS (…) STORED`) is not supported yet.
+- **Filled by `update`, the column does not refresh itself.** Run the `update` again after the text
+  changes, for the rows that changed, or declare the column generated (next section) and PostgreSQL
+  keeps it current.
 - **Search with the configuration the document was built with.** The stored document does not
   record it, so a `SearchQuery` without one is parsed with the server's default, and an `english`
   document searched with a `simple` query misses every stemmed word.
@@ -377,6 +378,54 @@ M.Race_report.objects.
   declares one. A retype from text into `tsvector` is refused, because `CAST(text AS tsvector)`
   reads the text as a document literal rather than parsing its words. Add a new column and fill it
   with `update` instead.
+
+## A generated document
+
+Declare the column with `generated_from` and PostgreSQL computes the document itself, on every insert
+and every update, as a generated column (`GENERATED ALWAYS AS (…) STORED`). It is never stale, and
+nothing has to fill it:
+
+```julia
+Race_report = Models.Model("race_report",
+    id     = Models.IDField(),
+    title  = Models.CharField(max_length = 200),
+    body   = Models.TextField(null = true),
+    search_vector = Models.SearchVectorField(generated_from = ("title", "body"), config = "simple",
+                                             weights = ("A", "B")),
+    indexes = [Models.Index(fields = ("search_vector",), method = "gin", name = "race_report_search_vector_gin")],
+)
+# "search_vector" tsvector NOT NULL GENERATED ALWAYS AS (
+#   setweight(to_tsvector('simple'::regconfig, COALESCE(("title")::text, '')), 'A') ||
+#   setweight(to_tsvector('simple'::regconfig, COALESCE(("body")::text, '')), 'B')) STORED
+
+M.Race_report.objects.create("title" => "Senna at Suzuka")   # the document is computed
+M.Race_report.objects.filter("search_vector__@search" => SearchQuery("senna"; config = "simple"))
+```
+
+That is the document the `update` above writes, so `@search`, `SearchRank` and a GIN index work on it
+the same way.
+
+- `generated_from` takes database column names (a field's `db_column` where it sets one), in order.
+  Each is cast to text and `COALESCE`d, so a NULL one adds nothing and the document is never NULL.
+  `config` is required: PostgreSQL computes a generated column only from an expression that does not
+  depend on a server setting. `weights` gives one label from `"A"` to `"D"` per column, or is left
+  out for one unweighted document.
+- A malformed declaration raises `FieldValidationError` at the constructor. A column that is not
+  another ordinary column of the same model raises `ModelDefinitionError` when the model is defined.
+- PormG never writes the column. Naming it in `create`, `update`, `get_or_create`,
+  `update_or_create`, `save` or a bulk write raises `InvalidValueError` before anything runs; leave it
+  out. `bulk_insert(…; returning = …)` can still read it back.
+- **Migrations.** Declaring `generated_from` on an existing column, changing what it is generated
+  from, or retyping or removing one of its columns drops the generated column and adds it back,
+  with its indexes, in the same plan. PostgreSQL has no `ALTER` for any of these, and it refuses to
+  retype or drop a column a generated one reads. The `DROP COLUMN` makes the plan destructive, so
+  `migrate` runs it only with `destructive = true`, and adding the column back computes every row
+  again. Removing `generated_from` is `ALTER COLUMN … DROP EXPRESSION` instead: the documents stay,
+  and from then on they no longer follow the text.
+- A generated column that PormG did not create is left as it is while the model declares a plain
+  `SearchVectorField`. Declare `generated_from` and PormG re-creates it as its own.
+- Generated columns need PostgreSQL 12, and `DROP EXPRESSION` needs 13. On SQLite the column is
+  refused, as every `SearchVectorField` is.
 
 ## Indexing
 
@@ -433,6 +482,3 @@ These are deliberate for now. Each is refused with a typed error, not run as som
 - **A `SearchVector` or `SearchQuery` is not a value.** A `SearchVector` may be projected under a
   name (above). Otherwise, projecting either, comparing it, or wrapping it in another function raises
   `QueryBuildError`, and putting one on the right of any lookup but `@search` raises `FilterError`.
-- **No generated `tsvector` column.** A `SearchVectorField` is filled by `update`, not by the
-  database. A column that keeps itself current (`GENERATED ALWAYS AS (to_tsvector(…)) STORED`) is
-  not supported yet.

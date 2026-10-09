@@ -400,12 +400,23 @@ with `SearchRank("search_vector", …)` and index it with a GIN `Models.Index`. 
 `tsvector`'s text, a `String`. A text → `tsvector` retype is refused. See
 [Full-Text Search → A stored document](read/full_text_search.md#A-stored-document:-SearchVectorField).
 
+Declared with `generated_from`, the column is generated instead: PostgreSQL computes the document
+from the named columns on every write, and PormG never writes it. See
+[Full-Text Search → A generated document](read/full_text_search.md#A-generated-document).
+
 ```julia
 Race_report = Models.Model("race_report",
     id     = Models.IDField(),
     title  = Models.CharField(max_length = 200),
     search_vector = Models.SearchVectorField(null = true),
     indexes = [Models.Index(fields = ("search_vector",), method = "gin", name = "race_report_search_vector_gin")],
+)
+
+# Generated: kept current by PostgreSQL
+Race_report = Models.Model("race_report",
+    id     = Models.IDField(),
+    title  = Models.CharField(max_length = 200),
+    search_vector = Models.SearchVectorField(generated_from = ("title",), config = "simple"),
 )
 ```
 

@@ -241,6 +241,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Array Field (#28)" include("unit/test_array_field.jl")
     @testset "Array Field Lookups (#28)" include("unit/test_array_lookups.jl")
     @testset "Full-Text Search (#31)" include("unit/test_full_text_search.jl")
+    @testset "Generated columns in the migration engine (#1032)" include("unit/test_generated_columns.jl")
     @testset "UUIDField Pattern Lookups (#902)" include("unit/test_uuid_pattern_lookups.jl")
     @testset "Field Kwargs Equivalence (#260)" include("unit/test_field_kwargs_equivalence.jl")
     @testset "Django Model Importer" include("unit/test_import_django_models.jl")

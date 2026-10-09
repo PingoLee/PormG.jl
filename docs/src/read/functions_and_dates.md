@@ -362,10 +362,13 @@ between an index range scan and a full scan with a poisoned join plan.
 Note that `@lte` includes the *whole* final bucket (it becomes `<` the following period's first
 day), while `@lt` excludes the named bucket entirely. The same holds for `@year`.
 
-`@year` requires a whole year in the range 1–9999 — an `Integer`, a whole-valued number, or a
-numeric string. A value no single date can express (a fraction, a year outside that range, or a
-`Bool`) raises an `InvalidValueError` rather than silently comparing against an unusable bound. It
-is the error a value the column cannot take raises: the year is bound as a parameter.
+`@year` takes a whole year: an `Integer`, a whole-valued number, or a numeric string. A fraction or
+a `Bool` raises an `InvalidValueError` under every lookup, and so does a `@yyyy_mm` month that does
+not exist (`"1991-13"`). The range 1–9999 follows the date-part rule above: `=` and `@in` raise
+`InvalidValueError` for a year outside it, on any date or timestamp column. A comparison treats it
+as a bound. No date bound can express year 99999, so `"date__@year__@gte" => 99999` skips the
+rewrite and compares the extracted year: it selects no race on either backend, and `@lt` selects
+every race.
 
 !!! note "Scope of the rewrite"
     The rewrite applies to `@yyyy_mm`, `@date` and `@year` on a **plain `DateField`**, whether the
@@ -377,10 +380,10 @@ is the error a value the column cannot take raises: the year is bound as a param
     are not rewritten either — only `@yyyy_mm`, `@date` and `@year` are.
 
     For every value the bucket can express, the rewrite selects the same rows as before — only the
-    query plan changes. The one behavioural difference is at the edges: because the comparison is
-    now computed as a date bound, a value that no date bound can represent (`"1991-13"`, a
-    fractional or out-of-range year, a `Bool`) raises an `InvalidValueError` instead of building
-    SQL that silently matched nothing. Joined paths and columns on the queried model behave identically here.
+    query plan changes. A value that is no year or no month (`"1991-13"`, a fraction, a `Bool`)
+    raises an `InvalidValueError` on every path. A comparison's year outside 1–9999 keeps the
+    original rendering, as above. Joined paths and columns on the queried model behave identically
+    here.
 
 ---
 

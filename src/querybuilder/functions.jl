@@ -872,7 +872,7 @@ _temporal_row(r::NamedTuple, formatter::Function) = _TemporalRow((r.reads, r.wha
 # Keyed by `Dialect.extract_part`'s canonical spelling. `test_transform_ladder_parity.jl` fails if a
 # `Dialect.PG_EXTRACT_FIELDS` part has no row, so a new part cannot arrive unchecked.
 const _EXTRACT_PART_ROWS = Dict{String,_TemporalRow}(
-  "YEAR"            => _temporal_row(_CALENDAR_READS, Models.format_number_sql),
+  "YEAR"            => _temporal_row(_CALENDAR_READS, Models.format_year_sql),
   "ISOYEAR"         => _temporal_row(_CALENDAR_READS, Models.format_number_sql),
   "MONTH"           => _temporal_row(_CALENDAR_READS, Models.format_month_sql),
   "DAY"             => _temporal_row(_CALENDAR_READS, Models.format_day_sql),

@@ -1010,9 +1010,20 @@ const DOCERR_CASES = [
     # #988. The filter's own value checks raise the type a field's formatter raises: the value is
     # bound either way. Each claim was `FilterError` until then, and only the `@family` one ran here.
     (
-        "read/functions_and_dates.md — a @year no date bound can express raises (#988)",
+        "read/functions_and_dates.md — an exact @year outside 1–9999 raises (#988, #1091)",
         InvalidValueError,
-        () -> DOCERR_RACE_PG.objects.filter("date__@year__@gte" => 99999).list(show_query = :dict),
+        () -> DOCERR_RACE_PG.objects.filter("date__@year" => 99999).list(show_query = :dict),
+    ),
+    # #1091: "on any date or timestamp column" — off the `DateField` rewrite, `@in` and a timestamp.
+    (
+        "read/functions_and_dates.md — an @in year outside 1–9999 raises (#1091)",
+        InvalidValueError,
+        () -> DOCERR_RACE_PG.objects.filter("date__@year__@in" => [99999]).list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md — an exact @year outside 1–9999 on a timestamp raises (#1091)",
+        InvalidValueError,
+        () -> DOCERR_RACE801_SL.objects.filter("start_at__@year" => 99999).list(show_query = :dict),
     ),
     (
         "read/functions_and_dates.md — a Bool @year raises (#988)",
@@ -1020,7 +1031,7 @@ const DOCERR_CASES = [
         () -> DOCERR_RACE_PG.objects.filter("date__@year" => true).list(show_query = :dict),
     ),
     (
-        "read/functions_and_dates.md — a @yyyy_mm that is not a calendar month raises (#988)",
+        "read/functions_and_dates.md — a @yyyy_mm that is not a calendar month raises (#988, #1091)",
         InvalidValueError,
         () -> DOCERR_RACE_PG.objects.filter("date__@yyyy_mm__@lte" => "1991-13").list(show_query = :dict),
     ),
@@ -1028,6 +1039,12 @@ const DOCERR_CASES = [
         "read/filters_and_aggregates.md — a numeric JSON comparison against a non-number raises (#988)",
         InvalidValueError,
         () -> DOCERR_RESULT_PG.objects.filter("payload__wins__@gte" => "many").list(show_query = :dict),
+    ),
+    # #1091: errors.md — a JSON path compared with `Inf` / `NaN` is refused (the engines disagree on it).
+    (
+        "errors.md — a JSON path compared with NaN raises (#1091)",
+        InvalidValueError,
+        () -> DOCERR_RESULT_PG.objects.filter("payload__wins__@gte" => NaN).list(show_query = :dict),
     ),
     # #654 — the *Which Lookups Work on an Aggregate Alias* section says `@isnull` on a `Count` alias
     # raises when the query is built: COUNT never returns NULL, so the lookup could never match. (The

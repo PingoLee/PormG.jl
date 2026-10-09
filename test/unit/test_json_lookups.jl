@@ -109,6 +109,24 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # #1091: a non-finite float is refused on a JSON path, under every operator.
+  # `_json_numeric_rhs` refused text that overflows to `Inf` but passed a float through, so `Inf` and
+  # `NaN` were bound. The engines then disagree on the row set: PostgreSQL's `numeric` orders `NaN`
+  # above every number (and `<>` against the text 'NaN' is every row), while SQLite binds `NaN` as
+  # NULL, which compares with nothing. A finite float still binds as itself.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "a non-finite float is refused on a JSON path (#1091)" begin
+    for conn in (_JL_SL, _JL_PG), (path, v) in (("payload__count__@gte", Inf), ("payload__count__@lt", -Inf),
+                                                ("payload__count__@gte", NaN), ("payload__count", NaN),
+                                                ("payload__count__@ne", NaN))
+      e = try _sql((q = JL.Json_scratch.objects; q.filter(path => v); q.values("id"); q); conn = conn); nothing catch err; err end
+      @test e isa PormG.InvalidValueError && e.kind === :range
+      e isa PormG.InvalidValueError && @test e.field == "payload__count" && occursin("finite number", e.msg)
+    end
+    @test _sql((q = JL.Json_scratch.objects; q.filter("payload__count__@gte" => 2.5); q.values("id"); q))[:parameters] == [2.5]
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # __@isnull on a JSON path — IS NULL / IS NOT NULL, no parameter
   # Rendered directly (the shared ISNULL() rejects any column containing "(", which a legitimate
   # SQLite json_extract(...) expression trips).

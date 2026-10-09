@@ -2177,3 +2177,17 @@ end
     @test length(M.Race.objects.filter(Extract("date", "MONTH") >= 1).values("raceid").list(:dict)) == total
     @test_throws PormG.InvalidValueError M.Race.objects.filter(F("date__@month") == 13).list(:dict)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1091: a `DateField` year comparison outside 1–9999 compares the extracted year, on both engines.
+# The range rewrite cannot build a `Date` for year 99999, and a comparison's year is a bound (#1088), so
+# the filter falls back to `EXTRACT(YEAR …)`: `>= 99999` selects no race and `< 99999` every race.
+# An exact year outside the range, and `@in`, still raise when the query is built.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1091: an out-of-range @year comparison on a DateField falls back to the extracted year" begin
+    total = length(M.Race.objects.values("raceid").list(:dict))
+    @test isempty(M.Race.objects.filter("date__@year__@gte" => 99999).values("raceid").list(:dict))
+    @test length(M.Race.objects.filter("date__@year__@lt" => 99999).values("raceid").list(:dict)) == total
+    @test_throws PormG.InvalidValueError M.Race.objects.filter("date__@year" => 99999).list(:dict)
+    @test_throws PormG.InvalidValueError M.Race.objects.filter("date__@year__@in" => [99999]).list(:dict)
+end

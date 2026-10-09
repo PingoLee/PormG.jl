@@ -1223,6 +1223,41 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1091: `@year` and `@yyyy_mm` are checked on every path, not only the `DateField` range rewrite.
+# Their bounds ran inside `_render_sargable_date_range`, which fires only for `=` and the orderings on a
+# plain `DateField`. Off it — `@in`, a `DateTimeField` — the ladder formatted the value as a plain
+# number or text and bound it: `99999`, `true` as `1`, `"1991-13"`. Each now has its own formatter,
+# under #1088's split: a year outside 1–9999 is refused by `=` / `@in`, and a value that is no year or
+# no month (a Bool, a fraction, month 13) under every operator.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1091: @year and @yyyy_mm are checked off the DateField rewrite" begin
+  refusal(path, v, conn) = try _tlp_sql((q = TLP.Tlp_row.objects; q.values("id"); q.filter(path => v); q); conn = conn); nothing catch e; e end
+  params(path, v, conn) = _tlp_params((q = TLP.Tlp_row.objects; q.values("id"); q.filter(path => v); q); conn = conn)
+  for (backend, conn) in _TLP_BACKENDS
+    @testset "$backend" begin
+      # The issue's table, row by row, with the kind each refusal now carries.
+      for (path, v, kind) in (("seen__@year__@in", [99999], :range), ("ts__@year", 99999, :range),
+                              ("ts__@year", true, :type), ("ts__@year__@gte", 1991.5, :format),
+                              ("ts__@yyyy_mm", "1991-13", :format), ("ts__@yyyy_mm__@lt", "1991-13", :format),
+                              ("ts__@yyyy_mm", 199113, :format), ("ts__@yyyy_mm", "0000-01", :range))
+        e = refusal(path, v, conn)
+        @test e isa PormG.InvalidValueError && e.kind === kind
+      end
+      # A comparison's out-of-range year is a bound: it binds, as the integer.
+      @test params("ts__@year__@gte", 99999, conn) == [99999]
+      @test params("ts__@yyyy_mm__@lt", "0000-05", conn) == ["0000-05"]
+      # In range, every shape the rewrite accepts binds the year as an integer here too.
+      @test params("ts__@year", 1991.0, conn) == [1991]
+      @test params("ts__@year", "1991", conn) == [1991]
+      @test params("ts__@yyyy_mm", 199103, conn) == ["1991-03"]
+      # `F("…__@year")` takes the year's rule through the #1083 comparison arm.
+      e = try _tlp_sql((q = TLP.Tlp_row.objects; q.values("id"); q.filter(F("ts__@year") == 99999); q); conn = conn); nothing catch e; e end
+      @test e isa PormG.InvalidValueError && e.kind === :range
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #1083: a comparison written with `F` or `Extract` follows the same rule as the pair spelling.
 # The comparison arm typed its literal from the ROOTED column, never from the part on the left, so
 # `F("ts__@hour") == 25` bound 25 and matched nothing while `"ts__@hour" => 25` was refused. The part's

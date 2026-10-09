@@ -41,6 +41,9 @@ checked against the same table, with the same message, and get the same range:
 | `filter("date__@quarter__@lt" => 5)`, `filter("date__@quarter__@range" => [1, 5])` | `InvalidValueError`, for every operator | builds: a comparison's value and a range's ends are bounds (#1088) |
 | `filter("date__@month__@lt" => 13)`, `filter("start_at__@hour__@lte" => 24)` | every row | every row, unchanged: only `=` and `@in` are range-checked (#1088) |
 | `filter("date__@quarter" => 1.5)` | `InvalidValueError` with `kind = :range` | `InvalidValueError` with `kind = :format`, on every operator (#1088) |
+| `filter(F("start_at__@hour") == 25)`, `filter(Extract("start_at", "HOUR") == 25)` | matched nothing | `InvalidValueError`, as `"start_at__@hour" => 25` (#1083) |
+| `filter(F("start_at__@hour") == true)`, `filter(F("start_at__@hour") > 1.5)` | bound `1` / `"1.5"` | `InvalidValueError` (`kind = :type` / `:format`) (#1083) |
+| `filter(F("start_at__@hour") > 25)` | every row | every row, unchanged: an ordering's value is a bound |
 
 A refusal names the part rather than the spelling: "The `hour` part reads a time of day, …", and a
 refused filter value is located on "the `start_at` hour part" instead of "the `start_at` @hour
@@ -51,7 +54,7 @@ column) still passes through without a check. A relation (`raceid__@year`) is ch
 key it holds, by #1068 in the same train: see that entry. `ToChar` is checked
 only for the `"YYYY-MM"` mask `@yyyy_mm` uses. Arithmetic over a part is an ordinary number, and
 so is a `Coalesce`/`Greatest`/`Least`/`NullIf` over one: `Extract("start_at", "HOUR") + 1` has no
-range. A comparison written with `F` (`F("date__@month") > 13`) is not range-checked yet (#1083).
+range. A comparison written with `F` or `Extract` takes the part's rule too (#1083).
 
 The range applies to `=` and `@in` only (#1088). There an out-of-range value can only be a typo,
 while for `<`, `<=`, `>`, `>=`, `@range`, `@ne` and `@nin` it is a bound:

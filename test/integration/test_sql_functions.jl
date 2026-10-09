@@ -2163,3 +2163,17 @@ end
     @test ids(M.Race.objects.filter("date__@yyyy_mm__@startswith" => "2009").values("raceid")) == want
     @test ids(M.Race.objects.filter("date__@startswith" => "2009").values("raceid")) == want
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1088 / #1083: a comparison over a date part binds its bound, and both engines answer it the same.
+# The range is checked for `=` only, so `@lt 13` and `F(...) > 12` build. The answer is the natural one:
+# every race has a month below 13 and none has one above 12, whichever spelling asks.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1088/#1083: an out-of-range bound on a date part selects every row or none" begin
+    total = length(M.Race.objects.values("raceid").list(:dict))
+    @test total > 100
+    @test length(M.Race.objects.filter("date__@month__@lt" => 13).values("raceid").list(:dict)) == total
+    @test isempty(M.Race.objects.filter(F("date__@month") > 12).values("raceid").list(:dict))
+    @test length(M.Race.objects.filter(Extract("date", "MONTH") >= 1).values("raceid").list(:dict)) == total
+    @test_throws PormG.InvalidValueError M.Race.objects.filter(F("date__@month") == 13).list(:dict)
+end

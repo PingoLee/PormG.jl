@@ -1427,6 +1427,17 @@ const DOCERR_CASES = [
         InvalidValueError,
         () -> DOCERR_RACE_PG.objects.filter("date__@month__@lt" => 6.5).list(show_query = :dict),
     ),
+    # #1083: the `F` spelling of the same two claims.
+    (
+        "read/functions_and_dates.md — an F comparison over a date part, out of range, raises (#1083)",
+        InvalidValueError,
+        () -> DOCERR_RACE_PG.objects.filter(F("date__@month") == 13).list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md — an F comparison with a fraction over a date part raises (#1083)",
+        InvalidValueError,
+        () -> DOCERR_RACE_PG.objects.filter(F("date__@month") > 6.5).list(show_query = :dict),
+    ),
     # #955: a period transform refuses a `Bool` rather than reading `true` as `1`.
     (
         "read/functions_and_dates.md — a period transform refuses a Bool",

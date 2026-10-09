@@ -1223,6 +1223,43 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1083: a comparison written with `F` or `Extract` follows the same rule as the pair spelling.
+# The comparison arm typed its literal from the ROOTED column, never from the part on the left, so
+# `F("ts__@hour") == 25` bound 25 and matched nothing while `"ts__@hour" => 25` was refused. The part's
+# formatter now decides, under #1088's operator rule: `==` is held to the range, `>` and the other
+# orderings bind their bound, and the shape (a Bool, a fraction) is refused under every operator.
+# There is no `@in` form to cover: an `F`/`Extract` key in a filter pair is refused at parse.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1083: an F or Extract comparison over a date part takes the part's rule" begin
+  Fn = PormG.Functions
+  build(f) = (q = TLP.Tlp_row.objects; q.values("id"); q.filter(f()); q)
+  refusal(f, conn) = try _tlp_sql(build(f); conn = conn); nothing catch e; e end
+  for (backend, conn) in _TLP_BACKENDS
+    @testset "$backend" begin
+      # Equality: the three spellings refuse alike, with the same kind.
+      for f in (() -> F("ts__@hour") == 25, () -> Fn.Extract("ts", "HOUR") == 25, () -> F("seen__@month") == 13)
+        e = refusal(f, conn)
+        @test e isa PormG.InvalidValueError && e.kind === :range
+      end
+      @test _tlp_params(build(() -> F("ts__@hour") == 3); conn = conn) == [3]
+      # An ordering binds its bound — and keeps the PostgreSQL integer cast the numeric arm gives it.
+      for f in (() -> F("ts__@hour") > 25, () -> Fn.Extract("ts", "HOUR") > 25, () -> F("ts__@hour") != 25)
+        r = inspect_query(build(f); connection = conn)
+        @test r[:parameters] == [25]
+        @test occursin(conn === _TLP_PG ? "\$1::bigint" : "?", r[:sql_text])
+      end
+      # The shape under every operator: no hour is `true` or 1.5 (both bound as `1` and `"1.5"` before).
+      for (f, kind) in ((() -> F("ts__@hour") == true, :type), (() -> F("ts__@hour") > 1.5, :format))
+        e = refusal(f, conn)
+        @test e isa PormG.InvalidValueError && e.kind === kind
+      end
+      # Arithmetic over a part is a plain number (#1070): `hour + 1` reaches 24.
+      @test _tlp_params(build(() -> (F("ts__@hour") + 1) == 24); conn = conn)[end] == 24
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #1086: a pattern lookup's value is a FRAGMENT of the column's text, on every column.
 # Django's `PatternLookup` skips the field's `get_prep_value`, because `"2009"` is a prefix of a date
 # and of a `"YYYY-MM"` label, not a whole value of either. PormG did that only for the network and UUID

@@ -250,8 +250,9 @@ where it would refuse a valid filter.
 
 The shape is checked under every lookup. A `Bool` is refused rather than meaning `1`
 (`"start_at__@hour" => true`), and so are a fraction (`"date__@month__@lt" => 6.5`) and text that is
-not a number. A comparison written with `F`, such as `F("date__@month") > 13`, is not checked yet
-(#1083). The range belongs to the part, not to what you compute from it:
+not a number. A comparison written with `F` or `Extract` follows the same rule:
+`F("date__@month") == 13` raises, `F("date__@month") > 13` builds, and `F("date__@month") > 6.5`
+raises. The range belongs to the part, not to what you compute from it:
 `Extract("start_at", "hour") + 1` is an ordinary number, and `Coalesce("date__@month", 0)` can be
 filtered with its `0`.
 

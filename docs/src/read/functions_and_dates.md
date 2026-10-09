@@ -527,9 +527,8 @@ form, SQLite's the binary double. Measured on PostgreSQL 16.15 and SQLite 3.45.1
 | `1.005` | `1.01` | `1.0` |
 
 So over such a value (a float column, a float literal with more places, arithmetic over one, a
-function such as `Avg` or `Sqrt`, a `DecimalField` with more than `n` places, or anything built over
-a `Subquery` or a `Case`, bare or inside `Coalesce`, arithmetic and the like) `Round(x, n)` renders
-one formula instead, which both engines
+function such as `Avg` or `Sqrt`, or anything built over a `Subquery` or a `Case`, bare or inside
+`Coalesce`, arithmetic and the like) `Round(x, n)` renders one formula instead, which both engines
 compute in the same IEEE double arithmetic (#1061):
 
 ```sql
@@ -543,19 +542,43 @@ SQLite 3.53.4 over 1,200,020 values, `n` ∈ {1, 2, 3, 4, 6}. `2.675` and `1.555
 both engines, so it reads back as a `Float64`. A `GROUP BY` or a filter on it matches the same rows
 in development and in production.
 
-An integer, a whole number, a `DecimalField` with at most `n` places, and a literal that fits are
-already rounded. They render the engine's own `ROUND` and keep their type, so a `DecimalField` still
-reads back as a `Decimal` on PostgreSQL. PormG does not read the places of a value that comes through
-a `Subquery` or a `Case`. Such a value takes the formula, and reads back as a double even when it is
-an integer: the formula leaves a value that already fits unchanged. To keep its type, name it with a
-`Cast` (or a `Coalesce`/`Greatest`/`Least` `output_field`) as an integer type or a `numeric(p, s)`
-with `s ≤ n`: `Round(Cast(Subquery(q), IntegerField()), 2)` keeps the engine's `ROUND`. A `Case`'s own
-`output_field` is not read here, so wrap the `Case` in a `Cast`.
+An integer, a whole number, a `DecimalField` with at most `n` places (or `Max`, `Min` or `Coalesce`
+over one), and a literal that fits are already rounded. They render the engine's own `ROUND` and
+keep their type, so a `DecimalField` still reads back as a `Decimal` on PostgreSQL. A bare
+`Subquery` over a decimal column is read the same way: within its places it keeps `ROUND`, and past
+them it is refused (below). PormG does not read the places of anything else that comes through a
+`Subquery` or a `Case`. Such a value takes the formula, and reads back as a double even when it is
+an integer or a decimal: the formula leaves a value that already fits unchanged. To keep its type,
+name it with a `Cast` (or a `Coalesce`/`Greatest`/`Least` `output_field`) as an integer type or a
+`numeric(p, s)` with `s ≤ n`: `Round(Cast(Subquery(q), IntegerField()), 2)` keeps the engine's
+`ROUND`. A `Case`'s own `output_field` is not read here, so wrap the `Case` in a `Cast`.
 
 One limit applies: the formula is the same on both engines, but its operand has to be the same too.
 `Avg` over floats is summed differently by the two engines (SQLite compensates its rounding errors,
 PostgreSQL does not), so a mean that lands within a hair of a tie (`…5` at the last place) can still
 round apart. A column, a literal, or arithmetic over them is the same value on both.
+
+A decimal that PormG cannot show fits `n` places is refused: `Round(x, n)` raises `QueryBuildError`
+when the query is built. PostgreSQL would round it exactly as a decimal (`1.005` → `1.01`), SQLite
+holds it as a double (`1.0`, #648), and the formula would put PostgreSQL's exact value through a
+double without being asked. That covers:
+
+- a decimal with more than `n` places: a `DecimalField`, a `Decimal` literal, a cast to `numeric`;
+- a decimal whose places PormG does not read: a `Sum`, arithmetic, a window value or a CTE column
+  over a `DecimalField`. This one is refused **even when it would fit**:
+  `Round(Sum("points"), 2)` over `Constructor_standings.points`, a two-place `DecimalField`, raises.
+
+Say what you want instead:
+
+- `Round(Cast(x, FloatField()), n)` accepts the double, and gives the formula's answer on both engines.
+- `Round("points", 2)` on that two-place column is exact already, and keeps the `Decimal`.
+- Or fetch the value and round it in Julia.
+
+Two kinds of decimal operand take the formula instead, so they round as a double on PostgreSQL too:
+
+- `Avg` and `Mod` of a `DecimalField`, which PormG reads as computed numbers;
+- a decimal reached through a `Case`, or through a `Subquery` other than a bare one over a decimal
+  column (wrapped, or projecting a `Sum`), as above.
 
 Text is not a number to round. `Round(x, n)` over a text column, a string literal or a JSON value
 raises `QueryBuildError` when the query is built. Say which number it is first with
@@ -779,8 +802,8 @@ Julia formatting for the rest.
 
 For a scaled `numeric`, round first. `Round(x, d)` gives the same value on both engines (#1061,
 *Rounding to decimal places* above), and that value has at most `d` places, so a cast to a scale of
-at least `d` over it passes: `Cast(Round("points", 2), "numeric(10,2)")`. Over text, make it a
-number first: `Cast(Round(Cast(x, FloatField()), 2), "numeric(10,2)")`. A cast to an unscaled
+at least `d` over it passes: `Cast(Round("points", 2), "numeric(10,2)")`. Over text or a wider decimal,
+make it a float first: `Cast(Round(Cast(x, FloatField()), 2), "numeric(10,2)")`. A cast to an unscaled
 `"numeric"` (or `DecimalField()`) keeps the value on both engines and passes as it is.
 
 A cast to any other type (`"numeric"`, `"double precision"`, `"date"`) is not checked: it is not a

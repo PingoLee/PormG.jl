@@ -550,14 +550,35 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # own values, in text order (#844's reason: repeating the rendered string would repeat a `?` bound
   # once). `f` is bound once per use, after both, and `precision` not at all — a bound value with no
   # placeholder is itself a misbind. Text is no number to round, and is refused.
+  #
+  # A decimal with more than `d` places is refused too (the maintainer's call on #1061): PostgreSQL
+  # rounds it exactly as a decimal, and the formula would put it through a double (`1.005` → `1.0`)
+  # without the caller asking. A cast to a float says the double is fine.
   round_scale = nothing
   if v isa FObject && v.function_name == "ROUND"
     digits = get(v.kwargs, "precision", 0)
     if digits isa Integer && digits > 0
       # `Round` takes any `Integer` (`Int32`, `BigInt`); the classifier's scale is an `Int`.
       divergent = _scale_divergent_operand(v.column, Int(digits), instruc)
+      untyped = divergent === nothing && _untyped_scale_operand(v.column)
+      if untyped
+        # A bare `Subquery` is its one column, as its own build typed it (#888): a decimal that fits
+        # keeps the engine's ROUND, a wider one is a decimal like any other. An integer column records
+        # no kind there (`field_canonical_kind` names none), so it stays unknown and takes the formula.
+        kind = _operand_kind(v.column, instruc)
+        if kind isa CDecimal
+          places = kind.scale
+          if places !== nothing && places <= digits
+            untyped = false
+          else
+            divergent = (:decimal, places === nothing ? "a Subquery over a decimal of unknown scale" :
+                                                        "a Subquery over a decimal with $(places) decimal places")
+          end
+        end
+      end
       divergent !== nothing && divergent[1] === :text && throw(_round_text_refusal(digits, divergent[2]))
-      if divergent !== nothing || _untyped_scale_operand(v.column)
+      divergent !== nothing && divergent[1] === :decimal && throw(_round_decimal_refusal(digits, divergent[2]))
+      if divergent !== nothing || untyped
         resolved_column = Any[resolved_column, _get_select_query(v.column, instruc, _as=_as)]
         delete!(deferred_kwargs, "precision")
         round_scale = exp10(Int(digits))

@@ -1,9 +1,9 @@
-## `Round(x, n)` to places renders one double formula on both engines; text and a negative `n` are refused (#1044, #1061)
+## `Round(x, n)` to places renders one double formula on both engines; text, a decimal it cannot show fits, and a negative `n` are refused (#1044, #1061)
 
 - **Version**: Unreleased
-- **PormG ref**: #1044, #1061 ; `src/querybuilder/functions.jl` (`Round`, `_round_text_refusal`), `src/querybuilder/select_nodes.jl` (`_render_function_body`), `src/Dialect.jl` (`ROUND`'s vector arm), reusing `src/querybuilder/projection_types.jl` (`_scale_divergent_operand`)
+- **PormG ref**: #1044, #1061 ; `src/querybuilder/functions.jl` (`Round`, `_round_text_refusal`, `_round_decimal_refusal`), `src/querybuilder/select_nodes.jl` (`_render_function_body`), `src/Dialect.jl` (`ROUND`'s vector arm), reusing `src/querybuilder/projection_types.jl` (`_scale_divergent_operand`)
 - **Recorded**: 2026-10-08
-- **Severity**: breaking. `Round(x, n)` with `n > 0` over a value with more than `n` places answers differently on PostgreSQL than before (`1.005` → `1.0`, was `1.01`) and reads back as a `Float64` there (was a `Decimal`). Over text it raises `QueryBuildError`, and `n < 0` or `n > 22` raises `InvalidValueError` when it is built.
+- **Severity**: breaking. `Round(x, n)` with `n > 0` over a value with more than `n` places answers differently on PostgreSQL than before (`1.005` → `1.0`, was `1.01`) and reads back as a `Float64` there (was a `Decimal`). Over text, or a decimal PormG cannot show fits `n` places, it raises `QueryBuildError`, and `n < 0` or `n > 22` raises `InvalidValueError` when it is built.
 
 ### What changed
 
@@ -21,9 +21,9 @@ in production and on SQLite. Measured on PostgreSQL 16.15 and SQLite 3.45.1:
 | `Round(x)` | same on both | same on both |
 
 Now `Round(x, n)` with `n > 0` over a value that can carry more than `n` places (a float column, a
-float literal with more places, arithmetic over a float, a function such as `Avg`, `Sqrt` or `Mod`, a
-`DecimalField` with more than `n` places, a nested cast to a wider scale, or anything built over a
-`Subquery` or a `Case`, bare or inside `Coalesce`, arithmetic and the like) renders one formula. Both engines compute it in the
+float literal with more places, arithmetic over a float, a function such as `Avg`, `Sqrt` or `Mod`, or
+anything built over a `Subquery` or a `Case`, bare or inside `Coalesce`, arithmetic and the like)
+renders one formula. Both engines compute it in the
 same IEEE double arithmetic:
 
 ```sql
@@ -40,14 +40,15 @@ them:
 | `Round(<float> 1.555, 2)` | `1.56` | `1.55` | `1.56` |
 | `Round(<float> 1.005, 2)` | `1.01` | `1.0` | `1.0` (the double nearest `1.005` is below it) |
 | `Round(<float> 1.15, 1)` | `1.2` | `1.1` | `1.2` |
-| `Round(<numeric(10,3)> 2.675, 2)` | `2.68` (a `Decimal`) | `2.67` | `2.68` (a `Float64`) |
+| `Round(<numeric(10,3)> 2.675, 2)` | `2.68` (a `Decimal`) | `2.67` | refused (below) |
 
 Its value is a double on both engines, so on PostgreSQL it reads back as a `Float64` where it read
 back as a `Decimal`.
 
 Unchanged: `Round(x)` and `Round(x, 0)`, and `Round(x, n)` over an integer, a whole number (`Floor`,
 `Ceil`, `Round(x)`), a `DecimalField` with at most `n` places, or a literal that fits `n` places. That
-value already has at most `n` places, so it keeps the engine's own `ROUND` and its type. A value
+value already has at most `n` places, so it keeps the engine's own `ROUND` and its type, as does a
+bare `Subquery` over a decimal column within its places (past them it is refused). Anything else
 that comes through a `Subquery` or a `Case` takes the formula even when it is an integer, and reads
 back as a double, unless a `Cast` (or a `Coalesce`/`Greatest`/`Least` `output_field`) names an
 integer type or a `numeric(p, s)` with `s ≤ n` (`Round(Cast(Subquery(q), IntegerField()), 2)` keeps
@@ -58,6 +59,14 @@ Refused:
 - `Round(x, n)` with `n > 0` over text (a text column, a string literal, a JSON value) raises
   `QueryBuildError` when the query is built. PostgreSQL parses the text as a number, and SQLite reads
   text that is not a number as 0.
+- `Round(x, n)` with `n > 0` over a decimal that PormG cannot show fits `n` places raises
+  `QueryBuildError` when the query is built: one with more than `n` places (a `DecimalField`, a
+  `Decimal` literal, a cast to `numeric`), and one whose places it does not read (a `Sum`,
+  arithmetic, a window value or a CTE column over a `DecimalField`), even when it would fit. `Avg`
+  and `Mod` of a `DecimalField`, and a decimal reached through a `Case` or a `Subquery` PormG cannot
+  type, take the formula. PostgreSQL rounds a decimal exactly (`1.005` → `1.01`) and SQLite holds it
+  as a double (`1.0`); the formula would put PostgreSQL's exact value through a double without being asked.
+  `Round(Cast(x, FloatField()), n)` accepts the double.
 - `Round(x, n)` with `n < 0` raises `InvalidValueError` for every operand, an integer included.
 - `n > 22` raises `InvalidValueError` too. The formula scales by `10^n` as a double, and PostgreSQL
   raises on an overflow where SQLite returns `Inf`; up to 22 `10^n` is exact and only an `|x|` above
@@ -71,7 +80,7 @@ renders, since its value has at most `n` places on both engines.
 - Code that rounds a float, an average or another computed number to decimal places in SQL on
   PostgreSQL, and either compares the result against a pinned value (an answer at a decimal tie can
   move, as `1.005` does) or expects a `Decimal` back.
-- Code that rounds text to places in SQL.
+- Code that rounds text, or a decimal below its own places, in SQL.
 - Code that uses a negative precision.
 
 ### How to find the calls to migrate
@@ -97,6 +106,12 @@ df.pts .== 2.68
 M.Driver.objects.values("x" => Round("code", 1))
 # ✓ after — say which number it is first
 M.Driver.objects.values("x" => Round(Cast("code", FloatField()), 1))
+
+# ✗ before — a two-place DecimalField rounded to one: exact on PostgreSQL, a double on SQLite
+M.Constructor_standings.objects.values("pts" => Round("points", 1))
+# ✓ after — accept the double, the same on both engines
+M.Constructor_standings.objects.values("pts" => Round(Cast("points", FloatField()), 1))
+# ✓ or keep the exact Decimal: round to its own places in SQL, or round the fetched value in Julia
 
 # ✗ before — 130 on PostgreSQL, 125.0 on SQLite
 M.Driver.objects.values("bucket" => Round("number", -1))

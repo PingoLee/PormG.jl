@@ -413,7 +413,7 @@ df = M.Result.objects.values(
 | Function | Description |
 | :--- | :--- |
 | `Abs("field")` | Absolute value |
-| `Round("field", precision)` | Round to `precision` places, half away from zero; over a float, `Avg` or another value with more places it renders one double formula both engines compute alike (#1061); over text it raises `QueryBuildError` |
+| `Round("field", precision)` | Round to `precision` places, half away from zero; over a float, `Avg` or another value with more places it renders one double formula both engines compute alike (#1061); over text, or a decimal PormG cannot show fits (more places, or a `Sum`/arithmetic over a `DecimalField`), it raises `QueryBuildError` |
 | `Floor("field")` | Floor |
 | `Ceil("field")` | Ceiling |
 | `Sqrt("field")` | Square root |

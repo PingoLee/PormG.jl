@@ -1989,7 +1989,8 @@ end
 # 3.45.1: `2.675` at d = 2 is 2.68 on one and 2.67 on the other, a numeric(10,3) value the same, as
 # SQLite holds a REAL). #1061 renders `sign(x) * floor(abs(x) * 10^d + 0.5) / 10^d + 0.0` instead,
 # which both compute in IEEE double arithmetic and which is Julia's `RoundNearestTiesAway` of the
-# same double. A value with at most d places keeps the engine's own ROUND; text and a negative d are
+# same double. A value with at most d places keeps the engine's own ROUND; text, a decimal with more
+# than d places (PostgreSQL would round it exactly, the formula would not) and a negative d are
 # refused.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1061: Round(x, d) to places is the same double on both engines" begin
@@ -2002,9 +2003,13 @@ end
         x = proj(M.Result, Round(Value(v), 2))()[1, :x]
         @test x isa Float64 && x === want   # `===`: `-0.001` must not read back as `-0.0`
     end
-    # A numeric(10,3) value, which PostgreSQL rounded as a decimal and SQLite as a REAL.
-    x = proj(M.Result, Round(Cast(Value(Decimals.Decimal(0, 2675, -3)), "numeric(10,3)"), 2))()[1, :x]
-    @test Float64(x) == 2.68
+    # A numeric(10,3) value, which PostgreSQL rounded as a decimal and SQLite as a REAL: refused, since
+    # the formula would drop PostgreSQL's exact decimal; made a float by the caller, it rounds alike.
+    dec3 = Cast(Value(Decimals.Decimal(0, 2675, -3)), "numeric(10,3)")
+    err = refusal(proj(M.Result, Round(dec3, 2)))
+    @test err isa PormG.QueryBuildError && occursin("#1061", sprint(showerror, err))
+    x = proj(M.Result, Round(Cast(dec3, PormG.Models.FloatField()), 2))()[1, :x]
+    @test x === 2.68
 
     # A float column and arithmetic over it, every row of the first 100 races.
     q = M.Result.objects
@@ -2049,11 +2054,12 @@ end
     @test nrow(q |> DataFrame) == nrow(q2 |> DataFrame) > 0
 
     # What already fits keeps the engine's own ROUND, and its type: a two-place DecimalField at two
-    # places, an integer column, and a literal that fits. At one place the DecimalField takes the formula.
+    # places, an integer column, and a literal that fits. At one place the DecimalField is refused, and
+    # made a float by the caller it takes the formula.
     q = M.Constructor_standings.objects
     q.filter("raceid" => 2)
     q.values("points", "wins", "r" => Round("points", 2), "w" => Round("wins", 1),
-             "one" => Round("points", 1),
+             "one" => Round(Cast("points", PormG.Models.FloatField()), 1),
              "c" => Cast(Round("points", 2), "numeric(10,2)"))   # the docs' example: at most 2 places
     df = q |> DataFrame
     @test nrow(df) > 0
@@ -2061,6 +2067,8 @@ end
     @test all(r -> Float64(r.c) == Float64(r.points), eachrow(df))
     @test all(r -> Float64(r.w) == Float64(r.wins), eachrow(df))
     @test all(r -> r.one == tiesaway(parse(Float64, string(r.points)), 1), eachrow(df))
+    err = refusal(() -> (q = M.Constructor_standings.objects; q.filter("raceid" => 2); q.values("x" => Round("points", 1)); q |> DataFrame))
+    @test err isa PormG.QueryBuildError && occursin("#1061", sprint(showerror, err))
     df = proj(M.Result, Round(Value(1.5), 2))()
     @test Float64(df[1, :x]) == 1.5
 

@@ -606,17 +606,14 @@ _ccd_out(expr; conn) = inspect_query((q = CCD.Ccd_driver.objects; q.values("x" =
 @testset "#1061: Round(x, d) renders the double formula over a value with more than d places" begin
   numbers = [
     "points"                       => "\"Tb\".\"points\"",
-    "price"                        => "\"Tb\".\"price\"",          # two places, rounded to one below
+    Fn.Cast("price", Models.FloatField()) => nothing,   # a decimal, made a float by the caller
     _CF("points") * 3              => nothing,   # not 1 or 2: `d` must not be among the binds
     Fn.Avg("number")               => "AVG(\"Tb\".\"number\")",
     Fn.Sqrt("number")              => nothing,
     Fn.Max("points")               => "MAX(\"Tb\".\"points\")",
-    Fn.Cast("points", "numeric")   => nothing,
     Fn.Value(2.675)                => nothing,
-    Fn.Value(Decimal(0, 1555, -3)) => nothing,
   ]
   for (operand, rendered) in numbers, d in (1, 2), conn in _CCD_ENGINES
-    operand === "price" && d == 2 && continue                   # fits: the engine's own ROUND, below
     out = _ccd_out(Fn.Round(operand, d); conn = conn)
     sql = _ccd_unnumbered(out[:sql_text])
     @test occursin(conn === _CCD_PG ? "* \$_::double precision + 0.5::float8) / \$_::double precision + 0.0::float8)" :
@@ -677,9 +674,11 @@ end
       sql = _ccd_out(Fn.Round(typed, 2); conn = conn)[:sql_text]
       @test occursin("ROUND(", sql) && !occursin("floor(abs(", sql)
     end
-    # Typed as a float, wider than `d`, or as a type the classifier cannot read (`money`, an unscaled
-    # `dec`), it still takes the formula: an unreadable type is no proof, so the walk fails closed.
-    for typed in (Fn.Cast(Subquery(rating()), Models.FloatField()), Fn.Cast(Subquery(rating()), "numeric(10,3)"),
+    # Typed as a float, or as a type the classifier cannot read (`money`, an unscaled `dec`), it still
+    # takes the formula: an unreadable type is no proof, so the walk fails closed. A wider decimal is
+    # refused (above), as any decimal is.
+    @test _is_1061(_ccd_refusal(Fn.Round(Fn.Cast(Subquery(rating()), "numeric(10,3)"), 2); conn = conn))
+    for typed in (Fn.Cast(Subquery(rating()), Models.FloatField()),
                   Fn.Cast(Subquery(rating()), "money"), Fn.Cast(Subquery(rating()), "dec"))
       @test occursin("floor(abs(", _ccd_out(Fn.Round(typed, 2); conn = conn)[:sql_text])
     end
@@ -747,6 +746,48 @@ end
   # The way out the message names: made a number, it renders the formula.
   for conn in _CCD_ENGINES
     @test occursin("floor(abs(", _ccd_out(Fn.Round(Fn.Cast("surname", Models.FloatField()), 2); conn = conn)[:sql_text])
+  end
+end
+
+@testset "#1061: a decimal with more than d places is refused, never rounded through a double" begin
+  # PostgreSQL rounds a decimal exactly (`1.005` → `1.01`), SQLite holds a REAL (`1.0`): the formula
+  # would drop PostgreSQL's exactness unasked, so the caller chooses (the maintainer's call on #1061).
+  price_sub() = (s = CCD.Ccd_driver.objects; s.filter("id" => OuterRef("id")); s.values("price"); s)
+  refused = [
+    (Fn.Round("price", 1), 1, "the DecimalField `price` (2 decimal places)"),
+    (Fn.Round(Fn.Max("price"), 1), 1, "`MAX(…)` over the DecimalField `price` (2 decimal places)"),
+    (Fn.Round(_CF("price") * 2, 1), 1, "arithmetic over the DecimalField `price`"),
+    (Fn.Round(Fn.Cast("points", "numeric"), 1), 1, "a value cast to numeric"),
+    (Fn.Round(Fn.Value(Decimal(0, 1555, -3)), 2), 2, "a Decimal literal with 3 decimal places"),
+    (Fn.Round(Subquery(price_sub()), 1), 1, "a Subquery over a decimal with 2 decimal places"),
+  ]
+  for (expr, d, named) in refused, conn in _CCD_ENGINES
+    err = _ccd_refusal(expr; conn = conn)
+    @test _is_1061(err)
+    msg = _ccd_msg(err)
+    @test occursin("Round(…, $(d)) cannot round $(named): it is a decimal with more than $(d) $(isone(d) ? "place" : "places")", msg)
+    @test occursin("Round(Cast(x, FloatField()), $(d))", msg) && !occursin("1555", msg)
+  end
+  for conn in _CCD_ENGINES
+    # The way out the message names: made a float, it renders the formula.
+    @test occursin("floor(abs(", _ccd_out(Fn.Round(Fn.Cast("price", Models.FloatField()), 1); conn = conn)[:sql_text])
+    # Within its places it keeps the engine's ROUND, bare or through a Subquery (#888 types its column).
+    for expr in (Fn.Round("price", 2), Fn.Round(Subquery(price_sub()), 2))
+      sql = _ccd_out(expr; conn = conn)[:sql_text]
+      @test occursin("ROUND(", sql) && !occursin("floor(abs(", sql)
+    end
+    # The documented edges of the rule (the maintainer kept the classifier as it is, #1061):
+    # a decimal whose places it does not read is refused even where it would fit…
+    for expr in (Fn.Round(Fn.Sum("price"), 2), Fn.Round(_CF("price") + 1, 2))
+      @test _is_1061(_ccd_refusal(expr; conn = conn))
+    end
+    # …while `Avg`/`Mod` of a decimal (`numeric` functions) and a decimal reached through a `Case` or a
+    # wrapped `Subquery` take the formula, as a double.
+    for expr in (Fn.Round(Fn.Avg("price"), 1), Fn.Round(Fn.Mod("price", 1), 1),
+                 Fn.Round(Fn.Case([Fn.When("id" => 1, then = _CF("price"))], default = 0), 1),
+                 Fn.Round(Fn.Coalesce(Subquery(price_sub()), 0), 1))
+      @test occursin("floor(abs(", _ccd_out(expr; conn = conn)[:sql_text])
+    end
   end
 end
 

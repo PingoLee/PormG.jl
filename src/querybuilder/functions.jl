@@ -811,8 +811,9 @@ function _cast_divergent_refusal(fname::AbstractString, kind::Symbol, what::Abst
   if target === :scale
     scale = something(_numeric_cast_scale(flag), 0)
     why = "PostgreSQL rounds a value cast to $(flag) to its scale (`1.555` → `1.56` at scale 2, `1.5` → `2` at scale 0) and SQLite keeps every digit"
-    # Text is not rounded to places either (`_round_text_refusal`): it is made a number first.
-    spelled = kind === :text ? "Cast(x, FloatField())" : "x"
+    # Text and a wider decimal are not rounded to places either (`_round_text_refusal`,
+    # `_round_decimal_refusal`): each is made a float first, which says a double is fine.
+    spelled = kind in (:text, :decimal) ? "Cast(x, FloatField())" : "x"
     unscaled = "cast to an unscaled \e[32m\"numeric\"\e[0m, which keeps the value on both engines."
     # `Round` takes at most 22 places (#1061), so past that only the unscaled cast is a way out.
     fix = scale > 22 ? uppercasefirst(unscaled) :
@@ -845,6 +846,25 @@ function _round_text_refusal(digits::Integer, what::AbstractString)
     "\e[32mRound(Cast(x, FloatField()), $(digits))\e[0m (text that is not a number still errors on " *
     "PostgreSQL and reads 0 on SQLite there), or fetch the value and round it in Julia " *
     "(\e[32mround(parse(Float64, x), RoundNearestTiesAway; digits = $(digits))\e[0m).")
+end
+
+# #1061 — `Round(x, d)` over a decimal with more than `d` places (`_scale_divergent_operand`'s
+# `:decimal` kind: a `DecimalField`, a `Decimal` literal, a cast to `numeric`). PostgreSQL rounds it
+# exactly as a decimal and SQLite holds a REAL (#648), so no one SQL rounding is both exact and the
+# same on both; the double formula would drop PostgreSQL's exactness unasked. The caller chooses.
+# The classifier reads a decimal's places only off a column, `Max`/`Min`/`Coalesce` over one, a cast
+# and a bare `Subquery`; a sum, arithmetic, a window value or a CTE column over one has no places it
+# can read, so it is refused even when it would fit (the maintainer's call on #1061), and the
+# message says so.
+function _round_decimal_refusal(digits::Integer, what::AbstractString)
+  return QueryBuildError(
+    "\e[4m\e[31mRound(…, $(digits))\e[0m cannot round $(what): it is a decimal with more than " *
+    "$(digits) $(isone(digits) ? "place" : "places"), or one whose places PormG does not read (a " *
+    "sum, arithmetic, a window value or a CTE column over a DecimalField), and PostgreSQL rounds a " *
+    "decimal exactly (`1.005` → `1.01`) where SQLite holds it as a double (`1.0`) (#1061). If a " *
+    "double is fine, say so with a cast, " *
+    "\e[32mRound(Cast(x, FloatField()), $(digits))\e[0m, which rounds the same on both engines; " *
+    "otherwise fetch the value and round it in Julia.")
 end
 
 # Variadic convenience: Concat("forename", Value(" "), "surname") → same as vector form
@@ -1207,9 +1227,9 @@ Rounds a number to `precision` decimal places, half away from zero.
 `Round(x)` (no places) gives the same whole number on PostgreSQL and SQLite. Each engine's own
 `ROUND` to places does not: PostgreSQL's rounds the value's decimal form and SQLite's the binary
 double, so `2.675` would be `2.68` on one and `2.67` on the other. So `Round(x, d)` over a value that
-can carry more than `d` places (a float column, a float literal, a function such as `Avg` or `Sqrt`, a
-`DecimalField` with more than `d` places, anything built over a `Subquery` or a `Case`) renders
-one definition both engines compute in the same IEEE double arithmetic:
+can carry more than `d` places (a float column, a float literal, a function such as `Avg` or `Sqrt`,
+a value PormG cannot type that comes through a `Subquery` or a `Case`) renders one definition both
+engines compute in the same IEEE double arithmetic:
 
     sign(x) * floor(abs(x) * 10^d + 0.5) / 10^d
 
@@ -1218,13 +1238,24 @@ so it is the same double on both (#1061). `2.675` and `1.555` round up to `2.68`
 `round(x, RoundNearestTiesAway; digits = d)` gives too. Its value is a double, also on PostgreSQL.
 An integer, a whole number, a `DecimalField` with at most `d` places and a literal that fits are
 already rounded, so they render the engine's own `ROUND` and keep their type (a `DecimalField` reads
-back as a `Decimal` on PostgreSQL). Through a `Subquery` or a `Case` PormG does not read the places,
-so the formula applies and the value is a double even when it is an integer, unless a `Cast` (or a
-`Coalesce`/`Greatest`/`Least` `output_field`) names an integer type or a `numeric(p, s)` with
-`s ≤ d`: `Round(Cast(Subquery(q), IntegerField()), 2)` keeps `ROUND`. Wrap a `Case` in a `Cast`.
+back as a `Decimal` on PostgreSQL). A bare `Subquery` over a decimal column is read the same way:
+within its places it keeps `ROUND`, past them it is refused (below). PormG does not read the places
+of anything else that comes through a `Subquery` or a `Case`, so the formula applies and the value
+is a double even when it is an integer, unless a `Cast` (or a `Coalesce`/`Greatest`/`Least`
+`output_field`) names an integer type or a `numeric(p, s)` with `s ≤ d`:
+`Round(Cast(Subquery(q), IntegerField()), 2)` keeps `ROUND`. Wrap a `Case` in a `Cast`.
+
+A decimal that PormG cannot show fits `d` places raises `QueryBuildError` when the query is built:
+one with more than `d` places (a `DecimalField`, a `Decimal` literal, a cast to `numeric`), and one
+whose places it does not read (a `Sum`, arithmetic, a window value or a CTE column over a
+`DecimalField`), even when it would fit. PostgreSQL rounds a decimal exactly (`1.005` → `1.01`) and SQLite holds it as a double
+(`1.0`), and the formula would drop PostgreSQL's exactness without being asked.
+`Round(Cast(x, FloatField()), d)` says a double is fine and renders the formula. `Avg` and `Mod` of a
+`DecimalField`, and a decimal reached through a `Case` or a `Subquery` PormG cannot type, take the
+formula.
 
 Text is not a number to round: `Round(x, d)` over a text column, a string or a JSON value raises
-`QueryBuildError` when the query is built. A negative `precision` raises `InvalidValueError` when the
+`QueryBuildError` too. A negative `precision` raises `InvalidValueError` when the
 expression is built: PostgreSQL rounds `Round(125, -1)` to `130` and SQLite takes a negative
 precision as 0. A `precision` above 22 raises it too: the formula scales by `10^d` as a double,
 and an overflow raises on PostgreSQL where SQLite returns `Inf`.

@@ -618,6 +618,16 @@ const DOCERR_CASES = [
             list(show_query = :dict),
     ),
     (
+        # #1061. A decimal with more than `n` places is refused: PostgreSQL rounds it exactly, SQLite
+        # holds a double, and the formula would drop PostgreSQL's exactness unasked. The same claim is
+        # in api.md, the upgrade entry and the `Round` docstring.
+        "read/functions_and_dates.md + api.md + Round docstring — Round(x, n) over a wider decimal raises (#1061)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_SL.objects.
+            values("x" => PormG.Functions.Round(PormG.Functions.Value(Decimals.Decimal(0, 1555, -3)), 2)).
+            list(show_query = :dict),
+    ),
+    (
         # #1061. Rounding to places scales by `10^n` as a double; past 22 it can overflow, which
         # PostgreSQL raises on and SQLite does not.
         "read/functions_and_dates.md + Round docstring — a Round precision above 22 raises (#1061)",

@@ -164,7 +164,12 @@ const ALLOWED_UNTYPED_BARE_ERROR = Dict(
     # both terminals refuse aggregate projections, `_values!` REPLACES a delete's projection with its
     # key before the build (so no alias filter can route to HAVING), and `update()` refuses alias
     # filters outright (#668). Raised rather than dropped, because dropping HAVING widens the write.
-    "src/querybuilder/execution_write.jl" => 1,  # GROUP BY / HAVING reaching a mutation predicate — internal invariant
+    #
+    # #174 added the second: a `cjoin_on` row reaching a correlated UPDATE … FROM with no rendered ON
+    # clause. Unreachable — `build_row_join_sql_text` renders every row `build()` materialized and
+    # records each `AnchorlessJoin`'s clause as it does, and the SET loop adds only `ModelJoin`s.
+    # Raised rather than emitted, because the row without its ON joins every target row.
+    "src/querybuilder/execution_write.jl" => 2,  # GROUP BY / HAVING in a mutation predicate / cjoin_on row with no rendered ON — internal invariants
     # #433 shrank this from 2 to 1. The "unmaterialized CTE" site was NOT an internal invariant:
     # `cte_dict["model"]` is written only by `build_cte_clause`, so its absence means the statement
     # emits no WITH clause — reachable from `update()` on a query that references a CTE. It is now a

@@ -360,6 +360,36 @@ function _render_function_typed(v::SQLTypeFunction, instruc::SQLInstruction;
   _is_aggregate_call(v) || return _render_function_body(v, instruc; _as = _as)
   return with_scope(() -> _render_function_body(v, instruc; _as = _as), instruc; phase = :row)
 end
+# #955: which column types a date or time transform reads. Before this nothing checked, so
+# `"surname__@month"` built and failed (or matched nothing) only at the database, and `@hour` on a
+# plain `DateField` answered `0` on SQLite while PostgreSQL refused the statement. Classified by the
+# field's declared type, not its formatter: a `TimeField` formats as text, exactly as a `CharField` does.
+const _TIME_OF_DAY_TRANSFORMS = ("hour", "minute", "second")
+
+# Refuses `key` (a `PormGtransform` name) over a model field it cannot read, naming both. Fails OPEN,
+# unlike `@len`: only a column PormG can name a field for is checked. An expression, a subquery or an
+# untyped CTE column passes, as it always did, because refusing what PormG cannot type would refuse
+# valid SQL. A relation passes too — its value is the related key, whose type the transform would have
+# to follow across the relation (`raceid__@year` over an integer key is a separate question).
+function _check_transform_operand(key::String, column, instruc::SQLInstruction)
+  field = _alias_column_field(column, instruc)
+  field isa PormGField || return nothing
+  field isa Union{Models.sForeignKey, Models.sOneToOneField, Models.sManyToManyField} && return nothing
+  hasproperty(field, :type) || return nothing
+  time_of_day = key in _TIME_OF_DAY_TRANSFORMS
+  ok = time_of_day ? (_is_datetime_field(field) || _is_time_field(field)) :
+                     (_is_date_field(field) || _is_datetime_field(field))
+  ok && return nothing
+  kind = string(nameof(typeof(field)))
+  kind = Base.startswith(kind, "s") ? kind[2:end] : kind
+  label = column isa AbstractString ? column : sprint(show, column)
+  throw(QueryBuildError(
+    "The \e[31m@$(key)\e[0m transform reads " *
+    (time_of_day ? "a time of day, so its column must be a DateTimeField or a TimeField" :
+                   "a calendar date, so its column must be a DateField or a DateTimeField") *
+    "; \e[31m$(label)\e[0m is declared as $(kind) (#955)."))
+end
+
 function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
                                _as::Union{Nothing,String}=nothing)::Tuple{String,Bool,Bool}
   # Parameterize scalar kwargs instead of rendering them as SQL literals.
@@ -477,6 +507,10 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   v.function_name == "ARRAY_LEN" && !(_expression_formatter(v.column, instruc) isa Models.ArrayFormatter) &&
     throw(FilterError("The \e[31m@len\e[0m transform counts the elements of an ArrayField, and " *
                       "\e[31m$(_len_operand_label(v.column))\e[0m is not one."))
+  # #955: a date or time transform over a column of another type. Read at the same point as `@len`
+  # above, for the same reason, but it fails OPEN — see `_check_transform_operand`.
+  v isa FObject && (t = get(v.kwargs, "transform", nothing)) isa String &&
+    _check_transform_operand(t, v.column, instruc)
   # #1027: a `Concat` operand with no single text — a boolean, a float or a decimal column, or an
   # expression of one — read once the operands render, as the checks around it are. A literal was
   # refused when the `Concat` was built. This is the one site every `Concat` renders through, the

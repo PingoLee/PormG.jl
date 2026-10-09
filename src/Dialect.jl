@@ -962,11 +962,43 @@ function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGSQLite)
     "%w"
   elseif up == "DOY"
     "%j"
+  elseif up in ("WEEK", "ISOYEAR", "ISODOW")
+    return _sqlite_iso_week_part(up, column)
   else
     throw(BackendCapabilityError("Unsupported extract part for SQLite: $part"))
   end
 
   return "CAST(strftime('$(strftime_format)', $(column)) AS INTEGER)"
+end
+
+# #636 — the ISO-8601 parts on SQLite, numbered exactly as PostgreSQL's `WEEK`, `ISOYEAR` and
+# `ISODOW` are. SQLite's own `%W` is NOT the ISO week (it counts Monday-started weeks from the first
+# Monday of the calendar year, so 2021-01-01 is week 0 where ISO says 53), and `%w` is 0 = Sunday.
+#
+# The ISO week of a date is the week of its Thursday: `date(x, '-3 days', 'weekday 4')` steps back
+# three days and then forward to the next Thursday, which lands on the Thursday of x's Monday-started
+# week for every weekday. That Thursday's calendar year IS the ISO year, and its day-of-year gives
+# the week number. Measured against Python's `date.isocalendar()` for every day 1999-12-20 …
+# 2031-01-10 on PormG's canonical `…T23:30:00.000+00:00` text: no mismatch.
+#
+# Arithmetic rather than `%V` / `%G` / `%u`, which only exist from SQLite 3.46: the `SQLite = "1.6.1"`
+# floor admits any `SQLite_jll` 3.x, and an older SQLite answers an unknown `strftime` code with NULL
+# rather than an error — a filter that silently matches nothing.
+function _sqlite_iso_week_part(up::String, column::String)
+  thursday = "date($(column), '-3 days', 'weekday 4')"
+  up == "WEEK" && return "((CAST(strftime('%j', $(thursday)) AS INTEGER) - 1) / 7 + 1)"
+  up == "ISOYEAR" && return "CAST(strftime('%Y', $(thursday)) AS INTEGER)"
+  # ISODOW: Monday = 1 … Sunday = 7, from `%w`'s Sunday = 0.
+  return "((CAST(strftime('%w', $(column)) AS INTEGER) + 6) % 7 + 1)"
+end
+
+# #636 — `@week_day`, Django's numbering: 1 = Sunday … 7 = Saturday. Neither engine has it as a
+# field; both have the 0-based Sunday-first day (`DOW` / `%w`), so this is that plus one.
+function WEEK_DAY(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+  return "(EXTRACT(DOW FROM $(column))::integer + 1)"
+end
+function WEEK_DAY(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+  return "(CAST(strftime('%w', $(column)) AS INTEGER) + 1)"
 end
 function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
   output_field = get(format, "output_field", nothing)

@@ -6,6 +6,7 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 import Decimals   # #1044: a Decimal literal operand
+import TimeZones  # #955: the UTC instant behind a `start_at`, and its São Paulo wall clock
 
 @testset "Aggregate Functions" begin
     # Logic: Test basic aggregates (Sum, Avg, Count, Max, Min).
@@ -1750,6 +1751,50 @@ end
     @test in_90s > 0
     @test M.Race.objects.filter("date__@year__@range" => [1990, 1999]).count() == in_90s
     @test M.Race.objects.filter("date__@year__@nrange" => [1990, 1999]).count() == length(years) - in_90s
+end
+
+@testset "#955: transforms read a timestamp in UTC on both engines" begin
+    # The contract: `@hour`, `@date` and `@day` over a `DateTimeField` are the UTC hour, date and day,
+    # on both engines. SQLite stores the UTC text; PostgreSQL reads a `timestamptz` in the session
+    # time zone, which both drivers open as UTC. The expectations come from the instant itself, read
+    # back and converted in Julia, not from another transform.
+    to_utc(z) = z isa TimeZones.ZonedDateTime ? DateTime(TimeZones.astimezone(z, TimeZones.tz"UTC")) : DateTime(z)
+    q = M.Race.objects
+    q.filter("start_at__@isnull" => false)
+    q.values("raceid", "start_at", "h" => "start_at__@hour", "d" => "start_at__@date", "dy" => "start_at__@day")
+    q.order_by("raceid")
+    rows = q.list(:dict)
+    @test length(rows) > 100
+    for r in rows
+        utc = to_utc(r[:start_at])
+        @test r[:h] == hour(utc)
+        @test string(r[:d]) == string(Date(utc))
+        @test r[:dy] == day(utc)
+    end
+
+    # PostgreSQL only: the session really is UTC, and overriding it is what moves the answer — the
+    # divergence the docs warn about. `SET LOCAL` in a transaction pins every statement to the one
+    # connection the zone was set on and resets at COMMIT, so nothing leaks back into the pool
+    # (the #114 pattern in `test_bulk_copy.jl`).
+    settings = PormG.config[PORMG_DB_FOLDER]
+    if settings.connections isa PormG.PormGPostgres
+        session_zone() = (PormG.ConnectionPool.fetch(settings,
+            "SELECT current_setting('TimeZone') AS tz;") |> DataFrame)[1, :tz]
+        @test session_zone() == "UTC"
+        r = first(rows)
+        local_hour = hour(TimeZones.astimezone(TimeZones.ZonedDateTime(to_utc(r[:start_at]), TimeZones.tz"UTC"),
+                                               TimeZones.tz"America/Sao_Paulo"))
+        @test local_hour != r[:h]   # the probe can tell the two zones apart
+        PormG.run_in_transaction(settings) do
+            PormG.ConnectionPool.fetch(settings, "SET LOCAL TIME ZONE 'America/Sao_Paulo';")
+            @test session_zone() == "America/Sao_Paulo"
+            hq = M.Race.objects
+            hq.filter("raceid" => r[:raceid])
+            hq.values("h" => "start_at__@hour")
+            @test only(hq.list(:dict))[:h] == local_hour
+        end
+        @test session_zone() == "UTC"
+    end
 end
 
 @testset "#997: @yyyy_q / @yyyy_quad read NULL for a NULL date on both engines" begin

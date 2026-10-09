@@ -223,6 +223,10 @@ search type. See [Full-Text Search](read/full_text_search.md).
 | `field__@hour` | Extract hour (0-23) | `"start_at__@hour" => 13` |
 | `field__@minute` | Extract minute (0-59) | `"start_at__@minute" => 30` |
 | `field__@second` | Extract whole second (0-59) | `"time__@second" => 0` |
+| `field__@week` | ISO-8601 week (1-53) | `"date__@week" => 10` |
+| `field__@week_day` | Day of the week, 1 = Sunday … 7 = Saturday | `"date__@week_day" => 1` |
+| `field__@iso_week_day` | ISO day of the week, 1 = Monday … 7 = Sunday | `"date__@iso_week_day" => 7` |
+| `field__@iso_year` | ISO-8601 week-numbering year | `"date__@iso_year" => 2021` |
 | `field__@len` | Element count of an `ArrayField` (PostgreSQL only) | `"pit_laps__@len__@gte" => 2` |
 
 A lookup chains after a transform: `"date__@year__@range" => [1990, 1999]`,

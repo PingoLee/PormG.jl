@@ -208,10 +208,10 @@ returns a different answer, so a test suite running on SQLite fails where produc
   [Functions and Dates → ToChar](read/functions_and_dates.md#ToChar-—-Format-as-String) render the
   same text on both engines. Any other template (`"HH12:MI AM"`) goes to PostgreSQL's `to_char`
   as written.
-- **`Extract` parts beyond the portable eight.** SQLite supports `YEAR`, `MONTH`, `DAY`, `HOUR`,
-  `MINUTE`, `SECOND`, `DOW` and `DOY`, in any case (`"year"` works as well as `"YEAR"`).
-  PostgreSQL also accepts the rest of its `EXTRACT` fields (`epoch`, `week`, `isoyear`, `century`,
-  …). Code that uses those eight runs on both. A string outside that list — including
+- **`Extract` parts beyond the portable eleven.** SQLite supports `YEAR`, `MONTH`, `DAY`, `HOUR`,
+  `MINUTE`, `SECOND`, `DOW`, `DOY`, `WEEK`, `ISOYEAR` and `ISODOW`, in any case (`"year"` works as
+  well as `"YEAR"`), numbered as PostgreSQL numbers them. PostgreSQL also accepts the rest of its
+  `EXTRACT` fields (`epoch`, `century`, `quarter`, …). Code that uses those eleven runs on both. A string outside that list — including
   PostgreSQL's synonyms such as `years` or `hr` — raises `InvalidValueError` on both engines; see
   [Functions and Dates → Extract](read/functions_and_dates.md#Extract-—-Extract-Date/Time-Part).
 - **Explicit window frames** — `WindowOver(...; frame = "ROWS BETWEEN …")`. See
@@ -260,7 +260,7 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 | **Full-text search** (`@search`, `SearchQuery`, `SearchVector`, `SearchRank`, `SearchHeadline`) | `tsvector` / `tsquery` | `BackendCapabilityError` |
 | **`Cast` to a time type** | `::date`, `::timestamp`, `::time`, `::interval` | `date` renders `date(x)`; the others raise `BackendCapabilityError` |
 | **`ToChar` formats** | any `to_char` template | the portable table only; others raise `BackendCapabilityError` |
-| **`Extract` parts** | every PostgreSQL `EXTRACT` field, any case; a non-field raises `InvalidValueError` | `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY`, any case; other PostgreSQL fields raise `BackendCapabilityError`, a non-field `InvalidValueError` |
+| **`Extract` parts** | every PostgreSQL `EXTRACT` field, any case; a non-field raises `InvalidValueError` | `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY` `WEEK` `ISOYEAR` `ISODOW`, any case; other PostgreSQL fields raise `BackendCapabilityError`, a non-field `InvalidValueError` |
 | **Row locks** (`select_for_update()`) | `SELECT … FOR UPDATE` | silent no-op — a SQLite write already locks the whole database |
 | **`without_foreign_keys`** | `SET CONSTRAINTS ALL DEFERRED`; an orphan fails `COMMIT` with `IntegrityError` | `PRAGMA foreign_keys = OFF` plus a `foreign_key_check` before `COMMIT` (`UnsafeMutationError`) |
 | **Engine-pinned `db_default`** | `db_default = (postgres = "now()",)` renders | rendering it raises `BackendCapabilityError` — add `sqlite = "…"`, or `sqlite = nothing` for no default |

@@ -866,13 +866,14 @@ end
       end
     end
 
-    # The 5 are named here so the count is visible rather than implied: if one gets wired, this
-    # list is where the change is declared, and the loop above proves the message moved with it.
-    # (#635 wired `regex`/`iregex`, #634 `iexact` and #636 `hour`/`minute`/`second` — 6 of the
-    # original 11. They still reach the loop, now on the "requires '@' prefix" arm.)
+    # The one left is named here so the count is visible rather than implied: if a name gets
+    # wired, this list is where the change is declared, and the loop above proves the message moved
+    # with it. (#635 wired `regex`/`iregex`, #634 `iexact`, and #636 `hour`/`minute`/`second` and
+    # then `week`/`week_day`/`iso_week_day`/`iso_year` — 10 of the original 11. They still reach
+    # the loop, now on the "requires '@' prefix" arm.)
     unreachable = [n for n in hint_names
                    if !haskey(PormG.PormGsuffix, n) && !haskey(PormG.PormGtransform, n)]
-    @test sort(unreachable) == sort(["exact", "iso_year", "week", "week_day", "iso_week_day"])
+    @test unreachable == ["exact"]
 
     # The alternatives table is a message table, not a registry: every key must be one of the
     # unreachable names. An entry for a name that later gets wired would advertise a detour around

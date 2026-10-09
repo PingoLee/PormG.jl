@@ -1261,7 +1261,7 @@ const DOCERR_CASES = [
     # A part SQLite has no equivalent for. The spelling is case-blind since #684, so a lower-case
     # portable part renders instead — `test_date_functions_sql.jl` pins that half.
     (
-        "postgres.md + read/functions_and_dates.md — an `Extract` part outside the portable eight raises on SQLite",
+        "postgres.md + read/functions_and_dates.md — an `Extract` part outside the portable eleven raises on SQLite",
         BackendCapabilityError,
         () -> DOCERR_RESULT_SL.objects.values("x" => Extract("resultid", "EPOCH")).
             list(show_query = :dict),
@@ -1273,6 +1273,24 @@ const DOCERR_CASES = [
         InvalidValueError,
         () -> DOCERR_RESULT_PG.objects.values("x" => Extract("resultid", "fortnight")).
             list(show_query = :dict),
+    ),
+    # #955: a transform checks its column's type when the query is built — a text column under a date
+    # part, and a time-of-day part over a plain date.
+    (
+        "read/functions_and_dates.md — a date transform over a text column raises",
+        QueryBuildError,
+        () -> DOCERR_RACE_PG.objects.filter("name__@month" => 3).list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md — a time-of-day transform over a DateField raises",
+        QueryBuildError,
+        () -> DOCERR_RACE_PG.objects.values("h" => "date__@hour").list(show_query = :dict),
+    ),
+    # #955: a period transform refuses a `Bool` rather than reading `true` as `1`.
+    (
+        "read/functions_and_dates.md — a period transform refuses a Bool",
+        InvalidValueError,
+        () -> DOCERR_RACE_PG.objects.filter("date__@quarter" => true).list(show_query = :dict),
     ),
     # #696: a `Cast` type string outside the grammar is refused when the expression is built, on
     # both engines — the PostgreSQL arm used to write it verbatim after `::`.

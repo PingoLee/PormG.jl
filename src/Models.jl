@@ -3993,7 +3993,13 @@ end
 # `InvalidValueError`, matching the sibling transforms `@month` and `@day` exactly — #576 tracks
 # moving that whole family to the filter path's `FilterError`, and splitting it here would leave
 # #576 with a third behaviour to reconcile instead of one.
+#
+# #955: a `Bool` is refused before `format_number_sql` sees it. That formatter maps `true` to `1` on
+# purpose (a numeric column given a flag), but no period is a flag: `"start_at__@hour" => true`
+# silently meant 1 AM, and `@quarter => true` the first quarter.
 function _format_period_sql(value, lo::Int, hi::Int, label::String)
+  (value isa Bool || (value isa AbstractArray && any(v -> v isa Bool, value))) &&
+    throw(InvalidValueError("The value is a Bool, but the $(label) must be an integer from $(lo) to $(hi)", :type))
   formatted = format_number_sql(value)
   formatted isa AbstractArray && return [_format_period_sql(v, lo, hi, label) for v in formatted]
   (formatted === missing || formatted === nothing) && return formatted
@@ -4010,6 +4016,10 @@ format_quadrimester_sql(value) = _format_period_sql(value, 1, 3, "quadrimester")
 format_hour_sql(value) = _format_period_sql(value, 0, 23, "hour")
 format_minute_sql(value) = _format_period_sql(value, 0, 59, "minute")
 format_second_sql(value) = _format_period_sql(value, 0, 59, "second")
+# #636: the week parts. Week 53 exists in ISO years that start on a Thursday (or a leap year starting
+# on a Wednesday); `@week_day` and `@iso_week_day` are both 1-based, they differ only in which day is 1.
+format_week_sql(value) = _format_period_sql(value, 1, 53, "week")
+format_week_day_sql(value) = _format_period_sql(value, 1, 7, "week day")
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Comparison Tools

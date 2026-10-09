@@ -4036,7 +4036,14 @@ end
 function _format_period_sql(value, lo::Int, hi::Int, label::String; ranged::Bool = true)
   (value isa Bool || (value isa AbstractArray && any(v -> v isa Bool, value))) &&
     throw(InvalidValueError("The value is a Bool, but the $(label) must be an integer from $(lo) to $(hi)", :type))
-  formatted = format_number_sql(value)
+  # #1088 (review): a value `format_number_sql` has no method for — a `Time`, a `UUID`, a `Rational` —
+  # is no value of the part, so it is refused as `:type` rather than escaping as a raw `MethodError`.
+  formatted = try
+    format_number_sql(value)
+  catch e
+    e isa MethodError && e.f === format_number_sql || rethrow()
+    throw(InvalidValueError("The $(label) must be an integer from $(lo) to $(hi), not a $(typeof(value))", :type))
+  end
   formatted isa AbstractArray && return [_format_period_sql(v, lo, hi, label; ranged = ranged) for v in formatted]
   (formatted === missing || formatted === nothing) && return formatted
   # A whole number too large for `Int` — a `BigInt`, `1e30`, a long digit string — is out of every
@@ -4048,10 +4055,12 @@ function _format_period_sql(value, lo::Int, hi::Int, label::String; ranged::Bool
       something(tryparse(Int, s), tryparse(BigInt, s), Some(nothing))
   n === nothing &&
     throw(InvalidValueError("The value is not a valid $(label); it must be an integer from $(lo) to $(hi)", :format))
+  ranged && (n < lo || n > hi) &&
+    throw(InvalidValueError("The value is not a valid $(label); it must be an integer from $(lo) to $(hi)", :range))
   # An unranged value still has to bind as an `Int`, so one outside `Int`'s own range is refused here
   # whatever the operator: no part reaches it, and `Int(…)` would throw a raw `InexactError`.
-  ((ranged && (n < lo || n > hi)) || !(typemin(Int) <= n <= typemax(Int))) &&
-    throw(InvalidValueError("The value is not a valid $(label); it must be an integer from $(lo) to $(hi)", :range))
+  typemin(Int) <= n <= typemax(Int) ||
+    throw(InvalidValueError("The value is too large to compare with a $(label): it does not fit a 64-bit integer", :range))
   return Int(n)
 end
 

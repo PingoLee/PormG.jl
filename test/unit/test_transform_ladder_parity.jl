@@ -1218,6 +1218,15 @@ end
       @test _tlp_params((q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@month" => 3.0); q); conn = conn) == [3]
       e = refusal(q -> q.filter("ts__@month" => 1e30), conn)
       @test e isa PormG.InvalidValueError && e.kind === :range
+      # Under a comparison there is no range, but the bound must still fit the integer it binds as —
+      # and the message says that, not "an integer from 0 to 23" for an operator that takes 24 (review).
+      e = refusal(q -> q.filter("ts__@hour__@lt" => 1e30), conn)
+      @test e isa PormG.InvalidValueError && e.kind === :range && occursin("64-bit integer", e.msg)
+      # A value no number formatter takes is refused as `:type`, not a raw `MethodError` (review).
+      for v in (Time(3), 3 // 1)
+        e = refusal(q -> q.filter("ts__@hour" => v), conn)
+        @test e isa PormG.InvalidValueError && e.kind === :type
+      end
     end
   end
 end

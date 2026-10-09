@@ -203,7 +203,8 @@ function _values!(q::SQLObject, values)
       # #481: a bare `Joined("d","surname")` projects as `d__surname`, likewise.
       push!(q.values, _values_field(v))
     else
-      throw(QueryBuildError("Invalid argument: $(v) (::$(typeof(v)))); use a string field name, a CTE(\"name\", \"path\") or Joined(\"alias\", \"column\") reference, a function (Count, Sum, Day, …), or an aliased pair \"alias\" => expr (e.g. \"total\" => Subquery(inner))."))
+      # The type, never the argument itself (#971, #1092).
+      throw(QueryBuildError("Invalid argument: a $(typeof(v)); please use a string field name, a CTE(\"name\", \"path\") or Joined(\"alias\", \"column\") reference, a function (Count, Sum, Day, …), or an aliased pair \"alias\" => expr (e.g. \"total\" => Subquery(inner))."))
     end
   end
 

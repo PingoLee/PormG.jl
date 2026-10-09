@@ -673,15 +673,13 @@ function _numeric_cast_scale(type_name::AbstractString)::Union{Int,Nothing}
 end
 
 # #1040 — an operand of a cast to `numeric(p, s)` that can carry more than `s` fractional digits, as
-# `(kind, what)`, or `nothing` when PostgreSQL's rounding cannot change it. Rounding first is NOT an
-# escape beyond whole numbers: `Round(x, 2)` is `ROUND(x::numeric, 2)` on PostgreSQL, which rounds the
-# float's 15-digit decimal form, and `ROUND(x, 2)` on SQLite, which rounds the binary double, so
-# `2.675` is `2.68` on one and `2.67` on the other (`1.555`, `1.005` likewise). It is classified as the
-# `numeric` function it is. #1044 asks this same question of `Round(x, d)` itself, with `d` as the
-# scale (`_render_function_body`), so over a float it is refused before any cast reads it; a
-# `Round(x, d)` that renders therefore has at most `d` places, and passes a scale of at least `d`.
-# `Round(x)`, `Floor` and `Ceil` agree (every `Result.points` row, ±0.5, ±1.5, ±2.5), so a whole
-# number passes any scale.
+# `(kind, what)`, or `nothing` when PostgreSQL's rounding cannot change it. Rounding first is the
+# escape: `Round(x, d)` has at most `d` places on both engines, so it passes a scale of at least `d`.
+# The engines can round a tie apart (`ROUND(x::numeric, 2)` rounds the decimal form, SQLite's `ROUND`
+# the double: `2.675` is `2.68` and `2.67`), a last-digit difference #1061 follows Django on rather
+# than refusing. `Round(x)`, `Floor` and `Ceil` agree (every `Result.points` row, ±0.5, ±1.5, ±2.5),
+# so a whole number passes any scale. `_render_function_body` asks this classifier of `Round(x, d)`
+# itself only to refuse text, which neither engine rounds the same way.
 #
 # A literal is named by its type and its digits, never its value: it is a bound value, and a refusal
 # never prints one (#971).
@@ -734,14 +732,11 @@ function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union
     inner = declared isa AbstractString ? _numeric_cast_scale(declared) : nothing
     inner === nothing || return inner <= scale ? nothing : (:decimal, "a value cast to $(declared)")
   end
-  # #1044: `Round(x, d)` renders only where both engines agree on it, so its value has at most `d`
-  # places; a wider `d` is still a `numeric` function's value, read below. Only over an operand PormG
-  # types: one it cannot (a `Subquery`, an untyped `Case`) passed #1044 unread, and stays refused here.
+  # #1061: `Round(x, d)` has at most `d` places on both engines, whatever its operand, so it passes a
+  # scale of at least `d`; a wider `d` is still a `numeric` function's value, read below.
   if operand isa FObject && operand.function_name == "ROUND"
     d = get(operand.kwargs, "precision", 0)
-    inner = operand.column isa SQLField ? operand.column.field : operand.column
-    untyped = inner isa SubqueryObject || (inner isa FObject && inner.function_name == "CASE")
-    !untyped && d isa Integer && 0 < d <= scale && return nothing
+    d isa Integer && 0 < d <= scale && return nothing
   end
   # A function whose value is one of its operands' values gains no digits: `Max("price")` of a
   # two-place DecimalField has two. With an `output_field` it is a cast, read above or below.

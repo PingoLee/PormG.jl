@@ -164,12 +164,15 @@ const DOCERR_RACE801_SL = let m = Model("docerr_race801_docerr_sl",
     m.connect_key = "docerr_sl"; m._module = Main; m
 end
 
-# #1004 — a foreign key whose target has a `year`, so `raceid__@year` (a transform's generated name)
-# and `raceid__year` (the path to the race's year) are one spelling, as on the filters page.
-const DOCERR_RESULT1004_PG = let race = Model("docerr_race1004_docerr_pg", raceid = IDField(), year = IntegerField())
-    race.connect_key = "docerr_pg"; race._module = Main
-    m = Model("docerr_result1004_docerr_pg", resultid = IDField(),
-              raceid = ForeignKey(race, pk_field = "raceid", null = true))
+# #1004 — a foreign key whose target has a `year`, so `weekend__@year` (a transform's generated name)
+# and `weekend__year` (the path to the weekend's year) are one spelling: the filters page's `Weekend`
+# and `Session`. The key is the weekend's DATE — since #1068 a date part over a relation reads the key
+# it holds, so over an integer key the transform is refused before this ambiguity is reached.
+const DOCERR_SESSION1004_PG = let weekend = Model("docerr_weekend1004_docerr_pg", weekendid = IDField(),
+                                                  date = DateField(unique = true), year = IntegerField())
+    weekend.connect_key = "docerr_pg"; weekend._module = Main
+    m = Model("docerr_session1004_docerr_pg", sessionid = IDField(), name = CharField(),
+              weekend = ForeignKey(weekend, pk_field = "date", null = true))
     m.connect_key = "docerr_pg"; m._module = Main; m
 end
 
@@ -389,15 +392,15 @@ const DOCERR_CASES = [
         end,
     ),
     (
-        # #1004. A bare transform keeps the name PormG generated, `raceid__year`, which is also the
-        # path to the race's year; an ORDER BY on it matched the projection by name alone and sorted
-        # by the transform. It is refused, as #703 refuses the filter.
+        # #1004. A bare transform keeps the name PormG generated, `weekend__year`, which is also the
+        # path to the weekend's year; an ORDER BY on it matched the projection by name alone and
+        # sorted by the transform. It is refused, as #703 refuses the filter.
         "read/filters_and_aggregates.md — order_by on a transform's generated name that is also a related path is ambiguous",
         AmbiguousFieldError,
         () -> begin
-            q = DOCERR_RESULT1004_PG.objects
-            q.values("resultid", "raceid__@year")
-            q.order_by("raceid__year")
+            q = DOCERR_SESSION1004_PG.objects
+            q.values("sessionid", "weekend__@year")
+            q.order_by("weekend__year")
             q.list(show_query = :dict)
         end,
     ),
@@ -420,8 +423,8 @@ const DOCERR_CASES = [
         "read/filters_and_aggregates.md — a path projection's chosen name is not a filter key",
         UnknownFieldError,
         () -> begin
-            q = DOCERR_RESULT1004_PG.objects
-            q.values("resultid", "yr" => "raceid__@year")
+            q = DOCERR_SESSION1004_PG.objects
+            q.values("sessionid", "yr" => "weekend__@year")
             q.filter("yr" => 2009)
             q.list(show_query = :dict)
         end,
@@ -1303,11 +1306,13 @@ const DOCERR_CASES = [
             list(show_query = :dict),
     ),
     # A part SQLite has no equivalent for. The spelling is case-blind since #684, so a lower-case
-    # portable part renders instead — `test_date_functions_sql.jl` pins that half.
+    # portable part renders instead — `test_date_functions_sql.jl` pins that half. Over a timestamp:
+    # since #1070 a part over a column it cannot read (the integer `resultid` this used) is refused
+    # first, on both engines, so the capability error needs an operand the part reads.
     (
         "postgres.md + read/functions_and_dates.md — an `Extract` part outside the portable eleven raises on SQLite",
         BackendCapabilityError,
-        () -> DOCERR_RESULT_SL.objects.values("x" => Extract("resultid", "EPOCH")).
+        () -> DOCERR_RACE801_SL.objects.values("x" => Extract("start_at", "EPOCH")).
             list(show_query = :dict),
     ),
     # #691: a string that is no `EXTRACT` field is refused when the expression is built, before any
@@ -1318,8 +1323,9 @@ const DOCERR_CASES = [
         () -> DOCERR_RESULT_PG.objects.values("x" => Extract("resultid", "fortnight")).
             list(show_query = :dict),
     ),
-    # #955: a transform checks its column's type when the query is built — a text column under a date
-    # part, and a time-of-day part over a plain date.
+    # #955, #1070: a date part checks its column's type when the query is built — a text column under
+    # a date part, and a time-of-day part over a plain date — through the transform and through the
+    # `Extract` it is sugar for.
     (
         "read/functions_and_dates.md — a date transform over a text column raises",
         QueryBuildError,
@@ -1329,6 +1335,35 @@ const DOCERR_CASES = [
         "read/functions_and_dates.md — a time-of-day transform over a DateField raises",
         QueryBuildError,
         () -> DOCERR_RACE_PG.objects.values("h" => "date__@hour").list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md — an `Extract` part over a column it cannot read raises on both engines",
+        QueryBuildError,
+        () -> DOCERR_RACE801_SL.objects.values("h" => Extract("date", "HOUR")).list(show_query = :dict),
+    ),
+    # #1068: a date part over a relation reads the key it holds — here an integer status id.
+    (
+        "read/functions_and_dates.md + read/filters_and_aggregates.md — a date part over an integer-keyed foreign key raises",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.values("y" => "statusid__@year").list(show_query = :dict),
+    ),
+    # #1070 (review): `ToChar(x, "YYYY-MM")` is `@yyyy_mm`, so a filter on it — a pattern lookup
+    # included — takes a whole `"YYYY-MM"` value, as the transform always did.
+    (
+        "read/functions_and_dates.md — a pattern lookup on a `ToChar(x, \"YYYY-MM\")` alias with a partial value raises",
+        InvalidValueError,
+        () -> begin
+            q = DOCERR_RACE_PG.objects
+            q.values("ym" => ToChar("date", "YYYY-MM"))
+            q.filter("ym__@startswith" => "2009")
+            q.list(show_query = :dict)
+        end,
+    ),
+    # #1070: a filter on a date part is held to the part's range — `@month` had none.
+    (
+        "read/functions_and_dates.md — a date part's filter value outside its range raises",
+        InvalidValueError,
+        () -> DOCERR_RACE_PG.objects.filter("date__@month" => 13).list(show_query = :dict),
     ),
     # #955: a period transform refuses a `Bool` rather than reading `true` as `1`.
     (

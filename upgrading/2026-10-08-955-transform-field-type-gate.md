@@ -1,7 +1,7 @@
 ## A date or time transform over a column of the wrong type is refused when the query is built (#955)
 
 - **Version**: Unreleased
-- **PormG ref**: #955 ; `src/querybuilder/select_nodes.jl` (`_check_transform_operand`, called from `_render_function_body`), `src/querybuilder/functions.jl` (`_transform`, the `"transform"` key on every `__@` node)
+- **PormG ref**: #955 ; `src/querybuilder/select_nodes.jl` (the check, called from `_render_function_body`). #1070 replaced its transform tag with a table keyed by part, which also checks `Extract` — see that entry
 - **Recorded**: 2026-10-08
 - **Severity**: behavior. A transform over a column of the wrong type now raises `QueryBuildError` when the query is built. Before, it failed on PostgreSQL, and on SQLite it answered from the column's text, which for a `CharField` of ISO dates was the right answer.
 
@@ -26,19 +26,18 @@ alike, through both the string and the `F(...)` spelling:
 | `filter("surname__@month" => 3)` | built; failed on PostgreSQL, matched nothing on SQLite | `QueryBuildError` naming `surname` and `CharField` |
 | `values("h" => "date__@hour")` on a `DateField` | `0` on SQLite, an error on PostgreSQL | `QueryBuildError` |
 | `values("w" => "time__@week")` on a `TimeField` | engine-dependent | `QueryBuildError` |
-| `values("h" => "lap__@hour")` on a `DurationField` | the interval's hours on PostgreSQL; on SQLite the text read as a clock (NULL from 24 hours) | `QueryBuildError`; `Extract("lap", "hour")` still builds |
+| `values("h" => "lap__@hour")` on a `DurationField` | the interval's hours on PostgreSQL; on SQLite the text read as a clock (NULL from 24 hours) | `QueryBuildError`, and since #1070 `Extract("lap", "hour")` too |
 | `filter("logged_on__@month" => 3)` on a `CharField` holding ISO dates | correct on SQLite, an error on PostgreSQL | `QueryBuildError` |
 
 Unchanged: these all pass through without a check.
 - A transform over a column PormG cannot name a field for: an expression, a subquery, or an untyped CTE column.
-- A transform over a relation (`raceid__@year`). Its value is the related key.
-- The public `Extract` and `ToChar` functions, which build the same SQL but are not transforms. `Extract("duration", "epoch")` is valid on PostgreSQL.
+- A transform over a relation (`raceid__@year`) was left unchecked here. #1068 checks it against the related key, as part of the same train: see its entry.
+- The public `Extract` and `ToChar` functions were left unchecked here. #1070 checks `Extract` by the same rule, as part of the same train: see its entry.
 
 ### Who this affects
 
 Code that applies a date or time transform to a column that is not a date, a timestamp or (for the
-time parts) a time of day. Measured on 2026-10-08: **0** of the 29 transform call sites in the
-consuming apps. All of them are `@yyyy_mm` over a `DateField`.
+time parts) a time of day. On PostgreSQL each such query already failed when it ran.
 
 ### How to find the calls to migrate
 
@@ -47,7 +46,7 @@ grep -rnE '__@(year|month|day|date|quarter|quadrimester|week|week_day|iso_week_d
 ```
 
 For each hit, check the type of the field before the `__@` in its model. Running the query is the
-definitive check: the refusal names the column, its type and the transform, and cites #955.
+definitive check: the refusal names the column, its type and the date part, and cites #1070.
 
 ### Migrate your app
 

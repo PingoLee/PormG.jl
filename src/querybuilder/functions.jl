@@ -853,6 +853,79 @@ Concat(args...; kwargs...) = Concat(collect(args); kwargs...)
 const _TemporalOperand = Union{AbstractString,SQLTypeField,SQLTypeFunction,SQLTypeF,SQLTypeCTE,
                                SQLTypeJoined,SubqueryObject,Vector{<:AbstractString}}
 
+# #1070: what each date/time part reads, and the value a filter may hold it to. One row per thing the
+# node COMPUTES, never per spelling: `"start_at__@hour"` builds `Extract("start_at", "HOUR")`, so the
+# two get one rule. #955 keyed the check on a tag only the `__@` ladder stamped, which left the public
+# `Extract` unchecked — `Extract(date, "HOUR")` answered `0` on SQLite where PostgreSQL refused it —
+# and the range followed the constructor, so `@month => 13` matched nothing. Django is the prior art:
+# `Extract.resolve_expression` checks the field type against the part, and `__hour` IS `ExtractHour`.
+#
+# `reads` is the operand kinds (`_temporal_kind`, `select_nodes.jl`); `what` the phrase the refusal
+# uses; `formatter` checks a filter's value. The gate fails open on an operand PormG cannot type —
+# see `_check_temporal_operand`. An interval reads only `EPOCH`: its hours on PostgreSQL are a
+# component of the duration, while SQLite reads the stored text as a clock (#955).
+const _TemporalRow = @NamedTuple{reads::Tuple{Vararg{Symbol}}, what::String, formatter::Function}
+const _CALENDAR_READS = (reads = (:date, :datetime), what = "a calendar date")
+const _CLOCK_READS = (reads = (:datetime, :time), what = "a time of day")
+_temporal_row(r::NamedTuple, formatter::Function) = _TemporalRow((r.reads, r.what, formatter))
+
+# Keyed by `Dialect.extract_part`'s canonical spelling. `test_transform_ladder_parity.jl` fails if a
+# `Dialect.PG_EXTRACT_FIELDS` part has no row, so a new part cannot arrive unchecked.
+const _EXTRACT_PART_ROWS = Dict{String,_TemporalRow}(
+  "YEAR"            => _temporal_row(_CALENDAR_READS, Models.format_number_sql),
+  "ISOYEAR"         => _temporal_row(_CALENDAR_READS, Models.format_number_sql),
+  "MONTH"           => _temporal_row(_CALENDAR_READS, Models.format_month_sql),
+  "DAY"             => _temporal_row(_CALENDAR_READS, Models.format_day_sql),
+  "QUARTER"         => _temporal_row(_CALENDAR_READS, Models.format_quarter_sql),
+  "WEEK"            => _temporal_row(_CALENDAR_READS, Models.format_week_sql),
+  "ISODOW"          => _temporal_row(_CALENDAR_READS, Models.format_week_day_sql),
+  "DOW"             => _temporal_row(_CALENDAR_READS, Models.format_dow_sql),
+  "DOY"             => _temporal_row(_CALENDAR_READS, Models.format_doy_sql),
+  "CENTURY"         => _temporal_row(_CALENDAR_READS, Models.format_number_sql),
+  "DECADE"          => _temporal_row(_CALENDAR_READS, Models.format_number_sql),
+  "MILLENNIUM"      => _temporal_row(_CALENDAR_READS, Models.format_number_sql),
+  "JULIAN"          => _temporal_row(_CALENDAR_READS, Models.format_number_sql),
+  "HOUR"            => _temporal_row(_CLOCK_READS, Models.format_hour_sql),
+  "MINUTE"          => _temporal_row(_CLOCK_READS, Models.format_minute_sql),
+  "SECOND"          => _temporal_row(_CLOCK_READS, Models.format_second_sql),
+  "MILLISECONDS"    => _temporal_row(_CLOCK_READS, Models.format_number_sql),
+  "MICROSECONDS"    => _temporal_row(_CLOCK_READS, Models.format_number_sql),
+  # PostgreSQL has a zone only on a `timestamptz` (or a `timetz`, which no PormG field declares).
+  "TIMEZONE"        => _TemporalRow(((:timestamptz,), "a timestamp with a time zone", Models.format_number_sql)),
+  "TIMEZONE_HOUR"   => _TemporalRow(((:timestamptz,), "a timestamp with a time zone", Models.format_number_sql)),
+  "TIMEZONE_MINUTE" => _TemporalRow(((:timestamptz,), "a timestamp with a time zone", Models.format_number_sql)),
+  # Seconds since the epoch, since midnight, or in the duration: every temporal kind has one.
+  "EPOCH"           => _TemporalRow(((:date, :datetime, :time, :interval),
+                                     "a date, a time or a duration", Models.format_number_sql)),
+)
+
+# The date nodes that are not `EXTRACT` fields, keyed by `function_name` (`week_day` is 1 = Sunday,
+# which neither engine has as a field; `@date`, `@quarter`, `@quadrimester` render per engine).
+const _TEMPORAL_FUNCTION_ROWS = Dict{String,_TemporalRow}(
+  "WEEK_DAY"     => _temporal_row(_CALENDAR_READS, Models.format_week_day_sql),
+  "QUARTER"      => _temporal_row(_CALENDAR_READS, Models.format_quarter_sql),
+  "QUADRIMESTER" => _temporal_row(_CALENDAR_READS, Models.format_quadrimester_sql),
+  "DATE"         => _temporal_row(_CALENDAR_READS, Models.format_date_sql),
+)
+
+# The row a node is checked against, and the name its messages use for it — the part, lower-cased as
+# a caller writes it (`hour`, `isodow`), or the node's own name. `nothing` for a node that is no date
+# part. `ToChar` is checked only for the `"YYYY-MM"` mask `@yyyy_mm` builds: `to_char` also formats a
+# number on PostgreSQL, so an arbitrary mask says nothing about its operand's type.
+function _temporal_row_of(v::FObject)
+  name = v.function_name
+  if name == "EXTRACT"
+    up = Dialect.extract_part(v.kwargs["part"])
+    return _EXTRACT_PART_ROWS[up], lowercase(up)
+  elseif name == "EXTRACT_DATE"
+    get(v.kwargs, "format", nothing) == "YYYY-MM" || return nothing
+    return _temporal_row(_CALENDAR_READS, Models.format_yyyy_mm), "yyyy_mm"
+  end
+  row = get(_TEMPORAL_FUNCTION_ROWS, name, nothing)
+  return row === nothing ? nothing : (row, lowercase(name))
+end
+_temporal_row_of(::Any) = nothing
+
 """
     Extract(column, part)
 
@@ -866,6 +939,22 @@ Extracts a component (`"year"`, `"month"`, `"dow"`, …) from a date/time column
 SQLite runs `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY` `WEEK` `ISOYEAR` `ISODOW`,
 numbered as PostgreSQL numbers them, and raises `BackendCapabilityError` for the rest.
 
+The part must be one the column holds, checked against the field the column is declared as when
+the query is built, on both engines (#1070). It raises `QueryBuildError` otherwise:
+
+- the time-of-day parts (`HOUR`, `MINUTE`, `SECOND`, `MILLISECONDS`, `MICROSECONDS`) read a
+  `DateTimeField` or a `TimeField`;
+- the `TIMEZONE` parts read a `DateTimeField` with a time zone (the default `TIMESTAMPTZ`);
+- `EPOCH` reads any of those, a `DateField` or a `DurationField`;
+- every other part reads a `DateField` or a `DateTimeField`.
+
+The `"col__@hour"` transforms are this function, so they follow the same rule. A column PormG
+cannot name a field for — an expression, a subquery, an untyped CTE column — is not checked.
+
+A filter on the result is held to the part's range: `HOUR` 0–23, `MINUTE` and `SECOND` 0–59,
+`MONTH` 1–12, `DAY` 1–31, `QUARTER` 1–4, `WEEK` 1–53, `ISODOW` 1–7, `DOW` 0–6, `DOY` 1–366. A
+value outside it raises `InvalidValueError` rather than matching nothing.
+
 To change the result type, wrap it in [`Cast`](@ref) — e.g. on PostgreSQL,
 `Cast(Extract("date", "epoch"), "bigint")`.
 """
@@ -874,7 +963,10 @@ function Extract(x::_TemporalOperand, part::AbstractString; formatter::Union{Not
   # #691: refuse an unknown part at build time on both engines. The node keeps the caller's
   # spelling — the dialect renders the canonical one — so the `"YEAR"` range rewrite in
   # `filter_operators.jl` sees exactly what it saw before.
-  Dialect.extract_part(part)
+  up = Dialect.extract_part(part)
+  # #1070: a filter's value is checked against the part's range whoever built the node — the `__@`
+  # ladder is this call. An explicit `formatter=` still wins.
+  formatter === nothing && (formatter = _EXTRACT_PART_ROWS[up].formatter)
   return FObject(function_name = "EXTRACT", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = formatter, kwargs = Dict{String, Any}("part" => String(part)))
 end
 # Build a WHEN fragment. When `otherwise` is provided, wrap it in a CASE automatically so
@@ -1064,6 +1156,9 @@ See also [Functions and Dates](@ref).
 """
 function ToChar(x::_TemporalOperand, format::AbstractString; formatter::Union{Nothing, Function, PormGField} = nothing)
   isa(formatter, PormGField) && (formatter = formatter.formatter)
+  # #1070: the one mask with a row (`_temporal_row_of`) checks a filter's value as `@yyyy_mm` does —
+  # `@yyyy_mm` is this call. Any other mask is free text. An explicit `formatter=` still wins.
+  formatter === nothing && format == "YYYY-MM" && (formatter = Models.format_yyyy_mm)
   return FObject(function_name = "EXTRACT_DATE", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = formatter, kwargs = Dict{String, Any}("format" => String(format)))
 end
 
@@ -1729,35 +1824,29 @@ SearchHeadline(expression, query; kwargs...) = throw(QueryBuildError(
   "SearchHeadline marks up a column path (a string) or an expression (#31)."))
 
 
-# #955: every node the `__@` ladder builds carries the transform's own name under `"transform"`. Two
-# readers need it and neither can recover it from the node: the field-type gate
-# (`_check_transform_operand`), which must not touch a public `Extract`/`ToChar` building the same
-# `EXTRACT` node — `Extract(duration, "epoch")` is legitimate — and the refusal message, which names
-# the caller's `@hour` rather than the `EXTRACT` the node renders. `Dialect` never reads the key.
-function _transform(f::FObject, key::String)
-  f.kwargs["transform"] = key
-  return f
-end
-MONTH(x) = _transform(Extract(x, "MONTH", formatter = Models.format_number_sql), "month")
-YEAR(x) = _transform(Extract(x, "YEAR", formatter = Models.format_number_sql), "year")
-DAY(x) = _transform(Extract(x, "DAY", formatter = Models.format_number_sql), "day")
-# #636: the time parts. `Dialect.EXTRACT` already renders all three on both engines — PostgreSQL
-# `trunc`s `SECOND` so a fractional timestamp agrees with SQLite's `%S` — so only the range-checking
-# formatter is new: a value no clock can show is refused rather than silently matching nothing (#579).
-HOUR(x) = _transform(Extract(x, "HOUR", formatter = Models.format_hour_sql), "hour")
-MINUTE(x) = _transform(Extract(x, "MINUTE", formatter = Models.format_minute_sql), "minute")
-SECOND(x) = _transform(Extract(x, "SECOND", formatter = Models.format_second_sql), "second")
+# #1070: the `__@` ladder is sugar — each part is the `Extract` a caller could write, and nothing
+# more. The operand check and the value's range come from the part's row (`_EXTRACT_PART_ROWS`), so
+# `"start_at__@hour"` and `Extract("start_at", "HOUR")` cannot disagree. (#955 tagged these nodes
+# `"transform" => "<name>"` so a gate could tell them from a public `Extract`; the tag is gone.)
+MONTH(x) = Extract(x, "MONTH")
+YEAR(x) = Extract(x, "YEAR")
+DAY(x) = Extract(x, "DAY")
+# #636: the time parts. `Dialect.EXTRACT` renders all three on both engines — PostgreSQL `trunc`s
+# `SECOND` so a fractional timestamp agrees with SQLite's `%S`.
+HOUR(x) = Extract(x, "HOUR")
+MINUTE(x) = Extract(x, "MINUTE")
+SECOND(x) = Extract(x, "SECOND")
 # #636: the week parts, on Django's numbering. Three are PostgreSQL `EXTRACT` fields with that exact
 # numbering (`WEEK` and `ISOYEAR` are ISO-8601, `ISODOW` is 1 = Monday), so they go through `Extract`
 # and `Dialect.EXTRACT` gives SQLite the matching arithmetic. `week_day` (1 = Sunday) is no EXTRACT
 # field on either engine — `DOW` is 0-based — so it is a node of its own, like `QUARTER` below.
-WEEK(x) = _transform(Extract(x, "WEEK", formatter = Models.format_week_sql), "week")
-ISO_YEAR(x) = _transform(Extract(x, "ISOYEAR", formatter = Models.format_number_sql), "iso_year")
-ISO_WEEK_DAY(x) = _transform(Extract(x, "ISODOW", formatter = Models.format_week_day_sql), "iso_week_day")
+WEEK(x) = Extract(x, "WEEK")
+ISO_YEAR(x) = Extract(x, "ISOYEAR")
+ISO_WEEK_DAY(x) = Extract(x, "ISODOW")
 WEEK_DAY(x) = (y = _transform_operand("WEEK_DAY", x);
-               _transform(FObject(function_name = "WEEK_DAY", column = y, aggregate = _any_agg(y),
-                                  formatter = Models.format_week_day_sql), "week_day"))
-Y_M(x) = _transform(ToChar(x, "YYYY-MM", formatter = Models.format_yyyy_mm), "yyyy_mm")
+               FObject(function_name = "WEEK_DAY", column = y, aggregate = _any_agg(y),
+                       formatter = _TEMPORAL_FUNCTION_ROWS["WEEK_DAY"].formatter))
+Y_M(x) = ToChar(x, "YYYY-MM")
 # #562: `@date` no longer goes through `ToChar`. A `ToChar` node carries the format mask as SQL
 # text, which forces one spelling on both engines; `DATE` is the one transform where the correct
 # spelling differs (`(col)::date` on PostgreSQL, `strftime` on SQLite — see `Dialect.DATE`). Naming
@@ -1781,7 +1870,7 @@ function _transform_operand(fn::String, x)
     "— \e[4m\e[32m\"col__@$(lowercase(fn))\"\e[0m (#878)."))
 end
 DATE(x) = (y = _transform_operand("DATE", x);
-           _transform(FObject(function_name = "DATE", column = y, aggregate = _any_agg(y), formatter = Models.format_date_sql), "date"))
+           FObject(function_name = "DATE", column = y, aggregate = _any_agg(y), formatter = _TEMPORAL_FUNCTION_ROWS["DATE"].formatter))
 # Same that function CAST in django ORM
 # # relatorio = relatorio.annotate(quarter=functions.Concat(functions.Cast(f'{data}__year', CharField()), Value('-Q'), Case(
 # # 					When(**{ f'{data}__month__lte': 4 }, then=Value('1')),
@@ -1821,11 +1910,11 @@ function _null_propagating(f::FObject)
 end
 function Y_QUAD(x)
   return _null_propagating(Concat([
-                Cast(_transform(YEAR(x), "yyyy_quad"), CharField()), 
-                Value("-Q"), 
-                Case([When(OP(_transform(MONTH(x), "yyyy_quad"), "<=", 4), then = 1), 
-                      When(OP(_transform(MONTH(x), "yyyy_quad"), "<=", 8), then = 2), 
-                      When(OP(_transform(MONTH(x), "yyyy_quad"), "<=", 12), then = 3)
+                Cast(YEAR(x), CharField()),
+                Value("-Q"),
+                Case([When(OP(MONTH(x), "<=", 4), then = 1),
+                      When(OP(MONTH(x), "<=", 8), then = 2),
+                      When(OP(MONTH(x), "<=", 12), then = 3)
                       ], 
                       output_field = CharField())
                 ], 
@@ -1834,12 +1923,12 @@ function Y_QUAD(x)
 end
 function Y_Q(x)
   return _null_propagating(Concat([
-                Cast(_transform(YEAR(x), "yyyy_q"), CharField()), 
-                Value("-Q"), 
-                Case([When(OP(_transform(MONTH(x), "yyyy_q"), "<=", 3), then = 1), 
-                      When(OP(_transform(MONTH(x), "yyyy_q"), "<=", 6), then = 2), 
-                      When(OP(_transform(MONTH(x), "yyyy_q"), "<=", 9), then = 3), 
-                      When(OP(_transform(MONTH(x), "yyyy_q"), "<=", 12), then = 4)
+                Cast(YEAR(x), CharField()),
+                Value("-Q"),
+                Case([When(OP(MONTH(x), "<=", 3), then = 1),
+                      When(OP(MONTH(x), "<=", 6), then = 2),
+                      When(OP(MONTH(x), "<=", 9), then = 3),
+                      When(OP(MONTH(x), "<=", 12), then = 4)
                       ], 
                       output_field = CharField())
                 ],
@@ -1853,9 +1942,9 @@ end
 # string and matched nothing instead of raising.
 # #878: through `_transform_operand` (above `DATE`), for the same reason.
 QUARTER(x) = (y = _transform_operand("QUARTER", x);
-              _transform(FObject(function_name = "QUARTER", column = y, aggregate = _any_agg(y), formatter = Models.format_quarter_sql), "quarter"))
+              FObject(function_name = "QUARTER", column = y, aggregate = _any_agg(y), formatter = _TEMPORAL_FUNCTION_ROWS["QUARTER"].formatter))
 QUADRIMESTER(x) = (y = _transform_operand("QUADRIMESTER", x);
-                   _transform(FObject(function_name = "QUADRIMESTER", column = y, aggregate = _any_agg(y), formatter = Models.format_quadrimester_sql), "quadrimester"))
+                   FObject(function_name = "QUADRIMESTER", column = y, aggregate = _any_agg(y), formatter = _TEMPORAL_FUNCTION_ROWS["QUADRIMESTER"].formatter))
 # #28: `@len`, an `ArrayField`'s element count (`Dialect.ARRAY_LEN`). A count, so its right-hand side
 # is a number. Unlike the date parts it is checked against its operand's type when it renders
 # (`_get_select_query(::FObject)`): `cardinality` over a column that is not an array is an error only

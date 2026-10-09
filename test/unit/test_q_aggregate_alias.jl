@@ -682,11 +682,14 @@ PormG.config["q_agg_tx_sl"] = PormG.Configuration.Settings(connections = QAggTxM
 
 module QAggTx
 import PormG, PormG.Models
+# The relation targets the race's DATE (a unique key), not its integer id: since #1068 a date part
+# over a relation reads the key it holds, and `raceid__@year` over an integer key is refused. Keyed by
+# a date, the spelling these tests use as their vehicle stays legal, and still collides as before.
 Race = Models.Model("q_agg_tx_race", raceid = Models.IDField(), year = Models.IntegerField(),
-                    date = Models.DateField())
+                    date = Models.DateField(unique = true))
 Result = Models.Model("q_agg_tx_result", resultid = Models.IDField(), points = Models.FloatField(),
                       race_date = Models.DateField(),
-                      raceid = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"))
+                      raceid = Models.ForeignKey(Race, pk_field = "date", on_delete = "CASCADE"))
 PormG.Models.set_models(@__MODULE__, "q_agg_tx_sl")
 end
 

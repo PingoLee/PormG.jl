@@ -1494,7 +1494,8 @@ end
   # `format_number_sql` with no `try` around it at all.
   month_err = @test_throws PormG.InvalidValueError _IN411.objects.filter(
     "happened__@month" => "abc").list(show_query = :dict)
-  @test occursin(" transform (", month_err.value.msg)
+  # Located on the date part, not on a "field" (#1070 names the part: `the happened month part`).
+  @test occursin("filter on the `happened` month part (", month_err.value.msg)
   @test_throws PormG.InvalidValueError _IN411.objects.filter(
     "happened__@day" => "abc").list(show_query = :dict)
 
@@ -1502,7 +1503,7 @@ end
   # it is the one the docs named by error type, so both doc pages moved with this commit.
   quarter_err = @test_throws PormG.InvalidValueError _IN411.objects.filter(
     "happened__@quarter" => 9).list(show_query = :dict)
-  @test occursin(" transform (", quarter_err.value.msg)
+  @test occursin("filter on the `happened` quarter part (", quarter_err.value.msg)
 
   # ── The sargable rewrite (`_render_sargable_date_range`) ──
   # Not named by the issue, and the one that actually fires for these spellings: on a plain

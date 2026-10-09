@@ -19,13 +19,12 @@ quarter. `false` meant hour `0`, or for a 1-based period it was refused as out o
 | `filter("start_at__@minute__@in" => Any[5, true])` | minutes 5 and 1 | `InvalidValueError` |
 
 It covers every transform with a range: `@quarter`, `@quadrimester`, `@hour`, `@minute`, `@second`,
-`@week`, `@week_day` and `@iso_week_day`. An integer, a numeric string and `missing` are unchanged.
+`@week`, `@week_day` and `@iso_week_day` — and, since #1070, `@month`, `@day` and the `Extract`
+parts with a range (see that entry). An integer, a numeric string and `missing` are unchanged.
 
 ### Who this affects
 
 Code that passes a `Bool` to one of those transforms, which was always a mistake that returned rows.
-Measured on 2026-10-08: **0** call sites in the consuming apps. None of their 29 transform call
-sites uses a period transform.
 
 ### How to find the calls to migrate
 
@@ -34,7 +33,7 @@ grep -rnE '__@(quarter|quadrimester|hour|minute|second|week|week_day|iso_week_da
 ```
 
 The pattern only sees a literal. A `Bool` held in a variable shows up when the query runs, as an
-`InvalidValueError` naming the transform.
+`InvalidValueError` naming the date part.
 
 ### Migrate your app
 

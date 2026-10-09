@@ -2162,6 +2162,11 @@ end
     @test ids(alias) == want
     @test ids(M.Race.objects.filter("date__@yyyy_mm__@startswith" => "2009").values("raceid")) == want
     @test ids(M.Race.objects.filter("date__@startswith" => "2009").values("raceid")) == want
+    # A transform reads the text of what it yields: `@date` a date, `@year` an integer's digits.
+    @test ids(M.Race.objects.filter("date__@date__@startswith" => "2009").values("raceid")) == want
+    decade = ids(M.Race.objects.filter("date__@year__@range" => [2000, 2009]).values("raceid"))
+    @test !isempty(decade)
+    @test ids(M.Race.objects.filter("date__@year__@startswith" => "200").values("raceid")) == decade
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

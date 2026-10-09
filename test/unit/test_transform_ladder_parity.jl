@@ -1324,6 +1324,18 @@ end
       sql = _tlp_sql((q = TLP.Tlp_row.objects; q.values("id"); q.filter("seen__@startswith" => "2009"); q); conn = conn)
       @test params(q -> (q.values("id"); q.filter("seen__@startswith" => "2009")), conn) == ["2009%"]
       @test occursin(conn === _TLP_PG ? "to_char(\"Tb\".\"seen\", 'YYYY-MM-DD') LIKE" : "\"Tb\".\"seen\" LIKE", sql)
+      # A transform reads the text of what it yields (review): `@date` is a date, so PostgreSQL reads
+      # it through `to_char` too, and a date part is an integer, read as its digits. On SQLite both
+      # are already text to `LIKE`. Without this, PostgreSQL got a `LIKE` on a `date` / an integer.
+      tsql(path, v) = _tlp_sql((q = TLP.Tlp_row.objects; q.values("id"); q.filter(path => v); q); conn = conn)
+      if conn === _TLP_PG
+        @test occursin("to_char((\"Tb\".\"ts\")::date, 'YYYY-MM-DD') LIKE", tsql("ts__@date__@startswith", "2009"))
+        @test occursin("CAST(EXTRACT(HOUR FROM \"Tb\".\"ts\")::integer AS text) LIKE", tsql("ts__@hour__@startswith", "2"))
+        aliased = _tlp_sql((q = TLP.Tlp_row.objects; q.values("y" => Fn.Extract("seen", "YEAR")); q.filter("y__@startswith" => "200"); q); conn = conn)
+        @test occursin("CAST(EXTRACT(YEAR FROM \"Tb\".\"seen\")::integer AS text) LIKE", aliased)
+      else
+        @test occursin("WHERE CAST(strftime('%H', \"Tb\".\"ts\") AS INTEGER) LIKE ?", tsql("ts__@hour__@startswith", "2"))
+      end
       # A number column binds its fragment as text, a float as the text it always bound; a text
       # column still refuses a float (#860), and no column takes a Bool (#876).
       @test params(q -> (q.values("id"); q.filter("id__@startswith" => 1)), conn) == ["1%"]

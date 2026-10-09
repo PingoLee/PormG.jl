@@ -174,7 +174,11 @@ because they use their right-hand side as it is.
 The value is a **fragment of the column's text**, not a whole value of the column's type, so it is
 bound as text whatever the column holds, as in Django. `"date__@startswith" => "2009"` matches every
 race in 2009, and so does `"date__@yyyy_mm__@startswith" => "2009"`, though an exact `@yyyy_mm`
-needs a whole `"2009-03"`. A date column is matched as its `YYYY-MM-DD` text on both backends.
+needs a whole `"2009-03"`. A date column, or a transform that yields a date (`@date`), is matched
+as its `YYYY-MM-DD` text on both backends, and a date part (`@year`, `@hour`, an `Extract`) as its
+digits: `"date__@year__@startswith" => "200"` selects the 2000s. A timestamp or number column is
+compared as written: SQLite matches its stored text, and PostgreSQL, which has no `LIKE` for those
+types, raises.
 
 ### Case-Sensitive (`@contains`)
 

@@ -818,6 +818,10 @@ function _pattern_text_kind(formatter)::Union{Symbol,Nothing}
   # same column `::text` (`lookup_cast`). A timestamp is not here on purpose: its text differs per
   # engine (PostgreSQL prints the session's zone offset), so a fragment would match different rows.
   formatter === Models.format_date_sql && return :date
+  # #1086 (review): a date part (`@hour`, `@year`, an `Extract`) is an integer, whose text is the same
+  # digits on both engines — unlike a float or a decimal column, which shares `format_number_sql`
+  # with an integer one and so cannot be told apart here, and is left as written.
+  formatter in Models.PERIOD_FORMATTERS && return :integer
   return nothing
 end
 
@@ -934,8 +938,13 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   # value arm below — none of which knows their operand.
   v.operator in NETWORK_LOOKUP_OPERATORS &&
     return _render_network_operator(v, column, operand_field, operand_label, instruc)
+  # #1086 (review): a transform has no field, but its node carries the formatter of what it yields —
+  # `@date` a date, `@hour` an integer — so a pattern lookup over one reads the same text a column of
+  # that kind does. Without it `"seen__@date__@startswith"` was a `LIKE` on a `date` on PostgreSQL.
   operand_formatter = operand_field !== nothing ? operand_field.formatter :
-                      alias !== nothing ? _having_alias_formatter(memo_key(:base, alias), instruc) : nothing
+                      alias !== nothing ? _having_alias_formatter(memo_key(:base, alias), instruc) :
+                      v.column isa SQLTypeField && v.column.field isa SQLTypeFunction ? v.column.field.formatter :
+                      nothing
   # The label is derived only for an array or a SearchVectorField column (#1021) — the kinds that
   # refuse here and name a path. `_filter_path_label` has no method for every column kind (an `F`
   # transform), so it is not asked for the others.

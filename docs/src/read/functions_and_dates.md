@@ -352,7 +352,8 @@ day), while `@lt` excludes the named bucket entirely. The same holds for `@year`
 
 `@year` requires a whole year in the range 1–9999 — an `Integer`, a whole-valued number, or a
 numeric string. A value no single date can express (a fraction, a year outside that range, or a
-`Bool`) raises a `FilterError` rather than silently comparing against an unusable bound.
+`Bool`) raises an `InvalidValueError` rather than silently comparing against an unusable bound. It
+is the error a value the column cannot take raises: the year is bound as a parameter.
 
 !!! note "Scope of the rewrite"
     The rewrite applies to `@yyyy_mm`, `@date` and `@year` on a **plain `DateField`**, whether the
@@ -366,8 +367,8 @@ numeric string. A value no single date can express (a fraction, a year outside t
     For every value the bucket can express, the rewrite selects the same rows as before — only the
     query plan changes. The one behavioural difference is at the edges: because the comparison is
     now computed as a date bound, a value that no date bound can represent (`"1991-13"`, a
-    fractional or out-of-range year, a `Bool`) raises a `FilterError` instead of building SQL that
-    silently matched nothing. Joined paths and columns on the queried model behave identically here.
+    fractional or out-of-range year, a `Bool`) raises an `InvalidValueError` instead of building
+    SQL that silently matched nothing. Joined paths and columns on the queried model behave identically here.
 
 ---
 

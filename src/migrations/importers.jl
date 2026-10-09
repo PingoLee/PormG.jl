@@ -2642,7 +2642,10 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
   # keeps that outcome matching the file the reader sees.
   for (slot, model, markers) in pending_renders
     markers = vcat(markers, get(unconstrained, model, String[]))
-    rendered = Models.Model_to_str(model; taken_bindings=taken_bindings, taken_names=taken_names)
+    # #1043: the short form — this file is regenerated from `models.py`, never edited by hand, so a
+    # binding that is renamed carries its name with it. `inspectdb` keeps the explicit name.
+    rendered = Models.Model_to_str(model; taken_bindings=taken_bindings, taken_names=taken_names,
+                                   omit_derived_name=true)
     Instructions[slot] = isempty(markers) ? rendered : join((_marker_line(m) for m in markers), "\n") * "\n" * rendered
   end
 
@@ -2719,7 +2722,8 @@ pairs instead — see the [`Vector{Pair}` method](@ref import_models_from_django
 
   Since #345 the prefix is written into **`db_table`**, not into the positional model name:
   `class Dim_ibge` under `django_prefix = "estoque"` emits
-  `Dim_ibge = Models.Model("dim_ibge", db_table = "estoque_dim_ibge", …)`. A `Meta.db_table` in the
+  `Dim_ibge = Models.Model(db_table = "estoque_dim_ibge", …)` — the logical name `"dim_ibge"` is the
+  binding lowercased, so it is left for loading to derive (#1043). A `Meta.db_table` in the
   Django source still overrides it, exactly as in Django. An empty string is treated as no prefix.
 
   Each auto-derived `ManyToManyField` also gets its join table pinned to Django's spelling, which is

@@ -560,11 +560,34 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     so the `driver` join PormG generates for `driverid__surname` would silently read the CTE
     ([#479](https://github.com/PingoLee/PormG.jl/issues/479)). Pick a name that is not a table.
 
-    `cjoin_on` works in reads and in the common `update()`/`delete()` (which scope rows via a
-    subquery); only a **correlated** UPDATE-FROM/DELETE-USING (setting a column *from* a joined
-    table) is unsupported and raises. Finally, a `cjoin_on` join is not tracked by the #74
-    aggregate fan-out guard — if the join is to-many, aggregate the base table with `distinct=true`
-    (or over the joined table's own column) to avoid silent row multiplication.
+    `cjoin_on` works in reads and in `update()`/`delete()`, which scope rows via a subquery. An
+    `update()` can also **set a column from the joined copy**, `update("x" => Joined("d", "col"))`
+    ([Setting a column from a `cjoin_on` copy](../write/update.md#Setting-a-column-from-a-cjoin_on-copy)).
+
+!!! note "When PormG treats a `cjoin_on` join as to-many"
+    An `ON` clause can say anything, so PormG decides from the conditions alone whether the join can
+    match **more than one** target row per base row
+    ([#174](https://github.com/PingoLee/PormG.jl/issues/174)). The join is **to-one** only when
+    top-level conditions (the `on` list, or a `Q(...)` in it, never a `Qor(...)` branch) use `==` or
+    `=>` to pin a **key** of the target to **one value per base row**:
+
+    - the key is the target's primary key, a `unique = true` column, or every column of a
+      `UniqueConstraint` declared without `condition`/`expressions`;
+    - the value is a literal, a base column or a forward path off it (`F("driverid")`,
+      `F("raceid__circuitid")`), an `OuterRef`, or a column of another alias that is itself to-one.
+
+    Anything else counts as **to-many**: a range (`>=`), a `Qor`, arithmetic, or a column the
+    model never declared unique, even when your data happens to be one-to-one. Two features read this:
+
+    - the [fan-out guard](filters_and_aggregates.md#Aggregating-Across-To-Many-Relations-(Fan-Out-Guard))
+      raises `QueryBuildError` for `Count`/`Sum`/`Avg` over a base column next to a to-many
+      `cjoin_on`, as it does for a reverse foreign key;
+    - an `update()` that sets a column from a joined copy refuses a to-many alias.
+
+    If the column really is unique, declare it (`unique = true` or a `UniqueConstraint`) and the
+    join becomes to-one. On a managed model that is a schema change: the next migration adds the
+    constraint, and fails if the table holds duplicates. The declaration is taken on its word, so a
+    key declared on an unmanaged model or a view is trusted without a constraint behind it.
 
 !!! warning "Give the join a predicate that names its own alias"
     An `ON` clause that never names its own alias is **refused**

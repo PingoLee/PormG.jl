@@ -151,12 +151,21 @@ end
     j_ok = Json773Models.Stint773.objects
     j_ok.filter("payload__laps__@gte" => "16")
     @test j_ok.list(show_query = :dict)[:parameters] == [16]
-    for v in ("0x10", "0b101", "0x1p4")
+    # #988: the RHS is bound, so a refusal is an `InvalidValueError` located on the path the caller
+    # wrote. A JSON key has no field type, and the value stays out of the message.
+    for (v, kind, reason) in (("0x10", :format, "base-10 number"), ("0b101", :format, "base-10 number"),
+                              ("0x1p4", :format, "base-10 number"),
+                              # Base-10 text that overflows Float64 parses to Inf.
+                              ("1e400", :range, "finite number"))
         j_bad = Json773Models.Stint773.objects
         j_bad.filter("payload__laps__@gte" => v)
         err = try j_bad.list(show_query = :dict); nothing catch e; e end
-        @test err isa FilterError
-        @test occursin("base-10 number", err.msg)
+        @test err isa InvalidValueError
+        err isa InvalidValueError || continue
+        @test err.kind == kind
+        @test err.field == "payload__laps" && err.field_type === nothing
+        @test occursin(reason, err.msg)
+        @test !occursin(v, err.msg)
     end
 end
 

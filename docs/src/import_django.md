@@ -224,9 +224,9 @@ import_models_from_django(
 Everything lands in **one** generated module, and each model's table carries its own app label:
 
 ```julia
-Circuit     = Models.Model("circuit",     db_table = "racing_circuit",     …)
-User        = Models.Model("user",        db_table = "access_user",        …)
-ImportBatch = Models.Model("importbatch", db_table = "imports_importbatch",
+Circuit     = Models.Model(db_table = "racing_circuit",     …)
+User        = Models.Model(db_table = "access_user",        …)
+ImportBatch = Models.Model(db_table = "imports_importbatch",
   circuit_id = Models.ForeignKey("Circuit", pk_field="id", on_delete=CASCADE),
   steward_id = Models.ForeignKey("User", pk_field="id", on_delete=PROTECT))
 ```
@@ -312,8 +312,8 @@ class Driver(models.Model): ...    class Driver(models.Model): ...
 ```
 
 ```julia
-Racing_driver = Models.Model("racing_driver", db_table = "racing_driver", …)
-Access_driver = Models.Model("access_driver", db_table = "access_driver", …)
+Racing_driver = Models.Model(db_table = "racing_driver", …)   # logical name "racing_driver"
+Access_driver = Models.Model(db_table = "access_driver", …)   # logical name "access_driver"
 ```
 
 Renaming only the loser would make the output depend on the order you listed the apps, and PormG keys
@@ -336,7 +336,7 @@ is which.
 
 ```julia
 import_models_from_django(pairs; binding_overrides = Dict("access.Driver" => "DriverLicence"))
-# DriverLicence = Models.Model("driverlicence", db_table = "access_driver", …)
+# DriverLicence = Models.Model(db_table = "access_driver", …)   # logical name "driverlicence"
 ```
 
 The value becomes the model's name, so the binding, the logical name and the reverse accessor all
@@ -348,7 +348,8 @@ does something different is worse than none.
 ## The app prefix
 
 Django names a model's table `<app_label>_<lowercased class name>`. PormG carries that prefix as the
-model's **`db_table`**, leaving the positional slot as the logical handle:
+model's **`db_table`**, while the logical name stays the class name lowercased — left for loading to
+derive from the binding:
 
 ```python
 # server/dash/models.py
@@ -363,11 +364,11 @@ class DimIbge(models.Model):
 imported with `django_prefix = "dash"` becomes:
 
 ```julia
-Dim_uf = Models.Model("dim_uf", db_table = "dash_dim_uf",
+Dim_uf = Models.Model(db_table = "dash_dim_uf",
   id = Models.IDField(),
   nome = Models.CharField(max_length=50))
 
-DimIbge = Models.Model("dimibge", db_table = "dash_dimibge",
+DimIbge = Models.Model(db_table = "dash_dimibge",
   id = Models.IDField(),
   cidade = Models.CharField(max_length=10),
   ufs = Models.ManyToManyField("Dim_uf", db_table="dash_dimibge_ufs"))
@@ -375,9 +376,17 @@ DimIbge = Models.Model("dimibge", db_table = "dash_dimibge",
 
 Three things to read off that output, and a fourth that shows up only when something is reported:
 
-- **The positional name is `class.__name__.lower()`** — Django's own derivation. `DimIbge` becomes
+- **The logical name is `class.__name__.lower()`** — Django's own derivation. `DimIbge` becomes
   `"dimibge"`, with no underscore inserted, because that is what Django's table is called. Whichever
-  class-naming convention the project uses, the derived name matches.
+  class-naming convention the project uses, the derived name matches. That is also exactly what
+  loading derives from the binding when a model has no positional name, so the importer leaves it
+  out — the [no-name form](models.md) the hand-written examples use. A renamed model (a collision,
+  `binding_overrides`) takes the short form too, because the new name *is* its binding lowercased.
+  The one class that keeps it is a leading-underscore one (`_Internal`). With a table pinned it keeps
+  `"internal"`, which its binding would not derive; with none, its name would start with `_`, which
+  a PormG model name never does, and the short form must not be a way around that. `inspectdb` output always writes
+  the name, because that file is edited by hand afterwards and a renamed binding there must not
+  rename the model.
 - **The Julia binding is the class name, unchanged.** It never carried the prefix, so `M.Dim_uf` in a
   consuming app is unaffected.
 - **An auto-derived `ManyToManyField` gets its join table pinned** to Django's spelling, which is
@@ -411,7 +420,8 @@ and no `db_table` is emitted.
 !!! note "Existing generated files keep working"
     The older spelling, `Models.Model("dash_dim_uf", …)`, still addresses the table `dash_dim_uf`.
     The new form only appears when you regenerate — see the change log for the one case that forces
-    an edit.
+    an edit. A file that writes the logical name out, `Models.Model("dim_uf", db_table = …)`, loads
+    the very same model as the short form; regenerating changes its text and nothing else.
 
 ## Supported Django Fields
 
@@ -627,7 +637,7 @@ names the field and the class.
 
 | Django `Meta` option | Outcome | Notes |
 |----------------------|---------|-------|
-| `db_table = "x"` | **imported** as `db_table = "x"` | The physical table. Absolute, as in Django: it overrides the derived name *and* a configured `django_prefix`. The positional slot keeps the derived logical name (`"matricula"`) either way — see [The app prefix](#The-app-prefix). |
+| `db_table = "x"` | **imported** as `db_table = "x"` | The physical table. Absolute, as in Django: it overrides the derived name *and* a configured `django_prefix`. The logical name stays the derived one (`"matricula"`, from the binding) either way — see [The app prefix](#The-app-prefix). |
 | `unique_together = ('a', 'b')` | **imported** as `constraints = [Models.UniqueConstraint(fields = ("a", "b"))]` | A tuple-of-tuples (several composite keys) becomes one `UniqueConstraint` per group. |
 | `constraints = [UniqueConstraint(fields=…, name=…)]` | **imported** | The modern spelling. See the acceptance rule below — it is narrower than Django's. |
 | `constraints = [UniqueConstraint(fields=…, condition=Q(…), name=…)]`, `UniqueConstraint(Lower('x'), name=…)` | **imported** as `Models.UniqueConstraint(fields = …, name = …, condition = "<SQL>")` / `Models.UniqueConstraint(expressions = (…,), name = …)` | A partial or functional unique constraint, translated exactly as a partial or functional `Index` is; the generated file notes it carries Django's SQL (see the note below the table). |
@@ -740,12 +750,11 @@ class Dim_item_fabricante(models.Model):
 imports as:
 
 ```julia
-Dim_item_fabricante = Models.Model("dim_item_fabricante",
+Dim_item_fabricante = Models.Model(
   id = Models.IDField(),
-  item_id = Models.ForeignKey("Dim_item", pk_field="id", on_delete=CASCADE),
   fabricante_id = Models.ForeignKey("Dim_fabricante", pk_field="id", on_delete=CASCADE),
-  constraints = [Models.UniqueConstraint(fields = ("item_id", "fabricante_id",))],
-)
+  item_id = Models.ForeignKey("Dim_item", pk_field="id", on_delete=CASCADE),
+  constraints = [Models.UniqueConstraint(fields = ("item_id", "fabricante_id",))])
 ```
 
 See [Composite Uniqueness](models.md#Composite-Uniqueness-(unique_together)) for how the
@@ -797,7 +806,7 @@ the same way, and it emits nothing of its own to carry the marker:
 # PormG: model 'Relatorio' inherits 'TimeStampedModel', not defined in this file — any fields
 #   declared there are MISSING below. Add them by hand, or pass every app of the project as
 #   "<app_label>" => "<models.py>" pairs so a base in another app is merged.
-Relatorio = Models.Model("relatorio",
+Relatorio = Models.Model(
   id = Models.IDField(),
   titulo = Models.CharField(max_length=80))
 ```
@@ -859,7 +868,7 @@ class ImportBatch(models.Model):
 imports as (fields are emitted in sorted order, so `canal` precedes `status`):
 
 ```julia
-ImportBatch = Models.Model("importbatch",
+ImportBatch = Models.Model(
   id = Models.IDField(),
   canal = Models.CharField(max_length=2, choices=(("UP", "Upload"), ("GS", "Sheets"))),
   status = Models.CharField(max_length=20, default="DRAFT", choices=(("DRAFT", "Em processamento"), ("APPLIED", "Aplicado"), ("IN_PROGRESS", "In Progress"))))

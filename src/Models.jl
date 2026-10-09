@@ -3081,7 +3081,7 @@ physical table with `_apply_db_table!` before calling this, so there is exactly 
 derives `<app label>_<class>` instead of two that had to agree.
 
 # Arguments
-    Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}(), binding::Union{String, Nothing}=nothing)::String
+    Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}(), binding::Union{String, Nothing}=nothing, omit_derived_name::Bool=false)::String
 - `model::Union{Model_Type, PormGModel}`: The model object to convert.
 - `contants_julia::Vector{String}=reserved_words`: identifiers the *generated* field name must avoid —
   the words that cannot be a Julia keyword-argument name. A column named after one of them (or after a
@@ -3112,6 +3112,15 @@ derives `<app label>_<class>` instead of two that had to agree.
   to rewrite each `ForeignKey`'s `.to` to it — `_resolve_target_model` resolves `.to` by binding
   lookup alone, so a `.to` naming a pre-dedup spelling silently reaches the wrong sibling. Supplying
   it keeps that a SINGLE derivation; `taken_bindings` still applies as a collision backstop.
+- `omit_derived_name::Bool=false`: emit the no-name form `Binding = Models.Model(db_table = …, …)`
+  when the positional name is exactly what registration derives from the binding
+  (`format_model_name(binding)`), keeping it whenever the two differ (a deduplicated name or
+  binding, a stripped leading underscore), for any name that starts with `_` even when they agree,
+  and in the commented-out stub (#1043). The loaded model
+  is identical either way. `true` for the Django importer, whose file is regenerated from
+  `models.py` rather than edited; `false` (the default) for `inspectdb`, whose file is edited by
+  hand, where the explicit string keeps the logical name — and everything derived from it, such as
+  `ManyToManyField` join columns — from following a renamed binding.
 
 # Returns
 - `String`: The string representation of the model object. A field whose rendering fails is
@@ -3131,7 +3140,7 @@ users = Models.Model("users",
 )
 ```
 """
-function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}(), binding::Union{String, Nothing}=nothing)::String
+function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vector{String}=reserved_words, name_is_physical_table::Bool=false, taken_bindings::Set{String}=Set{String}(), taken_names::Set{String}=Set{String}(), binding::Union{String, Nothing}=nothing, omit_derived_name::Bool=false)::String
   fields::String = ""
   render_failures::Vector{String} = String[]
   # Iterate fields by name for deterministic output. Use `sort(collect(...))` rather than
@@ -3406,6 +3415,14 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
   managed_part = model_is_managed(model) ? "" : ", managed = false"
   # Marker comments sit directly above the model definition in the generated file (#70).
   marker = isempty(render_failures) ? "" : join(render_failures, "\n") * "\n"
+  # #1043: the no-name `Model(; …)` form is exactly as good as the positional one when registration
+  # would derive the same string from the binding (`format_model_name`, at `set_models` time) — and
+  # only then. Compared AFTER both dedups, so a renamed name or binding keeps the name explicit
+  # without a special case for either. Never for a leading underscore: a PormG model name never
+  # carries one (#306), and the no-name form would load what that positional gate refuses — so an
+  # unpinned `_Internal` keeps the spelling it had, rather than changing what the file loads.
+  omit_name = omit_derived_name && !startswith(model_name_abs, "_") &&
+              model_name_abs == format_model_name(model_var_name)
   if fields == ""
     # Every field failed to render (or the model has none): a `Models.Model("name")` call with no
     # field keywords throws `ModelDefinitionError` at include time, which would abort loading the
@@ -3415,9 +3432,15 @@ function Model_to_str(model::Union{Model_Type, PormGModel}; contants_julia::Vect
     #
     # #612 widened that guard to the `db_table =` arity as well, so the commented-out line below
     # would throw for the same reason if it were ever uncommented as-is. That is the intended
-    # reading: it is a stub to fix by hand, not a definition to restore.
+    # reading: it is a stub to fix by hand, not a definition to restore. It keeps the explicit name
+    # even under `omit_derived_name` (#1043): hand-edited is the case that option leaves explicit.
     note = "# PormG: model '$(model_name_abs)' had no renderable fields — definition commented out."
     result = """$(marker)$(note)\n# $(model_var_name) = Models.Model($(format_string(model_name_abs))$db_table_part$managed_part)"""
+  elseif omit_name
+    # Every part after the name opens with its own separator (`", db_table = …"`, `",\n  id = …"`);
+    # with no name before it, the first one has nothing to separate.
+    args = chopprefix(chopprefix("$db_table_part$managed_part$fields", ","), " ")
+    result = """$(marker)$(model_var_name) = Models.Model($(args))"""
   else
     result = """$(marker)$(model_var_name) = Models.Model($(format_string(model_name_abs))$db_table_part$managed_part$fields)"""
   end
@@ -4044,9 +4067,9 @@ end
 #
 # Built on `format_number_sql` so the type ladder (Bool, Integer, Float, numeric string, array for
 # `__@in`, `missing`) stays in ONE place and these add only the range. The raised type is
-# `InvalidValueError`, matching the sibling transforms `@month` and `@day` exactly — #576 tracks
-# moving that whole family to the filter path's `FilterError`, and splitting it here would leave
-# #576 with a third behaviour to reconcile instead of one.
+# `InvalidValueError`, matching the sibling transforms `@month` and `@day` exactly. #971 kept that
+# family on `InvalidValueError` on the filter path too, and #988 moved `@year`'s own bounds there:
+# a refused bound value is an `InvalidValueError` whichever function refuses it.
 #
 # #955: a `Bool` is refused before `format_number_sql` sees it. That formatter maps `true` to `1` on
 # purpose (a numeric column given a flag), but no period is a flag: `"start_at__@hour" => true`

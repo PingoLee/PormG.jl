@@ -33,11 +33,16 @@ Catch the umbrella when you want a category, the concrete type when you want a r
 | `earliest(...)` / `latest(...)` | `DoesNotExist` | Empty queryset — unlike `first()`/`last()`, which return `nothing` |
 | `row.driverid` on an unprojected `ForeignKey` / `OneToOneField` | `LazyTraversalError` | PormG never lazily loads a relation — project it with `values(...)` |
 | any filter, `values` or `order_by` | `UnknownFieldError` | The field name does not exist on the model (lookups are case-sensitive). Names the table searched and its available fields |
-| any filter | `FilterError` | The predicate itself is malformed — an unknown lookup, an operator misused, a list where one value belongs |
-| any filter, with a value its field cannot take | `InvalidValueError` | Text in a number column, a malformed date or UUID, an out-of-range period. The same type a write raises (it was a `FilterError` until #971); the message names the field, never the value |
+| any filter | `FilterError` | The predicate itself is malformed — an unknown lookup, an operator misused, a list where one value belongs, an `isnull` that is not a `Bool` |
+| any filter, with a value its field cannot take | `InvalidValueError` | Text in a number column, a malformed date or UUID, an out-of-range period, a `@year` outside 1–9999 or a `@yyyy_mm` that is not a calendar month compared on a `DateField`, a `@family` other than 4 or 6, a numeric JSON comparison against a value that is not a base-10 number. The same type a write raises (it was a `FilterError` until #971 and #988); the message names the field, never the value |
 | PostgreSQL-only features on SQLite | `BackendCapabilityError` | e.g. `iunaccent_*`, the `regex` / `iregex` lookups and their negated twins, full-text search (`@search`, `SearchRank`, `SearchHeadline`), JSONB containment, window `frame=`, `with_advisory_lock(...; on_missing_lock = :error)`, a `ToChar` format outside the portable table, a `Cast`, or a `Case`/`Coalesce`/`Greatest`/`Least` `output_field`, to `timestamp`, `time` or `interval` |
 | `makemigrations` on SQLite | `BackendCapabilityError` | A `DecimalField` declares `max_digits` above 15, which SQLite cannot store exactly — see [`DecimalField`](fields.md#DecimalField(max_digits,-decimal_places)) |
 | anything else about query shape | `QueryBuildError` | The long-tail default |
+
+Between `FilterError` and `InvalidValueError` on a filter, the rule is: **a value that would be
+bound as a parameter is refused with `InvalidValueError`; an argument that shapes the SQL is refused
+with `FilterError`.** So a bad value — the part of a filter an end user usually supplies — is an
+`InvalidValueError` whichever check refuses it, the field's or the lookup's own (#988).
 
 ### Writing
 

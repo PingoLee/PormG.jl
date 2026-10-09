@@ -1514,7 +1514,8 @@ end
   @test occursin("Error in filter, field `happened`", date_err.value.msg)
   # `@yyyy_mm` leaks one call deeper — `_yyyy_mm_bucket_bounds` opens with `Models.format_yyyy_mm`,
   # whose `InvalidValueError` escaped before the bounds guard. Its sibling `_year_bucket_bounds`
-  # already raised `FilterError` throughout, which is why `@year` was never on the leak list.
+  # raised `FilterError` throughout, which is why `@year` was never on the leak list; since #988 it
+  # raises `InvalidValueError`, located by the same guard (`test_sargable_date_range.jl`).
   @test_throws PormG.InvalidValueError _IN411.objects.filter(
     "happened__@yyyy_mm" => "nonsense").list(show_query = :dict)
 

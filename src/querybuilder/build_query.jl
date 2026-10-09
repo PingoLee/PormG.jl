@@ -85,6 +85,8 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         # Never empty: binding refuses an ON clause that never names this alias (#448), which an empty
         # one cannot, and `_cjoin_on` refuses an empty `on` at the call.
         on_clause = join(conditions, " AND ")
+        # #174: kept, markers and all, for a correlated UPDATE … FROM to carry into its WHERE.
+        instruc.cjoin_on_rendered[value.alias_b] = conditions
       else
         alias_a_quoted = quote_identifier(value.alias_a, instruc.connection)
         # #394: escape-only, because on every model-join branch these are PHYSICAL columns
@@ -279,8 +281,11 @@ function _check_aggregate_fanout(instruct::SQLInstruction)
   # (e.g. _cache_join pre-builds a filter join, then it is built again for real); _insert_join keeps
   # only one entry, so deriving here counts each actual to-many join exactly once.
   many = Set{String}()
+  cjoin_on_many = String[]   # #174: the to-many aliases that are `cjoin_on` rows, for the message
   for r in instruct.row_join
-    _to_many(r) && push!(many, r.alias_b)
+    _to_many(r) || continue
+    push!(many, r.alias_b)
+    r isa AnchorlessJoin && push!(cjoin_on_many, r.alias_b)
   end
   isempty(many) && return nothing
   n = length(many)
@@ -289,26 +294,39 @@ function _check_aggregate_fanout(instruct::SQLInstruction)
     ambiguous = a.alias == "\0AMBIGUOUS"
     # Safe only when the aggregate targets the sole to-many table's own column.
     (!ambiguous && a.alias in many && n == 1) && continue
-    throw(QueryBuildError(_fanout_error_msg(a, many, ambiguous)))
+    throw(QueryBuildError(_fanout_error_msg(a, many, ambiguous; cjoin_on_many = cjoin_on_many)))
   end
   return nothing
 end
 
-function _fanout_error_msg(a, many, ambiguous::Bool)
+function _fanout_error_msg(a, many, ambiguous::Bool; cjoin_on_many::Vector{String} = String[])
   paths = join(sort!(collect(many)), ", ")
   reason = ambiguous ?
     "the aggregated expression spans more than one source, so it cannot be proven safe under a row-multiplying (to-many) join" :
     "it aggregates a column from a table that a to-many join row-multiplies"
   string(
     "PormG fan-out guard (#74): the aggregate \e[4m\e[31m", a.label, "\e[0m is inflated because ", reason, ".\n",
-    "  A to-many join (reverse foreign key or many-to-many) repeats base-table rows, so ", a.func,
+    "  A to-many join (reverse foreign key, many-to-many, or a cjoin_on not proven to-one) repeats base-table rows, so ", a.func,
     " would count/sum each base row once per related row.\n",
     "  To-many table alias(es) in this query: \e[33m", paths, "\e[0m.\n",
     "  Fix one of:\n",
     "    \e[32m1.\e[0m Aggregate the RELATED table's own column instead (e.g. count related rows: Count(\"reverse_relation__id\")).\n",
     "    \e[32m2.\e[0m Pass \e[32mdistinct=true\e[0m to the aggregate if de-duplicated counting is what you want.\n",
     "    \e[32m3.\e[0m Compute the aggregate in a correlated \e[32mSubquery(...)\e[0m projected in values() " *
-    "(correlate the inner query with \e[32mOuterRef(...)\e[0m) so the base rows are not multiplied.\n")
+    "(correlate the inner query with \e[32mOuterRef(...)\e[0m) so the base rows are not multiplied.\n",
+    _fanout_cjoin_on_hint(cjoin_on_many))
+end
+
+# #174: a `cjoin_on` alias is to-many when its ON clause does not PROVE it to-one, which may be news to
+# a caller whose data is one-to-one. Say what the proof is. Names aliases only — never a value.
+function _fanout_cjoin_on_hint(aliases::Vector{String})::String
+  isempty(aliases) && return ""
+  names = join(("\e[33m\"" * a * "\"\e[0m" for a in sort(aliases)), ", ")
+  return string(
+    "  The cjoin_on alias(es) ", names, " count as to-many because their ON clause does not prove at most one ",
+    "match per base row. It does when top-level conditions (not inside Qor) equate, with one value per base row, ",
+    "the target's primary key, a \e[32munique = true\e[0m column, or every column of a plain ",
+    "\e[32mUniqueConstraint\e[0m — e.g. \e[32mJoined(\"<alias>\", \"<key>\") == F(\"<column>\")\e[0m (#174).\n")
 end
 
 # #194 grouped-correlation guard -------------------------------------------------------------------

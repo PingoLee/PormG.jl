@@ -340,3 +340,40 @@ WHERE "Tb"."raceid" = "Tb_1"."raceid"
   AND "Tb_1"."circuitid" = "Tb_2"."circuitid" 
   AND "Tb"."resultid" = $1
 ```
+
+### Setting a column from a `cjoin_on` copy
+
+A [`cjoin_on`](../read/custom_joins.md) join can supply the new value too: pass `Joined(alias, column)`
+as the value, directly or inside a SQL function. The join's `ON` clause becomes part of the
+statement's `WHERE`, so a row is updated only when the join matches:
+
+```julia
+query = M.Result.objects
+query.filter("raceid" => 18)
+# Only results of British drivers match the join, so only those rows are updated.
+query.cjoin_on("Driver", alias = "d", on = [
+  Joined("d", "driverid") == F("driverid"),
+  Joined("d", "nationality") => "British",
+])
+query.update("positiontext" => Joined("d", "code"))
+```
+
+```sql
+UPDATE "result" AS "Tb"
+SET "positiontext" = "d"."code"
+FROM "driver" AS "d"
+WHERE ("d"."driverid" = "Tb"."driverid") AND "d"."nationality" = $2 AND "Tb"."raceid" = $1
+```
+
+The statement joins in its `WHERE` clause, which only means what the `cjoin_on` says under two
+conditions. PormG checks both, for **every** `cjoin_on` in the query, and raises `QueryBuildError`
+when either fails:
+
+- **The join is `INNER`** (the default), and so is every relation join in the statement. A `LEFT`,
+  `RIGHT` or `FULL` join would act as an inner one and skip the rows it was declared to keep. A
+  nullable foreign key is joined `LEFT`, so a path through one, named in the `ON` clause or anywhere
+  else in the query, is refused too.
+- **The join is to-one**: its `ON` clause pins the target's primary key or a unique column to one value
+  per row (the rule is in [Custom Joins](../read/custom_joins.md), under *When PormG treats a
+  `cjoin_on` join as to-many*).
+  Otherwise the database would set each row from an arbitrary one of its matches.

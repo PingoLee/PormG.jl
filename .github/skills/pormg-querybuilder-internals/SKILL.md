@@ -444,9 +444,12 @@ a typed column IR (I1) is still worth its cost, is #990.
     Since #993 a gap in that lowering is a loud refusal, not a wrong row, so I1 now buys message
     quality and fewer walker arms, not correctness.
   - **Cardinality is not one invariant yet (#1002).** Reference is settled. "Does this join repeat a
-    base row?" is answered by six local guards: #74, #973, the M2M `on()` refusal, #992, open #174,
-    and none for a `cjoin(field = …)` link to a non-unique column, which `_relation_step` classifies
-    `:forward`. Do not add a seventh local guard for a to-many shape: put the case in #1002, which
+    base row?" is answered by five local guards: #74, #973, the M2M `on()` refusal, #992, and none
+    for a `cjoin(field = …)` link to a non-unique column, which `_relation_step` classifies
+    `:forward`. A `cjoin_on` alias is no longer a sixth: `_cjoin_on_to_many` reads its ON clause into
+    `AnchorlessJoin.to_many` (to-one only when top-level `=` conjuncts pin a declared key to one value
+    per base row), and that flag feeds #74 and the correlated UPDATE … FROM rather than a guard of its
+    own (#174). Do not add a seventh local guard for a to-many shape: put the case in #1002, which
     also holds the open decision on `filter()` / `order_by` across a to-many path (Django-shaped
     repeats, refuse, or rewrite to `EXISTS`).
 

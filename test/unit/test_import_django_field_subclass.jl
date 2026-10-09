@@ -71,7 +71,7 @@ class Constructor(models.Model):
         # The column is declared on BOTH models with the call's own options. Before #1041 neither
         # line existed.
         @test occursin("code = Models.CharField(max_length=3, blank=true, null=true)", generated)
-        @test occursin(r"Constructor = Models\.Model\(\"constructor\",\n  id = Models\.IDField\(\),\n  code = Models\.CharField\(max_length=3\)\)", generated)
+        @test occursin(r"\nConstructor = Models\.Model\(\n  id = Models\.IDField\(\),\n  code = Models\.CharField\(max_length=3\)\)", generated)
         # The second hop of the chain resolves through the first.
         @test occursin("nickname = Models.CharField(max_length=5)", generated)
 
@@ -370,7 +370,7 @@ class Steward(models.Model):
                                   db = config_key, file = "field_subclass_apps.jl",
                                   force_replace = true)
         generated = read(joinpath(config_key, "field_subclass_apps.jl"), String)
-        @test occursin(r"Driver = Models\.Model\(\"driver\", db_table = \"racing_driver\",\n  id = Models\.IDField\(\),\n  code = Models\.CharField\(max_length=3\)\)", generated)
+        @test occursin(r"\nDriver = Models\.Model\(db_table = \"racing_driver\",\n  id = Models\.IDField\(\),\n  code = Models\.CharField\(max_length=3\)\)", generated)
         @test occursin("field 'code' on 'racing.Driver' (models.py line 5) is " *
                        "DriverCodeField(models.CharField) — imported as CharField", generated)
         # `access` never imported the class, so the field stays unread there.

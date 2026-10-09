@@ -34,9 +34,9 @@ PormG provides several terminal methods to execute a query and return data in di
 | `.earliest(fields...)` | `PormGRow` | Returns the earliest row ordered by `fields`; raises `DoesNotExist` when empty. |
 | `.latest(fields...)` | `PormGRow` | Returns the latest row ordered by `fields`; raises `DoesNotExist` when empty. |
 | `.get(filters...)` | `PormGRow` | Returns exactly one row, or raises a typed exception. |
-| `.count()` | `Int` | Runs `SELECT COUNT(*)` and returns the number of rows `.list()` would return — after `distinct()`, the distinct projected rows; with an aggregate in `values()`, the groups. |
+| `.count()` | `Int` | Runs `SELECT COUNT(*)` and returns the number of rows `.list()` would return — after `distinct()`, the distinct projected rows; with an aggregate in `values()`, the groups. An aggregate with no grouping and no `HAVING` (`values("n" => Count("resultid"))`) is one row whatever matched, so it counts the matched rows instead. |
 | `.aggregate(pairs...)` | `NamedTuple` | Computes whole-queryset aggregates (no `GROUP BY`) and returns them as a single-row named tuple. |
-| `.exists()` | `Bool` | Returns `true` if `.list()` would return at least one row. |
+| `.exists()` | `Bool` | Returns `.count() > 0`: `true` if `.list()` would return at least one row, except for the ungrouped aggregate above, where it asks whether any row matched. |
 
 ### Choosing an Output Format
 
@@ -426,7 +426,20 @@ nationalities = M.Driver.objects.values("nationality").distinct().list()
 `.count()` and `.exists()` answer for the same rows: `values("nationality").distinct().count()` is the
 number of nationalities, not of drivers. The same holds for a grouped projection —
 `values("nationality", "n" => Count("driverid")).count()` counts the groups, and a filter on `"n"`
-applies before they are counted.
+applies before they are counted. A filter on any other `values()` alias applies too, as it does for
+`.list()`: `values("next_grid" => F("grid") + 1).filter("next_grid__@gt" => 20).count()` counts the
+results that started 20th or further back, and a filter on a window alias raises the same `QueryBuildError` it
+raises from `.list()`.
+
+An aggregate with nothing to group by is the exception. `values("n" => Count("resultid"))` is exactly
+one row whatever the filters matched — `COUNT` over no rows is `0`, not zero rows — so its answer would
+be a constant. `.count()`, `.exists()` and `Exists(...)` therefore answer for the matched rows instead,
+and `.exists() == (.count() > 0)` holds. That is what lets one correlated handle serve both
+`Subquery(...)` and `Exists(...)` (see [Subqueries and CTEs](subqueries_and_ctes.md)). A filter on the
+alias is a `HAVING`, which can remove that one row, so `values("n" => Count("resultid")).filter("n__@gt" => 3)`
+is answered as written: one row or none. A shape PormG cannot place before it builds the query — an aggregate beside a
+`Value(...)` literal that a filter reads, say — raises `QueryBuildError` from `.count()`, `.exists()`
+and `Exists(...)` rather than answer that constant.
 
 !!! warning "`distinct()` + `order_by()`: the sort key must be projected"
     Under `distinct()`, every column you `order_by(...)` must appear in `values(...)`. Ordering a

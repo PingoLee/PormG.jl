@@ -20,6 +20,7 @@
 using Test
 using PormG
 import PormG.QueryBuilder: F, Q, Qor, Joined, Exists, OuterRef
+import PormG.Functions: Count, Max
 
 struct CJoinOnMockPG <: PormG.PormGPostgres end
 struct CJoinOnMockSL <: PormG.PormGSQLite end
@@ -181,6 +182,37 @@ end
   q.filter("driverid" => 1)
   sql = q.update("position" => 0, show_query = :sql)
   @test occursin("INNER JOIN \"laps\" AS \"b2\" ON (\"b2\".\"raceid\" = \"Tb\".\"raceid\")", sql)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #174: the #74 fan-out guard sees a cjoin_on join
+# A self-join on `raceid` pairs each lap with every lap of its race, so COUNT over a base column counts
+# each base row once per match. The row is to-many unless its ON clause proves otherwise
+# (`_cjoin_on_to_many`, pinned shape by shape in `test_join_rows.jl`); a pk self-join proves it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the fan-out guard refuses a base aggregate over a to-many cjoin_on (#174) — $(M === PG ? "PG" : "SL")" for M in (PG, SL)
+  _render(agg; on = [Joined("b2", "raceid") == F("raceid")]) = begin
+    q = M.Lap.objects
+    q.cjoin_on("Lap", alias = "b2", on = on)
+    q.values("driverid", "n" => agg)
+    q.list(show_query = :sql)
+  end
+  err = try
+    _render(Count("id"))
+    nothing
+  catch e
+    e
+  end
+  @test err isa PormG.QueryBuildError
+  msg = replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
+  @test occursin("fan-out guard (#74)", msg)
+  @test occursin("cjoin_on alias(es) \"b2\"", msg)
+
+  # The guard's existing exemptions hold for this row kind too, and a proven key is not refused.
+  @test occursin("COUNT(DISTINCT", _render(Count("id", distinct = true)))
+  @test occursin("COUNT(\"b2\".\"id\")", _render(Count(Joined("b2", "id"))))   # the many side's own column
+  @test occursin("MAX(", _render(Max("id")))
+  @test occursin("COUNT(\"Tb\".\"id\")", _render(Count("id"); on = [Joined("b2", "id") == F("id")]))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

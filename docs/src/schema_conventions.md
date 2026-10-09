@@ -249,12 +249,12 @@ names the Django **app label** whose tables the connection reads, since Django n
 `<app_label>_<model>`:
 
 - When PormG **generates** a model file (via the Django importer), the prefix is emitted as the
-  model's [`db_table`](#Pinning-an-explicit-table-name-with-db_table). The positional slot keeps the
-  logical handle:
+  model's [`db_table`](#Pinning-an-explicit-table-name-with-db_table). The logical handle,
+  `"dim_uf"`, is the binding lowercased, so the positional slot is left out and loading derives it:
 
   ```julia
   # class Dim_uf(models.Model) imported with django_prefix = "dash"
-  Dim_uf = Models.Model("dim_uf", db_table = "dash_dim_uf", …)
+  Dim_uf = Models.Model(db_table = "dash_dim_uf", …)
   ```
 
   A `Meta.db_table` in the Django source still wins outright, exactly as in Django.

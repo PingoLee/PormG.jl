@@ -730,15 +730,45 @@ function _build_from_tables(row_join::Vector{JoinRow}, connection::Union{PormGPo
   return join(unique(tables), ", ")
 end
 
-function _get_join_condition_list(row_join::Vector{JoinRow}, connection)
-  # #45: this correlated UPDATE-FROM / DELETE-USING path only builds equi-anchors and ignores
-  # on_conditions, so an anchor-less cjoin_on join would be emitted WITHOUT its ON (silently wrong).
-  # The common update/delete path scopes rows via a subquery that DOES render cjoin_on correctly;
-  # only this correlated path is unsupported — fail loudly rather than drop the join condition.
+# The WHERE half of a correlated UPDATE … FROM: one equi-anchor per path join, and each `cjoin_on`
+# alias's ON conditions as `build()` already rendered them (`rendered_on`, keyed by alias). Emitted in
+# `row_join` order, so the `cjoin_on` markers sit in the order their values were bound into `:join`,
+# and the caller prints all of it before `_where` — SET, ON, WHERE: `_BUCKET_ORDER`'s order (#174).
+function _get_join_condition_list(row_join::Vector{JoinRow}, connection;
+                                  rendered_on::Dict{String,Vector{String}} = Dict{String,Vector{String}}())
+  has_cjoin_on = any(r -> r isa AnchorlessJoin, row_join)
   for row in row_join
+    # #174: a LEFT path join turns inner here too — its anchor lands in WHERE — and a `cjoin_on` ON
+    # clause may lean on its NULL row (`Qor(…, "fk__col__@isnull" => true)`), which then matches
+    # nothing: fewer rows updated, silently. With a `cjoin_on` in the statement, refused. (The same
+    # flattening without one predates #174 and stays as it was.)
+    if has_cjoin_on && row isa ModelJoin && row.how != "INNER"
+      throw(QueryBuildError(
+        "The $(row.how) join to \"$(row.b)\" (alias \"$(row.alias_b)\") cannot be carried into a correlated " *
+        "UPDATE ... FROM beside a cjoin_on: that statement joins in its WHERE clause, so it would act as an " *
+        "INNER join and drop the rows it was declared to keep, which a cjoin_on ON clause may match on. " *
+        "Scope the mutation with a filter instead (#174)."))
+    end
+    # #174: a `cjoin_on` join's ON clause moves into this statement's WHERE, which is an INNER join by
+    # construction, and SET reads one joined row per updated row. Both hold only for an INNER alias
+    # proven to-one; anything else is refused rather than rendered differently from what it says.
+    # The rule covers EVERY alias in the FROM list, not just the ones SET reads: deliberately
+    # conservative, and no wider than the blanket refusal it replaced.
     if row isa AnchorlessJoin
-      throw(QueryBuildError("cjoin_on is not supported in a correlated UPDATE-FROM/DELETE-USING (setting a " *
-                    "column from a joined table); scope the mutation with a filter/subquery instead."))
+      row.how == "INNER" || throw(QueryBuildError(
+        "cjoin_on alias \"$(row.alias_b)\" is a $(row.how) join, which a correlated UPDATE ... FROM cannot " *
+        "carry: that statement joins in its WHERE clause, so it would act as an INNER join and skip the rows " *
+        "with no match instead of keeping them. Declare it with join_type = \"INNER\", or scope the mutation " *
+        "with a filter instead (#174)."))
+      row.to_many && throw(QueryBuildError(
+        "cjoin_on alias \"$(row.alias_b)\" may match more than one row per updated row, so a correlated " *
+        "UPDATE ... FROM would SET from an arbitrary match. Its ON clause must equate, at the top level " *
+        "(not inside Qor) and with one value per base row, the target's primary key, a unique = true " *
+        "column, or every column of a plain UniqueConstraint, e.g. " *
+        "Joined(\"$(row.alias_b)\", \"<key>\") == F(\"<column>\") (#174)."))
+      haskey(rendered_on, row.alias_b) || error(_emsg(
+        "PormG internal error: cjoin_on alias \"$(row.alias_b)\" reached a correlated UPDATE ... FROM with no " *
+        "rendered ON clause; refusing to emit the join unconstrained."))
     end
     # #394: the same rule, for a CTE. `update()` emits no `WITH` prefix — `build_cte_clause` is
     # reached only from the three READ paths — so a row_join entry naming a CTE renders
@@ -769,10 +799,14 @@ function _get_join_condition_list(row_join::Vector{JoinRow}, connection)
   for row in row_join
     # #394: no try/catch either — the guards above refuse to drop an ON clause, and until now the
     # loop below dropped one anyway on any failure, with nothing but an `@error`. An UPDATE ... FROM
-    # or DELETE ... USING missing its ON condition matches every row of the joined table, so this is
-    # the one place a swallowed identifier error corrupts data rather than returning wrong rows.
-    # Everything reaching here is a `ModelJoin`: both anchor-less shapes and both CTE shapes are
-    # refused above, and a `ModelJoin` cannot exist without its alias/key set (#487).
+    # missing its ON condition matches every row of the joined table, so this is the one place a
+    # swallowed identifier error corrupts data rather than returning wrong rows.
+    # Both CTE shapes are refused above, so a row is a `ModelJoin` (an equi-anchor) or an INNER,
+    # to-one `AnchorlessJoin` with its ON already rendered (#174).
+    if row isa AnchorlessJoin
+      append!(conditions, rendered_on[row.alias_b])
+      continue
+    end
     row = row::ModelJoin
     alias_a = quote_identifier(row.alias_a, connection)
     key_a = safe_column_identifier(row.key_a, connection)
@@ -783,8 +817,9 @@ function _get_join_condition_list(row_join::Vector{JoinRow}, connection)
   return conditions
 end
 
-function _build_join_conditions(row_join::Vector{JoinRow}, connection::Union{PormGPostgres, PormGSQLite})
-  return _get_join_condition_list(row_join, connection)
+function _build_join_conditions(row_join::Vector{JoinRow}, connection::Union{PormGPostgres, PormGSQLite};
+                                rendered_on::Dict{String,Vector{String}} = Dict{String,Vector{String}}())
+  return _get_join_condition_list(row_join, connection; rendered_on = rendered_on)
 end
 
 function _set_clause_uses_join_aliases(set_clause::String,
@@ -1114,17 +1149,6 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     # Routed here, it resolves as a column and `update()`'s own "this statement emits no WITH
     # clause" refusal (#433) fires with the accurate message, which is exactly what the pre-#444
     # `F("<cte>__col")` spelling produced.
-    # #481: a `Joined(...)` handle is admitted here so it does NOT reach the field formatter as a
-    # bare MethodError — and is then refused with an accurate message. Setting a column FROM a
-    # joined copy is the correlated UPDATE-FROM path, which this statement shape cannot express
-    # (it scopes rows through a subquery); that remains #174's fourth deferred edge.
-    if isa(objct.insert[field], SQLTypeJoined)
-      throw(QueryBuildError(
-        "update(\"$(field)\" => Joined(\"$(objct.insert[field].alias)\", \"$(objct.insert[field].path)\")) is not supported: " *
-        "the common update path scopes rows with a subquery, so a cjoin_on joined copy is not " *
-        "visible to SET. Setting a column FROM a joined table needs the correlated UPDATE ... FROM " *
-        "path, which is not implemented (#174)."))
-    end
     # #1021: a `SearchVector` fills a `SearchVectorField` — Django's
     # `update(search=SearchVector(…))` — and is rendered as the document it is, past the "operand,
     # not a value" refusal every other value position keeps. Into any other column it is refused, as
@@ -1138,8 +1162,11 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
           "operand (#1021)."))
       connection isa PormGSQLite && throw(Dialect.fts_capability_error("SearchVector"))
       push!(set_clause_parts, "$(quoted_field) = $(_render_fts_operand(value, instruction))")
+    # #174: a `Joined(...)` handle is a column of a `cjoin_on` copy — never a literal, so it must not
+    # reach the field formatter (#481). It renders `"<alias>"."<col>"`, which sends the statement down
+    # the correlated UPDATE … FROM branch below, where the alias's rendered ON clause joins it.
     elseif isa(objct.insert[field], SQLTypeF) || isa(objct.insert[field], SQLTypeFunction) ||
-       isa(objct.insert[field], SQLTypeCTE)
+       isa(objct.insert[field], SQLTypeCTE) || isa(objct.insert[field], SQLTypeJoined)
       f_value = _set_update_query(objct.insert[field], instruction)
       push!(set_clause_parts, "$(quoted_field) = $(f_value)")
     else
@@ -1201,10 +1228,14 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
       else
         # PostgreSQL & SQLite 3.33+ support UPDATE FROM syntax
         from_clause = _build_from_tables(instruction.row_join, connection)
-        join_conditions = _build_join_conditions(instruction.row_join, connection)
-        
-        # Merge structural joins and logical filters, then deduplicate
-        final_where = unique([join_conditions; instruction._where])
+        join_conditions = _build_join_conditions(instruction.row_join, connection;
+                                                 rendered_on = instruction.cjoin_on_rendered)
+
+        # Structural joins, then the filters: SET → ON → WHERE is the bucket order (#174). Not
+        # deduplicated: two anchors can never coincide (`_insert_join` dedups the rows, each with its
+        # own alias), and a fragment that carries a marker must print once per bound value — `unique`
+        # here dropped a repeated `"Tb"."c" = ?` on SQLite and left a value with no marker.
+        final_where = [join_conditions; instruction._where]
         
         sql = """
         UPDATE $(safe_table_name) AS $(safe_alias)

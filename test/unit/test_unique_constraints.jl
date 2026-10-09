@@ -253,7 +253,7 @@ end
   try
     import_models_from_django(django; db = config_key, file = "uc_bad_unit.jl", force_replace = true)
     generated = read(joinpath(config_key, "uc_bad_unit.jl"), String)
-    @test occursin("Widget = Models.Model(\"widget\"", generated)   # model still generated
+    @test occursin("\nWidget = Models.Model(", generated)   # model still generated
     @test !occursin("UniqueConstraint", generated)                   # bad constraint skipped
   finally
     delete!(PormG.config, config_key)

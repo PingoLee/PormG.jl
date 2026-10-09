@@ -687,6 +687,7 @@ function Base.show(io::IO, r::QueryBuilder.CrossJoin)
 end
 function Base.show(io::IO, r::QueryBuilder.AnchorlessJoin)
   print(io, "AnchorlessJoin(", getfield(r, :b), " AS ", getfield(r, :alias_b), ", ", getfield(r, :how))
+  getfield(r, :to_many) && print(io, ", to_many")
   _d_on_count(io, length(getfield(r, :on_conditions)))
   print(io, ")")
 end

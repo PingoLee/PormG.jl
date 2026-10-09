@@ -95,7 +95,9 @@ end
 """
     FilterError(msg) <: PormGError
 
-An invalid filter argument/shape, or an operator misused on a JSON/subquery column.
+An invalid filter shape — an unknown lookup, a list where one value belongs, an argument that shapes
+the SQL (an `isnull` flag) — or an operator misused on a JSON/subquery column. A bound value the
+filter refuses is an [`InvalidValueError`](@ref) instead (#988).
 """
 struct FilterError <: PormGError
   msg::String
@@ -131,7 +133,8 @@ end
 A value was refused: it failed coercion/type validation on a filter, insert or update, an
 identifier failed the fail-closed safety check, or an interval/duration literal could not be
 parsed. Raised by the `Models.format_*_sql` coercion helpers, which every write and filter path
-calls (#239).
+calls (#239), and by a lookup's own checks on the value it binds — a `@year` bound, `@family`,
+a numeric JSON comparison (#988).
 
 **A refusal never contains the value it refused** (#971): a bound value can be a password or any
 other secret, and an app may hand `e.msg` to an HTTP client. The message names where it happened —

@@ -381,6 +381,97 @@ function _refuse_unconstrained_cjoin_on(alias::String, cfg::AliasJoin)
     "\e[4m\e[32mCROSS JOIN\e[0m and warns that it is Cartesian (#44, #448)."))
 end
 
+# ── #174: can a `cjoin_on` row repeat a base row? ───────────────────────────────────────────────
+# A `cjoin_on` ON clause is arbitrary, so nothing about the join says how many target rows a base row
+# meets. This answers it CONSERVATIVELY, from the conditions alone: the row is to-one only when
+# top-level conjuncts (the `on` vector and any `Q(...)` in it — never a `Qor(...)` branch) equate a
+# key of the target with one value per base row. A key is the single primary key, a `unique = true`
+# field, or every field of a plain `UniqueConstraint` (no `condition`, no `expressions`, which only
+# hold over a subset or a transform). One value per base row is a literal, an `OuterRef`, a base
+# column or a path off it (forward by #992), or another alias's column when that alias is itself
+# to-one — which is what makes the answer transitive. Anything else is to-many: a range, a `Qor`, a
+# transformed or arithmetic side, a key the model never declared unique. Declared, not checked: the key
+# of an unmanaged model or a view is taken on the declaration's word, as a forward FK's is.
+#
+# The answer feeds the EXISTING guards — #74's aggregate fan-out check reads it through `_to_many`,
+# and the correlated UPDATE … FROM refuses a to-many alias (`_get_join_condition_list`). It is not a
+# guard of its own: the general cardinality invariant is #1002's. Total by construction: it never
+# throws, so it cannot change which error a malformed condition reports.
+function _cjoin_on_to_many(cfg::AliasJoin, alias::String, instruct::SQLInstruction)::Bool
+  keyed = Set{String}()
+  for f in cfg.filters
+    _cjoin_on_keyed!(keyed, f, alias, instruct, 0)
+  end
+  return !_covers_unique_key(cfg.target, keyed)
+end
+
+function _cjoin_on_keyed!(keyed::Set{String}, f, alias::String, instruct::SQLInstruction, depth::Int)
+  depth > 32 && return keyed   # a `push!(q, q)` cycle, as the condition walkers bound it
+  if f isa QObject
+    for g in f.filters
+      _cjoin_on_keyed!(keyed, g, alias, instruct, depth + 1)
+    end
+  elseif f isa OperObject && f.operator == "="
+    _cjoin_on_key_side!(keyed, f.column, f.values, alias, instruct)
+    _cjoin_on_key_side!(keyed, f.values, f.column, alias, instruct)
+  elseif f isa FExpression && f.operation == "="
+    _cjoin_on_key_side!(keyed, f.field_name, f.operand, alias, instruct)
+    _cjoin_on_key_side!(keyed, f.operand, f.field_name, alias, instruct)
+  end
+  return keyed
+end
+
+function _cjoin_on_key_side!(keyed::Set{String}, own, other, alias::String, instruct::SQLInstruction)
+  col = _cjoin_on_own_column(own, alias)
+  col !== nothing && _cjoin_on_single_valued(other, alias, instruct) && push!(keyed, col)
+  return nothing
+end
+
+# The plain column of THIS alias a side names, or `nothing`. A `__` in the path is a transform or an
+# operator suffix, and a transformed key is not a key.
+_cjoin_on_own_column(x::JoinedReference, alias::String) =
+  (x.alias == alias && !occursin("__", x.path)) ? x.path : nothing
+# A `Joined(...)`-keyed pair's column. Read from the slot it holds, not from the namespace tag: the tag
+# is memo-key surface (#478), and a `JoinedReference` in the slot already says which side this is.
+_cjoin_on_own_column(x::SQLField, alias::String) =
+  x.field isa JoinedReference ? _cjoin_on_own_column(x.field, alias) : nothing
+_cjoin_on_own_column(_, ::String) = nothing
+
+function _cjoin_on_single_valued(x, alias::String, instruct::SQLInstruction)::Bool
+  # A literal — or, in an `FExpression`'s `field_name`, a base column: one value per base row either way.
+  x isa Union{AbstractString,Number,Dates.TimeType,Base.UUID} && return true
+  x isa OuterRefObject && return true
+  x isa FExpression && return x.operation === nothing && x.field_name isa String
+  # A pair's column: a plain path is a base column (a CTE spelling never survives into a `cjoin_on`
+  # ON clause, #444), a `Joined` handle is decided as one. A transformed column holds an `FObject`
+  # in the slot, so it falls through to the conservative answer below.
+  x isa SQLField && x.field isa String && return true
+  x isa SQLField && x.field isa JoinedReference && return _cjoin_on_single_valued(x.field, alias, instruct)
+  if x isa JoinedReference
+    x.alias == alias && return false
+    # `cjoin_on_order` is topological, so an alias this ON clause names is already a row.
+    i = findfirst(r -> r isa AnchorlessJoin && r.alias_b == x.alias, instruct.row_join)
+    return i !== nothing && !_to_many(instruct.row_join[i])
+  end
+  return false   # a function, arithmetic, a subquery, a list: not provably one value
+end
+
+function _covers_unique_key(target::PormGModel, keyed::Set{String})::Bool
+  isempty(keyed) && return false
+  # Not `get_model_pk_field`: it throws on a composite key, and this check must never throw.
+  pks = [n for (n, f) in target.fields if hasfield(typeof(f), :primary_key) && getfield(f, :primary_key) === true]
+  length(pks) == 1 && pks[1] in keyed && return true
+  for c in keyed
+    f = get(target.fields, c, nothing)
+    f !== nothing && hasfield(typeof(f), :unique) && getfield(f, :unique) === true && return true
+  end
+  for uc in Models._declared_unique_constraints(target)
+    Models._unique_holds_text(uc) && continue   # partial or functional: unique over a subset only
+    !isempty(uc.fields) && all(in(keyed), uc.fields) && return true
+  end
+  return false
+end
+
 # The canonical key of a hop being built (`_finish_hop!`, the PATH loop) — the one `_bind_join_conditions!`
 # files its conditions under.
 _join_key(instruct::SQLInstruction, join_path::AbstractString) = _canonical_join_path(instruct.object, join_path)

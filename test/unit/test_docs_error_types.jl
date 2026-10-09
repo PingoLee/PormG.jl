@@ -795,6 +795,40 @@ const DOCERR_CASES = [
             q.list(show_query = :dict)
         end,
     ),
+    (
+        # #174. A cjoin_on join counts as to-many unless its ON clause pins a declared key, so the #74
+        # guard refuses a base aggregate beside a self-join on a shared, non-unique column.
+        "read/filters_and_aggregates.md — a base aggregate over a to-many cjoin_on raises",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_DRIVER_PG.objects
+            q.cjoin_on(DOCERR_DRIVER_PG, alias = "d2", on = [Joined("d2", "nationality") == F("nationality")])
+            q.values("nationality", "n" => Count("driverid"))
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #174. SET from a joined copy joins in WHERE, so a LEFT alias would act as an inner one.
+        "write/update.md — setting a column from a LEFT cjoin_on copy is refused",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_DRIVER_PG.objects
+            q.cjoin_on(DOCERR_DRIVER_PG, alias = "d", join_type = "LEFT", on = [Joined("d", "driverid") == F("driverid")])
+            q.filter("driverid" => 1)
+            q.update("surname" => Joined("d", "surname"), show_query = :dict)
+        end,
+    ),
+    (
+        # #174. …and a to-many alias would SET each row from an arbitrary match.
+        "write/update.md — setting a column from a to-many cjoin_on copy is refused",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_DRIVER_PG.objects
+            q.cjoin_on(DOCERR_DRIVER_PG, alias = "d", on = [Joined("d", "nationality") == F("nationality")])
+            q.filter("driverid" => 1)
+            q.update("surname" => Joined("d", "surname"), show_query = :dict)
+        end,
+    ),
     # #474 removed TWO cases that stood here, and the removals are the point rather than a
     # tidy-up. Both pinned doc sentences about a CTE name colliding with a join key:
     #
@@ -972,6 +1006,28 @@ const DOCERR_CASES = [
         "read/functions_and_dates.md — a period transform compared against a non-number",
         InvalidValueError,
         () -> DOCERR_RACE_PG.objects.filter("date__@quarter" => "abc").list(show_query = :dict),
+    ),
+    # #988. The filter's own value checks raise the type a field's formatter raises: the value is
+    # bound either way. Each claim was `FilterError` until then, and only the `@family` one ran here.
+    (
+        "read/functions_and_dates.md — a @year no date bound can express raises (#988)",
+        InvalidValueError,
+        () -> DOCERR_RACE_PG.objects.filter("date__@year__@gte" => 99999).list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md — a Bool @year raises (#988)",
+        InvalidValueError,
+        () -> DOCERR_RACE_PG.objects.filter("date__@year" => true).list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md — a @yyyy_mm that is not a calendar month raises (#988)",
+        InvalidValueError,
+        () -> DOCERR_RACE_PG.objects.filter("date__@yyyy_mm__@lte" => "1991-13").list(show_query = :dict),
+    ),
+    (
+        "read/filters_and_aggregates.md — a numeric JSON comparison against a non-number raises (#988)",
+        InvalidValueError,
+        () -> DOCERR_RESULT_PG.objects.filter("payload__wins__@gte" => "many").list(show_query = :dict),
     ),
     # #654 — the *Which Lookups Work on an Aggregate Alias* section says `@isnull` on a `Count` alias
     # raises when the query is built: COUNT never returns NULL, so the lookup could never match. (The
@@ -1437,6 +1493,21 @@ const DOCERR_CASES = [
         () -> with_tx_context(DocErrMockPostgres(), nothing) do
             without_foreign_keys(() -> nothing, DocErrMockPostgres())
         end,
+    ),
+    # #1074 / #1082 — `read/index.md` (*Distinct Results*): a filter on a window alias raises from
+    # `.count()` as from `.list()`, and a degenerate aggregate the pre-build check cannot place is
+    # refused rather than answered.
+    (
+        "read/index.md — a filter on a window alias raises from .count() as from .list() (#1074)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.values("r" => Rank(over = WindowOver(order_by = ["points"]))).
+            filter("r" => 1).count(show_query = :sql),
+    ),
+    (
+        "read/index.md — an aggregate beside a filtered Value(...) alias cannot be probed (#1082)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.values("n" => Count("resultid"), "k" => Value(1)).
+            filter("k" => 1).count(show_query = :sql),
     ),
     # #1049 — `api.md`, `read/index.md` (method table and *Pagination*) and the `object` docstring
     # promise QueryBuildError for a negative or `Bool` LIMIT / OFFSET, on `.page()` too.
@@ -1911,11 +1982,19 @@ const DOCERR_CASES = [
         end,
     ),
     (
-        "fields.md — @family other than 4 or 6 raises (#904)",
-        FilterError,
+        "fields.md — @family other than 4 or 6 raises (#904, #988)",
+        InvalidValueError,
         () -> let m = Model("docerr_pitwall_904b", id = IDField(), client_ip = GenericIPAddressField())
             m.connect_key = "docerr_pg"; m._module = Main
             q = m.objects; q.filter("client_ip__@family" => 5); q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — @prefixlen outside 0 to 128 raises (#988)",
+        InvalidValueError,
+        () -> let m = Model("docerr_pitwall_988a", id = IDField(), garage_lan = CIDRField())
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("garage_lan__@prefixlen" => 129); q.list(show_query = :dict)
         end,
     ),
     (

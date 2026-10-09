@@ -777,9 +777,10 @@ _err904(f) = try; f(); nothing; catch e; e; end
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # Refusals: everything the operators cannot serve is a FilterError before the server sees it
-  # A non-network column, a bad address, a family other than 4/6, a prefix outside 0-128, a list, a
-  # non-column expression, and a projection alias.
+  # Refusals: everything the operators cannot serve is refused before the server sees it. A filter
+  # shape they cannot serve — a non-network column, a list, a non-column expression, a projection
+  # alias — is a FilterError; a value they cannot bind — a bad address, a family other than 4/6, a
+  # prefix outside 0-128 — is an InvalidValueError (#988).
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "refusals" begin
     msg(e) = _plain28(sprint(showerror, e))
@@ -796,17 +797,23 @@ _err904(f) = try; f(); nothing; catch e; e; end
     # A value that is not an address.
     @test _err904(() -> _q904("client_ip__@net_contained" => "10.0.0.0/33").list(show_query = :dict)) isa PormG.InvalidValueError
     @test _err904(() -> _q904("client_ip__@net_contained" => 10).list(show_query = :dict)) isa PormG.InvalidValueError
-    # `@family` takes 4 or 6. (`true` is refused by the set alone; the `Bool` guard is what refuses
-    # `@prefixlen => false` below, since `false in 0:128`.)
-    for bad in (5, true, "4", 4.0)
-      e = _err904(() -> _q904("client_ip__@family" => bad).list(show_query = :dict))
-      @test e isa PormG.FilterError
-      @test occursin("takes 4 or 6, got another $(typeof(bad))", msg(e))
-    end
-    for bad in (-1, 129, false)
-      e = _err904(() -> _q904("garage_lan__@prefixlen" => bad).list(show_query = :dict))
-      @test e isa PormG.FilterError
-      @test occursin("takes a whole number from 0 to 128", msg(e))
+    # `@family` takes 4 or 6, and `@prefixlen` a whole number from 0 to 128. The value is bound, so a
+    # refusal is an `InvalidValueError` located on the column (#988): `:type` for a `Bool` or a
+    # non-integer, `:range` for an integer outside the set. The `Bool` guard is what refuses
+    # `@prefixlen => false`, since `false in 0:128`.
+    for (lookup, column, bad, kind) in (("family", "client_ip", 5, :range), ("family", "client_ip", true, :type),
+                                        ("family", "client_ip", "4", :type), ("family", "client_ip", 4.0, :type),
+                                        ("prefixlen", "garage_lan", -1, :range), ("prefixlen", "garage_lan", 129, :range),
+                                        ("prefixlen", "garage_lan", false, :type))
+      e = _err904(() -> _q904("$(column)__@$(lookup)" => bad).list(show_query = :dict))
+      @test e isa PormG.InvalidValueError
+      e isa PormG.InvalidValueError || continue
+      @test e.kind == kind
+      @test e.field == column && e.field_type !== nothing
+      @test occursin(lookup == "family" ? "The @family lookup takes 4 or 6" :
+                                          "The @prefixlen lookup takes a whole number from 0 to 128", msg(e))
+      # `"4"` is a substring of the reason itself, so only the other values can be checked for.
+      bad == "4" || @test !occursin(string(bad), msg(e))
     end
     # A list is not one network.
     e = with_logger(NullLogger()) do

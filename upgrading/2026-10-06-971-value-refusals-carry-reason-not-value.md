@@ -11,9 +11,9 @@
 malformed UUID or date, an integer other than 0/1 on a boolean — raises `InvalidValueError` in a
 `filter()` as it already did on a write. It used to be re-raised as `FilterError`. `FilterError`
 stays for what is wrong with the filter itself: an unknown lookup, an operator misused, a list where
-one value belongs, and a few range checks the filter makes itself rather than the field's formatter:
-a `@family` / `@prefixlen` value, a `@year` outside 1–9999, and a `@yyyy_mm` month that is not a
-calendar month on a `DateField` (`"1991-13"`).
+one value belongs. (This entry first kept a few value checks the lookup makes itself on
+`FilterError` — `@family` / `@prefixlen`, a `@year` bound, a `@yyyy_mm` calendar month; #988 moved
+them to `InvalidValueError` too, see its own entry.)
 
 | `M.Result.objects.filter(…)` | before | after |
 |---|---|---|

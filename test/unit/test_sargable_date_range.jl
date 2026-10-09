@@ -154,29 +154,50 @@ _sdr_where(res) = strip(split(res[:sql_text], " WHERE ")[end])
   end
 
   @testset "@year rejects values no date bound can express" begin
-    # Non-numeric string.
-    @test_throws PormG.FilterError _SdrEv.objects.filter("happened__@year__@gte" => "abc").list(show_query=:dict)
-    # Hex-looking string: tryparse(Int, "0x10") is 16 in Julia, so base=10 must be explicit or
-    # this silently becomes year 16.
-    @test_throws PormG.FilterError _SdrEv.objects.filter("happened__@year__@gte" => "0x10").list(show_query=:dict)
-    # Bool — `Bool <: Integer` in Julia, so `false` would silently become year 0.
-    @test_throws PormG.FilterError _SdrEv.objects.filter("happened__@year__@gte" => false).list(show_query=:dict)
-    @test_throws PormG.FilterError _SdrEv.objects.filter("happened__@year__@gte" => true).list(show_query=:dict)
-    # Fractional year — no single date bound represents it.
-    @test_throws PormG.FilterError _SdrEv.objects.filter("happened__@year__@gte" => 1991.7).list(show_query=:dict)
-    # Out of the range a rendered date literal can express: Dates.Date(0,1,1) stringifies to
-    # "0000-01-01" and Date(-5,1,1) to "-0005-01-01", which both backends reject at execution.
-    @test_throws PormG.FilterError _SdrEv.objects.filter("happened__@year__@gte" => 0).list(show_query=:dict)
-    @test_throws PormG.FilterError _SdrEv.objects.filter("happened__@year__@gte" => -5).list(show_query=:dict)
-    @test_throws PormG.FilterError _SdrEv.objects.filter("happened__@year__@gte" => 999999).list(show_query=:dict)
-    # Values too large for Int64: the range check must run BEFORE `Int(...)` narrowing, or these
-    # escape as a raw InexactError (not a PormGError, and its message never mentions a year).
-    # `isinteger(1e30)` is true, so the whole-year guard alone does not catch that one.
-    @test_throws PormG.FilterError _SdrEv.objects.filter("happened__@year__@gte" => big(10)^20).list(show_query=:dict)
-    @test_throws PormG.FilterError _SdrEv.objects.filter("happened__@year__@gte" => 1e30).list(show_query=:dict)
-    @test_throws PormG.FilterError _SdrEv.objects.filter("happened__@year__@gte" => typemax(UInt64)).list(show_query=:dict)
+    # #988: each refusal is an `InvalidValueError` — the value is bound — located on the field the
+    # caller wrote, with a `kind` per case and no trace of the value in the message.
+    cases = [
+      # Non-numeric string.
+      ("abc", :format),
+      # Hex-looking string: tryparse(Int, "0x10") is 16 in Julia, so base=10 must be explicit or
+      # this silently becomes year 16.
+      ("0x10", :format),
+      # Bool — `Bool <: Integer` in Julia, so `false` would silently become year 0.
+      (false, :type), (true, :type),
+      # Fractional year — no single date bound represents it.
+      (1991.7, :range),
+      # Out of the range a rendered date literal can express: Dates.Date(0,1,1) stringifies to
+      # "0000-01-01" and Date(-5,1,1) to "-0005-01-01", which both backends reject at execution.
+      (0, :range), (-5, :range), (999999, :range),
+      # Values too large for Int64: the range check must run BEFORE `Int(...)` narrowing, or these
+      # escape as a raw InexactError (not a PormGError, and its message never mentions a year).
+      # `isinteger(1e30)` is true, so the whole-year guard alone does not catch that one.
+      (big(10)^20, :range), (1e30, :range), (typemax(UInt64), :range),
+      # A `Number` that is not a `Real` (the ladder's last arm). A `Date` never gets that far: the
+      # rewrite admits only a String or a Number, and the transform path refuses anything else.
+      (1991 + 0im, :type),
+    ]
+    for (v, kind) in cases
+      e = try
+        _SdrEv.objects.filter("happened__@year__@gte" => v).list(show_query=:dict); nothing
+      catch err
+        err
+      end
+      @test e isa PormG.InvalidValueError
+      e isa PormG.InvalidValueError || continue
+      @test e.kind == kind
+      @test e.field == "happened"
+      @test e.field_type == "DATE"
+      @test !occursin(string(v), PormG.error_message(e))
+    end
     # Same guard on the yyyy_mm path — "0000-01" clears format_yyyy_mm's regex.
-    @test_throws PormG.FilterError _SdrEv.objects.filter("happened__@yyyy_mm__@gte" => "0000-01").list(show_query=:dict)
+    e = try
+      _SdrEv.objects.filter("happened__@yyyy_mm__@gte" => "0000-01").list(show_query=:dict); nothing
+    catch err
+      err
+    end
+    @test e isa PormG.InvalidValueError && e.kind == :range
+    @test !occursin("0000-01", PormG.error_message(e))
   end
 
   # =========================================================================
@@ -361,11 +382,18 @@ _sdr_where(res) = strip(split(res[:sql_text], " WHERE ")[end])
   end
 
   # =========================================================================
-  # 5. Invalid bounds raise FilterError, not a bare Dates.jl ArgumentError.
+  # 5. Invalid bounds raise InvalidValueError (#988), not a bare Dates.jl ArgumentError.
   # =========================================================================
-  @testset "Invalid calendar bounds raise FilterError" begin
+  @testset "Invalid calendar bounds raise InvalidValueError" begin
     # "2026-13" passes format_yyyy_mm's regex shape but is not a real calendar month.
-    @test_throws PormG.FilterError _SdrEv.objects.filter("happened__@yyyy_mm__@lte" => "2026-13").list(show_query=:dict)
+    e = try
+      _SdrEv.objects.filter("happened__@yyyy_mm__@lte" => "2026-13").list(show_query=:dict); nothing
+    catch err
+      err
+    end
+    @test e isa PormG.InvalidValueError
+    @test e isa PormG.InvalidValueError && e.kind == :range && e.field == "happened"
+    @test !occursin("2026-13", PormG.error_message(e))
   end
 
   # =========================================================================

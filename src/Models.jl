@@ -4013,9 +4013,9 @@ end
 #
 # Built on `format_number_sql` so the type ladder (Bool, Integer, Float, numeric string, array for
 # `__@in`, `missing`) stays in ONE place and these add only the range. The raised type is
-# `InvalidValueError`, matching the sibling transforms `@month` and `@day` exactly — #576 tracks
-# moving that whole family to the filter path's `FilterError`, and splitting it here would leave
-# #576 with a third behaviour to reconcile instead of one.
+# `InvalidValueError`, matching the sibling transforms `@month` and `@day` exactly. #971 kept that
+# family on `InvalidValueError` on the filter path too, and #988 moved `@year`'s own bounds there:
+# a refused bound value is an `InvalidValueError` whichever function refuses it.
 #
 # #955: a `Bool` is refused before `format_number_sql` sees it. That formatter maps `true` to `1` on
 # purpose (a numeric column given a flag), but no period is a flag: `"start_at__@hour" => true`

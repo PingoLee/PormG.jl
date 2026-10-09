@@ -89,10 +89,10 @@ const _Ev = _YmTestEvent
   # =========================================================================
   # 3. Reject malformed values (the accept/reject contract)
   # =========================================================================
-  # #576 split this testset's one type into two, along the line the taxonomy always drew: a FILTER
-  # reports `FilterError`, and the coercion helper it calls still reports `InvalidValueError`. The
-  # helper's type never changed — what changed is that the filter path now converts it instead of
-  # letting it escape, so the two halves below assert different types on purpose.
+  # #576 split this testset's one type into two: a FILTER reported `FilterError`, and the coercion
+  # helper it calls `InvalidValueError`. #971 joined them again — a value the field refuses is an
+  # `InvalidValueError` on a filter as on a write — and #988 extended that to the bucket's own
+  # calendar check, so both halves below assert the same type.
   @testset "Malformed bucket values are refused (InvalidValueError from a filter and from the formatter, #971)" begin
     # 4-digit string (year only) — missing the month component.
     @test_throws PormG.InvalidValueError _Ev.objects.filter("happened__@yyyy_mm" => "2025").list(show_query=:dict)

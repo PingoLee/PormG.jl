@@ -404,14 +404,22 @@ _format_filter_value(formatter, values, operator::AbstractString) =
 # **Call it only from inside a `catch`.** The non-`InvalidValueError` arm is `rethrow(e)`, which is
 # legal in a function only while a handler is dynamically in scope; called anywhere else it raises
 # `"rethrow(exc) not allowed outside a catch block"` and masks the error it was handed. There are
-# exactly two callers, both inside a `catch`: `_guarded_format` below and the sargable rewrite's
-# bounds guard. (The `BETWEEN` arm was a third until #654 routed it through `_guarded_format`.)
+# exactly four callers, all inside a `catch`: `_guarded_format` below, the sargable rewrite's bounds
+# guard, the numeric JSON comparison's RHS (#988), and the date-operand guard in
+# `expression_render.jl`. (The `BETWEEN` arm was another until #654 routed it through
+# `_guarded_format`.)
 #
 # #971: a refused value raises `InvalidValueError` here as on a write, located by this funnel —
 # filter, field and column type — and never quoting the value. It used to be re-raised as a
 # `FilterError` ending in "Please check the value: <value>", which put the bound value (a password,
 # a token) in a message an app may return to an HTTP client. `FilterError` stays for what is wrong
 # with the filter's SHAPE — a lookup, an operator — not with a value.
+#
+# #988 made that boundary a rule rather than a consequence of which function refused: **a value
+# that would be bound as a parameter is refused with `InvalidValueError`; an argument that shapes
+# the SQL (an `isnull` flag, a lookup, a list where one value belongs) with `FilterError`.** The
+# filter's own value checks — a `@year` or `@yyyy_mm` bound, `@family`/`@prefixlen`, a numeric JSON
+# comparison — therefore raise `InvalidValueError` too, though no field formatter makes them.
 # A label that is not a name — an `F` expression on the left of a comparison — is not printed: its
 # `string` is a struct dump, operands included.
 function _locate_filter_refusal(e, label, type_label; subject::AbstractString = "field")
@@ -440,10 +448,11 @@ _opt_label(x) = x === nothing ? nothing : string(x)   # refusal-value-ok: a fiel
 # 1 plain model field). Exactly ONE -- the plain-field arm -- sat inside a `try`. #576 routed the
 # other 12 through here.
 #
-# One further site calls a formatter DIRECTLY rather than through `_format_filter_value`: the
-# sargable rewrite guards a bounds computation rather than a formatter call (guarded by #576), and
-# calls `_locate_filter_refusal` directly, so the message and the type check still have one
-# definition. The `BETWEEN` arm was the other until #654 — its two operands now format here, as one
+# Three further sites guard something other than a `_format_filter_value` call and call
+# `_locate_filter_refusal` directly, so the message and the type check still have one definition:
+# the sargable rewrite's bounds computation (guarded by #576), the date-operand guard in
+# `expression_render.jl` (`_format_date_operand`), and the numeric JSON comparison's RHS coercion
+# (#988). The `BETWEEN` arm was the other until #654 — its two operands now format here, as one
 # iterable lookup, which is what keeps "bind neither until both succeed" (#467) true in both clauses.
 #
 # Both labels are arguments because the sites cannot agree on where they come from: a model field

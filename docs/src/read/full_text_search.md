@@ -408,11 +408,20 @@ M.Driver.objects.filter("surname__@search" => SearchQuery("senna"; config = "sim
 | `"col__@search" => "text"` (no configuration) | none: one-argument `to_tsvector` depends on a server setting, so PostgreSQL refuses to index it |
 | `"doc__@search"` on `"doc" => SearchVector("a", "b"; config = "cfg")` | `search_vector_expression("a", "b"; config = "cfg")` |
 | the same with `weight = "A"` | `search_vector_expression("a", "b"; config = "cfg", weight = "A")` |
+| `"doc__@search"` on `"doc" => SearchVector("a"; config = "cfg")` | `search_vector_expression("a"; config = "cfg", form = :vector)` |
 
 The second row is the reason to always pass a configuration on a large table. The configuration you
 give the helper must be the query's, and it is required: without one there is no index to declare. Its columns are database column names, a field's `db_column`
 where it sets one. A configuration that is not a name raises `InvalidValueError`, as it does in the
-query, and a column that is not an identifier, or no configuration, raises `ModelDefinitionError`.
+query, and a column that is not an identifier, no configuration, or an unknown `form` raises
+`ModelDefinitionError`.
+
+One column without a weight is the one shape with two expressions. The lookup renders it bare,
+`to_tsvector('simple'::regconfig, "surname")`, and a `SearchVector` alias casts and `COALESCE`s it,
+`to_tsvector('simple'::regconfig, COALESCE(("surname")::text, ''))`, so a NULL column is an empty
+document rather than NULL. The helper returns the lookup's by default. Pass `form = :vector` for an
+index that serves the alias (the last row). With several columns or a weight there is only the
+`SearchVector` form, and `form` changes nothing.
 
 Only the lookup uses an index. `SearchRank` and `SearchHeadline` are computed for each row the query
 keeps, so filter with an indexed `@search` first and rank or headline what is left.
@@ -424,9 +433,6 @@ These are deliberate for now. Each is refused with a typed error, not run as som
 - **A `SearchVector` or `SearchQuery` is not a value.** A `SearchVector` may be projected under a
   name (above). Otherwise, projecting either, comparing it, or wrapping it in another function raises
   `QueryBuildError`, and putting one on the right of any lookup but `@search` raises `FilterError`.
-- **A single-column `SearchVector` alias is not the lookup's expression.** `SearchVector("surname")`
-  is `COALESCE`d and cast, so an index on `search_vector_expression("surname"; config = …)` serves
-  `"surname__@search"` but not that alias. Search the column itself.
 - **No generated `tsvector` column.** A `SearchVectorField` is filled by `update`, not by the
   database. A column that keeps itself current (`GENERATED ALWAYS AS (to_tsvector(…)) STORED`) is
   not supported yet.

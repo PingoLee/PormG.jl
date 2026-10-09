@@ -494,6 +494,37 @@ end
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # Index helper: form = :vector is the one-column SearchVector alias's expression (#1032)
+  # One unweighted column has two renderings: the lookup's bare `to_tsvector(cfg, col)` and a
+  # SearchVector's COALESCE'd one. `form` names which query the index serves, so an index for
+  # `values("doc" => SearchVector("surname")).filter("doc__@search" => …)` is declarable.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "search_vector_expression(…; form = :vector) is the one-column alias's document" begin
+    vec = SearchVector("surname"; config = "simple")
+    r = _q31("doc__@search" => "senna"; vals = Any["driverid", "doc" => vec])
+    # The WHERE predicate's document, with the table alias stripped as an index expression has none.
+    where_doc = match(r"WHERE (to_tsvector\(.*?\)\)) @@", r[:sql_text]).captures[1]
+    @test Models.search_vector_expression("surname"; config = "simple", form = :vector) ==
+          replace(where_doc, r"\"Tb\"\." => "")
+    # The default is still the lookup's form, which that alias does NOT render.
+    @test Models.search_vector_expression("surname"; config = "simple") ==
+          Models.search_vector_expression("surname"; config = "simple", form = :lookup) ==
+          "to_tsvector('simple'::regconfig, \"surname\")"
+    @test Models.search_vector_expression("surname"; config = "simple") != replace(where_doc, r"\"Tb\"\." => "")
+    # Several columns, or a weight, have SearchVector's document alone: both forms give it.
+    for (cols, kw) in ((("forename", "surname"), (;)), (("surname",), (; weight = "A")))
+      @test Models.search_vector_expression(cols...; config = "simple", form = :vector, kw...) ==
+            Models.search_vector_expression(cols...; config = "simple", form = :lookup, kw...)
+    end
+    # Any other form, including the string spelling, is refused where the index is declared.
+    for bad in (:coalesce, "vector", nothing)
+      e = _err31(() -> Models.search_vector_expression("surname"; config = "simple", form = bad))
+      @test e isa ModelDefinitionError
+      @test occursin("form is :lookup", _plain31(sprint(showerror, e)))
+    end
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # Weights: v1 + v2 is one document, each half with its own config and weight
   # Django's CombinedSearchVector. It renders `(v1 || v2)` and binds nothing of its own, so the only
   # parameters are the operands' own, in text order, before the query's text.

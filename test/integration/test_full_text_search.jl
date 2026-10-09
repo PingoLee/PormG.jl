@@ -238,6 +238,9 @@ _fts31_err(f) = try f(); nothing catch e; e end
         #
         # #1021: a second index, on the two-column document, serves `@search` on a SearchVector alias —
         # the same helper, the same text the alias predicate renders.
+        #
+        # #1032: a third, on ONE column with `form = :vector`, serves a single-column SearchVector
+        # alias, whose document is COALESCE'd and so is not the lookup's bare expression.
         @testset "GIN indexes from search_vector_expression serve @search, on a column and on an alias" begin
             drop() = try; PormG.ConnectionPool.fetch(pool, Dialect.drop_table(pool, FTS31_TABLE)); catch; end
             model = Models.Model(FTS31_TABLE;
@@ -247,7 +250,10 @@ _fts31_err(f) = try f(); nothing catch e; e end
                 indexes = [Models.Index(expressions = (Models.search_vector_expression("body"; config = "simple"),), method = "gin",
                                         name = "pormg_fts31_body_tsv"),
                            Models.Index(expressions = (Models.search_vector_expression("title", "body"; config = "simple"),),
-                                        method = "gin", name = "pormg_fts31_doc_tsv")])
+                                        method = "gin", name = "pormg_fts31_doc_tsv"),
+                           Models.Index(expressions = (Models.search_vector_expression("title"; config = "simple",
+                                                                                       form = :vector),),
+                                        method = "gin", name = "pormg_fts31_title_vec")])
             model.connect_key = PORMG_DB_FOLDER
             schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
                 Symbol(FTS31_TABLE) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => model, :exist => false))
@@ -315,6 +321,19 @@ _fts31_err(f) = try f(); nothing catch e; e end
                     filter("doc__@search" => "senna")
                 @test length(swapped.list()) == 3
                 @test !occursin("pormg_fts31_doc_tsv", plan_of(swapped))
+
+                # #1032: one column as an alias. Its document is COALESCE'd, so only the `form = :vector`
+                # index serves it. One row has "senna" in its title.
+                one = model.objects
+                one.values("id", "doc" => SearchVector("title"; config = "simple")).filter("doc__@search" => "senna")
+                @test length(one.list()) == 1
+                @test occursin("pormg_fts31_title_vec", plan_of(one))
+                # The control: the lookup on the same column renders the bare `to_tsvector(cfg, title)`,
+                # another expression, so the `:vector` index does not serve it.
+                lookup = model.objects
+                lookup.filter("title__@search" => SearchQuery("senna"; config = "simple")).values("id")
+                @test length(lookup.list()) == 1
+                @test !occursin("pormg_fts31_title_vec", plan_of(lookup))
             finally
                 drop()
             end

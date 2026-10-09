@@ -1249,6 +1249,12 @@ const DOCERR_CASES = [
         InvalidValueError,
         () -> PormG.Models.search_vector_expression("surname"; config = "simple'"),
     ),
+    # #1032 — `form` names the query an index serves: `:lookup` or `:vector`, nothing else.
+    (
+        "read/full_text_search.md + Models.search_vector_expression — an unknown form",
+        ModelDefinitionError,
+        () -> PormG.Models.search_vector_expression("surname"; config = "simple", form = :coalesce),
+    ),
     (
         "read/full_text_search.md — `@search` on a projection alias raises FilterError",
         FilterError,

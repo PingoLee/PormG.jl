@@ -409,8 +409,8 @@ _exists_projection(object::SQLObject, instruction::SQLInstruction, keep::Bool)::
 # The terminals that cannot honor a slice refuse it instead of ignoring it. `last()`, `earliest()` and
 # `latest()` reorder the rows, which changes which rows the slice holds — Django refuses them too.
 # `count(column)` and `aggregate()` refuse it by design (#1066): Django's `aggregate()` (its spelling of
-# both) computes over the slice through a derived table, but no consuming app reached either terminal
-# on a sliced handler, and the same result is one call away — aggregate the query before slicing it.
+# both) computes over the slice through a derived table, but here the same result is one call away —
+# aggregate the query before slicing it — so the derived table is not worth building.
 function _refuse_sliced(object::SQLObject, terminal::AbstractString, why::AbstractString)
   _is_sliced(object) || return nothing
   throw(QueryBuildError(

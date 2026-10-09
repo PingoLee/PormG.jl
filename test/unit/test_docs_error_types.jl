@@ -1147,6 +1147,50 @@ const DOCERR_CASES = [
         QueryBuildError,
         () -> DOCERR_DRIVER_PG.objects.filter("driverid" => 1).select_for_update().explain(),
     ),
+    # #169 — `select_for_update(of = …)` (write/transaction.md, "Locking only some tables"): a target
+    # the query does not join, a LEFT-joined target (`driverid` is a nullable FK here), any `of` on a
+    # query with a RIGHT/FULL join, and an empty `of` raise QueryBuildError; a name that is both a
+    # relation path and a cjoin_on alias raises AmbiguousFieldError. All before execution, so the
+    # mock needs no driver.
+    (
+        "write/transaction.md — of = a relation the query does not join raises QueryBuildError",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.values("resultid").select_for_update(of = ("driverid",)).
+            list(show_query = :sql),
+    ),
+    (
+        "write/transaction.md — of = a LEFT-joined target raises QueryBuildError",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.filter("driverid__nationality" => "Brazilian").values("resultid").
+            select_for_update(of = ("driverid",)).list(show_query = :sql),
+    ),
+    (
+        "write/transaction.md — any of on a query with a RIGHT or FULL join raises QueryBuildError",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.on("driverid", join_type = "RIGHT")
+            q.values("resultid", "driverid__nationality")
+            q.select_for_update(of = ("self",))
+            q.list(show_query = :sql)
+        end,
+    ),
+    (
+        "write/transaction.md — an empty of raises QueryBuildError",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.select_for_update(of = ()),
+    ),
+    (
+        "write/transaction.md — of = a name that is both a relation path and a cjoin_on alias raises AmbiguousFieldError",
+        AmbiguousFieldError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.cjoin_on(DOCERR_DRIVER_PG, alias = "driverid", on = [Joined("driverid", "driverid") == F("driverid")])
+            q.values("resultid")
+            q.select_for_update(of = ("driverid",))
+            q.list(show_query = :sql)
+        end,
+    ),
     # Intentional PG/SQLite divergence: these pages tell the reader the lookup is PostgreSQL-only
     # and raises on SQLite. Asserting it on the SQLite mock keeps the documented divergence honest.
     (

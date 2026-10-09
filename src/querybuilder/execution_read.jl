@@ -167,6 +167,108 @@ function _limit_offset_sql(limit::Union{Nothing,Integer}, offset::Integer, param
   end
 end
 
+# #169: `select_for_update(of = …)` targets → the QUOTED FROM-clause aliases `FOR UPDATE OF` names.
+#
+# Runs after `build()`, because only then does every join the targets may name exist, and on BOTH
+# engines — SQLite renders no lock, but a target that cannot resolve is a bug in the caller's code,
+# and the development engine is where it should surface. A name is only ever a lookup key: what is
+# rendered is the alias the build generated (or a `cjoin_on` alias `_validate_identifier` accepted at
+# declaration), so no caller text reaches the SQL.
+#
+# Three kinds of target, each in its own namespace — `"self"`, a relation path, a `cjoin_on` alias.
+# A name in more than one is refused rather than ranked (#492): the alias namespace exists precisely
+# because an alias may be spelled like a relation (#484), and guessing which was meant would lock
+# the wrong table silently. A relation the query never joins is refused too, not joined on the spot:
+# a reverse relation joined only to be locked would multiply the rows the read returns.
+function _lock_target_aliases(instruction::SQLInstruction, names::Vector{String})::Vector{String}
+  obj = instruction.object
+  by_path = something(instruction.join_alias_by_path, Dict{String,String}())
+  _refuse_lock_targets_beside_right_joins(instruction)
+  aliases = String[]
+  for name in names
+    segments = split(name, "__")
+    canonical = _canonical_join_path(obj, name)
+    # Every segment must be a relation: `driverid__surname` canonicalizes to `driverid`, which would
+    # otherwise lock the driver while the caller named a column.
+    is_path = !isempty(canonical) && length(split(canonical, "__")) == length(segments)
+    is_alias = haskey(obj.alias_join, name)
+    is_self = name == "self"
+    if count((is_self, is_path, is_alias)) > 1
+      meanings = String[]
+      is_self && push!(meanings, "the base model's own target")
+      is_path && push!(meanings, "a relation path on $(obj.model.name)")
+      is_alias && push!(meanings, "a cjoin_on alias")
+      # The only remedy PormG can offer is renaming the alias; a model relation literally named
+      # "self" has no spelling in `of` at all, and saying so beats advice that does not apply.
+      remedy = is_alias ? "Rename the cjoin_on alias." :
+        "A relation named \"self\" cannot be told apart from the base model in `of`."
+      throw(AmbiguousFieldError(
+        "select_for_update(of = …): \"$(name)\" is ambiguous — it names $(join(meanings, " and ")), " *
+        "so PormG will not choose which table to lock. $(remedy)"))
+    end
+    alias = if is_self
+      instruction.alias
+    elseif is_alias
+      name
+    elseif is_path && haskey(by_path, canonical)
+      by_path[canonical]
+    else
+      # Only what would be accepted: a LEFT-joined path or alias would be refused the moment the
+      # caller took the suggestion.
+      lockable(a) = (i = findfirst(r -> r.alias_b == a, instruction.row_join);
+                     i === nothing || !hasproperty(instruction.row_join[i], :how) ||
+                     uppercase(instruction.row_join[i].how) != "LEFT")
+      choices = vcat(["self"], sort!([p for (p, a) in by_path if lockable(a)]),
+                     [a for a in keys(obj.alias_join) if lockable(a)])
+      what = is_path ? "is a relation on $(obj.model.name) that this query does not join" :
+                       "is not a relation path or cjoin_on alias of this query"
+      throw(QueryBuildError(
+        "select_for_update(of = …): \"$(name)\" $(what). A lock target must name a table the query " *
+        "already reads. Choices: $(join(choices, ", "))."))
+    end
+    _refuse_nullable_lock_target(instruction, name, alias)
+    alias in aliases || push!(aliases, alias)
+  end
+  return [quote_identifier(a, instruction.connection) for a in aliases]
+end
+
+# PostgreSQL refuses `FOR UPDATE OF` the nullable side of an outer join. A nullable foreign key and
+# every hop after one render LEFT (`build_joins.jl`), so this is ordinary input, not an edge case —
+# refused here, on both engines, so it fails during development on SQLite too.
+function _refuse_nullable_lock_target(instruction::SQLInstruction, name::String, alias::String)
+  i = findfirst(r -> r.alias_b == alias, instruction.row_join)
+  i === nothing && return nothing   # the base relation, which no join row describes
+  row = instruction.row_join[i]
+  hasproperty(row, :how) || return nothing
+  # FULL never reaches here: `_refuse_lock_targets_beside_right_joins` refused the statement first.
+  uppercase(row.how) == "LEFT" || return nothing
+  throw(QueryBuildError(
+    "select_for_update(of = …): \"$(name)\" is joined $(uppercase(row.how)) — a nullable foreign " *
+    "key, a hop after one, or an explicit join_type — and PostgreSQL cannot lock the nullable side " *
+    "of an outer join. Leave it out of `of` — of = (\"self\",) locks the base rows alone — or lock " *
+    "that table with a query of its own."))
+end
+
+# A RIGHT or FULL join puts what is joined BEFORE it on the nullable side — the base table included —
+# which a per-row check cannot see: the target's own row may be INNER. Which tables that reaches
+# depends on emission order, which `cjoin_on` dependencies and ON-clause relocation reorder after
+# the rows are built, so `of` is refused for the whole statement rather than guessed at per target.
+# That also refuses a target PostgreSQL would accept (the right side of a lone RIGHT join): the
+# cost of not tracking the order, and a loud one.
+function _refuse_lock_targets_beside_right_joins(instruction::SQLInstruction)
+  for row in instruction.row_join
+    hasproperty(row, :how) || continue
+    how = uppercase(row.how)
+    how in ("RIGHT", "FULL") || continue
+    throw(QueryBuildError(
+      "select_for_update(of = …) cannot be used on a query with a $(how) JOIN (to \"$(row.b)\"): it " *
+      "puts the tables joined before it, the base table included, on the nullable side of an outer " *
+      "join, which PostgreSQL cannot lock. Use INNER or LEFT joins, or lock the rows with a query " *
+      "of their own."))
+  end
+  return nothing
+end
+
 function query(q::SQLObjectHandler; 
   table_alias::Union{Nothing, SQLTableAlias} = nothing,
   connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing,
@@ -286,11 +388,14 @@ function query(q::SQLObjectHandler;
   let fu = q.object.for_update
     if fu !== nothing
       # PostgreSQL rejects FOR UPDATE + DISTINCT; fail early with a friendly message. SQLite is
-      # exempt — there the lock renders "" (pure no-op), so select_for_update never raises (#26).
+      # exempt — there the lock renders "" (pure no-op), so DISTINCT does not raise (#26). An `of`
+      # target that does not resolve raises on both engines (#169): that is a bug in the call, not
+      # a lock the engine lacks.
       if q.object.distinct && instruction.connection isa PormGPostgres
         throw(QueryBuildError("select_for_update() cannot be combined with distinct() — a locking read must return concrete rows."))
       end
-      print(io, Dialect.for_update_clause(fu.nowait, fu.skip_locked, fu.no_key, instruction.connection))
+      of_aliases = isempty(fu.of) ? String[] : _lock_target_aliases(instruction, fu.of)
+      print(io, Dialect.for_update_clause(fu.nowait, fu.skip_locked, fu.no_key, of_aliases, instruction.connection))
     end
   end
 

@@ -618,6 +618,113 @@ settings = PormG.config[PORMG_DB_FOLDER]
     M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # select_for_update(of = …): which tables a locked read actually locks (#169)
+  # Without `of`, PostgreSQL locks every table in FROM — the joined `driver` row too — and refuses a
+  # LEFT-joined (nullable FK) table outright. With `of`, only the named aliases are locked. Proven by
+  # CONTENTION, not by SQL shape: a second transaction tries the same rows with NOWAIT, which fails
+  # (lock_not_available, 55P03) exactly when the first one holds the lock.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "select_for_update(of = …) locks only the named tables (#169)" begin
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+    M.Just_a_test_deletion.objects.create("name" => "lockme", "test_result" => nothing)
+
+    # One real result and its driver, read from the fixture rather than hard-coded.
+    pick = M.Result.objects.
+      values("resultid", "driverid", "driverid__nationality").
+      order_by("resultid").
+      limit(1).
+      list() |> first
+    rid, did, nat = pick[:resultid], pick[:driverid], pick[:driverid__nationality]
+    # The locked read: one result row, reached through a `__` filter that JOINs `driver`.
+    locked_read(; kw...) = M.Result.objects.
+      filter("resultid" => rid, "driverid__nationality" => nat).
+      values("resultid").
+      select_for_update(; kw...)
+
+    if adapter_name == "PostgreSQL"
+      # Run `probe` in a SECOND transaction while `read` holds its lock in the first, and report
+      # whether the probe found its rows locked. The probe task is created OUTSIDE the first block:
+      # a task spawned inside it would join that transaction and its connection (see "Tasks that
+      # outlive their block" in transaction.md) instead of contending with it. NOWAIT keeps a
+      # wrong expectation from turning into a hang.
+      function contended(read, probe)
+        go = Channel{Bool}(1)
+        probe_task = Threads.@spawn begin
+          take!(go)
+          try
+            PormG.atomic(PORMG_DB_FOLDER) do
+              probe().select_for_update(nowait = true).list()
+            end
+            :free
+          catch e
+            (e isa PormG.OperationalError && e.sqlstate == "55P03") ? :locked : e
+          end
+        end
+        PormG.atomic(PORMG_DB_FOLDER) do
+          @test length(read().list()) == 1
+          put!(go, true)
+          fetch(probe_task)
+        end
+      end
+      driver_row = () -> M.Driver.objects.filter("driverid" => did).values("driverid")
+      result_row = () -> M.Result.objects.filter("resultid" => rid).values("resultid")
+
+      # Control: a plain lock also locks the joined driver row. This is the over-locking `of` fixes,
+      # and it is what makes the next assertion able to fail.
+      @test contended(() -> locked_read(), driver_row) == :locked
+      # of = ("self",): the driver row stays free, while the result row really is locked.
+      @test contended(() -> locked_read(of = ("self",)), driver_row) == :free
+      @test contended(() -> locked_read(of = ("self",)), result_row) == :locked
+      # of names the relation path: the driver row is locked through its generated alias.
+      @test contended(() -> locked_read(of = ("self", "driverid")), driver_row) == :locked
+
+      # A nullable FK joins LEFT, and PostgreSQL refuses to lock the nullable side: a plain lock
+      # fails at the database, while of = ("self",) runs.
+      nullable_read(; kw...) = M.Just_a_test_deletion.objects.
+        filter("name" => "lockme").
+        values("id", "test_result__points").
+        select_for_update(; kw...)
+      db_err = try
+        PormG.atomic(PORMG_DB_FOLDER) do
+          nullable_read().list()
+        end
+        nothing
+      catch e
+        e
+      end
+      @test db_err isa PormG.DatabaseError
+      @test occursin("nullable side of an outer join", error_message(db_err))
+      rows = PormG.atomic(PORMG_DB_FOLDER) do
+        nullable_read(of = ("self",)).list()
+      end
+      @test length(rows) == 1
+    else
+      # SQLite: no lock is rendered, so `of` is a no-op — but the rows still come back.
+      @test length(locked_read(of = ("self", "driverid")).list()) == 1
+    end
+
+    # Both engines: a target that cannot be locked is refused before the database sees the query —
+    # an unknown name, and the LEFT-joined side of a nullable FK.
+    bad = try
+      locked_read(of = ("self", "raceid")).list(show_query = :sql); nothing
+    catch e; e end
+    @test bad isa PormG.QueryBuildError
+    @test occursin("does not join", error_message(bad))
+    left = try
+      M.Just_a_test_deletion.objects.
+        filter("name" => "lockme").
+        values("id", "test_result__points").
+        select_for_update(of = ("test_result",)).
+        list(show_query = :sql)
+      nothing
+    catch e; e end
+    @test left isa PormG.QueryBuildError
+    @test occursin("is joined LEFT", error_message(left))
+
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+  end
+
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -388,6 +388,11 @@ function _apply_many_to_many_branch(
   # instead of a KeyError here and a good error three lines later.
   last_field = size(vector, 1) == 2 ? get(foreign_model.fields, vector[2], nothing) : nothing
   tb_alias = _insert_many_to_many_joins(relation, instruct, parent_table, parent_alias, join_path, previus_how=previus_how, track_path=track_path)
+  # #169: the path names the RELATED row; the link-table row is internal and is never a lock target.
+  # `track_path` is false exactly on a CTE build, which `_finish_hop!` keeps out of the map too. The
+  # gate comes first so a build with no `of` never pays for canonicalizing the path (#41).
+  track_path && _records_lock_targets(instruct) &&
+    _record_join_alias!(instruct, _join_key(instruct, join_path), tb_alias)
   # #74: the related table reached through a many-to-many is the "many-side". Flag the (deduped)
   # row_join entry so the fan-out guard can refuse silently-inflated aggregates over base columns.
   row_join = _flag_to_many!(instruct.row_join, tb_alias)
@@ -596,7 +601,27 @@ function _finish_hop!(instruct::SQLInstruction, row::JoinRow, join_path::String;
   join_filters = cte ? nothing : get(instruct.join_conditions, key, nothing)
   row = _with_config(row, join_type_override, join_filters)
   alias = _insert_join(instruct.row_join, row, instruct.row_path, join_path; track_path = !cte)
+  # #169: `alias` is the dedup SURVIVOR's, so every spelling of one relation maps to the row emitted.
+  cte || _record_join_alias!(instruct, key, alias)
   return (alias, row)
+end
+
+# #169: whether this build's lock names `of` targets — the only reader of `join_alias_by_path`, so the
+# map is not even allocated otherwise. A subquery is its own build with its own object, and answers
+# for its own lock.
+function _records_lock_targets(instruct::SQLInstruction)::Bool
+  obj = instruct.object
+  obj isa SQLObjectQuery || return false
+  fu = obj.for_update
+  return fu !== nothing && !isempty(fu.of)
+end
+
+function _record_join_alias!(instruct::SQLInstruction, canonical_path::String, alias::String)
+  _records_lock_targets(instruct) || return nothing
+  map = instruct.join_alias_by_path
+  map === nothing && (map = instruct.join_alias_by_path = Dict{String,String}())
+  map[canonical_path] = alias
+  return nothing
 end
 
 function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bool=true, cte::Bool=false)

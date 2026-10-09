@@ -483,6 +483,12 @@ end
   # df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
   row_join::Vector{JoinRow} = JoinRow[] # the materialized joins, one typed row each (#487)
   row_path::Vector{String} = [] # array of path to map the row_join (model__model__ etc)
+  # #169: the alias each relation path's join ended up under, keyed by the CANONICAL path — what a
+  # `select_for_update(of = …)` target resolves through. `row_path` cannot answer that: it is not
+  # aligned with `row_join` and records nothing on a dedup hit. Written by `_finish_hop!` and the M2M
+  # branch only when this query's lock names an `of` target (`_records_lock_targets`), so the other
+  # builds never allocate it (#41).
+  join_alias_by_path::Union{Nothing,Dict{String,String}} = nothing
   # #977: each `on()` / `cjoin(filters = …)` path's conditions, BOUND — every left-side column lowered
   # onto the path, every check run — by `_bind_join_conditions!` before anything renders, and its
   # explicit `join_type`. Both keyed by the CANONICAL path (`_canonical_join_path`: the FK short form
@@ -727,12 +733,16 @@ end
 # a `ForUpdateClause` renders `FOR [NO KEY] UPDATE [NOWAIT|SKIP LOCKED]` on PostgreSQL and is a
 # silent no-op on SQLite (which has no row-level locking). Immutable/set-once — the
 # `_select_for_update!` mutator always builds a fresh clause, so it is shared by reference on copy.
-# (An `OF <table>` target is a deferred follow-up: it must name the query's generated FROM alias,
-# which is not yet exposed — see the row-locking follow-up issue.)
+#
+# #169: `of` holds the lock targets AS WRITTEN — `"self"`, a relation path, a `cjoin_on` alias — and
+# never reaches the SQL. PostgreSQL's `OF` names a FROM-clause ALIAS, not a table, and PormG's aliases
+# are generated during the build, so the targets are resolved to aliases only after it
+# (`_lock_target_aliases`); a name stored here is a lookup key and nothing else. Empty = no `OF`.
 struct ForUpdateClause
   nowait::Bool
   skip_locked::Bool
   no_key::Bool                 # PostgreSQL: FOR NO KEY UPDATE (weaker lock, allows FK-referencing inserts)
+  of::Vector{String}
 end
 
 # #484 — one `cjoin(...)` / `on(...)` entry, keyed in `custom_join` by a JOIN PATH on the base model.
@@ -1910,7 +1920,8 @@ Each mutates the handler and returns it, so calls can be chained or accumulated 
   `__` path raise `AmbiguousFieldError`, and the handle selects the CTE side (#492)
 - every `join_type` above accepts `"INNER"`, `"LEFT"`, `"RIGHT"` or `"FULL"`; anything else,
   `"CROSS"` included, raises `QueryBuildError` at the call (#474)
-- `.select_for_update(; nowait, skip_locked, no_key)` — `SELECT … FOR UPDATE` row lock
+- `.select_for_update(; nowait, skip_locked, no_key, of)` — `SELECT … FOR UPDATE` row lock; `of`
+  limits it to `"self"`, relation paths the query joins, and `cjoin_on` aliases (`FOR UPDATE OF …`)
 - `.copy()` — deep copy, to branch a chain without disturbing the original
 
 # Terminal methods

@@ -390,16 +390,23 @@ _probe_limit(limit::Union{Nothing,Integer}, k::Integer)::Integer = limit === not
 #   `SELECT DISTINCT *`, and an offset `exists()` skipped rows `list()` collapses);
 # - an aggregating one returns a row per group (`count()` counted the rows, and a HAVING filter on the
 #   alias raised `UnknownFieldError` because the alias was gone).
-# Asked before the build, from `_contains_agg` (the predicate `get_select_query` sets GROUP BY from),
-# because a kept projection binds its values under `:select` and must then be printed. `distinct` is
+# Asked before the build, from `_contains_agg` (the predicate `get_select_query` sets the aggregate
+# flag from), because a kept projection binds its values under `:select` and must then be printed. `distinct` is
 # the caller's choice: `exists()` without an offset gets the same answer from the non-distinct rows.
 #
 # #1082: except an aggregate with no GROUP BY and no HAVING (`values("t" => Count("id"))`). It is one
 # row whatever matched — `COUNT` over no rows is 0, not zero rows — so keeping it made `Exists(sub)`
-# and `exists()` always true and `count()` always 1. Such a projection is cleared, as `v0.7.0` cleared
-# every projection and as Django's `Exists` clears the SELECT, so all three ask about the matched rows
-# and `exists() == (count() > 0)` holds. A HAVING (a filter on the alias) makes the row optional, so
-# that projection is kept; `_refuse_degenerate_probe` catches a shape this cannot predict.
+# always true. `Exists(sub)` clears such a projection (`clear_degenerate`), as Django's `Exists` clears
+# the SELECT and keeps grouping and HAVING, so it asks whether any row matched. A HAVING (a filter on
+# the alias) makes the row optional, so that projection is kept; `_refuse_degenerate_probe` catches a
+# shape this cannot predict.
+#
+# #1100: the terminals do not clear it. Answering for the matched rows made `count()` return N where
+# `list()` returns one row, and 1 once a true HAVING was added — two kinds of answer in one query
+# family. They keep it, build it, and `_refuse_constant_terminal` refuses what builds as that one row,
+# so `count() == length(list())` holds with no exception and `exists() == (count() > 0)` still does:
+# both raise. Building first also makes a projection `list()` refuses (#798's mixed grouping) raise
+# the same error from them.
 #
 # #1074: and a projection a filter names by alias is kept too, whatever it projects. The filter
 # resolves the alias through the projection (`get_filter_query` → the projection memo), so clearing
@@ -409,8 +416,8 @@ _probe_limit(limit::Union{Nothing,Integer}, k::Integer)::Integer = limit === not
 # without the projection (Django inlines it the same way) gives the same rows with leaner SQL, but
 # alias resolution needs the memo entry only the printed SELECT creates. Keeping it was chosen for
 # cost and safety, not on concept.
-_projection_shapes_rows(object::SQLObject; distinct::Bool)::Bool =
-  !isempty(object.values) && !_degenerate_aggregate(object) &&
+_projection_shapes_rows(object::SQLObject; distinct::Bool, clear_degenerate::Bool = true)::Bool =
+  !isempty(object.values) && !(clear_degenerate && _degenerate_aggregate(object)) &&
   (distinct || _contains_agg(object.values) || _filters_name_alias(object))
 
 # #1082: does any filter name a projection by its output name? Asked of the declaration, before the
@@ -449,12 +456,17 @@ _declaration_instruction(object::SQLObject) =
   InstructionObject(text = "", table_alias = SQLTbAlias(), alias = "Tb", object = object)
 
 # #1082: is the projection an aggregate that the build will neither group nor filter with HAVING?
-# Mirrors `get_select_query`'s GROUP BY rule entry by entry: a resolved aggregate, a literal
-# (`Value`) and a projected subquery add no GROUP BY term; a column, a path or a row expression does.
-# A window is not answered (its OVER terms can be grouped), nor an `order_by()` term other than a
-# projected name (`get_order_query` groups the rest), nor any filter on an alias (a HAVING, or a
+# Each entry's part in GROUP BY is `_group_role`'s answer, the one `get_select_query` builds from
+# (#1099): degenerate when every entry is an aggregate or adds no term, and at least one aggregates.
+# A window is not answered (its OVER terms can be grouped), nor any filter on an alias (a HAVING, or a
 # literal's WHERE). Each unanswered shape keeps the projection, and `_refuse_degenerate_probe` refuses
 # it if the build turns out ungrouped after all.
+#
+# `order_by()` terms are the one part still decided here, conservatively: `get_order_query` tells a
+# projected term from one it groups by matching the RENDERED projection and the memo, which do not
+# exist before the build. A term is taken as projected only when its name is an entry's output name,
+# a literal's included; any other term keeps the projection. The drift guard in
+# `test_fluent_parity_208.jl` compares this answer with the built instruction's.
 function _degenerate_aggregate(object::SQLObject)::Bool
   isempty(object.values) && return false
   _filters_name_alias(object) && return false
@@ -462,17 +474,12 @@ function _degenerate_aggregate(object::SQLObject)::Bool
   names = String[]
   any_agg = false
   for v in object.values
-    v isa SQLTypeText && continue
-    node = v.field
-    if node isa Union{SubqueryObject,ExistsObject}
-      nothing
-    elseif node isa Union{SQLTypeFunction,SQLTypeF}
-      _resolved_window(node, instruc) && return false
-      _resolved_agg(node, instruc) || return false
-      any_agg = true
-    else
-      return false
-    end
+    role = _group_role(v, instruc)
+    role === :group && return false
+    # A window's OVER terms can be grouped, and an aggregate can be a window too (`Rank(…) + Sum(…)`,
+    # #756), so this is asked apart from the role.
+    role !== :none && _resolved_window(v.field, instruc) && return false
+    any_agg |= role === :aggregate
     name = v.custom_as !== nothing ? v.custom_as : v._as
     name === nothing || push!(names, String(name))
   end
@@ -480,16 +487,34 @@ function _degenerate_aggregate(object::SQLObject)::Bool
   return all(o -> o.field._as !== nothing && String(o.field._as) in names, object.order)
 end
 
-# #1082: the check behind `_degenerate_aggregate`. A kept projection that built as an aggregate with no
-# GROUP BY and no HAVING is the shape that answers a constant, so refuse it rather than answer.
+# A kept projection that built as an aggregate with no GROUP BY and no HAVING: exactly one row whatever
+# matched, so any answer about its rows is a constant.
+_builds_one_row(instruction::SQLInstruction, keep_values::Bool)::Bool =
+  keep_values && instruction.aggregate && isempty(instruction.group) && isempty(instruction.having)
+
+# #1082: the check behind `_degenerate_aggregate`, for `Exists(...)`, which clears the shape it
+# predicts. One it could not predict that still builds as one row is refused rather than answered.
 function _refuse_degenerate_probe(instruction::SQLInstruction, keep_values::Bool, terminal::AbstractString)
-  (keep_values && instruction.aggregate && isempty(instruction.group) && isempty(instruction.having)) ||
-    return nothing
+  _builds_one_row(instruction, keep_values) || return nothing
   throw(QueryBuildError(
     "$(terminal) cannot answer for this query: its values() projection aggregates with no GROUP BY " *
     "and no HAVING, so it is exactly one row whatever matched, and the answer would be a constant. " *
     "Drop the aggregate from values() to ask about the matched rows, or filter on its alias to keep " *
     "only the row that passes (#1082)."))
+end
+
+# #1100: `count()` and `exists()` keep that projection and refuse it, whether or not it was predicted:
+# its only honest answer is the constant `list()` gives, one row.
+function _refuse_constant_terminal(instruction::SQLInstruction, keep_values::Bool, terminal::AbstractString)
+  _builds_one_row(instruction, keep_values) || return nothing
+  ask = terminal == "count()" ? "count the matched rows" : "ask whether any row matched"
+  throw(QueryBuildError(
+    "$(terminal) cannot answer for this query: its values() projection is an aggregate with no GROUP BY " *
+    "and no HAVING, so it is exactly one row whatever matched (list() returns that one row, or none under " *
+    "a slice), and the " *
+    "answer would be a constant. To $(ask), drop the aggregate from values(); to keep the aggregate row " *
+    "only when it passes a condition, filter on its alias; to read the aggregate's value, use " *
+    ".aggregate(\"n\" => Count(...)) instead (#1100)."))
 end
 
 # #1066: an aggregating projection keeps its ordering too. An `order_by()` on a column it does not
@@ -541,7 +566,7 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
   # #1066: the projection is kept when it decides which rows `list()` returns — see
   # `_projection_shapes_rows`. Otherwise it is cleared, and a plain `values(...)` counts as before.
   is_distinct = distinct || q.object.distinct
-  keep_values = _projection_shapes_rows(q.object; distinct = is_distinct)
+  keep_values = _projection_shapes_rows(q.object; distinct = is_distinct, clear_degenerate = false)
   _keeps_order(q.object, keep_values) || (q.object.order = []) # clear order_by
   keep_values || (q.object.values = [])
 
@@ -556,7 +581,7 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
 
   # Main query continues from where CTE numbering left off.
   instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters)
-  _refuse_degenerate_probe(instruction, keep_values, "count()")
+  _refuse_constant_terminal(instruction, keep_values, "count()")
   
   # Quote table name and alias to prevent SQL injection
   safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
@@ -668,7 +693,7 @@ function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias
     
     q = deepcopy(oq) # Create a copy of the SQLObjectHandler to avoid modifying the original object
     # #1066: a kept projection is probed as `list()` would run it — see `_projection_shapes_rows`.
-    keep_values = _projection_shapes_rows(q.object; distinct = q.object.distinct && q.object.offset > 0)
+    keep_values = _projection_shapes_rows(q.object; distinct = q.object.distinct && q.object.offset > 0, clear_degenerate = false)
     _keeps_order(q.object, keep_values) || (q.object.order = []) # clear order_by
     keep_values || (q.object.values = [])
 
@@ -683,7 +708,7 @@ function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias
 
     # Main query continues from where CTE numbering left off.
     instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters)
-    _refuse_degenerate_probe(instruction, keep_values, "exists()")
+    _refuse_constant_terminal(instruction, keep_values, "exists()")
     # `LIMIT 1` is this query's own shape, not a user value, so it stays literal; the OFFSET the
     # caller set binds (#46). A non-positive offset was always dropped here, and still is.
     # #1053: a caller's `limit(0)` makes it `LIMIT 0` — the probe is the smaller of the two, so it is

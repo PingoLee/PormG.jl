@@ -34,9 +34,9 @@ PormG provides several terminal methods to execute a query and return data in di
 | `.earliest(fields...)` | `PormGRow` | Returns the earliest row ordered by `fields`; raises `DoesNotExist` when empty. |
 | `.latest(fields...)` | `PormGRow` | Returns the latest row ordered by `fields`; raises `DoesNotExist` when empty. |
 | `.get(filters...)` | `PormGRow` | Returns exactly one row, or raises a typed exception. |
-| `.count()` | `Int` | Runs `SELECT COUNT(*)` and returns the number of rows `.list()` would return — after `distinct()`, the distinct projected rows; with an aggregate in `values()`, the groups. An aggregate with no grouping and no `HAVING` (`values("n" => Count("resultid"))`) is one row whatever matched, so it counts the matched rows instead. |
+| `.count()` | `Int` | Runs `SELECT COUNT(*)` and returns the number of rows `.list()` would return — after `distinct()`, the distinct projected rows; with an aggregate in `values()`, the groups. An aggregate with no grouping and no `HAVING` (`values("n" => Count("resultid"))`) is one row whatever matched, so its count would be a constant: it raises `QueryBuildError`. |
 | `.aggregate(pairs...)` | `NamedTuple` | Computes whole-queryset aggregates (no `GROUP BY`) and returns them as a single-row named tuple. |
-| `.exists()` | `Bool` | Returns `.count() > 0`: `true` if `.list()` would return at least one row, except for the ungrouped aggregate above, where it asks whether any row matched. |
+| `.exists()` | `Bool` | Returns `.count() > 0`: `true` if `.list()` would return at least one row. Raises `QueryBuildError` where `.count()` does. |
 
 ### Choosing an Output Format
 
@@ -431,15 +431,30 @@ applies before they are counted. A filter on any other `values()` alias applies 
 results that started 20th or further back, and a filter on a window alias raises the same `QueryBuildError` it
 raises from `.list()`.
 
-An aggregate with nothing to group by is the exception. `values("n" => Count("resultid"))` is exactly
-one row whatever the filters matched — `COUNT` over no rows is `0`, not zero rows — so its answer would
-be a constant. `.count()`, `.exists()` and `Exists(...)` therefore answer for the matched rows instead,
-and `.exists() == (.count() > 0)` holds. That is what lets one correlated handle serve both
-`Subquery(...)` and `Exists(...)` (see [Subqueries and CTEs](subqueries_and_ctes.md)). A filter on the
-alias is a `HAVING`, which can remove that one row, so `values("n" => Count("resultid")).filter("n__@gt" => 3)`
-is answered as written: one row or none. A shape PormG cannot place before it builds the query — an aggregate beside a
-`Value(...)` literal that a filter reads, say — raises `QueryBuildError` from `.count()`, `.exists()`
-and `Exists(...)` rather than answer that constant.
+An aggregate with nothing to group by is one row whatever the filters matched:
+`values("n" => Count("resultid"))` returns a single row because `COUNT` over no rows is `0`, not zero
+rows. Its count would be a constant (1, or 0 under a slice), so `.count()` and `.exists()` raise
+`QueryBuildError` instead of answering it. The message names three ways out:
+
+```julia
+brazilian = M.Result.objects.filter("driverid__nationality" => "Brazilian")
+
+brazilian.count()                                                          # the matched results
+brazilian.values("n" => Count("resultid")).filter("n__@gt" => 3).count()   # 1 or 0: a HAVING on the alias
+brazilian.aggregate("n" => Count("resultid")).n                            # the aggregate's value
+```
+
+A filter on the alias is a `HAVING`, which can remove that one row, so the second line is answered as
+written. A shape that only the build shows is ungrouped is refused the same way — an aggregate beside a
+`Value(...)` literal that a filter reads, say.
+
+`Exists(...)` is different, and follows Django: it ignores the subquery's `SELECT` list and keeps its
+grouping and `HAVING`, so `Exists(standings)` over `standings.values("t" => Count("driverstandingsid"))`
+asks whether any standing matched. That is what lets one correlated handle serve both `Subquery(...)`
+and `Exists(...)` (see [Subqueries and CTEs](subqueries_and_ctes.md)). `Exists(...)` can only clear a
+projection it recognizes before building the query, so the ungrouped shapes that only the build shows —
+the literal one above, or an aggregate beside a window with an empty `WindowOver()` — raise
+`QueryBuildError` from it as well, rather than answer a constant.
 
 !!! warning "`distinct()` + `order_by()`: the sort key must be projected"
     Under `distinct()`, every column you `order_by(...)` must appear in `values(...)`. Ordering a

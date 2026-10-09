@@ -88,6 +88,26 @@ function _record_wildcard_projection_kinds!(instruc::SQLInstruction)
   return nothing
 end
 
+# #1099: what one `values()` entry adds to GROUP BY — the rule stated once. `get_select_query` asks it
+# as it builds, and `_degenerate_aggregate` asks it before the build, so the two cannot drift: a rule
+# restated at a second site type-checks, and stays right only until the first site changes (#474).
+# - `:none` — a `Value(...)` literal, or a projected `Subquery`/`Exists` (#92): no term;
+# - `:aggregate` — a resolved aggregate (#722): no term, and the statement aggregates;
+# - `:window` — a window that is not also an aggregate (#756): no term here, but its OVER terms can be
+#   grouped later (`_group_window_terms!`);
+# - `:group` — anything else: a column, a path, a handle, a row expression. It adds a positional term.
+# Whether the STATEMENT aggregates is a separate question (#776): a window over an aggregate does,
+# and `get_select_query` reads `_contains_agg` beside this for it.
+function _group_role(v::Union{SQLTypeText,SQLTypeField}, instruc::SQLInstruction)::Symbol
+  v isa SQLTypeText && return :none
+  node = v.field
+  node isa Union{SubqueryObject,ExistsObject} && return :none
+  node isa Union{SQLTypeFunction,SQLTypeF} || return :group
+  _resolved_agg(node, instruc) && return :aggregate
+  _resolved_window(node, instruc) && return :window
+  return :group
+end
+
 """
   get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instruc::SQLInstruction)
 
@@ -128,33 +148,27 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       continue
     end
 
-    if isa(v_copy.field, Union{SQLTypeFunction, SQLTypeF})
-      # #722: resolved, not read off the node — a condition that names an aggregate (or window)
-      # alias makes the projection one too, and its own flag cannot see that. See `_reads_alias`.
-      #
-      # #756 review: the two questions are independent. A projection can be BOTH — `Rank(…) +
-      # Sum(…)`, or a `Case` with an aggregate in one branch and a window in another — and it is
-      # still an aggregate, so the statement needs GROUP BY for its plain columns. Answering "window"
-      # first used to skip the flag and drop the GROUP BY altogether.
-      #
-      # #776: and "is an aggregate" is not the question the STATEMENT asks. A window over one —
-      # `Lag(Sum(…))`, `PARTITION BY Sum(…)` — is a window, so it stays out of GROUP BY, yet it makes
-      # the statement aggregate. Keyed on `_is_agg` alone the flag stayed unset, the plain columns
-      # beside it were never grouped, and SQLite returned one arbitrary row. See `_contains_agg`.
-      # Unlike the two questions around it, this one needs no `_reads_alias`: it is asked of the
-      # STATEMENT, and an alias a condition reads is itself a projection in this same loop, which
-      # sets the flag on its own turn.
-      is_agg = _resolved_agg(v_copy.field, instruc)
-      (is_agg || _contains_agg(v_copy.field)) && (instruc.aggregate = true)
-      (is_agg || _resolved_window(v_copy.field, instruc)) || push!(instruc.group, i |> string)
-    elseif isa(v_copy.field, Union{SubqueryObject, ExistsObject})
-      # #92: a projected scalar subquery / EXISTS is a per-row expression — neither a groupable
-      # column nor an outer aggregate. It must NOT be pushed into GROUP BY (in a mixed projection
-      # with a real aggregate, that would otherwise emit the subquery's positional index into GROUP BY).
-      nothing
-    else
-      push!(instruc.group, i |> string)
-    end
+    # #1099: GROUP BY comes from `_group_role`, which `_degenerate_aggregate` asks before the build.
+    # Its arms record why each kind is or is not a term:
+    # - #722: an aggregate is resolved, not read off the node — a condition that names an aggregate
+    #   (or window) alias makes the projection one too, and its own flag cannot see that. See
+    #   `_reads_alias`.
+    # - #756 review: "aggregate" and "window" are independent questions. A projection can be BOTH —
+    #   `Rank(…) + Sum(…)`, or a `Case` with an aggregate in one branch and a window in another — and it
+    #   is still an aggregate, so the statement needs GROUP BY for its plain columns. Answering
+    #   "window" first used to skip the flag and drop the GROUP BY altogether.
+    # - #92: a projected scalar subquery / EXISTS is a per-row expression — neither a groupable column
+    #   nor an outer aggregate. Pushed into GROUP BY, a mixed projection with a real aggregate emitted
+    #   the subquery's positional index there.
+    role = _group_role(v_copy, instruc)
+    role === :group && push!(instruc.group, i |> string)
+    # #776: and "is an aggregate" is not the question the STATEMENT asks. A window over one —
+    # `Lag(Sum(…))`, `PARTITION BY Sum(…)` — is a window, so it stays out of GROUP BY, yet it makes the
+    # statement aggregate. Keyed on `_is_agg` alone the flag stayed unset, the plain columns beside it
+    # were never grouped, and SQLite returned one arbitrary row. See `_contains_agg`. Unlike the
+    # questions above, this one needs no `_reads_alias`: it is asked of the STATEMENT, and an alias a
+    # condition reads is itself a projection in this same loop, which sets the flag on its own turn.
+    (role === :aggregate || (role !== :none && _contains_agg(v_copy.field))) && (instruc.aggregate = true)
 
     # #441: the memo is keyed on `_as`, which for a field-path projection is the PATH, not the name
     # the column is rendered under (that lives in `custom_as`). So a bare `haskey` hit collapsed

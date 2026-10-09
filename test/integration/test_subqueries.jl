@@ -267,16 +267,32 @@ end
         values("has_standings" => Exists(standings)) |> DataFrame
     @test Bool(df_not[1, :has_standings]) == false
 
-    # #1082: the same ungrouped aggregate projection is one row whatever matched, so count(),
-    # exists() and Exists all answer for the matched rows instead: exists() == (count() > 0).
+    # #1082 / #1100: the same ungrouped aggregate projection is one row whatever matched. Exists(...)
+    # asks whether any row matched, as Django's does, while count() and exists() refuse: their only
+    # honest answer is the constant list() gives.
     for (id, expected) in ((1, true), (lonely_id, false))
         own = () -> M.Driver_standings.objects.
             filter("driverid" => id).
             values("t" => Count("driverstandingsid"))
-        @test own().exists() == expected
-        @test (own().count() > 0) == expected
-        @test (own().count() == length(M.Driver_standings.objects.filter("driverid" => id).list()))
+        @test length(own().list()) == 1
+        @test_throws PormG.QueryBuildError own().count()
+        @test_throws PormG.QueryBuildError own().exists()
+        @test M.Driver.objects.filter("driverid" => id, Exists(own())).exists() == expected
     end
+end
+
+# #1100: count() == length(list()) with no exception. An ungrouped aggregate projection is refused,
+# and a filter on its alias (a HAVING) makes the one row optional, so it is answered as written.
+@testset "count() on an ungrouped aggregate projection: refused, or answered with a HAVING (#1100)" begin
+    brazilian = () -> M.Result.objects.
+        filter("driverid__nationality" => "Brazilian").
+        values("n" => Count("resultid"))
+    @test_throws PormG.QueryBuildError brazilian().count()
+    @test brazilian().filter("n__@gt" => 3).count() == 1
+    @test brazilian().filter("n__@gt" => 3).exists() == true
+    @test brazilian().filter("n__@lt" => 0).count() == 0
+    # The value itself is one aggregate() away.
+    @test M.Result.objects.filter("driverid__nationality" => "Brazilian").aggregate("n" => Count("resultid")).n > 3
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

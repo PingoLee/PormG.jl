@@ -17,7 +17,7 @@ Pinned here, with no server:
      constructor — are held to the same rule, parsed rather than matched as text (#1057). So is
      every **local variable** a refusal prints, followed to its assignments in the same function
      (#1092: a `hint` carried a `Regex`'s pattern past the constructor scan); a reviewed assignment
-     carries the marker on its own line.
+     carries the marker on the assignment's first line.
   2. **The data shape** — the one-string constructor still works (#231's contract), and the location
      a funnel attaches renders once.
   3. **Every path, end to end** — a filter, a write, a bulk write and `sqlite_bind_value`, each fed a
@@ -132,7 +132,8 @@ end
 const LABEL_BUILDER971 = r"^_\w*(?:textless|divergent|_label)"
 
 _def_name971(sig::Symbol) = sig
-_def_name971(sig::Expr) = sig.head in (:call, :where, :(::)) ? _def_name971(sig.args[1]) : nothing
+_def_name971(sig::Expr) = sig.head in (:call, :where, :(::)) ? _def_name971(sig.args[1]) :
+  sig.head === :. && sig.args[end] isa QuoteNode ? sig.args[end].value : nothing   # `Base.setproperty!`
 _def_name971(::Any) = nothing
 
 # Every definition whose name matches, as `(name, line, definition)`: the long form and the short
@@ -193,7 +194,7 @@ end
 # #1092 found the `@regex` refusal building `hint = "… $(repr(x.second.pattern)) …"` and printing
 # `$(hint)`. So every name a refusal interpolates (or `*`-joins) is followed to its assignments in the
 # same function, transitively, and each one's text is held to the label-builder rule. A reviewed
-# assignment carries `# refusal-value-ok: <why>` on its line.
+# assignment carries `# refusal-value-ok: <why>` on its first line, a refusal on its statement's.
 const REFUSALS1092 = (:InvalidValueError, :FilterError, :QueryBuildError)
 
 # Every top-level definition, long and short form, as `(line, definition)`. A closure is scanned with
@@ -211,8 +212,9 @@ function _definitions1092(ex, found = Tuple{Int, Expr}[], line = 0)
   return found
 end
 
-# A body's refusal constructions and its local assignments `name = rhs`, each with its line. A `for`
-# loop's `v in values` parses as `v = values`, so an element of a value collection is followed too.
+# A body's refusal constructions and its local assignments `name = rhs` / `name *= rhs`, each with its
+# line. A `for` loop's `v in values` parses as `v = values`, so an element of a value collection is
+# followed too.
 function _refusals_and_locals1092(body)
   calls = Tuple{Int, Expr}[]
   locals = Dict{Symbol, Vector{Tuple{Int, Any}}}()
@@ -221,7 +223,7 @@ function _refusals_and_locals1092(body)
     ex isa LineNumberNode && (line[] = ex.line; return)
     ex isa Expr || return
     ex.head === :call && ex.args[1] in REFUSALS1092 && push!(calls, (line[], ex))
-    ex.head === :(=) && ex.args[1] isa Symbol && push!(get!(locals, ex.args[1], Tuple{Int, Any}[]), (line[], ex.args[2]))
+    ex.head in (:(=), :*=) && ex.args[1] isa Symbol && push!(get!(locals, ex.args[1], Tuple{Int, Any}[]), (line[], ex.args[2]))
     foreach(walk, ex.args)
   end
   walk(body)
@@ -248,7 +250,7 @@ function _local_offenders1092(src::AbstractString)
     for (cl, call) in calls
       ncalls += 1
       occursin("refusal-value-ok:", get(lines, cl, "")) && continue
-      todo = collect(Set(a for arg in call.args[2:end] for a in _written_names1092(arg) if !(arg isa Symbol)))
+      todo = Symbol[n for arg in call.args[2:end] for n in _written_names1092(arg)]   # `FilterError(msg)` too
       seen = Set{Symbol}()
       while !isempty(todo)
         name = pop!(todo)
@@ -261,6 +263,9 @@ function _local_offenders1092(src::AbstractString)
             _label_leaks971(expr) && push!(offenders, "$(al): `$(name)` writes `$(expr)`, printed by the refusal at $(cl)")
           end
           rhs isa Symbol && String(rhs) in VALUE_NAMES971 &&
+            push!(offenders, "$(al): `$(name)` is `$(rhs)`, printed by the refusal at $(cl)")
+          # A whole right-hand side `repr(…)` — the pieces above are only its operands.
+          rhs isa Expr && rhs.head === :call && _leaks971(string(rhs)) &&
             push!(offenders, "$(al): `$(name)` is `$(rhs)`, printed by the refusal at $(cl)")
           append!(todo, _written_names1092(rhs))
         end
@@ -281,7 +286,7 @@ end
     ncalls += n
     append!(offenders, "$(relpath(path, root)):" .* found)
   end
-  @test ncalls > 400        # the scan found the refusals at all (#1092: 506 inside definitions)
+  @test ncalls > 400        # the scan found the refusals at all (#1092: 506, qualified names included)
   @test isempty(offenders)
   isempty(offenders) || foreach(o -> @info(o), offenders)
 end
@@ -309,8 +314,8 @@ end
     found = _label_builders971(Meta.parseall(src))
     @test any(any(_label_leaks971, _ast_interpolations971(d.args[2])) for (_, _, d) in found) == leaks
   end
-  # The local-variable scan, on #1092's own defect, the spellings it would come back as, and the
-  # shapes it must let through.
+  # The local-variable scan, on #1092's own defect, the likeliest spellings it would come back as,
+  # and the shapes it must let through.
   for (src, leaks) in ((raw"""
                         function f(x)
                           hint = "e.g. surname__@regex => $(repr(x.second.pattern))"
@@ -334,6 +339,27 @@ end
                             item isa String || throw(QueryBuildError("bad argument: $(item)"))
                           end
                         end""", true),    # `.values(…)`'s refusal, until #1092's scan saw it
+                       (raw"""
+                        function f(value)
+                          msg = "bad input: $(value)"
+                          throw(FilterError(msg))
+                        end""", true),    # the message itself is the local
+                       (raw"""
+                        function f(value)
+                          msg = "bad input"
+                          msg *= ": $(value)"
+                          throw(FilterError(msg))
+                        end""", true),
+                       (raw"""
+                        function f(x)
+                          pat = repr(x.second.pattern)
+                          throw(FilterError("pass it as a String, e.g. $(pat)"))
+                        end""", true),    # #1092 re-spelled in two steps
+                       (raw"""
+                        function Base.setproperty!(row, sym::Symbol, value)
+                          hint = "got $(value)"
+                          throw(InvalidValueError("bad $(hint)"))
+                        end""", true),    # a qualified name is a definition too
                        (raw"""
                         function f(value)
                           hint = "got a $(typeof(value))"
@@ -481,6 +507,6 @@ end
     @test e isa PormG.QueryBuildError
     e isa PormG.QueryBuildError || return
     @test !occursin(SECRET971, PormG.error_message(e))
-    @test occursin("Invalid argument of type Dict{String, Int64}", PormG.error_message(e))
+    @test occursin("Invalid argument: a Dict{String, Int64}", PormG.error_message(e))
   end
 end

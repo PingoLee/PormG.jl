@@ -204,7 +204,7 @@ function _values!(q::SQLObject, values)
       push!(q.values, _values_field(v))
     else
       # The type, never the argument itself (#971, #1092).
-      throw(QueryBuildError("Invalid argument of type $(typeof(v)); use a string field name, a CTE(\"name\", \"path\") or Joined(\"alias\", \"column\") reference, a function (Count, Sum, Day, …), or an aliased pair \"alias\" => expr (e.g. \"total\" => Subquery(inner))."))
+      throw(QueryBuildError("Invalid argument: a $(typeof(v)); please use a string field name, a CTE(\"name\", \"path\") or Joined(\"alias\", \"column\") reference, a function (Count, Sum, Day, …), or an aliased pair \"alias\" => expr (e.g. \"total\" => Subquery(inner))."))
     end
   end
 

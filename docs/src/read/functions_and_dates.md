@@ -210,7 +210,7 @@ same rule and refuse with the same message.
 | Parts | Column |
 | :--- | :--- |
 | `@hour`, `@minute`, `@second`; `Extract` parts `HOUR`, `MINUTE`, `SECOND`, `MILLISECONDS`, `MICROSECONDS` | a `DateTimeField` or a `TimeField` |
-| `Extract` parts `TIMEZONE`, `TIMEZONE_HOUR`, `TIMEZONE_MINUTE` | a `DateTimeField` |
+| `Extract` parts `TIMEZONE`, `TIMEZONE_HOUR`, `TIMEZONE_MINUTE` | a `DateTimeField` with a time zone — the default; not `type = "TIMESTAMP"` |
 | `Extract` part `EPOCH` | a `DateField`, a `DateTimeField`, a `TimeField` or a `DurationField` |
 | every other part — `@year`, `@month`, `@day`, `@date`, `@quarter`, `@quadrimester`, the week parts, the `@yyyy_*` labels, and the other `Extract` parts | a `DateField` or a `DateTimeField` |
 
@@ -236,12 +236,15 @@ because `raceid` holds the race's integer id. Read the race's date through the r
 with `"raceid__date__@year"`. A foreign key into a table keyed by a date reads as that date. `ToChar` is checked only for the `"YYYY-MM"` mask that `@yyyy_mm` uses, because
 `to_char` also formats numbers on PostgreSQL.
 
-A filter on a date part is held to the part's range, through either spelling: `@month` and
-`MONTH` `1`–`12`, `@day` and `DAY` `1`–`31`, the clock and week parts as listed above, and the
-`Extract` parts `DOW` `0`–`6` and `DOY` `1`–`366`. A value outside the range raises
-`InvalidValueError` instead of matching nothing, and so does a `Bool`:
-`"start_at__@hour" => true` is refused rather than meaning `1`. The range belongs to the part, not
-to what you compute from it, so `Extract("start_at", "hour") + 1` is an ordinary number.
+A filter on a date part is held to the part's range: `@month` and `MONTH` `1`–`12`, `@day` and
+`DAY` `1`–`31`, the clock and week parts as listed above, and the `Extract` parts `DOW` `0`–`6` and
+`DOY` `1`–`366`. The check applies to a filter pair (`"date__@month" => 13`) and to an alias of an
+`Extract` (`values("m" => Extract("date", "month")); filter("m" => 13)`). A value outside the range
+raises `InvalidValueError` instead of matching nothing, and so does a `Bool`:
+`"start_at__@hour" => true` is refused rather than meaning `1`. A comparison written with `F`,
+such as `F("date__@month") > 13`, is not checked yet (#1083). The range belongs to the part, not to
+what you compute from it: `Extract("start_at", "hour") + 1` is an ordinary number, and
+`Coalesce("date__@month", 0)` can be filtered with its `0`.
 
 ```julia
 M.Race.objects.filter("date__@month" => 13)        # InvalidValueError: a month is 1 to 12
@@ -982,6 +985,11 @@ query.filter("raceid" => 1)
 query.values("start" => ToChar("start_at", "YYYY-MM-DDTHH:MI:SS.SSS"))
 query.list(:dict)   # [Dict(:start => "2009-03-29T06:00:00.000")]
 ```
+
+`ToChar(x, "YYYY-MM")` is the expression `"x__@yyyy_mm"` builds, and it follows the same rules. Its
+column must be a date or a timestamp, and a filter on it takes a whole `"YYYY-MM"` value: `"2009-03"`,
+not `"2009"` or `"March 2009"`. That holds for a pattern lookup too, so `"ym__@startswith" => "2009"`
+raises `InvalidValueError`. To filter a year, filter `@year` on the date.
 
 !!! warning "Any other format is PostgreSQL-only"
     A format outside the table is passed to `to_char` as written — a native template such as

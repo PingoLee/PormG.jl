@@ -372,7 +372,18 @@ function _temporal_kind(field)
   return :other
 end
 const _TEMPORAL_KIND_FIELDS = Dict(:date => "DateField", :datetime => "DateTimeField",
-                                   :time => "TimeField", :interval => "DurationField")
+                                   :time => "TimeField", :interval => "DurationField",
+                                   :timestamptz => "DateTimeField with a time zone (the default `TIMESTAMPTZ`)")
+# A row reads `:timestamptz` when only a zoned timestamp will do (`EXTRACT(TIMEZONE …)`): PostgreSQL
+# rejects it over a `DateTimeField(type = "TIMESTAMP")`, which is a `:datetime` all the same.
+_temporal_reads(field, reads) = _temporal_kind(field) in reads ||
+                                (:timestamptz in reads && getproperty(field, :type) == "TIMESTAMPTZ")
+
+# A bare `F("col")` or `SQLField("col")` names a column as plainly as `"col"` does, so it is checked as
+# that column. Anything with an operation is an expression, and stays unchecked (fail open).
+_temporal_operand(x::FExpression) = x.operation === nothing ? _temporal_operand(x.column) : x
+_temporal_operand(x::SQLField) = _temporal_operand(x.field)
+_temporal_operand(x) = x
 
 # #1068: the field a relation's value is. A `ForeignKey`/`OneToOneField` column holds the related
 # row's key, so a date part reads THAT field's type: `raceid__@year` over an integer key is an
@@ -404,14 +415,15 @@ function _check_temporal_operand(v::FObject, instruc::SQLInstruction)
   found = _temporal_row_of(v)
   found === nothing && return nothing
   row, part = found
-  declared = _alias_column_field(v.column, instruc)
+  column = _temporal_operand(v.column)
+  declared = _alias_column_field(column, instruc)
   declared isa PormGField || return nothing
   declared isa Models.sManyToManyField && return nothing
   field = _relation_key_field(declared, instruc)
   field isa PormGField || return nothing
   hasproperty(field, :type) || return nothing
-  _temporal_kind(field) in row.reads && return nothing
-  label = v.column isa AbstractString ? v.column : sprint(show, v.column)
+  _temporal_reads(field, row.reads) && return nothing
+  label = column isa AbstractString ? column : sprint(show, column)
   accepted = [_TEMPORAL_KIND_FIELDS[k] for k in row.reads]
   must = length(accepted) == 1 ? "a $(only(accepted))" :
          join(["a $(f)" for f in accepted], ", ", " or ")

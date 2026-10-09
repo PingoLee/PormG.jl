@@ -1347,6 +1347,18 @@ const DOCERR_CASES = [
         QueryBuildError,
         () -> DOCERR_RESULT_PG.objects.values("y" => "statusid__@year").list(show_query = :dict),
     ),
+    # #1070 (review): `ToChar(x, "YYYY-MM")` is `@yyyy_mm`, so a filter on it — a pattern lookup
+    # included — takes a whole `"YYYY-MM"` value, as the transform always did.
+    (
+        "read/functions_and_dates.md — a pattern lookup on a `ToChar(x, \"YYYY-MM\")` alias with a partial value raises",
+        InvalidValueError,
+        () -> begin
+            q = DOCERR_RACE_PG.objects
+            q.values("ym" => ToChar("date", "YYYY-MM"))
+            q.filter("ym__@startswith" => "2009")
+            q.list(show_query = :dict)
+        end,
+    ),
     # #1070: a filter on a date part is held to the part's range — `@month` had none.
     (
         "read/functions_and_dates.md — a date part's filter value outside its range raises",

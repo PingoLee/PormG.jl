@@ -893,9 +893,9 @@ const _EXTRACT_PART_ROWS = Dict{String,_TemporalRow}(
   "MILLISECONDS"    => _temporal_row(_CLOCK_READS, Models.format_number_sql),
   "MICROSECONDS"    => _temporal_row(_CLOCK_READS, Models.format_number_sql),
   # PostgreSQL has a zone only on a `timestamptz` (or a `timetz`, which no PormG field declares).
-  "TIMEZONE"        => _TemporalRow(((:datetime,), "a timestamp with a time zone", Models.format_number_sql)),
-  "TIMEZONE_HOUR"   => _TemporalRow(((:datetime,), "a timestamp with a time zone", Models.format_number_sql)),
-  "TIMEZONE_MINUTE" => _TemporalRow(((:datetime,), "a timestamp with a time zone", Models.format_number_sql)),
+  "TIMEZONE"        => _TemporalRow(((:timestamptz,), "a timestamp with a time zone", Models.format_number_sql)),
+  "TIMEZONE_HOUR"   => _TemporalRow(((:timestamptz,), "a timestamp with a time zone", Models.format_number_sql)),
+  "TIMEZONE_MINUTE" => _TemporalRow(((:timestamptz,), "a timestamp with a time zone", Models.format_number_sql)),
   # Seconds since the epoch, since midnight, or in the duration: every temporal kind has one.
   "EPOCH"           => _TemporalRow(((:date, :datetime, :time, :interval),
                                      "a date, a time or a duration", Models.format_number_sql)),
@@ -946,7 +946,7 @@ the query is built, on both engines (#1070). It raises `QueryBuildError` otherwi
 
 - the time-of-day parts (`HOUR`, `MINUTE`, `SECOND`, `MILLISECONDS`, `MICROSECONDS`) read a
   `DateTimeField` or a `TimeField`;
-- the `TIMEZONE` parts read a `DateTimeField`;
+- the `TIMEZONE` parts read a `DateTimeField` with a time zone (the default `TIMESTAMPTZ`);
 - `EPOCH` reads any of those, a `DateField` or a `DurationField`;
 - every other part reads a `DateField` or a `DateTimeField`.
 
@@ -1158,6 +1158,9 @@ See also [Functions and Dates](@ref).
 """
 function ToChar(x::_TemporalOperand, format::AbstractString; formatter::Union{Nothing, Function, PormGField} = nothing)
   isa(formatter, PormGField) && (formatter = formatter.formatter)
+  # #1070: the one mask with a row (`_temporal_row_of`) checks a filter's value as `@yyyy_mm` does —
+  # `@yyyy_mm` is this call. Any other mask is free text. An explicit `formatter=` still wins.
+  formatter === nothing && format == "YYYY-MM" && (formatter = Models.format_yyyy_mm)
   return FObject(function_name = "EXTRACT_DATE", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = formatter, kwargs = Dict{String, Any}("format" => String(format)))
 end
 
@@ -1845,7 +1848,7 @@ ISO_WEEK_DAY(x) = Extract(x, "ISODOW")
 WEEK_DAY(x) = (y = _transform_operand("WEEK_DAY", x);
                FObject(function_name = "WEEK_DAY", column = y, aggregate = _any_agg(y),
                        formatter = _TEMPORAL_FUNCTION_ROWS["WEEK_DAY"].formatter))
-Y_M(x) = ToChar(x, "YYYY-MM", formatter = Models.format_yyyy_mm)
+Y_M(x) = ToChar(x, "YYYY-MM")
 # #562: `@date` no longer goes through `ToChar`. A `ToChar` node carries the format mask as SQL
 # text, which forces one spelling on both engines; `DATE` is the one transform where the correct
 # spelling differs (`(col)::date` on PostgreSQL, `strftime` on SQLite — see `Dialect.DATE`). Naming

@@ -69,6 +69,8 @@ Tlp_clock = Models.Model("tlp_clock",
   clock = Models.TimeField(null = true),
   span  = Models.DurationField(null = true),
   rowid = Models.ForeignKey(Tlp_row, pk_field = "id", on_delete = "CASCADE"),
+  # #1070: a timestamp WITHOUT a time zone — `EXTRACT(TIMEZONE …)` has nothing to read in it.
+  naive = Models.DateTimeField(null = true, type = "TIMESTAMP"),
 )
 
 # #1068: relations a date part reads through. `dayid` targets a DATE key, so its value is a date; the
@@ -1178,4 +1180,39 @@ end
     q.values("y" => "seen__@year", "x" => Fn.Coalesce(Fn.Extract("seen", "YEAR"), PormG.QueryBuilder.Count("id")))
     @test occursin("GROUP BY", _tlp_sql(q; conn = conn))
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1070 (review): the part's rule follows every spelling of the column, and stays with the part.
+# A bare `F("note")` names a column as plainly as `"note"`, so it is checked as that column. A
+# `TIMEZONE` part needs a zoned timestamp: PostgreSQL rejects it over `type = "TIMESTAMP"`. The public
+# `ToChar(x, "YYYY-MM")` IS `@yyyy_mm`, so it gets the same value check. And the range belongs to the
+# part only: a `Coalesce` over it may be its fallback (`0` for a NULL date), while `Max` of an hour is
+# still an hour.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1070: bare F columns, zoned timestamps, ToChar's mask, and Coalesce over a part" begin
+  Fn = PormG.Functions
+  plain(e) = replace(PormG.error_message(e), r"\e\[[0-9;]*m" => "")
+  built(model, f, conn) = (try _tlp_sql((q = model.objects; f(q); q); conn = conn); catch e; e end)
+  for (backend, conn) in _TLP_BACKENDS
+    @testset "$backend" begin
+      # A bare `F` column is checked; an `F` with an operation is an expression and is not.
+      e = built(TLP.Tlp_row, q -> q.values("x" => Fn.Extract(F("note"), "YEAR")), conn)
+      @test e isa PormG.QueryBuildError && occursin("CharField", plain(e))
+      @test built(TLP.Tlp_row, q -> q.values("x" => Fn.Extract(F("seen"), "YEAR")), conn) isa AbstractString
+      # `TIMEZONE` over a timestamp without a zone is refused on both engines, naming why.
+      e = built(TLP.Tlp_clock, q -> q.values("x" => Fn.Extract("naive", "TIMEZONE")), conn)
+      @test e isa PormG.QueryBuildError && occursin("with a time zone", plain(e))
+      # `ToChar`'s `YYYY-MM` mask checks the value's shape as `@yyyy_mm` does, through an alias.
+      @test built(TLP.Tlp_row, q -> (q.values("ym" => Fn.ToChar("seen", "YYYY-MM")); q.filter("ym" => "not-a-month")), conn) isa PormG.InvalidValueError
+      @test built(TLP.Tlp_row, q -> (q.values("ym" => Fn.ToChar("seen", "YYYY-MM")); q.filter("ym" => "2009-12")), conn) isa AbstractString
+      # A `Coalesce` over a part may hold its fallback; `Max` of a part keeps the part's range.
+      @test built(TLP.Tlp_row, q -> (q.values("m" => Fn.Coalesce("ts__@month", 0)); q.filter("m" => 0)), conn) isa AbstractString
+      @test built(TLP.Tlp_row, q -> (q.values("m" => Fn.Coalesce(Fn.Extract("ts", "HOUR"), -1)); q.filter("m" => -1)), conn) isa AbstractString
+      @test built(TLP.Tlp_row, q -> (q.values("ym" => Fn.Coalesce("seen__@yyyy_mm", Fn.Value("none"))); q.filter("ym" => "none")), conn) isa AbstractString
+      @test built(TLP.Tlp_row, q -> (q.values("note", "mh" => Fn.Max(Fn.Extract("ts", "HOUR"))); q.filter("mh" => 24)), conn) isa PormG.InvalidValueError
+    end
+  end
+  # PostgreSQL only — SQLite has no `TIMEZONE` part — a zoned timestamp reads its zone.
+  @test occursin("TIMEZONE", _tlp_sql((q = TLP.Tlp_row.objects; q.values("x" => Fn.Extract("ts", "TIMEZONE")); q); conn = _TLP_PG))
 end

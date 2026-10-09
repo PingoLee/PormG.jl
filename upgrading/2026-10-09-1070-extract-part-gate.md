@@ -20,7 +20,7 @@ checked against the same table, with the same message, and get the same range:
 | part | column it reads | filter value |
 |---|---|---|
 | `HOUR`, `MINUTE`, `SECOND`, `MILLISECONDS`, `MICROSECONDS` | `DateTimeField`, `TimeField` | `HOUR` 0–23, `MINUTE`/`SECOND` 0–59 |
-| `TIMEZONE`, `TIMEZONE_HOUR`, `TIMEZONE_MINUTE` | `DateTimeField` | — |
+| `TIMEZONE`, `TIMEZONE_HOUR`, `TIMEZONE_MINUTE` | `DateTimeField` with a time zone (not `type = "TIMESTAMP"`) | — |
 | `EPOCH` | `DateField`, `DateTimeField`, `TimeField`, `DurationField` | — |
 | `MONTH`, `DAY`, `DOW`, `DOY` | `DateField`, `DateTimeField` | 1–12, 1–31, 0–6, 1–366 |
 | `QUARTER`, `WEEK`, `ISODOW` | `DateField`, `DateTimeField` | 1–4, 1–53, 1–7 |
@@ -34,6 +34,10 @@ checked against the same table, with the same message, and get the same range:
 | `filter("date__@month" => 13)` | matched nothing | `InvalidValueError` |
 | `filter("date__@day" => 32)` | matched nothing | `InvalidValueError` |
 | `values("h" => Extract("start_at", "HOUR")); filter("h" => 25)` | matched nothing | `InvalidValueError` |
+| `values("ym" => ToChar("date", "YYYY-MM")); filter("ym" => "March 2009")` | matched nothing | `InvalidValueError`: not `YYYY-MM`, as `"date__@yyyy_mm"` already refused |
+| `values("ym" => ToChar("date", "YYYY-MM")); filter("ym__@startswith" => "2009")` | the 2009 months | `InvalidValueError`, as `"date__@yyyy_mm__@startswith"` already raised; filter `"date__@year" => 2009` instead |
+| `values("y" => Extract(F("name"), "YEAR"))` — a bare `F` column | unchecked | checked as the column `name`: `QueryBuildError` |
+| `values("h" => Coalesce("start_at__@hour", -1)); filter("h" => -1)` | `InvalidValueError`: the hour's range applied to the fallback | builds: a `Coalesce` keeps a number, not the part's range |
 
 A refusal names the part rather than the spelling: "The `hour` part reads a time of day, …", and a
 refused filter value is located on "the `start_at` hour part" instead of "the `start_at` @hour
@@ -42,8 +46,9 @@ transform". Code that matches on that text needs the new wording.
 Unchanged: an operand PormG cannot name a field for (an expression, a subquery, an untyped CTE
 column) still passes through without a check. A relation (`raceid__@year`) is checked against the
 key it holds, by #1068 in the same train: see that entry. `ToChar` is checked
-only for the `"YYYY-MM"` mask `@yyyy_mm` uses. Arithmetic over a part is an ordinary number:
-`Extract("start_at", "HOUR") + 1` has no range.
+only for the `"YYYY-MM"` mask `@yyyy_mm` uses. Arithmetic over a part is an ordinary number, and
+so is a `Coalesce`/`Greatest`/`Least`/`NullIf` over one: `Extract("start_at", "HOUR") + 1` has no
+range. A comparison written with `F` (`F("date__@month") > 13`) is not range-checked yet (#1083).
 
 ### Who this affects
 

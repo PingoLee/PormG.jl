@@ -323,6 +323,13 @@ const _TEXT_OUTPUT_FUNCTIONS = ("LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "REP
 # Functions whose result has the type of their operands — the first one that names a type decides.
 const _OPERAND_TYPED_FUNCTIONS = ("MAX", "MIN", "COALESCE", "GREATEST", "LEAST", "NULLIF")
 
+# #1070: a date part's formatter holds a value to the part's RANGE — an hour 0–23, a month 1–12, a
+# `"YYYY-MM"` label. The range belongs to the part, not to an expression computed from it: `hour + 1`
+# reaches 24, and `Coalesce("ts__@month", 0)` is 0 for a NULL date. Such an expression keeps the
+# family (a number, a text) and drops the range.
+_unranged(f) = f in Models.PERIOD_FORMATTERS ? Models.format_number_sql :
+               f === Models.format_yyyy_mm   ? Models.format_text_sql : f
+
 # The formatter a value compared with this expression must satisfy, or `nothing` when the
 # expression's type cannot be named. Only a type that is KNOWN is returned — see
 # `_having_alias_formatter`.
@@ -346,7 +353,8 @@ function _expression_formatter(p::SQLTypeFunction, instruc::SQLInstruction)
   if name in _OPERAND_TYPED_FUNCTIONS
     for operand in (p.column isa AbstractVector ? p.column : (p.column,))
       formatter = _expression_formatter(operand, instruc)
-      formatter === nothing || return formatter
+      # `Max`/`Min` of a part is still that part; a `Coalesce` may be its fallback (`0`, `"n/a"`).
+      formatter === nothing || return name in ("MAX", "MIN") ? formatter : _unranged(formatter)
     end
   end
   return nothing
@@ -361,10 +369,9 @@ function _expression_formatter(p::FExpression, instruc::SQLInstruction)
   # `false`, so an alias filter `"ahead" => 5` now fails loudly instead of binding `false`.
   p.operation in _COMPARISON_OPERATIONS && return Models.format_bool_sql
   left = _expression_formatter(p.field_name, instruc)
-  # #1070: a date part is a number with a range (`format_hour_sql`, …). The range is the part's, so
-  # `Extract("start_at", "HOUR") + 1` is a plain number — it was one while `Extract` carried no formatter.
-  (left === Models.format_number_sql || left in Models.PERIOD_FORMATTERS) && return Models.format_number_sql
-  return nothing
+  # #1070: `Extract("start_at", "HOUR") + 1` is a plain number — it was one while `Extract` carried no
+  # formatter. See `_unranged`.
+  return _unranged(left) === Models.format_number_sql ? Models.format_number_sql : nothing
 end
 _expression_formatter(p::SQLField, instruc::SQLInstruction) = _expression_formatter(p.field, instruc)
 function _expression_formatter(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction)

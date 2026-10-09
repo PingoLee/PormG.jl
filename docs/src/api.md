@@ -407,6 +407,8 @@ df = M.Result.objects.values(
 | `LTrim("field")` | Left trim | `"clean" => LTrim("name")` |
 | `RTrim("field")` | Right trim | `"clean" => RTrim("name")` |
 | `Replace("field", old, new)` | Replace substring | `"fixed" => Replace("name", "-", " ")` |
+| `LPad("field", len, fill = " ")` | Pad on the left; the column must be text | `"car" => LPad(Cast("number", "text"), 3, "0")` |
+| `RPad("field", len, fill = " ")` | Pad on the right; the column must be text | `"code" => RPad("code", 5, ".")` |
 
 ### Numeric Functions
 
@@ -1082,7 +1084,7 @@ The library in full — the same index `?PormG.Functions` prints in the REPL:
 
 **Window** — `WindowOver`, `WindowSpec`, `Rank`, `DenseRank`, `RowNumber`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` — see [Window Functions](read/window_functions.md)
 
-**String** — `Concat`, `Lower`, `Upper`, `Length`, `Replace`, `Trim`, `LTrim`, `RTrim`
+**String** — `Concat`, `Lower`, `Upper`, `Length`, `Replace`, `Trim`, `LTrim`, `RTrim`, `LPad`, `RPad`
 
 **Math** — `Abs`, `Round`, `Floor`, `Ceil`, `Sqrt`, `Exp`, `Ln`, `Power`, `Mod`
 

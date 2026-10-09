@@ -71,7 +71,7 @@ const EXPECTED_FUNCTIONS = Set([
     :Sum, :Avg, :Count, :Max, :Min,
     :Case, :When,
     :WindowOver, :WindowSpec, :Rank, :DenseRank, :RowNumber, :Lag, :Lead, :FirstValue, :LastValue, :NthValue,
-    :Concat, :Lower, :Upper, :Length, :Replace, :Trim, :LTrim, :RTrim,
+    :Concat, :Lower, :Upper, :Length, :Replace, :Trim, :LTrim, :RTrim, :LPad, :RPad,   # #122
     :Abs, :Round, :Floor, :Ceil, :Sqrt, :Exp, :Ln, :Power, :Mod,
     :Cast, :Extract, :ToChar, :Value, :Coalesce, :Greatest, :Least, :NullIf,
     :SearchQuery, :SearchVector, :SearchRank, :SearchHeadline,   # #31

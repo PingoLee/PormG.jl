@@ -84,6 +84,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "F/Joined Date Operands (#494)" include("unit/test_f_date_operands.jl")
     @testset "SQLite Interval Ordering (#894)" include("unit/test_sqlite_interval_order.jl")
     @testset "pormg_lower UDF (#78)" include("unit/test_pormg_lower_udf.jl")
+    @testset "LPad/RPad String Padding (#122)" include("unit/test_lpad_rpad.jl")
     @testset "Aggregate Fan-out Guard (#74)" include("unit/test_aggregate_fanout.jl")
     @testset "Date Bucket Operator (yyyy_mm)" include("unit/test_date_bucket_operator.jl")
     @testset "Sargable Date Range Rewrite (#352)" include("unit/test_sargable_date_range.jl")

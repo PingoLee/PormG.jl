@@ -29,7 +29,7 @@ using Dates
 using PormG
 using PormG.Models: Model, IDField, FloatField, CharField, DateField
 using PormG.QueryBuilder: inspect_query, _is_agg
-using PormG.Functions: Coalesce, Greatest, Least, NullIf, Power, Mod, Replace, Concat, Sum, Value
+using PormG.Functions: Coalesce, Greatest, Least, NullIf, Power, Mod, Replace, Concat, Sum, Value, LPad, RPad
 
 include("helper_marker_alignment.jl")
 
@@ -118,7 +118,10 @@ end
                                  ("a number in Replace's replacement", () -> Replace("surname", "a", 2), "string(x)"),
                                  # Every integer type gets the string hint there, not `Int64(x)`,
                                  # which the same slot would refuse (found in the delta review).
-                                 ("an Int16 in Replace's find", () -> Replace("surname", Int16(1), "x"), "string(x)"))
+                                 ("an Int16 in Replace's find", () -> Replace("surname", Int16(1), "x"), "string(x)"),
+                                 # #122: `LPad`/`RPad`'s fill is the same text slot.
+                                 ("a number in LPad's fill", () -> LPad("surname", 3, 0), "string(x)"),
+                                 ("a number in RPad's fill", () -> RPad("surname", 3, 0.5), "string(x)"))
     @testset "$label" begin
       err = @test_throws PormG.QueryBuildError build()
       @test occursin(needle, err.value.msg)

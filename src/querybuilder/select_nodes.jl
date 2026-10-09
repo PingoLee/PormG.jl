@@ -390,6 +390,76 @@ function _check_transform_operand(key::String, column, instruc::SQLInstruction)
     "; \e[31m$(label)\e[0m is declared as $(kind) (#955)."))
 end
 
+# #122: `LPad`/`RPad` pad text. PostgreSQL has no `lpad` over a number, a date, a time, a boolean, a
+# uuid, a timestamp, an interval or a JSON document, nor one whose fill is any of those, and fails the
+# statement — while SQLite's `pormg_lpad` pads whatever text the value converts to. So a typed operand
+# or fill that is not text is refused on both engines. Fails OPEN, like `_check_transform_operand`: a
+# value PormG cannot type passes (an untyped `Case`, a `Subquery` over a number, a relation whose
+# target is not loaded).
+#
+# Text is an ALLOW list of formatters — `format_text_sql`, and `format_yyyy_mm` for the `@yyyy_mm`
+# label, which renders `to_char`/`strftime` — so a typed value of any other kind is refused rather
+# than reaching PostgreSQL. Three readings beside the formatter: a `TimeField` formats as text (see
+# above) but is a `time`; a JSON key lookup (`"payload__driver"`) carries the JSONField's formatter but
+# renders `#>>`/`json_extract`, which are text, so only a whole document is refused
+# (`_json_document_operand`, Concat's rule); a relation is its target key's type, not the
+# relation's (`"cc"` over a `CharField` primary key is text).
+const _PAD_TEXT_FORMATTERS = (Models.format_text_sql, Models.format_yyyy_mm)
+
+# The value's description when it is typed and not text, else `nothing`. `kind` is the rendered kind
+# `_render_operand_kind` computed: a timestamp or interval arithmetic that no type reader names.
+function _pad_textless(operand, kind, instruc::SQLInstruction)::Union{String,Nothing}
+  if operand isa SQLText
+    x = operand.field
+    (_is_null_literal(x) || x isa AbstractString) && return nothing
+    return "a literal of type $(nameof(typeof(x)))"   # never the value: it is a bound value (#971, #1057)
+  end
+  rendered = _rendered_kind_textless(kind)
+  rendered === nothing || return rendered[2]
+  # A time of day formats as text, so the formatter cannot tell it from text; its kind can, through
+  # the functions that keep their operand's (`Max("clock")`, `Coalesce`, a `Subquery`).
+  time_kind = _operand_kind(operand, instruc) isa CTime
+  formatter = _expression_formatter(operand, instruc)
+  column = operand isa FExpression && operand.operation === nothing ? operand.field_name : operand
+  column = column isa SQLField ? column.field : column
+  field = _alias_column_field(column, instruc)
+  relation = ""
+  if field isa Models.sRelationalColumn
+    target = field.to
+    (target isa PormGModel && field.pk_field !== nothing) || return nothing
+    relation = string(nameof(typeof(field)))[2:end]
+    field = get(target.fields, String(field.pk_field), nothing)
+    field isa PormGField || return nothing
+    formatter = hasproperty(field, :formatter) ? field.formatter : nothing
+  end
+  formatter === nothing && return nothing
+  formatter === Models.format_json_sql && !_json_document_operand(operand, instruc) && return nothing
+  time_field = time_kind || (field isa PormGField && hasproperty(field, :type) && _is_time_field(field))
+  formatter in _PAD_TEXT_FORMATTERS && !time_field && return nothing
+  label = _concat_operand_label(operand)
+  kind_name = field isa PormGField ? string(nameof(typeof(field))) : ""
+  kind_name = Base.startswith(kind_name, "s") ? kind_name[2:end] : kind_name
+  label === nothing && return time_field ? "a time of day" : "a non-text expression"
+  isempty(relation) || return "the $(relation) `$(label)`, whose key is of type $(kind_name)"
+  return isempty(kind_name) ? "`$(label)`" : "the $(kind_name) `$(label)`"
+end
+
+function _check_pad_operands(v::SQLTypeFunction, instruc::SQLInstruction, operand_kinds::AbstractVector)
+  name = v.function_name == "LPAD" ? "LPad" : "RPad"
+  for (i, slot) in ((1, "the value it pads"), (3, "its fill"))
+    what = _pad_textless(v.column[i], get(operand_kinds, i, nothing), instruc)
+    what === nothing && continue
+    advice = v.column[i] isa SQLText ?
+      "Write the literal as a string: \e[4m\e[32mstring(x)\e[0m" :
+      "Convert it to text first: \e[4m\e[32mCast(x, \"text\")\e[0m for an integer, a date, a time or a " *
+      "uuid, \e[4m\e[32mToChar\e[0m for a timestamp, a \e[4m\e[32mCase\e[0m for a boolean; a float, a " *
+      "decimal, an interval or a JSON document reads differently on each engine, so format it in Julia"
+    throw(QueryBuildError(
+      "\e[4m\e[31m$(name)\e[0m pads TEXT, and $(slot), $(what), is not text: PostgreSQL has no " *
+      "$(lowercase(v.function_name)) over it. $(advice) (#122)."))
+  end
+end
+
 function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
                                _as::Union{Nothing,String}=nothing)::Tuple{String,Bool,Bool}
   # Parameterize scalar kwargs instead of rendering them as SQL literals.
@@ -479,10 +549,11 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     # #31: in text order — the vector or document, then the query, then the headline's options.
     # #1021: a sum of vectors renders its two halves the same way, left to right.
     resolved_column = Any[_render_fts_operand(c, instruc; _as = _as) for c in v.column]
-  elseif v.function_name == "CONCAT" || v.function_name in _DECLARED_CAST_FUNCTIONS
+  elseif v.function_name in ("CONCAT", "LPAD", "RPAD") || v.function_name in _DECLARED_CAST_FUNCTIONS
     # #1028: each operand rendered once, keeping the kind its render computed — arithmetic over a
     # timestamp or a duration (`F("start_at") + Day(1)`, a difference) and `Sum(duration)` are a
-    # timestamp or an interval that no type reader names, and their text differs per engine.
+    # timestamp or an interval that no type reader names, and their text differs per engine. #122:
+    # `LPad`/`RPad` read it too — PostgreSQL has no `lpad` over either.
     operands = _null_skipping_operands(v, instruc)
     forms = [_render_operand_kind(x, instruc; _as = _as) for x in (operands isa AbstractVector ? operands : (operands,))]
     resolved_column = operands isa AbstractVector ? Any[f[1] for f in forms] : only(forms)[1]
@@ -523,6 +594,8 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
       throw(_concat_textless_refusal(textless...; flag = _concat_flag(operand)))
     end
   end
+  # #122: `LPad`/`RPad` over a typed operand that is not text, read at the same point.
+  v.function_name in ("LPAD", "RPAD") && _check_pad_operands(v, instruc, operand_kinds)
   # #1028: the same divergence through a declared cast — `Cast(x, CharField())`, `Cast(x,
   # IntegerField())`, and the `output_field` cast `Coalesce`/`Greatest`/`Least` apply. Read at the same
   # point, so a `Concat` over such a cast meets this refusal first, while its operand renders. An

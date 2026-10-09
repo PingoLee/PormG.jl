@@ -149,7 +149,7 @@ include("querybuilder/join_conditions.jl")
 export Q, Qor
 export Sum, Avg, Count, Max, Min, When, F, Exists, OuterRef, Subquery, CTE, Joined, Case, Cast, Concat, Extract, ToChar, Value, Interval
 export WindowOver, WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue
-export Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim
+export Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf, Replace, Trim, LTrim, RTrim, LPad, RPad
 export Floor, Ceil, Sqrt, Exp, Ln, Power, Mod
 export SearchQuery, SearchVector, SearchRank, SearchHeadline   # #31
 

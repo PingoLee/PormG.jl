@@ -89,6 +89,8 @@ const _AGG_WRAPPERS = Dict{Symbol,Function}(
   :Trim     => inner -> Trim(inner),
   :LTrim    => inner -> LTrim(inner),
   :RTrim    => inner -> RTrim(inner),
+  :LPad     => inner -> LPad(inner, 3, "0"),   # #122
+  :RPad     => inner -> RPad(inner, 3, "0"),
   :Floor    => inner -> Floor(inner),
   :Ceil     => inner -> Ceil(inner),
   :Sqrt     => inner -> Sqrt(inner),
@@ -112,6 +114,7 @@ const _AGG_WRAPPER_OTHER_SLOTS = (
   ("Power, the exponent",         inner -> Power(Value(2), inner)),
   ("Mod, the divisor",            inner -> Mod(Value(10), inner)),
   ("Replace, the search value",   inner -> Replace("surname", inner, "b")),
+  ("LPad, the fill",              inner -> LPad("surname", 3, inner)),   # #122
   ("When, otherwise",             inner -> When("raceid" => 1, then = 0, otherwise = inner)),
   ("Case, default",               inner -> Case([When("raceid" => 1, then = 0)], default = inner)),
 )
@@ -244,6 +247,7 @@ end
   arg_for = Dict(:Extract => "born", :ToChar => "born", :Lower => "surname", :Upper => "surname",
                  :Length => "surname", :Replace => "surname", :Trim => "surname",
                  :LTrim => "surname", :RTrim => "surname", :Concat => "surname",
+                 :LPad => "surname", :RPad => "surname",   # #122: a number is refused
                  :Cast => "raceid",   # #1028: a float cast to an integer is refused
                  :Round => "raceid")  # #1044: a float rounded to places is refused
   for (backend, Model_) in _AGG_FLAG_MODELS

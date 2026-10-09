@@ -70,6 +70,42 @@ end
     @test df[1, :min_val] == 1
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# LPad/RPad: string padding on a real engine (#122)
+# PostgreSQL renders its own LPAD/RPAD; SQLite calls the `pormg_lpad`/`pormg_rpad` functions the
+# extension registers on every connection, so this is the run that proves the registration reaches
+# a pooled connection. Then the issue's statement: zero-fill an integer into a text column with one
+# UPDATE, inside a transaction that is rolled back so the shared fixture keeps "HAM".
+# ─────────────────────────────────────────────────────────────────────────────
+struct _Lpad122Rollback <: Exception end   # top level: Julia rejects a `struct` inside `@testset`
+@testset "LPad/RPad (#122)" begin
+    q = M.Driver.objects
+    q.filter("driverid__@in" => [1, 20])
+    q.values("driverid",
+             "car"  => LPad(Cast("number", "text"), 3, "0"),   # 44 → "044", 5 → "005"
+             "code" => RPad("code", 5, "."),                    # "HAM" → "HAM.."
+             "cut"  => LPad("surname", 3, "*"),                 # longer than 3: cut to "Ham"
+             "pad"  => LPad("code", 7, "xy"))                   # a fill that repeats and is cut
+    q.order_by("driverid")
+    rows = q.list(:dict)
+    @test [r[:car] for r in rows] == ["044", "005"]
+    @test rows[1][:code] == "HAM.."
+    @test rows[1][:cut] == "Ham"
+    @test rows[1][:pad] == "xyxyHAM"
+
+    # The update, rolled back by the sentinel thrown at the end of the block.
+    try
+        PormG.run_in_transaction(PORMG_DB_FOLDER) do
+            M.Driver.objects.filter("driverid" => 1).update("code" => LPad(Cast("number", "text"), 3, "0"))
+            @test only(M.Driver.objects.filter("driverid" => 1).values("code").list(:dict))[:code] == "044"
+            throw(_Lpad122Rollback())
+        end
+    catch e
+        e isa _Lpad122Rollback || rethrow()
+    end
+    @test only(M.Driver.objects.filter("driverid" => 1).values("code").list(:dict))[:code] == "HAM"
+end
+
 @testset "Range Filter Modifier" begin
     # Logic: Test the "__range" modifier which translates to SQL "BETWEEN".
     # Expected SQL: SELECT ... FROM ... WHERE "driverid" BETWEEN 1 AND 5

@@ -184,7 +184,7 @@ the entry point: it lists every constructor and where each family is documented.
 [`NthValue`](@ref) — see [Window Functions](@ref)
 
 **String** — [`Concat`](@ref), [`Lower`](@ref), [`Upper`](@ref), [`Length`](@ref),
-[`Replace`](@ref), [`Trim`](@ref), [`LTrim`](@ref), [`RTrim`](@ref)
+[`Replace`](@ref), [`Trim`](@ref), [`LTrim`](@ref), [`RTrim`](@ref), [`LPad`](@ref), [`RPad`](@ref)
 
 **Math** — [`Abs`](@ref), [`Round`](@ref), [`Floor`](@ref), [`Ceil`](@ref), [`Sqrt`](@ref),
 [`Exp`](@ref), [`Ln`](@ref), [`Power`](@ref), [`Mod`](@ref)
@@ -212,12 +212,12 @@ library — they are query primitives and stay on the top-level `using PormG` su
 module Functions
   import ..QueryBuilder: Sum, Avg, Count, Max, Min, Case, When, Cast, Concat, Extract,
     ToChar, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf,
-    Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod, WindowOver,
+    Replace, Trim, LTrim, RTrim, LPad, RPad, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod, WindowOver,
     WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue,
     SearchQuery, SearchVector, SearchRank, SearchHeadline
   export Sum, Avg, Count, Max, Min, Case, When, Cast, Concat, Extract,
     ToChar, Value, Coalesce, Greatest, Least, Lower, Upper, Length, Abs, Round, NullIf,
-    Replace, Trim, LTrim, RTrim, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod, WindowOver,
+    Replace, Trim, LTrim, RTrim, LPad, RPad, Floor, Ceil, Sqrt, Exp, Ln, Power, Mod, WindowOver,
     WindowSpec, Rank, DenseRank, RowNumber, Lag, Lead, FirstValue, LastValue, NthValue,
     SearchQuery, SearchVector, SearchRank, SearchHeadline
 end

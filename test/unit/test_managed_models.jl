@@ -438,12 +438,15 @@ end
     end
     generated = read(joinpath(config_key, "managed741.jl"), String)
 
-    @test occursin("Models.Model(\"driverpoints\", db_table = \"driver_points_v\", managed = false,", generated)
-    @test occursin("Models.Model(\"feedrow\", managed = false,", generated)   # inherited
-    @test occursin("Models.Model(\"circuit\",", generated)
-    @test !occursin("Models.Model(\"circuit\", managed", generated)
+    # The importer leaves the positional name out (#1043), so `managed = false` is the first argument
+    # when no `db_table` precedes it.
+    @test occursin("\nDriverPoints = Models.Model(db_table = \"driver_points_v\", managed = false,", generated)
+    @test occursin("\nFeedRow = Models.Model(managed = false,", generated)   # inherited
+    @test occursin("\nCircuit = Models.Model(\n", generated)
+    @test !occursin("\nCircuit = Models.Model(managed", generated)
     # Not a literal: the model stays managed, and both the log and the file say so.
-    @test !occursin("Models.Model(\"lap\", managed", generated)
+    @test occursin("\nLap = Models.Model(\n", generated)
+    @test !occursin("\nLap = Models.Model(managed", generated)
     @test occursin("# PormG: Meta.managed on 'Lap' is not True or False", generated)
     @test any(r -> r.level == Logging.Warn && occursin("Meta.managed", string(r.message)), logs)
     # A managed model's key into an unmanaged one: Django allows the constraint, PormG does not (the

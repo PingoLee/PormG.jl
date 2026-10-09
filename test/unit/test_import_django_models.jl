@@ -77,23 +77,23 @@ end
 
         generated = read(generated_path, String)
         @test occursin("module django_models_from_txt_unit", generated)
-        @test occursin("Dim_municipio = Models.Model(\"dim_municipio\"", generated)
+        @test occursin("\nDim_municipio = Models.Model(", generated)
         @test occursin("servidor_id = Models.ForeignKey(\"Dim_servidor\"", generated)
         @test occursin("on_delete=RESTRICT", generated)
         @test occursin("nu_cnes_temp_id = Models.ForeignKey(\"Dim_CNES\"", generated)
         @test occursin("on_delete=SET_NULL", generated)
         @test occursin("vaccine_def = Models.JSONField(blank=true, null=true)", generated)
-        @test occursin("CustomUser = Models.Model(\"customuser\"", generated)
+        @test occursin("\nCustomUser = Models.Model(", generated)
         @test occursin("password = Models.CharField()", generated)
-        @test occursin("PasswordResetToken = Models.Model(\"passwordresettoken\"", generated)
+        @test occursin("\nPasswordResetToken = Models.Model(", generated)
         @test occursin("created_at = Models.DateTimeField(auto_now_add=true)", generated)
-        @test occursin("ReporteProblema = Models.Model(\"reporteproblema\"", generated)
+        @test occursin("\nReporteProblema = Models.Model(", generated)
         @test occursin("imagem = Models.ImageField(blank=true, null=true, editable=true)", generated)
         @test occursin("retorno = Models.TextField(blank=true, default=\"\")", generated)
         @test occursin("retorno_por_id = Models.ForeignKey(\"CustomUser\"", generated)
         @test occursin("related_name=\"reportes_respondidos\"", generated)
         @test occursin("usuario_lido_em = Models.DateTimeField(blank=true, null=true)", generated)
-        @test occursin("Cust_adminHOD = Models.Model(\"cust_adminhod\"", generated)
+        @test occursin("\nCust_adminHOD = Models.Model(", generated)
         # `id` is emitted as `id`, not `_id` (#317): it was only ever prefixed because PormG's
         # `reserved_words` list wrongly carried it — it is an ordinary Julia identifier.
         #
@@ -107,15 +107,15 @@ end
         @test occursin("user_id = Models.OneToOneField(\"CustomUser\"", generated)
         @test occursin("criado_em = Models.DateTimeField(auto_now=true)", generated)
         @test !occursin("objects = Models.Manager", generated)
-        @test occursin("Prod_antropometria = Models.Model(\"prod_antropometria\"", generated)
+        @test occursin("\nProd_antropometria = Models.Model(", generated)
         @test occursin("nu_peso = Models.FloatField(null=true)", generated)
         @test occursin("hora_ag = Models.TimeField(null=true)", generated)
         @test occursin("tempo_atendimento = Models.DurationField(null=true)", generated)
-        @test occursin("Dim_cnes_grupo = Models.Model(\"dim_cnes_grupo\"", generated)
+        @test occursin("\nDim_cnes_grupo = Models.Model(", generated)
         @test occursin("criado_por_id = Models.ForeignKey(\"CustomUser\"", generated)
         @test occursin("unidades = Models.ManyToManyField(\"Dim_CNES\", related_name=\"grupos_unidades\")", generated)
         @test !occursin("unidades_id", generated)
-        @test occursin("Dim_interacao_programa = Models.Model(\"dim_interacao_programa\"", generated)
+        @test occursin("\nDim_interacao_programa = Models.Model(", generated)
         @test occursin("nivel_destino = Models.PositiveSmallIntegerField(default=3)", generated)
         @test occursin("tipos_permitidos = Models.JSONField(blank=true, default=\"[]\")", generated)
         @test occursin("created_at = Models.DateTimeField(auto_now_add=true)", generated)
@@ -173,7 +173,7 @@ class SupportedThing(models.Model):
 
     try
         generated = read(generated_path, String)
-        @test occursin("SupportedThing = Models.Model(\"supportedthing\"", generated)
+        @test occursin("\nSupportedThing = Models.Model(", generated)
         @test occursin("label = Models.CharField(max_length=50)", generated)
         # `PlainHelper(object)` is a helper by its base list, so it leaves no trace at all.
         @test !occursin("PlainHelper", generated)
@@ -597,9 +597,10 @@ class Dim_ibge(models.Model):
         @test !isfile(joinpath(folder, output_file))
 
         generated = read(joinpath(out_folder, output_file), String)
-        # #345: the prefix rides in `db_table`, not in the positional slot. The positional slot is
-        # the LOGICAL handle — `lowercase(class_name)`, which is Django's own derivation.
-        @test occursin("Models.Model(\"dim_ibge\", db_table = \"estoque_dim_ibge\"", generated)
+        # #345: the prefix rides in `db_table`, not in the positional slot. The LOGICAL handle is
+        # `lowercase(class_name)`, Django's own derivation — and since that is exactly what loading
+        # derives from the binding, the importer leaves the positional slot out altogether (#1043).
+        @test occursin("\nDim_ibge = Models.Model(db_table = \"estoque_dim_ibge\"", generated)
         # The old spelling (prefix fused into the positional name) must be gone entirely.
         @test !occursin("Models.Model(\"estoque_dim_ibge\"", generated)
         # The overridden prefix wins over the config's "dash" — asserted on the db_table VALUE, not
@@ -644,9 +645,10 @@ class DimIbge(models.Model):
 
     generated, config_key, db_dir_existed = import_django_source(source; django_prefix = "dash")
     try
-        # Positional slot = logical handle; db_table = the physical Django table.
-        @test occursin("Models.Model(\"dim_uf\", db_table = \"dash_dim_uf\"", generated)
-        @test occursin("Models.Model(\"dimibge\", db_table = \"dash_dimibge\"", generated)
+        # Logical handle = the binding lowercased (no positional slot, #1043); db_table = the
+        # physical Django table.
+        @test occursin("\nDim_uf = Models.Model(db_table = \"dash_dim_uf\"", generated)
+        @test occursin("\nDimIbge = Models.Model(db_table = \"dash_dimibge\"", generated)
 
         # `DimIbge` lowers to "dimibge", NOT "dim_ibge" — Django inserts no underscore either, so a
         # camel-cased class still addresses the table Django actually created.
@@ -684,7 +686,7 @@ class Dim_uf(models.Model):
 
     generated, config_key, db_dir_existed = import_django_source(source; django_prefix = nothing)
     try
-        @test occursin("Dim_uf = Models.Model(\"dim_uf\",", generated)
+        @test occursin("\nDim_uf = Models.Model(", generated)
         @test !occursin("db_table", generated)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
@@ -710,8 +712,8 @@ class Matricula(models.Model):
 
     generated, config_key, db_dir_existed = import_django_source(source; django_prefix = "dash")
     try
-        # The declared table wins; the positional slot is still the logical handle.
-        @test occursin("Models.Model(\"matricula\", db_table = \"rh_matricula_legado\"", generated)
+        # The declared table wins; the logical handle is still derived from the binding.
+        @test occursin("\nMatricula = Models.Model(db_table = \"rh_matricula_legado\"", generated)
         # The app prefix must NOT be applied on top of, or instead of, the declared name.
         @test !occursin("dash_matricula", generated)
         @test !occursin("dash_rh_matricula_legado", generated)
@@ -772,7 +774,7 @@ class Matricula(models.Model):
         @test occursin("vinculos = Models.ManyToManyField(\"Dim_uf\", through=\"Vinculo\")", generated)
         @test !occursin("dash_dimibge_vinculos", generated)
         # The through model is a real table of its own and gets the app label like any other.
-        @test occursin("Vinculo = Models.Model(\"vinculo\", db_table = \"dash_vinculo\"", generated)
+        @test occursin("\nVinculo = Models.Model(db_table = \"dash_vinculo\"", generated)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end
@@ -852,8 +854,10 @@ class ___(models.Model):
 
         # An ALL-underscore class strips to the empty string, which as a positional name silently
         # means "derive from the binding". The sanitizer's placeholder (`col`) is used instead —
-        # free to be arbitrary precisely because db_table carries the real table.
-        @test occursin("Models.Model(\"col\", db_table = \"dash____\"", generated)
+        # free to be arbitrary precisely because db_table carries the real table. It is then exactly
+        # the binding lowercased, so the short form omits it (#1043) — while `_Internal` above keeps
+        # "internal", which is NOT what its binding would derive.
+        @test occursin("\nCol = Models.Model(db_table = \"dash____\"", generated)
         @test !occursin("Models.Model(\"___\"", generated)
 
         # The assertion that actually matters: the file loads. String-matching the output cannot
@@ -869,6 +873,133 @@ class ___(models.Model):
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#1043): the positional name is omitted, and the models load the same
+# The importer emits `Race = Models.Model(db_table = "racing_race", …)`: the logical name is exactly
+# what `set_models` derives from the binding, so writing it out was redundant. Loaded side by side
+# with the explicit spelling (the pre-#1043 output), every name-derived property must agree — the
+# logical name, the table, the reverse accessors, and the ManyToMany join table and join columns.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Django importer omits the positional name the binding derives (#1043)" begin
+    source = """
+from django.db import models
+
+class Circuit(models.Model):
+    name = models.CharField(max_length=50)
+
+class Driver(models.Model):
+    surname = models.CharField(max_length=50)
+
+class Race(models.Model):
+    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)
+    drivers = models.ManyToManyField(Driver)
+"""
+    output_file = "django_1043_short_name_unit.jl"
+    generated, config_key, db_dir_existed = import_django_source(source; django_prefix = "racing",
+                                                                 output_file = output_file)
+    try
+        # No positional string anywhere: every model's name equals its binding lowercased.
+        @test occursin("\nRace = Models.Model(db_table = \"racing_race\",\n  id = Models.IDField(),", generated)
+        @test !occursin(r"Models\.Model\(\"", generated)
+
+        # The explicit spelling, rebuilt by putting each derived name back in the positional slot —
+        # byte-for-byte what the importer emitted before #1043.
+        explicit = replace(generated, r"\n(\w+) = Models\.Model\(" =>
+                           s -> (b = match(r"\n(\w+) = ", s).captures[1];
+                                 "\n$(b) = Models.Model(\"$(lowercase(b))\", "))
+        @test occursin("\nRace = Models.Model(\"race\", db_table = \"racing_race\",", explicit)
+
+        # Load each spelling into its own sandbox and register it. `invokelatest`: the module was
+        # just created by `Core.eval`, so its bindings are newer than this testset's world (#211).
+        function load(text)
+            sandbox = Module()
+            Core.eval(sandbox, Meta.parse(text))
+            mod = Core.eval(sandbox, :(django_1043_short_name_unit))
+            Base.invokelatest(Models.set_models, mod, config_key)
+            return mod
+        end
+        short_mod, long_mod = load(generated), load(explicit)
+        settings = PormG.config[config_key]
+        # Same world-age reason: read the bindings through `invokelatest`, never `short_mod.Race`.
+        modelof(mod, sym) = Base.invokelatest(getfield, mod, sym)
+        short = (; (b => modelof(short_mod, b) for b in (:Circuit, :Driver, :Race))...)
+        long = (; (b => modelof(long_mod, b) for b in (:Circuit, :Driver, :Race))...)
+
+        for binding in (:Circuit, :Driver, :Race)
+            s, l = getfield(short, binding), getfield(long, binding)
+            # The name was never written, so registration filled it from the binding.
+            @test s.name == l.name == lowercase(String(binding))
+            @test PormG.model_table_name(s) == PormG.model_table_name(l)
+            @test sort(collect(keys(s.related_objects))) == sort(collect(keys(l.related_objects)))
+        end
+        # Non-vacuous: the FK and the M2M both put a reverse accessor on their target.
+        @test haskey(short.Circuit.related_objects, "race")
+        @test haskey(short.Driver.related_objects, "race")
+
+        # The M2M join table is pinned by the importer; its join COLUMNS are derived from the model
+        # name, which is the part a name/binding drift would change.
+        s_m2m, l_m2m = short.Race.fields["drivers"], long.Race.fields["drivers"]
+        @test Models._many_to_many_table_name(short.Race, "drivers", s_m2m, settings) ==
+              Models._many_to_many_table_name(long.Race, "drivers", l_m2m, settings) == "racing_race_drivers"
+        for (s, l) in ((short.Race, long.Race), (short.Driver, long.Driver))
+            @test Models._many_to_many_column_name(s, "id") == Models._many_to_many_column_name(l, "id")
+        end
+        @test Models._many_to_many_column_name(short.Race, "id") == "race_id"
+        @test Models._many_to_many_column_name(short.Driver, "id") == "driver_id"
+    finally
+        cleanup_import_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Model_to_str (#1043): `omit_derived_name` drops the name only where the binding derives it
+# The omission is safe exactly when `format_model_name(binding)` reproduces the name. Every other
+# case must keep it: a binding the caller chose, a deduplicated name or binding, a leading underscore
+# stripped from the logical handle. The default (`false`, inspectdb's) must not change at all, and the
+# commented-out stub keeps the name because it is edited by hand.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Model_to_str omit_derived_name keeps every name the binding would not derive (#1043)" begin
+    fields() = Dict{String, PormG.PormGField}("id" => Models.IDField())
+    plain = Models.Model("Circuit", fields())
+    render(m; kw...) = Models.Model_to_str(m; omit_derived_name = true, kw...)
+
+    # Short form, with nothing, a db_table, or managed = false in front of the fields.
+    @test render(plain) == "Circuit = Models.Model(\n  id = Models.IDField())"
+    pinned = Models.Model("Circuit", fields())
+    Models._apply_db_table!(pinned, "racing_circuit")
+    @test render(pinned) == "Circuit = Models.Model(db_table = \"racing_circuit\",\n  id = Models.IDField())"
+    unmanaged = Models.Model("circuit"; managed = false, id = Models.IDField())
+    @test render(unmanaged) == "Circuit = Models.Model(managed = false,\n  id = Models.IDField())"
+
+    # The default is the explicit form, byte-for-byte — the inspectdb path.
+    @test Models.Model_to_str(plain) == "Circuit = Models.Model(\"circuit\",\n  id = Models.IDField())"
+
+    # A binding the caller chose, which does not lowercase to the name.
+    @test render(plain; binding = "Track") == "Track = Models.Model(\"circuit\",\n  id = Models.IDField())"
+
+    # A deduplicated NAME: "circuit" is taken, so the handle becomes "circuit2" (and the real table is
+    # pinned) — while the binding is still `Circuit`.
+    @test render(plain; taken_names = Set(["circuit"])) ==
+          "Circuit = Models.Model(\"circuit2\", db_table = \"circuit\",\n  id = Models.IDField())"
+    # A deduplicated BINDING: `Circuit` is taken, so it becomes `Circuit2` while the name stays.
+    @test render(plain; taken_bindings = Set(["Circuit"])) ==
+          "Circuit2 = Models.Model(\"circuit\",\n  id = Models.IDField())"
+
+    # A leading underscore stripped from the handle: `_Internal` would derive "_internal".
+    under = Models.Model("_Internal", fields())
+    Models._apply_db_table!(under, "dash__internal")
+    @test render(under) == "_Internal = Models.Model(\"internal\", db_table = \"dash__internal\",\n  id = Models.IDField())"
+    # …and with NO table pinned, where the name is the unstripped "_internal" and so DOES equal the
+    # binding lowercased. The no-name form would load a model the positional #306 gate refuses, so
+    # the spelling stays exactly what it was.
+    @test render(Models.Model("_Internal", fields())) ==
+          "_Internal = Models.Model(\"_internal\",\n  id = Models.IDField())"
+
+    # The commented-out stub keeps the name.
+    empty_model = Models.Model("Circuit", Dict{String, PormG.PormGField}())
+    @test endswith(render(empty_model), "\n# Circuit = Models.Model(\"circuit\")")
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -980,7 +1111,7 @@ class Tab_interacao_anexo(models.Model):
 
     try
         generated = read(generated_path, String)
-        @test occursin("Tab_interacao_anexo = Models.Model(\"tab_interacao_anexo\"", generated)
+        @test occursin("\nTab_interacao_anexo = Models.Model(", generated)
         @test occursin("tamanho = Models.PositiveIntegerField(default=0)", generated)
         @test occursin("mensagem_id = Models.ForeignKey(\"Tab_interacao_mensagem\"", generated)
         @test occursin("uploaded_by_id = Models.ForeignKey(\"CustomUser\"", generated)
@@ -1043,10 +1174,10 @@ end
     try
         generated = read(generated_path, String)
         @test occursin("module django_models_from_string_unit", generated)
-        @test occursin("Dim_CNES = Models.Model(\"dim_cnes\"", generated)
+        @test occursin("\nDim_CNES = Models.Model(", generated)
         @test occursin("agendamento_online = Models.CharField(max_length=1", generated)
-        @test occursin("CustomUser = Models.Model(\"customuser\"", generated)
-        @test occursin("ReporteProblema = Models.Model(\"reporteproblema\"", generated)
+        @test occursin("\nCustomUser = Models.Model(", generated)
+        @test occursin("\nReporteProblema = Models.Model(", generated)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end
@@ -1296,8 +1427,8 @@ class PessoaHistorico(models.Model):
     try
         import_models_from_django(ok; db = config_key2, file = "case_ok.jl", force_replace = true)
         generated = read(joinpath(config_key2, "case_ok.jl"), String)
-        @test occursin("Pessoa = Models.Model(\"pessoa\"", generated)
-        @test occursin("PessoaHistorico = Models.Model(\"pessoahistorico\"", generated)
+        @test occursin("\nPessoa = Models.Model(", generated)
+        @test occursin("\nPessoaHistorico = Models.Model(", generated)
     finally
         cleanup_import_test!(config_key2, existed2)
     end
@@ -1503,12 +1634,12 @@ end
         # The positional slot stays the LOGICAL name while `db_table` carries the physical one —
         # the #59 split. Asserted as ONE string so a regression emitting only half fails here.
         @test occursin(
-            "Matricula = Models.Model(\"matricula\", db_table = \"rh_matricula_legado\"",
+            "\nMatricula = Models.Model(db_table = \"rh_matricula_legado\"",
             generated,
         )
 
         # A model that declares no db_table must not acquire one.
-        @test !occursin("Setor = Models.Model(\"setor\", db_table", generated)
+        @test !occursin("\nSetor = Models.Model(db_table", generated)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end
@@ -1535,14 +1666,14 @@ end
         @test !occursin("db_table = TABELA_LEGADO", generated)
 
         # ...and the model is still imported, under its derived name, with the reason stated.
-        @test occursin("Legado = Models.Model(\"legado\"", generated)
+        @test occursin("\nLegado = Models.Model(", generated)
         @test occursin("# PormG: Meta.db_table on 'Legado' is not a string literal", generated)
 
         # A TRIPLE-quoted literal is the case a naive "starts with a quote" test lets through:
         # `parse_value` strips one character per side, so the value keeps two stray quotes.
         @test !occursin("arq_legado", generated)
         @test occursin("# PormG: Meta.db_table on 'Arquivado' is not a string literal", generated)
-        @test occursin("Arquivado = Models.Model(\"arquivado\"", generated)
+        @test occursin("\nArquivado = Models.Model(", generated)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end
@@ -1928,7 +2059,7 @@ end
         # child of one abstract base would point at a single table. `Auditavel` declares
         # `db_table = "aud_base"` precisely so this assertion has something that could fail —
         # without it on the base, no implementation could ever put one on the child.
-        @test !occursin("Ocorrencia = Models.Model(\"ocorrencia\", db_table", generated)
+        @test !occursin("\nOcorrencia = Models.Model(db_table", generated)
         @test !occursin("aud_base", generated)
         # ...and the refusal is REPORTED, not silent — otherwise a reader sees a model addressing a
         # different table from the one Django would have given it, with nothing to explain why.
@@ -1940,7 +2071,7 @@ end
         # so `RaizConfig`'s must NOT be reported against it, and `MeioConfig`'s ordering must be.
         @test !occursin("abstract base 'RaizConfig' declares Meta.db_table", generated)
         @test occursin("Meta.ordering on 'FimConfig'", generated)
-        @test occursin("FimConfig = Models.Model(\"fimconfig\"", generated)
+        @test occursin("\nFimConfig = Models.Model(", generated)
 
         # A `class Meta:` carrying ONLY a docstring is still a declaration, so Django inherits
         # nothing past it. Gating on the parsed OPTIONS instead of on the block would hand
@@ -1948,7 +2079,7 @@ end
         # block — which is what the code does — gives it neither.
         # The `== 1` count above already covers the constraint half: SoDocstring is a third child of
         # Auditavel, so inheriting past its docstring-only Meta would make it 2.
-        @test occursin("SoDocstring = Models.Model(\"sodocstring\"", generated)
+        @test occursin("\nSoDocstring = Models.Model(", generated)
         @test !occursin("abstract base 'Auditavel' declares Meta.db_table — NOT inherited by 'SoDocstring'", generated)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
@@ -1979,8 +2110,8 @@ end
         @test !occursin("desconto", generated)
 
         # The parents still import — refusing the child must not cost the parent.
-        @test occursin("Venda = Models.Model(\"venda\"", generated)
-        @test occursin("Servidor = Models.Model(\"servidor\"", generated)
+        @test occursin("\nVenda = Models.Model(", generated)
+        @test occursin("\nServidor = Models.Model(", generated)
 
         # The generated file states each omission and its reason. ServidorAtivo doubles as the
         # check that `proxy = True` is read BEFORE the inheritance kind is decided: its base is
@@ -2009,7 +2140,7 @@ end
     try
         generated = read(generated_path, String)
 
-        @test occursin("Relatorio = Models.Model(\"relatorio\"", generated)
+        @test occursin("\nRelatorio = Models.Model(", generated)
         @test occursin("titulo = Models.CharField(max_length=80)", generated)
         @test occursin("# PormG: model 'Relatorio' inherits 'TimeStampedModel'", generated)
 
@@ -2039,7 +2170,7 @@ end
         # The unresolved-base walk climbs the ABSTRACT chain. `Encomenda` inherits the abstract
         # `Rastreavel`, whose own base is the one missing — and `Rastreavel` emits nothing, so
         # without the walk its gap would reach the file with no marker anywhere.
-        @test occursin("Encomenda = Models.Model(\"encomenda\"", generated)
+        @test occursin("\nEncomenda = Models.Model(", generated)
         @test occursin("rastreio = Models.CharField(max_length=20)", generated)
         @test occursin("# PormG: model 'Encomenda' inherits 'TimeStampedModel'", generated)
 
@@ -2070,14 +2201,14 @@ end
     try
         generated = read(generated_path, String)
 
-        @test occursin("Lotacao = Models.Model(\"lotacao\"", generated)
+        @test occursin("\nLotacao = Models.Model(", generated)
         @test occursin("setor = Models.CharField(max_length=40)", generated)
 
         # ...and the same for a BLACKLISTED base rather than an in-file helper. `object` must come
         # last in a Python base list, so `class Ausencia(models.Model, object)` is the only legal
         # ordering — and it is asserted separately because the two exclusions are separate flags:
         # fixing one and leaving the other still deletes the model in silence.
-        @test occursin("Ausencia = Models.Model(\"ausencia\"", generated)
+        @test occursin("\nAusencia = Models.Model(", generated)
         @test occursin("motivo = Models.CharField(max_length=30)", generated)
 
         # The mixin itself is not a table, and contributes nothing — matching Django, which only
@@ -2089,7 +2220,7 @@ end
         # model name — in an HR schema a manager is a person — and matching that list against the
         # raw base list made the class invisible as a base, so `SeniorManager` resolved no parent
         # and was dropped in silence. It is multi-table inheritance, and must be reported as such.
-        @test occursin("Manager = Models.Model(\"manager\"", generated)
+        @test occursin("\nManager = Models.Model(", generated)
         @test occursin("# PormG: model 'SeniorManager' inherits the concrete model 'Manager'", generated)
 
         # A duplicated class name is pathological Python, and reporting it is conditional on what is
@@ -2124,7 +2255,7 @@ end
         generated = read(generated_path, String)
 
         # The model survives...
-        @test occursin("Frequencia = Models.Model(\"frequencia\"", generated)
+        @test occursin("\nFrequencia = Models.Model(", generated)
         # ...and the field it could not read is named in the file, not merely warned about.
         @test occursin("field 'competencia' on 'Frequencia'", generated)
         @test occursin("is a field-shaped call the importer cannot read", generated)
@@ -2161,9 +2292,9 @@ end
         @test occursin("Models.UniqueConstraint(fields = (\"andar\", \"numero\",))", generated)
 
         # All three models are still imported — reporting is not refusing.
-        @test occursin("Reserva = Models.Model(\"reserva\"", generated)
-        @test occursin("Diaria = Models.Model(\"diaria\"", generated)
-        @test occursin("Quarto = Models.Model(\"quarto\"", generated)
+        @test occursin("\nReserva = Models.Model(", generated)
+        @test occursin("\nDiaria = Models.Model(", generated)
+        @test occursin("\nQuarto = Models.Model(", generated)
     finally
         cleanup_import_test!(config_key, db_dir_existed)
     end
@@ -2252,6 +2383,9 @@ end
         # defined during this call, so its bindings are newer than this frame's world age and a
         # direct `getfield` raises UndefVarError.
         modelof(sym) = Core.eval(sandbox, :(django_meta_evaluates_unit.$sym))
+        # Register the module as `@import_models` would. The importer omits a positional name the
+        # binding derives (#1043), so the logical name exists only once `set_models` has filled it.
+        Base.invokelatest(Models.set_models, Core.eval(sandbox, :django_meta_evaluates_unit), config_key)
 
         # `db_table` survives the round trip as the PHYSICAL table while the logical name stays
         # lowercase. Reloading is where a wrong kwarg actually bites — rendering it is not enough.
@@ -2307,6 +2441,8 @@ class Matricula(models.Model):
         Core.eval(sandbox, Meta.parse(read(joinpath(config_key, output_file), String)))
         # Same world-age dance as the testset above.
         modelof(sym) = Core.eval(sandbox, :(django_345_roundtrip_unit.$sym))
+        # Registered first, as in the testset above: the logical name is filled by `set_models` (#1043).
+        Base.invokelatest(Models.set_models, Core.eval(sandbox, :django_345_roundtrip_unit), config_key)
 
         # The reloaded model queries Django's real table while its logical name — the thing every
         # accessor and reverse relation is keyed on — stays un-prefixed.
@@ -2490,7 +2626,7 @@ end
 
         # ...and the model declared AFTER all of them is still here. This is the assertion that
         # actually pins the issue: one bad enum must cost one field's metadata, not the file.
-        @test occursin("Posterior = Models.Model(\"posterior\"", generated)
+        @test occursin("\nPosterior = Models.Model(", generated)
         # Every model in the fixture reaches the file. A count rather than nine `occursin`s, so a
         # regression that loses one anywhere in the middle fails here.
         # Bump this when the fixture gains a model — that maintenance is the price of catching a

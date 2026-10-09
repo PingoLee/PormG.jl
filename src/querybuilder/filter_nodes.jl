@@ -72,12 +72,15 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
   # to the filter form.
   _guard_no_nested_cte(subquery, "Exists(...)")
   q = deepcopy(subquery)
-  q.object.values = []
-  q.object.order = []
+  # #1066: the projection is kept, and probed, when it decides the subquery's rows — as `exists()`.
+  keep_values = _projection_shapes_rows(q.object; distinct = q.object.distinct && q.object.offset > 0)
+  _keeps_order(q.object, keep_values) || (q.object.order = [])
+  keep_values || (q.object.values = [])
   # #1053: the subquery's own slice is kept. It used to be reset here, so `Exists(sub.limit(0))`
   # was true whenever `sub` had a row. The probe is `LIMIT 0` or `LIMIT 1` — the smaller of the
   # caller's limit and 1, a literal the code chooses — and the caller's OFFSET binds, as `exists()`'s
-  # does (#46). The ordering is still dropped: an EXISTS answer cannot depend on it.
+  # does (#46). The ordering is still dropped — an EXISTS answer cannot depend on it — except an
+  # aggregating projection's, where it is a GROUP BY term too (#1066, `_keeps_order`).
   probe_limit = _probe_limit(q.object.limit, 1)
   offset = q.object.offset
 
@@ -104,7 +107,14 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
   safe_alias = quote_identifier(instruction.alias, instruction.connection)
 
   io = IOBuffer()
-  print(io, "EXISTS (SELECT 1\nFROM ", safe_table_name, " as ", safe_alias, "\n")
+  # #1066: a kept projection is probed through a derived table, not as `EXISTS (SELECT DISTINCT …)`.
+  # SQLite drops a DISTINCT inside EXISTS as not changing the answer, which is false once an OFFSET
+  # counts the rows: on the F1 fixture `EXISTS (SELECT DISTINCT nationality FROM driver LIMIT 1
+  # OFFSET 43)` is true though the same SELECT returns no row. A derived table it cannot rewrite.
+  # `OuterRef` still correlates from inside it, on both engines, since it names an enclosing query.
+  print(io, keep_values ? "EXISTS (SELECT 1 FROM (SELECT " * _exists_projection(q.object, instruction, true) * "\n" :
+                          "EXISTS (SELECT 1\n")
+  print(io, "FROM ", safe_table_name, " as ", safe_alias, "\n")
 
   for join_sql in instruction.join
     print(io, join_sql, "\n")
@@ -132,6 +142,8 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
     print(io, "\n")
   end
 
+  isempty(instruction.order) || print(io, "ORDER BY ", join(instruction.order, ", "), "\n")
+  keep_values && print(io, ") as \"__pormg_exists\"\n")
   print(io, probe_limit == 0 ? "LIMIT 0" : "LIMIT 1")
   isempty(offset_clause) || print(io, " ", offset_clause)
   print(io, ")")

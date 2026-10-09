@@ -13,8 +13,9 @@ own, or clear it. After #1049 made `limit(0)` zero rows, `q.limit(0).list()` ret
 do on `qs[:n]`: a terminal that needs `k` rows takes the smaller of `k` and the caller's limit, and
 keeps the caller's offset. A terminal that cannot work inside a slice raises `QueryBuildError`
 instead of ignoring it. For `last()`, `earliest()` and `latest()` that matches Django, which refuses
-to reorder a slice. For `count("col")` and `aggregate()` it is a PormG limitation: Django's
-`aggregate()` computes over the slice through a derived table, which PormG does not build yet.
+to reorder a slice. For `count("col")` and `aggregate()` it is a deliberate divergence (#1066): Django's
+`aggregate()` computes over the slice through a derived table, and PormG refuses instead — aggregate
+the query before slicing it.
 
 | call | before | after |
 |---|---|---|

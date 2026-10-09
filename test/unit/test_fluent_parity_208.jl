@@ -1,7 +1,7 @@
 using Test
 using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField
-using PormG.Functions: Sum, Count, Avg
+using PormG.Functions: Sum, Count, Avg, Coalesce, Value
 using PormG.QueryBuilder: SQLOrder, SQLField
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -462,6 +462,83 @@ end
   q.limit(nothing).offset(0)
   @test occursin("LIMIT", q.last(show_query = :sql))
   @test occursin("COUNT(", q.count("points"; show_query = :sql))
+end
+
+# #1066: count(), exists() and Exists(...) cleared the values() projection before they built. A plain
+# column list returns one row per matching row either way, but a DISTINCT projection collapses its own
+# columns and an aggregating one returns a row per group, so clearing either made the terminal answer
+# for other rows than list() returns. Such a projection is now kept, and printed.
+@testset "count/exists keep a projection that shapes the rows (#1066)" begin
+  for (model, m) in ((GocPg, i -> "\$$(i)"), (GocSl, _ -> "?"))
+    # distinct(): the duplicates collapsed are the projected columns', not `*`'s.
+    sql_d = model.objects.values("code").distinct().count(show_query = :sql)
+    @test occursin("SELECT DISTINCT \"Tb\".\"code\" as \"code\"\n", sql_d)
+    @test occursin("SELECT DISTINCT \"Tb\".\"code\"", model.objects.values("code").count(distinct = true, show_query = :sql))
+    # No projection is still `SELECT DISTINCT *`, and a plain column list still the plain COUNT(*).
+    @test occursin("SELECT DISTINCT *", model.objects.distinct().count(show_query = :sql))
+    @test !occursin("FROM (", model.objects.values("code").count(show_query = :sql))
+
+    # A projected value binds where its text sits — under SELECT, ahead of WHERE and the slice —
+    # which is the order list() binds the same query in.
+    qv = () -> model.objects.filter("points__@gt" => 3).values("c" => Coalesce("surname", Value("zz"))).distinct().offset(2)
+    @test occursin(Regex("SELECT DISTINCT COALESCE[^\\n]*\\Q$(m(1))\\E[\\s\\S]*> \\Q$(m(2))\\E[\\s\\S]*OFFSET \\Q$(m(3))\\E"),
+                   qv().count(show_query = :sql))
+    @test qv().count(show_query = :params) == qv().list(show_query = :params) == Any["zz", 3, 2]
+
+    # exists() with an offset probes the distinct rows. Without an offset, or without distinct(), the
+    # plain probe gives the same answer, so it is still `SELECT 1`.
+    @test startswith(lstrip(qv().exists(show_query = :sql)), "SELECT DISTINCT COALESCE(")
+    @test qv().exists(show_query = :params) == Any["zz", 3, 2]
+    @test startswith(lstrip(model.objects.values("code").distinct().exists(show_query = :sql)), "SELECT 1\n")
+    @test startswith(lstrip(model.objects.values("code").offset(2).exists(show_query = :sql)), "SELECT 1\n")
+
+    # Exists(sub): the same rule, probed through a derived table — SQLite drops a DISTINCT inside EXISTS
+    # even under an OFFSET. The projected value travels in the subquery's run, between the outer values
+    # written either side of it.
+    sub = model.objects.filter("points" => 9).values("c" => Coalesce("surname", Value("zz"))).distinct().offset(4)
+    qx = model.objects.filter("code" => "A", Exists(sub)).filter("surname" => "S")
+    @test occursin(Regex("EXISTS \\(SELECT 1 FROM \\(SELECT DISTINCT COALESCE\\([\\s\\S]*\\) as \"__pormg_exists\"\nLIMIT 1 OFFSET \\Q$(m(4))\\E\\)"),
+                   qx.list(show_query = :sql))
+    @test qx.list(show_query = :params) == Any["A", "zz", 9, 4, "S"]
+    @test occursin("EXISTS (SELECT 1\n", model.objects.filter(Exists(model.objects.values("code").distinct())).list(show_query = :sql))
+
+    # An aggregating projection: count() counts the groups, through a derived table whose GROUP BY
+    # names projection positions, and a filter on the alias renders its HAVING. Both used to lose the
+    # projection: the count was every row, and the alias filter raised UnknownFieldError.
+    qg = () -> model.objects.filter("points" => 1).values("code", "n" => Count("id")).filter(Q("n" => 2)).limit(5).offset(1)
+    sql_g = qg().count(show_query = :sql)
+    @test occursin("GROUP BY 1", sql_g)
+    @test occursin(Regex("HAVING \\(COUNT\\(\"Tb\"\\.\"id\"\\) = \\Q$(m(2))\\E\\)"), sql_g)
+    @test occursin("as \"__pormg_grouped_count\"", sql_g)
+    @test qg().count(show_query = :params) == qg().list(show_query = :params) == Any[1, 2, 5, 1]
+    sql_ge = qg().exists(show_query = :sql)
+    @test occursin("GROUP BY 1\nHAVING (COUNT(", sql_ge)
+    @test qg().exists(show_query = :params) == Any[1, 2, 1]
+    @test occursin("FROM (", model.objects.values("code", "n" => Count("id")).count(show_query = :sql))
+    @test occursin("HAVING COUNT(", model.objects.values("code", "n" => Count("id")).filter("n" => 2).count(show_query = :sql))
+    @test occursin("HAVING COUNT(", model.objects.values("code", "n" => Count("id")).filter("n" => 2).exists(show_query = :sql))
+    sql_gx = model.objects.filter(Exists(model.objects.values("code", "n" => Count("id")).filter(Q("n" => 2)))).list(show_query = :sql)
+    @test occursin(r"EXISTS \(SELECT 1 FROM \(SELECT \"R1\"\.\"code\"[\s\S]*GROUP BY 1[\s\S]*HAVING \(COUNT\([^\n]*\n\) as \"__pormg_exists\"\nLIMIT 1\)", sql_gx)
+    # list() groups by an order_by() column the projection does not name, so the probes keep the
+    # ordering of an aggregating projection — and print it, as its values bind under `:order`.
+    qo = () -> model.objects.values("code", "n" => Count("id")).order_by("points")
+    grouped_by_points = r"GROUP BY 1, \"Tb\"\.\"points\""
+    @test occursin(grouped_by_points, qo().list(show_query = :sql))
+    @test occursin(r"GROUP BY 1, \"Tb\"\.\"points\" \nORDER BY \"Tb\"\.\"points\" ASC[^\n]*\n", qo().count(show_query = :sql))
+    @test occursin(r"GROUP BY 1, \"Tb\"\.\"points\"\nORDER BY \"Tb\"\.\"points\" ASC[^\n]*\n", qo().exists(show_query = :sql))
+    @test occursin(r"GROUP BY 1, \"R1\"\.\"points\" \nORDER BY \"R1\"\.\"points\" ASC[^\n]*\n\) as \"__pormg_exists\"",
+                   model.objects.filter(Exists(qo())).list(show_query = :sql))
+    # An order term that binds a value is bound for GROUP BY and for ORDER BY, as list() binds it.
+    qb = () -> model.objects.filter("code" => "A").values("code", "n" => Count("id")).filter(Q("n" => 2)).
+      order_by(SQLOrder(SQLField(Coalesce("points", Value(7)), "o7"))).offset(3)
+    @test qb().count(show_query = :params) == qb().list(show_query = :params)
+    @test qb().exists(show_query = :params) == qb().list(show_query = :params)
+    # A non-aggregating probe still drops it.
+    @test !occursin("ORDER BY", model.objects.values("code").distinct().order_by("code").count(show_query = :sql))
+    # A whole-table aggregate is one row: counted through the derived table, with no GROUP BY.
+    sql_w = model.objects.values("n" => Count("id")).count(show_query = :sql)
+    @test occursin("FROM (", sql_w) && !occursin("GROUP BY", sql_w)
+  end
 end
 
 @testset "ChainCaller rejects keyword arguments as a PormGError (#272)" begin

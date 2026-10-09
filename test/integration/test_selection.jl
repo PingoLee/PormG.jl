@@ -1123,6 +1123,63 @@ end
     @test sort([r[:statusid] for r in has_two]) == sort([k for (k, n) in per_status if n >= 2])
     @test isempty(M.Status.objects.filter(Exists(results_of().limit(0))).values("statusid").list())
   end
+
+  @testset "count/exists agree with list() on a distinct or grouped projection (#1066)" begin
+    # count()/exists() cleared values() before building, so a distinct projection counted
+    # `SELECT DISTINCT *` (every driver) and a grouped one counted rows, not groups. The oracle is
+    # the nationality column read back unprojected and collapsed in Julia.
+    nats = [r[:nationality] for r in M.Driver.objects.values("nationality").list(:dict)]
+    per_nat = Dict{String,Int}()
+    for n in nats
+      per_nat[n] = get(per_nat, n, 0) + 1
+    end
+    nd = length(per_nat)
+    @test nd < length(nats)   # repeated nationalities, or the distinct cases prove nothing
+
+    dq = () -> M.Driver.objects.values("nationality").distinct()
+    @test dq().count() == nd == length(dq().list())
+    @test M.Driver.objects.values("nationality").count(distinct = true) == nd
+    # Past the last distinct row there is none, though the non-distinct rows go on.
+    @test dq().offset(nd - 1).exists()
+    @test !dq().offset(nd).exists()
+    @test isempty(M.Status.objects.filter(Exists(dq().offset(nd))).values("statusid").list())
+    @test !isempty(M.Status.objects.filter(Exists(dq().offset(nd - 1))).values("statusid").list())
+    # Correlated: the races more than k distinct constructors entered. Not the races with more than k
+    # results — a constructor enters two cars.
+    k = 12
+    constructors_of = Dict{Int,Vector{Int}}()
+    for r in M.Result.objects.values("raceid", "constructorid").list(:dict)
+      push!(get!(constructors_of, r[:raceid], Int[]), r[:constructorid])
+    end
+    many = sort([race for (race, c) in constructors_of if length(unique(c)) > k])
+    @test !isempty(many) && many != sort([race for (race, c) in constructors_of if length(c) > k])
+    sub = M.Result.objects.filter("raceid" => OuterRef("raceid")).values("constructorid").distinct().offset(k)
+    got = M.Race.objects.filter(Exists(sub)).values("raceid").list(:dict)
+    @test sort([r[:raceid] for r in got]) == many
+
+    # Grouped: a row per nationality, and a filter on the aggregate alias keeps the groups it names.
+    gq = () -> M.Driver.objects.values("nationality", "n" => Count("driverid"))
+    big = count(>=(10), values(per_nat))
+    @test 0 < big < nd
+    @test gq().count() == nd == length(gq().list())
+    @test gq().filter("n__@gte" => 10).count() == big == length(gq().filter("n__@gte" => 10).list())
+    @test gq().filter(Q("n__@gte" => 10)).count() == big
+    @test gq().filter("n__@gte" => 10).limit(2).offset(1).count() == min(2, big - 1)
+    @test gq().filter(Q("n__@gte" => 10)).offset(big - 1).exists()
+    @test !gq().filter(Q("n__@gte" => 10)).offset(big).exists()
+    @test !gq().filter("n__@gte" => length(nats) + 1).exists()
+    # Exists(sub) probes the same groups, HAVING and offset included.
+    @test isempty(M.Status.objects.filter(Exists(gq().filter(Q("n__@gte" => 10)).offset(big))).values("statusid").list())
+    @test !isempty(M.Status.objects.filter(Exists(gq().filter(Q("n__@gte" => 10)).offset(big - 1))).values("statusid").list())
+    # An order_by() column the projection does not name is a GROUP BY term in list(), so it splits
+    # the groups the count sees too: one per (nationality, dob) pair.
+    oq = () -> M.Driver.objects.values("nationality", "n" => Count("driverid")).order_by("dob")
+    split_groups = length(oq().list())
+    @test split_groups > nd
+    @test oq().count() == split_groups
+    @test oq().offset(split_groups - 1).exists()
+    @test !oq().offset(split_groups).exists()
+  end
 end
 
 

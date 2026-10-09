@@ -831,7 +831,7 @@ M.Driver.objects.latest("dob")     # youngest driver
 # Total rows
 M.Driver.objects.count()                                 # SELECT COUNT(*)
 
-# Distinct rows — dedupes whole rows (wraps SELECT DISTINCT * in an outer COUNT(*))
+# Distinct rows — dedupes the rows list() returns: whole rows, or the values() projection when there is one
 M.Driver.objects.distinct().count()                      # same as:
 M.Driver.objects.count(distinct=true)
 

@@ -34,9 +34,9 @@ PormG provides several terminal methods to execute a query and return data in di
 | `.earliest(fields...)` | `PormGRow` | Returns the earliest row ordered by `fields`; raises `DoesNotExist` when empty. |
 | `.latest(fields...)` | `PormGRow` | Returns the latest row ordered by `fields`; raises `DoesNotExist` when empty. |
 | `.get(filters...)` | `PormGRow` | Returns exactly one row, or raises a typed exception. |
-| `.count()` | `Int` | Runs `SELECT COUNT(*)` and returns the count. |
+| `.count()` | `Int` | Runs `SELECT COUNT(*)` and returns the number of rows `.list()` would return — after `distinct()`, the distinct projected rows; with an aggregate in `values()`, the groups. |
 | `.aggregate(pairs...)` | `NamedTuple` | Computes whole-queryset aggregates (no `GROUP BY`) and returns them as a single-row named tuple. |
-| `.exists()` | `Bool` | Returns `true` if at least one row matches. |
+| `.exists()` | `Bool` | Returns `true` if `.list()` would return at least one row. |
 
 ### Choosing an Output Format
 
@@ -400,7 +400,7 @@ ignores the slice.
 | `.count()` | The number of rows the slice holds, at most the limit. |
 | `Exists(subquery)` | The subquery's own `.limit()`/`.offset()` apply: `Exists(sub.limit(0))` is always false. |
 | `.last()`, `.earliest(...)`, `.latest(...)` | Raise `QueryBuildError`: they reorder the rows, which changes which rows the slice holds. |
-| `.count("column")`, `.aggregate(...)` | Raise `QueryBuildError`: they would compute over every matching row, not over the slice. Django's `aggregate()` computes over the slice; PormG does not yet. |
+| `.count("column")`, `.aggregate(...)` | Raise `QueryBuildError`, by design: they would compute over every matching row, not over the slice. Aggregate the query before slicing it. Django's `aggregate()` computes over the slice through a derived table; PormG refuses instead. |
 
 ```julia
 q = M.Driver.objects.filter("nationality" => "British").order_by("surname").limit(5)
@@ -422,6 +422,11 @@ rows  = base.order_by("surname").page(20, 40).list()
 ```julia
 nationalities = M.Driver.objects.values("nationality").distinct().list()
 ```
+
+`.count()` and `.exists()` answer for the same rows: `values("nationality").distinct().count()` is the
+number of nationalities, not of drivers. The same holds for a grouped projection —
+`values("nationality", "n" => Count("driverid")).count()` counts the groups, and a filter on `"n"`
+applies before they are counted.
 
 !!! warning "`distinct()` + `order_by()`: the sort key must be projected"
     Under `distinct()`, every column you `order_by(...)` must appear in `values(...)`. Ordering a

@@ -770,7 +770,7 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
     return (args...; kwargs...) -> _get_or_create!(q.object, args; kwargs...)
   elseif sym === :count
     # count()                         -> COUNT(*)              (total rows)
-    # count(distinct=true)            -> distinct rows         (subquery COUNT(*) over SELECT DISTINCT *)
+    # count(distinct=true)            -> distinct rows         (subquery COUNT(*) over SELECT DISTINCT <values() or *>)
     # count("col")                    -> COUNT("col")          (non-null values of a column)
     # count("col", distinct=true)     -> COUNT(DISTINCT "col") (distinct values of a column, scalar)
     return (column=nothing; distinct::Bool=false, show_query::Symbol=:execute) ->

@@ -300,6 +300,27 @@ _gen_steps(plan) = collect(keys(get(plan, :doc, Dict{String, String}())))
                                  title = Models.CharField(max_length = 300), body = Models.TextField(null = true),
                                  sv = Models.SearchVectorField())))
     @test e isa PormG.InvalidMigrationError && occursin("(title)", _gen_plain(e))
+    # A source renamed AND widened in the same plan is a changed source too, under its old name.
+    no_sv = Models.Model("doc", id = Models.IDField(), headline = Models.CharField(max_length = 300),
+                         body = Models.TextField(null = true))
+    steps = _gen_steps(_gen_plan([live], no_sv; renames = ["doc.title" => "doc.headline"]))
+    @test steps[1] == "Release generated field: sv"
+    @test findfirst(==("Alter field: headline"), steps) > 1
+    # A cast's type name is not a column: `(title)::text` does not read a column named `text`.
+    deparsed = "to_tsvector('simple'::regconfig, COALESCE((title)::text, ''::text) || 'A'::\"char\")"
+    @test Migrations._text_names_column(deparsed, "title")
+    for t in ("text", "regconfig", "char")
+      @test !Migrations._text_names_column(deparsed, t)
+    end
+    @test !Migrations._text_names_column("(x)::character varying", "varying")
+    with_text = Models.Model("doc", id = Models.IDField(), title = Models.CharField(max_length = 100),
+                             body = Models.TextField(null = true), text = Models.CharField(max_length = 20),
+                             sv = Models.SearchVectorField(generated_from = ("title", "body"), config = "simple"))
+    widened_text = Models.Model("doc", id = Models.IDField(), title = Models.CharField(max_length = 100),
+                                body = Models.TextField(null = true), text = Models.CharField(max_length = 40),
+                                sv = Models.SearchVectorField())
+    hm = live_table(with_text, GEN_PG)
+    @test "Alter field: text" in _gen_steps(_gen_plan([hm], widened_text))
     # The control: a retype of a column the expression does not read is planned as usual.
     other = _gen_doc(extra = (note = Models.CharField(max_length = 20),))
     plan = _gen_plan([live_table(other, GEN_PG)], _gen_doc(gen = false, extra = (note = Models.CharField(max_length = 40),)))

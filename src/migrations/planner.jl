@@ -1654,11 +1654,16 @@ function _generated_recreates(conn::PormGPostgres, model::PormGModel, live::Live
 end
 _generated_recreates(::PormGSQLite, ::PormGModel, ::LiveTable) = OrderedDict{String, String}()
 
-# Does an index or CHECK's SQL text name `col`? The same token scan the CHECK-countability pass uses:
-# a quoted token compares exactly, a bare one case-insensitively.
+# Does an index, CHECK or generation expression's SQL text name `col`? The same token scan the
+# CHECK-countability pass uses — a quoted token compares exactly, a bare one case-insensitively — on
+# the text with every cast's TYPE NAME removed first. PostgreSQL's deparser casts everywhere
+# (`(title)::text`, `'A'::"char"`, `'simple'::regconfig`), and read as a token that type would name a
+# column called `text`, `char` or `regconfig` (review of #1032).
+const _CAST_TYPE_NAME_RE = r"::\s*(?:\"[^\"]*\"|[A-Za-z_][A-Za-z0-9_]*(?:\s+(?:varying|precision|with(?:out)?\s+time\s+zone))?)(?:\s*\[\])*"
 _text_names_column(text::Nothing, col::AbstractString)::Bool = false
 _text_names_column(text::AbstractString, col::AbstractString)::Bool =
-  any(t -> t.quoted ? t.name == col : lowercase(t.name) == lowercase(col), _sql_text_column_tokens(text))
+  any(t -> t.quoted ? t.name == col : lowercase(t.name) == lowercase(col),
+      _sql_text_column_tokens(replace(text, _CAST_TYPE_NAME_RE => "")))
 
 # The live table as it will be once the re-created columns are dropped: same columns, without the
 # indexes, composites and CHECKs `DROP COLUMN` removes with them.
@@ -1971,7 +1976,13 @@ function _release_generated_first!(conn::PormGPostgres,
   haskey(migration_plan, model_name) || return nothing
   steps = migration_plan[model_name]
   removed = Set{String}(chopprefix(k, "Remove field: ") for k in keys(steps) if startswith(k, "Remove field: "))
-  changed = union(removed, retyped)
+  # A renamed column's change is planned by the rename branch, not the column loop, so `retyped` does
+  # not hold it: read it off its `Alter field:` step. And the live expression names columns by their
+  # PRE-rename names, so every changed name is compared as the catalog knows it (review of #1032).
+  previous = Dict{String, String}(new => old for (old, new) in renames)
+  renamed_retyped = (new for new in keys(previous)
+                     if occursin(" TYPE ", get(steps, "Alter field: $(new)", "")))
+  changed = Set{String}(get(previous, c, c) for c in Iterators.flatten((removed, retyped, renamed_retyped)))
   front = Pair{String, String}[]
   for (col, spec) in live.columns
     spec.default isa GeneratedExpression || continue

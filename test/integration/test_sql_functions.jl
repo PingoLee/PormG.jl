@@ -2144,3 +2144,55 @@ end
     @test length(rows) > 100
     @test all(r -> r[:a] == r[:b], rows)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1086: a pattern lookup takes a fragment of the column's text, on both engines.
+# `"2009"` is a prefix of every 2009 date and of every 2009 `"YYYY-MM"` label, so all three spellings
+# select the races `"date__@year" => 2009` selects. Before #1086 the two `YYYY-MM` spellings refused
+# the fragment as "not YYYY-MM", and the date column was a bare `LIKE` on a `date`, which PostgreSQL
+# has no operator for. The independent answer is the `@year` filter, which reads no text at all.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1086: a pattern lookup matches a fragment of the date's text" begin
+    ids(q) = sort([r[:raceid] for r in q.list(:dict)])
+    want = ids(M.Race.objects.filter("date__@year" => 2009).values("raceid"))
+    @test !isempty(want)
+    alias = M.Race.objects
+    alias.values("raceid", "ym" => ToChar("date", "YYYY-MM"))
+    alias.filter("ym__@startswith" => "2009")
+    @test ids(alias) == want
+    @test ids(M.Race.objects.filter("date__@yyyy_mm__@startswith" => "2009").values("raceid")) == want
+    @test ids(M.Race.objects.filter("date__@startswith" => "2009").values("raceid")) == want
+    # A transform reads the text of what it yields: `@date` a date, `@year` an integer's digits.
+    @test ids(M.Race.objects.filter("date__@date__@startswith" => "2009").values("raceid")) == want
+    decade = ids(M.Race.objects.filter("date__@year__@range" => [2000, 2009]).values("raceid"))
+    @test !isempty(decade)
+    @test ids(M.Race.objects.filter("date__@year__@startswith" => "200").values("raceid")) == decade
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1088 / #1083: a comparison over a date part binds its bound, and both engines answer it the same.
+# The range is checked for `=` only, so `@lt 13` and `F(...) > 12` build. The answer is the natural one:
+# every race has a month below 13 and none has one above 12, whichever spelling asks.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1088/#1083: an out-of-range bound on a date part selects every row or none" begin
+    total = length(M.Race.objects.values("raceid").list(:dict))
+    @test total > 100
+    @test length(M.Race.objects.filter("date__@month__@lt" => 13).values("raceid").list(:dict)) == total
+    @test isempty(M.Race.objects.filter(F("date__@month") > 12).values("raceid").list(:dict))
+    @test length(M.Race.objects.filter(Extract("date", "MONTH") >= 1).values("raceid").list(:dict)) == total
+    @test_throws PormG.InvalidValueError M.Race.objects.filter(F("date__@month") == 13).list(:dict)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1091: a `DateField` year comparison outside 1–9999 compares the extracted year, on both engines.
+# The range rewrite cannot build a `Date` for year 99999, and a comparison's year is a bound (#1088), so
+# the filter falls back to `EXTRACT(YEAR …)`: `>= 99999` selects no race and `< 99999` every race.
+# An exact year outside the range, and `@in`, still raise when the query is built.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1091: an out-of-range @year comparison on a DateField falls back to the extracted year" begin
+    total = length(M.Race.objects.values("raceid").list(:dict))
+    @test isempty(M.Race.objects.filter("date__@year__@gte" => 99999).values("raceid").list(:dict))
+    @test length(M.Race.objects.filter("date__@year__@lt" => 99999).values("raceid").list(:dict)) == total
+    @test_throws PormG.InvalidValueError M.Race.objects.filter("date__@year" => 99999).list(:dict)
+    @test_throws PormG.InvalidValueError M.Race.objects.filter("date__@year__@in" => [99999]).list(:dict)
+end

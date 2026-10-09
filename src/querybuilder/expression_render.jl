@@ -1071,6 +1071,21 @@ function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
   return _render_temporal_shift(left_side, kind, v.operation, comps, instruc), kind
 end
 
+# #1083 — the formatter of the date part on the LEFT of a comparison, or `nothing` when the left is not
+# one. A part's formatter holds its range (`_unranged` drops it), and that is the test: a `__@` path
+# arrives as the String `F("start_at__@hour")` keeps in `field_name`, resolved through the one transform
+# ladder (#562); an `Extract` as its node. Arithmetic over a part (`F("start_at__@hour") + 1`) is a
+# plain number (#1070), so an `FExpression` with an operation is not one.
+_date_part_formatter(p::FExpression, instruc::SQLInstruction) =
+  p.operation === nothing ? _date_part_formatter(p.field_name, instruc) : nothing
+_date_part_formatter(p::AbstractString, instruc::SQLInstruction) =
+  occursin("__@", p) ? _date_part_formatter(_check_function(p), instruc) : nothing
+function _date_part_formatter(p::SQLTypeFunction, instruc::SQLInstruction)
+  f = _expression_formatter(p, instruc)
+  return f !== nothing && _unranged(f) !== f ? f : nothing
+end
+_date_part_formatter(::Any, ::SQLInstruction) = nothing
+
 # `left_kind` (#564): the kind the LEFT side evaluates to, when the caller has it. Only the temporal
 # literal arm reads it — the `xor` call sites legitimately have no temporal left and pass nothing.
 function _set_update_query_operand(operand::Any, field_name::Any, operation::String, instruc::SQLInstruction;
@@ -1166,6 +1181,13 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # no column formatter to override, so it falls to the literal's own family below, and a duration
     # reached `format_number_sql(::Hour)`, a raw `MethodError`. The left's kind names the formatter.
     left_kind isa CInterval && f === nothing && (column_formatter = value_formatter(left_kind, instruc.connection))
+    # #1083: a DATE PART on the left decides, as it does for the pair spelling — `F("start_at__@hour")
+    # == 25` was bound as a plain number while `"start_at__@hour" => 25` was refused. The part's own
+    # formatter goes to `_guarded_format`, whose operator rule (#1088) holds `=` to the part's range
+    # and lets every other comparison bind its bound; the shape (a `Bool`, a fraction) is checked under
+    # every operator. It is still a NUMBER for the cast below.
+    part = _date_part_formatter(field_name, instruc)
+    part === nothing || (column_formatter = part)
     # #814: a duration and an interval belong together, in both directions. The kind that decides is
     # the left's, else the rooted column's — on SQLite only while the left IS that column. Untyped
     # arithmetic over a DurationField (`F("lap") * 2`) is an interval on PostgreSQL (`interval * 2`),
@@ -1202,7 +1224,7 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # BooleanField), a UUID or a Time, and a numeric literal against a text or boolean column —
     # `F("flag") == 1` binds `true` and must not carry `::bigint` (review of #536 measured the cast
     # following the LITERAL there: `"flag" = $1::bigint` with `true` bound, a PostgreSQL error).
-    numeric_column = column_formatter === nothing || column_formatter === Models.format_number_sql
+    numeric_column = column_formatter === nothing || _unranged(column_formatter) === Models.format_number_sql
     sql_type = numeric_column && operand isa Union{Integer,Float16,Float32,Float64} && !(operand isa Bool) ?
                _infer_parameter_sql_type(operand, instruc) : nothing
     # #576: this arm was unguarded, and the issue listed it as SUSPECTED. Guarded since, and the guard

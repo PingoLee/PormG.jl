@@ -3976,32 +3976,40 @@ function format_timezone_sql(value; format::AbstractString=DATETIME_FORMAT)
   throw(InvalidValueError("The datetime must be a ZonedDateTime, DateTime, or a string in the format $(format)", :type))
 end
 
-function format_yyyy_mm(value::AbstractString)
+function format_yyyy_mm(value::AbstractString; ranged::Bool = true)
   # `::AbstractString`, not `::String` (#598). This is the `__@yyyy_mm` filter-value normaliser, so
   # `filter("date__@yyyy_mm" => split(period, ";")[1])` reaches it with a `SubString` — which used
   # to fall through to the generic arm below and be rejected as "not a String or Integer". Returns
   # the converted `String` rather than the argument, so the caller's type does not leak downstream.
   # Deliberately NOT stripped: widening the accepted SHAPE is a different change from widening the
   # accepted TYPE, and only the latter is a bug.
+  #
+  # #1091: the label must also BE a month. `"1991-13"` passed the shape and was bound wherever the
+  # sargable rewrite does not run (a `DateTimeField`, `@in`), matching nothing; only the rewrite
+  # refused it, by failing to build a `Date`. A month that does not exist is malformed, not out of
+  # range, so it is refused under every operator. Year `0000` is the range half (#1088): no date bound
+  # can express it, so an exact value refuses it, and a comparison binds it as the bound it is.
+  # `[0-9]`, not `\d`: PCRE matches every Unicode digit with `\d` here, so `"١٩٩١-٠١"` passed the shape
+  # and the byte slices below threw a raw `StringIndexError` (#1091 review).
   s = String(value)
-  if occursin(r"^\d{4}-\d{2}$", s)
-    return s
-  else
+  occursin(r"^[0-9]{4}-[0-9]{2}$", s) ||
     throw(InvalidValueError("The value is invalid, it must be in the format YYYY-MM", :format))
-  end  
+  1 <= parse(Int, s[6:7]) <= 12 ||
+    throw(InvalidValueError("The value is not a valid YYYY-MM bucket: it is not a calendar month", :format))
+  ranged && s[1:4] == "0000" &&
+    throw(InvalidValueError("The year is out of the range a date bound can express (1-9999)", :range))
+  return s
 end
-function format_yyyy_mm(value::Integer)
+function format_yyyy_mm(value::Integer; ranged::Bool = true)
   value = string(value)
-  if length(value) == 6
-    # Format as YYYY-MM
-    return string(value[1:4], "-", value[5:6])
-  else
+  length(value) == 6 ||
     throw(InvalidValueError("The value must be a 6-digit integer in the format YYYYMM or a string in the format YYYY-MM", :format))
-  end
+  # Through the string arm, so `YYYYMM` gets the same month and year checks as `"YYYY-MM"` (#1091).
+  return format_yyyy_mm(string(value[1:4], "-", value[5:6]); ranged = ranged)
 end
-function format_yyyy_mm(value)
+function format_yyyy_mm(value; ranged::Bool = true)
   throw(InvalidValueError("The value must be a string or Integer in the format YYYY-MM or YYYYMM", :type))
-end    
+end
 
 # #579 — the right-hand side of a `__@quarter` / `__@quadrimester` comparison.
 #
@@ -4020,42 +4028,79 @@ end
 # #955: a `Bool` is refused before `format_number_sql` sees it. That formatter maps `true` to `1` on
 # purpose (a numeric column given a flag), but no period is a flag: `"start_at__@hour" => true`
 # silently meant 1 AM, and `@quarter => true` the first quarter.
-function _format_period_sql(value, lo::Int, hi::Int, label::String)
+#
+# #1088: `ranged = false` keeps every check but the range. A malformed value — a `Bool`, a fraction,
+# a word — is no value of the part, so it is refused whatever the operator (`:type` / `:format`). A
+# whole number outside the part's range (`:range`) is refused only where it can be nothing but a
+# mistake, and that is the operator's call, not the formatter's: `"date__@month" => 13` matches
+# nothing, while `"date__@month__@lt" => 13` matches every row, which is the natural way to write a
+# bound. See `unranged_formatter` and `QueryBuilder._format_filter_value`.
+function _format_period_sql(value, lo::Int, hi::Int, label::String; ranged::Bool = true)
   (value isa Bool || (value isa AbstractArray && any(v -> v isa Bool, value))) &&
     throw(InvalidValueError("The value is a Bool, but the $(label) must be an integer from $(lo) to $(hi)", :type))
-  formatted = format_number_sql(value)
-  formatted isa AbstractArray && return [_format_period_sql(v, lo, hi, label) for v in formatted]
+  # #1088 (review): a value `format_number_sql` has no method for — a `Time`, a `UUID`, a `Rational` —
+  # is no value of the part, so it is refused as `:type` rather than escaping as a raw `MethodError`.
+  formatted = try
+    format_number_sql(value)
+  catch e
+    e isa MethodError && e.f === format_number_sql || rethrow()
+    throw(InvalidValueError("The $(label) must be an integer from $(lo) to $(hi), not a $(typeof(value))", :type))
+  end
+  formatted isa AbstractArray && return [_format_period_sql(v, lo, hi, label; ranged = ranged) for v in formatted]
   (formatted === missing || formatted === nothing) && return formatted
-  n = formatted isa Integer ? Int(formatted) : tryparse(Int, string(formatted))
-  (n === nothing || n < lo || n > hi) &&
+  # A whole number too large for `Int` — a `BigInt`, `1e30`, a long digit string — is out of every
+  # part's range rather than malformed, so it is `:range` like any other. A float is read as itself:
+  # its `%.17g` text is `"3"` for `3.0` but `"1.0000000000000000e+30"` for `1e30`.
+  s = string(formatted)
+  n = formatted isa Integer ? formatted :
+      value isa AbstractFloat ? (isfinite(value) && isinteger(value) ? BigInt(value) : nothing) :
+      something(tryparse(Int, s), tryparse(BigInt, s), Some(nothing))
+  n === nothing &&
+    throw(InvalidValueError("The value is not a valid $(label); it must be an integer from $(lo) to $(hi)", :format))
+  ranged && (n < lo || n > hi) &&
     throw(InvalidValueError("The value is not a valid $(label); it must be an integer from $(lo) to $(hi)", :range))
-  return n
+  # An unranged value still has to bind as an `Int`, so one outside `Int`'s own range is refused here
+  # whatever the operator: no part reaches it, and `Int(…)` would throw a raw `InexactError`.
+  typemin(Int) <= n <= typemax(Int) ||
+    throw(InvalidValueError("The value is out of range for the $(label) part: it does not fit a 64-bit integer", :range))
+  return Int(n)
 end
 
-format_quarter_sql(value) = _format_period_sql(value, 1, 4, "quarter")
-format_quadrimester_sql(value) = _format_period_sql(value, 1, 3, "quadrimester")
+format_quarter_sql(value; ranged::Bool = true) = _format_period_sql(value, 1, 4, "quarter"; ranged = ranged)
+format_quadrimester_sql(value; ranged::Bool = true) = _format_period_sql(value, 1, 3, "quadrimester"; ranged = ranged)
 # #636: the time-part transforms. `second` stops at 59 because the rendered SQL truncates to whole
 # seconds on both engines; a leap second is not representable in either engine's timestamp type.
-format_hour_sql(value) = _format_period_sql(value, 0, 23, "hour")
-format_minute_sql(value) = _format_period_sql(value, 0, 59, "minute")
-format_second_sql(value) = _format_period_sql(value, 0, 59, "second")
+format_hour_sql(value; ranged::Bool = true) = _format_period_sql(value, 0, 23, "hour"; ranged = ranged)
+format_minute_sql(value; ranged::Bool = true) = _format_period_sql(value, 0, 59, "minute"; ranged = ranged)
+format_second_sql(value; ranged::Bool = true) = _format_period_sql(value, 0, 59, "second"; ranged = ranged)
 # #636: the week parts. Week 53 exists in ISO years that start on a Thursday (or a leap year starting
 # on a Wednesday); `@week_day` and `@iso_week_day` are both 1-based, they differ only in which day is 1.
-format_week_sql(value) = _format_period_sql(value, 1, 53, "week")
-format_week_day_sql(value) = _format_period_sql(value, 1, 7, "week day")
+format_week_sql(value; ranged::Bool = true) = _format_period_sql(value, 1, 53, "week"; ranged = ranged)
+format_week_day_sql(value; ranged::Bool = true) = _format_period_sql(value, 1, 7, "week day"; ranged = ranged)
 # #1070: the calendar parts that had no range, so `"date__@month" => 13` bound and matched nothing.
 # `DOW` is PostgreSQL's 0 = Sunday … 6 = Saturday (SQLite's `%w` agrees); `DOY` reaches 366 in a leap year.
-format_month_sql(value) = _format_period_sql(value, 1, 12, "month")
-format_day_sql(value) = _format_period_sql(value, 1, 31, "day")
-format_dow_sql(value) = _format_period_sql(value, 0, 6, "day of the week")
-format_doy_sql(value) = _format_period_sql(value, 1, 366, "day of the year")
+format_month_sql(value; ranged::Bool = true) = _format_period_sql(value, 1, 12, "month"; ranged = ranged)
+format_day_sql(value; ranged::Bool = true) = _format_period_sql(value, 1, 31, "day"; ranged = ranged)
+format_dow_sql(value; ranged::Bool = true) = _format_period_sql(value, 0, 6, "day of the week"; ranged = ranged)
+format_doy_sql(value; ranged::Bool = true) = _format_period_sql(value, 1, 366, "day of the year"; ranged = ranged)
+# #1091: `@year` had no formatter of its own, so its 1–9999 bound — the years a date bound can express,
+# and SQLite's date functions read — ran only inside the `DateField` range rewrite
+# (`_year_bucket_bounds`). Everywhere else (a `DateTimeField`, `@in`) it was `format_number_sql`, which
+# bound `99999` and read `true` as `1`.
+format_year_sql(value; ranged::Bool = true) = _format_period_sql(value, 1, 9999, "year"; ranged = ranged)
 
 # #1070: the range-checking formatters above. Each one is a number with a range, so arithmetic over a
 # part (`Extract("start_at", "HOUR") + 1`) is a plain number again — the range belongs to the part,
 # not to what is computed from it (`_expression_formatter(::FExpression)`).
 const PERIOD_FORMATTERS = (format_quarter_sql, format_quadrimester_sql, format_hour_sql,
                            format_minute_sql, format_second_sql, format_week_sql, format_week_day_sql,
-                           format_month_sql, format_day_sql, format_dow_sql, format_doy_sql)
+                           format_month_sql, format_day_sql, format_dow_sql, format_doy_sql, format_year_sql)
+
+# #1088: the same formatter with its range dropped and every other check kept — what a value bound by
+# an operator other than `=` / `@in` goes through. The identity for a formatter that has no range.
+# A closure rather than a sibling named function, because nothing names it: the message labels are
+# taken from the formatter the column carries, before this is asked for.
+unranged_formatter(f) = f in PERIOD_FORMATTERS || f === format_yyyy_mm ? (v -> f(v; ranged = false)) : f
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Comparison Tools

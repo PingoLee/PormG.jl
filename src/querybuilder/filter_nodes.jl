@@ -376,9 +376,22 @@ end
 # neither binds until both succeed (the #467 contract, which the WHERE arm used to hand-roll). Every
 # scalar comparison passes through untouched.
 const _ITERABLE_LOOKUP_OPERATORS = ("IN", "NOT IN", "BETWEEN", "NOT BETWEEN")
-_format_filter_value(formatter, values, operator::AbstractString) =
-  operator in _ITERABLE_LOOKUP_OPERATORS && values isa AbstractArray ? [formatter(v) for v in values] :
-                                                                       formatter(values)
+
+# #1088: the operators that take a VALUE of the column — the only ones where a date part's range can
+# tell a mistake from a query. `"date__@month" => 13` and `"date__@month__@in" => [13]` can only be a
+# typo, so they are refused; `"date__@month__@lt" => 13` matches every row and `@hour__@lte => 24` is
+# how a bound is written, so every other operator binds the number as given. Django checks no range
+# at all, and both engines answer an out-of-range value with no rows, so this guard is PormG's own:
+# kept where it catches a typo, dropped where it refused a valid filter. Only the RANGE is scoped —
+# a `Bool`, a fraction or a word is no value of the part under any operator, so the shape checks run
+# everywhere (`Models.unranged_formatter`).
+const _RANGE_CHECKED_OPERATORS = ("=", "IN")
+
+function _format_filter_value(formatter, values, operator::AbstractString)
+  operator in _RANGE_CHECKED_OPERATORS || (formatter = Models.unranged_formatter(formatter))
+  return operator in _ITERABLE_LOOKUP_OPERATORS && values isa AbstractArray ? [formatter(v) for v in values] :
+                                                                              formatter(values)
+end
 
 # The filter path's shared re-raise (#411, #467). A formatter reports a value it cannot coerce as
 # `InvalidValueError`, whose own docstring scopes it to the insert/update coercion helpers — on a
@@ -645,7 +658,9 @@ function _bind_transform_value(instruc::SQLInstruction, v::SQLTypeOper, node::SQ
       "group counts 0. Compare it with 0 instead."))
     return v.values
   end
-  formatted = _guarded_format(formatter, v.values, v.operator, label, type; subject = subject)
+  # #1086: through `_lookup_formatter`, so a pattern lookup over a transform takes a text fragment.
+  formatted = _guarded_format(_lookup_formatter(formatter, v.operator), v.values, v.operator, label, type;
+                              subject = subject)
   return _bind_predicate_value(instruc, v.operator, formatted)
 end
 
@@ -798,6 +813,15 @@ function _pattern_text_kind(formatter)::Union{Symbol,Nothing}
   # PostgreSQL prints. Django's PostgreSQL backend reads the same `::text`; its hyphen stripping
   # (`UUIDTextMixin`) is only for backends that store 32 hex digits, which PormG never does.
   formatter === Models.format_uuid_sql && return :uuid
+  # #1086: a date reads as its `YYYY-MM-DD` text — what SQLite stores. PostgreSQL has no `LIKE` for
+  # `date`, so `"date__@startswith" => "2009"` was a server error there; Django's backend reads the
+  # same column `::text` (`lookup_cast`). A timestamp is not here on purpose: its text differs per
+  # engine (PostgreSQL prints the session's zone offset), so a fragment would match different rows.
+  formatter === Models.format_date_sql && return :date
+  # #1086 (review): a date part (`@hour`, `@year`, an `Extract`) is an integer, whose text is the same
+  # digits on both engines — unlike a float or a decimal column, which shares `format_number_sql`
+  # with an integer one and so cannot be told apart here, and is left as written.
+  formatter in Models.PERIOD_FORMATTERS && return :integer
   return nothing
 end
 
@@ -832,19 +856,29 @@ function _pattern_operand(column::AbstractString, formatter, operator::AbstractS
   return Dialect._pattern_text_operand(instruc.connection, Val(kind), column)
 end
 
-# The formatter a filter value goes through. A pattern lookup's value is a FRAGMENT of an address
-# (`"10.20."`, `"::ffff"`) or of a UUID (`"550e"`), which the column's strict formatter would refuse,
-# so it binds as plain text — Django's `PatternLookup` skips the field's `get_prep_value` for the
-# same reason. Every other column and lookup keeps its own formatter. The `formatter` arm serves a
-# projection alias (#903), whose formatter may be `nothing` — a type the alias ladder cannot name.
+# The formatter a filter value goes through. A pattern lookup's value is a FRAGMENT of the column's
+# text — of an address (`"10.20."`), a UUID (`"550e"`), a date (`"2009"`), a `"YYYY-MM"` label — which
+# the column's own formatter would refuse as a whole value, so it binds as plain text. That is
+# Django's `PatternLookup`, which skips the field's `get_prep_value` for EVERY field (#1086); it was
+# done here only for the kinds `_pattern_text_kind` names, so `"date__@yyyy_mm__@startswith" =>
+# "2009"` was refused as "not YYYY-MM". Every other lookup keeps the column's formatter. The
+# `formatter` arm serves a projection alias (#903), whose formatter may be `nothing` — a type the
+# alias ladder cannot name — and the transform arms (`_bind_transform_value`).
 _lookup_formatter(formatter, operator::AbstractString) =
-  operator in PATTERN_LOOKUP_OPERATORS && _pattern_text_kind(formatter) !== nothing ? format_pattern_text_sql : formatter
+  operator in PATTERN_LOOKUP_OPERATORS ?
+    (_unranged(formatter) === Models.format_number_sql ? format_pattern_number_sql : format_pattern_text_sql) :
+    formatter
 
 # A pattern lookup's value on such a column: plain text, except a whole `UUID`, which is matched as
 # the text the column reads as. `format_text_sql` alone refuses a `UUID` (#860, a text column is not
 # a UUID column), and `"token__@contains" => uuid4()` worked on SQLite before #902.
 format_pattern_text_sql(value::UUIDs.UUID) = Models.format_uuid_sql(value)
 format_pattern_text_sql(value) = Models.format_text_sql(value)
+# #1086: a pattern over a NUMBER column (or a date part, which is one) — the same text, except that a
+# float keeps the text `format_number_sql` gave it before: a pattern over a `FloatField` was never an
+# error, while a float against a text column is refused (#860), so only a number column takes it.
+format_pattern_number_sql(value::AbstractFloat) = string(Models.format_number_sql(value))
+format_pattern_number_sql(value) = format_pattern_text_sql(value)
 _lookup_formatter(field::PormGField, operator::AbstractString) = _lookup_formatter(field.formatter, operator)
 
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
@@ -904,8 +938,13 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   # value arm below — none of which knows their operand.
   v.operator in NETWORK_LOOKUP_OPERATORS &&
     return _render_network_operator(v, column, operand_field, operand_label, instruc)
+  # #1086 (review): a transform has no field, but its node carries the formatter of what it yields —
+  # `@date` a date, `@hour` an integer — so a pattern lookup over one reads the same text a column of
+  # that kind does. Without it `"seen__@date__@startswith"` was a `LIKE` on a `date` on PostgreSQL.
   operand_formatter = operand_field !== nothing ? operand_field.formatter :
-                      alias !== nothing ? _having_alias_formatter(memo_key(:base, alias), instruc) : nothing
+                      alias !== nothing ? _having_alias_formatter(memo_key(:base, alias), instruc) :
+                      v.column isa SQLTypeField && v.column.field isa SQLTypeFunction ? v.column.field.formatter :
+                      nothing
   # The label is derived only for an array or a SearchVectorField column (#1021) — the kinds that
   # refuse here and name a path. `_filter_path_label` has no method for every column kind (an `F`
   # transform), so it is not asked for the others.

@@ -1010,9 +1010,20 @@ const DOCERR_CASES = [
     # #988. The filter's own value checks raise the type a field's formatter raises: the value is
     # bound either way. Each claim was `FilterError` until then, and only the `@family` one ran here.
     (
-        "read/functions_and_dates.md — a @year no date bound can express raises (#988)",
+        "read/functions_and_dates.md — an exact @year outside 1–9999 raises (#988, #1091)",
         InvalidValueError,
-        () -> DOCERR_RACE_PG.objects.filter("date__@year__@gte" => 99999).list(show_query = :dict),
+        () -> DOCERR_RACE_PG.objects.filter("date__@year" => 99999).list(show_query = :dict),
+    ),
+    # #1091: "on any date or timestamp column" — off the `DateField` rewrite, `@in` and a timestamp.
+    (
+        "read/functions_and_dates.md — an @in year outside 1–9999 raises (#1091)",
+        InvalidValueError,
+        () -> DOCERR_RACE_PG.objects.filter("date__@year__@in" => [99999]).list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md — an exact @year outside 1–9999 on a timestamp raises (#1091)",
+        InvalidValueError,
+        () -> DOCERR_RACE801_SL.objects.filter("start_at__@year" => 99999).list(show_query = :dict),
     ),
     (
         "read/functions_and_dates.md — a Bool @year raises (#988)",
@@ -1020,7 +1031,7 @@ const DOCERR_CASES = [
         () -> DOCERR_RACE_PG.objects.filter("date__@year" => true).list(show_query = :dict),
     ),
     (
-        "read/functions_and_dates.md — a @yyyy_mm that is not a calendar month raises (#988)",
+        "read/functions_and_dates.md — a @yyyy_mm that is not a calendar month raises (#988, #1091)",
         InvalidValueError,
         () -> DOCERR_RACE_PG.objects.filter("date__@yyyy_mm__@lte" => "1991-13").list(show_query = :dict),
     ),
@@ -1028,6 +1039,12 @@ const DOCERR_CASES = [
         "read/filters_and_aggregates.md — a numeric JSON comparison against a non-number raises (#988)",
         InvalidValueError,
         () -> DOCERR_RESULT_PG.objects.filter("payload__wins__@gte" => "many").list(show_query = :dict),
+    ),
+    # #1091: errors.md — a JSON path compared with `Inf` / `NaN` is refused (the engines disagree on it).
+    (
+        "errors.md — a JSON path compared with NaN raises (#1091)",
+        InvalidValueError,
+        () -> DOCERR_RESULT_PG.objects.filter("payload__wins__@gte" => NaN).list(show_query = :dict),
     ),
     # #654 — the *Which Lookups Work on an Aggregate Alias* section says `@isnull` on a `Count` alias
     # raises when the query is built: COUNT never returns NULL, so the lookup could never match. (The
@@ -1403,23 +1420,40 @@ const DOCERR_CASES = [
         QueryBuildError,
         () -> DOCERR_RESULT_PG.objects.values("y" => "statusid__@year").list(show_query = :dict),
     ),
-    # #1070 (review): `ToChar(x, "YYYY-MM")` is `@yyyy_mm`, so a filter on it — a pattern lookup
-    # included — takes a whole `"YYYY-MM"` value, as the transform always did.
+    # #1070 (review): `ToChar(x, "YYYY-MM")` is `@yyyy_mm`, so a filter on it takes a whole
+    # `"YYYY-MM"` value, as the transform always did. A pattern lookup takes a fragment (#1086).
     (
-        "read/functions_and_dates.md — a pattern lookup on a `ToChar(x, \"YYYY-MM\")` alias with a partial value raises",
+        "read/functions_and_dates.md — an exact filter on a `ToChar(x, \"YYYY-MM\")` alias with a partial value raises",
         InvalidValueError,
         () -> begin
             q = DOCERR_RACE_PG.objects
             q.values("ym" => ToChar("date", "YYYY-MM"))
-            q.filter("ym__@startswith" => "2009")
+            q.filter("ym" => "2009")
             q.list(show_query = :dict)
         end,
     ),
-    # #1070: a filter on a date part is held to the part's range — `@month` had none.
+    # #1070: a filter on a date part is held to the part's range — `@month` had none. #1088 scoped
+    # the range to `=` / `@in`; the shape is checked under every lookup, which is the second claim.
     (
         "read/functions_and_dates.md — a date part's filter value outside its range raises",
         InvalidValueError,
         () -> DOCERR_RACE_PG.objects.filter("date__@month" => 13).list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md — a fraction compared with a date part raises (#1088)",
+        InvalidValueError,
+        () -> DOCERR_RACE_PG.objects.filter("date__@month__@lt" => 6.5).list(show_query = :dict),
+    ),
+    # #1083: the `F` spelling of the same two claims.
+    (
+        "read/functions_and_dates.md — an F comparison over a date part, out of range, raises (#1083)",
+        InvalidValueError,
+        () -> DOCERR_RACE_PG.objects.filter(F("date__@month") == 13).list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md — an F comparison with a fraction over a date part raises (#1083)",
+        InvalidValueError,
+        () -> DOCERR_RACE_PG.objects.filter(F("date__@month") > 6.5).list(show_query = :dict),
     ),
     # #955: a period transform refuses a `Bool` rather than reading `true` as `1`.
     (
@@ -2195,14 +2229,14 @@ const DOCERR_CASES = [
         () -> CharField(default = true),
     ),
     # #972. *Null checks and ranges after a transform* says a range operand is checked like a single
-    # value. Every transform is pinned in `test_transform_ladder_parity.jl`. (The `@isnull` after a
+    # value — for its shape; since #1088 its ends are bounds, so `[1, 25]` builds. Every transform is pinned in `test_transform_ladder_parity.jl`. (The `@isnull` after a
     # year-qualified label it also listed raises no more: #997 made the label NULL-preserving.)
     (
-        "functions_and_dates.md — an hour no clock shows in a range raises (#972)",
+        "functions_and_dates.md — a range operand that is no hour raises (#972, #1088)",
         InvalidValueError,
         () -> let m = Model("docerr_race_972r", id = IDField(), ts = DateTimeField(null = true))
             m.connect_key = "docerr_pg"; m._module = Main
-            q = m.objects; q.filter("ts__@hour__@range" => [1, 25]); q.list(show_query = :dict)
+            q = m.objects; q.filter("ts__@hour__@range" => [1, 2.5]); q.list(show_query = :dict)
         end,
     ),
     # #885. The *TimeField* section says a Bool or a bare number default is refused; the full

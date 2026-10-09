@@ -1,9 +1,9 @@
-## `Extract` is checked like the `__@` transforms, and every date part's filter value is range-checked (#1070)
+## `Extract` is checked like the `__@` transforms, and an exact filter on a date part is range-checked (#1070)
 
 - **Version**: Unreleased
-- **PormG ref**: #1070 ; `src/querybuilder/functions.jl` (`_EXTRACT_PART_ROWS`, `Extract`), `src/querybuilder/select_nodes.jl` (`_check_temporal_operand`), `src/Models.jl` (`format_month_sql`, `format_day_sql`, `format_dow_sql`, `format_doy_sql`)
+- **PormG ref**: #1070, #1088 ; `src/querybuilder/functions.jl` (`_EXTRACT_PART_ROWS`, `Extract`), `src/querybuilder/select_nodes.jl` (`_check_temporal_operand`), `src/Models.jl` (`format_month_sql`, `format_day_sql`, `format_dow_sql`, `format_doy_sql`, `unranged_formatter`), `src/querybuilder/filter_nodes.jl` (`_format_filter_value`)
 - **Recorded**: 2026-10-09
-- **Severity**: behavior. An `Extract` part over a column it cannot read now raises `QueryBuildError` when the query is built, on both engines. A filter value outside a date part's range now raises `InvalidValueError` where it used to match nothing.
+- **Severity**: behavior. An `Extract` part over a column it cannot read now raises `QueryBuildError` when the query is built, on both engines. An `=` or `@in` filter value outside a date part's range now raises `InvalidValueError` where it used to match nothing. Every other lookup binds it as a bound. That relaxes the released `@quarter`/`@quadrimester` check, which refused such a value under every operator.
 
 ### What changed
 
@@ -35,9 +35,15 @@ checked against the same table, with the same message, and get the same range:
 | `filter("date__@day" => 32)` | matched nothing | `InvalidValueError` |
 | `values("h" => Extract("start_at", "HOUR")); filter("h" => 25)` | matched nothing | `InvalidValueError` |
 | `values("ym" => ToChar("date", "YYYY-MM")); filter("ym" => "March 2009")` | matched nothing | `InvalidValueError`: not `YYYY-MM`, as `"date__@yyyy_mm"` already refused |
-| `values("ym" => ToChar("date", "YYYY-MM")); filter("ym__@startswith" => "2009")` | the 2009 months | `InvalidValueError`, as `"date__@yyyy_mm__@startswith"` already raised; filter `"date__@year" => 2009` instead |
+| `values("ym" => ToChar("date", "YYYY-MM")); filter("ym__@startswith" => "2009")` | the 2009 months | the 2009 months, unchanged: a pattern lookup takes a text fragment, and `"date__@yyyy_mm__@startswith" => "2009"`, which raised, now matches them too (#1086) |
 | `values("y" => Extract(F("name"), "YEAR"))` — a bare `F` column | unchecked | checked as the column `name`: `QueryBuildError` |
 | `values("h" => Coalesce("start_at__@hour", -1)); filter("h" => -1)` | `InvalidValueError`: the hour's range applied to the fallback | builds: a `Coalesce` keeps a number, not the part's range |
+| `filter("date__@quarter__@lt" => 5)`, `filter("date__@quarter__@range" => [1, 5])` | `InvalidValueError`, for every operator | builds: a comparison's value and a range's ends are bounds (#1088) |
+| `filter("date__@month__@lt" => 13)`, `filter("start_at__@hour__@lte" => 24)` | every row | every row, unchanged: only `=` and `@in` are range-checked (#1088) |
+| `filter("date__@quarter" => 1.5)` | `InvalidValueError` with `kind = :range` | `InvalidValueError` with `kind = :format`, on every operator (#1088) |
+| `filter(F("start_at__@hour") == 25)`, `filter(Extract("start_at", "HOUR") == 25)` | matched nothing | `InvalidValueError`, as `"start_at__@hour" => 25` (#1083) |
+| `filter(F("start_at__@hour") == true)`, `filter(F("start_at__@hour") > 1.5)` | bound `1` / `"1.5"` | `InvalidValueError` (`kind = :type` / `:format`) (#1083) |
+| `filter(F("start_at__@hour") > 25)` | no row | no row, unchanged: an ordering's value is a bound, not refused |
 
 A refusal names the part rather than the spelling: "The `hour` part reads a time of day, …", and a
 refused filter value is located on "the `start_at` hour part" instead of "the `start_at` @hour
@@ -48,7 +54,15 @@ column) still passes through without a check. A relation (`raceid__@year`) is ch
 key it holds, by #1068 in the same train: see that entry. `ToChar` is checked
 only for the `"YYYY-MM"` mask `@yyyy_mm` uses. Arithmetic over a part is an ordinary number, and
 so is a `Coalesce`/`Greatest`/`Least`/`NullIf` over one: `Extract("start_at", "HOUR") + 1` has no
-range. A comparison written with `F` (`F("date__@month") > 13`) is not range-checked yet (#1083).
+range. A comparison written with `F` or `Extract` takes the part's rule too (#1083).
+
+The range applies to `=` and `@in` only (#1088). There an out-of-range value can only be a typo,
+while for `<`, `<=`, `>`, `>=`, `@range`, `@ne` and `@nin` it is a bound:
+`"date__@month__@lt" => 13` matches every row. Django checks no range at all, and both engines
+answer an out-of-range value with no rows, so the check is kept only where it catches a mistake. The
+value's shape is still checked under every lookup: a `Bool`, a fraction or non-numeric text is
+refused whatever the operator. A whole number outside the part is `kind = :range`, and a fraction is
+now `kind = :format`.
 
 ### Who this affects
 
@@ -56,7 +70,8 @@ range. A comparison written with `F` (`F("date__@month") > 13`) is not range-che
   calendar part over a time or a duration, or any part over a text or number column. On PostgreSQL
   each of these already failed when it ran, so the change moves the failure to build time and
   makes SQLite agree.
-- Code that filters a date part with a value outside its range, which matched no row before.
+- Code that filters a date part with `=` or `@in` and a value outside its range, which matched no row before.
+- Code that relied on a `@quarter`/`@quadrimester` comparison raising for an out-of-range bound, or that matched `kind == :range` for a fractional period value.
 
 ### How to find the calls to migrate
 

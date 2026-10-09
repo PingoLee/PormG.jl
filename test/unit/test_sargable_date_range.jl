@@ -156,7 +156,16 @@ _sdr_where(res) = strip(split(res[:sql_text], " WHERE ")[end])
   @testset "@year rejects values no date bound can express" begin
     # #988: each refusal is an `InvalidValueError` — the value is bound — located on the field the
     # caller wrote, with a `kind` per case and no trace of the value in the message.
-    cases = [
+    #
+    # #1088 split the cases in two. What is no YEAR at all is refused under every operator; a whole
+    # year outside 1..9999 is refused only by an exact filter, because for a comparison it is a bound
+    # (see the next testset, which shows it falling back to the extracted year).
+    refusal(v, suffix) = try
+      _SdrEv.objects.filter("happened__@year$(suffix)" => v).list(show_query=:dict); nothing
+    catch err
+      err
+    end
+    shape_cases = [
       # Non-numeric string.
       ("abc", :format),
       # Hex-looking string: tryparse(Int, "0x10") is 16 in Julia, so base=10 must be explicit or
@@ -164,40 +173,75 @@ _sdr_where(res) = strip(split(res[:sql_text], " WHERE ")[end])
       ("0x10", :format),
       # Bool — `Bool <: Integer` in Julia, so `false` would silently become year 0.
       (false, :type), (true, :type),
-      # Fractional year — no single date bound represents it.
-      (1991.7, :range),
-      # Out of the range a rendered date literal can express: Dates.Date(0,1,1) stringifies to
-      # "0000-01-01" and Date(-5,1,1) to "-0005-01-01", which both backends reject at execution.
-      (0, :range), (-5, :range), (999999, :range),
-      # Values too large for Int64: the range check must run BEFORE `Int(...)` narrowing, or these
-      # escape as a raw InexactError (not a PormGError, and its message never mentions a year).
-      # `isinteger(1e30)` is true, so the whole-year guard alone does not catch that one.
-      (big(10)^20, :range), (1e30, :range), (typemax(UInt64), :range),
+      # Fractional year — no single date bound represents it. `:format` since #1088: it is no year,
+      # not a year out of range (it was `:range`).
+      (1991.7, :format),
       # A `Number` that is not a `Real` (the ladder's last arm). A `Date` never gets that far: the
       # rewrite admits only a String or a Number, and the transform path refuses anything else.
       (1991 + 0im, :type),
     ]
-    for (v, kind) in cases
-      e = try
-        _SdrEv.objects.filter("happened__@year__@gte" => v).list(show_query=:dict); nothing
-      catch err
-        err
-      end
+    range_cases = [
+      # Out of the range a rendered date literal can express: Dates.Date(0,1,1) stringifies to
+      # "0000-01-01" and Date(-5,1,1) to "-0005-01-01", which both backends reject at execution.
+      0, -5, 999999,
+      # Values too large for Int64: the range check must run BEFORE `Int(...)` narrowing, or these
+      # escape as a raw InexactError (not a PormGError, and its message never mentions a year).
+      # `isinteger(1e30)` is true, so the whole-year guard alone does not catch that one.
+      big(10)^20, 1e30, typemax(UInt64),
+    ]
+    for (v, kind) in shape_cases, suffix in ("", "__@gte")
+      e = refusal(v, suffix)
       @test e isa PormG.InvalidValueError
       e isa PormG.InvalidValueError || continue
       @test e.kind == kind
+      @test e.field == "happened"
+      @test !occursin(string(v), PormG.error_message(e))
+    end
+    for v in range_cases
+      e = refusal(v, "")
+      @test e isa PormG.InvalidValueError
+      e isa PormG.InvalidValueError || continue
+      @test e.kind == :range
       @test e.field == "happened"
       @test e.field_type == "DATE"
       @test !occursin(string(v), PormG.error_message(e))
     end
     # Same guard on the yyyy_mm path — "0000-01" clears format_yyyy_mm's regex.
     e = try
-      _SdrEv.objects.filter("happened__@yyyy_mm__@gte" => "0000-01").list(show_query=:dict); nothing
+      _SdrEv.objects.filter("happened__@yyyy_mm" => "0000-01").list(show_query=:dict); nothing
     catch err
       err
     end
     @test e isa PormG.InvalidValueError && e.kind == :range
     @test !occursin("0000-01", PormG.error_message(e))
+  end
+
+  @testset "#1088: a comparison's year outside 1..9999 falls back to the extracted year" begin
+    # The rewrite cannot build a `Date` bound for year 99999, and refusing a bound is what #1088
+    # removed. So the filter renders the plain extracted comparison instead, which both engines
+    # answer naturally — `>= 99999` selects no row, `< 99999` every row — and binds the bound as an
+    # integer. An exact filter keeps the refusal above. A year beyond `Int` still has no integer
+    # to bind, so it is refused even here.
+    for (suffix, op) in (("__@gte", ">="), ("__@gt", ">"), ("__@lte", "<="), ("__@lt", "<"))
+      for v in (99999, 0, -5, "99999")
+        res = _SdrEv.objects.filter("happened__@year$(suffix)" => v).list(show_query=:dict)
+        @test occursin("EXTRACT(YEAR FROM", res[:sql_text])
+        @test occursin(" $(op) \$1", res[:sql_text])
+        @test res[:parameters] == [v isa String ? parse(Int, v) : v]
+      end
+      e = try
+        _SdrEv.objects.filter("happened__@year$(suffix)" => 1e30).list(show_query=:dict); nothing
+      catch err
+        err
+      end
+      @test e isa PormG.InvalidValueError && e.kind == :range
+    end
+    # The same for a `YYYY-MM` bucket in year 0000: the label is well formed, so it is compared as text.
+    res = _SdrEv.objects.filter("happened__@yyyy_mm__@lt" => "0000-05").list(show_query=:dict)
+    @test occursin("to_char", res[:sql_text])
+    @test res[:parameters] == ["0000-05"]
+    # In range, the rewrite still runs.
+    @test _SdrEv.objects.filter("happened__@year__@gte" => 1991).list(show_query=:dict)[:parameters] == ["1991-01-01"]
   end
 
   # =========================================================================
@@ -392,7 +436,9 @@ _sdr_where(res) = strip(split(res[:sql_text], " WHERE ")[end])
       err
     end
     @test e isa PormG.InvalidValueError
-    @test e isa PormG.InvalidValueError && e.kind == :range && e.field == "happened"
+    # `:format` since #1091: a month that does not exist is malformed, refused under every operator
+    # by `format_yyyy_mm` itself (it was `:range`, raised only by this rewrite).
+    @test e isa PormG.InvalidValueError && e.kind == :format && e.field == "happened"
     @test !occursin("2026-13", PormG.error_message(e))
   end
 

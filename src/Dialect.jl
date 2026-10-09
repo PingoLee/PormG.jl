@@ -3250,6 +3250,15 @@ _pattern_text_operand(::PormGPostgres, ::Val{:cidr}, column::AbstractString)::St
 # #902: a `uuid` prints lowercase and hyphenated, the text a `UUIDField` stores on SQLite.
 _pattern_text_operand(::PormGPostgres, ::Val{:uuid}, column::AbstractString)::String =
   "CAST($(column) AS text)"
+# #1086: a `date`, as the `YYYY-MM-DD` text SQLite stores. `to_char` rather than `::text`, because a
+# cast follows the session's `DateStyle` (`'German'` prints `31.12.2009`), and the fragment must match
+# the same text on both engines.
+_pattern_text_operand(::PormGPostgres, ::Val{:date}, column::AbstractString)::String =
+  "to_char($(column), 'YYYY-MM-DD')"
+# #1086 (review): a date part — an integer, printed as its digits on both engines. SQLite's `LIKE` reads
+# an integer as that text already.
+_pattern_text_operand(::PormGPostgres, ::Val{:integer}, column::AbstractString)::String =
+  "CAST($(column) AS text)"
 # SQLite reads the column as written: it has no network column (#28), and its UUID column is already
 # that text (#902). SQLite only, so a kind added without a PostgreSQL method raises a `MethodError`
 # there rather than rendering a `LIKE` the server rejects.

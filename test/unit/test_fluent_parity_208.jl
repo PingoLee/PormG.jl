@@ -361,9 +361,10 @@ end
     qp.page(0, 20)
     @test qp.list(show_query = :params) == [0, 20]
 
-    # An aggregate drops the handler's slice on its copy: a limit(0) left there would render LIMIT 0
-    # and return no aggregate row at all.
-    @test !occursin("LIMIT", model.objects.limit(0).aggregate("n" => Count("id"), show_query = :sql))
+    # #1053: an aggregate on a sliced handler is refused. It used to drop the slice on its copy and
+    # aggregate every row, which is not what a `limit(0)` asked for (see the #1053 testset below).
+    @test occursin("aggregate() cannot run on a query with limit() or offset() set",
+      _p208_error(() -> model.objects.limit(0).aggregate("n" => Count("id"), show_query = :sql)))
   end
 
   # An offset with no limit keeps SQLite's no-limit spelling (#46): the `nothing` limit, not 0.
@@ -372,6 +373,93 @@ end
   @test occursin("LIMIT -1 \nOFFSET ?", qo.list(show_query = :sql))
   @test qo.list(show_query = :params) == [5]
   @test !occursin("LIMIT", GocPg.objects.offset(5).list(show_query = :sql))
+end
+
+# #1053: the read terminals run on a copy, and each one used to overwrite the copy's limit with its
+# own probe size, or clear it. After #1049 made `limit(0)` zero rows, `q.limit(0).list()` returned
+# nothing while `exists()` said rows existed and `first()`/`get()` returned one. They now combine
+# their probe with the caller's slice the way Django's `set_limits` does (the smaller limit, the
+# caller's offset kept), and the terminals that cannot honor a slice refuse it.
+@testset "read terminals honor a user slice (#1053)" begin
+  for (model, m) in ((GocPg, i -> "\$$(i)"), (GocSl, _ -> "?"))
+    # exists(): LIMIT 0 under a limit(0), LIMIT 1 otherwise; the offset still binds (#46).
+    @test occursin("LIMIT 0", model.objects.limit(0).exists(show_query = :sql))
+    @test isempty(model.objects.limit(0).exists(show_query = :params))
+    @test occursin("LIMIT 1", model.objects.limit(5).exists(show_query = :sql))
+    @test !occursin("LIMIT 0", model.objects.limit(5).exists(show_query = :sql))
+    qe = model.objects.filter("code" => "HAM").limit(0).offset(4)
+    @test occursin(Regex("LIMIT 0\\s+OFFSET \\Q$(m(2))\\E"), qe.exists(show_query = :sql))
+    @test qe.exists(show_query = :params) == Any["HAM", 4]
+    # An unsliced exists() is unchanged.
+    @test occursin("LIMIT 1", model.objects.exists(show_query = :sql))
+
+    # first(): the smaller of the caller's limit and 1, the caller's offset kept.
+    @test model.objects.limit(0).first(show_query = :params) == [0]
+    @test model.objects.limit(5).first(show_query = :params) == [1]
+    @test model.objects.offset(10).first(show_query = :params) == [1, 10]
+
+    # get(): the smaller of the caller's limit and 2; inline filters join WHERE ahead of the slice.
+    @test model.objects.limit(0).get(show_query = :params) == [0]
+    @test model.objects.limit(1).get(show_query = :params) == [1]
+    @test model.objects.limit(5).offset(3).get("code" => "HAM"; show_query = :params) == Any["HAM", 2, 3]
+
+    # count(): COUNT(*) over the sliced rows, the tail bound last inside the subquery.
+    qc = model.objects.filter("code" => "HAM").limit(5).offset(10)
+    sql_c = qc.count(show_query = :sql)
+    @test occursin("SELECT COUNT(*) FROM (", sql_c)
+    @test occursin(Regex("LIMIT \\Q$(m(2))\\E\\s+OFFSET \\Q$(m(3))\\E\\s*\\) as \"__pormg_sliced_count\""), sql_c)
+    @test qc.count(show_query = :params) == Any["HAM", 5, 10]
+    @test model.objects.limit(0).count(show_query = :params) == [0]
+    # distinct: the slice applies after DISTINCT, so it goes inside the same subquery.
+    sql_d = model.objects.limit(5).count(distinct = true, show_query = :sql)
+    @test occursin(Regex("SELECT DISTINCT \\*[\\s\\S]*LIMIT \\Q$(m(1))\\E\\s*\\) as \"__pormg_distinct_count\""), sql_d)
+    # An unsliced count() is the plain COUNT(*), no subquery.
+    @test !occursin("FROM (", model.objects.count(show_query = :sql))
+    @test isempty(model.objects.count(show_query = :params))
+
+    # Exists(sub): the subquery keeps its slice. Its OFFSET binds inside the nested run, so the
+    # outer value after it still binds last on both engines.
+    sub = model.objects.filter("code" => "X").limit(0).offset(2)
+    qx = model.objects.filter("points" => 7, Exists(sub)).filter("surname" => "S")
+    sql_x = qx.list(show_query = :sql)
+    @test occursin(Regex("LIMIT 0 OFFSET \\Q$(m(3))\\E\\)"), sql_x)
+    @test qx.list(show_query = :params) == Any[7, "X", 2, "S"]
+    # The same run in a projection binds under SELECT, ahead of the outer WHERE value, and inside a
+    # Qor it stays between the values written either side of it.
+    qp = model.objects.values("code", "x" => Exists(model.objects.filter("code" => "Y").offset(2)))
+    qp.filter("points" => 7)
+    @test qp.list(show_query = :params) == Any["Y", 2, 7]
+    qo = model.objects.filter(Qor("points" => 1, Exists(model.objects.filter("code" => "Z").offset(3))), "surname" => "S")
+    @test qo.list(show_query = :params) == Any[1, "Z", 3, "S"]
+    @test occursin("LIMIT 1)", model.objects.filter(Exists(model.objects.filter("code" => "X").limit(5))).list(show_query = :sql))
+    @test occursin("LIMIT 1)", model.objects.filter(Exists(model.objects.filter("code" => "X"))).list(show_query = :sql))
+
+    # The caller's handler keeps its slice; the probe lives on the copy only (#199).
+    qh = model.objects.limit(3)
+    qh.first(show_query = :params); qh.get(show_query = :params); qh.exists(show_query = :params); qh.count(show_query = :params)
+    @test qh.object.limit == 3
+  end
+end
+
+@testset "terminals that reorder or aggregate refuse a sliced query (#1053)" begin
+  for slice! in (q -> q.limit(5), q -> q.limit(0), q -> q.offset(1))
+    q = slice!(GocPg.objects)
+    @test occursin("last() cannot run on a query with limit() or offset() set",
+      _p208_error(() -> q.last(show_query = :sql)))
+    @test occursin("earliest() cannot run on a query with limit() or offset() set",
+      _p208_error(() -> q.earliest("points"; show_query = :sql)))
+    @test occursin("latest() cannot run on a query with limit() or offset() set",
+      _p208_error(() -> q.latest("points"; show_query = :sql)))
+    @test occursin("count(column) cannot run on a query with limit() or offset() set",
+      _p208_error(() -> q.count("points"; show_query = :sql)))
+    @test occursin("aggregate() cannot run on a query with limit() or offset() set",
+      _p208_error(() -> q.aggregate("n" => Count("id"); show_query = :sql)))
+  end
+  # Cleared slices are not slices: limit(nothing) and offset(0) lift the refusal.
+  q = GocPg.objects.limit(5).offset(1)
+  q.limit(nothing).offset(0)
+  @test occursin("LIMIT", q.last(show_query = :sql))
+  @test occursin("COUNT(", q.count("points"; show_query = :sql))
 end
 
 @testset "ChainCaller rejects keyword arguments as a PormGError (#272)" begin

@@ -386,6 +386,37 @@ q = M.Driver.objects.order_by("surname").limit(20)
 q.limit(nothing)                                  # removes the limit again: every row
 ```
 
+#### Read terminals on a sliced query
+
+A terminal called on a query with `.limit()` or `.offset()` set works inside the slice, the way
+Django's terminals do on `qs[:n]`. A terminal that cannot do that raises `QueryBuildError`; it never
+ignores the slice.
+
+| Terminal | On a sliced query |
+| :--- | :--- |
+| `.first()` | The first row of the slice; `nothing` under `.limit(0)`. |
+| `.get(filters...)` | The one row inside the slice; `DoesNotExist` under `.limit(0)`. Inline filters join `WHERE` before the slice applies. |
+| `.exists()` | Whether the slice holds a row; always `false` under `.limit(0)`. |
+| `.count()` | The number of rows the slice holds, at most the limit. |
+| `Exists(subquery)` | The subquery's own `.limit()`/`.offset()` apply: `Exists(sub.limit(0))` is always false. |
+| `.last()`, `.earliest(...)`, `.latest(...)` | Raise `QueryBuildError`: they reorder the rows, which changes which rows the slice holds. |
+| `.count("column")`, `.aggregate(...)` | Raise `QueryBuildError`: they would compute over every matching row, not over the slice. Django's `aggregate()` computes over the slice; PormG does not yet. |
+
+```julia
+q = M.Driver.objects.filter("nationality" => "British").order_by("surname").limit(5)
+
+q.count()     # → 5, not every British driver
+q.first()     # → the first of those five
+
+q.limit(0)
+q.exists()    # → false: a zero-row page holds no row
+
+# Count before slicing to get the total for a paginated response
+base  = M.Driver.objects.filter("nationality" => "British")
+total = base.count()
+rows  = base.order_by("surname").page(20, 40).list()
+```
+
 ### Distinct Results
 
 ```julia

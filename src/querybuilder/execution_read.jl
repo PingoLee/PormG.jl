@@ -369,6 +369,27 @@ show_query(q::SQLObjectHandler, mode::Symbol = :sql) = query(deepcopy(q); show_q
 # Count or check if exists
 #
 
+# #1053: the caller's slice, as the read terminals see it. A terminal runs on a copy, and before
+# #1053 each one overwrote the copy's `limit` with its own probe size or cleared it, so
+# `q.limit(0).exists()` answered `true` for the rows `q.limit(0).list()` does not return. The same
+# predicate `update()`/`delete()` refuse a sliced handler on.
+_is_sliced(object::SQLObject)::Bool = object.limit !== nothing || object.offset > 0
+
+# The limit a terminal probing `k` rows applies on top of the caller's — Django's
+# `set_limits(high=k)`: the smaller of the two, with the caller's offset left where it is.
+_probe_limit(limit::Union{Nothing,Integer}, k::Integer)::Integer = limit === nothing ? k : min(limit, k)
+
+# The terminals that cannot honor a slice refuse it instead of ignoring it. `last()`, `earliest()` and
+# `latest()` reorder the rows, which changes which rows the slice holds — Django refuses them too.
+# `count(column)` and `aggregate()` are a PormG limitation, not Django parity: Django's `aggregate()`
+# (its spelling of both) computes over the slice through a derived table, which these do not build yet.
+function _refuse_sliced(object::SQLObject, terminal::AbstractString, why::AbstractString)
+  _is_sliced(object) || return nothing
+  throw(QueryBuildError(
+    "$(terminal) cannot run on a query with limit() or offset() set: $(why). " *
+    "Call it on the query before slicing it, or clear the slice with limit(nothing).offset(0) first."))
+end
+
 function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = nothing, distinct::Bool = false,
                   table_alias::Union{Nothing, SQLTableAlias} = nothing, show_query::Symbol = :execute)
   # Column form: COUNT([DISTINCT] column). Reuse the Count() aggregate so column
@@ -376,6 +397,7 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
   # return the scalar rather than a row. COUNT(DISTINCT col) is valid SQL (unlike
   # COUNT(DISTINCT *)), so no subquery is needed for this form.
   if column !== nothing
+    _refuse_sliced(oq.object, "count(column)", "the column is counted over every matching row, not over the slice")
     cq = deepcopy(oq)
     cq.object.order = []
     cq.object.distinct = false      # DISTINCT belongs to COUNT(col), not the row set
@@ -422,9 +444,18 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
     # DISTINCT select would return, wrap `SELECT DISTINCT *` in an outer COUNT(*) so that
     # count() == length(distinct list()). Any CTEs stay at the top level and remain in
     # scope for the subquery; parameter order/count is unchanged by the wrapping.
+    # #1053: a slice applies after DISTINCT, so its tail goes inside the subquery. Its markers are
+    # the last in the text and bind under `:limit`, the last bucket, so the order holds on both engines.
     resposta = """$(with_clause)SELECT COUNT(*) FROM (
     SELECT DISTINCT *
-    $body) as "__pormg_distinct_count"
+    $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as "__pormg_distinct_count"
+    """
+  elseif _is_sliced(q.object)
+    # #1053: count the rows the slice returns, as Django's `qs[:5].count()` does. The ordering was
+    # cleared above, and that is safe: how many rows a slice holds does not depend on which they are.
+    resposta = """$(with_clause)SELECT COUNT(*) FROM (
+    SELECT 1
+    $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as "__pormg_sliced_count"
     """
   else
     resposta = """$(with_clause)SELECT
@@ -472,6 +503,7 @@ function _aggregate(oq::SQLObjectHandler; pairs, show_query::Symbol = :execute)
       throw(QueryBuildError("aggregate() value for \"$(p.first)\" must be an aggregate function (Sum/Avg/Count/Max/Min); got $(typeof(val)). For per-row expressions use values(...)."))
     push!(aliases, Symbol(p.first))
   end
+  _refuse_sliced(oq.object, "aggregate()", "the aggregate is computed over every matching row, not over the slice")
 
   cq = deepcopy(oq)
   cq.object.order = []
@@ -515,7 +547,9 @@ function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias
     instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters)
     # `LIMIT 1` is this query's own shape, not a user value, so it stays literal; the OFFSET the
     # caller set binds (#46). A non-positive offset was always dropped here, and still is.
-    limit_clause = "LIMIT 1"
+    # #1053: a caller's `limit(0)` makes it `LIMIT 0` — the probe is the smaller of the two, so it is
+    # one of two literals the code chooses, never the caller's value interpolated.
+    limit_clause = _probe_limit(q.object.limit, 1) == 0 ? "LIMIT 0" : "LIMIT 1"
     offset_clause = q.object.offset > 0 ?
       with_bucket(() -> "OFFSET " * add_parameter!(parameters, q.object.offset), parameters, :limit) : ""
     
@@ -890,6 +924,9 @@ list(objct::SQLObjectHandler; kwargs...) = list(objct, Val(:row); kwargs...)
 
 Return the first `PormGRow` matching the current query, or `nothing` if no records match.
 
+A slice the caller set is honored: `first` takes the first row of the slice, so
+`q.limit(0).first()` is `nothing` and `q.offset(10).first()` is the eleventh row (#1053).
+
 Like every read terminal (`count`, `exists`, `list`, `get`), `first` executes on an
 internal copy of the handler — the `limit(1)` it needs is applied to that copy, never
 to `objct`. The handler is reusable afterwards, including for `.update()`:
@@ -904,7 +941,7 @@ q.update("nationality" => "English")    # still valid on the same handler
 function first(objct::SQLObjectHandler; show_query::Symbol = :execute)
   # #199: copy-first like count/exists/list — limit(1) must not leak into the caller's handler
   q = deepcopy(objct)
-  q.limit(1)
+  q.limit(_probe_limit(q.object.limit, 1))   # #1053: within the caller's slice, not instead of it
   res = list(q, show_query=show_query)
   if show_query !== :execute
     return res
@@ -940,8 +977,12 @@ The mirror of [`first`](@ref): it inverts the query's ordering and takes one row
 ordering. When **no** ordering is set, it falls back to **primary-key descending**, so `last()`
 is always well-defined (matching Django). Like every read terminal, it runs on an internal copy —
 the inverted ordering and `limit(1)` never leak into the caller's handler.
+
+On a query with `limit()` or `offset()` set, `last` raises `QueryBuildError`, as Django's does:
+reversing the ordering changes which rows the slice holds (#1053).
 """
 function last(objct::SQLObjectHandler; show_query::Symbol = :execute)
+  _refuse_sliced(objct.object, "last()", "it reverses the ordering, which changes which rows the slice holds")
   # #199: copy-first like first/count/list — the ordering flip and limit(1) apply to the copy only.
   q = deepcopy(objct)
   if isempty(q.object.order)
@@ -975,6 +1016,7 @@ end
 # Shared body for earliest()/latest(): apply the (already-oriented) ordering fields, take one row,
 # and raise DoesNotExist on an empty queryset (Django parity — these behave like get(), not first()).
 function _extreme(objct::SQLObjectHandler, order_fields, opname::String; show_query::Symbol)
+  _refuse_sliced(objct.object, "$(opname)()", "it replaces the ordering, which changes which rows the slice holds")
   q = deepcopy(objct)
   q.order_by(order_fields...)
   q.limit(1)
@@ -1000,7 +1042,8 @@ _invert_order_token(f) = throw(QueryBuildError("earliest()/latest() fields must 
 
 Return the earliest row ordered by `fields` (ascending; a `"-field"` flips that term to
 descending). Requires at least one field and raises `DoesNotExist` when no rows match — the
-extreme-row counterpart of [`get`](@ref), matching Django's `earliest()`.
+extreme-row counterpart of [`get`](@ref), matching Django's `earliest()`. On a query with
+`limit()` or `offset()` set it raises `QueryBuildError`, as Django's does (#1053).
 """
 function earliest(objct::SQLObjectHandler, fields...; show_query::Symbol = :execute)
   isempty(fields) &&
@@ -1013,7 +1056,8 @@ end
 
 Return the latest row ordered by `fields` (descending; a `"-field"` flips that term to
 ascending). Requires at least one field and raises `DoesNotExist` when no rows match. Django's
-`latest()`; `latest("f") == earliest("-f")`.
+`latest()`; `latest("f") == earliest("-f")`. A sliced query raises `QueryBuildError`, as for
+[`earliest`](@ref).
 """
 function latest(objct::SQLObjectHandler, fields...; show_query::Symbol = :execute)
   isempty(fields) &&
@@ -1054,13 +1098,17 @@ than one row matches.
 Like every read terminal, `get` executes on an internal copy of the handler: inline
 filters do **not** persist on `objct`, so the handler can be reused afterwards with
 its original filter list intact.
+
+A slice the caller set is honored: `get` looks for its one row inside the slice, so
+`q.limit(0).get()` raises `DoesNotExist` (#1053). Inline filters join the `WHERE`
+clause before the slice applies, the same as a `filter()` call after `limit()`.
 """
 function get(objct::SQLObjectHandler, filters...; show_query::Symbol = :execute)
   # #199: copy-first — inline filters and the limit(2) probe apply to the copy only,
   # so they never leak into the caller's handler.
   q = deepcopy(objct)
   !isempty(filters) && _filter!(q.object, filters)
-  q = q.limit(2)
+  q = q.limit(_probe_limit(q.object.limit, 2))   # #1053: within the caller's slice, not instead of it
 
   if show_query !== :execute
     return query_list(q, show_query=show_query)

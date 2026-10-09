@@ -76,6 +76,11 @@ These methods finalize the query and execute it against the database:
 | `.delete()` | — | Deletes all matching records. |
 | `.inspect()` | `Dict` | Full query metadata without executing — the `inspect_query` shape (see Query Inspection & Debugging below). |
 
+On a query with `.limit()` or `.offset()` set, `.first()`, `.get()`, `.exists()` and `.count()` work
+inside the slice, while `.last()`, `.earliest()`, `.latest()`, `.count("column")` and `.aggregate()`
+raise `QueryBuildError` — see
+[Read terminals on a sliced query](read/index.md#Read-terminals-on-a-sliced-query).
+
 ### `PormGRow` Instance Methods
 
 Rows returned by `.list()`, `.first()`, `.last()`, `.earliest()`, `.latest()`, `.get()`, `.create()`, `.get_or_create()`, and `.update_or_create()` expose model-aware property access and instance-level persistence:

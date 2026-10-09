@@ -1,7 +1,7 @@
 using Test
 using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField
-using PormG.Functions: Sum, Count, Avg, Coalesce, Value
+using PormG.Functions: Sum, Count, Avg, Coalesce, Value, Rank, WindowOver
 using PormG.QueryBuilder: SQLOrder, SQLField
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -596,6 +596,49 @@ end
       @test occursin("$(terminal) cannot answer for this query", msg)
       @test occursin("no GROUP BY and no HAVING", msg)
     end
+  end
+end
+
+# #1074: a filter on a values() alias resolves it through the projection, so clearing a plain
+# projection made count() and exists() raise UnknownFieldError on a query list() runs. The projection is
+# kept whenever a filter names its alias, and each alias takes list()'s route: a row alias in WHERE, an
+# aggregate one in HAVING (#1066), a window one into #685's refusal. Re-rendering the row alias in WHERE
+# without the projection would give the same rows; keeping it was chosen for cost and safety.
+@testset "count/exists keep a projection a filter names by alias (#1074)" begin
+  for (model, m) in ((GocPg, i -> "\$$(i)"), (GocSl, _ -> "?"))
+    q = () -> model.objects.filter("code" => "A").values("pts1" => F("points") + 1).filter("pts1__@gt" => 2)
+    # Same statement body as list(), so the same values in the same order.
+    @test q().count(show_query = :params) == q().exists(show_query = :params) == q().list(show_query = :params) ==
+          Any[1, "A", 1, 2]
+    sql_c = q().count(show_query = :sql)
+    @test occursin(Regex("SELECT COUNT\\(\\*\\) FROM \\(\\nSELECT \\(\"Tb\"\\.\"points\" \\+ \\Q$(m(1))\\E[^)]*\\) as \"pts1\""), sql_c)
+    @test occursin("as \"__pormg_projected_count\"", sql_c)
+    @test occursin(Regex("WHERE \"Tb\"\\.\"code\" = \\Q$(m(2))\\E AND \\n   \\(\"Tb\"\\.\"points\" \\+ \\Q$(m(3))\\E"), sql_c)
+    @test startswith(q().exists(show_query = :sql), "SELECT (\"Tb\".\"points\" + ")
+    # Exists(sub): through the derived table, its values one run between the outer ones.
+    qx = () -> model.objects.filter(Exists(q())).filter("code" => "Z")
+    @test occursin(r"EXISTS \(SELECT 1 FROM \(SELECT \(\"R1\"\.\"points\" \+ [\s\S]*\) as \"__pormg_exists\"\nLIMIT 1\)", qx().list(show_query = :sql))
+    @test qx().list(show_query = :params) == Any[1, "A", 1, 2, "Z"]
+    # The Q spelling, and distinct(), which already kept the projection.
+    qq = () -> model.objects.values("pts1" => F("points") + 1).filter(Q("pts1" => 2))
+    @test qq().count(show_query = :params) == qq().list(show_query = :params) == Any[1, 1, 2]
+    @test occursin("SELECT DISTINCT (", q().distinct().count(show_query = :sql))
+    # No filter on an alias: a plain projection is still cleared.
+    @test !occursin("FROM (", model.objects.values("pts1" => F("points") + 1).filter("points" => 2).count(show_query = :sql))
+
+    # A window alias reaches #685's refusal from every probe, as from list().
+    w = () -> model.objects.values("r" => Rank(over = WindowOver(order_by = ["points"]))).filter("r" => 1)
+    msg_list = _p208_error(() -> w().list(show_query = :sql))
+    @test occursin("projects a window function", msg_list)
+    @test _p208_error(() -> w().count(show_query = :sql)) == msg_list
+    @test _p208_error(() -> w().exists(show_query = :sql)) == msg_list
+    @test _p208_error(() -> model.objects.filter(Exists(w())).list(show_query = :sql)) == msg_list
+    # A name that is neither a field nor an alias gets list()'s UnknownFieldError, aliases listed.
+    t = () -> model.objects.values("pts1" => F("points") + 1).filter("pts2" => 1)
+    msg_t = _p208_error(() -> t().list(show_query = :sql))
+    @test occursin("declared aliases: pts1", msg_t)
+    @test _p208_error(() -> t().count(show_query = :sql)) == msg_t
+    @test _p208_error(() -> t().exists(show_query = :sql)) == msg_t
   end
 end
 

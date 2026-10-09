@@ -426,7 +426,10 @@ nationalities = M.Driver.objects.values("nationality").distinct().list()
 `.count()` and `.exists()` answer for the same rows: `values("nationality").distinct().count()` is the
 number of nationalities, not of drivers. The same holds for a grouped projection —
 `values("nationality", "n" => Count("driverid")).count()` counts the groups, and a filter on `"n"`
-applies before they are counted.
+applies before they are counted. A filter on any other `values()` alias applies too, as it does for
+`.list()`: `values("next_grid" => F("grid") + 1).filter("next_grid__@gt" => 20).count()` counts the
+results that started 20th or further back, and a filter on a window alias raises the same `QueryBuildError` it
+raises from `.list()`.
 
 An aggregate with nothing to group by is the exception. `values("n" => Count("resultid"))` is exactly
 one row whatever the filters matched — `COUNT` over no rows is `0`, not zero rows — so its answer would

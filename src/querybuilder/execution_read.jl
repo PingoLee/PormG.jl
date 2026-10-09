@@ -400,9 +400,18 @@ _probe_limit(limit::Union{Nothing,Integer}, k::Integer)::Integer = limit === not
 # every projection and as Django's `Exists` clears the SELECT, so all three ask about the matched rows
 # and `exists() == (count() > 0)` holds. A HAVING (a filter on the alias) makes the row optional, so
 # that projection is kept; `_refuse_degenerate_probe` catches a shape this cannot predict.
+#
+# #1074: and a projection a filter names by alias is kept too, whatever it projects. The filter
+# resolves the alias through the projection (`get_filter_query` → the projection memo), so clearing
+# it raised `UnknownFieldError` for `values("pts1" => F("points") + 1).filter("pts1__@gt" => 2)`,
+# which `list()` runs. Kept, each alias takes `list()`'s route: a row alias renders in WHERE, an
+# aggregate one in HAVING, and a window one reaches #685's refusal. Re-rendering a row alias in WHERE
+# without the projection (Django inlines it the same way) gives the same rows with leaner SQL, but
+# alias resolution needs the memo entry only the printed SELECT creates. Keeping it was chosen for
+# cost and safety, not on concept.
 _projection_shapes_rows(object::SQLObject; distinct::Bool)::Bool =
   !isempty(object.values) && !_degenerate_aggregate(object) &&
-  (distinct || _contains_agg(object.values))
+  (distinct || _contains_agg(object.values) || _filters_name_alias(object))
 
 # #1082: does any filter compare a plain key that names no model field — the filter path's own alias
 # test (`_alias_filter_key`), asked of the declaration before the build? An alias is the only way into
@@ -552,12 +561,13 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
     # projection positions, which is why the projection is printed rather than replaced by `1`.
     # Any CTEs stay at the top level and remain in scope for the subquery; the projection's values bind
     # under `:select`, ahead of the WHERE ones, which is where its text sits.
+    # #1074: a projection kept because a filter names its alias counts the same way, named for what it is.
     # #1053: a slice applies after DISTINCT and GROUP BY, so its tail goes inside the subquery. Its
     # markers are the last in the text and bind under `:limit`, the last bucket, so the order holds on
     # both engines.
     resposta = """$(with_clause)SELECT COUNT(*) FROM (
     SELECT $(is_distinct ? "DISTINCT " : "")$(_query_select(instruction.select, instruction.connection))
-    $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as $(is_distinct ? "\"__pormg_distinct_count\"" : "\"__pormg_grouped_count\"")
+    $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as $(is_distinct ? "\"__pormg_distinct_count\"" : instruction.aggregate ? "\"__pormg_grouped_count\"" : "\"__pormg_projected_count\"")
     """
   elseif _is_sliced(q.object)
     # #1053: count the rows the slice returns, as Django's `qs[:5].count()` does. The ordering was

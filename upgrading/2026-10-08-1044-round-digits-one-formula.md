@@ -74,8 +74,6 @@ renders, since its value has at most `n` places on both engines.
 - Code that rounds text to places in SQL.
 - Code that uses a negative precision.
 
-Measured on 2026-10-08: **0** `Round(` call sites in the consuming apps' Julia code.
-
 ### How to find the calls to migrate
 
 ```bash

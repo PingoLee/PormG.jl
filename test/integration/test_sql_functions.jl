@@ -2144,3 +2144,22 @@ end
     @test length(rows) > 100
     @test all(r -> r[:a] == r[:b], rows)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1086: a pattern lookup takes a fragment of the column's text, on both engines.
+# `"2009"` is a prefix of every 2009 date and of every 2009 `"YYYY-MM"` label, so all three spellings
+# select the races `"date__@year" => 2009` selects. Before #1086 the two `YYYY-MM` spellings refused
+# the fragment as "not YYYY-MM", and the date column was a bare `LIKE` on a `date`, which PostgreSQL
+# has no operator for. The independent answer is the `@year` filter, which reads no text at all.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1086: a pattern lookup matches a fragment of the date's text" begin
+    ids(q) = sort([r[:raceid] for r in q.list(:dict)])
+    want = ids(M.Race.objects.filter("date__@year" => 2009).values("raceid"))
+    @test !isempty(want)
+    alias = M.Race.objects
+    alias.values("raceid", "ym" => ToChar("date", "YYYY-MM"))
+    alias.filter("ym__@startswith" => "2009")
+    @test ids(alias) == want
+    @test ids(M.Race.objects.filter("date__@yyyy_mm__@startswith" => "2009").values("raceid")) == want
+    @test ids(M.Race.objects.filter("date__@startswith" => "2009").values("raceid")) == want
+end

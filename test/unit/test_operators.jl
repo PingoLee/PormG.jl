@@ -1532,8 +1532,11 @@ end
   @test_throws PormG.InvalidValueError _IN411R.objects.filter(
     "eventid__n" => "abc").list(show_query = :dict)
   # Through a pattern operator too, which reaches the same arm by a different branch of the caller.
+  # Since #1086 a pattern's value is a text FRAGMENT on every column (Django's `PatternLookup`), so
+  # `"x"` against the integer `n` is a valid fragment, not a refusal; a `Bool`, which has no single
+  # text (#876), is what the pattern formatter still refuses on this arm.
   @test_throws PormG.InvalidValueError _IN411R.objects.filter(
-    "eventid__n__@contains" => "x").list(show_query = :dict)
+    "eventid__n__@contains" => true).list(show_query = :dict)
 
   # ── Controls: the conversion must not swallow a well-typed value ──
   # Every spelling above, with a value its formatter accepts, still builds. Asserting the BOUND

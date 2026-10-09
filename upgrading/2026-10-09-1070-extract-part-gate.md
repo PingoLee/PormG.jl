@@ -35,7 +35,7 @@ checked against the same table, with the same message, and get the same range:
 | `filter("date__@day" => 32)` | matched nothing | `InvalidValueError` |
 | `values("h" => Extract("start_at", "HOUR")); filter("h" => 25)` | matched nothing | `InvalidValueError` |
 | `values("ym" => ToChar("date", "YYYY-MM")); filter("ym" => "March 2009")` | matched nothing | `InvalidValueError`: not `YYYY-MM`, as `"date__@yyyy_mm"` already refused |
-| `values("ym" => ToChar("date", "YYYY-MM")); filter("ym__@startswith" => "2009")` | the 2009 months | `InvalidValueError`, as `"date__@yyyy_mm__@startswith"` already raised; filter `"date__@year" => 2009` instead |
+| `values("ym" => ToChar("date", "YYYY-MM")); filter("ym__@startswith" => "2009")` | the 2009 months | the 2009 months, unchanged: a pattern lookup takes a text fragment, and `"date__@yyyy_mm__@startswith" => "2009"`, which raised, now matches them too (#1086) |
 | `values("y" => Extract(F("name"), "YEAR"))` — a bare `F` column | unchecked | checked as the column `name`: `QueryBuildError` |
 | `values("h" => Coalesce("start_at__@hour", -1)); filter("h" => -1)` | `InvalidValueError`: the hour's range applied to the fallback | builds: a `Coalesce` keeps a number, not the part's range |
 | `filter("date__@quarter__@lt" => 5)`, `filter("date__@quarter__@range" => [1, 5])` | `InvalidValueError`, for every operator | builds: a comparison's value and a range's ends are bounds (#1088) |

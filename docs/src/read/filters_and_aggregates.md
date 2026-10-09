@@ -171,6 +171,11 @@ right (`"surname__@contains" => F("forename")`) raises a `FilterError` on both b
 `@iexact` pair and the PostgreSQL-only `@regex` and `@iunaccent_exact` families do take a column,
 because they use their right-hand side as it is.
 
+The value is a **fragment of the column's text**, not a whole value of the column's type, so it is
+bound as text whatever the column holds, as in Django. `"date__@startswith" => "2009"` matches every
+race in 2009, and so does `"date__@yyyy_mm__@startswith" => "2009"`, though an exact `@yyyy_mm`
+needs a whole `"2009-03"`. A date column is matched as its `YYYY-MM-DD` text on both backends.
+
 ### Case-Sensitive (`@contains`)
 
 ```julia

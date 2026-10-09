@@ -1223,6 +1223,46 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1086: a pattern lookup's value is a FRAGMENT of the column's text, on every column.
+# Django's `PatternLookup` skips the field's `get_prep_value`, because `"2009"` is a prefix of a date
+# and of a `"YYYY-MM"` label, not a whole value of either. PormG did that only for the network and UUID
+# kinds, so after #1084 `ToChar(x, "YYYY-MM")` — which IS `@yyyy_mm` — refused `@startswith "2009"`.
+# The value now binds as text with the `%` the lookup adds; an exact value is still a whole value. On
+# PostgreSQL a `date` has no `LIKE`, so a date column is read as its `YYYY-MM-DD` text, the text
+# SQLite stores (`to_char`, not `::text`, which follows `DateStyle`).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1086: a pattern lookup binds a text fragment, on every column" begin
+  Fn = PormG.Functions
+  refusal(f, conn) = try _tlp_sql((q = TLP.Tlp_row.objects; f(q); q); conn = conn); nothing catch e; e end
+  params(f, conn) = _tlp_params((q = TLP.Tlp_row.objects; f(q); q); conn = conn)
+  for (backend, conn) in _TLP_BACKENDS
+    @testset "$backend" begin
+      # Both spellings of the issue: an alias of `ToChar(…, "YYYY-MM")`, and the `@yyyy_mm` transform.
+      # Each binds the fragment with the prefix wildcard, as text.
+      alias_ym = q -> (q.values("ym" => Fn.ToChar("seen", "YYYY-MM")); q.filter("ym__@startswith" => "2009"))
+      @test params(alias_ym, conn) == ["2009%"]
+      @test params(q -> (q.values("id"); q.filter("seen__@yyyy_mm__@startswith" => "2009")), conn) == ["2009%"]
+      # A pattern over a date part's text is odd but valid: the hour's range is not asked of `"2"`.
+      @test params(q -> (q.values("id"); q.filter("ts__@hour__@startswith" => "2")), conn) == ["2%"]
+      # An exact value is still a whole value: the label's shape and the hour's range still refuse.
+      e = refusal(q -> (q.values("ym" => Fn.ToChar("seen", "YYYY-MM")); q.filter("ym" => "2009")), conn)
+      @test e isa PormG.InvalidValueError
+      @test refusal(q -> (q.values("id"); q.filter("ts__@hour" => 25)), conn) isa PormG.InvalidValueError
+      # A date column: the value is the fragment, and PostgreSQL reads the column as its date text.
+      sql = _tlp_sql((q = TLP.Tlp_row.objects; q.values("id"); q.filter("seen__@startswith" => "2009"); q); conn = conn)
+      @test params(q -> (q.values("id"); q.filter("seen__@startswith" => "2009")), conn) == ["2009%"]
+      @test occursin(conn === _TLP_PG ? "to_char(\"Tb\".\"seen\", 'YYYY-MM-DD') LIKE" : "\"Tb\".\"seen\" LIKE", sql)
+      # A number column binds its fragment as text, a float as the text it always bound; a text
+      # column still refuses a float (#860), and no column takes a Bool (#876).
+      @test params(q -> (q.values("id"); q.filter("id__@startswith" => 1)), conn) == ["1%"]
+      @test params(q -> (q.values("id"); q.filter("id__@startswith" => 1.5)), conn) == ["1.5%"]
+      @test refusal(q -> (q.values("id"); q.filter("note__@contains" => 1.5)), conn) isa PormG.InvalidValueError
+      @test refusal(q -> (q.values("id"); q.filter("seen__@startswith" => true)), conn) isa PormG.InvalidValueError
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #955: a transform and its `Extract` twin are one grouped expression.
 # The #798 grouping check matches a grouped projection against the same expression elsewhere by a
 # structural signature of the node, kwargs included. While the ladder tagged its nodes, a

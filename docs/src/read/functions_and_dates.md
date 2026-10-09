@@ -988,8 +988,8 @@ query.list(:dict)   # [Dict(:start => "2009-03-29T06:00:00.000")]
 
 `ToChar(x, "YYYY-MM")` is the expression `"x__@yyyy_mm"` builds, and it follows the same rules. Its
 column must be a date or a timestamp, and a filter on it takes a whole `"YYYY-MM"` value: `"2009-03"`,
-not `"2009"` or `"March 2009"`. That holds for a pattern lookup too, so `"ym__@startswith" => "2009"`
-raises `InvalidValueError`. To filter a year, filter `@year` on the date.
+not `"2009"` or `"March 2009"`. A pattern lookup takes a fragment of that text instead, so
+`"ym__@startswith" => "2009"` selects the 2009 months.
 
 !!! warning "Any other format is PostgreSQL-only"
     A format outside the table is passed to `to_char` as written — a native template such as

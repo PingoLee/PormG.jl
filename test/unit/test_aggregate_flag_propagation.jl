@@ -249,7 +249,7 @@ end
                  :LTrim => "surname", :RTrim => "surname", :Concat => "surname",
                  :LPad => "surname", :RPad => "surname",   # #122: a number is refused
                  :Cast => "raceid",   # #1028: a float cast to an integer is refused
-                 :Round => "raceid")  # #1044: a float rounded to places is refused
+                 :Round => "raceid")
   for (backend, Model_) in _AGG_FLAG_MODELS
     for (name, build) in sort!(collect(_AGG_WRAPPERS), by = first)
       @testset "$backend — $name" begin

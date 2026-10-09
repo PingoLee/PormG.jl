@@ -611,16 +611,18 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     divergent = _cast_divergent_operand(v, instruc; rendered = rendered)
     divergent === nothing || throw(_cast_divergent_refusal(_declared_cast_label(v), divergent...))
   end
-  # #1044: `Round(x, d)` rounds the decimal form on PostgreSQL and the binary double on SQLite, which
-  # disagree as soon as `x` has more than `d` places — the question #1040 asks of a `numeric(p, d)`
-  # cast, so the same classifier answers it. Read here, after the operand renders, for the joined
-  # and CTE memos. An operand PormG cannot type passes, as it does there.
+  # #1061: `Round(x, d)` renders each engine's own `ROUND`, as Django does — `ROUND(x::numeric, d)` on
+  # PostgreSQL, exact, and `ROUND(x, d)` over the stored double on SQLite, which can round a tie the
+  # other way (`2.675` → `2.68` / `2.67`). That last-digit difference is documented, not refused. Text
+  # is refused: PostgreSQL rejects text that is no number while SQLite reads it as 0, a different
+  # value rather than a different last digit. The #1040 classifier names it (its `:text` kind, a JSON
+  # value included); read here, after the operand renders, for the joined and CTE memos.
   if v isa FObject && v.function_name == "ROUND"
     digits = get(v.kwargs, "precision", 0)
     if digits isa Integer && digits > 0
       # `Round` takes any `Integer` (`Int32`, `BigInt`); the classifier's scale is an `Int`.
       divergent = _scale_divergent_operand(v.column, Int(digits), instruc)
-      divergent === nothing || throw(_round_divergent_refusal(digits, divergent...))
+      divergent !== nothing && divergent[1] === :text && throw(_round_text_refusal(digits, divergent[2]))
     end
   end
   # #953: an aggregate over a boolean, read once its column resolves (as the check above is).

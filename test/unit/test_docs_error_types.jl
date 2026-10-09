@@ -1483,6 +1483,24 @@ const DOCERR_CASES = [
         () -> DOCERR_RESULT_PG.objects.values("n" => Count("resultid"), "k" => Value(1)).
             filter("k" => 1).count(show_query = :sql),
     ),
+    # #1100 — `read/index.md` (method table and *Distinct Results*): `.count()` and `.exists()` raise
+    # on an ungrouped aggregate projection instead of answering the constant it is.
+    (
+        "read/index.md — .count() refuses an ungrouped aggregate projection (#1100)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.values("n" => Count("resultid")).count(show_query = :sql),
+    ),
+    (
+        "read/index.md — .exists() refuses an ungrouped aggregate projection (#1100)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.values("n" => Count("resultid")).exists(show_query = :sql),
+    ),
+    (
+        "read/index.md — Exists(...) refuses an aggregate beside an empty-OVER window (#1082)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.filter(Exists(DOCERR_RESULT_PG.objects.
+            values("n" => Count("resultid"), "r" => Rank(over = WindowOver())))).list(show_query = :sql),
+    ),
     # #1049 — `api.md`, `read/index.md` (method table and *Pagination*) and the `object` docstring
     # promise QueryBuildError for a negative or `Bool` LIMIT / OFFSET, on `.page()` too.
     (

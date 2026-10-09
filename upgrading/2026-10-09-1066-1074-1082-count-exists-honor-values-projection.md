@@ -1,9 +1,9 @@
 ## `count()`, `exists()` and `Exists(...)` answer for the rows a `values()` projection returns (#1066, #1074, #1082)
 
 - **Version**: Unreleased
-- **PormG ref**: #1066, #1074, #1082 ; `src/querybuilder/execution_read.jl` (`_projection_shapes_rows`, `_filters_name_alias`, `_degenerate_aggregate`, `_refuse_degenerate_probe`, `_count`, `_exists`), `src/querybuilder/filter_nodes.jl` (`_build_exists_query`)
+- **PormG ref**: #1066, #1074, #1082, #1100 ; `src/querybuilder/execution_read.jl` (`_projection_shapes_rows`, `_filters_name_alias`, `_degenerate_aggregate`, `_refuse_degenerate_probe`, `_refuse_constant_terminal`, `_count`, `_exists`), `src/querybuilder/filter_nodes.jl` (`_build_exists_query`)
 - **Recorded**: 2026-10-09
-- **Severity**: behavior change. Two counts return a different number, alias filters that used to raise now run, and two shapes raise a different error.
+- **Severity**: behavior change. Two counts return a different number, one shape that returned an answer from `count()` and `exists()` now raises, alias filters that used to raise now run, and two shapes raise a different error.
 
 ### What changed
 
@@ -19,10 +19,13 @@ now keep such a projection and agree with `list()`:
 - a **filter on an alias** resolves as it does in `list()`: a row alias in `WHERE`, an aggregate alias
   in `HAVING`, and a window alias reaches the same `QueryBuildError` (#685) `list()` raises.
 
-One shape is deliberately left as it was: an aggregate with no grouping and no `HAVING`
+One shape is split (#1100): an aggregate with no grouping and no `HAVING`
 (`values("n" => Count("resultid"))`) is one row whatever matched, so its literal answer would be a
-constant. The three terminals still ask about the matched rows there, as Django's `Exists` does, so
-`exists() == (count() > 0)` holds.
+constant. `Exists(...)` asks about the matched rows there, as Django's does: it ignores the `SELECT`
+list and keeps grouping and `HAVING`. `count()` and `exists()` raise `QueryBuildError` instead. They
+used to count the matched rows, which made `count()` return *N* and then 1 once a `HAVING` that is
+true was added. Raising keeps `count() == length(list())` without an exception, and
+`exists() == (count() > 0)` still holds, because both raise.
 
 | call | before | after |
 |---|---|---|
@@ -32,10 +35,11 @@ constant. The three terminals still ask about the matched rows there, as Django'
 | `M.Result.objects.values("driverid", "wins" => Count("resultid")).filter("wins__@gte" => 10).count()` | `UnknownFieldError` | the drivers with at least 10 results (`HAVING`) |
 | a filter on a window alias, `values("r" => Rank(…)).filter("r" => 1).count()` | `UnknownFieldError` | `QueryBuildError` (#685), as `list()` raises |
 | `M.Result.objects.values("points" => Sum("points")).filter("points__@gt" => 5).count()` | the results whose `points` **column** is above 5 | `AmbiguousFieldError` (#703), as `list()` raises |
-| an aggregate beside a filtered literal, `values("n" => Count("resultid"), "k" => Value(1)).filter("k" => 1).count()` | `UnknownFieldError` | `QueryBuildError` (#1082) |
-| `M.Result.objects.values("n" => Count("resultid")).count()`, `.exists()`, `Exists(...)` | the matched rows | unchanged: the matched rows |
+| an aggregate beside a filtered literal, `values("n" => Count("resultid"), "k" => Value(1)).filter("k" => 1).count()` | `UnknownFieldError` | `QueryBuildError` (#1100; `(#1082)` from `Exists(...)`) |
+| `M.Result.objects.values("n" => Count("resultid")).count()`, `.exists()` | the matched rows | `QueryBuildError` (#1100) |
+| `Exists(M.Result.objects.values("n" => Count("resultid")))` | the matched rows | unchanged: the matched rows |
 
-The last row but one is the fail-closed check: a kept aggregate projection that builds with no
+The filtered-literal row is the fail-closed check: a kept aggregate projection that builds with no
 `GROUP BY` and no `HAVING` would answer a constant, so it is refused rather than answered. The
 `AmbiguousFieldError` row was silent before: the filter quietly meant the column, not the alias.
 
@@ -44,7 +48,11 @@ The last row but one is the fail-closed check: a kept aggregate projection that 
 Code that calls `count()` or `exists()` on a handler that already has `values(...)` set with an
 aggregate or with `distinct()`, or passes such a handler to `Exists(...)`. The usual case is a
 grouped or distinct report query whose total is taken with `count()` on the same handler: that total
-is now the number of groups or distinct rows, which is what `list()` returns. A filter on a
+is now the number of groups or distinct rows, which is what `list()` returns. A `count()` or `exists()`
+on a handler whose `values(...)` builds with no `GROUP BY` and no `HAVING` now raises: aggregates
+alone, or beside entries that group nothing (a `Value(...)`, a `Subquery`/`Exists`, a window with an
+empty `WindowOver()`). A filter on an aggregate alias (a `HAVING`) or an `order_by()` on a column the
+projection does not name (a `GROUP BY` term) keeps it answered. A filter on a
 `values()` alias that used to raise from these terminals is not a migration — it now runs.
 
 ### How to find the calls to migrate
@@ -55,7 +63,7 @@ grep -rnE '\.(count|exists)\(|Exists\(' --include=*.jl src/ test/
 
 For each hit, check whether the same handler has `values(...)` with an aggregate (`Count`, `Sum`,
 `Avg`, `Max`, `Min`) or `distinct()`. The two errors are loud: run the app's tests and look for
-`AmbiguousFieldError` or a `QueryBuildError` ending in `(#1082)`.
+`AmbiguousFieldError` or a `QueryBuildError` ending in `(#1082)` or `(#1100)`.
 
 ### Migrate your app
 
@@ -82,4 +90,13 @@ n = M.Result.objects.values("points" => Sum("points")).filter("points__@gt" => 5
 # ✓ after: name the alias apart from the column, and say which one the filter means
 n = M.Result.objects.filter("points__@gt" => 5).count()                                    # the column
 n = M.Result.objects.values("total" => Sum("points")).filter("total__@gt" => 5).count()    # the sum: 0 or 1
+```
+
+```julia
+# ✗ before: the aggregate was dropped, so this counted the matching results
+n = M.Result.objects.filter("driverid__nationality" => "Brazilian").values("n" => Count("resultid")).count()
+
+# ✓ after: that raises QueryBuildError (#1100). Say which answer you meant
+n = M.Result.objects.filter("driverid__nationality" => "Brazilian").count()                          # the results
+n = M.Result.objects.filter("driverid__nationality" => "Brazilian").aggregate("n" => Count("resultid")).n  # the same number, as the aggregate
 ```

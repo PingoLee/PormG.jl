@@ -535,40 +535,56 @@ end
     @test qb().exists(show_query = :params) == qb().list(show_query = :params)
     # A non-aggregating probe still drops it.
     @test !occursin("ORDER BY", model.objects.values("code").distinct().order_by("code").count(show_query = :sql))
-    # A whole-table aggregate is one row whatever matched, so it is not kept: count() counts the
-    # matched rows (#1082, which reversed #1066's derived-table count of that single row).
-    sql_w = model.objects.values("n" => Count("id")).count(show_query = :sql)
-    @test !occursin("FROM (", sql_w) && !occursin("GROUP BY", sql_w)
+    # A whole-table aggregate is one row whatever matched, so count() refuses it (#1100; #1082 had
+    # counted the matched rows, and #1066 the single row through a derived table).
+    @test occursin("count() cannot answer for this query", _p208_error(() -> model.objects.values("n" => Count("id")).count(show_query = :sql)))
   end
 end
 
 # #1082: an aggregate projection with no GROUP BY and no HAVING is exactly one row whatever matched
-# (`COUNT` over no rows is 0, not zero rows). #1066 kept it, so `Exists(sub)` and `exists()` were always
-# true and `count()` always 1. It is cleared again, as v0.7.0 cleared every projection: all three ask
-# about the matched rows, which is what keeps `exists() == (count() > 0)`. A HAVING makes the one row
-# optional, and any grouping makes the rows the groups, so both keep the #1066 path.
-@testset "count/exists drop an ungrouped aggregate projection with no HAVING (#1082)" begin
+# (`COUNT` over no rows is 0, not zero rows). #1066 kept it, so `Exists(sub)` was always true. It clears
+# it again, as Django's `Exists` clears the SELECT, so it asks whether any row matched. #1100: `count()`
+# and `exists()` refuse it instead — their only honest answer is the constant `list()` gives, and
+# answering for the matched rows made `count()` jump from N to 1 when a true HAVING was added. A HAVING
+# makes the one row optional, and any grouping makes the rows the groups, so both keep the #1066 path.
+@testset "count/exists refuse, and Exists clears, an ungrouped aggregate projection (#1082, #1100)" begin
   for (model, m) in ((GocPg, i -> "\$$(i)"), (GocSl, _ -> "?"))
     deg = () -> model.objects.filter("points" => 3).values("n" => Count("id"))
-    # Both terminals probe the matched rows, with the same WHERE and the same values: the invariant.
-    sql_c = deg().count(show_query = :sql)
-    @test occursin(Regex("^SELECT\\n  COUNT\\(\\*\\)\\nFROM \"goc_driver\""), sql_c)
-    @test !occursin("FROM (", sql_c) && !occursin("COUNT(\"Tb\"", sql_c)
-    sql_e = deg().exists(show_query = :sql)
-    @test startswith(sql_e, "SELECT 1\n") && !occursin("COUNT(", sql_e)
-    @test occursin(Regex("WHERE \"Tb\"\\.\"points\" = \\Q$(m(1))\\E"), sql_c)
-    @test occursin(Regex("WHERE \"Tb\"\\.\"points\" = \\Q$(m(1))\\E"), sql_e)
-    @test deg().count(show_query = :params) == deg().exists(show_query = :params) == Any[3]
+    # The terminals refuse, naming the three ways out; a slice, distinct() or an order_by() on the
+    # alias leaves it one row (or none, which is still a constant), so each is refused the same way.
+    for (terminal, ask) in (("count()", "To count the matched rows"), ("exists()", "To ask whether any row matched"))
+      run = q -> terminal == "count()" ? q.count(show_query = :sql) : q.exists(show_query = :sql)
+      msg = _p208_error(() -> run(deg()))
+      @test occursin("$(terminal) cannot answer for this query", msg)
+      @test occursin("no GROUP BY and no HAVING", msg) && occursin("list() returns that one row, or none under a slice", msg)
+      @test occursin("$(ask), drop the aggregate from values()", msg)
+      @test occursin("filter on its alias", msg) && occursin(".aggregate(\"n\" => Count(...))", msg)
+      for variant in (() -> deg().distinct(), () -> deg().distinct().offset(2), () -> deg().order_by("n"),
+                      () -> deg().limit(5))
+        @test occursin("$(terminal) cannot answer for this query", _p208_error(() -> run(variant())))
+      end
+    end
+    # The pair #1100 is about: the same query family no longer returns two kinds of answer. With a
+    # HAVING the row is optional, so count() answers (0 or 1) as list() does.
+    @test occursin("count() cannot answer", _p208_error(() -> deg().count(show_query = :sql)))
+    sql_h = deg().filter("n__@gt" => 3).count(show_query = :sql)
+    @test occursin("SELECT COUNT(\"Tb\".\"id\") as \"n\"", sql_h) && occursin(Regex("HAVING COUNT\\(\"Tb\"\\.\"id\"\\) > \\Q$(m(2))\\E"), sql_h)
+    # A projection list() refuses raises the same error from the terminals, because they build it:
+    # #798's mixed grouping, which the predictor classifies as one aggregate.
+    mixed = () -> model.objects.values("n" => F("points") + Sum("points"))
+    msg_mixed = _p208_error(() -> mixed().list(show_query = :sql))
+    @test occursin("#798", msg_mixed)
+    @test _p208_error(() -> mixed().count(show_query = :sql)) == msg_mixed
+    @test _p208_error(() -> mixed().exists(show_query = :sql)) == msg_mixed
     # Exists(sub), correlated — the documented Subquery/Exists shared-handle shape: the plain probe.
     sub = model.objects.filter("code" => OuterRef("code")).values("t" => Count("id"))
     sql_x = model.objects.filter(Exists(sub)).list(show_query = :sql)
     @test occursin("EXISTS (SELECT 1\nFROM \"goc_driver\" as \"R1\"", sql_x)
     @test !occursin("__pormg_exists", sql_x) && !occursin("COUNT(", sql_x)
-    # distinct() and a slice collapse nothing in one row, so neither keeps it.
-    @test !occursin("COUNT(\"Tb\"", deg().distinct().count(show_query = :sql))
-    @test startswith(deg().distinct().offset(2).exists(show_query = :sql), "SELECT 1\n")
-    # An order_by() on the alias is not a grouping term, so the shape is still degenerate.
-    @test !occursin("FROM (", deg().order_by("n").count(show_query = :sql))
+    # distinct(), a slice and an order_by() on the alias leave it one row, so Exists(sub) clears it too.
+    for variant in (() -> deg().distinct(), () -> deg().distinct().offset(2), () -> deg().order_by("n"))
+      @test occursin("EXISTS (SELECT 1\n", model.objects.filter(Exists(variant())).list(show_query = :sql))
+    end
     # A window beside the aggregate can group by its OVER terms, so it is never treated as degenerate:
     # list() groups by the window's order column, and count() counts those groups.
     win = () -> model.objects.values("x" => Rank(over = WindowOver(order_by = ["points"])) + Sum("id"))

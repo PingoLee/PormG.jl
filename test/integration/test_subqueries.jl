@@ -266,6 +266,17 @@ end
         filter("driverid" => lonely_id).
         values("has_standings" => Exists(standings)) |> DataFrame
     @test Bool(df_not[1, :has_standings]) == false
+
+    # #1082: the same ungrouped aggregate projection is one row whatever matched, so count(),
+    # exists() and Exists all answer for the matched rows instead: exists() == (count() > 0).
+    for (id, expected) in ((1, true), (lonely_id, false))
+        own = () -> M.Driver_standings.objects.
+            filter("driverid" => id).
+            values("t" => Count("driverstandingsid"))
+        @test own().exists() == expected
+        @test (own().count() > 0) == expected
+        @test (own().count() == length(M.Driver_standings.objects.filter("driverid" => id).list()))
+    end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

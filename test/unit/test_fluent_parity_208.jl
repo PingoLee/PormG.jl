@@ -535,9 +535,67 @@ end
     @test qb().exists(show_query = :params) == qb().list(show_query = :params)
     # A non-aggregating probe still drops it.
     @test !occursin("ORDER BY", model.objects.values("code").distinct().order_by("code").count(show_query = :sql))
-    # A whole-table aggregate is one row: counted through the derived table, with no GROUP BY.
+    # A whole-table aggregate is one row whatever matched, so it is not kept: count() counts the
+    # matched rows (#1082, which reversed #1066's derived-table count of that single row).
     sql_w = model.objects.values("n" => Count("id")).count(show_query = :sql)
-    @test occursin("FROM (", sql_w) && !occursin("GROUP BY", sql_w)
+    @test !occursin("FROM (", sql_w) && !occursin("GROUP BY", sql_w)
+  end
+end
+
+# #1082: an aggregate projection with no GROUP BY and no HAVING is exactly one row whatever matched
+# (`COUNT` over no rows is 0, not zero rows). #1066 kept it, so `Exists(sub)` and `exists()` were always
+# true and `count()` always 1. It is cleared again, as v0.7.0 cleared every projection: all three ask
+# about the matched rows, which is what keeps `exists() == (count() > 0)`. A HAVING makes the one row
+# optional, and any grouping makes the rows the groups, so both keep the #1066 path.
+@testset "count/exists drop an ungrouped aggregate projection with no HAVING (#1082)" begin
+  for (model, m) in ((GocPg, i -> "\$$(i)"), (GocSl, _ -> "?"))
+    deg = () -> model.objects.filter("points" => 3).values("n" => Count("id"))
+    # Both terminals probe the matched rows, with the same WHERE and the same values: the invariant.
+    sql_c = deg().count(show_query = :sql)
+    @test occursin(Regex("^SELECT\\n  COUNT\\(\\*\\)\\nFROM \"goc_driver\""), sql_c)
+    @test !occursin("FROM (", sql_c) && !occursin("COUNT(\"Tb\"", sql_c)
+    sql_e = deg().exists(show_query = :sql)
+    @test startswith(sql_e, "SELECT 1\n") && !occursin("COUNT(", sql_e)
+    @test occursin(Regex("WHERE \"Tb\"\\.\"points\" = \\Q$(m(1))\\E"), sql_c)
+    @test occursin(Regex("WHERE \"Tb\"\\.\"points\" = \\Q$(m(1))\\E"), sql_e)
+    @test deg().count(show_query = :params) == deg().exists(show_query = :params) == Any[3]
+    # Exists(sub), correlated — the documented Subquery/Exists shared-handle shape: the plain probe.
+    sub = model.objects.filter("code" => OuterRef("code")).values("t" => Count("id"))
+    sql_x = model.objects.filter(Exists(sub)).list(show_query = :sql)
+    @test occursin("EXISTS (SELECT 1\nFROM \"goc_driver\" as \"R1\"", sql_x)
+    @test !occursin("__pormg_exists", sql_x) && !occursin("COUNT(", sql_x)
+    # distinct() and a slice collapse nothing in one row, so neither keeps it.
+    @test !occursin("COUNT(\"Tb\"", deg().distinct().count(show_query = :sql))
+    @test startswith(deg().distinct().offset(2).exists(show_query = :sql), "SELECT 1\n")
+    # An order_by() on the alias is not a grouping term, so the shape is still degenerate.
+    @test !occursin("FROM (", deg().order_by("n").count(show_query = :sql))
+
+    # A HAVING (a filter on the alias, either spelling) makes the one row optional: kept, and bound as
+    # list() binds it.
+    for hv in (() -> deg().filter("n__@gt" => 2), () -> deg().filter(Q("n" => 2)))
+      sql_hc = hv().count(show_query = :sql)
+      @test occursin("SELECT COUNT(\"Tb\".\"id\") as \"n\"", sql_hc) && occursin("HAVING", sql_hc)
+      @test occursin("HAVING", hv().exists(show_query = :sql))
+      @test hv().count(show_query = :params) == hv().list(show_query = :params) == Any[3, 2]
+      @test hv().exists(show_query = :params) == Any[3, 2]
+    end
+    sql_hx = model.objects.filter(Exists(sub.filter("t__@gt" => 1))).list(show_query = :sql)
+    @test occursin(r"EXISTS \(SELECT 1 FROM \(SELECT COUNT\(\"R1\"\.\"id\"\) as \"t\"[\s\S]*HAVING[\s\S]*\) as \"__pormg_exists\"", sql_hx)
+
+    # Any grouping keeps the #1066 path: a grouping column, or an order_by() column it does not project.
+    @test occursin("GROUP BY 1", model.objects.values("code", "n" => Count("id")).exists(show_query = :sql))
+    @test occursin("GROUP BY \"Tb\".\"points\"", deg().order_by("points").count(show_query = :sql))
+
+    # A shape the pre-build check cannot answer, which still builds ungrouped, is refused rather than
+    # answered: a filter on a literal's alias keeps the projection, and the build has no GROUP BY.
+    lit = () -> model.objects.values("n" => Count("id"), "k" => Value(1)).filter("k" => 1)
+    for (terminal, run) in (("count()", () -> lit().count(show_query = :sql)),
+                            ("exists()", () -> lit().exists(show_query = :sql)),
+                            ("Exists(...)", () -> model.objects.filter(Exists(lit())).list(show_query = :sql)))
+      msg = _p208_error(run)
+      @test occursin("$(terminal) cannot answer for this query", msg)
+      @test occursin("no GROUP BY and no HAVING", msg)
+    end
   end
 end
 

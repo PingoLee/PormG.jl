@@ -234,6 +234,61 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# update() sets a column FROM a cjoin_on copy on a live engine (#174)
+# The alias's ON clause joins in the correlated UPDATE … FROM's WHERE, so it must also decide WHICH
+# rows are written: with `code = 'HAM'` in the ON clause only Hamilton's results in the race change,
+# and with a code no driver has, none do. The write runs inside a transaction that is always rolled
+# back (a sentinel exception ends it), so the shared F1 fixture is never changed.
+# ─────────────────────────────────────────────────────────────────────────────
+struct _Rollback174 <: Exception end
+
+@testset "update() sets a column from a cjoin_on copy (#174)" begin
+    raceid = 18
+    ham = M.Result.objects.filter("raceid" => raceid, "driverid__code" => "HAM").values("resultid") |> DataFrame
+    @test nrow(ham) == 1   # the scenario needs Hamilton in this race, or `n == 1` proves nothing
+
+    upd(code) = begin
+        q = M.Result.objects
+        q.filter("raceid" => raceid)
+        q.cjoin_on("Driver", alias = "d", on = [Joined("d", "driverid") == F("driverid"), Joined("d", "code") => code])
+        q.update("positiontext" => Joined("d", "code"))
+    end
+
+    seen = Dict{Symbol,Any}()
+    err = try
+        PormG.run_in_transaction(PORMG_DB_FOLDER) do
+            seen[:n_ham] = upd("HAM")
+            seen[:n_none] = upd("XXX")
+            rows = M.Result.objects.filter("raceid" => raceid).values("resultid", "positiontext") |> DataFrame
+            seen[:ham_text] = only(rows[rows.resultid .== ham.resultid[1], :positiontext])
+            seen[:others] = count(==("HAM"), coalesce.(rows[rows.resultid .!= ham.resultid[1], :positiontext], ""))
+            throw(_Rollback174())
+        end
+        nothing
+    catch e
+        e
+    end
+    @test err isa _Rollback174
+    @test seen[:n_ham] == 1
+    @test seen[:n_none] == 0
+    @test seen[:ham_text] == "HAM"
+    @test seen[:others] == 0
+    # Rolled back: Hamilton's row reads what it read before.
+    after = M.Result.objects.filter("resultid" => ham.resultid[1]).values("positiontext") |> DataFrame
+    @test after.positiontext[1] != "HAM"
+
+    # Refused before any SQL runs: a LEFT alias, and one not proven to-one.
+    left = M.Result.objects
+    left.filter("raceid" => raceid)
+    left.cjoin_on("Driver", alias = "d", join_type = "LEFT", on = [Joined("d", "driverid") == F("driverid")])
+    @test_throws PormG.QueryBuildError left.update("positiontext" => Joined("d", "code"))
+    many = M.Result.objects
+    many.filter("raceid" => raceid)
+    many.cjoin_on("Driver", alias = "d", on = [Joined("d", "nationality") == F("driverid__nationality")])
+    @test_throws PormG.QueryBuildError many.update("positiontext" => Joined("d", "code"))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # A cjoin_on alias equal to a ForeignKey field name executes on a live engine (#484)
 # Top-level rather than inside "cjoin error paths" above: this executes a query, it does not assert
 # a refusal. (The sibling `cjoin_on self-join` testset sits in that block for historical reasons and

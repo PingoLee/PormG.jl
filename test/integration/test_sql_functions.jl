@@ -1489,6 +1489,44 @@ end
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #174: the fan-out guard sees a cjoin_on join
+# A cjoin_on self-join on a shared, non-unique column (nationality) repeats each driver once per driver
+# of the same nationality, so COUNT over the base pk would be inflated: refused. The exemptions return
+# the real numbers on a live engine, and a join that pins a key (the pk, or a `unique = true` column)
+# is to-one and allowed. Expected counts come from the plain, join-free aggregate.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#174: the fan-out guard sees a to-many cjoin_on" begin
+    fanout_err(f) = try; f(); nothing; catch e; e; end
+    is_fanout(e)  = e isa PormGError && occursin("fan-out", e.msg) && occursin("cjoin_on", e.msg)
+    per_nat(df) = Dict(r.nationality => r.n for r in eachrow(df))
+
+    plain = M.Driver.objects
+    plain.values("nationality", "n" => Count("driverid"))
+    expected = per_nat(plain |> DataFrame)
+    @test any(>(1), values(expected))   # a nationality with two drivers, so the join does multiply
+
+    selfjoin(on) = (q = M.Driver.objects; q.cjoin_on("Driver", alias = "d2", on = on); q)
+
+    q = selfjoin([Joined("d2", "nationality") == F("nationality")])
+    q.values("nationality", "n" => Count("driverid"))
+    @test is_fanout(fanout_err(() -> (q |> DataFrame)))
+
+    q = selfjoin([Joined("d2", "nationality") == F("nationality")])
+    q.values("nationality", "n" => Count("driverid", distinct = true))
+    @test per_nat(q |> DataFrame) == expected
+
+    q = selfjoin([Joined("d2", "driverid") == F("driverid")])
+    q.values("nationality", "n" => Count("driverid"))
+    @test per_nat(q |> DataFrame) == expected
+
+    # A `unique = true` column pins the target as well as the pk does.
+    e = M.M2m_driver_endorsement_scratch.objects
+    e.cjoin_on("M2m_driver_endorsement_scratch", alias = "e2", on = [Joined("e2", "driverref") == F("driverref")])
+    e.values("driverref", "n" => Count("id"))
+    @test fanout_err(() -> (e |> DataFrame)) === nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #696: Cast / output_field type names on a real engine
 # The type name is validated and rebuilt before it reaches the SQL, so every accepted spelling must
 # still execute and return the right values on both engines — a modifier (`numeric(10,2)`), a

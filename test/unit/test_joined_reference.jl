@@ -67,6 +67,14 @@ Jn_result = Models.Model("jn_result",
   note   = Models.CharField(null = true),
 )
 
+# #174: a REQUIRED foreign key, so the path join it renders is INNER — the one kind a correlated
+# UPDATE … FROM can carry beside a `cjoin_on` (`Jn_result.driver` is nullable, so LEFT).
+Jn_entry = Models.Model("jn_entry",
+  id     = Models.IDField(),
+  result = Models.ForeignKey(Jn_result, on_delete = "CASCADE", related_name = "jn_entries"),
+  note   = Models.CharField(null = true),
+)
+
 PormG.Models.set_models(@__MODULE__, "jn_mock")
 end
 
@@ -457,17 +465,6 @@ end
     @test occursin("wraps a literal", _jn_no_ansi(sprint(showerror, err)))
   end
 
-  @testset "an UPDATE cannot SET a column from a joined copy" begin
-    # The common update path scopes rows with a subquery, so the joined copy is not visible to SET.
-    # That is #174's fourth deferred edge; what is pinned here is that it fails with an accurate
-    # typed error rather than a MethodError out of the field formatter.
-    q = _jn_query()
-    q.filter("id" => 1)
-    err = _jn_catch(() -> q.update("note" => Joined("d", "surname"), show_query = :sql))
-    @test err isa PormG.QueryBuildError
-    @test occursin("not supported", _jn_no_ansi(sprint(showerror, err)))
-  end
-
   @testset "a CTE handle is still refused inside a cjoin_on ON clause (#444)" begin
     # The two handles are opposites at exactly one place: a joined reference belongs in an ON
     # clause and a CTE reference never does. Pinned together so neither refusal drifts.
@@ -623,4 +620,156 @@ end
     @test !occursin("*", where_text)
     @test length(collect(eachmatch(r"\"points\" = ", where_text))) == 2
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #174: SET a column FROM a joined copy — the correlated UPDATE … FROM
+# `update("note" => Joined("d", "surname"))` renders `"d"."family_name"` into SET, which sends the
+# statement down the UPDATE … FROM branch; the alias's ON clause, rendered once by `build()`, joins it
+# in the WHERE ahead of the filters. That is only the statement the caller wrote when the alias is
+# INNER (WHERE joins inner) and proven to-one (SET reads one joined row), so anything else is refused
+# — for every alias in the FROM list, not just the one SET reads. The bind-order cases count markers
+# against values: a misplaced or deduplicated ON fragment is silent wrong data on SQLite. Only the
+# SQLite half of a marker count can see a dropped duplicate — PostgreSQL's `$N` makes the text differ.
+# ─────────────────────────────────────────────────────────────────────────────
+# `q.update(pairs...)` rendered against `conn`; the fluent form takes no `connection`.
+function _jn_update(q, pairs::Pair...; conn = _JN_SL)
+  empty!(q.object.insert)
+  for (k, v) in pairs
+    q.object.insert[k] = v
+  end
+  return PormG.QueryBuilder.update(q.object; connection = conn, show_query = :dict)
+end
+
+# The values in the order their markers appear in the text: `?` is the order itself on SQLite;
+# PostgreSQL numbers at bind time, so read the `$N` back in text order.
+function _jn_text_order(res)
+  occursin("\$", res[:sql_text]) || return res[:parameters]
+  return [res[:parameters][parse(Int, m.captures[1])] for m in eachmatch(r"\$(\d+)", res[:sql_text])]
+end
+
+@testset "update() can SET a column from a cjoin_on copy (#174)" begin
+  @testset "renders UPDATE … FROM with the alias's ON clause — $(nameof(typeof(conn)))" for conn in (_JN_SL, _JN_PG)
+    q = _jn_query()
+    q.filter("id" => 1)
+    res = _jn_update(q, "note" => Joined("d", "surname"); conn = conn)
+    sql = res[:sql_text]
+    @test occursin("SET \"note\" = \"d\".\"family_name\"", sql)
+    @test occursin("FROM \"jn_driver\" AS \"d\"", sql)
+    @test occursin("(\"d\".\"id\" = \"Tb\".\"driver\")", sql)
+    @test res[:parameters] == [1]
+    # Inside a function too: the handle reaches SET through the expression renderer.
+    q = _jn_query()
+    q.filter("id" => 1)
+    @test occursin("LOWER(\"d\".\"family_name\")", _jn_update(q, "note" => Lower(Joined("d", "surname")); conn = conn)[:sql_text])
+  end
+
+  @testset "SET, ON and WHERE values bind in text order, one marker each — $(nameof(typeof(conn)))" for conn in (_JN_SL, _JN_PG)
+    q = JN.Jn_result.objects
+    q.cjoin_on("Jn_driver", alias = "d", on = [Joined("d", "id") == F("driver"), Joined("d", "points") => 3])
+    q.filter("id" => 1)
+    res = _jn_update(q, "points" => 5, "note" => Joined("d", "surname"); conn = conn)
+    @test _jn_text_order(res) == [5, 3, 1]
+    @test length(res[:parameters]) == 3
+    conn === _JN_SL && @test count(==('?'), res[:sql_text]) == 3
+  end
+
+  @testset "an ON fragment identical to a filter keeps its own marker — $(nameof(typeof(conn)))" for conn in (_JN_SL, _JN_PG)
+    # Same text on SQLite (`"Tb"."points" = ?`), two values: printing it once leaves one unbound.
+    q = JN.Jn_result.objects
+    q.cjoin_on("Jn_driver", alias = "d", on = [Joined("d", "id") == F("driver"), "points" => 3])
+    q.filter("points" => 3)
+    res = _jn_update(q, "note" => Joined("d", "surname"); conn = conn)
+    @test _jn_text_order(res) == [3, 3]
+    conn === _JN_SL && @test count(==('?'), res[:sql_text]) == 2
+  end
+
+  @testset "a LEFT alias is refused, used by SET or not" begin
+    q = JN.Jn_result.objects
+    q.cjoin_on("Jn_driver", alias = "d", join_type = "LEFT", on = [Joined("d", "id") == F("driver")])
+    q.filter("id" => 1)
+    err = _jn_catch(() -> _jn_update(q, "note" => Joined("d", "surname")))
+    @test err isa PormG.QueryBuildError
+    msg = _jn_no_ansi(sprint(showerror, err))
+    @test occursin("LEFT join", msg) && occursin("\"d\"", msg)
+
+    q = _jn_query()
+    q.cjoin_on("Jn_driver", alias = "e", join_type = "LEFT", on = [Joined("e", "id") == F("driver")])
+    q.filter("id" => 1)
+    err = _jn_catch(() -> _jn_update(q, "note" => Joined("d", "surname")))
+    @test err isa PormG.QueryBuildError
+    @test occursin("alias \"e\" is a LEFT join", _jn_no_ansi(sprint(showerror, err)))
+  end
+
+  @testset "two aliases, the second keyed on the first: ON values bind in row order — $(nameof(typeof(conn)))" for conn in (_JN_SL, _JN_PG)
+    q = JN.Jn_result.objects
+    q.cjoin_on("Jn_driver", alias = "a", on = [Joined("a", "id") == F("driver"), Joined("a", "points") => 11])
+    q.cjoin_on("Jn_driver", alias = "b", on = [Joined("b", "id") == Joined("a", "id"), Joined("b", "points") => 22])
+    q.filter("id" => 1)
+    res = _jn_update(q, "points" => 5, "note" => Joined("b", "surname"); conn = conn)
+    @test _jn_text_order(res) == [5, 11, 22, 1]
+    conn === _JN_SL && @test count(==('?'), res[:sql_text]) == 4
+  end
+
+  @testset "a path the ON clause names is in FROM, its anchor ahead of the ON clause — $(nameof(typeof(conn)))" for conn in (_JN_SL, _JN_PG)
+    q = JN.Jn_entry.objects
+    q.cjoin_on("Jn_driver", alias = "d", on = [Joined("d", "id") == F("result__driver"), Joined("d", "points") => 9])
+    q.filter("id" => 1)
+    res = _jn_update(q, "note" => Joined("d", "surname"); conn = conn)
+    sql = res[:sql_text]
+    @test occursin("FROM \"jn_result\" AS \"Tb_1\", \"jn_driver\" AS \"d\"", sql)
+    anchor = findfirst("\"Tb\".\"result\" = \"Tb_1\".\"id\"", sql)
+    on = findfirst("(\"d\".\"id\" = \"Tb_1\".\"driver\")", sql)
+    @test anchor !== nothing && on !== nothing && first(anchor) < first(on)
+    @test _jn_text_order(res) == [9, 1]
+  end
+
+  @testset "SET from a path, beside a cjoin_on used only to filter" begin
+    q = JN.Jn_entry.objects
+    q.cjoin_on("Jn_driver", alias = "d", on = [Joined("d", "id") == F("result__driver"), Joined("d", "points") => 9])
+    q.filter("id" => 1)
+    res = _jn_update(q, "note" => F("result__note"))
+    @test occursin("SET \"note\" = \"Tb_1\".\"note\"", res[:sql_text])
+    @test _jn_text_order(res) == [9, 1]
+    # …and the alias is held to the same rule when SET does not read it.
+    q = JN.Jn_entry.objects
+    q.cjoin_on("Jn_driver", alias = "d", on = [Joined("d", "points") == F("result__points")])
+    q.filter("id" => 1)
+    err = _jn_catch(() -> _jn_update(q, "note" => F("result__note")))
+    @test err isa PormG.QueryBuildError
+    @test occursin("may match more than one row", _jn_no_ansi(sprint(showerror, err)))
+  end
+
+  @testset "a LEFT path join beside a cjoin_on is refused, not flattened" begin
+    # `driver` is nullable, so its path joins LEFT, and the ON clause matches on its NULL row. In WHERE
+    # the anchor would drop exactly the rows that `__@isnull` branch exists to keep.
+    q = JN.Jn_result.objects
+    q.cjoin_on("Jn_driver", alias = "d", on = [Joined("d", "id") == F("id"),
+               Qor(Joined("d", "points") => 1, "driver__surname__@isnull" => true)])
+    q.filter("id" => 1)
+    err = _jn_catch(() -> _jn_update(q, "note" => Joined("d", "surname")))
+    @test err isa PormG.QueryBuildError
+    @test occursin("LEFT join to \"jn_driver\"", _jn_no_ansi(sprint(showerror, err)))
+  end
+
+  @testset "an alias not proven to-one is refused" begin
+    q = JN.Jn_result.objects
+    q.cjoin_on("Jn_driver", alias = "d", on = [Joined("d", "points") == F("points")])
+    q.filter("id" => 1)
+    err = _jn_catch(() -> _jn_update(q, "note" => Joined("d", "surname")))
+    @test err isa PormG.QueryBuildError
+    @test occursin("may match more than one row", _jn_no_ansi(sprint(showerror, err)))
+  end
+end
+
+# Not a `cjoin_on` case, but the same WHERE list: it used to be `unique`d, which dropped a repeated
+# filter's text while both values stayed bound (#174).
+@testset "a repeated filter keeps both markers in an UPDATE … FROM — $(nameof(typeof(conn)))" for conn in (_JN_SL, _JN_PG)
+  q = JN.Jn_result.objects
+  q.filter("points" => 3)
+  q.filter("points" => 3)
+  res = _jn_update(q, "note" => F("driver__surname"); conn = conn)
+  @test occursin("FROM \"jn_driver\"", res[:sql_text])
+  @test _jn_text_order(res) == [3, 3]
+  conn === _JN_SL && @test count(==('?'), res[:sql_text]) == 2
 end

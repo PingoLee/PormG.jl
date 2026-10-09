@@ -16,7 +16,8 @@ because their contract is what makes the refactor behavior-preserving:
 
   - the dedup key is kind-AGNOSTIC and shaped like the old `(a, b, key_a, key_b, alias_a)` tuple,
     with the same sentinels the dict rows carried (#479 says why the kind must stay out of it);
-  - `to_many` is stamped onto the dedup SURVIVOR, by slot replacement, not set at construction;
+  - a `ModelJoin`'s `to_many` is stamped onto the dedup SURVIVOR, by slot replacement, not set at
+    construction; an `AnchorlessJoin`'s is set at construction, from its ON clause (#174);
   - a `cjoin`/`on()` override is applied by copy, and only a `ModelJoin` can receive one.
 
 All assertions render through mock connections — no live database.
@@ -77,11 +78,28 @@ Jr_result = Models.Model("jr_result",
   points = Models.IntegerField(null = true),
 )
 
+# #174: a `cjoin_on` target carrying every kind of key the to-one detector reads — the primary key,
+# a `unique = true` column, a composite `UniqueConstraint`, a PARTIAL one (unique over a subset only,
+# so no key), and a plain column.
+Jr_badge = Models.Model("jr_badge",
+  id      = Models.IDField(),
+  serial  = Models.IntegerField(unique = true),
+  team_no = Models.IntegerField(),
+  number  = Models.IntegerField(),
+  season  = Models.IntegerField(),
+  rank    = Models.IntegerField(),
+  badge   = Models.IntegerField(unique = true, null = true),   # `=` never matches NULL: still a key
+  constraints = [
+    Models.UniqueConstraint(fields = ("team_no", "number"), name = "jr_badge_team_number"),
+    Models.UniqueConstraint(fields = ("season",), condition = "number > 0", name = "jr_badge_season_live"),
+  ],
+)
+
 PormG.Models.set_models(@__MODULE__, "join_rows_mock")
 end
 
 const JR = JoinRowsModels
-import PormG.QueryBuilder: F, Joined, CTE, FilterType,
+import PormG.QueryBuilder: F, Q, Qor, Joined, CTE, FilterType,
   JoinRow, ModelJoin, CteJoin, CrossJoin, AnchorlessJoin,
   _dedup_key, _with_config, _flag_to_many!, _prev_how, _on_conditions, _to_many, _joins_cte
 
@@ -267,6 +285,60 @@ end
   # Same target, same source: only the alias in the key_a position tells them apart.
   @test _dedup_key(d) == ("jr_result", "jr_driver", "d", "", "Tb")
   @test _dedup_key(e) == ("jr_result", "jr_driver", "e", "", "Tb")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #174: a `cjoin_on` row is to-one only when its ON clause PROVES it
+# `_cjoin_on_to_many` reads the conditions alone: top-level `=` conjuncts (and those inside `Q`, never
+# a `Qor` branch) equating a key of the target — the pk, a `unique` column, every column of a plain
+# `UniqueConstraint` — with one value per base row. Everything else counts as to-many, which is what
+# #74's guard and the correlated UPDATE … FROM read. Read with `getfield`, so a row with no such slot
+# fails here rather than defaulting.
+# ─────────────────────────────────────────────────────────────────────────────
+function _jr_badge_to_many(on; alias = "b")
+  q = JR.Jr_result.objects
+  q.cjoin_on("Jr_badge"; alias = alias, on = on)
+  q.values("points")
+  # `only` over the anchor-less rows: a path the ON clause names is a row of its own (#982).
+  return getfield(only(filter(r -> r isa AnchorlessJoin, _jr_rows(q))), :to_many)
+end
+
+@testset "a cjoin_on row's to_many is what its ON clause cannot rule out (#174)" begin
+  @testset "proven to-one: a key equated with one value per base row" begin
+    @test _jr_badge_to_many([Joined("b", "id") == F("points")]) === false
+    @test _jr_badge_to_many([Joined("b", "serial") == F("points")]) === false   # unique = true
+    @test _jr_badge_to_many([Joined("b", "badge") == F("points")]) === false    # nullable unique
+    @test _jr_badge_to_many([F("points") == Joined("b", "id")]) === false       # either orientation
+    @test _jr_badge_to_many([Joined("b", "id") => F("points")]) === false
+    @test _jr_badge_to_many(["points" => Joined("b", "id")]) === false
+    @test _jr_badge_to_many([Joined("b", "id") => 7]) === false                 # a literal
+    @test _jr_badge_to_many([Joined("b", "id") == F("driver__id")]) === false   # a forward path
+    # A composite key, split over two conjuncts — at the top level, or inside one `Q(...)`.
+    @test _jr_badge_to_many([Joined("b", "team_no") == F("points"), Joined("b", "number") => 3]) === false
+    @test _jr_badge_to_many([Q(Joined("b", "team_no") => F("points"), Joined("b", "number") => 3)]) === false
+  end
+
+  @testset "not proven: counted as to-many" begin
+    @test _jr_badge_to_many([Joined("b", "rank") == F("points")]) === true      # not declared unique
+    @test _jr_badge_to_many([Joined("b", "team_no") == F("points")]) === true   # half a composite key
+    @test _jr_badge_to_many([Joined("b", "season") == F("points")]) === true    # a partial constraint
+    @test _jr_badge_to_many([Qor(Joined("b", "id") => F("points"), Joined("b", "id") => F("driver"))]) === true
+    @test _jr_badge_to_many([Joined("b", "id") >= F("points")]) === true
+    @test _jr_badge_to_many([Joined("b", "id__@gte") => F("points")]) === true
+    @test _jr_badge_to_many([Joined("b", "id") == F("points") + 1]) === true    # arithmetic
+  end
+
+  @testset "transitive: keyed on another alias counts only when that alias is to-one" begin
+    for (b1_on, expected) in ((Joined("b1", "rank") == F("points"), true), (Joined("b1", "id") == F("points"), false))
+      q = JR.Jr_result.objects
+      q.cjoin_on("Jr_badge"; alias = "b1", on = [b1_on])
+      q.cjoin_on("Jr_badge"; alias = "b2", on = [Joined("b2", "serial") == Joined("b1", "number")])
+      q.values("points")
+      rows = _jr_rows(q)
+      @test getfield(rows[1], :to_many) === expected
+      @test getfield(rows[2], :to_many) === expected
+    end
+  end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

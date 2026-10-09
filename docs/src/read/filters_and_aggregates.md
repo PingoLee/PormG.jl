@@ -964,7 +964,7 @@ These boolean values read back as a `Bool` on both engines: the column itself, a
 
 ### Aggregating Across To-Many Relations (Fan-Out Guard)
 
-Joining a **to-many** relation — a reverse foreign key (one parent → many children) or a many-to-many — repeats each parent row once per related row *before* aggregation. An aggregate over a **parent/base** column would therefore be silently multiplied. PormG refuses this at build time rather than return a confidently-wrong number:
+Joining a **to-many** relation — a reverse foreign key (one parent → many children), a many-to-many, or a `cjoin_on` join not proven to-one — repeats each parent row once per related row *before* aggregation. An aggregate over a **parent/base** column would therefore be silently multiplied. PormG refuses this at build time rather than return a confidently-wrong number:
 
 ```julia
 # ✗ raises: counts the DRIVER pk, but the driver_standings join repeats each driver row once per standing
@@ -989,7 +989,7 @@ df = query |> DataFrame
 2. **Pass `distinct=true`** if de-duplicated counting is what you want: `Count("driverid", distinct=true)` renders `COUNT(DISTINCT …)`.
 3. **Compute the aggregate in a correlated `Subquery(...)`** projected in `values()` so the base rows are never multiplied — see [Scalar correlated subqueries](subqueries_and_ctes.md#Scalar-correlated-subqueries) for the full pattern.
 
-**Not affected.** Ordinary forward (to-one) `ForeignKey` traversals never trip the guard — only *to-many* joins (reverse FK / many-to-many) multiply rows. Aggregating across a normal FK is always fine:
+**Not affected.** Ordinary forward (to-one) `ForeignKey` traversals never trip the guard — only *to-many* joins (reverse FK / many-to-many / a to-many `cjoin_on`) multiply rows. Aggregating across a normal FK is always fine:
 
 ```julia
 # ✓ to-one join (Result → Constructor); no fan-out — results per constructor
@@ -1000,6 +1000,18 @@ df = query |> DataFrame
 ```
 
 **Exemptions.** `Max` and `Min` are immune to row duplication and are never blocked; an aggregate built with `distinct=true` is treated as an explicit opt-in.
+
+**A `cjoin_on` join.** A [`cjoin_on`](custom_joins.md) self-join or custom join is to-many unless its `ON` clause pins a primary key or a declared-unique column of the target to one value per base row (see *When PormG treats a `cjoin_on` join as to-many* in [Custom Joins](custom_joins.md)). A self-join on a shared, non-unique column is the typical case:
+
+```julia
+# ✗ raises: each driver meets every driver of the same nationality, so COUNT repeats each base row
+query = M.Driver.objects
+query.cjoin_on("Driver", alias = "d2", on = [Joined("d2", "nationality") == F("nationality")])
+query.values("nationality", "n" => Count("driverid"))
+query |> DataFrame   # QueryBuildError: PormG fan-out guard (#74): … The cjoin_on alias(es) "d2" count as to-many …
+```
+
+The same three fixes apply, and `Count(Joined("d2", "driverid"))` is the "related table's own column". A join on a column that is unique in your data but not declared unique is refused too: declare it with `unique = true` or a `UniqueConstraint` (a schema change: the migration adds the constraint, and fails if the table holds duplicates).
 
 !!! note
     The guard is deliberately fail-loud: an aggregate it cannot prove safe (for example one wrapping a multi-column expression) raises rather than risk a silent wrong number. The first-class fix for pattern 3 is the explicit [`Subquery` scalar column](subqueries_and_ctes.md#Scalar-correlated-subqueries) — the aggregate runs in its own correlated subquery, so the outer rows are never row-multiplied.

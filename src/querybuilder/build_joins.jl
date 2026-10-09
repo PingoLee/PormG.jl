@@ -62,7 +62,8 @@ end
 # alias_b — so `_dedup_key` contributes the unique user alias in the `key_a` position, otherwise two
 # cjoin_on joins to the same target model would collide and one would be silently dropped.
 #
-# The row KIND drives RENDERING (skip the equi-anchor, the correlated-UPDATE refusal), which is a
+# The row KIND drives RENDERING (skip the equi-anchor; the correlated UPDATE carries the rendered ON
+# into its WHERE, #174), which is a
 # different question from which namespace the config came
 # from. #484 removed the CONFIG-level tag — `AliasJoin`'s type and its map answer that — and #487
 # removed the row-level `"no_anchor" => "1"` string flag that used to answer this one.
@@ -77,6 +78,9 @@ function _build_cjoin_on_row_join(config::AliasJoin, user_alias::String, instruc
     alias_b = user_alias,
     how     = config.join_type,
     on_conditions = config.filters,
+    # #174: read by #74's fan-out guard and the correlated UPDATE … FROM. The aliases this ON clause
+    # names are already rows (`cjoin_on_order`), so their answer is there to build on.
+    to_many = _cjoin_on_to_many(config, user_alias, instruct),
   )
   # #488 — fail closed on a target registered on a connection this statement does not run on. The
   # statement's connection is what `get_settings` resolves: the `.db("key")` override first, then the

@@ -795,6 +795,40 @@ const DOCERR_CASES = [
             q.list(show_query = :dict)
         end,
     ),
+    (
+        # #174. A cjoin_on join counts as to-many unless its ON clause pins a declared key, so the #74
+        # guard refuses a base aggregate beside a self-join on a shared, non-unique column.
+        "read/filters_and_aggregates.md — a base aggregate over a to-many cjoin_on raises",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_DRIVER_PG.objects
+            q.cjoin_on(DOCERR_DRIVER_PG, alias = "d2", on = [Joined("d2", "nationality") == F("nationality")])
+            q.values("nationality", "n" => Count("driverid"))
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #174. SET from a joined copy joins in WHERE, so a LEFT alias would act as an inner one.
+        "write/update.md — setting a column from a LEFT cjoin_on copy is refused",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_DRIVER_PG.objects
+            q.cjoin_on(DOCERR_DRIVER_PG, alias = "d", join_type = "LEFT", on = [Joined("d", "driverid") == F("driverid")])
+            q.filter("driverid" => 1)
+            q.update("surname" => Joined("d", "surname"), show_query = :dict)
+        end,
+    ),
+    (
+        # #174. …and a to-many alias would SET each row from an arbitrary match.
+        "write/update.md — setting a column from a to-many cjoin_on copy is refused",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_DRIVER_PG.objects
+            q.cjoin_on(DOCERR_DRIVER_PG, alias = "d", on = [Joined("d", "nationality") == F("nationality")])
+            q.filter("driverid" => 1)
+            q.update("surname" => Joined("d", "surname"), show_query = :dict)
+        end,
+    ),
     # #474 removed TWO cases that stood here, and the removals are the point rather than a
     # tidy-up. Both pinned doc sentences about a CTE name colliding with a join key:
     #

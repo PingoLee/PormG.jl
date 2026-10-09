@@ -253,11 +253,19 @@ end
   @test_throws PormG.QueryBuildError PormG.QueryBuilder._get_join_condition_list(
     JR[CJ(a = "laps", alias_a = "Tb", key_a = "raceid", b = "fast_laps", alias_b = "Tb_1",
           key_b = "raceid", how = "INNER")], MockPostgresIdent())
-  # And an anchor-less `cjoin_on` row: this path renders equi-anchors only, so it refuses the row
-  # rather than emit the join without its ON clause (#45).
+  # An anchor-less `cjoin_on` row carries the ON clause `build()` rendered for it (#174), and only when
+  # that clause can act as an INNER, to-one join: a LEFT row would silently turn inner, a to-many one
+  # would SET from an arbitrary match. A row with no rendered clause is a defect, never emitted bare.
+  _aj(; how = "INNER", to_many = false) = AJ(a = "laps", alias_a = "Tb", b = "laps", alias_b = "b2", how = how,
+                                              on_conditions = PormG.QueryBuilder.FilterType[], to_many = to_many)
+  on_b2 = Dict("b2" => ["(\"b2\".\"id\" = \"Tb\".\"id\")"])
   @test_throws PormG.QueryBuildError PormG.QueryBuilder._get_join_condition_list(
-    JR[AJ(a = "laps", alias_a = "Tb", b = "laps", alias_b = "b2", how = "INNER",
-          on_conditions = PormG.QueryBuilder.FilterType[])], MockPostgresIdent())
+    JR[_aj(how = "LEFT")], MockPostgresIdent(); rendered_on = on_b2)
+  @test_throws PormG.QueryBuildError PormG.QueryBuilder._get_join_condition_list(
+    JR[_aj(to_many = true)], MockPostgresIdent(); rendered_on = on_b2)
+  @test_throws ErrorException PormG.QueryBuilder._get_join_condition_list(JR[_aj()], MockPostgresIdent())
+  @test PormG.QueryBuilder._get_join_condition_list(JR[_aj()], MockPostgresIdent(); rendered_on = on_b2) ==
+        ["(\"b2\".\"id\" = \"Tb\".\"id\")"]
 
   # The well-formed case still builds, so the assertions above are about the failure path only.
   good = MJ(a = "laps", alias_a = "Tb", key_a = "id", b = "drivers", alias_b = "Tb_1",

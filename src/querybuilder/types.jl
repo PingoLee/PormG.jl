@@ -288,6 +288,9 @@ end
 
 # A `cjoin_on` join (#45): `alias_b` is the user's alias and `on_conditions` is the ENTIRE ON clause —
 # no equi-anchor is emitted, so there are no key columns to carry.
+# `to_many` is what `_cjoin_on_to_many` could NOT rule out (#174): true unless the ON clause provably
+# matches at most one target row per base row. Required, not defaulted, on purpose: unlike a
+# `ModelJoin`, nothing stamps it later, and a forgotten `false` is the silent-inflation direction.
 Base.@kwdef struct AnchorlessJoin <: JoinRow
   a::String
   alias_a::String
@@ -295,6 +298,7 @@ Base.@kwdef struct AnchorlessJoin <: JoinRow
   alias_b::String
   how::String
   on_conditions::Vector{FilterType}
+  to_many::Bool
 end
 
 # The dedup identity `_insert_join` compares. Deliberately KIND-AGNOSTIC and shaped exactly like the
@@ -320,8 +324,8 @@ _dedup_key(r::JoinRow) = (r.a, r.b, _key_a(r), _key_b(r), r.alias_a)
 _on_conditions(r::Union{ModelJoin,AnchorlessJoin})::Vector{FilterType} = r.on_conditions
 _on_conditions(::Union{CteJoin,CrossJoin})::Vector{FilterType} = FilterType[]
 
-# #74: is this row the many-side of a to-many relation?
-_to_many(r::ModelJoin)::Bool = r.to_many
+# #74: is this row the many-side of a to-many relation? For a `cjoin_on` row: could it be (#174)?
+_to_many(r::Union{ModelJoin,AnchorlessJoin})::Bool = r.to_many
 _to_many(::JoinRow)::Bool = false
 
 # #394: does this row name a CTE — i.e. a relation a statement that emits no `WITH` never declares?
@@ -492,6 +496,10 @@ end
   # are emitted in — every alias after the aliases its ON clause names, declaration order otherwise.
   cjoin_on_paths::Vector{Vector{String}} = Vector{String}[]
   cjoin_on_order::Vector{String} = String[]
+  # #174: each alias's ON conditions as `build_row_join_sql_text` rendered them — markers bound once,
+  # into `:join`. The correlated UPDATE … FROM carries them into its WHERE from here; rendering them a
+  # second time would bind every value twice.
+  cjoin_on_rendered::Dict{String,Vector{String}} = Dict{String,Vector{String}}()
   # array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
   tab_field_cache::Dict{MemoKey,PormGField} = sizehint!(Dict{MemoKey,PormGField}(), 12) # cache to be used in join query (#474: keyed by MemoKey)
   # #27: the membership set of resolved JSON-lookup paths (e.g. "payload__driver"). Added when the
@@ -540,7 +548,7 @@ end
   outer::Union{Nothing,SQLInstruction} = nothing # parent query instruction for correlated subqueries
   # #74 fan-out guard: record each at-risk aggregate's source alias so build() can refuse
   # silently-inflated COUNT/SUM/AVG. To-many joins carry `ModelJoin.to_many` (stamped onto the dedup
-  # survivor by `_flag_to_many!`) and the many-side alias set is derived from the *deduped* row_join at check time
+  # survivor by `_flag_to_many!`) or `AnchorlessJoin.to_many` (#174, `_cjoin_on_to_many`) and the many-side alias set is derived from the *deduped* row_join at check time
   # (deriving avoids over-counting when _cache_join builds the same join twice). See _check_aggregate_fanout.
   agg_sources::Vector{NamedTuple{(:alias, :func, :label, :distinct),Tuple{String,String,String,Bool}}} =
     NamedTuple{(:alias, :func, :label, :distinct),Tuple{String,String,String,Bool}}[]

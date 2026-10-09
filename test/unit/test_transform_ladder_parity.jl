@@ -961,98 +961,171 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #955: a date or time transform refuses a column it cannot read, when the query is built.
-# Before, nothing checked: `"note__@month"` built and failed (or matched nothing) only at the
-# database, and `@hour` on a plain `DateField` answered `0` on SQLite while PostgreSQL rejected it.
-# The gate sits where every position renders a function — a projection, a filter, an ORDER BY — and
-# fails OPEN: a column it cannot name a field for passes, and so does a relation, and so does the
-# public `Extract`, which builds the same node but is not a transform.
+# #955, #1070: a date or time part refuses a column it cannot read, when the query is built — through
+# either spelling. #955 gated only the `__@` transforms, by a tag the ladder stamped, so the public
+# `Extract` building the SAME node went unchecked: `Extract("seen", "HOUR")` rendered
+# `EXTRACT(HOUR FROM …)`, which answers `0` on SQLite and is refused by PostgreSQL. #1070 checks the
+# part against the operand's declared type wherever the node renders, so both spellings refuse alike,
+# with the same message. It fails OPEN: a column PormG cannot name a field for passes, and so does a
+# relation (its value is the related key).
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#955: a transform over a column of the wrong type is refused at build time" begin
+@testset "#1070: a date part over a column of the wrong type is refused, whoever built it" begin
+  Fn = PormG.Functions
   plain(e) = replace(PormG.error_message(e), r"\e\[[0-9;]*m" => "")
   refused(build, conn) = (try _tlp_sql(build(); conn = conn); nothing catch e; e end)
+  # The refusal for one projection, so the two spellings can be compared message for message.
+  projected(model, x, conn) = refused(() -> (q = model.objects; q.values("x" => x); q), conn)
   for (backend, conn) in _TLP_BACKENDS
     @testset "$backend" begin
       # A text column under a date part, in every position and through both spellings.
       for build in (() -> (q = TLP.Tlp_row.objects; q.values("x" => "note__@month"); q),
                     () -> (q = TLP.Tlp_row.objects; q.values("x" => F("note__@month")); q),
+                    () -> (q = TLP.Tlp_row.objects; q.values("x" => Fn.Extract("note", "month")); q),
                     () -> (q = TLP.Tlp_row.objects; q.values("id"); q.filter("note__@month" => 3); q),
                     () -> (q = TLP.Tlp_row.objects; q.values("id"); q.order_by("note__@month"); q))
         e = refused(build, conn)
         @test e isa PormG.QueryBuildError
-        @test occursin("@month", plain(e)) && occursin("note", plain(e)) && occursin("CharField", plain(e))
+        @test occursin("month part", plain(e)) && occursin("note", plain(e)) && occursin("CharField", plain(e))
       end
-      # A time-of-day part over a date: the date has no hour.
-      e = refused(() -> (q = TLP.Tlp_row.objects; q.values("x" => "seen__@hour"); q), conn)
-      @test e isa PormG.QueryBuildError
-      @test occursin("time of day", plain(e)) && occursin("DateField", plain(e))
+      # A time-of-day part over a date: the date has no hour. The transform and the `Extract` it is
+      # sugar for refuse with one message — the rule lives on the part, not on the spelling.
+      e_transform = projected(TLP.Tlp_row, "seen__@hour", conn)
+      e_extract = projected(TLP.Tlp_row, Fn.Extract("seen", "HOUR"), conn)
+      @test e_transform isa PormG.QueryBuildError && e_extract isa PormG.QueryBuildError
+      @test occursin("time of day", plain(e_extract)) && occursin("DateField", plain(e_extract))
+      @test plain(e_transform) == plain(e_extract)
       # A calendar part over a time of day, including a week part (#636) and a label (`@yyyy_q`,
-      # whose `Concat` holds the gated year and month nodes).
+      # whose `Concat` holds the checked year and month nodes).
       for key in ("week", "year", "date", "yyyy_q")
-        e = refused(() -> (q = TLP.Tlp_clock.objects; q.values("x" => "clock__@$(key)"); q), conn)
+        e = projected(TLP.Tlp_clock, "clock__@$(key)", conn)
         @test e isa PormG.QueryBuildError
-        @test occursin("@$(key)", plain(e)) && occursin("TimeField", plain(e))
+        @test occursin("TimeField", plain(e))
       end
+      @test projected(TLP.Tlp_clock, Fn.Extract("clock", "year"), conn) isa PormG.QueryBuildError
       # A joined path is checked against the field at its end.
-      e = refused(() -> (q = TLP.Tlp_clock.objects; q.values("x" => "rowid__note__@year"); q), conn)
-      @test e isa PormG.QueryBuildError
-
-      # Every transform the registry holds is checked, not only the spellings above: a constructor
-      # that lost its `"transform"` key would build here.
+      @test projected(TLP.Tlp_clock, "rowid__note__@year", conn) isa PormG.QueryBuildError
+      # Every transform the registry holds is checked, not only the spellings above.
       for key in _TLP_DATE_TRANSFORMS
-        e = refused(() -> (q = TLP.Tlp_row.objects; q.values("x" => "note__@$(key)"); q), conn)
-        @test e isa PormG.QueryBuildError
-        @test occursin("@$(key)", plain(e))
+        @test projected(TLP.Tlp_row, "note__@$(key)", conn) isa PormG.QueryBuildError
       end
-      # A `DurationField` holds no date or time of day either (PostgreSQL extracts from an interval,
-      # SQLite reads the stored text as a clock): refused, where the public `Extract` below is not.
-      @test refused(() -> (q = TLP.Tlp_clock.objects; q.values("x" => "span__@hour"); q), conn) isa PormG.QueryBuildError
+      # A `DurationField` reads only `EPOCH`: PostgreSQL would extract a component of the duration,
+      # while SQLite reads the stored text as a clock (NULL from 24 hours) — so its hours are refused
+      # through both spellings now, where #955 let the public `Extract` through.
+      @test projected(TLP.Tlp_clock, "span__@hour", conn) isa PormG.QueryBuildError
+      @test projected(TLP.Tlp_clock, Fn.Extract("span", "hour"), conn) isa PormG.QueryBuildError
+      # A zone exists only on a timestamp.
+      @test projected(TLP.Tlp_row, Fn.Extract("seen", "timezone"), conn) isa PormG.QueryBuildError
 
       # What still builds: each part on a column it reads…
       @test occursin("Tb", _tlp_sql((q = TLP.Tlp_clock.objects; q.values("x" => "clock__@hour"); q); conn = conn))
+      @test occursin("Tb", _tlp_sql((q = TLP.Tlp_clock.objects; q.values("x" => Fn.Extract("clock", "minute")); q); conn = conn))
       @test occursin("Tb", _tlp_sql((q = TLP.Tlp_clock.objects; q.values("x" => "rowid__seen__@week"); q); conn = conn))
+      # …`EPOCH` over a date, the documented `Cast(Extract("date", "epoch"), "bigint")`, and over a
+      # duration — PostgreSQL only (SQLite has no `EPOCH`), so it is rendered there alone…
+      if conn isa PormG.PormGPostgres
+        @test occursin("EPOCH", _tlp_sql((q = TLP.Tlp_row.objects; q.values("x" => Fn.Cast(Fn.Extract("seen", "epoch"), "bigint")); q); conn = conn))
+        @test occursin("EPOCH", _tlp_sql((q = TLP.Tlp_clock.objects; q.values("x" => Fn.Extract("span", "epoch")); q); conn = conn))
+      end
       # …a relation, whose value is the related key (fails open, as before #955)…
       @test occursin("Tb", _tlp_sql((q = TLP.Tlp_clock.objects; q.values("x" => "rowid__@year"); q); conn = conn))
-      # …and the public `Extract`, which is not a transform: a duration's hours are a real question.
-      @test occursin("Tb", _tlp_sql((q = TLP.Tlp_clock.objects; q.values("x" => PormG.Functions.Extract("span", "hour")); q); conn = conn))
-      @test occursin("Tb", _tlp_sql((q = TLP.Tlp_row.objects; q.values("x" => PormG.Functions.Extract("note", "year")); q); conn = conn))
+      # …and an operand PormG cannot type: an expression is not refused for what it cannot know.
+      @test occursin("Tb", _tlp_sql((q = TLP.Tlp_row.objects; q.values("x" => Fn.Extract(Fn.Coalesce("note", "note"), "HOUR")); q); conn = conn))
     end
   end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #955: a period transform refuses a Bool, and its refusal names the transform the caller wrote.
-# `format_number_sql` maps `true` to `1` on purpose, so `"ts__@hour" => true` silently meant 1 AM and
-# `@quarter => true` the first quarter. And the out-of-range message called every part an `EXTRACT
-# transform` — the Dialect function, the same for `@year` and `@hour`, never a spelling the caller
-# typed. It keeps the formatter's range and, since #971, never quotes the value.
+# #1070: every `EXTRACT` part has a row, and the ladder stamps nothing on its nodes.
+# The rows are what check an operand and a filter's value, so a part `Dialect` learns without one
+# would arrive unchecked; `_temporal_row_of` raises a `KeyError` on it rather than pass it silently,
+# and this fails first. The `"transform"` tag #955 put in `kwargs` is gone: `"seen__@year"` and
+# `Extract("seen", "YEAR")` are one node, so nothing distinguishes them.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#955: a period transform refuses a Bool and names itself in the refusal" begin
+@testset "#1070: every EXTRACT part has a row; ladder nodes carry no transform tag" begin
+  QB = PormG.QueryBuilder
+  for part in PormG.Dialect.PG_EXTRACT_FIELDS
+    @test haskey(QB._EXTRACT_PART_ROWS, part)
+  end
+  # A walk over the node's operands and kwargs — `@yyyy_q` is a `Concat` holding a `Case`.
+  tagged(x) = x isa QB.FObject ? (haskey(x.kwargs, "transform") || tagged(x.column) || any(tagged, values(x.kwargs))) :
+              x isa AbstractVector ? any(tagged, x) :
+              hasproperty(x, :column) ? tagged(getproperty(x, :column)) : false
+  for key in _TLP_DATE_TRANSFORMS
+    @test !tagged(QB._check_function(["seen", key]))
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #955, #1070: a filter on a date part is held to the part's range, through either spelling.
+# #955 put the range on the formatter each ladder constructor chose, so it followed the spelling:
+# `"ts__@hour" => 25` was refused while `OP(Extract("ts", "HOUR"), "=", 25)` was not, and `@month`
+# and `@day` had no range at all — `"seen__@month" => 13` bound and matched nothing. The range is the
+# part's now. A Bool is refused too (`format_number_sql` maps `true` to `1`). The refusal names the
+# part and never quotes the value (#971).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1070: a date part's filter value is range-checked through either spelling" begin
+  Fn = PormG.Functions
   plain(e) = replace(PormG.error_message(e), r"\e\[[0-9;]*m" => "")
+  # (EXTRACT part, the `__@` key that is sugar for it or `nothing`, first value out of range, last in range)
+  ranges = (("HOUR", "hour", 24, 23), ("MINUTE", "minute", 60, 59), ("SECOND", "second", 60, 59),
+            ("MONTH", "month", 13, 12), ("DAY", "day", 32, 31), ("QUARTER", "quarter", 5, 4),
+            ("WEEK", "week", 54, 53), ("ISODOW", "iso_week_day", 8, 7), ("DOW", nothing, 7, 6),
+            ("DOY", nothing, 367, 366))
   for (backend, conn) in _TLP_BACKENDS
-    # `Any[...]`: a literal `[5, true]` promotes to `[5, 1]` before PormG sees it.
-    for (path, v) in (("ts__@hour", true), ("ts__@quarter", true), ("seen__@week_day", true),
-                      ("ts__@minute__@in", Any[5, true]))
+    @testset "$backend" begin
+      for (part, key, bad, good) in ranges
+        # SQLite has no `QUARTER` field: its `@quarter` is a node of its own, checked below.
+        conn isa PormG.PormGSQLite && part == "QUARTER" && continue
+        # The public spelling is an alias of the `Extract`; `OP` is the node-level comparison the
+        # `@yyyy_q` labels build (internal), which reaches the WHERE path's function arm.
+        alias(v) = (q = TLP.Tlp_row.objects; q.values("p" => Fn.Extract("ts", part)); q.filter("p" => v); q)
+        op(v) = (q = TLP.Tlp_row.objects; q.values("id"); q.filter(PormG.QueryBuilder.OP(Fn.Extract("ts", part), "=", v)); q)
+        for build in (alias, op)
+          @test_throws PormG.InvalidValueError _tlp_sql(build(bad); conn = conn)
+          @test occursin("Tb", _tlp_sql(build(good); conn = conn))
+        end
+        key === nothing && continue
+        pair(v) = (q = TLP.Tlp_row.objects; q.values("id"); q.filter("ts__@$(key)" => v); q)
+        @test_throws PormG.InvalidValueError _tlp_sql(pair(bad); conn = conn)
+        @test occursin("Tb", _tlp_sql(pair(good); conn = conn))
+      end
+      # The issue's case: a plain `DateField` (not on the sargable rewrite's path for `@month`).
       @test_throws PormG.InvalidValueError _tlp_sql(
-        (q = TLP.Tlp_row.objects; q.values("note"); q.filter(path => v); q); conn = conn)
+        (q = TLP.Tlp_row.objects; q.values("id"); q.filter("seen__@month" => 13); q); conn = conn)
+      # An alias of an `Extract` is held to the part's range too.
+      @test_throws PormG.InvalidValueError _tlp_sql(
+        (q = TLP.Tlp_row.objects; q.values("h" => Fn.Extract("ts", "HOUR")); q.filter("h" => 24); q); conn = conn)
+      # Arithmetic over a part is a plain number: the range belongs to the part, not to `hour + 1`, so
+      # 24 builds — and it is still a NUMBER, so a word is refused rather than bound raw (untyped, as
+      # `hour + 1` would be if only `format_number_sql` counted as a number, `"abc"` reached the driver).
+      plus_one(v) = (q = TLP.Tlp_row.objects; q.values("h" => Fn.Extract("ts", "HOUR") + 1); q.filter("h" => v); q)
+      @test occursin("Tb", _tlp_sql(plus_one(24); conn = conn))
+      @test_throws PormG.InvalidValueError _tlp_sql(plus_one("abc"); conn = conn)
+
+      # `Any[...]`: a literal `[5, true]` promotes to `[5, 1]` before PormG sees it.
+      for (path, v) in (("ts__@hour", true), ("ts__@quarter", true), ("seen__@week_day", true),
+                        ("ts__@minute__@in", Any[5, true]), ("ts__@month", true))
+        @test_throws PormG.InvalidValueError _tlp_sql(
+          (q = TLP.Tlp_row.objects; q.values("note"); q.filter(path => v); q); conn = conn)
+      end
+      e = try _tlp_sql((q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@hour" => 24); q); conn = conn); nothing catch e; e end
+      @test e isa PormG.InvalidValueError
+      @test occursin("hour part", plain(e))
+      @test occursin("integer from 0 to 23", plain(e))
+      @test !occursin("EXTRACT", plain(e))
+      @test !occursin("24", plain(e))
     end
-    e = try _tlp_sql((q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@hour" => 24); q); conn = conn); nothing catch e; e end
-    @test e isa PormG.InvalidValueError
-    @test occursin("@hour transform", plain(e))
-    @test occursin("integer from 0 to 23", plain(e))
-    @test !occursin("EXTRACT", plain(e))
-    @test !occursin("24", plain(e))
   end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #955: the `"transform"` key is a tag, not part of what the node computes.
+# #955: a transform and its `Extract` twin are one grouped expression.
 # The #798 grouping check matches a grouped projection against the same expression elsewhere by a
-# structural signature of the node, kwargs included. A `"seen__@year"` node carries the tag and a
-# public `Extract("seen", "YEAR")` does not, so with the tag in the signature the two stopped
-# matching and a valid mixed projection was refused.
+# structural signature of the node, kwargs included. While the ladder tagged its nodes, a
+# `"seen__@year"` node and a public `Extract("seen", "YEAR")` stopped matching and a valid mixed
+# projection was refused. With no tag (#1070) they are the same node.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#955: the transform tag does not split a grouped expression from its Extract twin" begin
+@testset "#955: a transform does not split a grouped expression from its Extract twin" begin
   Fn = PormG.Functions
   for (backend, conn) in _TLP_BACKENDS
     q = TLP.Tlp_row.objects

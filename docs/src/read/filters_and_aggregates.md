@@ -89,8 +89,8 @@ without inverting the logic by hand.
 | Transform | Description | Use in `filter()` | Use in `values()` |
 | :--- | :--- | :--- | :--- |
 | `@year` | Extract year from date | `"dob__@year" => 1960` | `"dob__@year"` |
-| `@month` | Extract month | `"dob__@month" => 3` | `"dob__@month"` |
-| `@day` | Extract day | `"date__@day" => 21` | `"date__@day"` |
+| `@month` | Extract month (1-12) | `"dob__@month" => 3` | `"dob__@month"` |
+| `@day` | Extract day (1-31) | `"date__@day" => 21` | `"date__@day"` |
 | `@quarter` | Extract quarter (1-4) | `"date__@quarter" => 1` | `"date__@quarter"` |
 | `@quadrimester` | Extract quadrimester (1-3) | `"date__@quadrimester" => 2` | `"date__@quadrimester"` |
 | `@date` | Extract date from datetime | `"created__@date" => Date(...)` | `"created__@date"` |

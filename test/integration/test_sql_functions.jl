@@ -2050,3 +2050,39 @@ end
     df = proj(M.Result, Round(Value(1.5), 2))()
     @test Float64(df[1, :x]) == 1.5
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1070: a date part is checked by what it reads, and reads the same on both engines.
+# `Extract` and the `__@` transform it is sugar for are one node: they return the same values, and
+# those values are the column's own (the hour of the UTC instant, the minute of the `TimeField`, the
+# month of the date) — computed in Julia from the rows read back, not from another transform. A part
+# over a column it cannot read is refused when the query is built, on both engines: before #1070
+# `Extract(date, "HOUR")` answered 0 on SQLite and failed on PostgreSQL. A filter value outside the
+# part's range raises rather than matching nothing.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1070: a date part reads its column the same on both engines, or is refused" begin
+    to_utc(z) = z isa TimeZones.ZonedDateTime ? DateTime(TimeZones.astimezone(z, TimeZones.tz"UTC")) : DateTime(z)
+    q = M.Race.objects
+    q.filter("start_at__@isnull" => false, "time__@isnull" => false)
+    q.values("raceid", "start_at", "time", "date",
+             "h_extract" => Extract("start_at", "HOUR"), "h_transform" => "start_at__@hour",
+             "clock" => Extract("time", "MINUTE"), "m" => Extract("date", "MONTH"), "doy" => Extract("date", "DOY"))
+    q.order_by("raceid")
+    rows = q.list(:dict)
+    @test length(rows) > 100
+    for r in rows
+        @test r[:h_extract] == r[:h_transform] == hour(to_utc(r[:start_at]))
+        # A `TimeField` reads back as its text on SQLite and a `Time` on PostgreSQL.
+        @test r[:clock] == minute(r[:time] isa Dates.Time ? r[:time] : Dates.Time(String(r[:time])))
+        @test r[:m] == month(r[:date])
+        @test r[:doy] == dayofyear(r[:date])
+    end
+
+    # Refused at build time, so the SQL never reaches either engine.
+    @test_throws PormG.QueryBuildError M.Race.objects.values("h" => Extract("date", "HOUR")).list(:dict)
+    @test_throws PormG.QueryBuildError M.Race.objects.values("y" => Extract("time", "YEAR")).list(:dict)
+    @test_throws PormG.InvalidValueError M.Race.objects.filter("date__@month" => 13).list(:dict)
+    # A month in range still filters: the count is the one the dates themselves give.
+    months = [month(r[:date]) for r in M.Race.objects.values("date").list(:dict)]
+    @test length(M.Race.objects.filter("date__@month" => 12).values("raceid").list(:dict)) == count(==(12), months)
+end

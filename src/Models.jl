@@ -4020,6 +4020,19 @@ format_second_sql(value) = _format_period_sql(value, 0, 59, "second")
 # on a Wednesday); `@week_day` and `@iso_week_day` are both 1-based, they differ only in which day is 1.
 format_week_sql(value) = _format_period_sql(value, 1, 53, "week")
 format_week_day_sql(value) = _format_period_sql(value, 1, 7, "week day")
+# #1070: the calendar parts that had no range, so `"date__@month" => 13` bound and matched nothing.
+# `DOW` is PostgreSQL's 0 = Sunday … 6 = Saturday (SQLite's `%w` agrees); `DOY` reaches 366 in a leap year.
+format_month_sql(value) = _format_period_sql(value, 1, 12, "month")
+format_day_sql(value) = _format_period_sql(value, 1, 31, "day")
+format_dow_sql(value) = _format_period_sql(value, 0, 6, "day of the week")
+format_doy_sql(value) = _format_period_sql(value, 1, 366, "day of the year")
+
+# #1070: the range-checking formatters above. Each one is a number with a range, so arithmetic over a
+# part (`Extract("start_at", "HOUR") + 1`) is a plain number again — the range belongs to the part,
+# not to what is computed from it (`_expression_formatter(::FExpression)`).
+const PERIOD_FORMATTERS = (format_quarter_sql, format_quadrimester_sql, format_hour_sql,
+                           format_minute_sql, format_second_sql, format_week_sql, format_week_day_sql,
+                           format_month_sql, format_day_sql, format_dow_sql, format_doy_sql)
 
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Comparison Tools

@@ -1303,11 +1303,13 @@ const DOCERR_CASES = [
             list(show_query = :dict),
     ),
     # A part SQLite has no equivalent for. The spelling is case-blind since #684, so a lower-case
-    # portable part renders instead — `test_date_functions_sql.jl` pins that half.
+    # portable part renders instead — `test_date_functions_sql.jl` pins that half. Over a timestamp:
+    # since #1070 a part over a column it cannot read (the integer `resultid` this used) is refused
+    # first, on both engines, so the capability error needs an operand the part reads.
     (
         "postgres.md + read/functions_and_dates.md — an `Extract` part outside the portable eleven raises on SQLite",
         BackendCapabilityError,
-        () -> DOCERR_RESULT_SL.objects.values("x" => Extract("resultid", "EPOCH")).
+        () -> DOCERR_RACE801_SL.objects.values("x" => Extract("start_at", "EPOCH")).
             list(show_query = :dict),
     ),
     # #691: a string that is no `EXTRACT` field is refused when the expression is built, before any
@@ -1318,8 +1320,9 @@ const DOCERR_CASES = [
         () -> DOCERR_RESULT_PG.objects.values("x" => Extract("resultid", "fortnight")).
             list(show_query = :dict),
     ),
-    # #955: a transform checks its column's type when the query is built — a text column under a date
-    # part, and a time-of-day part over a plain date.
+    # #955, #1070: a date part checks its column's type when the query is built — a text column under
+    # a date part, and a time-of-day part over a plain date — through the transform and through the
+    # `Extract` it is sugar for.
     (
         "read/functions_and_dates.md — a date transform over a text column raises",
         QueryBuildError,
@@ -1329,6 +1332,17 @@ const DOCERR_CASES = [
         "read/functions_and_dates.md — a time-of-day transform over a DateField raises",
         QueryBuildError,
         () -> DOCERR_RACE_PG.objects.values("h" => "date__@hour").list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md — an `Extract` part over a column it cannot read raises on both engines",
+        QueryBuildError,
+        () -> DOCERR_RACE801_SL.objects.values("h" => Extract("date", "HOUR")).list(show_query = :dict),
+    ),
+    # #1070: a filter on a date part is held to the part's range — `@month` had none.
+    (
+        "read/functions_and_dates.md — a date part's filter value outside its range raises",
+        InvalidValueError,
+        () -> DOCERR_RACE_PG.objects.filter("date__@month" => 13).list(show_query = :dict),
     ),
     # #955: a period transform refuses a `Bool` rather than reading `true` as `1`.
     (

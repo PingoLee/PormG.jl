@@ -361,7 +361,10 @@ function _expression_formatter(p::FExpression, instruc::SQLInstruction)
   # `false`, so an alias filter `"ahead" => 5` now fails loudly instead of binding `false`.
   p.operation in _COMPARISON_OPERATIONS && return Models.format_bool_sql
   left = _expression_formatter(p.field_name, instruc)
-  return left === Models.format_number_sql ? left : nothing
+  # #1070: a date part is a number with a range (`format_hour_sql`, …). The range is the part's, so
+  # `Extract("start_at", "HOUR") + 1` is a plain number — it was one while `Extract` carried no formatter.
+  (left === Models.format_number_sql || left in Models.PERIOD_FORMATTERS) && return Models.format_number_sql
+  return nothing
 end
 _expression_formatter(p::SQLField, instruc::SQLInstruction) = _expression_formatter(p.field, instruc)
 function _expression_formatter(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction)

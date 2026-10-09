@@ -557,9 +557,6 @@ function _mixed_node_signature(x, depth::Int = 0)
     col === nothing && return nothing
     kws = Any[]
     for k in sort!(collect(keys(x.kwargs)))
-      # #955: `"transform"` tags a node the `__@` ladder built; it changes nothing the node computes,
-      # so `"date__@year"` and `Extract("date", "YEAR")` stay one expression here.
-      k == "transform" && continue
       s = _mixed_node_signature(x.kwargs[k], depth + 1)
       s === nothing && return nothing
       push!(kws, (k, s))

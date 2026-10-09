@@ -282,8 +282,8 @@ search type. See [Full-Text Search](read/full_text_search.md).
 | Transform | Description | Example |
 | :--- | :--- | :--- |
 | `field__@year` | Extract year from date | `"dob__@year" => 1960` |
-| `field__@month` | Extract month from date | `"dob__@month" => 3` |
-| `field__@day` | Extract day from date | `"dob__@day" => 21` |
+| `field__@month` | Extract month (1-12) from date | `"dob__@month" => 3` |
+| `field__@day` | Extract day (1-31) from date | `"dob__@day" => 21` |
 | `field__@quarter` | Extract quarter (1-4) | `"date__@quarter" => 1` |
 | `field__@quadrimester` | Extract quadrimester (1-3) | `"date__@quadrimester" => 2` |
 | `field__@yyyy_q` | Year-qualified quarter label (`"YYYY-Qn"`) | `"q" => "date__@yyyy_q"` |

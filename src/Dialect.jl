@@ -2150,23 +2150,26 @@ function on_conflict_clause(action::Symbol, target::Vector{String}, set::Vector{
 end
 
 """
-    for_update_clause(nowait, skip_locked, no_key, conn) -> String
+    for_update_clause(nowait, skip_locked, no_key, of_aliases, conn) -> String
 
 Render a row-level locking clause for a SELECT (#26), appended after ORDER BY / LIMIT / OFFSET.
 
-- **PostgreSQL** → `FOR [NO KEY] UPDATE [NOWAIT | SKIP LOCKED]`.
+- **PostgreSQL** → `FOR [NO KEY] UPDATE [OF <alias>, …] [NOWAIT | SKIP LOCKED]`.
 - **SQLite** → `""`. SQLite has no row-level locking, so the clause is a silent no-op — the one
   intentional PostgreSQL/SQLite divergence for this feature (keeps `select_for_update` portable;
   see `docs/src/write/transaction.md`).
 
-An `OF <table>` target is a deferred follow-up (it must name the query's generated FROM alias).
+`of_aliases` are FROM-clause aliases, **already quoted** by the caller (#169) — PostgreSQL's `OF`
+names a range variable, never a table, and only the query builder knows which aliases it generated.
+Empty renders no `OF`, which locks every table the statement reads.
 """
-function for_update_clause(nowait::Bool, skip_locked::Bool, no_key::Bool, conn::PormGPostgres)::String
+function for_update_clause(nowait::Bool, skip_locked::Bool, no_key::Bool, of_aliases::Vector{String}, conn::PormGPostgres)::String
   lock_sql = no_key ? "FOR NO KEY UPDATE" : "FOR UPDATE"
+  of_sql = isempty(of_aliases) ? "" : " OF " * join(of_aliases, ", ")
   wait_sql = nowait ? " NOWAIT" : (skip_locked ? " SKIP LOCKED" : "")
-  return "$(lock_sql)$(wait_sql) \n"
+  return "$(lock_sql)$(of_sql)$(wait_sql) \n"
 end
-function for_update_clause(nowait::Bool, skip_locked::Bool, no_key::Bool, conn::PormGSQLite)::String
+function for_update_clause(nowait::Bool, skip_locked::Bool, no_key::Bool, of_aliases::Vector{String}, conn::PormGSQLite)::String
   return ""  # SQLite: no row-level locking — silent no-op (documented divergence, #26)
 end
 

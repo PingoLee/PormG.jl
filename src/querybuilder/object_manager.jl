@@ -533,14 +533,38 @@ end
 
 # #26: mark the query for row-level locking. Renders `FOR [NO KEY] UPDATE [NOWAIT|SKIP LOCKED]`
 # on PostgreSQL; a silent no-op on SQLite. `nowait` and `skip_locked` are mutually exclusive
-# (Django parity). Always builds a fresh ForUpdateClause (set-once semantics). (An `of=` target
-# is a deferred follow-up — it must name the query's generated FROM alias, not yet exposed.)
-function _select_for_update!(q::SQLObject; nowait::Bool=false, skip_locked::Bool=false, no_key::Bool=false)
+# (Django parity). Always builds a fresh ForUpdateClause (set-once semantics).
+#
+# #169: `of` is checked for SHAPE only — one name or a collection of names. Whether a name resolves
+# is decided after the build (`_lock_target_aliases`), because the joins it may name do not exist
+# yet: a `filter`/`values`/`cjoin_on` later in the chain can still add them.
+function _select_for_update!(q::SQLObject; nowait::Bool=false, skip_locked::Bool=false, no_key::Bool=false, of=nothing)
   if nowait && skip_locked
     throw(QueryBuildError("select_for_update: `nowait` and `skip_locked` are mutually exclusive — pass at most one."))
   end
-  q.for_update = ForUpdateClause(nowait, skip_locked, no_key)
+  q.for_update = ForUpdateClause(nowait, skip_locked, no_key, _lock_target_names(of))
   return q
+end
+
+_lock_target_names(::Nothing) = String[]
+_lock_target_names(name::AbstractString) = _lock_target_names((name,))
+function _lock_target_names(names::Union{Tuple,AbstractVector})
+  isempty(names) && throw(QueryBuildError(
+    "select_for_update: `of` is empty — name at least one target, e.g. of = (\"self\",), or leave `of` out to lock every table the query reads."))
+  out = String[]
+  for name in names
+    # The type, never the value: a refusal does not print what it refused (#971).
+    (name isa AbstractString && !isempty(name)) || throw(QueryBuildError(
+      "select_for_update: every `of` target must be a non-empty String — got " *
+      (name isa AbstractString ? "an empty string" : "a $(typeof(name))") *
+      ". Name \"self\", a relation path, or a cjoin_on alias."))
+    push!(out, String(name))
+  end
+  return out
+end
+function _lock_target_names(names)
+  throw(QueryBuildError(
+    "select_for_update: `of` must be a String or a tuple/vector of Strings — got a $(typeof(names))."))
 end
 
 # function _distinct!(q::SQLObject, value)
@@ -727,7 +751,7 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
   elseif sym === :distinct
     return ChainCaller(_distinct!, q)
   elseif sym === :select_for_update
-    # Chainable: query.select_for_update(; nowait=false, skip_locked=false, no_key=false)
+    # Chainable: query.select_for_update(; nowait=false, skip_locked=false, no_key=false, of=nothing)
     # Closure (not ChainCaller) so keyword arguments are forwarded correctly (#26).
     return (; kwargs...) -> (_select_for_update!(q.object; kwargs...); q)
   elseif sym === :with

@@ -261,7 +261,7 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 | **`Cast` to a time type** | `::date`, `::timestamp`, `::time`, `::interval` | `date` renders `date(x)`; the others raise `BackendCapabilityError` |
 | **`ToChar` formats** | any `to_char` template | the portable table only; others raise `BackendCapabilityError` |
 | **`Extract` parts** | every PostgreSQL `EXTRACT` field, any case; a non-field raises `InvalidValueError` | `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY` `WEEK` `ISOYEAR` `ISODOW`, any case; other PostgreSQL fields raise `BackendCapabilityError`, a non-field `InvalidValueError` |
-| **Row locks** (`select_for_update()`) | `SELECT … FOR UPDATE` | silent no-op — a SQLite write already locks the whole database |
+| **Row locks** (`select_for_update()`) | `SELECT … FOR UPDATE [OF …]` | silent no-op — a SQLite write already locks the whole database |
 | **`without_foreign_keys`** | `SET CONSTRAINTS ALL DEFERRED`; an orphan fails `COMMIT` with `IntegrityError` | `PRAGMA foreign_keys = OFF` plus a `foreign_key_check` before `COMMIT` (`UnsafeMutationError`) |
 | **Engine-pinned `db_default`** | `db_default = (postgres = "now()",)` renders | rendering it raises `BackendCapabilityError` — add `sqlite = "…"`, or `sqlite = nothing` for no default |
 

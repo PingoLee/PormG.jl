@@ -638,7 +638,11 @@ function Base.show(io::IO, ::MIME"text/plain", h::QueryBuilder.ObjectHandler)
     println(io, lbl("page"), join(parts, ", "))
   end
   getfield(q, :distinct) && println(io, lbl("distinct"), "true")
-  getfield(q, :for_update) === nothing || println(io, lbl("lock"), "select_for_update")
+  let fu = getfield(q, :for_update)
+    # #169: the `of` targets as written — names, not aliases, since nothing has been built.
+    fu === nothing || println(io, lbl("lock"), "select_for_update",
+      isempty(fu.of) ? "" : string(" of ", join(fu.of, ", ")))
+  end
 
   # The closing hint is the whole reason this method refuses to touch the database: it names the
   # two calls that legitimately do, instead of performing either.

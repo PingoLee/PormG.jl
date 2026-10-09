@@ -635,9 +635,11 @@ Options (PostgreSQL):
 | `select_for_update(skip_locked = true)` | `FOR UPDATE SKIP LOCKED` | Skip rows another transaction already holds (claim-next-available pattern). |
 | `select_for_update(nowait = true)` | `FOR UPDATE NOWAIT` | Raise immediately if a matched row is already locked. |
 | `select_for_update(no_key = true)` | `FOR NO KEY UPDATE` | Weaker lock that still allows FK-referencing inserts. |
+| `select_for_update(of = ("self",))` | `FOR UPDATE OF "Tb"` | Lock only the named tables — see below. |
 
-`nowait` and `skip_locked` are mutually exclusive. On PostgreSQL a locked read **must run inside a
-transaction** — calling it under autocommit raises, because the lock would be released immediately.
+`nowait` and `skip_locked` are mutually exclusive; `of` combines with any of the other three. On
+PostgreSQL a locked read **must run inside a transaction** — calling it under autocommit raises,
+because the lock would be released immediately.
 
 ```julia
 # Process pit stops for a race, one worker at a time, skipping rows another worker already holds.
@@ -651,13 +653,71 @@ atomic("db_2") do
 end
 ```
 
+### Locking only some tables: `of`
+
+Without `of`, PostgreSQL locks the matched rows of **every table in the query**, and that includes
+the tables a `__` filter joins in. The read below locks the `driver` row as well as the `result`
+rows:
+
+```julia
+atomic("db_2") do
+  M.Result.objects.
+    filter("raceid" => 1120, "driverid__nationality" => "Dutch").
+    values("resultid", "points").
+    select_for_update().          # FOR UPDATE: result rows AND the joined driver rows
+    list()
+end
+```
+
+That has three costs:
+
+- **Contention.** Another transaction that writes the same driver now waits for this one.
+- **Privilege.** PostgreSQL needs `UPDATE` privilege on every locked table. A role that may only
+  read `driver` gets `permission denied`.
+- **Nullable foreign keys fail.** A path through a nullable foreign key is joined `LEFT`, and
+  PostgreSQL refuses to lock the nullable side of an outer join. The query fails with
+  `FOR UPDATE cannot be applied to the nullable side of an outer join`.
+
+`of` names the tables to lock, as in Django:
+
+```julia
+atomic("db_2") do
+  M.Result.objects.
+    filter("raceid" => 1120, "driverid__nationality" => "Dutch").
+    values("resultid", "points").
+    select_for_update(of = ("self",)).   # FOR UPDATE OF "Tb": only the result rows
+    list()
+end
+```
+
+`of` takes a `String` or a tuple or vector of them. Each one names a table this query already reads:
+
+| Target | Locks |
+|--------|-------|
+| `"self"` | The model the query starts from. |
+| A relation path — `"driverid"`, `"raceid__circuitid"`, a reverse accessor, a ManyToMany field | The table that path joins. For a ManyToMany field, the related table, not the link table. |
+| A `cjoin_on` alias | The table joined under that alias. |
+
+PormG renders the alias it generated for each table (`FOR UPDATE OF "Tb", "Tb_1"`), since
+PostgreSQL's `OF` names an alias rather than a table. The following raise `QueryBuildError` before
+the query runs, on PostgreSQL and SQLite alike:
+
+- a target that names nothing this query joins (PormG does not add a join just to lock it);
+- a target joined `LEFT` — the nullable side of an outer join, which PostgreSQL cannot lock;
+- any `of` on a query with a `RIGHT` or `FULL` join, which puts the tables joined before it — the
+  base table included — on the nullable side;
+- an `of` that is empty, or holds an empty string or a value that is not a `String`.
+
+A name that is both a relation path and a `cjoin_on` alias raises `AmbiguousFieldError`.
+
 !!! warning "Row locking on SQLite"
     SQLite has no `SELECT ... FOR UPDATE`. On SQLite, `select_for_update()` is a **silent no-op** — no
     lock clause is emitted and no error is raised, so identical query code runs on both backends (this
     matches Django, SQLAlchemy, and Rails). SQLite already serializes writers per database file via
     `BEGIN IMMEDIATE` (see [Multithreaded Work](#Multithreaded-Work)); if you need explicit
-    write-serialization there, rely on the transaction itself rather than a row lock. An `OF <table>`
-    target is not yet supported on either backend (a planned follow-up).
+    write-serialization there, rely on the transaction itself rather than a row lock. `of` renders
+    nothing on SQLite either, but a read that returns rows (`list()`, `first()`, …) still checks the
+    targets against the rules above, so a target PostgreSQL would refuse fails during development too.
 
 ---
 

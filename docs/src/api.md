@@ -38,7 +38,7 @@ These methods modify the query builder and return the handler for further chaini
 | `.cjoin("field" => "Model", ...)` | Add a custom join at query time. | `.cjoin("driverid" => "Driver")` |
 | `.cjoin_on(model; alias, on, join_type)` | Anchor-less join: `on` is the **entire** ON clause. `model` is the model object, or its name as a `String`. | `.cjoin_on(M.Driver; alias = "d", on = [...])` |
 | `.with("name" => subquery; join_field, join_type)` | Define one CTE on the query; call again for a second. Its columns are then reached with [`CTE(name, path)`](@ref CTE). | `.with("fast" => sub)` |
-| `.select_for_update(; nowait, skip_locked, no_key)` | `SELECT … FOR UPDATE` row lock (PostgreSQL; must run inside a transaction). | `.select_for_update(nowait = true)` |
+| `.select_for_update(; nowait, skip_locked, no_key, of)` | `SELECT … FOR UPDATE` row lock (PostgreSQL; must run inside a transaction). `of` limits it to the named tables. | `.select_for_update(of = ("self",))` |
 | `.copy()` | Deep-copy the handler to branch a chain without disturbing the original. | `base.copy().filter("year" => 2020)` |
 
 See also: [Custom Joins](read/custom_joins.md) for `.cjoin()` / `.cjoin_on()` / `.on()`, and
@@ -648,8 +648,12 @@ Pass `durable = true` to require the block be the outermost transaction on its d
 Query-builder method that adds a `FOR UPDATE` clause to lock the selected rows until the surrounding
 transaction commits — the guard for a safe read-modify-write. Keyword options `nowait`, `skip_locked`,
 and `no_key` map to `FOR UPDATE NOWAIT` / `FOR UPDATE SKIP LOCKED` / `FOR NO KEY UPDATE` (`nowait` and
-`skip_locked` are mutually exclusive). On PostgreSQL it must run inside a transaction; **on SQLite it is
-a silent no-op** (no row-level locking). See [Row-Level Locking](write/transaction.md#Row-Level-Locking).
+`skip_locked` are mutually exclusive). `of` limits the lock to the named tables — `"self"`, a relation path
+the query joins, or a `cjoin_on` alias — and renders `FOR UPDATE OF "<alias>", …`. Without it PostgreSQL
+locks every table in the query, joined ones included. On PostgreSQL it must run inside a transaction;
+**on SQLite it is a silent no-op** (no row-level locking), though a read that returns rows still checks the
+`of` targets. See
+[Row-Level Locking](write/transaction.md#Row-Level-Locking).
 
 ```julia
 atomic("db") do

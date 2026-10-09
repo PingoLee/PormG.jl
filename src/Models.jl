@@ -4062,7 +4062,7 @@ function _format_period_sql(value, lo::Int, hi::Int, label::String; ranged::Bool
   # An unranged value still has to bind as an `Int`, so one outside `Int`'s own range is refused here
   # whatever the operator: no part reaches it, and `Int(…)` would throw a raw `InexactError`.
   typemin(Int) <= n <= typemax(Int) ||
-    throw(InvalidValueError("The value is too large to compare with a $(label): it does not fit a 64-bit integer", :range))
+    throw(InvalidValueError("The value is out of range for the $(label) part: it does not fit a 64-bit integer", :range))
   return Int(n)
 end
 

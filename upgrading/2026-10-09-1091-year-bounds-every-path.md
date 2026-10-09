@@ -47,7 +47,7 @@ numeric column already refused it.
 
 ```bash
 grep -rnE '__@(year|yyyy_mm)' --include=*.jl src/ test/                 # pairs, F("…__@year"), aliases
-grep -rnE 'Extract\([^)]*"(YEAR|year)"' --include=*.jl src/ test/        # an Extract alias or comparison
+grep -rnE 'Extract\(.*"(YEAR|year)"' --include=*.jl src/ test/           # an Extract alias or comparison
 grep -rn 'JSONField' --include=*.jl src/      # the JSON columns; then grep each one's "<column>__…" filters
 ```
 

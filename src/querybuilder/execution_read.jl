@@ -382,10 +382,35 @@ _is_sliced(object::SQLObject)::Bool = object.limit !== nothing || object.offset 
 # `set_limits(high=k)`: the smaller of the two, with the caller's offset left where it is.
 _probe_limit(limit::Union{Nothing,Integer}, k::Integer)::Integer = limit === nothing ? k : min(limit, k)
 
+# #1066: does the `values()` projection decide which rows `list()` returns? `count()`, `exists()` and
+# `Exists(...)` clear the projection before they build, which is safe for a plain column list: it
+# returns one row per matching row either way. Two projections change the row set, and clearing them
+# made the terminal disagree with `list()`:
+# - a DISTINCT one collapses duplicates of the projected columns, not of `*` (`count()` counted
+#   `SELECT DISTINCT *`, and an offset `exists()` skipped rows `list()` collapses);
+# - an aggregating one returns a row per group (`count()` counted the rows, and a HAVING filter on the
+#   alias raised `UnknownFieldError` because the alias was gone).
+# Asked before the build, from `_contains_agg` (the predicate `get_select_query` sets GROUP BY from),
+# because a kept projection binds its values under `:select` and must then be printed. `distinct` is
+# the caller's choice: `exists()` without an offset gets the same answer from the non-distinct rows.
+_projection_shapes_rows(object::SQLObject; distinct::Bool)::Bool =
+  !isempty(object.values) && (distinct || _contains_agg(object.values))
+
+# #1066: an aggregating projection keeps its ordering too. An `order_by()` on a column it does not
+# project is a GROUP BY term as well (`get_order_query`), so clearing it merged groups `list()` keeps
+# apart. A kept ordering is printed, because its values bind under `:order`; elsewhere it is cleared.
+_keeps_order(object::SQLObject, keep_values::Bool)::Bool = keep_values && _contains_agg(object.values)
+
+# What an existence probe selects: `1`, or the kept projection — `DISTINCT` when the query is — whose
+# GROUP BY names projection positions. Shared by `exists()` and `Exists(...)`.
+_exists_projection(object::SQLObject, instruction::SQLInstruction, keep::Bool)::String =
+  keep ? string(object.distinct ? "DISTINCT " : "", _query_select(instruction.select, instruction.connection)) : "1"
+
 # The terminals that cannot honor a slice refuse it instead of ignoring it. `last()`, `earliest()` and
 # `latest()` reorder the rows, which changes which rows the slice holds — Django refuses them too.
-# `count(column)` and `aggregate()` are a PormG limitation, not Django parity: Django's `aggregate()`
-# (its spelling of both) computes over the slice through a derived table, which these do not build yet.
+# `count(column)` and `aggregate()` refuse it by design (#1066): Django's `aggregate()` (its spelling of
+# both) computes over the slice through a derived table, but here the same result is one call away —
+# aggregate the query before slicing it — so the derived table is not worth building.
 function _refuse_sliced(object::SQLObject, terminal::AbstractString, why::AbstractString)
   _is_sliced(object) || return nothing
   throw(QueryBuildError(
@@ -416,9 +441,13 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
   # Resolve settings
   settings, connection, conn_key = get_settings(oq)
   
-  q = deepcopy(oq) # Create a copy of the SQLObjectHandler to avoid modifying the original object  
-  q.object.order = []# clear order_by
-  q.object.values = [] # clear values
+  q = deepcopy(oq) # Create a copy of the SQLObjectHandler to avoid modifying the original object
+  # #1066: the projection is kept when it decides which rows `list()` returns — see
+  # `_projection_shapes_rows`. Otherwise it is cleared, and a plain `values(...)` counts as before.
+  is_distinct = distinct || q.object.distinct
+  keep_values = _projection_shapes_rows(q.object; distinct = is_distinct)
+  _keeps_order(q.object, keep_values) || (q.object.order = []) # clear order_by
+  keep_values || (q.object.values = [])
 
   # Create shared table alias and parameters BEFORE building CTEs
   # so CTE parameters are numbered first (critical for positional backends).
@@ -436,22 +465,28 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
   safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
   safe_alias = quote_identifier(instruction.alias, instruction.connection)
   
-  # Shared FROM / JOIN / WHERE / GROUP BY body for both count forms.
+  # Shared FROM / JOIN / WHERE / GROUP BY / HAVING body for every count form. GROUP BY and HAVING
+  # are only ever filled for a kept, aggregating projection (#1066); the guard matches `query()`'s, as
+  # a whole-table aggregate (`values("n" => Count("id"))`) groups by nothing.
   body = """FROM $safe_table_name as $safe_alias
     $(join(instruction.join, "\n"))
     $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
-    $(instruction.aggregate ? "GROUP BY $(join(instruction.group, ", ")) \n" : "")
+    $(instruction.aggregate && !isempty(instruction.group) ? "GROUP BY $(join(instruction.group, ", ")) \n" : "")$(isempty(instruction.having) ? "" : "HAVING $(join(instruction.having, " AND \n   "))\n")$(isempty(instruction.order) ? "" : "ORDER BY $(join(instruction.order, ", "))\n")
     """
-  if distinct || q.object.distinct
-    # COUNT(DISTINCT *) is invalid SQL in both PostgreSQL and SQLite. To count the rows a
-    # DISTINCT select would return, wrap `SELECT DISTINCT *` in an outer COUNT(*) so that
-    # count() == length(distinct list()). Any CTEs stay at the top level and remain in
-    # scope for the subquery; parameter order/count is unchanged by the wrapping.
-    # #1053: a slice applies after DISTINCT, so its tail goes inside the subquery. Its markers are
-    # the last in the text and bind under `:limit`, the last bucket, so the order holds on both engines.
+  if is_distinct || keep_values
+    # COUNT(DISTINCT *) is invalid SQL in both PostgreSQL and SQLite, and a grouped projection has one
+    # row per group, not per matching row. Either way the rows `list()` would return are counted from
+    # a derived table, so count() == length(list()). With no values() the projection is `*`, so an
+    # unprojected `distinct()` renders `SELECT DISTINCT *` as it always did. Its GROUP BY names
+    # projection positions, which is why the projection is printed rather than replaced by `1`.
+    # Any CTEs stay at the top level and remain in scope for the subquery; the projection's values bind
+    # under `:select`, ahead of the WHERE ones, which is where its text sits.
+    # #1053: a slice applies after DISTINCT and GROUP BY, so its tail goes inside the subquery. Its
+    # markers are the last in the text and bind under `:limit`, the last bucket, so the order holds on
+    # both engines.
     resposta = """$(with_clause)SELECT COUNT(*) FROM (
-    SELECT DISTINCT *
-    $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as "__pormg_distinct_count"
+    SELECT $(is_distinct ? "DISTINCT " : "")$(_query_select(instruction.select, instruction.connection))
+    $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as $(is_distinct ? "\"__pormg_distinct_count\"" : "\"__pormg_grouped_count\"")
     """
   elseif _is_sliced(q.object)
     # #1053: count the rows the slice returns, as Django's `qs[:5].count()` does. The ordering was
@@ -534,8 +569,10 @@ function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias
     settings, connection, conn_key = get_settings(oq)
     
     q = deepcopy(oq) # Create a copy of the SQLObjectHandler to avoid modifying the original object
-    q.object.order = [] # clear order_by
-    q.object.values = [] # clear values
+    # #1066: a kept projection is probed as `list()` would run it — see `_projection_shapes_rows`.
+    keep_values = _projection_shapes_rows(q.object; distinct = q.object.distinct && q.object.offset > 0)
+    _keeps_order(q.object, keep_values) || (q.object.order = []) # clear order_by
+    keep_values || (q.object.values = [])
 
     # Create shared table alias and parameters BEFORE building CTEs
     # so CTE parameters are numbered first (critical for positional backends).
@@ -561,11 +598,11 @@ function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias
     safe_alias = quote_identifier(instruction.alias, instruction.connection)
     
     sql = """
-    $(with_clause)SELECT 1
+    $(with_clause)SELECT $(_exists_projection(q.object, instruction, keep_values))
     FROM $safe_table_name as $safe_alias
     $(join(instruction.join, "\n"))
     $(isempty(instruction._where) ? "" : "WHERE " * join(instruction._where, " AND \n   "))
-    $(instruction.aggregate && !isempty(instruction.group) ? "GROUP BY $(join(instruction.group, ", "))" : "")
+    $(instruction.aggregate && !isempty(instruction.group) ? "GROUP BY $(join(instruction.group, ", "))" : "")$(isempty(instruction.having) ? "" : "\nHAVING " * join(instruction.having, " AND \n   "))$(isempty(instruction.order) ? "" : "\nORDER BY " * join(instruction.order, ", "))
     $limit_clause
     $offset_clause
     """

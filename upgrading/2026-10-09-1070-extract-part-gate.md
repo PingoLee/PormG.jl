@@ -40,7 +40,8 @@ refused filter value is located on "the `start_at` hour part" instead of "the `s
 transform". Code that matches on that text needs the new wording.
 
 Unchanged: an operand PormG cannot name a field for (an expression, a subquery, an untyped CTE
-column) and a relation (`raceid__@year`) still pass through without a check. `ToChar` is checked
+column) still passes through without a check. A relation (`raceid__@year`) is checked against the
+key it holds, by #1068 in the same train: see that entry. `ToChar` is checked
 only for the `"YYYY-MM"` mask `@yyyy_mm` uses. Arithmetic over a part is an ordinary number:
 `Extract("start_at", "HOUR") + 1` has no range.
 

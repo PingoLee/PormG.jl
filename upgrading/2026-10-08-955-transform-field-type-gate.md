@@ -31,7 +31,7 @@ alike, through both the string and the `F(...)` spelling:
 
 Unchanged: these all pass through without a check.
 - A transform over a column PormG cannot name a field for: an expression, a subquery, or an untyped CTE column.
-- A transform over a relation (`raceid__@year`). Its value is the related key.
+- A transform over a relation (`raceid__@year`) was left unchecked here. #1068 checks it against the related key, as part of the same train: see its entry.
 - The public `Extract` and `ToChar` functions were left unchecked here. #1070 checks `Extract` by the same rule, as part of the same train: see its entry.
 
 ### Who this affects

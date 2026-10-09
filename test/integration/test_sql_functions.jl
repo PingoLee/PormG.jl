@@ -2086,3 +2086,20 @@ end
     months = [month(r[:date]) for r in M.Race.objects.values("date").list(:dict)]
     @test length(M.Race.objects.filter("date__@month" => 12).values("raceid").list(:dict)) == count(==(12), months)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1068: a date part over a foreign key reads the key the column holds, on both engines.
+# `M.Result.raceid` holds the race's integer id, so `raceid__@year` is refused when the query is built
+# — before #1068 it reached PostgreSQL as `EXTRACT(YEAR FROM <integer>)` and SQLite read the integer
+# as text. Through the relation, the race's date is a date, and its year is the race's `year` column.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1068: a date part over an integer-keyed foreign key is refused on both engines" begin
+    @test_throws PormG.QueryBuildError M.Result.objects.values("y" => "raceid__@year").list(:dict)
+    @test_throws PormG.QueryBuildError M.Result.objects.values("y" => Extract("raceid", "YEAR")).list(:dict)
+    rq = M.Result.objects
+    rq.filter("resultid__@lte" => 200)
+    rq.values("resultid", "a" => "raceid__date__@year", "b" => "raceid__year")
+    rows = rq.list(:dict)
+    @test length(rows) > 100
+    @test all(r -> r[:a] == r[:b], rows)
+end

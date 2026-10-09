@@ -374,28 +374,52 @@ end
 const _TEMPORAL_KIND_FIELDS = Dict(:date => "DateField", :datetime => "DateTimeField",
                                    :time => "TimeField", :interval => "DurationField")
 
+# #1068: the field a relation's value is. A `ForeignKey`/`OneToOneField` column holds the related
+# row's key, so a date part reads THAT field's type: `raceid__@year` over an integer key is an
+# `EXTRACT(YEAR FROM <integer>)`, which PostgreSQL refuses and SQLite answers from the text. A key
+# that is itself a relation (a one-to-one primary key) is followed in turn. `nothing` — fail open —
+# for a target PormG cannot resolve here; the join walk reports that one when it needs the model.
+function _relation_key_field(field::PormGField, instruc::SQLInstruction)
+  for _ in 1:8
+    field isa Union{Models.sForeignKey, Models.sOneToOneField} || return field
+    mod = instruc.object.model._module
+    target = field.to isa PormGModel ? field.to :
+             (field.to isa AbstractString && mod isa Module) ? Models._resolve_target_model(field.to, mod) :
+             nothing
+    target isa PormGModel || return nothing
+    pk = field.pk_field === nothing ? Models.get_model_pk_field(target) : field.pk_field
+    pk === nothing && return nothing
+    field = get(target.fields, String(pk), nothing)
+    field isa PormGField || return nothing
+  end
+  return nothing
+end
+
 # Refuses a date/time node over a model field its part cannot read, naming both (#1070: by the part's
 # row, so a public `Extract` is checked exactly as the `__@` transform that builds it). Fails OPEN,
 # unlike `@len`: only a column PormG can name a field for is checked. An expression, a subquery or an
 # untyped CTE column passes, as it always did, because refusing what PormG cannot type would refuse
-# valid SQL. A relation passes too — its value is the related key, whose type the check would have
-# to follow across the relation (`raceid__@year` over an integer key is a separate question).
+# valid SQL. A relation is checked against the key it holds (#1068); a many-to-many has no column.
 function _check_temporal_operand(v::FObject, instruc::SQLInstruction)
   found = _temporal_row_of(v)
   found === nothing && return nothing
   row, part = found
-  field = _alias_column_field(v.column, instruc)
+  declared = _alias_column_field(v.column, instruc)
+  declared isa PormGField || return nothing
+  declared isa Models.sManyToManyField && return nothing
+  field = _relation_key_field(declared, instruc)
   field isa PormGField || return nothing
-  field isa Union{Models.sForeignKey, Models.sOneToOneField, Models.sManyToManyField} && return nothing
   hasproperty(field, :type) || return nothing
   _temporal_kind(field) in row.reads && return nothing
   label = v.column isa AbstractString ? v.column : sprint(show, v.column)
   accepted = [_TEMPORAL_KIND_FIELDS[k] for k in row.reads]
   must = length(accepted) == 1 ? "a $(only(accepted))" :
          join(["a $(f)" for f in accepted], ", ", " or ")
+  declared_as = field === declared ? "is declared as $(_field_label(field))" :
+    "is a $(_field_label(declared)) whose value is the related key, declared as $(_field_label(field))"
   throw(QueryBuildError(
     "The \e[31m$(part)\e[0m part reads $(row.what), so its column must be $(must); " *
-    "\e[31m$(label)\e[0m is declared as $(_field_label(field)) (#1070)."))
+    "\e[31m$(label)\e[0m $(declared_as) (#1070)."))
 end
 
 # #122: `LPad`/`RPad` pad text. PostgreSQL has no `lpad` over a number, a date, a time, a boolean, a

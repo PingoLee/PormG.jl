@@ -71,6 +71,18 @@ Tlp_clock = Models.Model("tlp_clock",
   rowid = Models.ForeignKey(Tlp_row, pk_field = "id", on_delete = "CASCADE"),
 )
 
+# #1068: relations a date part reads through. `dayid` targets a DATE key, so its value is a date; the
+# one-to-one `rowid` targets `Tlp_row`'s integer id, like `Tlp_clock.rowid` above.
+Tlp_day = Models.Model("tlp_day",
+  id  = Models.IDField(),
+  day = Models.DateField(unique = true),
+)
+Tlp_visit = Models.Model("tlp_visit",
+  id    = Models.IDField(),
+  dayid = Models.ForeignKey(Tlp_day, pk_field = "day", on_delete = "CASCADE"),
+  rowid = Models.OneToOneField(Tlp_row, pk_field = "id", on_delete = "CASCADE"),
+)
+
 PormG.Models.set_models(@__MODULE__, "tlp_mock")
 end
 
@@ -966,8 +978,8 @@ end
 # `Extract` building the SAME node went unchecked: `Extract("seen", "HOUR")` rendered
 # `EXTRACT(HOUR FROM …)`, which answers `0` on SQLite and is refused by PostgreSQL. #1070 checks the
 # part against the operand's declared type wherever the node renders, so both spellings refuse alike,
-# with the same message. It fails OPEN: a column PormG cannot name a field for passes, and so does a
-# relation (its value is the related key).
+# with the same message. It fails OPEN: a column PormG cannot name a field for passes. (A relation is
+# checked against the key it holds — the #1068 testset below.)
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1070: a date part over a column of the wrong type is refused, whoever built it" begin
   Fn = PormG.Functions
@@ -1026,10 +1038,44 @@ end
         @test occursin("EPOCH", _tlp_sql((q = TLP.Tlp_row.objects; q.values("x" => Fn.Cast(Fn.Extract("seen", "epoch"), "bigint")); q); conn = conn))
         @test occursin("EPOCH", _tlp_sql((q = TLP.Tlp_clock.objects; q.values("x" => Fn.Extract("span", "epoch")); q); conn = conn))
       end
-      # …a relation, whose value is the related key (fails open, as before #955)…
-      @test occursin("Tb", _tlp_sql((q = TLP.Tlp_clock.objects; q.values("x" => "rowid__@year"); q); conn = conn))
       # …and an operand PormG cannot type: an expression is not refused for what it cannot know.
       @test occursin("Tb", _tlp_sql((q = TLP.Tlp_row.objects; q.values("x" => Fn.Extract(Fn.Coalesce("note", "note"), "HOUR")); q); conn = conn))
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1068: a date part over a relation reads the key the relation holds.
+# A `ForeignKey`'s column holds the related row's key, so `"rowid__@year"` over an integer key renders
+# `EXTRACT(YEAR FROM "Tb"."rowid")` — refused by PostgreSQL when it runs, answered from the text by
+# SQLite. #955 let every relation through; the check now follows the relation to its key's field, so
+# an integer key is refused at build time and a key that is itself a date is read as one.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1068: a date part over a relation is checked against the related key" begin
+  Fn = PormG.Functions
+  plain(e) = replace(PormG.error_message(e), r"\e\[[0-9;]*m" => "")
+  projected(model, x, conn) = (try _tlp_sql((q = model.objects; q.values("x" => x); q); conn = conn); nothing catch e; e end)
+  for (backend, conn) in _TLP_BACKENDS
+    @testset "$backend" begin
+      # An integer key, through a foreign key and a one-to-one, and through both spellings. The
+      # message says why a relation was checked at all: its value is the key, and the key's type.
+      for (model, x) in ((TLP.Tlp_clock, "rowid__@year"), (TLP.Tlp_clock, Fn.Extract("rowid", "YEAR")),
+                         (TLP.Tlp_visit, "rowid__@month"), (TLP.Tlp_clock, "rowid__@hour"))
+        e = projected(model, x, conn)
+        @test e isa PormG.QueryBuildError
+        @test occursin("rowid", plain(e)) && occursin("related key", plain(e)) && occursin("IDField", plain(e))
+      end
+      # In a filter too, which renders the part before it binds anything.
+      @test_throws PormG.QueryBuildError _tlp_sql(
+        (q = TLP.Tlp_clock.objects; q.values("id"); q.filter("rowid__@year" => 2009); q); conn = conn)
+      # A key that is a date is read as one: the year, and a calendar part, of the relation's value.
+      @test occursin("\"dayid\"", _tlp_sql((q = TLP.Tlp_visit.objects; q.values("x" => "dayid__@year"); q); conn = conn))
+      @test occursin("\"dayid\"", _tlp_sql((q = TLP.Tlp_visit.objects; q.values("x" => Fn.Extract("dayid", "MONTH")); q); conn = conn))
+      # …but not a time of day: the key's type decides, exactly as for a plain DateField.
+      e = projected(TLP.Tlp_visit, "dayid__@hour", conn)
+      @test e isa PormG.QueryBuildError && occursin("DateField", plain(e))
+      # Through the relation to a real date column is unaffected: the part reads the joined field.
+      @test occursin("Tb", _tlp_sql((q = TLP.Tlp_clock.objects; q.values("x" => "rowid__seen__@year"); q); conn = conn))
     end
   end
 end

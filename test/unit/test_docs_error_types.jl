@@ -164,12 +164,15 @@ const DOCERR_RACE801_SL = let m = Model("docerr_race801_docerr_sl",
     m.connect_key = "docerr_sl"; m._module = Main; m
 end
 
-# #1004 — a foreign key whose target has a `year`, so `raceid__@year` (a transform's generated name)
-# and `raceid__year` (the path to the race's year) are one spelling, as on the filters page.
-const DOCERR_RESULT1004_PG = let race = Model("docerr_race1004_docerr_pg", raceid = IDField(), year = IntegerField())
-    race.connect_key = "docerr_pg"; race._module = Main
-    m = Model("docerr_result1004_docerr_pg", resultid = IDField(),
-              raceid = ForeignKey(race, pk_field = "raceid", null = true))
+# #1004 — a foreign key whose target has a `year`, so `weekend__@year` (a transform's generated name)
+# and `weekend__year` (the path to the weekend's year) are one spelling: the filters page's `Weekend`
+# and `Session`. The key is the weekend's DATE — since #1068 a date part over a relation reads the key
+# it holds, so over an integer key the transform is refused before this ambiguity is reached.
+const DOCERR_SESSION1004_PG = let weekend = Model("docerr_weekend1004_docerr_pg", weekendid = IDField(),
+                                                  date = DateField(unique = true), year = IntegerField())
+    weekend.connect_key = "docerr_pg"; weekend._module = Main
+    m = Model("docerr_session1004_docerr_pg", sessionid = IDField(), name = CharField(),
+              weekend = ForeignKey(weekend, pk_field = "date", null = true))
     m.connect_key = "docerr_pg"; m._module = Main; m
 end
 
@@ -389,15 +392,15 @@ const DOCERR_CASES = [
         end,
     ),
     (
-        # #1004. A bare transform keeps the name PormG generated, `raceid__year`, which is also the
-        # path to the race's year; an ORDER BY on it matched the projection by name alone and sorted
-        # by the transform. It is refused, as #703 refuses the filter.
+        # #1004. A bare transform keeps the name PormG generated, `weekend__year`, which is also the
+        # path to the weekend's year; an ORDER BY on it matched the projection by name alone and
+        # sorted by the transform. It is refused, as #703 refuses the filter.
         "read/filters_and_aggregates.md — order_by on a transform's generated name that is also a related path is ambiguous",
         AmbiguousFieldError,
         () -> begin
-            q = DOCERR_RESULT1004_PG.objects
-            q.values("resultid", "raceid__@year")
-            q.order_by("raceid__year")
+            q = DOCERR_SESSION1004_PG.objects
+            q.values("sessionid", "weekend__@year")
+            q.order_by("weekend__year")
             q.list(show_query = :dict)
         end,
     ),
@@ -420,8 +423,8 @@ const DOCERR_CASES = [
         "read/filters_and_aggregates.md — a path projection's chosen name is not a filter key",
         UnknownFieldError,
         () -> begin
-            q = DOCERR_RESULT1004_PG.objects
-            q.values("resultid", "yr" => "raceid__@year")
+            q = DOCERR_SESSION1004_PG.objects
+            q.values("sessionid", "yr" => "weekend__@year")
             q.filter("yr" => 2009)
             q.list(show_query = :dict)
         end,
@@ -1337,6 +1340,12 @@ const DOCERR_CASES = [
         "read/functions_and_dates.md — an `Extract` part over a column it cannot read raises on both engines",
         QueryBuildError,
         () -> DOCERR_RACE801_SL.objects.values("h" => Extract("date", "HOUR")).list(show_query = :dict),
+    ),
+    # #1068: a date part over a relation reads the key it holds — here an integer status id.
+    (
+        "read/functions_and_dates.md + read/filters_and_aggregates.md — a date part over an integer-keyed foreign key raises",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.values("y" => "statusid__@year").list(show_query = :dict),
     ),
     # #1070: a filter on a date part is held to the part's range — `@month` had none.
     (

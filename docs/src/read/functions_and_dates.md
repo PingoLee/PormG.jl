@@ -230,8 +230,10 @@ M.Race.objects.values("h" => Extract("date", "hour"))  # the same QueryBuildErro
 
 The check covers columns PormG can name a field for: a model field, or one reached through a
 join (`"raceid__date__@week"`). A column of unknown type, such as an expression or a subquery, is
-passed through as written. A relation is passed through too, because its value is the related
-row's key. `ToChar` is checked only for the `"YYYY-MM"` mask that `@yyyy_mm` uses, because
+passed through as written. A foreign key's value is the related row's key, so a part over it is
+checked against that key's field: on `M.Result`, `"raceid__@year"` raises `QueryBuildError`,
+because `raceid` holds the race's integer id. Read the race's date through the relation instead,
+with `"raceid__date__@year"`. A foreign key into a table keyed by a date reads as that date. `ToChar` is checked only for the `"YYYY-MM"` mask that `@yyyy_mm` uses, because
 `to_char` also formats numbers on PostgreSQL.
 
 A filter on a date part is held to the part's range, through either spelling: `@month` and

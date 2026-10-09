@@ -1347,23 +1347,32 @@ expression that defines it, the name can only mean the column.
 
 A transform projection is named after its path with the `@` dropped, as Django names it:
 `values("date__@year")` returns a column called `date__year`. When the field under the transform is
-a foreign key, that name can also be a real path. On `M.Result`, `raceid` is a foreign key to
-`M.Race`, which has a `year` column. So `"raceid__year"` is the path to the race's year, and it is
-also the name of `values("raceid__@year")`.
+a foreign key, that name can also be a real path.
 
-The examples below use that pair to show how PormG reads each spelling. The transform itself is not
-useful here: `raceid` is an integer, so PostgreSQL rejects `EXTRACT(YEAR FROM …)` over it when the
-query runs. The same naming applies to a foreign key whose column is a date, such as a key into a
-calendar table that has its own `year`.
+A date part over a foreign key reads the key the column holds. On `M.Result`, `raceid` holds the
+race's integer id, so `"raceid__@year"` raises `QueryBuildError` when the query is built: an integer
+has no year. Read the year through the relation instead, with `"raceid__date__@year"` or
+`"raceid__year"`. A foreign key whose key **is** a date is different. Take a calendar of race
+weekends keyed by date, with a `year` column of its own, and the sessions held on each weekend:
+
+```julia
+Weekend = Models.Model("weekend", weekendid = Models.IDField(),
+                       date = Models.DateField(unique = true), year = Models.IntegerField())
+Session = Models.Model("session", sessionid = Models.IDField(), name = Models.CharField(),
+                       weekend = Models.ForeignKey(Weekend, pk_field = "date"))
+```
+
+`session.weekend` holds a date, so `values("weekend__@year")` is valid, and it returns a column
+named `weekend__year`. That is also the path to the weekend's `year` column.
 
 The two spellings are kept apart. The spelling with `@` is the transform, and the plain path is the
 related column, wherever you write them:
 
 ```julia
-query = M.Result.objects
-query.values("resultid", "yr" => "raceid__@year")
-query.filter("raceid__year" => 2009)   # the race's year: INNER JOIN "race" … WHERE "Tb_1"."year" = $1
-query.order_by("raceid__@year")        # the transform, ordered by its name: ORDER BY "yr"
+query = M.Session.objects
+query.values("sessionid", "yr" => "weekend__@year")
+query.filter("weekend__year" => 2009)   # the weekend's year: INNER JOIN "weekend" … WHERE "Tb_1"."year" = $1
+query.order_by("weekend__@year")        # the transform, ordered by its name: ORDER BY "yr"
 ```
 
 When the projection keeps its generated name, the plain path names two things: a column in the
@@ -1371,14 +1380,14 @@ result and the related column. PormG will not choose, so a filter, a condition o
 that name raises `AmbiguousFieldError`:
 
 ```julia
-query = M.Result.objects
-query.values("resultid", "raceid__@year")
-query.order_by("raceid__year")   # AmbiguousFieldError: the projection, or the race's year?
+query = M.Session.objects
+query.values("sessionid", "weekend__@year")
+query.order_by("weekend__year")   # AmbiguousFieldError: the projection, or the weekend's year?
 ```
 
-Write `order_by("raceid__@year")` for the projection. For the column, give the projection a name of
-its own, such as `values("raceid_year" => "raceid__@year")`. After that, `"raceid__year"` means the
-column.
+Write `order_by("weekend__@year")` for the projection. For the column, give the projection a name
+of its own, such as `values("weekend_year" => "weekend__@year")`. After that, `"weekend__year"`
+means the column.
 
 A generated name that is not a path can still be ordered by. On `M.Race`,
 `values("date__@day"); order_by("date__day")` orders by the projection, because `date__day`
@@ -1386,7 +1395,8 @@ reaches no related column. Filtering on that name raises `AmbiguousFieldError`, 
 name is not a filter key. Filter `"date__@day"` instead.
 
 A name you choose for a path or transform projection is not a filter key. `values("yr" =>
-"raceid__@year"); filter("yr" => 2009)` raises `UnknownFieldError`. Filter `"raceid__@year"` instead.
+"weekend__@year"); filter("yr" => 2009)` raises `UnknownFieldError`. Filter `"weekend__@year"`
+instead.
 
 A projection that *is* the column is not ambiguous. `values("points")`,
 `values("points" => "points")` and `values("points" => F("points"))` filter the column as usual.

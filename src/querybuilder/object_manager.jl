@@ -672,18 +672,18 @@ end
 # QueryBuilder so that a helper defined in a sibling module and imported here — renameable, and
 # just as capable of leaking through `_fluent_name` — stays covered.
 #
-# The 29 branches below route to 29 targets, accounted for exhaustively — and since #305 the rule
+# The 30 branches below route to 30 targets, accounted for exhaustively — and since #305 the rule
 # has NO exception list:
 #
 #   20  `_`-prefixed, all `ispublic == false`: `_filter!`, `_db!`, `_values!`, `_order_by!`,
 #       `_limit!`, `_offset!`, `_page!`, `_distinct!`, `_select_for_update!`, `_create!`,
 #       `_update!`, `_update_or_create!`, `_get_or_create!`, `_count`, `_aggregate`, `_exists`,
 #       `_with`, `_cjoin`, `_cjoin_on`, `_on`
-#    5  bare and public, so the rule admits them: `list`, `delete`, `earliest`, `latest`,
-#       `inspect_query`
+#    6  bare and public, so the rule admits them: `list`, `delete`, `earliest`, `latest`,
+#       `inspect_query`, `explain_query`
 #    4  Base-owned, out of scope: `first`, `last`, `get`, `deepcopy`
 #
-# `ispublic` decides those five mechanically, which is the point: since #289 it is also the test
+# `ispublic` decides those six mechanically, which is the point: since #289 it is also the test
 # Documenter applies, so the rule is checkable rather than a matter of taste — and
 # `test/unit/test_docstring_coverage.jl` does check it, asserting the offender set is EMPTY.
 #
@@ -802,6 +802,9 @@ function Base.getproperty(q::ObjectHandler, sym::Symbol)
     return (format::Symbol=:row; show_query::Symbol=:execute) -> list(q, Val(format); show_query=show_query)
   elseif sym === :inspect
     return (; kwargs...) -> inspect_query(q; kwargs...)
+  elseif sym === :explain
+    # #48: the database's plan for this SELECT; keyword-only, so a closure (not a ChainCaller).
+    return (; kwargs...) -> explain_query(q; kwargs...)
   elseif sym === :delete
     return (; kwargs...) -> delete(q; kwargs...)
 

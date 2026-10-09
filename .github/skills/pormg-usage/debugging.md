@@ -13,7 +13,8 @@ Every terminal accepts `show_query`:
 | :--- | :--- |
 | `:execute` | the result (default) |
 | `:sql` | the SQL `String` |
-| `:dict` | a `Dict` with `:sql_text`, `:parameters`, `:dialect`, `:operation` |
+| `:pretty` | the same SQL reflowed one clause per line — for a log line; only whitespace changes |
+| `:dict` | a `Dict` with `:sql_text`, `:parameters`, `:parameter_count`, `:parameter_buckets`, `:dialect`, `:bucketing`, `:model`, `:operation` — the same keys for every operation |
 | `:params` | the bound parameters only |
 | `:none` | `nothing` — builds the query and skips the round-trip, for benchmarking |
 
@@ -30,6 +31,22 @@ info[:sql_text]; info[:parameters]; info[:dialect]
 
 Placeholders differ by backend: `$1, $2, …` on PostgreSQL, `?` on SQLite. Values are always
 parameters. If a value appears inline in the SQL text, that is a bug worth reporting.
+
+## See the plan the database chooses
+
+`show_query` shows what PormG sends; `.explain()` asks the database how it would run the `SELECT`:
+
+```julia
+plan = q.explain()                 # or explain_query(q)
+plan[:indexes_used]                # the indexes the plan uses
+plan[:seq_scans]                   # the tables it reads in full
+q.explain(analyze = true)          # PostgreSQL only: EXECUTES the query, adds :execution_time_ms
+```
+
+It is read-only — it explains the `SELECT`, never a write. On SQLite only `EXPLAIN QUERY PLAN`
+exists: `analyze`/`buffers`/`verbose = true` raise `BackendCapabilityError`, and tables are named by
+the query's alias (`Tb_1`). The result reports what the plan states; PormG does not guess at a
+"missing" index.
 
 ## When a query returns the wrong thing
 

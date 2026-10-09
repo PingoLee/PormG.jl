@@ -10,6 +10,8 @@ function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing
     return nothing # Zero-allocation mode for benchmarking the builder
   elseif mode === :sql
     return sql # Simplicity: just the SQL string (fast benchmarking)
+  elseif mode === :pretty
+    return _format_sql(sql) # #48: one clause per line, for logs and the REPL; whitespace only
   elseif mode === :execute
     # Safety check: this function shouldn't be called with :execute,
     # but we return SQL just in case to avoid a crash.
@@ -56,7 +58,7 @@ function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing
         :parameter_buckets => bucket_breakdown
     )
   else
-    throw(QueryBuildError("Invalid show_query mode: $mode. Must be one of: :sql, :dict, :inspection, :params, :none"))
+    throw(QueryBuildError("Invalid show_query mode: $mode. Must be one of: :sql, :pretty, :dict, :inspection, :params, :none"))
   end
 end
 
@@ -345,6 +347,7 @@ which makes it the quickest way to see what a chain builds.
 | `mode` | Returns |
 |--------|---------|
 | `:sql` | `String` — the generated SQL |
+| `:pretty` | `String` — the same SQL reflowed one clause per line; only whitespace changes |
 | `:params` | `Vector` — the parameterized values, in bucket order |
 | `:dict` / `:inspection` | `Dict` — the full metadata shape of [`inspect_query`](@ref) |
 | `:none` | `nothing` — builds and discards, for benchmarking the builder |

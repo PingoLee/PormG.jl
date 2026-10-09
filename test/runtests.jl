@@ -250,6 +250,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Discard Pending Migration" include("unit/test_discard_pending_migration.jl")
     @testset "makemigrations: no stale pending plan (#727)" include("unit/test_makemigrations_stale_pending.jl")
     @testset "makemigrations: plan against any models file (#736)" include("unit/test_makemigrations_models_file.jl")
+    @testset "makemigrations: a failed schema read raises (#1018)" include("unit/test_makemigrations_read_failure.jl")
     @testset "Lossy ALTERs: classified from the delta, pre-checked against the rows (#803)" include("unit/test_lossy_alters.jl")
     @testset "Positive Integer Fields CHECK" include("unit/test_positive_small_integer_check.jl")
     @testset "BinaryField Byte Storage (#296)" include("unit/test_binary_field_bytes.jl")

@@ -4471,7 +4471,7 @@ end
 # Deliberately no rescue around `JSON.parse`. Under the old string format a malformed aggregate was
 # an ordinary consequence of an odd-but-legal schema, so the reader degraded and warned; under JSON
 # there is no legal schema that produces an unparseable aggregate, so one means PormG built bad SQL.
-# `makemigrations` already wraps this read in a try/catch and reports "no plan generated".
+# A parse failure propagates out of `makemigrations` and `check()` as the read's own error (#1018).
 function _pg_json(row, key::Symbol)
   (key in propertynames(row) && !ismissing(row[key])) || return nothing
   return JSON.parse(String(row[key]))

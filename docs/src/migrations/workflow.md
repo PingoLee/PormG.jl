@@ -136,8 +136,8 @@ planner as `makemigrations`, so the two cannot disagree about whether there is a
 - **It writes nothing**: no `pending_migrations.jl`, no history row, no archive.
 - **It runs under `change_db: false`**, the setting a production connection usually carries, where
   `makemigrations` refuses to run.
-- **A failed read raises.** `makemigrations` logs a failed live-schema read and stops; a gate must
-  never report "clean" because it could not look.
+- **A failed read raises**, as it does in `makemigrations`: a gate must never report "clean"
+  because it could not look.
 - **It never prompts.** A renamed column is therefore reported as an add plus a remove, and a
   renamed table as a new model plus a drop, because that is what a plan without answers does. Each
   of the two findings names the other in its `message`, so you can tell a rename from two changes.

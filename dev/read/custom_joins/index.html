@@ -351,11 +351,34 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
     so the `driver` join PormG generates for `driverid__surname` would silently read the CTE
     ([#479](https://github.com/PingoLee/PormG.jl/issues/479)). Pick a name that is not a table.
 
-    `cjoin_on` works in reads and in the common `update()`/`delete()` (which scope rows via a
-    subquery); only a **correlated** UPDATE-FROM/DELETE-USING (setting a column *from* a joined
-    table) is unsupported and raises. Finally, a `cjoin_on` join is not tracked by the #74
-    aggregate fan-out guard — if the join is to-many, aggregate the base table with `distinct=true`
-    (or over the joined table&#39;s own column) to avoid silent row multiplication.
+    `cjoin_on` works in reads and in `update()`/`delete()`, which scope rows via a subquery. An
+    `update()` can also **set a column from the joined copy**, `update(&quot;x&quot; =&gt; Joined(&quot;d&quot;, &quot;col&quot;))`
+    ([Setting a column from a `cjoin_on` copy](../write/update.md#Setting-a-column-from-a-cjoin_on-copy)).
+
+!!! note &quot;When PormG treats a `cjoin_on` join as to-many&quot;
+    An `ON` clause can say anything, so PormG decides from the conditions alone whether the join can
+    match **more than one** target row per base row
+    ([#174](https://github.com/PingoLee/PormG.jl/issues/174)). The join is **to-one** only when
+    top-level conditions (the `on` list, or a `Q(...)` in it, never a `Qor(...)` branch) use `==` or
+    `=&gt;` to pin a **key** of the target to **one value per base row**:
+
+    - the key is the target&#39;s primary key, a `unique = true` column, or every column of a
+      `UniqueConstraint` declared without `condition`/`expressions`;
+    - the value is a literal, a base column or a forward path off it (`F(&quot;driverid&quot;)`,
+      `F(&quot;raceid__circuitid&quot;)`), an `OuterRef`, or a column of another alias that is itself to-one.
+
+    Anything else counts as **to-many**: a range (`&gt;=`), a `Qor`, arithmetic, or a column the
+    model never declared unique, even when your data happens to be one-to-one. Two features read this:
+
+    - the [fan-out guard](filters_and_aggregates.md#Aggregating-Across-To-Many-Relations-(Fan-Out-Guard))
+      raises `QueryBuildError` for `Count`/`Sum`/`Avg` over a base column next to a to-many
+      `cjoin_on`, as it does for a reverse foreign key;
+    - an `update()` that sets a column from a joined copy refuses a to-many alias.
+
+    If the column really is unique, declare it (`unique = true` or a `UniqueConstraint`) and the
+    join becomes to-one. On a managed model that is a schema change: the next migration adds the
+    constraint, and fails if the table holds duplicates. The declaration is taken on its word, so a
+    key declared on an unmanaged model or a view is trusted without a constraint behind it.
 
 !!! warning &quot;Give the join a predicate that names its own alias&quot;
     An `ON` clause that never names its own alias is **refused**
@@ -540,4 +563,4 @@ mermaid.initialize({
     startOnLoad: true,
     theme: "neutral"
 });
-</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Friday 9 October 2026 18:17">Friday 9 October 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+</script></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../values_and_joins/">« Values and Joins</a><a class="docs-footer-nextpage" href="../filters_and_aggregates/">Filters and Aggregates »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Friday 9 October 2026 18:32">Friday 9 October 2026</span>. Using Julia version 1.13.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

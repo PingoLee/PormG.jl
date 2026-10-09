@@ -2401,11 +2401,11 @@ end
 
 # The `:schema_drift` class: what the next `makemigrations` would plan, computed and not written.
 #
-# `makemigrations` itself could not serve as the gate, for three reasons it has good cause to keep:
-# it writes `pending_migrations.jl`, it refuses to run under `change_db: false` (what a production
-# connection usually carries), and it logs a failed live read and returns. Here the plan is built in
-# memory with `interactive = false` — no prompt, no file — `change_db` is not consulted, and the live
-# read has no `try` around it: a gate must never report clean because it could not look.
+# `makemigrations` itself could not serve as the gate, for two reasons it has good cause to keep:
+# it writes `pending_migrations.jl`, and it refuses to run under `change_db: false` (what a production
+# connection usually carries). Here the plan is built in memory with `interactive = false` — no
+# prompt, no file — `change_db` is not consulted, and the live read has no `try` around it, as in
+# `makemigrations` since #1018: a gate must never report clean because it could not look.
 function _schema_drift_findings(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings;
                                 ignore_table::Vector{String},
                                 include_table::Union{Vector{String}, Nothing},
@@ -2491,8 +2491,8 @@ Each finding is one planned step: `table` is the table, `columns` the column a f
   * **It reads what `makemigrations` reads, and plans the same way** — the same live reader, the same
     models loader, the same planner, with `interactive = false`. So it cannot disagree with the next
     `makemigrations` about whether there is a change.
-  * **A failed read raises.** Unlike `makemigrations`, which logs a failed live read and returns, a
-    gate must never report "clean" because it could not look.
+  * **A failed read raises**, as it does in `makemigrations`: a gate must never report "clean"
+    because it could not look.
   * **An unhinted rename is drift.** With no one to ask, a renamed column plans as an add plus a
     remove, and a renamed table as a new model plus a drop. Both findings are reported, and each
     `message` names the other half it could pair with.

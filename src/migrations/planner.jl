@@ -3089,7 +3089,8 @@ Returns `nothing`. Logs and returns early — writing no plan — when the conne
 exception is a plan a previous `migrate` already applied but failed to archive — its checksum
 matches the latest applied migration — which is kept, with a warning, for the next `migrate` to
 archive without re-applying. A missing models file raises `MissingConfigurationError` (the
-`String` form).
+`String` form). A failure reading the live schema raises the read's own error and writes no plan
+(#1018); an empty database is not a failure — it reads as no tables, and every model is planned.
 
 A pending plan holding hand-written data steps — entries labelled `Data (pre): …` or
 `Data (post): …` — is neither overwritten nor moved aside: those steps exist only in that file, so
@@ -3111,23 +3112,12 @@ end
 # #522: the live side is read straight into `LiveTable`s; `convert_schema_to_models` (which builds
 # `PormGModel`s on top of them) is `inspectdb`'s form and is not called here.
 # #749: the connection's own `ignore_tables:` rides on top of the backend default, less the entries its
-# `unignore_defaults:` removes (#818). Built outside the `try` below, which logs and returns: a bad list
-# is a configuration error to raise, not a failed read.
+# `unignore_defaults:` removes (#818).
 ignore = _with_connection_ignores(_backend_ignore_tables(connection, settings), settings)
-live_schema = LiveTable[]
-try
-  live_schema = read_live_schema(connection; ignore_table = ignore)
-catch e
-  error_message = sprint(showerror, e)
-  # server-text-match-ok: dead arm, nothing raises this phrase; #1018 removes it
-  if occursin("Table definition not found", error_message)
-    @info("The database is empty, that is migrate all tables") # TODO, impruve this message
-  else
-    println("Error: ", e)
-    @error("Error: ", e)
-    return
-  end
-end
+# #1018: a failed read raises, as it does for `migrate`'s precondition and `check()`. It used to be
+# logged and swallowed — `nothing`, the value a successful run returns — under a text match for an
+# "empty database" error nothing raised: an empty database reads as no tables, and plans them all.
+live_schema = read_live_schema(connection; ignore_table = ignore)
 
 # get module from the path (load + resolve FK targets + default pk_field — #62)
 current_models = _load_current_models(path)
@@ -3158,14 +3148,8 @@ function makemigrations(connection::PormGSQLite, settings::PormGSettings; path::
   end
   
   # #522: the live side is read straight into `LiveTable`s (see the PostgreSQL method above).
-  ignore = _with_connection_ignores(_backend_ignore_tables(connection, settings), settings)   # outside the `try`: see above
-  live_schema = LiveTable[]
-  try
-    live_schema = read_live_schema(connection; ignore_table = ignore)
-  catch e
-    @error("Error reading the live schema: ", e)
-    return
-  end
+  ignore = _with_connection_ignores(_backend_ignore_tables(connection, settings), settings)
+  live_schema = read_live_schema(connection; ignore_table = ignore)   # #1018: raises, see above
 
   # get module from the path (load + resolve FK targets + default pk_field — #62)
   current_models = _load_current_models(path)

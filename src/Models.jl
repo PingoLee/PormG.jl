@@ -3989,8 +3989,10 @@ function format_yyyy_mm(value::AbstractString; ranged::Bool = true)
   # refused it, by failing to build a `Date`. A month that does not exist is malformed, not out of
   # range, so it is refused under every operator. Year `0000` is the range half (#1088): no date bound
   # can express it, so an exact value refuses it, and a comparison binds it as the bound it is.
+  # `[0-9]`, not `\d`: PCRE matches every Unicode digit with `\d` here, so `"١٩٩١-٠١"` passed the shape
+  # and the byte slices below threw a raw `StringIndexError` (#1091 review).
   s = String(value)
-  occursin(r"^\d{4}-\d{2}$", s) ||
+  occursin(r"^[0-9]{4}-[0-9]{2}$", s) ||
     throw(InvalidValueError("The value is invalid, it must be in the format YYYY-MM", :format))
   1 <= parse(Int, s[6:7]) <= 12 ||
     throw(InvalidValueError("The value is not a valid YYYY-MM bucket: it is not a calendar month", :format))

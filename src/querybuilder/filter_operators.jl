@@ -20,7 +20,7 @@ function _json_numeric_rhs(value)
   n = tryparse(Int, s); n !== nothing && return n
   f = tryparse(Float64, s); (f !== nothing && isfinite(f)) && return f
   # Base-10 text that overflows `Float64` (`"1e400"`) parses to `Inf`: refused rather than bound as a
-  # value the caller never wrote. (A `Float64` the caller passes, `Inf` included, binds as it is.)
+  # value the caller never wrote. A non-finite `Float64` the caller passes is refused too (#1091).
   throw(InvalidValueError("A numeric JSON comparison requires a finite number", :range))
 end
 
@@ -518,7 +518,9 @@ function _year_bucket_bounds(value; ranged::Bool = true)::Union{Nothing,Tuple{Da
     isinteger(value) || throw(InvalidValueError("The value is not a whole year for a __@year filter", :format))
     value
   elseif value isa AbstractString
-    n = tryparse(Int, strip(value), base=10)
+    # A digit string too long for `Int` is a whole year out of range, not malformed — as it is on the
+    # transform path (`Models.format_year_sql`), so both report it as `:range` (#1091 review).
+    n = something(tryparse(Int, strip(value), base=10), tryparse(BigInt, strip(value), base=10), Some(nothing))
     n === nothing && throw(InvalidValueError("The value is not a valid year for a __@year filter", :format))
     n
   else

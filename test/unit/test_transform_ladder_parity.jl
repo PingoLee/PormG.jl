@@ -1259,6 +1259,18 @@ end
       @test params("ts__@year", 1991.0, conn) == [1991]
       @test params("ts__@year", "1991", conn) == [1991]
       @test params("ts__@yyyy_mm", 199103, conn) == ["1991-03"]
+      # Review: non-ASCII digits are no `YYYY-MM` (they were a raw `StringIndexError`); a year string too
+      # long for `Int` is out of range on the rewrite path as on the transform path; and an alias of
+      # `Extract(…, "YEAR")` takes the year's rule like the pair spelling.
+      @test (e = refusal("ts__@yyyy_mm", "١٩٩١-٠١", conn); e isa PormG.InvalidValueError && e.kind === :format)
+      @test (e = refusal("seen__@yyyy_mm__@lte", "١٩٩١-٠١", conn); e isa PormG.InvalidValueError && e.kind === :format)
+      for path in ("seen__@year__@gte", "ts__@year__@gte")
+        e = refusal(path, "99999999999999999999", conn)
+        @test e isa PormG.InvalidValueError && e.kind === :range
+      end
+      alias_year(v) = try _tlp_sql((q = TLP.Tlp_row.objects; q.values("y" => PormG.Functions.Extract("seen", "YEAR")); q.filter("y" => v); q); conn = conn); nothing catch e; e end
+      @test (e = alias_year(99999); e isa PormG.InvalidValueError && e.kind === :range)
+      @test alias_year(1991) === nothing
       # `F("…__@year")` takes the year's rule through the #1083 comparison arm.
       e = try _tlp_sql((q = TLP.Tlp_row.objects; q.values("id"); q.filter(F("ts__@year") == 99999); q); conn = conn); nothing catch e; e end
       @test e isa PormG.InvalidValueError && e.kind === :range

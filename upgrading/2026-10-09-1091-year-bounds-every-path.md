@@ -29,12 +29,16 @@ numeric column already refused it.
 | `filter("date__@yyyy_mm__@lte" => "1991-13")` on a `DateField` | `InvalidValueError` (`kind = :range`) | `InvalidValueError` (`kind = :format`) |
 | `filter("date__@year__@gte" => 1991.7)` on a `DateField` | `InvalidValueError` (`kind = :range`) | `InvalidValueError` (`kind = :format`) |
 | `filter("date__@year__@gte" => 99999)` on a `DateField` | `InvalidValueError` | builds: the extracted year, no rows (`@lt`: every row) |
+| `values("y" => Extract("date", "YEAR")); filter("y" => 99999)` | matched nothing | `InvalidValueError` (`kind = :range`); `"y__@gte" => 99999` builds |
+| `filter(F("start_at__@year") == 99999)` | matched nothing | `InvalidValueError` (`kind = :range`), with #1083 |
+| `values("m" => Max(Extract("date", "YEAR"))); filter("m__@gte" => 2009.5)` | compared with 2009.5 | `InvalidValueError` (`kind = :format`) |
 | `filter("payload__wins__@gte" => NaN)`, `=> Inf`, and `"payload__wins" => NaN` | bound as given; rows differ per engine | `InvalidValueError` (`kind = :range`) |
 
 ### Who this affects
 
 - Code that filters `@year` with `=` or `@in` and a year that can fall outside 1–9999, or with a
-  `Bool`, on a timestamp column or with `@in` on a date column.
+  `Bool` or a fraction: on a timestamp column, with `@in` on a date column, through an alias of
+  `Extract(…, "YEAR")`, or as `F("…__@year") == …`.
 - Code that filters `@yyyy_mm` with a label whose month can be outside `01`–`12`.
 - Code that compares a JSON path with a float that can be `Inf` or `NaN`.
 - Code that matched `kind == :range` for a fractional year or a non-existent month: it is `:format`.
@@ -42,7 +46,8 @@ numeric column already refused it.
 ### How to find the calls to migrate
 
 ```bash
-grep -rnE '__@(year|yyyy_mm)(__@[a-z]+)?"\s*=>' --include=*.jl src/ test/
+grep -rnE '__@(year|yyyy_mm)' --include=*.jl src/ test/                 # pairs, F("…__@year"), aliases
+grep -rnE 'Extract\([^)]*"(YEAR|year)"' --include=*.jl src/ test/        # an Extract alias or comparison
 grep -rn 'JSONField' --include=*.jl src/      # the JSON columns; then grep each one's "<column>__…" filters
 ```
 

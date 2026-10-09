@@ -963,7 +963,10 @@ struct _MockSQLiteRegex635 <: PormG.PormGSQLite end
     @test e isa PormG.FilterError
     msg = PormG.error_message(e)
     @test occursin("surname__@regex", msg)
-    @test occursin("\"surname__@regex\" => \"^Sen\"", msg)    # the user's own path and pattern
+    # The user's own path, with a placeholder for the pattern: a refusal never prints the value it
+    # refused (#971), and the pattern can come from a search box (#1092).
+    @test occursin("\"surname__@regex\" => \"<pattern>\"", msg)
+    @test !occursin("^Sen", msg)
 
     # A string carries no flags: `r"…"i` must be pointed at the case-insensitive twin, or following
     # the hint would silently turn the filter case-sensitive.
@@ -977,7 +980,8 @@ struct _MockSQLiteRegex635 <: PormG.PormGSQLite end
         err
       end
       @test ei isa PormG.FilterError
-      @test occursin("\"surname__@$(twin)\" => \"^sen\"", PormG.error_message(ei))
+      @test occursin("\"surname__@$(twin)\" => \"<pattern>\"", PormG.error_message(ei))
+      @test !occursin("^sen", PormG.error_message(ei))
     end
 
     # On a non-regex lookup the same refusal must not steer toward `@regex` — on SQLite that

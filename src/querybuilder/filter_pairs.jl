@@ -196,7 +196,9 @@ function _get_pair_to_oper(x::Pair{Vector{String},Regex})
     caseless = (x.second.compile_options & Base.PCRE.CASELESS) != 0
     suggested = caseless && op in ("regex", "nregex") ?
       join([x.first[1:end-1]..., op == "regex" ? "iregex" : "niregex"], "__@") : key
-    hint = "Pass the pattern as a String, e.g. \"$(suggested)\" => $(repr(x.second.pattern)); " *
+    # A placeholder, never the pattern itself (#1092): a pattern can come from a search box, and a
+    # refusal never prints the value it refused (#971).
+    hint = "Pass the pattern as a String, e.g. \"$(suggested)\" => \"<pattern>\"; " *
            "PostgreSQL evaluates it as a POSIX regular expression"
   else
     hint = "Pass the value as a String"

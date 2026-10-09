@@ -630,7 +630,7 @@ function _parse_cast_type(type::AbstractString, context::AbstractString)
   end
   # The caller's text may be request input: `repr` escapes it, and a long one is cut to its start.
   # It is SQL grammar the query is built from, not a bound value, so it is shown (#971 reviewed it).
-  shown = ncodeunits(s) <= 64 ? repr(s) : repr(first(s, 48)) * "… ($(length(s)) characters)"
+  shown = ncodeunits(s) <= 64 ? repr(s) : repr(first(s, 48)) * "… ($(length(s)) characters)"  # refusal-value-ok: SQL grammar, not a bound value (#971)
   throw(InvalidValueError("$(context): $(shown) is not an accepted SQL type name. Accepted: a single " *
                           "identifier (integer, bigint, text, timestamptz, …) or one of " *
                           join(_CAST_MULTIWORD_TYPES, ", ") *
@@ -784,7 +784,7 @@ function window_frame_sql(frame::AbstractString; context::AbstractString = "fram
   function fail(why::AbstractString)
     # The caller's text may be request input: `repr` escapes it, and a long one is cut to its start.
     # It is SQL grammar the query is built from, not a bound value, so it is shown (#971 reviewed it).
-    shown = ncodeunits(s) <= 64 ? repr(s) : repr(first(s, 48)) * "… ($(length(s)) characters)"
+    shown = ncodeunits(s) <= 64 ? repr(s) : repr(first(s, 48)) * "… ($(length(s)) characters)"  # refusal-value-ok: SQL grammar, not a bound value (#971)
     throw(InvalidValueError("$(context): $(shown) is not an accepted window frame ($(why)). Accepted: " *
                             "ROWS, RANGE or GROUPS, then one bound or BETWEEN <bound> AND <bound>, " *
                             "optionally followed by EXCLUDE CURRENT ROW | GROUP | TIES | NO OTHERS. " *

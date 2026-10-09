@@ -14,7 +14,10 @@ Pinned here, with no server:
      `repr(…)`, an exception's own text (`\$(e)`, `sprint(showerror, e)`, `e.msg`). A reviewed
      exception carries `# refusal-value-ok: <why>` on its line. The **label builders** — a function
      named `_…textless…`, `_…divergent…` or `_…_label…`, which writes a refusal's text outside its
-     constructor — are held to the same rule, parsed rather than matched as text (#1057).
+     constructor — are held to the same rule, parsed rather than matched as text (#1057). So is
+     every **local variable** a refusal prints, followed to its assignments in the same function
+     (#1092: a `hint` carried a `Regex`'s pattern past the constructor scan); a reviewed assignment
+     carries the marker on its own line.
   2. **The data shape** — the one-string constructor still works (#231's contract), and the location
      a funnel attaches renders once.
   3. **Every path, end to end** — a filter, a write, a bulk write and `sqlite_bind_value`, each fed a
@@ -186,6 +189,103 @@ _label_leaks971(expr) = _leaks971(expr) || occursin(r"\.field$", expr) ||
   isempty(offenders) || foreach(o -> @info(o), offenders)
 end
 
+# A local variable is the other way a value reaches a refusal without appearing inside its constructor.
+# #1092 found the `@regex` refusal building `hint = "… $(repr(x.second.pattern)) …"` and printing
+# `$(hint)`. So every name a refusal interpolates (or `*`-joins) is followed to its assignments in the
+# same function, transitively, and each one's text is held to the label-builder rule. A reviewed
+# assignment carries `# refusal-value-ok: <why>` on its line.
+const REFUSALS1092 = (:InvalidValueError, :FilterError, :QueryBuildError)
+
+# Every top-level definition, long and short form, as `(line, definition)`. A closure is scanned with
+# the function that holds it, so a refusal inside it sees that function's locals too.
+function _definitions1092(ex, found = Tuple{Int, Expr}[], line = 0)
+  ex isa Expr || return found
+  if (ex.head === :function || (ex.head === :(=) && ex.args[1] isa Expr)) && length(ex.args) == 2 &&
+     _def_name971(ex.args[1]) isa Symbol
+    push!(found, (line, ex))
+    return found
+  end
+  for a in ex.args
+    a isa LineNumberNode ? (line = a.line) : _definitions1092(a, found, line)
+  end
+  return found
+end
+
+# A body's refusal constructions and its local assignments `name = rhs`, each with its line. A `for`
+# loop's `v in values` parses as `v = values`, so an element of a value collection is followed too.
+function _refusals_and_locals1092(body)
+  calls = Tuple{Int, Expr}[]
+  locals = Dict{Symbol, Vector{Tuple{Int, Any}}}()
+  line = Ref(0)
+  function walk(ex)
+    ex isa LineNumberNode && (line[] = ex.line; return)
+    ex isa Expr || return
+    ex.head === :call && ex.args[1] in REFUSALS1092 && push!(calls, (line[], ex))
+    ex.head === :(=) && ex.args[1] isa Symbol && push!(get!(locals, ex.args[1], Tuple{Int, Any}[]), (line[], ex.args[2]))
+    foreach(walk, ex.args)
+  end
+  walk(body)
+  return calls, locals
+end
+
+# The bare names an expression writes into text: `$name` and the operands of `string(…)` or `*`.
+function _written_names1092(ex, out = Set{Symbol}())
+  ex isa Symbol && return push!(out, ex)        # `msg = hint` is an alias, followed like the rest
+  ex isa Expr || return out
+  ex.head === :string && foreach(a -> a isa Symbol && push!(out, a), ex.args)
+  ex.head === :call && ex.args[1] in (:string, :*) && foreach(a -> a isa Symbol && push!(out, a), ex.args[2:end])
+  foreach(a -> a isa Symbol || _written_names1092(a, out), ex.args)
+  return out
+end
+
+# Each leak in `src`, as text: the assignment that writes a value, and the refusal that prints it.
+function _local_offenders1092(src::AbstractString)
+  lines = split(src, '\n')
+  offenders = String[]
+  ncalls = 0
+  for (_, def) in _definitions1092(Meta.parseall(src))
+    calls, locals = _refusals_and_locals1092(def.args[2])
+    for (cl, call) in calls
+      ncalls += 1
+      occursin("refusal-value-ok:", get(lines, cl, "")) && continue
+      todo = collect(Set(a for arg in call.args[2:end] for a in _written_names1092(arg) if !(arg isa Symbol)))
+      seen = Set{Symbol}()
+      while !isempty(todo)
+        name = pop!(todo)
+        name in seen && continue
+        push!(seen, name)
+        for (al, rhs) in get(locals, name, ())
+          occursin("refusal-value-ok:", get(lines, al, "")) && continue
+          wrapped = Expr(:block, rhs)
+          for expr in _ast_interpolations971(wrapped)
+            _label_leaks971(expr) && push!(offenders, "$(al): `$(name)` writes `$(expr)`, printed by the refusal at $(cl)")
+          end
+          rhs isa Symbol && String(rhs) in VALUE_NAMES971 &&
+            push!(offenders, "$(al): `$(name)` is `$(rhs)`, printed by the refusal at $(cl)")
+          append!(todo, _written_names1092(rhs))
+        end
+      end
+    end
+  end
+  return unique(offenders), ncalls
+end
+
+@testset "#1092: no refusal prints a value through a local variable" begin
+  root = pkgdir(PormG)
+  offenders = String[]
+  ncalls = 0
+  for dir in ("src", "ext"), (base, _, files) in walkdir(joinpath(root, dir)), f in files
+    endswith(f, ".jl") || continue
+    path = joinpath(base, f)
+    found, n = _local_offenders1092(read(path, String))
+    ncalls += n
+    append!(offenders, "$(relpath(path, root)):" .* found)
+  end
+  @test ncalls > 400        # the scan found the refusals at all (#1092: 506 inside definitions)
+  @test isempty(offenders)
+  isempty(offenders) || foreach(o -> @info(o), offenders)
+end
+
 @testset "#971: the scanner flags a leak and passes a type" begin
   # Its own mutation check: each shape it exists to catch, and the shapes it must let through.
   for leak in ("\"got \$value\"", "\"got \$(value)\"", "\"got \$(repr(x))\"", "\"\$(sprint(showerror, e))\"",
@@ -208,6 +308,49 @@ end
                        ("_unrelated(x) = \"the literal \$(x)\"", false))   # not a builder by name
     found = _label_builders971(Meta.parseall(src))
     @test any(any(_label_leaks971, _ast_interpolations971(d.args[2])) for (_, _, d) in found) == leaks
+  end
+  # The local-variable scan, on #1092's own defect, the spellings it would come back as, and the
+  # shapes it must let through.
+  for (src, leaks) in ((raw"""
+                        function f(x)
+                          hint = "e.g. surname__@regex => $(repr(x.second.pattern))"
+                          throw(FilterError("a Julia Regex is not a filter value. $(hint)"))
+                        end""", true),
+                       (raw"""
+                        function f(value)
+                          detail = "got $(value)"
+                          hint = "see " * detail
+                          throw(QueryBuildError("bad input; $(hint)"))
+                        end""", true),
+                       (raw"""
+                        function f(value)
+                          msg = value
+                          throw(InvalidValueError("bad input: $msg", :format))
+                        end""", true),
+                       (raw"""f(v) = (shown = repr(v); throw(InvalidValueError("bad $(shown)")))""", true),
+                       (raw"""
+                        function f(values)
+                          for item in values
+                            item isa String || throw(QueryBuildError("bad argument: $(item)"))
+                          end
+                        end""", true),    # `.values(…)`'s refusal, until #1092's scan saw it
+                       (raw"""
+                        function f(value)
+                          hint = "got a $(typeof(value))"
+                          throw(FilterError("bad input; $(hint)"))
+                        end""", false),
+                       (raw"""
+                        function f(s)
+                          shown = repr(s)  # refusal-value-ok: SQL grammar
+                          throw(InvalidValueError("bad $(shown)"))
+                        end""", false),
+                       (raw"""
+                        function f(value)
+                          hint = "got $(value)"
+                          @info hint
+                          throw(FilterError("bad input"))
+                        end""", false))    # the value is logged, not refused: not this scan's business
+    @test !isempty(first(_local_offenders1092(src))) == leaks
   end
 end
 
@@ -315,5 +458,29 @@ end
     e = refusal971(() -> bulk_insert(model.objects, DataFrame(id = [2, 3], telemetry = [Dict("lap" => 1), Dict("k" => "a\0$SECRET971")])))
     no_secret971(e; field = "telemetry", row = 2)
     e isa PormG.InvalidValueError && @test e.kind === :json_nul
+  end
+end
+
+@testset "#1092: a Regex refusal names the lookup, never the pattern" begin
+  with_sqlite971() do pool, model
+    # The pattern is the value: a search box can supply it. A caseless one still steers to the twin.
+    for (pattern, twin) in ((Regex(SECRET971), "code__@regex"), (Regex(SECRET971, "i"), "code__@iregex"))
+      e = refusal971(() -> model.objects.filter("code__@regex" => pattern).list())
+      @test e isa PormG.FilterError
+      e isa PormG.FilterError || continue
+      @test !occursin(SECRET971, e.msg)
+      @test !occursin(SECRET971, PormG.error_message(e))
+      @test occursin("\"$(twin)\" => \"<pattern>\"", PormG.error_message(e))
+    end
+  end
+end
+
+@testset "#1092: an invalid values() argument is named by its type, never printed" begin
+  with_sqlite971() do pool, model
+    e = refusal971(() -> model.objects.values(Dict(SECRET971 => 1)).list())
+    @test e isa PormG.QueryBuildError
+    e isa PormG.QueryBuildError || return
+    @test !occursin(SECRET971, PormG.error_message(e))
+    @test occursin("Invalid argument of type Dict{String, Int64}", PormG.error_message(e))
   end
 end

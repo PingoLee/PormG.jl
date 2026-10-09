@@ -569,6 +569,11 @@ end
     @test startswith(deg().distinct().offset(2).exists(show_query = :sql), "SELECT 1\n")
     # An order_by() on the alias is not a grouping term, so the shape is still degenerate.
     @test !occursin("FROM (", deg().order_by("n").count(show_query = :sql))
+    # A window beside the aggregate can group by its OVER terms, so it is never treated as degenerate:
+    # list() groups by the window's order column, and count() counts those groups.
+    win = () -> model.objects.values("x" => Rank(over = WindowOver(order_by = ["points"])) + Sum("id"))
+    @test occursin("GROUP BY \"Tb\".\"points\"", win().list(show_query = :sql))
+    @test occursin("as \"__pormg_grouped_count\"", win().count(show_query = :sql))
 
     # A HAVING (a filter on the alias, either spelling) makes the one row optional: kept, and bound as
     # list() binds it.
@@ -633,6 +638,20 @@ end
     @test _p208_error(() -> w().count(show_query = :sql)) == msg_list
     @test _p208_error(() -> w().exists(show_query = :sql)) == msg_list
     @test _p208_error(() -> model.objects.filter(Exists(w())).list(show_query = :sql)) == msg_list
+    # A key that names a model field AND a projection that is not that column is #703's ambiguity. Its
+    # guard reads the projection list, so every probe keeps the projection and refuses it as list()
+    # does, instead of filtering the column. The aggregate shape (`"points" => Sum("points")`) would
+    # otherwise be dropped as degenerate (#1082) and lose its HAVING silently.
+    for amb in (() -> model.objects.values("points" => Sum("points")).filter("points__@gt" => 5),
+                () -> model.objects.values("points" => F("id") + 1).filter(Q("points" => 5)))
+      msg_amb = _p208_error(() -> amb().list(show_query = :sql))
+      @test occursin("points", msg_amb)
+      @test _p208_error(() -> amb().count(show_query = :sql)) == msg_amb
+      @test _p208_error(() -> amb().exists(show_query = :sql)) == msg_amb
+      @test _p208_error(() -> model.objects.filter(Exists(amb())).list(show_query = :sql)) == msg_amb
+    end
+    # A projection that IS the column is not ambiguous, and is still cleared.
+    @test !occursin("FROM (", model.objects.values("code").filter("code" => "A").count(show_query = :sql))
     # A name that is neither a field nor an alias gets list()'s UnknownFieldError, aliases listed.
     t = () -> model.objects.values("pts1" => F("points") + 1).filter("pts2" => 1)
     msg_t = _p208_error(() -> t().list(show_query = :sql))

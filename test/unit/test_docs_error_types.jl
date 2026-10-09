@@ -1412,6 +1412,21 @@ const DOCERR_CASES = [
             without_foreign_keys(() -> nothing, DocErrMockPostgres())
         end,
     ),
+    # #1074 / #1082 — `read/index.md` (*Distinct Results*): a filter on a window alias raises from
+    # `.count()` as from `.list()`, and a degenerate aggregate the pre-build check cannot place is
+    # refused rather than answered.
+    (
+        "read/index.md — a filter on a window alias raises from .count() as from .list() (#1074)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.values("r" => Rank(over = WindowOver(order_by = ["points"]))).
+            filter("r" => 1).count(show_query = :sql),
+    ),
+    (
+        "read/index.md — an aggregate beside a filtered Value(...) alias cannot be probed (#1082)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.values("n" => Count("resultid"), "k" => Value(1)).
+            filter("k" => 1).count(show_query = :sql),
+    ),
     # #1049 — `api.md`, `read/index.md` (method table and *Pagination*) and the `object` docstring
     # promise QueryBuildError for a negative or `Bool` LIMIT / OFFSET, on `.page()` too.
     (

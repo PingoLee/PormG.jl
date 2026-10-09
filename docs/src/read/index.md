@@ -437,7 +437,9 @@ be a constant. `.count()`, `.exists()` and `Exists(...)` therefore answer for th
 and `.exists() == (.count() > 0)` holds. That is what lets one correlated handle serve both
 `Subquery(...)` and `Exists(...)` (see [Subqueries and CTEs](subqueries_and_ctes.md)). A filter on the
 alias is a `HAVING`, which can remove that one row, so `values("n" => Count("resultid")).filter("n__@gt" => 3)`
-is answered as written: one row or none.
+is answered as written: one row or none. A shape PormG cannot place before it builds the query — an aggregate beside a
+`Value(...)` literal that a filter reads, say — raises `QueryBuildError` from `.count()`, `.exists()`
+and `Exists(...)` rather than answer that constant.
 
 !!! warning "`distinct()` + `order_by()`: the sort key must be projected"
     Under `distinct()`, every column you `order_by(...)` must appear in `values(...)`. Ordering a

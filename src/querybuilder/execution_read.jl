@@ -413,22 +413,40 @@ _projection_shapes_rows(object::SQLObject; distinct::Bool)::Bool =
   !isempty(object.values) && !_degenerate_aggregate(object) &&
   (distinct || _contains_agg(object.values) || _filters_name_alias(object))
 
-# #1082: does any filter compare a plain key that names no model field — the filter path's own alias
-# test (`_alias_filter_key`), asked of the declaration before the build? An alias is the only way into
-# HAVING: #537 refuses an aggregate written in a filter. `Exists(...)` in a filter is its own query.
+# #1082: does any filter name a projection by its output name? Asked of the declaration, before the
+# build, with the filter path's own two tests:
+# - a plain key that names no model field (`_alias_filter_key`): an alias, or an unknown name. An alias
+#   is the only way into HAVING — #537 refuses an aggregate written in a filter;
+# - a model key that a projection also names without being that column (#703's
+#   `_guard_field_alias_collision`): `values("points" => Sum("points")).filter("points__@gt" => 5)`.
+#   That guard reads the projection list, so a cleared projection let the key silently mean the
+#   column; kept, the build refuses it as `list()` does (review of #1082).
+# `Exists(...)` in a filter is its own query.
 function _filters_name_alias(object::SQLObject)::Bool
+  instruc = _declaration_instruction(object)
   hit = false
   for f in object.filter
     f isa ExistsObject && continue
     _each_condition_leaf(f) do leaf
+      hit && return nothing
       key = _plain_filter_key(leaf.column)
-      (key === nothing || key in object.model.field_names) || (hit = true)
+      if key !== nothing && !(key in object.model.field_names)
+        hit = true
+      elseif (mkey = _model_filter_key(leaf.column, instruc)) !== nothing
+        hit = any(p -> _projection_output_name(p) == mkey && !_projects_column(p, mkey), object.values)
+      end
       return nothing
     end
     hit && return true
   end
   return false
 end
+
+# An instruction over the declaration alone, for the pre-build questions above and below: `_resolved_agg`,
+# `_model_filter_key` and `_projected_source` read only `object` (its values, filters and model). Nothing
+# is built with it, so nothing binds.
+_declaration_instruction(object::SQLObject) =
+  InstructionObject(text = "", table_alias = SQLTbAlias(), alias = "Tb", object = object)
 
 # #1082: is the projection an aggregate that the build will neither group nor filter with HAVING?
 # Mirrors `get_select_query`'s GROUP BY rule entry by entry: a resolved aggregate, a literal
@@ -440,8 +458,7 @@ end
 function _degenerate_aggregate(object::SQLObject)::Bool
   isempty(object.values) && return false
   _filters_name_alias(object) && return false
-  # `_resolved_agg` reads the declaration only (`object.values` and the model); no build happens here.
-  instruc = InstructionObject(text = "", table_alias = SQLTbAlias(), alias = "Tb", object = object)
+  instruc = _declaration_instruction(object)
   names = String[]
   any_agg = false
   for v in object.values

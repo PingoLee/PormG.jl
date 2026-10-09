@@ -1415,11 +1415,17 @@ const DOCERR_CASES = [
             q.list(show_query = :dict)
         end,
     ),
-    # #1070: a filter on a date part is held to the part's range — `@month` had none.
+    # #1070: a filter on a date part is held to the part's range — `@month` had none. #1088 scoped
+    # the range to `=` / `@in`; the shape is checked under every lookup, which is the second claim.
     (
         "read/functions_and_dates.md — a date part's filter value outside its range raises",
         InvalidValueError,
         () -> DOCERR_RACE_PG.objects.filter("date__@month" => 13).list(show_query = :dict),
+    ),
+    (
+        "read/functions_and_dates.md — a fraction compared with a date part raises (#1088)",
+        InvalidValueError,
+        () -> DOCERR_RACE_PG.objects.filter("date__@month__@lt" => 6.5).list(show_query = :dict),
     ),
     # #955: a period transform refuses a `Bool` rather than reading `true` as `1`.
     (
@@ -2177,14 +2183,14 @@ const DOCERR_CASES = [
         () -> CharField(default = true),
     ),
     # #972. *Null checks and ranges after a transform* says a range operand is checked like a single
-    # value. Every transform is pinned in `test_transform_ladder_parity.jl`. (The `@isnull` after a
+    # value — for its shape; since #1088 its ends are bounds, so `[1, 25]` builds. Every transform is pinned in `test_transform_ladder_parity.jl`. (The `@isnull` after a
     # year-qualified label it also listed raises no more: #997 made the label NULL-preserving.)
     (
-        "functions_and_dates.md — an hour no clock shows in a range raises (#972)",
+        "functions_and_dates.md — a range operand that is no hour raises (#972, #1088)",
         InvalidValueError,
         () -> let m = Model("docerr_race_972r", id = IDField(), ts = DateTimeField(null = true))
             m.connect_key = "docerr_pg"; m._module = Main
-            q = m.objects; q.filter("ts__@hour__@range" => [1, 25]); q.list(show_query = :dict)
+            q = m.objects; q.filter("ts__@hour__@range" => [1, 2.5]); q.list(show_query = :dict)
         end,
     ),
     # #885. The *TimeField* section says a Bool or a bare number default is refused; the full

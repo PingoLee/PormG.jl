@@ -108,9 +108,11 @@ query = M.Race.objects.filter("sprint_date__@year__@isnull" => false)
 ```
 
 The range operands are values of the transform: years for `@year`, `"YYYY-MM"` strings for
-`@yyyy_mm`, and each is checked the way a single value is (`"start_at__@hour__@range" => [1, 25]` raises
-`InvalidValueError`). A range is not rewritten onto the column the way a comparison on a
-`DateField` is (below), so it compares the transform itself.
+`@yyyy_mm`. Each is checked for its shape the way a single value is, so
+`"start_at__@hour__@range" => [1, 2.5]` raises `InvalidValueError`. The ends are bounds, though, so
+they are not held to the part's range: `[1, 25]` builds (see the range rule below). A range is not
+rewritten onto the column the way a comparison on a `DateField` is (below), so it compares the
+transform itself.
 
 A date part is NULL exactly when its date is, so `"sprint_date__@year__@isnull" => false` selects
 the same rows as `"sprint_date__@isnull" => false`. The year-qualified labels follow the same rule:
@@ -236,18 +238,27 @@ because `raceid` holds the race's integer id. Read the race's date through the r
 with `"raceid__date__@year"`. A foreign key into a table keyed by a date reads as that date. `ToChar` is checked only for the `"YYYY-MM"` mask that `@yyyy_mm` uses, because
 `to_char` also formats numbers on PostgreSQL.
 
-A filter on a date part is held to the part's range: `@month` and `MONTH` `1`–`12`, `@day` and
-`DAY` `1`–`31`, the clock and week parts as listed above, and the `Extract` parts `DOW` `0`–`6` and
-`DOY` `1`–`366`. The check applies to a filter pair (`"date__@month" => 13`) and to an alias of an
-`Extract` (`values("m" => Extract("date", "month")); filter("m" => 13)`). A value outside the range
-raises `InvalidValueError` instead of matching nothing, and so does a `Bool`:
-`"start_at__@hour" => true` is refused rather than meaning `1`. A comparison written with `F`,
-such as `F("date__@month") > 13`, is not checked yet (#1083). The range belongs to the part, not to
-what you compute from it: `Extract("start_at", "hour") + 1` is an ordinary number, and
-`Coalesce("date__@month", 0)` can be filtered with its `0`.
+A date part's value has a range: `@month` and `MONTH` `1`–`12`, `@day` and `DAY` `1`–`31`, the
+clock and week parts as listed above, and the `Extract` parts `DOW` `0`–`6` and `DOY` `1`–`366`. An
+exact filter is held to it, because a value outside it can only be a mistake: `=` and `@in` raise
+`InvalidValueError` instead of matching nothing. That covers a filter pair (`"date__@month" => 13`)
+and an alias of an `Extract` (`values("m" => Extract("date", "month")); filter("m" => 13)`).
+Every other lookup binds the number as given, because there a value outside the range is a bound:
+`"date__@month__@lt" => 13` matches every race, and `"start_at__@hour__@lte" => 24` reads "any
+hour". Django checks no range at all. PormG keeps the check where it catches a typo, and drops it
+where it would refuse a valid filter.
+
+The shape is checked under every lookup. A `Bool` is refused rather than meaning `1`
+(`"start_at__@hour" => true`), and so are a fraction (`"date__@month__@lt" => 6.5`) and text that is
+not a number. A comparison written with `F`, such as `F("date__@month") > 13`, is not checked yet
+(#1083). The range belongs to the part, not to what you compute from it:
+`Extract("start_at", "hour") + 1` is an ordinary number, and `Coalesce("date__@month", 0)` can be
+filtered with its `0`.
 
 ```julia
 M.Race.objects.filter("date__@month" => 13)        # InvalidValueError: a month is 1 to 12
+M.Race.objects.filter("date__@month__@lt" => 13)   # every race: 13 is a bound, not a month
+M.Race.objects.filter("date__@month__@lt" => 6.5)  # InvalidValueError: no month is 6.5
 ```
 
 ### Grouped Date Query

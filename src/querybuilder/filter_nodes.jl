@@ -376,9 +376,22 @@ end
 # neither binds until both succeed (the #467 contract, which the WHERE arm used to hand-roll). Every
 # scalar comparison passes through untouched.
 const _ITERABLE_LOOKUP_OPERATORS = ("IN", "NOT IN", "BETWEEN", "NOT BETWEEN")
-_format_filter_value(formatter, values, operator::AbstractString) =
-  operator in _ITERABLE_LOOKUP_OPERATORS && values isa AbstractArray ? [formatter(v) for v in values] :
-                                                                       formatter(values)
+
+# #1088: the operators that take a VALUE of the column — the only ones where a date part's range can
+# tell a mistake from a query. `"date__@month" => 13` and `"date__@month__@in" => [13]` can only be a
+# typo, so they are refused; `"date__@month__@lt" => 13` matches every row and `@hour__@lte => 24` is
+# how a bound is written, so every other operator binds the number as given. Django checks no range
+# at all, and both engines answer an out-of-range value with no rows, so this guard is PormG's own:
+# kept where it catches a typo, dropped where it refused a valid filter. Only the RANGE is scoped —
+# a `Bool`, a fraction or a word is no value of the part under any operator, so the shape checks run
+# everywhere (`Models.unranged_formatter`).
+const _RANGE_CHECKED_OPERATORS = ("=", "IN")
+
+function _format_filter_value(formatter, values, operator::AbstractString)
+  operator in _RANGE_CHECKED_OPERATORS || (formatter = Models.unranged_formatter(formatter))
+  return operator in _ITERABLE_LOOKUP_OPERATORS && values isa AbstractArray ? [formatter(v) for v in values] :
+                                                                              formatter(values)
+end
 
 # The filter path's shared re-raise (#411, #467). A formatter reports a value it cannot coerce as
 # `InvalidValueError`, whose own docstring scopes it to the insert/update coercion helpers — on a

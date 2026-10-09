@@ -877,11 +877,15 @@ end
       end
     end
   end
-  # The operands still go through the transform's formatter: an hour no clock shows is refused,
-  # not bound — the #579 / #636 contract, now reached through the range arm too.
+  # The operands still go through the transform's formatter, but a range's ends are BOUNDS (#1088):
+  # `[1, 25]` covers every hour from 1 and is how a caller writes "1 or later", so it binds. What is
+  # no hour at all — a word, a fraction — is still refused, not bound.
   for (backend, conn) in _TLP_BACKENDS
+    @test _tlp_params((q = TLP.Tlp_row.objects; q.filter("ts__@hour__@range" => [1, 25]); q); conn = conn)[end-1:end] == [1, 25]
     @test_throws PormG.InvalidValueError _tlp_sql(
-      (q = TLP.Tlp_row.objects; q.filter("ts__@hour__@range" => [1, 25]); q); conn = conn)
+      (q = TLP.Tlp_row.objects; q.filter("ts__@hour__@range" => ["1", "abc"]); q); conn = conn)
+    @test_throws PormG.InvalidValueError _tlp_sql(
+      (q = TLP.Tlp_row.objects; q.filter("ts__@hour__@range" => [1, 2.5]); q); conn = conn)
   end
 end
 
@@ -1162,6 +1166,58 @@ end
       @test occursin("integer from 0 to 23", plain(e))
       @test !occursin("EXTRACT", plain(e))
       @test !occursin("24", plain(e))
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1088: a date part's RANGE is checked only for `=` and `@in`; its SHAPE under every operator.
+# #1070 held every filter value to the part's range whatever the operator, so the natural way to
+# write a bound was refused: `"ts__@month__@lt" => 13` matches every row and `"ts__@hour__@lte" => 24`
+# is "any hour". Django has no range check, and both engines answer an out-of-range value with no
+# rows, so the guard is PormG's own: it stays where an out-of-range value can only be a typo (`=`,
+# `@in`) and binds the number as given everywhere else. A malformed value — a Bool, a fraction, a
+# word — is no value of the part, so it is refused on every operator, and its kind says which it is:
+# `:range` for a whole number outside the part, `:type` / `:format` for one that is not a number.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1088: the operator decides whether a date part's range applies" begin
+  Fn = PormG.Functions
+  # The refusal itself, or `nothing` when the query builds.
+  refusal(f, conn) = try _tlp_sql((q = TLP.Tlp_row.objects; q.values("note"); f(q); q); conn = conn); nothing catch e; e end
+  for (backend, conn) in _TLP_BACKENDS
+    @testset "$backend" begin
+      # `=` and `@in` still refuse a whole number outside the part, as `:range`, through the pair, a
+      # `DateField` (off the sargable rewrite for `@month`), and an alias of an `Extract`.
+      for f in (q -> q.filter("ts__@month" => 13), q -> q.filter("ts__@month__@in" => [1, 13]),
+                q -> q.filter("seen__@month" => 13), q -> q.filter("ts__@hour" => 24),
+                q -> (q.values("m" => Fn.Extract("ts", "MONTH")); q.filter("m" => 13)))
+        e = refusal(f, conn)
+        @test e isa PormG.InvalidValueError && e.kind === :range
+      end
+      # Every other operator binds the number as given: an ordering bound, a range's ends, and the
+      # negations (`@ne` / `@nin` are not `=` / `@in`, and an out-of-range value matches every row).
+      for (path, v) in (("ts__@month__@lt", 13), ("ts__@hour__@lte", 24), ("ts__@month__@gt", 0),
+                        ("seen__@day__@lte", 32), ("ts__@month__@ne", 13), ("ts__@month__@nin", [13]),
+                        ("ts__@minute__@range", [0, 60]))
+        @test refusal(q -> q.filter(path => v), conn) === nothing
+        # Bound as the integers written, never as text. A membership list is one array parameter on
+        # PostgreSQL (`<> ALL($1)`) and one marker per element on SQLite; a range is always two.
+        want = !(v isa Vector) ? [v] : (conn === _TLP_PG && !endswith(path, "range")) ? [v] : v
+        @test _tlp_params((q = TLP.Tlp_row.objects; q.values("note"); q.filter(path => v); q); conn = conn) == want
+      end
+      # The alias of an `Extract` takes the same rule: a comparison is a bound.
+      @test refusal(q -> (q.values("m" => Fn.Extract("ts", "MONTH")); q.filter("m__@lt" => 13)), conn) === nothing
+      # The shape is checked under every operator, with its own kind — never `:range`.
+      for (path, v, kind) in (("ts__@month__@lt", true, :type), ("ts__@month__@lt", 1.5, :format),
+                              ("ts__@hour__@gte", "abc", :format), ("ts__@month", 1.5, :format),
+                              ("ts__@hour__@range", Any[0, true], :type))
+        e = refusal(q -> q.filter(path => v), conn)
+        @test e isa PormG.InvalidValueError && e.kind === kind
+      end
+      # A whole float is a whole number: in range it binds as the integer, out of range it is `:range`.
+      @test _tlp_params((q = TLP.Tlp_row.objects; q.values("note"); q.filter("ts__@month" => 3.0); q); conn = conn) == [3]
+      e = refusal(q -> q.filter("ts__@month" => 1e30), conn)
+      @test e isa PormG.InvalidValueError && e.kind === :range
     end
   end
 end

@@ -1,7 +1,7 @@
 # Upgrading PormG — consumer-app rollout log
 
 Tracks **breaking / behavior changes in PormG** that require source-code changes in the internal
-apps that depend on it. PormG is pre-publish (single maintainer, ~4 internal apps, no external
+apps that depend on it. PormG is pre-publish (single maintainer, a few private apps, no external
 users), so breaking changes are intentional and cheap on the *PormG* side — but each one still has
 to be rolled out by hand in every consuming app. This file is the contract for *writing* that
 rollout log; the log itself lives in [`upgrading/`](upgrading/).
@@ -66,6 +66,12 @@ Consequences worth knowing before you add one:
 - **Not for additive features.** This log is only what **forces** an app edit. A new opt-in
   capability (operator, kwarg, function) requires no change to keep an app working → document it in
   `docs/`, not here.
+- **No consuming-app details.** *Who this affects* names the affected **call pattern** and how to
+  find it; it never reports how many calls the maintainer's apps make, how many apps there are, or
+  any name, model or code taken from them. Those apps are private and this repository is public; a
+  measurement is reported to the maintainer in conversation
+  ([`general.instructions.md`](.github/instructions/general.instructions.md) → *No consuming-app
+  details in anything public*).
 - **No per-entry rollout tables.** An app's own PormG dependency pin *is* its rollout state, and
   `upgrade_guide(from = <that pin>)` derives what it still needs — so there is nothing to maintain
   per app.

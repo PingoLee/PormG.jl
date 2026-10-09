@@ -449,12 +449,17 @@ _declaration_instruction(object::SQLObject) =
   InstructionObject(text = "", table_alias = SQLTbAlias(), alias = "Tb", object = object)
 
 # #1082: is the projection an aggregate that the build will neither group nor filter with HAVING?
-# Mirrors `get_select_query`'s GROUP BY rule entry by entry: a resolved aggregate, a literal
-# (`Value`) and a projected subquery add no GROUP BY term; a column, a path or a row expression does.
-# A window is not answered (its OVER terms can be grouped), nor an `order_by()` term other than a
-# projected name (`get_order_query` groups the rest), nor any filter on an alias (a HAVING, or a
+# Each entry's part in GROUP BY is `_group_role`'s answer, the one `get_select_query` builds from
+# (#1099): degenerate when every entry is an aggregate or adds no term, and at least one aggregates.
+# A window is not answered (its OVER terms can be grouped), nor any filter on an alias (a HAVING, or a
 # literal's WHERE). Each unanswered shape keeps the projection, and `_refuse_degenerate_probe` refuses
 # it if the build turns out ungrouped after all.
+#
+# `order_by()` terms are the one part still decided here, conservatively: `get_order_query` tells a
+# projected term from one it groups by matching the RENDERED projection and the memo, which do not
+# exist before the build. A term is taken as projected only when its name is an entry's output name,
+# a literal's included; any other term keeps the projection. The drift guard in
+# `test_fluent_parity_208.jl` compares this answer with the built instruction's.
 function _degenerate_aggregate(object::SQLObject)::Bool
   isempty(object.values) && return false
   _filters_name_alias(object) && return false
@@ -462,17 +467,12 @@ function _degenerate_aggregate(object::SQLObject)::Bool
   names = String[]
   any_agg = false
   for v in object.values
-    v isa SQLTypeText && continue
-    node = v.field
-    if node isa Union{SubqueryObject,ExistsObject}
-      nothing
-    elseif node isa Union{SQLTypeFunction,SQLTypeF}
-      _resolved_window(node, instruc) && return false
-      _resolved_agg(node, instruc) || return false
-      any_agg = true
-    else
-      return false
-    end
+    role = _group_role(v, instruc)
+    role === :group && return false
+    # A window's OVER terms can be grouped, and an aggregate can be a window too (`Rank(…) + Sum(…)`,
+    # #756), so this is asked apart from the role.
+    role !== :none && _resolved_window(v.field, instruc) && return false
+    any_agg |= role === :aggregate
     name = v.custom_as !== nothing ? v.custom_as : v._as
     name === nothing || push!(names, String(name))
   end

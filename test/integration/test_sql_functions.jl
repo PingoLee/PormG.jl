@@ -234,7 +234,7 @@ end
     q.values(
         "floor_val" => Floor(Value(10.7)),
         "ceil_val"  => Ceil(Value(10.2)),
-        # #1044: a `numeric` function rounds to places differently per engine, so to a whole number.
+        # A whole number: `Round(Sqrt(x))` renders each engine's own ROUND (to places, #1061's formula).
         "sqrt_val"  => Round(Sqrt(Value(16.0))),
         "power_val" => Power(Value(2), Value(3)),
         "mod_val"   => Mod(Value(10), Value(3)),
@@ -1142,16 +1142,16 @@ end
         @test all(eachrow(df)) do row
             isapprox(Float64(row.round_bonus0), round(row.raw_bonus, RoundNearestTiesAway); atol=1e-6)
         end
-        # To two places it is refused (#1044): PostgreSQL rounds the decimal form of a float and
-        # SQLite the double. Until #1044 this case was compared against Julia's half-to-even
-        # rounding, and passed only because no row lands on a tie.
-        err = try
-            q2 = M.Result.objects; q2.values("x" => Round(F("points") * 1.1, 2)); q2 |> DataFrame
-            nothing
-        catch e
-            e
-        end
-        @test err isa PormG.QueryBuildError && occursin("#1044", sprint(showerror, err))
+        # To two places it renders one double formula both engines compute alike (#1061), which is
+        # Julia's `RoundNearestTiesAway` of the same double. The operand carries its own bound `1.1`
+        # and is printed twice, so a misbind would shift every value after it on SQLite.
+        q2 = M.Result.objects
+        q2.filter("raceid__@lte" => 100)
+        q2.values("resultid", "points", "x" => Round(F("points") * 1.1, 2))
+        df2 = q2 |> DataFrame
+        @test nrow(df2) > 0
+        wrong = [r.resultid for r in eachrow(df2) if Float64(r.x) != round(r.points * 1.1, RoundNearestTiesAway; digits = 2)]
+        @test isempty(wrong)
     end
 
     @testset "Abs wrapping F arithmetic" begin
@@ -1202,8 +1202,8 @@ end
     end
 
     @testset "Aggregate expression wrapped in Round" begin
-        # Scenario: Average points per result, rounded to a whole number (to places, a fractional
-        # value rounds differently per engine and is refused, #1044).
+        # Scenario: Average points per result, rounded to a whole number (to places it renders
+        # #1061's double formula, covered in its own testset).
         # Sum("points") / Count("resultid") produces an FExpression (field_name=FObject, ...),
         # and Round(that_expression) must accept it via the fixed FObject.column type.
         #
@@ -1237,7 +1237,7 @@ end
         q.values(
             "resultid",
             "points",
-            "rounded_dev" => Round(Abs(F("points") - 12.5))   # to places it is refused (#1044)
+            "rounded_dev" => Round(Abs(F("points") - 12.5))   # to places, #1061's formula
         )
         q.filter("points__@gt" => 0.0)
         q.order_by("resultid")
@@ -1938,8 +1938,6 @@ end
     proj(expr) = () -> (q = M.Result.objects; q.filter("raceid" => 2); q.values("x" => expr); q |> DataFrame)
     @test is_1040(refusal(proj(Cast("points", "numeric(10,0)"))))
     @test is_1040(refusal(proj(Cast("points", "numeric(10,2)"))))
-    # #1044 refuses `Round("points", 2)` itself, before the cast reads it.
-    @test occursin("#1044", sprint(showerror, refusal(proj(Cast(Round("points", 2), "numeric(10,2)")))))
     @test is_1040(refusal(proj(Coalesce("points", 0; output_field = "numeric(10,1)"))))
     @test is_1040(refusal(() -> (q = M.Driver.objects; q.filter("driverid" => 1); q.values("x" => Cast("driverref", "numeric(10,2)")); q |> DataFrame)))
 
@@ -1949,12 +1947,16 @@ end
     q.values("resultid", "points",
              "plain" => Cast("points", "numeric"),
              "whole" => Cast(Round("points"), "numeric(10,0)"),
-             "floor" => Cast(Floor("points"), "numeric(10,2)"))
+             "floor" => Cast(Floor("points"), "numeric(10,2)"),
+             # #1061: rounded to the scale first, the same on both engines.
+             "two"   => Cast(Round(F("points") / 3.0, 2), "numeric(10,2)"))
     df = q |> DataFrame
     @test any(p -> !isinteger(p), df.points)
     wrong = [r.resultid for r in eachrow(df) if
-             (Float64(r.plain), Float64(r.whole), Float64(r.floor)) !=
-             (r.points, round(r.points, RoundNearestTiesAway), floor(r.points))]
+             # A `Decimal` (PostgreSQL) through its text, which a two-place value converts exactly.
+             (Float64(r.plain), Float64(r.whole), Float64(r.floor), parse(Float64, string(r.two))) !=
+             (r.points, round(r.points, RoundNearestTiesAway), floor(r.points),
+              round(r.points / 3.0, RoundNearestTiesAway; digits = 2))]
     @test isempty(wrong)
 end
 
@@ -1982,35 +1984,89 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Round(x, d) over a value with more than d places, on both engines (#1044)
-# Measured on PostgreSQL 16.15 and SQLite 3.45.1: `Round(2.675, 2)` is 2.68 on one and 2.67 on the
-# other, and a numeric(10,3) value the same, because SQLite holds a REAL. A value with at most d places
-# (a two-place DecimalField at d = 2) and a whole number read the same; a negative d is refused when
-# the expression is built.
+# Round(x, d) to places is the same double on both engines (#1044, #1061)
+# Each engine's own ROUND disagrees past a value's places (measured on PostgreSQL 16.15 and SQLite
+# 3.45.1: `2.675` at d = 2 is 2.68 on one and 2.67 on the other, a numeric(10,3) value the same, as
+# SQLite holds a REAL). #1061 renders `sign(x) * floor(abs(x) * 10^d + 0.5) / 10^d + 0.0` instead,
+# which both compute in IEEE double arithmetic and which is Julia's `RoundNearestTiesAway` of the
+# same double. A value with at most d places keeps the engine's own ROUND; text and a negative d are
+# refused.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1044: Round(x, d) is refused where the engines would round differently" begin
+@testset "#1061: Round(x, d) to places is the same double on both engines" begin
     refusal(f) = try f(); nothing catch e; e end
-    is_1044(e) = e isa PormG.QueryBuildError && occursin("#1044", sprint(showerror, e))
+    tiesaway(x, d) = round(x, RoundNearestTiesAway; digits = d)
     proj(m, expr) = () -> (q = m.objects; q.filter("raceid" => 2); q.values("x" => expr); q |> DataFrame)
-    @test is_1044(refusal(proj(M.Result, Round("points", 2))))
-    @test is_1044(refusal(proj(M.Result, Round("points", 1))))
-    @test is_1044(refusal(proj(M.Result, Round(Avg("points"), 1))))
-    @test is_1044(refusal(proj(M.Constructor_standings, Round("points", 1))))   # two places, rounded to one
-    @test is_1044(refusal(proj(M.Result, Round(Cast(Value(Decimals.Decimal(0, 2675, -3)), "numeric(10,3)"), 2))))
-    @test is_1044(refusal(() -> (q = M.Result.objects; q.filter("raceid" => 2, "points__@gte" => Round("points", 2)); q |> DataFrame)))
-    @test refusal(() -> Round("number", -1)) isa PormG.InvalidValueError
 
-    # What passes reads the same value on both: a two-place DecimalField at two places, an integer
-    # column, and a literal that fits.
+    # The issue's own values, as literals: one answer, whichever engine runs it.
+    for (v, want) in ((2.675, 2.68), (1.555, 1.56), (1.005, 1.0), (-2.675, -2.68), (0.125, 0.13), (-0.001, 0.0))
+        x = proj(M.Result, Round(Value(v), 2))()[1, :x]
+        @test x isa Float64 && x === want   # `===`: `-0.001` must not read back as `-0.0`
+    end
+    # A numeric(10,3) value, which PostgreSQL rounded as a decimal and SQLite as a REAL.
+    x = proj(M.Result, Round(Cast(Value(Decimals.Decimal(0, 2675, -3)), "numeric(10,3)"), 2))()[1, :x]
+    @test Float64(x) == 2.68
+
+    # A float column and arithmetic over it, every row of the first 100 races.
+    q = M.Result.objects
+    q.filter("raceid__@lte" => 100)
+    q.values("resultid", "points", "p1" => Round("points", 1), "p2" => Round(F("points") / 3.0, 2))
+    df = q |> DataFrame
+    @test nrow(df) > 0
+    @test isempty([r.resultid for r in eachrow(df) if
+                   (r.p1, r.p2) != (tiesaway(r.points, 1), tiesaway(r.points / 3.0, 2))])
+
+    # An average, the most common use: each driver's mean lap in one race, against the mean of the
+    # same rows computed in Julia.
+    q = M.Lap_times.objects
+    q.filter("raceid" => 841)
+    q.values("driverid", "avg_ms" => Round(Avg("milliseconds"), 2))
+    agg = q |> DataFrame
+    q = M.Lap_times.objects
+    q.filter("raceid" => 841)
+    q.values("driverid", "milliseconds")
+    raw = q |> DataFrame
+    @test nrow(agg) > 1
+    for r in eachrow(agg)
+        ms = raw.milliseconds[raw.driverid .== r.driverid]
+        @test r.avg_ms == tiesaway(sum(ms) / length(ms), 2)
+    end
+
+    # GROUP BY on it, and a filter against it: the rows match the same groups on both engines. The
+    # GROUP BY renders positionally (`GROUP BY 1`), so it binds nothing of its own.
+    q = M.Result.objects
+    q.filter("raceid__@lte" => 100)
+    q.values("third" => Round(F("points") / 3.0, 1), "n" => Count("resultid"))
+    grouped = q |> DataFrame
+    want = Dict{Float64,Int}()
+    for p in df.points
+        k = tiesaway(p / 3.0, 1)
+        want[k] = get(want, k, 0) + 1
+    end
+    @test Dict(Float64(r.third) => Int(r.n) for r in eachrow(grouped)) == want
+    q = M.Result.objects
+    q.filter("raceid" => 2, "points__@gte" => Round("points", 2))
+    q2 = M.Result.objects; q2.filter("raceid" => 2); q2.values("resultid")
+    @test nrow(q |> DataFrame) == nrow(q2 |> DataFrame) > 0
+
+    # What already fits keeps the engine's own ROUND, and its type: a two-place DecimalField at two
+    # places, an integer column, and a literal that fits. At one place the DecimalField takes the formula.
     q = M.Constructor_standings.objects
     q.filter("raceid" => 2)
     q.values("points", "wins", "r" => Round("points", 2), "w" => Round("wins", 1),
+             "one" => Round("points", 1),
              "c" => Cast(Round("points", 2), "numeric(10,2)"))   # the docs' example: at most 2 places
     df = q |> DataFrame
     @test nrow(df) > 0
     @test all(r -> Float64(r.r) == Float64(r.points), eachrow(df))
     @test all(r -> Float64(r.c) == Float64(r.points), eachrow(df))
     @test all(r -> Float64(r.w) == Float64(r.wins), eachrow(df))
+    @test all(r -> r.one == tiesaway(parse(Float64, string(r.points)), 1), eachrow(df))
     df = proj(M.Result, Round(Value(1.5), 2))()
     @test Float64(df[1, :x]) == 1.5
+
+    # Refused: text, a negative precision, and one above 22, where the scaling can overflow.
+    err = refusal(() -> (q = M.Driver.objects; q.filter("driverid" => 1); q.values("x" => Round("driverref", 1)); q |> DataFrame))
+    @test err isa PormG.QueryBuildError && occursin("#1061", sprint(showerror, err))
+    @test refusal(() -> Round("number", -1)) isa PormG.InvalidValueError
+    @test refusal(() -> Round("points", 23)) isa PormG.InvalidValueError
 end

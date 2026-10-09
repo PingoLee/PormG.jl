@@ -413,7 +413,7 @@ df = M.Result.objects.values(
 | Function | Description |
 | :--- | :--- |
 | `Abs("field")` | Absolute value |
-| `Round("field", precision)` | Round to `precision` places; over a value with more places (a float, `Avg`, …) raises `QueryBuildError` (#1044) |
+| `Round("field", precision)` | Round to `precision` places, half away from zero; over a float, `Avg` or another value with more places it renders one double formula both engines compute alike (#1061); over text it raises `QueryBuildError` |
 | `Floor("field")` | Floor |
 | `Ceil("field")` | Ceiling |
 | `Sqrt("field")` | Square root |
@@ -451,7 +451,7 @@ expression with `Models.search_vector_expression(columns...; config)`, which ret
 project a `SearchVector` under a name and filter it: `values("doc" => SearchVector("forename",
 "surname")).filter("doc__@search" => "lewis")`.
 
-An operand of `Coalesce`, `Greatest`, `Least`, `NullIf`, `Power`, `Mod` and `Concat` is read by its type. A string is a column path. A number, a `Bool`, or a date or time (`Date`, `DateTime`, `ZonedDateTime`, `Time`) is a literal that is bound as a parameter, so `Coalesce("points", 0)` means `Coalesce("points", Value(0))`. Wrap a string literal in `Value`, as in `NullIf("code", Value(""))`. Any other value raises `QueryBuildError` when the expression is built. `Concat` is narrower: a `Bool`, float or `Decimal` operand, as a literal, a column or an expression, raises `QueryBuildError` too, since PostgreSQL and SQLite would write it differently (#1027), and so does a timestamp, an interval or a whole JSON document (#1028). `Cast` to text refuses the same operands, and `Cast` to an integer refuses a float or a decimal unless it is rounded first with `Round`, `Floor` or `Ceil`; `Cast` to `numeric(p, s)` refuses a float, text, a `numeric` function or a decimal with more than `s` places, since PostgreSQL rounds to the scale and SQLite does not (#1040); an `output_field` of text, an integer or a scaled numeric on `Coalesce`, `Greatest` or `Least` follows the same rules (#1028, #1040).
+An operand of `Coalesce`, `Greatest`, `Least`, `NullIf`, `Power`, `Mod` and `Concat` is read by its type. A string is a column path. A number, a `Bool`, or a date or time (`Date`, `DateTime`, `ZonedDateTime`, `Time`) is a literal that is bound as a parameter, so `Coalesce("points", 0)` means `Coalesce("points", Value(0))`. Wrap a string literal in `Value`, as in `NullIf("code", Value(""))`. Any other value raises `QueryBuildError` when the expression is built. `Concat` is narrower: a `Bool`, float or `Decimal` operand, as a literal, a column or an expression, raises `QueryBuildError` too, since PostgreSQL and SQLite would write it differently (#1027), and so does a timestamp, an interval or a whole JSON document (#1028). `Cast` to text refuses the same operands, and `Cast` to an integer refuses a float or a decimal unless it is rounded first with `Round`, `Floor` or `Ceil`; `Cast` to `numeric(p, s)` refuses a float, text, a `numeric` function or a decimal with more than `s` places, since PostgreSQL rounds to the scale and SQLite does not (#1040), unless it is rounded first with `Round(x, s)` (#1061); an `output_field` of text, an integer or a scaled numeric on `Coalesce`, `Greatest` or `Least` follows the same rules (#1028, #1040).
 
 ### Case Expressions
 

@@ -1109,6 +1109,23 @@ function ROUND(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   end
 end
 
+# #1061 — `Round(x, d)` over a value with more than `d` places: one formula both engines compute in the
+# same IEEE double arithmetic, half away from zero, instead of each engine's `ROUND` (PostgreSQL's
+# rounds the decimal form, SQLite's the double, so `2.675` was `2.68` and `2.67`). `columns` is the
+# operand rendered twice and `format["scale"]` the two placeholders binding `10^d`, so every value
+# placeholder in the text has its own bind, in order (`_render_function_body`). The trailing `+ 0.0`
+# turns IEEE `-0` (`-0.001` to two places) into `0`, as each engine's `ROUND` answers.
+function ROUND(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
+  a, b = columns
+  f1, f2 = format["scale"]
+  return "(sign(($(a))::float8) * floor(abs(($(b))::float8) * $(f1) + 0.5::float8) / $(f2) + 0.0::float8)"
+end
+function ROUND(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
+  a, b = columns
+  f1, f2 = format["scale"]
+  return "(sign($(a)) * floor(abs($(b)) * $(f1) + 0.5) / $(f2) + 0.0)"
+end
+
 function REPLACE(columns::Vector{Any}, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
   return "REPLACE($(columns[1]), $(columns[2]), $(columns[3]))"
 end

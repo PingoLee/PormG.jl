@@ -510,7 +510,10 @@ end
   cases = (
     ("Lower",    Lower,                     nsub, Any[3, "A"],    ("LOWER((SELECT",            "LOWER((SELECT")),
     ("Abs",      Abs,                       nsub, Any[3, "A"],    ("ABS((SELECT",              "ABS(((SELECT")),
-    ("Round",    s -> Round(s, 2),          nsub, Any[3, 2, "A"], ("ROUND((SELECT",            "ROUND(((SELECT")),
+    ("Round",    s -> Round(s),             nsub, Any[3, 0, "A"], ("ROUND((SELECT",            "ROUND(((SELECT")),
+    # #1061: to places an untyped operand takes the double formula, which prints it twice — each
+    # copy binds its own `3`, then `10^d` once per use, then the outer WHERE.
+    ("Round, d", s -> Round(s, 2),          nsub, Any[3, 3, 100.0, 100.0, "A"], ("(sign((SELECT", "(sign(((SELECT")),
     ("Cast",     s -> Cast(s, "integer"),   nsub, Any[3, "A"],    ("CAST((SELECT",             "((SELECT")),
     ("Extract",  s -> Extract(s, "year"),   dsub, Any[3, "A"],    ("strftime('%Y', (SELECT",   "EXTRACT(YEAR FROM (SELECT")),
     ("ToChar",   s -> ToChar(s, "YYYY-MM"), dsub, Any[3, "A"],    ("strftime('%Y-%m', (SELECT", "to_char((SELECT")),

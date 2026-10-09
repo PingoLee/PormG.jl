@@ -1786,7 +1786,8 @@ end
     # Round(col, precision) should parameterize the precision argument 
     # instead of interpolating it as a raw integer literal.
 
-    # #1044: over the float `points` it is refused, so the integer `grid`.
+    # #1061: over the float `points` it renders the double formula, which binds `10^d` instead of the
+    # precision; the integer `grid` keeps the engine's own ROUND, so its precision binds.
     q = M.Result.objects.values("resultid", "rounded_pts" => Round("grid", 2))
     insp = q |> inspect_query
 

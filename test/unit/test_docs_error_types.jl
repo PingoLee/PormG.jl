@@ -608,14 +608,21 @@ const DOCERR_CASES = [
             list(show_query = :dict),
     ),
     (
-        # #1044. `Round(x, n)` over an operand with more than `n` places rounds the decimal form on
-        # PostgreSQL and the binary double on SQLite; `Avg` is `numeric` on PostgreSQL, so it is
-        # refused once the query renders it. The same claim is in api.md and the `Round` docstring.
-        "read/functions_and_dates.md + api.md + Round docstring — Round(x, n) over a value with more places raises (#1044)",
+        # #1061. `Round(x, n)` over a number renders one double formula on both engines; over text it
+        # is refused once the query renders it, since text is no number to round. The same claim is
+        # in api.md and the `Round` docstring.
+        "read/functions_and_dates.md + api.md + Round docstring — Round(x, n) over text raises (#1061)",
         QueryBuildError,
         () -> DOCERR_RESULT_SL.objects.
-            values("x" => PormG.Functions.Round(PormG.Functions.Avg("points"), 1)).
+            values("x" => PormG.Functions.Round(PormG.Functions.Value("1.555"), 1)).
             list(show_query = :dict),
+    ),
+    (
+        # #1061. Rounding to places scales by `10^n` as a double; past 22 it can overflow, which
+        # PostgreSQL raises on and SQLite does not.
+        "read/functions_and_dates.md + Round docstring — a Round precision above 22 raises (#1061)",
+        InvalidValueError,
+        () -> PormG.Functions.Round("points", 23),
     ),
     (
         # #1044. A negative precision is SQLite's 0 and PostgreSQL's tens, so it is refused when the

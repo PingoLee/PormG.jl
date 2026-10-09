@@ -39,7 +39,9 @@ significant digits, is refused.
 
 #1044 asks the same question of `Round(x, d)` itself, with `d` as the scale: over an operand with more
 than `d` places PostgreSQL rounds the decimal form and SQLite the binary double (the `Round` row
-above), so it is refused on both engines; a negative `d` is refused when the expression is built.
+above). #1061 renders that operand as one IEEE double formula both engines compute bit for bit
+alike, so `Round(x, d)` is the way out of a scaled cast; text is refused, and a negative `d` is refused
+when the expression is built.
 
 Everything renders through mock connections — no live database, no fixture.
 
@@ -481,8 +483,10 @@ _is_1040(e) = e isa QueryBuildError && occursin("(#1040)", _ccd_msg(e))
     msg = _ccd_msg(err)
     @test occursin("Cast cannot make the same number from", msg)
     @test occursin(named, msg)
-    # The message names the escapes that agree, and warns off the one that does not.
-    @test occursin("round(x, RoundNearestTiesAway; digits = 2)", msg) && occursin("Round(x, 2) is no way out", msg)
+    # The message names the escapes that agree: rounding first, at the cast's own scale (#1061).
+    s = something(PormG.QueryBuilder._numeric_cast_scale(PormG.Dialect.cast_type_name(target)), 0)
+    @test occursin("Round it first, which both engines do the same", msg) && occursin("#1061", msg)
+    @test occursin(r"Cast\(Round\((x|Cast\(x, FloatField\(\)\)), " * string(s) * r"\), \"", msg)
   end
   # A DecimalField is bounded by its own places: `price` has two.
   for (target, refuses) in ("numeric(10,0)" => true, "numeric(10,1)" => true, "numeric(10,2)" => false,
@@ -580,75 +584,173 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #1044: Round(x, d) refuses an operand with more than d places, on both engines
-# `Round(x, d)` renders `ROUND(x::numeric, d)` on PostgreSQL, which rounds the decimal form, and
-# `ROUND(x, d)` on SQLite, which rounds the binary double. Measured on PostgreSQL 16.15 / SQLite 3.45.1:
-# `2.675`, `1.555`, `1.005` at d = 2 are `2.68`/`1.56`/`1.01` and `2.67`/`1.55`/`1.0`; `1.15` at d = 1
-# is `1.2` and `1.1`; a `numeric(10,3)` value the same (SQLite holds a REAL). Values that fit d places
-# agree. That is #1040's question with d as the scale, so the same classifier answers it. A negative d
-# is SQLite's 0 and PostgreSQL's tens: `Round(125, -1)` is `125.0` and `130`.
+# #1061: Round(x, d) over a value with more than d places renders one double formula on both engines
+# Each engine's own `ROUND` disagrees there (#1044): PostgreSQL's rounds the decimal form, SQLite's the
+# binary double — `2.675`, `1.555`, `1.005` at d = 2 were `2.68`/`1.56`/`1.01` and `2.67`/`1.55`/`1.0`.
+# #1044 refused it; #1061 renders `sign(x) * floor(abs(x) * 10^d + 0.5) / 10^d + 0.0` in IEEE double
+# arithmetic on both, measured bit for bit equal on PostgreSQL 16.15 and SQLite 3.53.4 (and equal to
+# Julia's `round(x, RoundNearestTiesAway; digits = d)`) over 1,200,020 values, d ∈ {1, 2, 3, 4, 6}.
+# The classifier #1044 reused still picks the arm: a value with at most d places keeps the engine's
+# own `ROUND` (and its type), text is refused. A negative d is SQLite's 0 and PostgreSQL's tens:
+# `Round(125, -1)` is `125.0` and `130`.
 # ─────────────────────────────────────────────────────────────────────────────
-_is_1044(e) = e isa QueryBuildError && occursin("(#1044)", _ccd_msg(e))
+_is_1061(e) = e isa QueryBuildError && occursin("(#1061)", _ccd_msg(e))
+# The formula, as each engine prints it, around an operand rendered as `x`.
+_ccd_formula(x; conn) = conn === _CCD_PG ?
+  "(sign(($(x))::float8) * floor(abs(($(x))::float8) * \$_::double precision + 0.5::float8) / \$_::double precision + 0.0::float8)" :
+  "(sign($(x)) * floor(abs($(x)) * ? + 0.5) / ? + 0.0)"
+# The projection's SQL with PostgreSQL's `$n` numbering blanked, so one expectation fits any position.
+_ccd_unnumbered(sql) = replace(sql, r"\$\d+" => "\$_")
+_ccd_out(expr; conn) = inspect_query((q = CCD.Ccd_driver.objects; q.values("x" => expr); q); connection = conn)
 
-@testset "#1044: Round(x, d) refuses an operand with more than d places" begin
-  refused = [
-    "points"              => "the FloatField `points`",
-    "team__rating"        => "the FloatField `team__rating`",
-    _CF("points") * 2     => "arithmetic over the FloatField `points`",
-    Fn.Avg("number")      => "`AVG(…)`",
-    Fn.Sqrt("number")     => "`SQRT(…)`",
-    Fn.Max("points")      => "`MAX(…)` over the FloatField `points`",
-    Fn.Cast("points", "numeric") => "a value cast to numeric",
-    "surname"             => "the text column `surname`",
-    Fn.Value("1.555")     => "a string literal",
-    Fn.Value(2.675)       => "a Float64 literal with 3 decimal places",
-    Fn.Value(Decimal(0, 1555, -3)) => "a Decimal literal with 3 decimal places",
-    "payload__score"      => "the JSONField `payload__score`",
+@testset "#1061: Round(x, d) renders the double formula over a value with more than d places" begin
+  numbers = [
+    "points"                       => "\"Tb\".\"points\"",
+    "price"                        => "\"Tb\".\"price\"",          # two places, rounded to one below
+    _CF("points") * 3              => nothing,   # not 1 or 2: `d` must not be among the binds
+    Fn.Avg("number")               => "AVG(\"Tb\".\"number\")",
+    Fn.Sqrt("number")              => nothing,
+    Fn.Max("points")               => "MAX(\"Tb\".\"points\")",
+    Fn.Cast("points", "numeric")   => nothing,
+    Fn.Value(2.675)                => nothing,
+    Fn.Value(Decimal(0, 1555, -3)) => nothing,
   ]
-  for (operand, named) in refused, d in (1, 2), conn in _CCD_ENGINES
-    err = _ccd_refusal(Fn.Round(operand, d); conn = conn)
-    @test _is_1044(err)
-    msg = _ccd_msg(err)
-    @test occursin("Round(…, $(d)) cannot round $(named)", msg)
-    @test occursin("round(x, RoundNearestTiesAway; digits = $(d))", msg)
+  for (operand, rendered) in numbers, d in (1, 2), conn in _CCD_ENGINES
+    operand === "price" && d == 2 && continue                   # fits: the engine's own ROUND, below
+    out = _ccd_out(Fn.Round(operand, d); conn = conn)
+    sql = _ccd_unnumbered(out[:sql_text])
+    @test occursin(conn === _CCD_PG ? "* \$_::double precision + 0.5::float8) / \$_::double precision + 0.0::float8)" :
+                                      "* ? + 0.5) / ? + 0.0)", sql)
+    rendered === nothing || @test occursin(_ccd_formula(rendered; conn = conn), sql)
+    @test !occursin("ROUND", uppercase(sql))
+    # `10^d` binds once per use, last; `precision` does not bind at all.
+    @test out[:parameters][end-1:end] == Any[10.0^d, 10.0^d]
+    @test !(d in out[:parameters])
   end
-  # A DecimalField is bounded by its own places: `price` has two.
+  # A joined path is a typed float too.
   for conn in _CCD_ENGINES
-    err = _ccd_refusal(Fn.Round("price", 1); conn = conn)
-    @test _is_1044(err) && occursin("the DecimalField `price` (2 decimal places)", _ccd_msg(err))
-    @test _ccd_refusal(Fn.Round("price", 2); conn = conn) === nothing
-    @test _ccd_refusal(Fn.Round("price", 3); conn = conn) === nothing
+    @test occursin("floor(abs(", _ccd_out(Fn.Round("team__rating", 1); conn = conn)[:sql_text])
   end
 end
 
-@testset "#1044: Round(x, d) passes what both engines round the same" begin
+@testset "#1061: an operand with its own bound values binds them once per use, in text order" begin
+  # The operand is printed twice; its NODE renders twice, so each `?` has its own bind. Repeating the
+  # rendered string would leave SQLite one value short and shift every later one (#844's reason).
+  for conn in _CCD_ENGINES
+    out = _ccd_out(Fn.Round(_CF("points") * 1.1, 2); conn = conn)
+    @test out[:parameters] == Any[1.1, 1.1, 100.0, 100.0]
+    @test count(conn === _CCD_PG ? r"\$\d+" : r"\?", out[:sql_text]) == 4
+    out = _ccd_out(Fn.Round(Fn.Value(2.675), 2); conn = conn)
+    @test out[:parameters] == Any[2.675, 2.675, 100.0, 100.0]
+    # A value after the Round in text order keeps its place behind all four.
+    q = CCD.Ccd_driver.objects
+    q.values("x" => Fn.Round(_CF("points") * 1.1, 2), "y" => Fn.Value(7))
+    out = inspect_query(q; connection = conn)
+    @test out[:parameters] == Any[1.1, 1.1, 100.0, 100.0, 7]
+    if conn === _CCD_PG
+      # Each `$n` is printed once, in increasing order.
+      @test [parse(Int, m.captures[1]) for m in eachmatch(r"\$(\d+)", out[:sql_text])] == 1:5
+    end
+  end
+end
+
+@testset "#1061: an operand PormG cannot type renders the formula too" begin
+  rating() = (s = CCD.Ccd_team.objects; s.filter("id" => OuterRef("team"), "rating__@gte" => 1.5); s.values("rating"); s)
+  for conn in _CCD_ENGINES
+    out = _ccd_out(Fn.Round(Subquery(rating()), 2); conn = conn)
+    @test occursin("floor(abs(", out[:sql_text])
+    @test out[:parameters] == Any["1.5", "1.5", 100.0, 100.0]   # the subquery's own value, once per render
+    out = _ccd_out(Fn.Round(Fn.Case([Fn.When("id" => 1, then = _CF("points"))], default = 0), 2); conn = conn)
+    @test occursin("floor(abs(", out[:sql_text])
+    # Wrapped: the classifier reads the integer `0` / the arithmetic and sees nothing to round, so
+    # only the node walk finds the Subquery or Case inside (review of #1061).
+    case() = Fn.Case([Fn.When("id" => 1, then = _CF("points"))], default = 0)
+    for wrapped in (Fn.Coalesce(Subquery(rating()), 0), Fn.Abs(Subquery(rating())),
+                    case() * 2, Fn.Greatest(Subquery(rating()), 0), Fn.Max(case()))
+      sql = _ccd_out(Fn.Round(wrapped, 2); conn = conn)[:sql_text]
+      @test occursin("floor(abs(", sql) && !occursin("ROUND(", sql)
+    end
+    # Typed by the caller: a cast, an `output_field`, or a whole number. The classifier reads each, so
+    # one that fits keeps the engine's own ROUND (and its type) — the walk stops there.
+    for typed in (Fn.Cast(Subquery(rating()), Models.IntegerField()), Fn.Cast(Subquery(rating()), "numeric(10,2)"),
+                  Fn.Floor(Subquery(rating())), Fn.Coalesce(Subquery(rating()), 0; output_field = "numeric(10,2)"))
+      sql = _ccd_out(Fn.Round(typed, 2); conn = conn)[:sql_text]
+      @test occursin("ROUND(", sql) && !occursin("floor(abs(", sql)
+    end
+    # Typed as a float, wider than `d`, or as a type the classifier cannot read (`money`, an unscaled
+    # `dec`), it still takes the formula: an unreadable type is no proof, so the walk fails closed.
+    for typed in (Fn.Cast(Subquery(rating()), Models.FloatField()), Fn.Cast(Subquery(rating()), "numeric(10,3)"),
+                  Fn.Cast(Subquery(rating()), "money"), Fn.Cast(Subquery(rating()), "dec"))
+      @test occursin("floor(abs(", _ccd_out(Fn.Round(typed, 2); conn = conn)[:sql_text])
+    end
+  end
+end
+
+@testset "#1061: in WHERE the formula's binds sit between the values around it" begin
+  # SQLite's WHERE bucket follows the SELECT one, so this is the order a misbind would shift.
+  for conn in _CCD_ENGINES
+    q = CCD.Ccd_driver.objects
+    q.filter("surname" => "A", "points__@gte" => Fn.Round(_CF("points") * 1.1, 2), "number" => 9)
+    q.values("id")
+    out = inspect_query(q; connection = conn)
+    @test out[:parameters] == Any["A", 1.1, 1.1, 100.0, 100.0, 9]
+    @test count(conn === _CCD_PG ? r"\$\d+" : r"\?", out[:sql_text]) == 6
+  end
+end
+
+@testset "#1061: Round(x, d) keeps the engine's own ROUND where the value already fits" begin
   allowed = ["number", Fn.Count("id"), Fn.Sum("number"), Fn.Floor("points"), Fn.Round("points"),
              Fn.Value(1.5), Fn.Value(7), Fn.Value(Decimal(0, 150, -2)), _CF("number") + 1,
              Fn.Cast(Fn.Round("price", 0), "numeric(10,1)")]
   for operand in allowed, conn in _CCD_ENGINES
-    @test _ccd_refusal(Fn.Round(operand, 1); conn = conn) === nothing
+    sql = _ccd_out(Fn.Round(operand, 1); conn = conn)[:sql_text]
+    @test occursin("ROUND(", sql) && !occursin("floor(abs(", sql)
+  end
+  # A DecimalField is bounded by its own places: `price` has two, so to two or three it fits.
+  for conn in _CCD_ENGINES, d in (2, 3)
+    sql = _ccd_out(Fn.Round("price", d); conn = conn)[:sql_text]
+    @test occursin("ROUND(", sql) && !occursin("floor(abs(", sql)
   end
   # No places: both engines give the same whole number, so a float operand passes, and the SQL is the
   # one it always was (the precision binds, `0` included).
   for conn in _CCD_ENGINES, r in (Fn.Round("points"), Fn.Round("points", 0))
-    out = inspect_query((q = CCD.Ccd_driver.objects; q.values("x" => r); q); connection = conn)
+    out = _ccd_out(r; conn = conn)
     @test occursin(conn === _CCD_PG ? r"ROUND\(\(\S+points\S*\)::numeric, \$1::integer\) as"i :
                                       r"ROUND\(\S+points\S*, \?\) as"i, out[:sql_text])
     @test out[:parameters] == Any[0]
   end
-  # A passing operand still binds its precision, after the operand's own parameter.
+  # The engine's own ROUND still binds its precision, after the operand's own parameter.
   for conn in _CCD_ENGINES
-    r = inspect_query((q = CCD.Ccd_driver.objects; q.values("x" => Fn.Round(Fn.Value(1.5), 2)); q); connection = conn)
-    @test r[:parameters] == Any[1.5, 2]
+    @test _ccd_out(Fn.Round(Fn.Value(1.5), 2); conn = conn)[:parameters] == Any[1.5, 2]
   end
-  # Any `Integer` precision, as `Round` accepts: the classifier's scale is an `Int`.
+  # Any `Integer` precision, as `Round` accepts: the classifier's scale is an `Int`, `10^d` a Float64.
   for conn in _CCD_ENGINES, d in (Int32(2), UInt8(2), big(2))
-    @test _ccd_refusal(Fn.Round("number", d); conn = conn) === nothing
-    @test _is_1044(_ccd_refusal(Fn.Round("points", d); conn = conn))
+    @test occursin("ROUND(", _ccd_out(Fn.Round("number", d); conn = conn)[:sql_text])
+    out = _ccd_out(Fn.Round("points", d); conn = conn)
+    @test occursin("floor(abs(", out[:sql_text]) && out[:parameters] == Any[100.0, 100.0]
   end
 end
 
-@testset "#1044: the refusal fires wherever Round(x, d) renders" begin
+@testset "#1061: text is refused, a number is not" begin
+  refused = [
+    "surname"         => "the text column `surname`",
+    Fn.Value("1.555") => "a string literal",
+    "payload__score"  => "the JSONField `payload__score`",
+  ]
+  for (operand, named) in refused, d in (1, 2), conn in _CCD_ENGINES
+    err = _ccd_refusal(Fn.Round(operand, d); conn = conn)
+    @test _is_1061(err)
+    msg = _ccd_msg(err)
+    @test occursin("Round(…, $(d)) cannot round $(named): it is text", msg)
+    @test occursin("Round(Cast(x, FloatField()), $(d))", msg)
+  end
+  # The way out the message names: made a number, it renders the formula.
+  for conn in _CCD_ENGINES
+    @test occursin("floor(abs(", _ccd_out(Fn.Round(Fn.Cast("surname", Models.FloatField()), 2); conn = conn)[:sql_text])
+  end
+end
+
+@testset "#1061: the formula renders wherever Round(x, d) renders" begin
   positions = (
     ("values",            q -> q.values("x" => Fn.Round("points", 2))),
     ("filter right-hand", q -> q.filter("number__@gte" => Fn.Round("points", 2))),
@@ -658,43 +760,45 @@ end
     ("a joined path",     q -> q.values("x" => Fn.Round("team__rating", 1))),
   )
   for (label, position) in positions, conn in _CCD_ENGINES
-    err = try _ccd_sql((q = CCD.Ccd_driver.objects; position(q); q); conn = conn); nothing catch e; e end
-    @test _is_1044(err)
-  end
-  # A cast over it meets this refusal first: the operand renders before the cast reads it.
-  for conn in _CCD_ENGINES
-    @test _is_1044(_ccd_refusal(Fn.Cast(Fn.Round("points", 2), "numeric(10,2)"); conn = conn))
-    @test _is_1044(_ccd_refusal(Fn.Concat(Fn.Round("points", 2), Fn.Value("-")); conn = conn))
+    sql = _ccd_sql((q = CCD.Ccd_driver.objects; position(q); q); conn = conn)
+    @test occursin("floor(abs(", sql)
   end
 end
 
-@testset "#1044: a Round that renders has at most d places for a cast to read" begin
+@testset "#1061: a Round to d places has at most d places for a cast to read" begin
+  rating() = (s = CCD.Ccd_team.objects; s.filter("id" => OuterRef("team")); s.values("rating"); s)
   for conn in _CCD_ENGINES
-    @test _ccd_refusal(Fn.Cast(Fn.Round("price", 2), "numeric(10,2)"); conn = conn) === nothing
-    @test _ccd_refusal(Fn.Cast(Fn.Round("price", 2), "numeric(10,3)"); conn = conn) === nothing
-    @test _ccd_refusal(Fn.Round(Fn.Round("price", 2), 2); conn = conn) === nothing
-    @test _ccd_refusal(Fn.Coalesce(Fn.Round("price", 2), 0; output_field = "numeric(10,2)"); conn = conn) === nothing
-    # Wider than the scale: PostgreSQL rounds a two-place value cast to one place, SQLite keeps it.
-    err = _ccd_refusal(Fn.Cast(Fn.Round("price", 2), "numeric(10,1)"); conn = conn)
-    @test _is_1040(err) && occursin("`ROUND(…)`", _ccd_msg(err))
-    # An operand PormG cannot type passed #1044 unread, so its places are not known: the cast over
-    # it stays refused, as it was before #1044.
-    rating() = (s = CCD.Ccd_team.objects; s.filter("id" => OuterRef("team")); s.values("rating"); s)
-    for untyped in (Subquery(rating()), Fn.Case([Fn.When("id" => 1, then = _CF("points"))], default = 0))
-      @test _ccd_refusal(Fn.Round(untyped, 2); conn = conn) === nothing
-      @test _is_1040(_ccd_refusal(Fn.Cast(Fn.Round(untyped, 2), "numeric(10,2)"); conn = conn))
+    for x in ("price", "points", Fn.Avg("points"), Subquery(rating()),
+              Fn.Case([Fn.When("id" => 1, then = _CF("points"))], default = 0))
+      @test _ccd_refusal(Fn.Cast(Fn.Round(x, 2), "numeric(10,2)"); conn = conn) === nothing
+      @test _ccd_refusal(Fn.Cast(Fn.Round(x, 2), "numeric(10,3)"); conn = conn) === nothing
+      # Wider than the scale: PostgreSQL rounds a two-place value cast to one place, SQLite keeps it.
+      err = _ccd_refusal(Fn.Cast(Fn.Round(x, 2), "numeric(10,1)"); conn = conn)
+      @test _is_1040(err) && occursin("`ROUND(…)`", _ccd_msg(err))
     end
+    @test _ccd_refusal(Fn.Round(Fn.Round("price", 2), 2); conn = conn) === nothing
+    @test _ccd_refusal(Fn.Coalesce(Fn.Round("points", 2), 0; output_field = "numeric(10,2)"); conn = conn) === nothing
+    # The #1040 refusal names Round as the way out, at the cast's own scale.
+    msg = _ccd_msg(_ccd_refusal(Fn.Cast("points", "numeric(10,2)"); conn = conn))
+    @test occursin("Cast(Round(x, 2), \"numeric(10,2)\")", msg)
+    msg = _ccd_msg(_ccd_refusal(Fn.Cast("surname", "numeric(10,2)"); conn = conn))
+    @test occursin("Cast(Round(Cast(x, FloatField()), 2), \"numeric(10,2)\")", msg)
+    # Past `Round`'s 22 places only the unscaled cast is offered, never a `Round` that would raise.
+    msg = _ccd_msg(_ccd_refusal(Fn.Cast("points", "numeric(40,25)"); conn = conn))
+    @test _is_1040(_ccd_refusal(Fn.Cast("points", "numeric(40,25)"); conn = conn))
+    @test occursin("Cast to an unscaled \"numeric\"", msg) && !occursin("Round(", msg)
   end
 end
 
 # The string, Float64 and Decimal labels this classifier writes. A Float32 literal and arithmetic over
-# a literal are named by #1027's `Concat` labels, pinned in the #1057 testset below.
+# a literal are named by #1027's `Concat` labels, pinned in the #1057 testset below. `Round` reaches
+# them for a string only: a number to places renders (#1061), so the others are reached through a cast.
 @testset "#1044: a string, Float64 or Decimal literal is named by its digits, not its value (#971)" begin
   marker = "s3cr3t1044"
   for (expr, named) in ((Fn.Round(Fn.Value(marker), 2), "a string literal"),
                         (Fn.Cast(Fn.Value(marker), "numeric(10,2)"), "a string literal"),
-                        (Fn.Round(Fn.Value(1044.123456), 2), "a Float64 literal with 6 decimal places"),
-                        (Fn.Round(Fn.Value(Decimal(0, 1044123, -3)), 2), "a Decimal literal with 3 decimal places")),
+                        (Fn.Cast(Fn.Value(1044.123456), "numeric(10,2)"), "a Float64 literal with 6 decimal places"),
+                        (Fn.Cast(Fn.Value(Decimal(0, 1044123, -3)), "numeric(10,2)"), "a Decimal literal with 3 decimal places")),
       conn in _CCD_ENGINES
     err = _ccd_refusal(expr; conn = conn)
     msg = _ccd_msg(err)
@@ -706,8 +810,9 @@ end
 # #1027's literal labels, and every label built over one (`arithmetic over …`), name the literal by
 # its type. Each route that reaches them: `Concat` when built, and `Concat`, `Cast` and `Round` when
 # rendered — a cast to an integer or to text through `_cast_divergent_operand`, a cast to
-# `numeric(p, s)` and `Round` through `_scale_divergent_operand`'s fall-through. Every marker holds `1057`
-# or `2057`, which nothing else in these messages does.
+# `numeric(p, s)` through `_scale_divergent_operand`'s fall-through (`Round` over a number renders
+# since #1061, so it reaches no label). Every marker holds `1057` or `2057`, which nothing else in
+# these messages does.
 @testset "#1057: a Concat, Cast or Round refusal never prints the literal (#971)" begin
   cases = (
     (() -> Fn.Concat("surname", 1057.25), "a Float64 literal"),
@@ -718,8 +823,8 @@ end
     (() -> Fn.Cast(Fn.Value(1057.25), Models.IntegerField()), "a Float64 literal"),
     (() -> Fn.Cast(_CF("number") + 1057.25, "numeric(10,0)"), "arithmetic over a Float64 literal"),
     (() -> Fn.Cast(Fn.Max(Fn.Value(1057.25)), Models.CharField()), "`MAX(…)` over a Float64 literal"),
-    (() -> Fn.Round(Fn.Value(Float32(1057.25)), 2), "a Float32 literal"),
-    (() -> Fn.Round(_CF("number") * 1057.25, 2), "arithmetic over a Float64 literal"),
+    (() -> Fn.Cast(Fn.Value(Float32(1057.25)), "numeric(10,1)"), "a Float32 literal"),
+    (() -> Fn.Cast(_CF("number") * 1057.25, "numeric(10,1)"), "arithmetic over a Float64 literal"),
   )
   for (build, named) in cases, conn in _CCD_ENGINES
     err = try _ccd_render(build(); conn = conn); nothing catch e; e end
@@ -736,4 +841,14 @@ end
     msg = _ccd_msg(err)
     @test occursin("(#1044)", msg) && occursin("Round(…, $(d))", msg) && occursin("round(x, RoundNearestTiesAway; digits = $(d))", msg)
   end
+end
+
+@testset "#1061: a precision above 22, where the scaling can overflow, is refused when the expression is built" begin
+  for operand in ("number", "points"), d in (23, 309)
+    err = try Fn.Round(operand, d); nothing catch e; e end
+    @test err isa PormG.InvalidValueError
+    msg = _ccd_msg(err)
+    @test occursin("(#1061)", msg) && occursin("Round(…, $(d))", msg) && occursin("at most 22", msg)
+  end
+  @test Fn.Round("points", 22) isa PormG.QueryBuilder.FObject
 end

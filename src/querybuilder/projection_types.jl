@@ -673,15 +673,12 @@ function _numeric_cast_scale(type_name::AbstractString)::Union{Int,Nothing}
 end
 
 # #1040 — an operand of a cast to `numeric(p, s)` that can carry more than `s` fractional digits, as
-# `(kind, what)`, or `nothing` when PostgreSQL's rounding cannot change it. Rounding first is NOT an
-# escape beyond whole numbers: `Round(x, 2)` is `ROUND(x::numeric, 2)` on PostgreSQL, which rounds the
-# float's 15-digit decimal form, and `ROUND(x, 2)` on SQLite, which rounds the binary double, so
-# `2.675` is `2.68` on one and `2.67` on the other (`1.555`, `1.005` likewise). It is classified as the
-# `numeric` function it is. #1044 asks this same question of `Round(x, d)` itself, with `d` as the
-# scale (`_render_function_body`), so over a float it is refused before any cast reads it; a
-# `Round(x, d)` that renders therefore has at most `d` places, and passes a scale of at least `d`.
-# `Round(x)`, `Floor` and `Ceil` agree (every `Result.points` row, ±0.5, ±1.5, ±2.5), so a whole
-# number passes any scale.
+# `(kind, what)`, or `nothing` when PostgreSQL's rounding cannot change it. Rounding first is the
+# escape: #1044 asks this same question of `Round(x, d)` itself, with `d` as the scale
+# (`_render_function_body`), and #1061 renders every operand it answers with a number as one double
+# formula both engines compute alike, so a `Round(x, d)` has at most `d` places and passes a scale of
+# at least `d`. `Round(x)`, `Floor` and `Ceil` agree (every `Result.points` row, ±0.5, ±1.5, ±2.5), so
+# a whole number passes any scale.
 #
 # A literal is named by its type and its digits, never its value: it is a bound value, and a refusal
 # never prints one (#971).
@@ -734,14 +731,14 @@ function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union
     inner = declared isa AbstractString ? _numeric_cast_scale(declared) : nothing
     inner === nothing || return inner <= scale ? nothing : (:decimal, "a value cast to $(declared)")
   end
-  # #1044: `Round(x, d)` renders only where both engines agree on it, so its value has at most `d`
-  # places; a wider `d` is still a `numeric` function's value, read below. Only over an operand PormG
-  # types: one it cannot (a `Subquery`, an untyped `Case`) passed #1044 unread, and stays refused here.
+  # #1044/#1061: `Round(x, d)` has at most `d` places on both engines, whichever arm renders it: the
+  # engine's own `ROUND` over a value that has no more, the double formula over anything else — its
+  # `k / 10^d` reads back as `k / 10^d` at PostgreSQL's 15 significant digits (a larger value is the
+  # caveat #1050 measured for every float, and `numeric(p, s)` that wide is rare). A wider `d` is still a
+  # `numeric` function's value, read below. Over text it is refused before this reads it.
   if operand isa FObject && operand.function_name == "ROUND"
     d = get(operand.kwargs, "precision", 0)
-    inner = operand.column isa SQLField ? operand.column.field : operand.column
-    untyped = inner isa SubqueryObject || (inner isa FObject && inner.function_name == "CASE")
-    !untyped && d isa Integer && 0 < d <= scale && return nothing
+    d isa Integer && 0 < d <= scale && return nothing
   end
   # A function whose value is one of its operands' values gains no digits: `Max("price")` of a
   # two-place DecimalField has two. With an `output_field` it is a cast, read above or below.
@@ -760,6 +757,36 @@ function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union
   # Text: a text column or function (`_expression_formatter` names every one), or a text CTE column.
   _expression_formatter(p, instruc) === Models.format_text_sql && return (:text, _text_operand_label(p))
   return nothing
+end
+# #1061 — an operand the classifier above may pass unread because it cannot type it: one that holds a
+# `Subquery` or a `Case` anywhere — bare, or inside arithmetic, `Coalesce`, `Abs`, a window value, …
+# (`Round(Coalesce(Subquery(q), 0), 2)`: the classifier reads the integer `0` and sees nothing else).
+# Its places are unknown, so `Round(x, d)` over one renders the double formula, which both engines
+# compute alike whatever the value is, and which leaves a value that already fits unchanged. The cost
+# of reading a typed one as unknown is its type: a double.
+#
+# The walk stops where the caller said the type and the classifier can read it: a `Cast` or a
+# `Coalesce`/`Greatest`/`Least` `output_field` (#823's "say the type with a cast") naming a type
+# `_numeric_cast_scale` or `_sql_type_field` knows, and `Floor`/`Ceil`, whose value is whole whatever
+# their operand. A type neither knows (`"money"`, `"jsonb"`) is no proof, so the walk goes on: it fails
+# closed. `Case`'s `output_field` is not read there, so a `Case` stays unknown.
+function _untyped_scale_operand(p)
+  p isa SQLField && return _untyped_scale_operand(p.field)
+  p isa SubqueryObject && return true
+  if p isa FObject
+    p.function_name == "CASE" && return true
+    p.function_name in ("FLOOR", "CEIL") && return false
+    if p.function_name in _DECLARED_CAST_FUNCTIONS
+      declared = get(p.kwargs, p.function_name == "CAST" ? "type" : "output_field", nothing)
+      declared isa AbstractString && !isempty(declared) &&
+        (_numeric_cast_scale(declared) !== nothing || _sql_type_field(declared) !== nothing) && return false
+    end
+  end
+  p isa FExpression && return _untyped_scale_operand(p.field_name) || _untyped_scale_operand(p.operand)
+  if p isa Union{FObject,WindowFunction}
+    return any(_untyped_scale_operand, p.column isa AbstractVector ? p.column : (p.column,))
+  end
+  return false
 end
 # The digits a `Decimal` needs after the point: `1.50` needs one, `25` none.
 function _decimal_scale(x::Decimals.Decimal)::Int

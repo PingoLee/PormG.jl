@@ -962,6 +962,57 @@ end
   end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Floor/Ceil/Abs over an integer date part, divided, is refused like over an integer column (#1135)
+# `FLOOR((EXTRACT(YEAR FROM "Tb"."born")::integer)::numeric) / $1::bigint` keeps the half on
+# PostgreSQL, where SQLite's `FLOOR(CAST(strftime('%Y', …) AS INTEGER)) / ?` divides as integers —
+# the #1111 split. #1111 counted an operand whole by its field only, and a `"born__@year"` path has
+# none, so it built. A date part is now read through the transform ladder, and the parts both
+# engines compute as integers count as whole: the `EXTRACT` fields but `EPOCH` and the sub-second
+# ones, `@quarter`, `@quadrimester`, `@week_day`. Expected SQL: none — the build raises, on both.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1135: Floor/Ceil/Abs over an integer date part, divided, is refused" begin
+  for conn in _CCD_ENGINES
+    for (expr, named) in (
+        (Fn.Cast(Fn.Floor("born__@year") / 2, Models.IntegerField()), "arithmetic over `FLOOR(…)`"),
+        (Fn.Cast(Fn.Ceil("born__@month") / 2, Models.CharField()), "arithmetic over `CEIL(…)`"),
+        (Fn.Cast(Fn.Floor("born__@quarter") / 2, Models.IntegerField()), "arithmetic over `FLOOR(…)`"),
+        (Fn.Cast(Fn.Floor("born__@quadrimester") / 2, Models.IntegerField()), "arithmetic over `FLOOR(…)`"),
+        (Fn.Cast(Fn.Abs("born__@week_day") / 2, Models.IntegerField()), "arithmetic over `ABS(…)`"),
+        (Fn.Cast(Fn.Floor("start_at__@second") / 2, Models.IntegerField()), "arithmetic over `FLOOR(…)`"),
+        # The explicit function is the same node the path builds.
+        (Fn.Cast(Fn.Abs(Fn.Extract("born", "year")) / 2, Models.IntegerField()), "arithmetic over `ABS(…)`"),
+        (Fn.Cast(Fn.Floor(Fn.Extract("born", "dow")) / 2, "numeric(10,1)"), "arithmetic over `FLOOR(…)`"))
+      err = _ccd_refusal(expr; conn = conn)
+      @test err isa QueryBuildError
+      @test occursin(named, _ccd_msg(err))
+      @test occursin("SQLite as an integer", _ccd_msg(err))
+    end
+    err = _ccd_refusal(Fn.Concat("surname", Fn.Floor("born__@year") / 2); conn = conn)
+    @test err isa QueryBuildError && occursin("(#1027)", _ccd_msg(err)) && occursin("arithmetic over `FLOOR(…)`", _ccd_msg(err))
+    # Unchanged: a text transform is not a whole number, a date part is whole undivided or under `*`,
+    # and divided directly or summed it divides as an integer on both engines.
+    for expr in (Fn.Cast(Fn.Floor("born__@yyyy_mm"), Models.CharField()),
+                 Fn.Cast(Fn.Floor("born__@year"), Models.IntegerField()),
+                 Fn.Cast(Fn.Floor("born__@day") * 2, Models.IntegerField()),
+                 Fn.Cast(_CF("born__@year") / 2, Models.IntegerField()),
+                 Fn.Cast(Fn.Sum("born__@year") / 2, Models.IntegerField()))
+      @test _ccd_refusal(expr; conn = conn) === nothing
+    end
+  end
+  # `EPOCH` stays fractional on PostgreSQL (`EXTRACT(EPOCH …)` is `numeric`), so it is no whole number
+  # to refuse; SQLite has no `EPOCH` part at all.
+  @test _ccd_refusal(Fn.Cast(Fn.Floor(Fn.Extract("start_at", "epoch")) / 2, Models.IntegerField()); conn = _CCD_PG) === nothing
+  # Review of #1135: a part SQLite cannot render raises there (category 4), so it has no SQLite answer
+  # to split from, and PostgreSQL keeps rendering it. `@quarter` is a node of its own on both engines;
+  # an `EXTRACT` `QUARTER` field is PostgreSQL's alone.
+  for part in ("century", "quarter", "timezone_hour")
+    expr = Fn.Cast(Fn.Floor(Fn.Extract("start_at", part)) / 2, Models.IntegerField())
+    @test _ccd_refusal(expr; conn = _CCD_PG) === nothing
+    @test _ccd_refusal(expr; conn = _CCD_SL) isa PormG.BackendCapabilityError
+  end
+end
+
 @testset "#1087: the precision, the scale and a Decimal exponent are bounded before they size a BigInt" begin
   size = PormG.QueryBuilder._numeric_cast_size
   @test size("numeric(1000,1000)") == (1000, 1000)

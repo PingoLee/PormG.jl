@@ -1112,8 +1112,10 @@ function _divided_whole_operand(p::Union{FObject,WindowFunction}, instruc::SQLIn
 end
 # An operand that is a whole number on both engines BY TYPE: an integer column (the BIGINT ones
 # included), an integer literal, `COUNT`, a cast to an integer, or a whole-keeping function (`Floor`,
-# `Ceil`, `Abs`, `Round(x)`, `Mod`, an extremum, `Coalesce`, a window value) or `+`/`-`/`*` of such.
-# A transform (`"ts__@year"`), a JSON key lookup, a text column and an untyped `Case` are not known.
+# `Ceil`, `Abs`, `Round(x)`, `Mod`, an extremum, `Coalesce`, a window value) or `+`/`-`/`*` of such,
+# and an integer-valued date part (`_integer_transform`), as a function or a `"dob__@year"` path. A
+# text or date transform (`"dob__@yyyy_mm"`, `"dob__@date"`), a JSON key lookup, a text column and
+# an untyped `Case` are not known.
 const _INTEGER_FIELDS = Union{Models.sIntegerField,Models.sBigIntegerField,Models.sPositiveIntegerField,
                               Models.sPositiveSmallIntegerField,Models.sIDField,Models.sForeignKey,
                               Models.sOneToOneField}
@@ -1122,7 +1124,9 @@ function _known_whole(p, instruc::SQLInstruction)::Bool
   p isa SQLText && return p.field isa Integer && !(p.field isa Bool)
   p isa Integer && return !(p isa Bool)
   if p isa Union{String,CTEReference,JoinedReference}
-    p isa String && occursin("__@", p) && return false
+    # #1135: a transformed path is the transform's result, not the column — through the one ladder
+    # (#562), as `_infer_kind(::String)` reads it.
+    p isa String && occursin("__@", p) && return _known_whole(_check_function(p), instruc)
     return _alias_column_field(p, instruc) isa _INTEGER_FIELDS
   end
   if p isa FExpression
@@ -1132,6 +1136,7 @@ function _known_whole(p, instruc::SQLInstruction)::Bool
   if p isa Union{FObject,WindowFunction}
     name = p.function_name
     name == "COUNT" && return true
+    _integer_transform(p) && return true
     declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
     declared isa AbstractString && !isempty(declared) &&
       return _sql_type_field(declared) isa Union{Models.sIntegerField,Models.sBigIntegerField}
@@ -1141,6 +1146,24 @@ function _known_whole(p, instruc::SQLInstruction)::Bool
     return all(x -> _known_whole(x, instruc), p.column isa AbstractVector ? p.column : (p.column,))
   end
   return false
+end
+# #1135 — a date part both engines compute as an integer, whatever its operand's type: `Dialect`
+# renders `EXTRACT(… FROM x)::integer` (`trunc(…)::integer` for `SECOND`) on PostgreSQL and
+# `CAST(strftime(…) AS INTEGER)` or integer arithmetic on SQLite, and `QUARTER`, `QUADRIMESTER` and
+# `WEEK_DAY` are integer arithmetic on both. Only the parts BOTH engines render: one SQLite cannot
+# (`CENTURY`, `TIMEZONE_HOUR`, an `EXTRACT` `QUARTER`, `@len`) raises `BackendCapabilityError` there,
+# so it has no SQLite answer to split from, and refusing it on PostgreSQL would be a false refusal.
+# `EPOCH` and the sub-second parts are fractional on PostgreSQL besides. Stated here because
+# `_result_rule` answers `:unknown` for these until #1034's phase 3 states their type — the place
+# this list belongs once it does.
+const _INTEGER_TRANSFORMS = ("QUARTER", "QUADRIMESTER", "WEEK_DAY")
+const _INTEGER_EXTRACT_PARTS = ("YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "DOW", "DOY",
+                                "WEEK", "ISOYEAR", "ISODOW")
+function _integer_transform(p::Union{FObject,WindowFunction})::Bool
+  p.function_name in _INTEGER_TRANSFORMS && return true
+  p.function_name == "EXTRACT" || return false
+  part = get(p.kwargs, "part", nothing)
+  return part isa AbstractString && Dialect.extract_part(part) in _INTEGER_EXTRACT_PARTS
 end
 function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   name = p.function_name

@@ -472,8 +472,12 @@ them as `numeric` (`FLOOR(x::numeric)`, `sum(bigint)`), so they read as integers
 divided, and `Floor("grid") / 2` is refused (#1111). An integer literal counts as a BIGINT here,
 because PostgreSQL binds it as `bigint`: `Sum(F("grid") + 1) / 2`, `Sum(Coalesce("grid", 0)) / 2` and
 the conditional count `Sum(Case(When("grid__@gt" => 3, then = 1), default = 0)) / 2` are
-`sum(bigint)` there, and are refused too, as is a `Sum` over a cast to `bigint` (#1141). Divide as a
-float and fetch the number instead.
+`sum(bigint)` there, and are refused too, as is a `Sum` over a cast to `bigint` (#1141). An integer
+date part counts as an integer operand (`@year`, `@month`, `@day`, `@hour`, `@quarter`, `@week_day`,
+… and the same `Extract` fields), so `Floor("dob__@year") / 2` is refused as `Floor("grid") / 2` is
+(#1135); `@yyyy_mm` is text and `Extract(…, "epoch")` is fractional, so neither counts, and a part
+SQLite has no spelling for (`Extract(…, "century")`) raises there rather than dividing differently.
+Divide as a float and fetch the number instead.
 A CTE column built from one of them is refused the same way when it is divided (#1127): the CTE
 gives a `Sum` column an integer type whatever it sums, so PormG reads the body's own expression
 instead, and `Coalesce(CTE("totals", "id_sum"), 0) / 2` is refused as `Sum("resultid") / 2` is.

@@ -25,7 +25,8 @@ Now refused, when the query is built, on both engines:
 
 - a cast to text (`Cast`, or `output_field` on `Coalesce`/`Greatest`/`Least`) of a boolean, a
   float, a decimal, a function PostgreSQL computes as `numeric` (`Avg`, `Round`, …), a timestamp, an
-  interval or a whole JSON document. A `DecimalField` with `decimal_places = 0` holds whole numbers,
+  interval or a whole JSON document. A cast through `"dec"`, PostgreSQL's third spelling of
+  `numeric`, sized or not, counts as a decimal like `"decimal"` (#1078). A `DecimalField` with `decimal_places = 0` holds whole numbers,
   which read the same on both engines, and passes, as an integer column does — unless it is divided,
   which SQLite does as integer division (#1087);
 - a cast to an integer of a float, a decimal with places or a `numeric` function, unless the operand is

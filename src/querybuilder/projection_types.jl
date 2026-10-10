@@ -1074,7 +1074,10 @@ function _sql_type_field(type_name::AbstractString)::Union{PormGField,Nothing}
   base in ("smallint", "integer", "int", "int2", "int4", "integer unsigned") && return Models.IntegerField()
   base in ("bigint", "int8") && return Models.BigIntegerField()
   base in ("real", "double precision", "float", "float4", "float8") && return Models.FloatField()
-  base in ("numeric", "decimal") && return Models.DecimalField()
+  # #1078: `dec` is the third spelling `_numeric_cast_scale` already reads; SQLite gives it NUMERIC
+  # affinity, as it does `decimal`. Unnamed, `Cast(Cast(x, "dec"), IntegerField())` passed the
+  # #1028 rule that refuses the same cast through `"decimal"`.
+  base in ("numeric", "decimal", "dec") && return Models.DecimalField()
   base in ("boolean", "bool") && return Models.BooleanField()
   base == "date" && return Models.DateField()
   # #929: the types a pattern lookup must read as text (`_pattern_text_kind`). Without them a

@@ -831,3 +831,30 @@ end
     @test occursin("(#1044)", msg) && occursin("Round(…, $(d))", msg) && occursin("round(x, RoundNearestTiesAway; digits = $(d))", msg)
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1078: `dec` is typed as `decimal` is
+# PostgreSQL's third spelling of `numeric`; SQLite gives `DEC` NUMERIC affinity, as it does `DECIMAL`.
+# `_numeric_cast_scale` read a scaled `dec(p, s)`, but the type reader did not know an unscaled
+# `"dec"`, so every rule that types a declared cast let it through: a cast to an integer over it
+# (PostgreSQL rounds `1.5` to `2`, SQLite truncates it to `1`), `Concat`, and the alias filter.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1078: an unscaled dec cast is typed as decimal is" begin
+  for t in ("dec", "DEC", "Dec")
+    @test PormG.QueryBuilder._sql_type_field(t) isa Models.sDecimalField
+  end
+  for t in ("dec", "decimal"), conn in _CCD_ENGINES
+    # A cast to an integer or to text over it is the #1028 refusal, through either spelling.
+    @test _is_1028(_ccd_refusal(Fn.Cast(Fn.Cast("points", t), Models.IntegerField()); conn = conn))
+    @test _is_1028(_ccd_refusal(Fn.Cast(Fn.Cast("number", t), Models.CharField()); conn = conn))
+    @test _ccd_refusal(Fn.Concat("surname", Fn.Cast("number", t)); conn = conn) isa QueryBuildError
+    # The alias filter checks the value as a number.
+    q = CCD.Ccd_driver.objects; q.values("d" => Fn.Cast("number", t)); q.filter("d" => "abc")
+    @test (try _ccd_sql(q; conn = conn); nothing catch e; e end) isa PormG.InvalidValueError
+    q = CCD.Ccd_driver.objects; q.values("d" => Fn.Cast("number", t)); q.filter("d" => 3)
+    @test !isempty(_ccd_sql(q; conn = conn))
+    # #1085: Round(x, d) renders each engine's own ROUND over it, as over any number.
+    sql = _ccd_render(Fn.Round(Fn.Cast("points", t), 2); conn = conn)
+    @test occursin("ROUND(", uppercase(sql)) && !occursin("FLOOR(", uppercase(sql))
+  end
+end

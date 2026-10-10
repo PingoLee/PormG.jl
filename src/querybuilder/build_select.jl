@@ -558,6 +558,9 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # #76 DISTINCT guard below read, and neither may see an ordering-only rewrite.
     order_expr = nothing
     interval_name = nothing   # the alias `order_expr` re-renders, for the old-SQLite NULL flag
+    # #1115: whether an unprojected term joins GROUP BY. Only the render branch below can say no — the
+    # alias, memo and projected-name branches never hold an aggregate or a window.
+    groups_term = true
     if found_in_select
       # Use the alias name instead of the expression to avoid double parameterization.
       # Most databases (PG, SQLite, MySQL) support aliases in ORDER BY.
@@ -608,9 +611,18 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
       # Not when it holds an aggregate or a window: neither is a valid grouping key (both engines
       # reject the statement), so the term keeps the clause's checked phase (review of #932). Resolved,
       # so an aggregate read through an alias (`When("n__@gt" => 1, …)` over `"n" => Count(…)`) counts.
+      #
+      # #1115: and it is not pushed either. The render answered this question while the push below
+      # never asked it, so `order_by(SQLOrder(SQLField(Max("number"), "o")))` printed
+      # `GROUP BY 1, MAX(…)`. Django's `get_group_by_cols`: an aggregate is evaluated per group and
+      # contributes nothing, a window contributes its OVER terms, which `_group_window_terms!` groups
+      # (#789). The columns a MIXED term reads outside its aggregate are the #798 guard's, which
+      # checks the terms recorded in `ungrouped_order_terms` below. The window half is resolved too,
+      # so a window reached through an alias (`When("r" => 1, …)` over `"r" => Rank(…)`) counts.
       order_node = v_field_copy.field
+      groups_term = !_resolved_contains_agg(order_node, instruc) && !_resolved_window(order_node, instruc)
       v_field_copy.field = with_scope(() -> _get_select_query(order_node, instruc), instruc;
-                                      group_key = !_resolved_contains_agg(order_node, instruc) && !_is_window_expr(order_node))
+                                      group_key = groups_term)
       order_params = bound_since(mark)
     end
     # #540: no render-time re-validation. `SQLOrder` is an immutable struct whose inner constructor
@@ -693,6 +705,11 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
             "\e[4m\e[32m.distinct()\e[0m and order by an aggregate if you meant one row per key."))
         end
       end
+      # #1115: the DISTINCT guard above still runs for an aggregate or window term; only the grouping
+      # is skipped, and the term is recorded for the #798 guard instead. The push and the copy below
+      # move together — a copy without its push binds values no marker consumes, the #587
+      # misalignment from the other side.
+      groups_term || (push!(instruc.ungrouped_order_terms, v.field); continue)
       push!(instruc.group, v_field_copy.field)
       # #587: GROUP BY prints this same string — `?`s included — BEFORE HAVING and ORDER BY, so on a
       # positional backend the values the term bound are needed a second time, under `:group`.

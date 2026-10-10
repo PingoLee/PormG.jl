@@ -200,6 +200,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "ORDER BY Join Emission (#404)" include("unit/test_order_by_joins.jl")
     @testset "Typed Join Rows (#487)" include("unit/test_join_rows.jl")
     @testset "ORDER BY a values() Alias (#423)" include("unit/test_order_by_alias.jl")
+    @testset "Aggregate/Window ORDER BY Term Not Grouped (#1115)" include("unit/test_order_by_aggregate_group.jl")
     @testset "PG Migration Fixture Isolated + Credential-free (#36)" include("unit/test_migration_pg_fixture.jl")
     @testset "Pool Exhaustion Typed Error (#37)" include("unit/test_connection_pool_timeout.jl")
     @testset "Connect-Failure Fast-Fail Typed Error (#72)" include("unit/test_connection_pool_connect_error.jl")

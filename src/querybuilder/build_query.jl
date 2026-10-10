@@ -692,6 +692,22 @@ function _check_mixed_grouping(instruct::SQLInstruction)
                                                        _grouped_expressions(instruct))))
     end
   end
+  # #1115: an order_by term holding an aggregate or a window is left out of GROUP BY whole too, so
+  # the columns it reads outside its aggregate (or as a window's argument, #809) are held to the same
+  # rule. Before #1115 such a term was pushed into GROUP BY whole and both engines refused the
+  # statement; without this, SQLite would sort by an arbitrary row's value. `get_order_query`
+  # recorded exactly the terms it left out, so this does not restate its test — and a term that
+  # resolved to a projection alias is not among them, because its expression never reaches the
+  # statement. A pure aggregate reads nothing outside it and passes.
+  for term in instruct.ungrouped_order_terms
+    _each_bare_column(term.field, instruct, ""; covered) do clause, leaf
+      grouped_text === nothing && (grouped_text = Set(_grouped_expressions(instruct)))
+      _mixed_leaf_grouped(leaf, grouped_keys, grouped_text, instruct) && return nothing
+      throw(QueryBuildError(_ungrouped_mixed_error_msg(term._as, clause, leaf,
+                                                       _grouped_expressions(instruct);
+                                                       subject = "order_by term")))
+    end
+  end
   return nothing
 end
 
@@ -901,7 +917,9 @@ end
 
 # Same shape and rules as `_ungrouped_correlation_error_msg`: the fix lines name what the user
 # wrote (`leaf.spelled`), never rendered SQL; the `Grouped by:` line is diagnosis and may carry it.
-function _ungrouped_mixed_error_msg(label, clause::String, leaf, grouped::Vector{String})
+# `subject` is `"order_by term"` for #1115's order-term walk; `label` is then the term's `_as`.
+function _ungrouped_mixed_error_msg(label, clause::String, leaf, grouped::Vector{String};
+                                    subject::String = "projection")
   where_ = clause == "" ? "in its expression" :
            clause == "argument" ? "in its window function's argument" :
            clause == "default" ? "in its window function's default" :
@@ -910,10 +928,10 @@ function _ungrouped_mixed_error_msg(label, clause::String, leaf, grouped::Vector
     "(none — this query aggregates the whole table into a single row)" :
     join(grouped, ", ")
   string(
-    "PormG mixed-grouping guard (#798): the projection \e[4m\e[31m", label, "\e[0m reads the column ",
+    "PormG mixed-grouping guard (#798): the ", subject, " \e[4m\e[31m", label, "\e[0m reads the column ",
     "\e[4m\e[31m", leaf.spelled, "\e[0m outside an aggregate (", where_, "), and this query does not ",
     "GROUP BY it.\n",
-    "  This query aggregates, so the projection is computed once per group — beside an aggregate, ",
+    "  This query aggregates, so the ", subject, " is computed once per group — beside an aggregate, ",
     "or over one inside a window — and ", leaf.spelled, " has no single value in a group. ",
     "PostgreSQL refuses this (\"must appear in the ",
     "GROUP BY clause or be used in an aggregate function\"); SQLite answers with an ARBITRARY row's ",

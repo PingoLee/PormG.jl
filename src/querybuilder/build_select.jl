@@ -142,7 +142,12 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
         # `ZonedDateTime`, exactly as a SQLite `DateTimeField` column reads (the canonical text
         # carries `+00:00`) — the column's behavior, not a new one. `nothing` for every non-temporal
         # literal. On PostgreSQL the kind is inert: every `value_parser` there is `nothing`.
+        # #1122: a `Bool` literal reads as `CBool`, as `_field_read_kind` types a boolean column
+        # (#965) — SQLite binds it as 0/1 and hands the integer back. Here and not in
+        # `literal_canonical_kind`, which also feeds `_operand_kind` and the binders (#882's reason).
+        # A `Subquery` over it inherits the kind through the inner build's record.
         kind = literal_canonical_kind(v_copy.field)
+        kind === nothing && v_copy.field isa Bool && (kind = CBool())
         kind === nothing || (instruc.projection_kinds[Symbol(alias)] = kind)
       end
       continue

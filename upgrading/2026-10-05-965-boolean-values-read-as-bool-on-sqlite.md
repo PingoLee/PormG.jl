@@ -1,9 +1,9 @@
 ## A boolean value reads back as a `Bool` on SQLite, and a `Case` of booleans is a boolean (#965)
 
 - **Version**: Unreleased
-- **PormG ref**: #965; `src/querybuilder/build_query.jl` (`_field_read_kind`,
+- **PormG ref**: #965, #1122; `src/querybuilder/build_query.jl` (`_field_read_kind`,
   `_function_projection_kind`, `_expression_formatter`, `_boolean_case`), `src/querybuilder/execution.jl`
-  (`_field_value_parser`)
+  (`_field_value_parser`); for #1122, `src/querybuilder/build_select.jl` (`get_select_query`)
 - **Recorded**: 2026-10-05
 - **Severity**: behavior change, on SQLite. On PostgreSQL the driver already delivered every one of
   these values as a `Bool`. What changes there is a `Case` of booleans: `Max`/`Min` over one now run,
@@ -26,6 +26,7 @@ when every operand is one.
 | `Cast(x, "boolean")`, `Coalesce(Max("is_rookie"), false)`, `Greatest`/`NullIf` over booleans | `Int64` | `Bool` |
 | `Lag`/`Lead`/`FirstValue`/`LastValue`/`NthValue` over a boolean | `Int64` | `Bool` |
 | a projected `Exists(...)` | `Int64` | `Bool` |
+| a projected `Value(true)`/`Value(false)`, alone or inside a `Subquery` (#1122; under a CTE it already was) | `Int64` | `Bool` |
 | a `Case` whose branches are all `true`/`false` (or `When(…, then = true, otherwise = false)`) | `Int64` | `Bool` |
 
 A `Case` whose branches are all booleans is also a boolean for #953's aggregate rule, on both engines:

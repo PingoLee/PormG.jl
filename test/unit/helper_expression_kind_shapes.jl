@@ -122,6 +122,13 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Abs float",               :Result,              m -> _EKM_FN.Abs("points")),
   ("Abs decimal",             :Constructor_results, m -> _EKM_FN.Abs("points")),
   ("Mod int",                 :Result,              m -> _EKM_FN.Mod("grid", 2)),
+  # #1147: over a whole number `Abs`/`Floor`/`Ceil` keep it whole on every engine — a bigint column, and
+  # an integer date part (#1135) as well as an integer column.
+  ("Abs int",                 :Result,              m -> _EKM_FN.Abs("grid")),
+  ("Floor int",               :Result,              m -> _EKM_FN.Floor("grid")),
+  ("Ceil int",                :Result,              m -> _EKM_FN.Ceil("grid")),
+  ("Floor bigint",            :Result,              m -> _EKM_FN.Floor("resultid")),
+  ("Floor year part",         :Race,                m -> _EKM_FN.Floor("date__@year")),
   # ── subqueries ─────────────────────────────────────────────────────────────────────────────────
   ("Subquery Max hop date",   :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Max("raceid__date")))),
   ("Subquery Avg float",      :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Avg("points")))),

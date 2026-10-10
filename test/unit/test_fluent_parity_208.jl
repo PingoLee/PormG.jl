@@ -666,16 +666,19 @@ end
       ("aggregate + Subquery",    :one_row, () -> model.objects.values("n" => Count("id"), "s" => Subquery(model.objects.filter("code" => "A").values("points").limit(1)))),
       ("aggregate + Exists",      :one_row, () -> model.objects.values("n" => Count("id"), "e" => Exists(model.objects.filter("code" => "A")))),
       ("distinct",                :one_row, () -> model.objects.values("n" => Count("id")).distinct()),
-      # Order terms that name a projection: the aggregate's alias, a literal's, an aliased expression.
+      # Order terms that name a projection: the aggregate's alias, a literal's.
       ("order by the alias",      :one_row, () -> model.objects.values("n" => Count("id")).order_by("-n")),
       ("order by a literal alias", :one_row, () -> model.objects.values("n" => Count("id"), "k" => Value(1)).order_by("k")),
-      ("order by a named aggregate", :one_row, () -> model.objects.values("n" => Count("id")).order_by(SQLOrder(SQLField(Count("id"), "n")))),
       ("alias shadowing its column", :one_row, () -> model.objects.values("points" => Sum("points")).order_by("points")),
       # Conservative: an empty OVER groups nothing, but no window is predicted.
       ("window with an empty OVER", :kept,  () -> model.objects.values("r" => Rank(over = WindowOver()), "n" => Count("id"))),
       # Conservative: an unnamed aggregate order term joins no GROUP BY (#1115), but the predictor
       # keeps the projection for any order term it cannot match by name.
       ("order by an unnamed aggregate", :kept, () -> model.objects.values("n" => Count("id")).order_by(SQLOrder(SQLField(Count("id"), "o")))),
+      # A labelled term is rendered whatever its label, so the predictor does not take a label that
+      # equals a projection's name as the projection either (#1138). It was `:one_row` while the build
+      # matched the label and printed `ORDER BY "n"`.
+      ("order by a named aggregate", :kept, () -> model.objects.values("n" => Count("id")).order_by(SQLOrder(SQLField(Count("id"), "n")))),
       # An aggregate beside the column it reads: the build refuses it (#798).
       ("column + aggregate in one expression", :refused, () -> model.objects.values("n" => F("points") + Sum("points"))),
       ("Case with an aggregate branch", :refused, () -> model.objects.values("c" => Case([When("points" => 1; then = Sum("id"))]; default = 0))),

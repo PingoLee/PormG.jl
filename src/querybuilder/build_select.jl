@@ -392,6 +392,18 @@ end
 # drops?
 _is_transform_term(v::SQLField) = memo_name(v) != v._as
 
+# #1138 — is this term's name a LABEL the caller chose, rather than what the term resolves to? An
+# expression reaches `order_by` as `SQLOrder(SQLField(F("grid") + Max("points"), "best"))`, and a path
+# can be labelled too (`SQLField("grid", "best")`). ORDER BY never prints the label, so it is no
+# evidence of which projection the term means — yet it is the term's memo key: a function projection's
+# chosen name is its `_as`, so `(:base, "best")` is the key of every term labelled `"best"`, whatever it
+# holds. A path written as itself (`SQLField(f, f)`, every String `order_by`), a `CTE`/`Joined` handle
+# and an outer reference are named by what they resolve to, and a transform's memo name is its path, so
+# those still match a projection by key.
+_is_labelled_term(v::SQLField) =
+  !(v.field isa Union{SQLTypeCTE,SQLTypeJoined,OuterRefObject}) && !_is_transform_term(v) &&
+  !(v.field isa String && v.field == v._as)
+
 # #1004 — does `path` walk relations from the query's model to a real column? `"raceid__year"` does
 # (the race's `year`); `"date__day"`, a transform's output name, does not. A pure walk: `_build_row_join`
 # would answer too, but it APPENDS the join it resolves, and asking must not change the statement.
@@ -483,7 +495,20 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # the loop itself, which answers only "is this name projected at all?" — and since no name can
     # now be projected twice, it could `break` on the first hit; it does not, only because running
     # to completion costs nothing over a projection list.
-    for i in (v_field_copy._as === nothing ? () : eachindex(instruc.select))
+    #
+    # #1138: a LABELLED term skips the scan too. It matched on its label alone, so
+    # `values("best" => Max("points")); order_by(SQLOrder(SQLField(F("grid") + Max("points"), "best")))`
+    # printed `ORDER BY "best"` and dropped its expression without a word — the two memo keys are equal,
+    # so the #1004 check below never saw it, and a `custom_as` projection (`"best" => "points"`) did not
+    # reach that check at all. The term is rendered below, as an unlabelled expression is; a term that
+    # is the projection's own expression then costs a second render of it, which returns the same rows
+    # — except under DISTINCT on PostgreSQL when the expression binds: the second render numbers its
+    # values afresh (`$2` against the projection's `$1`), so the #76 guard below refuses it, as
+    # PostgreSQL itself would. SQLite's `?` text matches and it runs. Accepted as an error on one engine
+    # only (#1061, case 4): the engine that answers gives what the query means, and `order_by("x")`
+    # names the projection on both.
+    labelled = _is_labelled_term(v_field_copy)
+    for i in (v_field_copy._as === nothing || labelled ? () : eachindex(instruc.select))
       isassigned(instruc.select, i) || continue
       value = instruc.select[i]
 
@@ -586,7 +611,10 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # sit in `:select`; reusing its text here printed nine markers into ORDER BY with nothing bound
     # for them — SQLite refused the statement. Gated negatively so a future node type that binds
     # lands on the safe path by default.
-    elseif v_field_copy.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject} &&
+    #
+    # #1138: not a labelled path either. `SQLField("grid", "best")` is keyed by its label, so beside
+    # `"best" => Max("points")` the hit is the AGGREGATE's entry and the term ordered by `MAX(points)`.
+    elseif !labelled && v_field_copy.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject} &&
            (order_cached = memo_projection(instruc, order_cache_key)) !== nothing
       v_field_copy.field = order_cached.field
     # #587: a binding expression that IS projected, under another output name, orders by that
@@ -596,7 +624,11 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # #76 guard (and PostgreSQL itself) used to accept is refused. The alias binds nothing on either
     # engine and is legal under DISTINCT by construction. Only a binding node takes this branch:
     # a String path or a handle keeps its memoized selector above, so their SQL is unchanged.
-    elseif (projected_as = _projected_output_name(instruc, order_cache_key)) !== nothing
+    #
+    # #1138: not a labelled term, whose key is its label: `values("y" => "grid")` is keyed
+    # `(:base, "grid")`, so `SQLField(F("points") * 2, "grid")` ordered by `"y"` — by `grid`.
+    elseif !labelled &&
+           (projected_as = _projected_output_name(instruc, order_cache_key)) !== nothing
       interval = _render_projected_interval_ms(projected_as, instruc)   # #894, as above
       interval === nothing || (order_expr = first(interval); interval_name = projected_as)
       v_field_copy.field = quote_identifier(projected_as, instruc.connection)
@@ -670,7 +702,15 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # to prevent. One extra lookup on a path already doing several.
     # A `nothing` key reaching the write is a MethodError, deliberately: see the writer note in
     # `memos.jl`.
-    (found_in_select || memo_projection(instruc, order_cache_key) !== nothing) ||
+    #
+    # #1138: a labelled term is not cached either. Its key is its LABEL, so the write filed this term's
+    # render under a name it does not resolve to, and a later String term of that name read it back:
+    # `order_by(SQLOrder(SQLField(F("points") * 2, "grid")), "grid")` sorted twice by `points * 2`
+    # (and on SQLite printed two `?` for one bound value). Gated on a key being present, so a term with
+    # no name at all (`SQLField(x, nothing)`, which classifies as labelled) still reaches the tracked
+    # `nothing` leak above unchanged.
+    (found_in_select || (labelled && order_cache_key !== nothing) ||
+     memo_projection(instruc, order_cache_key) !== nothing) ||
       memo_projection!(instruc, order_cache_key, v_field_copy)
 
     if !found_in_select

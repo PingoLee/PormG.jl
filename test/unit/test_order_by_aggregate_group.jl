@@ -239,13 +239,13 @@ end
       msg = _oag_refusal(_oag_best(Result).distinct().order_by(_oag_term(Sum("points"))))
       @test occursin("DISTINCT query cannot ORDER BY o", msg)
     end
-    # A term named like a projection orders by that alias — its expression never reaches the
-    # statement, so the #798 guard has nothing to judge and the query builds as it did before.
-    @testset "$backend — a term named like a projection orders by the alias" begin
+    # A term named like a projection is still rendered, so the #798 guard judges it. This control
+    # used to pin `ORDER BY "best"` — the expression silently dropped — which #1138 fixed; the shape
+    # now gets the same refusal as the term labelled "o" above.
+    @testset "$backend — a term named like a projection is still judged by #798 (#1138)" begin
       term = SQLOrder(SQLField(PormG.F("grid") + Max("points"), "best"))
-      sql = _oag_sql(_oag_best(Result).order_by(term))
-      @test _oag_group_by(sql) == "1"
-      @test occursin("ORDER BY \"best\" ASC", sql)
+      msg = _oag_refusal(_oag_best(Result).order_by(term))
+      @test occursin("the order_by term best reads the column \"grid\"", msg)
     end
   end
 end

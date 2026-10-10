@@ -361,4 +361,26 @@ end
         @test length(unique(df.best)) > 1   # the order check is vacuous over one distinct value
     end
 
+    @testset "an order_by expression labelled like a projection orders by the expression (#1138)" begin
+        # `Count("resultid")` labelled "best" — the name of the `Max("points")` projection. The label
+        # used to select that projection (`ORDER BY "best"`), so the groups came back by best score and
+        # the count was never consulted. Now the statement sorts by the count. Expected answer computed
+        # in Julia from the raw rows: the number of results per constructor.
+        rows = M.Result.objects.values("constructorid") |> DataFrame
+        starts = Dict{Int,Int}()
+        for r in eachrow(rows)
+            starts[r.constructorid] = get(starts, r.constructorid, 0) + 1
+        end
+
+        q = M.Result.objects.values("constructorid", "best" => Max("points"), "n" => Count("resultid"))
+        q.order_by(PormG.QueryBuilder.SQLOrder(PormG.QueryBuilder.SQLField(Count("resultid"), "best");
+                                               orientation = "DESC"))
+        @test occursin(r"ORDER BY COUNT\(", PormG.QueryBuilder.inspect_query(q)[:sql_text])
+        df = q |> DataFrame
+        @test Dict(Int(r.constructorid) => Int(r.n) for r in eachrow(df)) == starts
+        # Highest count first — and NOT highest best score first, which is what the alias gave.
+        @test issorted(Int.(df.n); rev = true)
+        @test !issorted(Float64.(df.best); rev = true)
+    end
+
 end

@@ -1215,6 +1215,12 @@ GROUP BY 1
 ORDER BY MAX("Tb"."points") DESC NULLS FIRST
 ```
 
+The second argument of `SQLField` is only a label, and ORDER BY never prints it. An expression term
+orders by its expression even when its label is the name of a projection: labelled `"best"`,
+`Count("resultid")` still sorts by the count, not by the `best` column. To order by a projection, name
+it as a string: `order_by("-best")`. Before [#1138](https://github.com/PingoLee/PormG.jl/issues/1138),
+a label that matched a projection's name sorted by that projection and dropped the expression.
+
 A term that mixes a column with an aggregate, such as `F("grid") + Max("points")`, raises unless the
 query groups `grid`. Before [#1115](https://github.com/PingoLee/PormG.jl/issues/1115), every one of these
 terms was added to `GROUP BY` whole, which both engines reject.

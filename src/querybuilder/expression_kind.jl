@@ -81,6 +81,7 @@ function _field_kind(f::PormGField)::Union{CanonicalType,Nothing}
   t == "BOOLEAN"  && return CBool()
   t == "SMALLINT" && return CInt16()
   t == "INTEGER"  && return CInt32()
+  t == "INTEGER UNSIGNED" && return CInt32()   # `PositiveIntegerField`: an `integer` with a check
   t == "BIGINT"   && return CInt64()
   t == "FLOAT"    && return CFloat64()
   t == "VARCHAR"  && return CVarChar(hasfield(typeof(f), :max_length) ? getfield(f, :max_length) : nothing)
@@ -131,14 +132,14 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
   rule = _result_rule(p)
   if p isa FObject && rule in (:declared, :one_of)
     declared = _declared_cast(p)
-    declared isa AbstractString && !isempty(declared) && return _declared_kind(declared)
+    declared isa AbstractString && !isempty(declared) && return _declared_kind(declared, instruc.connection)
   end
   rule isa CanonicalType && return rule
   rule === :operand && return _infer_kind(p.column, instruc, policy)
   rule === :first_operand && return _infer_kind(first(p.column), instruc, policy)
   rule === :one_of && return _agreeing_kind(p, instruc, policy)
-  rule === :promoting && return _promoted_kind(_infer_kind(_first_operand(p), instruc, policy))
-  rule === :numeric && return _numeric_kind(p, instruc, policy)
+  rule in (:promoting, :numeric) &&
+    return _computed_kind(Val(Symbol(p.function_name)), rule, _infer_kind(_first_operand(p), instruc, policy), instruc.connection)
   rule === :declared && p isa FObject && p.function_name == "CASE" && return _case_kind(p, instruc, policy)
   return nothing
 end
@@ -147,13 +148,18 @@ _infer_function_kind(::Any, ::SQLInstruction, ::_KindPolicy) = nothing
 _declared_cast(p::FObject) = get(p.kwargs, p.function_name == "CAST" ? "type" : "output_field", nothing)
 _first_operand(p::SQLTypeFunction) = p.column isa AbstractVector ? first(p.column) : p.column
 
-# The kind a declared type names. `_sql_type_field` maps a type NAME to a field and drops its size, so
-# the size is read here: `numeric(10,2)` is `CDecimal(10, 2)` and a bare `numeric` has no width.
-function _declared_kind(type_name::AbstractString)::Union{CanonicalType,Nothing}
+# The kind a declared type names on the engine. `_sql_type_field` maps a type NAME to a field and drops
+# its size, so the size is read here: `numeric(10,2)` is `CDecimal(10, 2)`, a bare `numeric` has no
+# width, and `smallint` is not an `integer`. A `real` is a `CFloat64`: no kind names a 4-byte float.
+# On SQLite a uuid or network cast renders `CAST(x AS TEXT)` (`_declared_type_formatter`), so it is text.
+function _declared_kind(type_name::AbstractString, conn)::Union{CanonicalType,Nothing}
   size = _numeric_cast_size(type_name)
   size === nothing || return CDecimal(size...)
   field = _sql_type_field(type_name)
+  field === nothing && return nothing
+  conn isa PormGSQLite && _text_cast_on_sqlite(field) && return CText()
   field isa Models.sDecimalField && return CDecimal(nothing, nothing)
+  lowercase(strip(first(split(type_name, '(')))) in ("smallint", "int2") && return CInt16()
   if field isa Models.sCharField
     m = match(r"\((\d+)\)$", type_name)
     return CVarChar(m === nothing ? nothing : parse(Int, m.captures[1]))
@@ -209,24 +215,26 @@ _numeric_rank(::CDecimal) = 3
 _numeric_rank(::CFloat64) = 4
 _numeric_rank(::CanonicalType) = nothing
 
-# `:promoting` — a number of its operand's type. The width an operation may change is dropped: a sum
-# of `numeric(10,2)` values is not a `numeric(10,2)`. An interval sums to an interval. An integer keeps
-# its own integer kind, although PostgreSQL widens `sum(integer)` to `bigint`: no reader undoes an
-# integer, so the width has nothing to drive yet.
-_promoted_kind(k::Union{CInt16,CInt32,CInt64,CFloat64,CInterval}) = k
-_promoted_kind(::CDecimal) = CDecimal(nothing, nothing)
-_promoted_kind(::Any) = nothing
-
-# `:numeric` — PostgreSQL computes these as `numeric` whatever the operand (`Dialect` casts each operand
-# `::numeric`) and SQLite answers a REAL (#1027). The engine-dependent result is stated here, once. An
-# average of intervals is an interval on PostgreSQL.
-function _numeric_kind(p::SQLTypeFunction, instruc::SQLInstruction, policy::_AllKinds)
-  p.function_name == "AVG" && _infer_kind(_first_operand(p), instruc, policy) isa CInterval && return CInterval()
-  return _numeric_result_kind(instruc.connection)
-end
-_numeric_result_kind(::PormGPostgres) = CDecimal(nothing, nothing)
-_numeric_result_kind(::PormGSQLite) = CFloat64()
-_numeric_result_kind(::Any) = nothing
+# A computed number's kind on the engine, from its rule and its (first) operand's kind `k` — the
+# engine-dependent results #1034 asks to state once, as data. What `Dialect` renders decides:
+#
+# - PostgreSQL renders every `:numeric` function and `Abs`/`Floor`/`Ceil` over `(x)::numeric`, so the
+#   value is a `numeric` whatever the operand;
+# - SQLite renders them bare: a `:promoting` function keeps its operand's type (an integer stays one,
+#   #1087) and a `:numeric` one answers a REAL (`Mod(7, 3)` reads `1.0`, #1027).
+#
+# `Sum` and `Avg` render bare on both engines and take each engine's aggregate type, so their methods
+# override these, beside their constructors (`functions.jl`). A width the operation may change is
+# dropped: a sum of `numeric(10,2)` values is not a `numeric(10,2)`.
+_computed_kind(::Val, ::Symbol, k, ::PormGPostgres) = CDecimal(nothing, nothing)
+_computed_kind(::Val, rule::Symbol, k, ::PormGSQLite) = rule === :numeric ? CFloat64() : _sqlite_number_kind(k)
+_computed_kind(::Val, ::Symbol, k, ::Any) = nothing
+# A number SQLite computes over `k` without a cast: an integer is a 64-bit integer, a decimal keeps
+# PormG's decimal storage without its width, and anything else is not a number this names.
+_sqlite_number_kind(::Union{CInt16,CInt32,CInt64}) = CInt64()
+_sqlite_number_kind(::CFloat64) = CFloat64()
+_sqlite_number_kind(::CDecimal) = CDecimal(nothing, nothing)
+_sqlite_number_kind(::Any) = nothing
 
 # A `Case` with no `output_field`: its value is a branch's, so it has the kind its `then` values and
 # its default agree on. A branch value that is a string is a literal, not a path (`_boolean_case`).

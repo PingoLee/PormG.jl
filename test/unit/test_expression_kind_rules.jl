@@ -15,8 +15,9 @@ Pinned here:
   2. **The vocabulary.** Every rule is one the readers know.
   3. **The lists it replaced.** Each former list is exactly one rule group, so moving the readers to
      the table changed no answer; `test_expression_kind_matrix.jl` pins the answers themselves.
-  4. **The walk's two pure helpers** (`src/querybuilder/expression_kind.jl`): how two candidate
-     values' kinds combine under each policy, and the kind a declared type names, size included.
+  4. **The walk's pure helpers** (`src/querybuilder/expression_kind.jl`): how two candidate values'
+     kinds combine under each policy, the kind a declared type names (size included), and a computed
+     number's type on each engine.
      What `_expression_kind` answers per shape is the matrix's `kind` channel.
 
 DB-free: no connection is opened.
@@ -28,6 +29,10 @@ using Test
 using PormG
 
 const _EKR_QB = PormG.QueryBuilder
+
+# Dispatch-only engines: the per-engine kinds below key on the connection's type, never open one.
+struct EkrMockPostgres <: PormG.PormGPostgres end
+struct EkrMockSQLite <: PormG.PormGSQLite end
 
 # Every function name a constructor builds, read from the source: `function_name = "X"` (the
 # `FObject`/`WindowFunction` constructors) and `_pad_function("X", …)` (`LPad`/`RPad`, which pass the
@@ -78,7 +83,7 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Function result rules: every rule is one the readers know
-# `_function_projection_kind`, `_textless_number` and `_zero_scale_decimal` branch on these symbols;
+# `_infer_function_kind`, `_textless_number` and `_zero_scale_decimal` branch on these symbols;
 # a misspelt rule would match none of their branches and silently read as untyped.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1034: every result rule is in the vocabulary" begin
@@ -140,17 +145,59 @@ end
 # would be typed a default-width decimal. `_declared_kind` reads the size from the name itself.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1034: _declared_kind reads the declared size" begin
-  dk = _EKR_QB._declared_kind
+  dk(t, conn = EkrMockPostgres()) = _EKR_QB._declared_kind(t, conn)
   @test dk("numeric(10,2)") == PormG.CDecimal(10, 2)
   @test dk("numeric(5)") == PormG.CDecimal(5, 0)
   @test dk("numeric") == PormG.CDecimal(nothing, nothing)
   @test dk("varchar(20)") == PormG.CVarChar(20)
   @test dk("text") == PormG.CText()
   @test dk("integer") == PormG.CInt32()
+  @test dk("smallint") == PormG.CInt16()
   @test dk("bigint") == PormG.CInt64()
   @test dk("double precision") == PormG.CFloat64()
   @test dk("boolean") == PormG.CBool()
   @test dk("date") == PormG.CDate()
   # A type `_sql_type_field` cannot name has no kind (an array cast, an unknown name).
   @test dk("integer[]") === nothing
+  # On SQLite a uuid or network cast renders `CAST(x AS TEXT)`, so it is text there and a uuid here.
+  @test dk("uuid") == PormG.CUUID()
+  @test dk("uuid", EkrMockSQLite()) == PormG.CText()
+  @test dk("numeric(10,2)", EkrMockSQLite()) == PormG.CDecimal(10, 2)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Expression kind: a computed number's type on each engine
+# The engine-dependent results #1034 states once. PostgreSQL: `Dialect` casts `Abs`/`Floor`/`Ceil` and
+# every `:numeric` function to `numeric`; `Sum` and `Avg` render bare and take PostgreSQL's aggregate
+# types (`sum(integer)` is `bigint`, `sum(bigint)` and `avg(integer)` `numeric`, `avg(double)` a
+# double). SQLite: a `:promoting` function keeps an integer an integer, a `:numeric` one is a REAL.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1034: _computed_kind, per engine" begin
+  ck(name, k, conn) = _EKR_QB._computed_kind(Val(name), _EKR_QB._result_rule(Val(name)), k, conn)
+  pg, sl = EkrMockPostgres(), EkrMockSQLite()
+  int, big, flt, dec, ivl = PormG.CInt32(), PormG.CInt64(), PormG.CFloat64(), PormG.CDecimal(10, 2), PormG.CInterval()
+  numeric = PormG.CDecimal(nothing, nothing)
+  # PostgreSQL: the `::numeric` cast decides whatever the operand.
+  @test ck(:ABS, int, pg) == numeric
+  @test ck(:FLOOR, flt, pg) == numeric
+  @test ck(:ROUND, flt, pg) == numeric
+  @test ck(:MOD, int, pg) == numeric
+  # PostgreSQL's own aggregate types.
+  @test ck(:SUM, int, pg) == PormG.CInt64()
+  @test ck(:SUM, big, pg) == numeric
+  @test ck(:SUM, flt, pg) == flt
+  @test ck(:SUM, dec, pg) == numeric
+  @test ck(:SUM, ivl, pg) == ivl
+  @test ck(:AVG, flt, pg) == flt
+  @test ck(:AVG, int, pg) == numeric
+  @test ck(:AVG, ivl, pg) == ivl
+  @test ck(:AVG, nothing, pg) === nothing   # an operand PormG cannot type: a numeric, a double or an interval
+  # SQLite: no cast, so the operand's number type, or a REAL.
+  @test ck(:ABS, int, sl) == PormG.CInt64()
+  @test ck(:FLOOR, flt, sl) == flt
+  @test ck(:SUM, dec, sl) == numeric
+  @test ck(:SUM, ivl, sl) == ivl
+  @test ck(:ROUND, dec, sl) == flt
+  @test ck(:AVG, int, sl) == flt
+  @test ck(:AVG, ivl, sl) == ivl
 end

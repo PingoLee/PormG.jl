@@ -112,9 +112,13 @@ _aggregate_refusal(fn::String, y) =
 #                      `Least`), so it has a kind only when they agree. A declared `output_field` is
 #                      the cast these render (#852);
 # - `:first_operand` — the value is the first operand's or NULL (`NullIf`);
-# - `:promoting`     — a number of its operands' numeric type (`Sum`, `Abs`, `Floor`, `Ceil`);
-# - `:numeric`       — a number PostgreSQL computes as `numeric` whatever the operand and SQLite as a
-#                      REAL (`Avg`, `Round`, `Mod`, …), measured for #1027;
+# - `:promoting`     — a number computed from its operand's type (`Sum`, `Abs`, `Floor`, `Ceil`): on
+#                      SQLite an integer stays one; on PostgreSQL the type is the function's own
+#                      (`Dialect` casts `Abs`/`Floor`/`Ceil` to `numeric`, and `Sum` widens), which
+#                      `_computed_kind` states;
+# - `:numeric`       — a fractional number: PostgreSQL computes it as `numeric` (`Dialect` casts the
+#                      operand; `Avg` renders bare and averages a `double precision` to one) and SQLite
+#                      as a REAL (`Avg`, `Round`, `Mod`, …), measured for #1027;
 # - `:declared`      — the type the call declares (`Cast`'s type, `Case`'s `output_field`);
 # - a `CanonicalType` — the value always has that kind (`Count` is a `bigint`, `Lower` text);
 # - `:unknown`       — not stated: the readers treat the value as untyped, the fail-open default.
@@ -142,6 +146,14 @@ function Sum(x; distinct::Bool = false)
   return FObject(function_name = "SUM", column = _aggregate_operand("Sum", x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
 _result_rule(::Val{:SUM}) = :promoting
+# `SUM` renders bare on both engines, so it has each one's aggregate type, not the `::numeric` cast the
+# other `:promoting` functions render on PostgreSQL (`_computed_kind`, `expression_kind.jl`). PostgreSQL
+# widens `sum(smallint|integer)` to `bigint` and `sum(bigint)` to `numeric`.
+_computed_kind(::Val{:SUM}, ::Symbol, ::Union{CInt16,CInt32}, ::PormGPostgres) = CInt64()
+_computed_kind(::Val{:SUM}, ::Symbol, ::Union{CInt64,CDecimal}, ::PormGPostgres) = CDecimal(nothing, nothing)
+_computed_kind(::Val{:SUM}, ::Symbol, k::Union{CFloat64,CInterval}, ::PormGPostgres) = k
+_computed_kind(::Val{:SUM}, ::Symbol, ::Any, ::PormGPostgres) = nothing
+_computed_kind(::Val{:SUM}, ::Symbol, k::CInterval, ::PormGSQLite) = k
 
 """
     Avg(x; distinct::Bool = false)
@@ -165,6 +177,12 @@ function Avg(x; distinct::Bool = false)
   return FObject(function_name = "AVG", column = _aggregate_operand("Avg", x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
 _result_rule(::Val{:AVG}) = :numeric
+# `AVG` renders bare too: PostgreSQL averages a `double precision` to one and an interval to an
+# interval, and every other number to a `numeric`. SQLite answers a REAL, but an interval stays one.
+_computed_kind(::Val{:AVG}, ::Symbol, k::Union{CFloat64,CInterval}, ::PormGPostgres) = k
+_computed_kind(::Val{:AVG}, ::Symbol, ::Union{CInt16,CInt32,CInt64,CDecimal}, ::PormGPostgres) = CDecimal(nothing, nothing)
+_computed_kind(::Val{:AVG}, ::Symbol, ::Any, ::PormGPostgres) = nothing
+_computed_kind(::Val{:AVG}, ::Symbol, k::CInterval, ::PormGSQLite) = k
 """
   Count(x; distinct::Bool = false)
 

@@ -15,6 +15,9 @@ Pinned here:
   2. **The vocabulary.** Every rule is one the readers know.
   3. **The lists it replaced.** Each former list is exactly one rule group, so moving the readers to
      the table changed no answer; `test_expression_kind_matrix.jl` pins the answers themselves.
+  4. **The walk's two pure helpers** (`src/querybuilder/expression_kind.jl`): how two candidate
+     values' kinds combine under each policy, and the kind a declared type names, size included.
+     What `_expression_kind` answers per shape is the matrix's `kind` channel.
 
 DB-free: no connection is opened.
 
@@ -105,4 +108,49 @@ end
   # The declared-date read (#822, #852) applied to these five by name.
   @test group(r -> r in (:declared, :one_of)) == Set(["CAST", "CASE", "COALESCE", "GREATEST", "LEAST"])
   @test group(r -> r isa PormG.CDate) == Set(["DATE"])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Expression kind: two operands' kinds as one value's, per policy
+# `Coalesce`/`Greatest`/`Least` and an untyped `Case` have a kind only when their candidate values
+# agree. The READ policy demands the same kind, because a read parser runs per column; every-kind
+# follows PostgreSQL's resolution — integers widen, integer < numeric < double, text is text.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1034: _unify_kinds, read vs every kind" begin
+  unify = _EKR_QB._unify_kinds
+  read, all = _EKR_QB._ReadKinds(), _EKR_QB._AllKinds()
+  # Read: the same kind or none, even where the families are compatible.
+  @test unify(PormG.CDate(), PormG.CDate(), read) == PormG.CDate()
+  @test unify(PormG.CInt32(), PormG.CInt64(), read) === nothing
+  @test unify(PormG.CDecimal(10, 2), PormG.CDecimal(12, 2), read) === nothing
+  # Every kind: numeric promotion, and a width the operands do not share is dropped.
+  @test unify(PormG.CInt32(), PormG.CInt64(), all) == PormG.CInt64()
+  @test unify(PormG.CInt32(), PormG.CFloat64(), all) == PormG.CFloat64()
+  @test unify(PormG.CInt64(), PormG.CDecimal(10, 2), all) == PormG.CDecimal(nothing, nothing)
+  @test unify(PormG.CDecimal(10, 2), PormG.CDecimal(10, 2), all) == PormG.CDecimal(10, 2)
+  @test unify(PormG.CVarChar(250), PormG.CText(), all) == PormG.CText()
+  # Kinds with no common type stay unknown under either policy: a date and a timestamp, a text and a number.
+  @test unify(PormG.CDate(), PormG.CDateTime(true), all) === nothing
+  @test unify(PormG.CText(), PormG.CInt32(), all) === nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Expression kind: a declared type keeps its size
+# `_sql_type_field` maps a type NAME to a field and drops its size, so a `Cast(x, "numeric(10,2)")`
+# would be typed a default-width decimal. `_declared_kind` reads the size from the name itself.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1034: _declared_kind reads the declared size" begin
+  dk = _EKR_QB._declared_kind
+  @test dk("numeric(10,2)") == PormG.CDecimal(10, 2)
+  @test dk("numeric(5)") == PormG.CDecimal(5, 0)
+  @test dk("numeric") == PormG.CDecimal(nothing, nothing)
+  @test dk("varchar(20)") == PormG.CVarChar(20)
+  @test dk("text") == PormG.CText()
+  @test dk("integer") == PormG.CInt32()
+  @test dk("bigint") == PormG.CInt64()
+  @test dk("double precision") == PormG.CFloat64()
+  @test dk("boolean") == PormG.CBool()
+  @test dk("date") == PormG.CDate()
+  # A type `_sql_type_field` cannot name has no kind (an array cast, an unknown name).
+  @test dk("integer[]") === nothing
 end

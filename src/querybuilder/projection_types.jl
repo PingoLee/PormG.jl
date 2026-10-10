@@ -402,7 +402,7 @@ end
 
 # #965 — whether a value is a boolean only when ALL of its candidate values are: a `Bool` literal, or
 # an expression `_expression_formatter` types as one. A NULL is no value and is skipped; NULLs alone
-# are untyped. Every value must agree, as `_multi_operand_kind` requires: PostgreSQL refuses a CASE or
+# are untyped. Every value must agree, as `_agreeing_kind` requires: PostgreSQL refuses a CASE or
 # COALESCE mixing boolean and integer, and on SQLite the result would be a boolean on some rows and an
 # integer on others, so a mixed one is no boolean to type. `paths`: whether a string is a column path
 # (a `Coalesce` operand) or a literal (a `Case` branch).
@@ -441,31 +441,14 @@ end
 # `strftime('%Y-%m-%d', …)` on SQLite (`Dialect.DATE`) — whatever its operand. `COALESCE`, `GREATEST`
 # and `LEAST` declared `date` are dates for the `Cast` reason: since #852 they render the cast on both
 # engines (`date(…)` on SQLite). Otherwise their value is one operand's own: they are typed only when
-# every operand agrees (`_multi_operand_kind`). `NULLIF(a, b)` returns `a` or NULL, so it is `a`.
+# every operand agrees (`_agreeing_kind`). `NULLIF(a, b)` returns `a` or NULL, so it is `a`.
 #
-# #1034: which function is which is its `_result_rule`, stated beside its constructor
-# (`functions.jl`): `:operand`, `:one_of`, `:first_operand`, a declaration (`:declared`, and the
-# `output_field` of a `:one_of`), and `DATE`'s fixed `CDate()`.
-function _function_projection_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)::Union{CanonicalType,Nothing}
-  rule = _result_rule(p)
-  if p isa FObject && rule in (:declared, :one_of)
-    declared = get(p.kwargs, p.function_name == "CAST" ? "type" : "output_field", nothing)
-    declared isa AbstractString && _sql_type_field(declared) isa Models.sDateField && return CDate()
-  end
-  rule isa CDate && return CDate()
-  # #953, #965: a boolean value is typed a boolean, whichever function produced it. PostgreSQL's
-  # driver types it already; SQLite delivers the 0/1 it stores, which `value_parser(::CBool, …)` turns
-  # back into a `Bool`. `field_canonical_kind` names no boolean kind (the table also feeds the
-  # comparison binder: #882's reason), so the formatter the build already gives the value decides: an
-  # extremum over a boolean, a `Cast`/`output_field` naming one, `Coalesce` or `Case` over booleans. A
-  # window value function returns its operand's own value, so its operand decides.
-  _is_boolean_valued(p, instruc) && return CBool()
-  p isa FObject && rule === :one_of && return _multi_operand_kind(p, instruc)
-  p isa FObject && rule === :first_operand && return _operand_kind(first(p.column), instruc)
-  rule === :operand || return nothing
-  return _operand_kind(p.column, instruc)
-end
+# #1034: the read POLICY of the one walk in `expression_kind.jl`, where each of these rules is stated
+# once; `_expression_kind` is the same walk asked for every kind.
+_function_projection_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)::Union{CanonicalType,Nothing} =
+  _infer_function_kind(p, instruc, _ReadKinds())
 _function_projection_kind(::Any, ::SQLInstruction) = nothing
+
 function _is_boolean_valued(p::FObject, instruc::SQLInstruction)
   # `_expression_formatter` takes the FIRST operand that names a type, which is right for a filter
   # value but would type `Coalesce("is_active", "points")` a boolean. A declared `output_field` is
@@ -477,31 +460,6 @@ function _is_boolean_valued(p::FObject, instruc::SQLInstruction)
 end
 _is_boolean_valued(p::WindowFunction, instruc::SQLInstruction) =
   _result_rule(p) === :operand && _expression_formatter(p.column, instruc) === Models.format_bool_sql
-
-# #824 — the kind of a function whose value is one of several operands' own values. Typed only on
-# agreement: every operand names the SAME kind (a `CDecimal` of the same width, a `CDateTime` of the
-# same flavour). An operand with no kind — a text or number column, a number, arithmetic, a function
-# PormG does not type — disqualifies the whole projection: the value may be that operand's, and a
-# kind taken from the others would run text through a date parser (`Coalesce("note", Date(…))`). A
-# NULL literal is skipped: it is never the value. A declared `output_field` other than `date` (which
-# `_function_projection_kind` answers first) is kept only when it names the kind the operands agree on:
-# the cast it renders (#852) is not a read kind of its own — `Cast(x, "numeric(10,2)")` records none
-# either — so a declaration that disagrees with the operands records nothing.
-function _multi_operand_kind(p::FObject, instruc::SQLInstruction)::Union{CanonicalType,Nothing}
-  kind = nothing
-  for operand in (p.column isa AbstractVector ? p.column : (p.column,))
-    _is_null_literal(operand isa SQLText ? operand.field : operand) && continue   # the #812 `Case` rule
-    k = _operand_kind(operand, instruc)
-    (k === nothing || (kind !== nothing && k != kind)) && return nothing
-    kind = k
-  end
-  declared = get(p.kwargs, "output_field", nothing)
-  if kind !== nothing && declared isa AbstractString
-    declared_field = _sql_type_field(declared)
-    (declared_field === nothing || field_canonical_kind(declared_field) != kind) && return nothing
-  end
-  return kind
-end
 
 # The operand's kind: a column path is its field's; a bare `F(col)` is the column; a function is what
 # `_function_projection_kind` says of it, so `Max(Coalesce(…))` and `Coalesce(Max("d"), …)` compose; a
@@ -515,25 +473,9 @@ end
 # agree. A `CTE(...)` handle is NOT its inferred field: `_set_field_from_sql_function` hands an
 # `Avg("amount")` column the operand's own `DecimalField`, which would run a computed double through
 # the decimal parser (#648). It is the body's own read record instead — see `_cte_column_kind`.
-function _operand_kind(p::String, instruc::SQLInstruction)
-  # A transformed path (`"ts__@date"`) names the transform's result, not the column — through the one
-  # transform ladder (#562), the call `_get_filter_query(::String)` renders with.
-  occursin("__@", p) && return _function_projection_kind(_check_function(p), instruc)
-  column_field = _alias_column_field(p, instruc)
-  return column_field === nothing ? nothing : field_canonical_kind(column_field)
-end
-_operand_kind(p::FExpression, instruc::SQLInstruction) =
-  p.operation === nothing ? _operand_kind(p.field_name, instruc) : nothing
-_operand_kind(p::SQLField, instruc::SQLInstruction) = _operand_kind(p.field, instruc)
-_operand_kind(p::SQLText, ::SQLInstruction) = literal_canonical_kind(p.field)
-_operand_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction) = _function_projection_kind(p, instruc)
-function _operand_kind(p::JoinedReference, instruc::SQLInstruction)
-  column_field = _alias_column_field(p, instruc)
-  return column_field === nothing ? nothing : field_canonical_kind(column_field)
-end
-_operand_kind(p::CTEReference, instruc::SQLInstruction) = _cte_column_kind(p, instruc)
-_operand_kind(p::SubqueryObject, instruc::SQLInstruction) = _subquery_kind(p, instruc)
-_operand_kind(::Any, ::SQLInstruction) = nothing
+#
+# #1034: the read policy of the walk in `expression_kind.jl`.
+_operand_kind(p, instruc::SQLInstruction) = _infer_kind(p, instruc, _ReadKinds())
 
 # #1027 — a `Concat` operand that has no single text: `(kind, what)`, `kind` one of `:bool`, `:float`,
 # `:decimal`, `:numeric`, or `nothing`. PostgreSQL's `CONCAT` writes each operand through its type's
@@ -991,25 +933,6 @@ end
 _textless_number(x::Union{Bool,AbstractFloat,Decimals.Decimal}, ::SQLInstruction) = _textless_literal(x)
 _textless_number(p::SQLText, ::SQLInstruction) = _textless_literal(p.field)
 _textless_number(::Any, ::SQLInstruction) = nothing
-
-# #824 — the read kind of a CTE column. The body is built before the outer query (`build_cte_clause`
-# runs first), and building it recorded the kind of each of its own projections under the same
-# output name the CTE model gives the column — so that record IS the answer, by the same rule, on the
-# same connection: a plain column has its kind, `Max` its operand's, a `Cast(…, "date")` `CDate`, and
-# `Avg`/`Sum`/`Count`/arithmetic none. A path that hops on through the CTE column
-# (`CTE("ev", "parent__x")`) ends at a real model field, which the join walk memoised. No record —
-# a body not built in this pass — answers `nothing`, the fail-open default.
-function _cte_column_kind(ref::CTEReference, instruc::SQLInstruction)::Union{CanonicalType,Nothing}
-  if occursin("__", ref.path)
-    column_field = _alias_column_field(ref, instruc)
-    return column_field === nothing ? nothing : field_canonical_kind(column_field)
-  end
-  cte = get(instruc.object.ctes, ref.name, nothing)
-  cte === nothing && return nothing
-  body = get(cte, "query", nothing)
-  body isa SQLObjectHandler || return nothing
-  return get(body.object.projection_kinds, Symbol(ref.path), nothing)
-end
 
 # #888 — the read kind of a `Subquery(...)`: its one projected column's, by `_cte_column_kind`'s rule.
 # The inner build typed that column the way it types any projection (a plain column has its kind,

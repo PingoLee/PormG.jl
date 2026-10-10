@@ -112,6 +112,8 @@ include("querybuilder/build_joins.jl")
 
 # #130: the SELECT/ORDER renderer, what a projection renders as, the filter renderer, then `build`.
 include("querybuilder/build_select.jl")
+# #1034: the one expression-kind walk; `projection_types.jl`'s read readers are its read policy.
+include("querybuilder/expression_kind.jl")
 include("querybuilder/projection_types.jl")
 include("querybuilder/build_filter.jl")
 include("querybuilder/build_query.jl")

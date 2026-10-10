@@ -127,8 +127,8 @@ Race_report = Models.Model("race_report",
 - A text → `tsvector` retype is refused: `CAST(text AS tsvector)` reads text as a document literal,
   not as words. Add the column and fill it with `update`.
 - Why SQLite is refused: it has no `tsvector`, and its FTS5 is a separate index table.
-- Declared with `generated_from`, it is a generated column (`GENERATED ALWAYS AS (…) STORED`, PostgreSQL
-  12+) that PostgreSQL keeps current and PormG never writes. See
+- Declared with `generated_from`, it is a generated column (`GENERATED ALWAYS AS (…) STORED`) that
+  PostgreSQL keeps current and PormG never writes. See
   [Full-Text Search → A generated document](read/full_text_search.md#A-generated-document).
 
 Reference: **[Full-Text Search → A stored document](read/full_text_search.md#A-stored-document:-SearchVectorField)**.

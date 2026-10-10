@@ -895,10 +895,10 @@ function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
 end
 
 # `pg_input_is_valid` arrived in PostgreSQL 16 (`server_version_num` 160000); PormG's
-# schema-management floor is 12 (#1032).
+# schema-management floor is 13 (#1108).
 const _PG_INPUT_IS_VALID = 160000
 
-# PostgreSQL 11–15 has no `pg_input_is_valid`, so the `:text_cast` count falls back to the grammar of
+# PostgreSQL 13–15 has no `pg_input_is_valid`, so the `:text_cast` count falls back to the grammar of
 # the target type's input function, as an anchored regex over the text (#828). Exact for an integer
 # (and its range), a numeric (and its precision) and a boolean; close for a float and a UUID, whose
 # input functions accept a few rare spellings these do not (a hex float; a UUID hyphenated at odd

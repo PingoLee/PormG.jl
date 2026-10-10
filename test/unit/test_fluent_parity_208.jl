@@ -673,6 +673,9 @@ end
       ("alias shadowing its column", :one_row, () -> model.objects.values("points" => Sum("points")).order_by("points")),
       # Conservative: an empty OVER groups nothing, but no window is predicted.
       ("window with an empty OVER", :kept,  () -> model.objects.values("r" => Rank(over = WindowOver()), "n" => Count("id"))),
+      # Conservative: an unnamed aggregate order term joins no GROUP BY (#1115), but the predictor
+      # keeps the projection for any order term it cannot match by name.
+      ("order by an unnamed aggregate", :kept, () -> model.objects.values("n" => Count("id")).order_by(SQLOrder(SQLField(Count("id"), "o")))),
       # An aggregate beside the column it reads: the build refuses it (#798).
       ("column + aggregate in one expression", :refused, () -> model.objects.values("n" => F("points") + Sum("points"))),
       ("Case with an aggregate branch", :refused, () -> model.objects.values("c" => Case([When("points" => 1; then = Sum("id"))]; default = 0))),

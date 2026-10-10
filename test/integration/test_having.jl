@@ -339,4 +339,26 @@ end
         end
     end
 
+    @testset "an aggregate order_by term orders the groups without joining GROUP BY (#1115)" begin
+        # Each constructor's best single-race score, ordered by that aggregate. The term used to be
+        # added to GROUP BY as well — `GROUP BY 1, MAX("Tb"."points")` — which both engines reject.
+        # Expected answer computed in Julia from the raw rows: the max points per constructor.
+        rows = M.Result.objects.values("constructorid", "points") |> DataFrame
+        best = Dict{Int,Float64}()
+        for r in eachrow(rows)
+            best[r.constructorid] = max(get(best, r.constructorid, -Inf), Float64(r.points))
+        end
+
+        q = M.Result.objects.values("constructorid", "best" => Max("points"))
+        q.order_by(PormG.QueryBuilder.SQLOrder(PormG.QueryBuilder.SQLField(Max("points"), "o");
+                                               orientation = "DESC"))
+        # The statement groups by the projected column alone.
+        @test occursin(r"GROUP BY 1\s+ORDER BY MAX\(", PormG.QueryBuilder.inspect_query(q)[:sql_text])
+        df = q |> DataFrame
+        # One row per constructor with its own maximum, and the rows come back highest first.
+        @test Dict(Int(r.constructorid) => Float64(r.best) for r in eachrow(df)) == best
+        @test issorted(Float64.(df.best); rev = true)
+        @test length(unique(df.best)) > 1   # the order check is vacuous over one distinct value
+    end
+
 end

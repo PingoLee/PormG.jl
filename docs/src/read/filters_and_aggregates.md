@@ -1194,6 +1194,31 @@ A window function's argument is held to the same rule, even with no aggregate in
 `Lag("raceid__round")` beside `Sum("points")` raises unless the query groups `raceid__round`. See
 [A Window Over an Aggregate](window_functions.md#A-Window-Over-an-Aggregate).
 
+An ordering term is held to the same rule. In an aggregating query, a column named in `order_by` joins
+`GROUP BY`. An aggregate term does not, because it already has one value per group, and a window term
+contributes only the columns its `partition_by` and `order_by` read. Ordering by the alias
+(`order_by("-best")`) is the usual spelling; an expression term works too:
+
+```julia
+using PormG.QueryBuilder: SQLOrder, SQLField
+
+query = M.Result.objects
+query.values("constructorid__name", "best" => Max("points"))
+query.order_by(SQLOrder(SQLField(Max("points"), "best_first"); orientation = "DESC"))
+```
+
+```sql
+SELECT "Tb_1"."name" as "constructorid__name", MAX("Tb"."points") as "best"
+FROM "result" as "Tb"
+ INNER JOIN "constructor" AS "Tb_1" ON "Tb"."constructorid" = "Tb_1"."constructorid"
+GROUP BY 1
+ORDER BY MAX("Tb"."points") DESC NULLS FIRST
+```
+
+A term that mixes a column with an aggregate, such as `F("grid") + Max("points")`, raises unless the
+query groups `grid`. Before [#1115](https://github.com/PingoLee/PormG.jl/issues/1115), every one of these
+terms was added to `GROUP BY` whole, which both engines reject.
+
 ### A Condition on an Aggregate Alias
 
 A condition can also reach an aggregate by its alias. A `When` that reads an aggregate alias compares

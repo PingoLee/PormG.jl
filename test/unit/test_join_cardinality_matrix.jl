@@ -161,6 +161,22 @@ const _JCARD_SINGLE_CELLS = (
   # A forward hop past a reverse one: the reverse hop is still the one that repeats.
   ("filter, reverse then forward",
    (mod -> mod.Team.objects.filter("drivers__teamid__name" => "X").values("teamid"), _jcard_read)),
+  # #1112: a reverse hop after the first, followed by another relation. The loop's reverse arm checked
+  # the next segment against the child's columns only, so a reverse accessor or a ManyToMany field there
+  # was refused; an unknown column now reports through the same funnel as at the first hop.
+  ("values, forward then reverse then reverse (#1112)",
+   (mod -> mod.Driver.objects.values("driverid", "teamid__drivers__results__grid"), _jcard_read)),
+  ("filter, forward then reverse then reverse (#1112)",
+   (mod -> mod.Driver.objects.filter("teamid__drivers__results__grid" => 1).values("driverid"), _jcard_read)),
+  ("values, forward then reverse then ManyToMany (#1112)",
+   (mod -> mod.Driver.objects.values("driverid", "teamid__drivers__sponsors__name"), _jcard_read)),
+  ("values, forward then reverse then an unknown column (#1112)",
+   (mod -> mod.Driver.objects.values("driverid", "teamid__drivers__nope"), _jcard_read)),
+  # The reverse ManyToMany arm (`Sponsor.drivers`) after a loop reverse hop, and an `on()` path through one.
+  ("values, forward then reverse then ManyToMany then reverse ManyToMany (#1112)",
+   (mod -> mod.Driver.objects.values("driverid", "teamid__drivers__sponsors__drivers__code"), _jcard_read)),
+  ("on() path through a reverse hop after the first (#1112)",
+   (mod -> mod.Driver.objects.on("teamid__drivers__results", "grid" => 1).values("driverid", "teamid__drivers__results__points"), _jcard_read)),
   ("filter, forward not null from Result",
    (mod -> mod.Result.objects.filter("driverid__code" => "X").values("resultid"), _jcard_read)),
   # An `OuterRef` across a to-many path joins the OUTER query.

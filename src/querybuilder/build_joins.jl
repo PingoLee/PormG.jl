@@ -571,9 +571,9 @@ end
 _child_key_unique(child::PormGModel, fk_field::Symbol)::Bool = _covers_unique_key(child, Set([String(fk_field)]))
 
 # #68 — ONE reverse-relation hop, the mirror of `_forward_fk_hop` and shared the same way. The
-# `length(vector) == 1` refusal stays in the callers (both have it), and so does the loop-only
-# "column not found on the child" check — the first hop deliberately lacks it (its line has been
-# commented out since before #343), and the extraction does not change which hop reports what.
+# `length(vector) == 1` refusal stays in the callers (both have it). Neither checks the segment after
+# the accessor against the child's columns: the loop did until #1112, which refused a path continuing
+# through another relation.
 function _reverse_hop(instruct::SQLInstruction, src_model::PormGModel, src_table::String,
                       src_alias::String, rel::Models.ReverseRelation, vector::Vector{String};
                       prev_how::Union{String,Nothing})
@@ -926,9 +926,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     else
       rel = related_object::Models.ReverseRelation
       length(vector) == 1 && throw(QueryBuildError("Invalid field path: $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
-      # Unlike the loop's reverse arm, the first hop does NOT check `vector[2]` against the child's
-      # field names here — an unknown terminal column falls through to `_solve_field`'s typed error
-      # (#446). Long-standing; #68 keeps each hop reporting what it reported.
+      # No check of `vector[2]` against the child's field names — an unknown terminal column falls
+      # through to `_solve_field`'s typed error (#446). The loop's reverse arm agrees since #1112.
       row_join, foreign_table_name, last_field = _reverse_hop(
         instruct, instruct.object.model, Models.model_table_name(instruct.object.model), instruct.alias,
         rel, vector; prev_how = nothing)
@@ -1033,9 +1032,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       else
         rel = related_object::Models.ReverseRelation
         length(vector) == 1 && throw(QueryBuildError("Invalid field path: $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
-        # Loop-only check (the first hop lacks it — see there); stays in the caller so the helper
-        # does not silently give the first hop a message it never had.
-        !(vector[2] in rel.model_resolved.field_names) && throw(UnknownFieldError("Invalid field path: the column $(vector[2]) not found in $(rel.model_resolved.name)"))
+        # #1112: no check of `vector[2]` against the child's columns, as at the first hop. That check
+        # refused a reverse accessor or a ManyToMany field there, neither of which is in `field_names`;
+        # the next iteration resolves those, and an unknown name reaches its `else` or `_solve_field`.
         row_join, foreign_table_name, last_field = _reverse_hop(
           instruct, new_object, prev_b, tb_alias, rel, vector; prev_how = prev_how)
         hop_reach = (:reverse, foreign_table_name.name, String(rel.binding))

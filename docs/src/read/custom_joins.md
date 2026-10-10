@@ -613,14 +613,15 @@ parameters from `on` route to the JOIN clause (ahead of any WHERE parameters).
       and drops no base row itself. The path's own join is the one any reference to it builds, so a
       nullable foreign key on the way is a `LEFT JOIN` and a required one an `INNER JOIN`.
     - **The path must be to-one** — forward foreign keys only. A path that crosses a reverse relation
-      (`driverid__result__grid`), a `ManyToManyField` or a link to a column that is not unique raises
-      `FilterError` ([#992](https://github.com/PingoLee/PormG.jl/issues/992),
+      (`driverid__result__grid`), a `ManyToManyField` or a `ForeignKey` whose `pk_field` names a column
+      the target does not declare unique raises `FilterError` ([#992](https://github.com/PingoLee/PormG.jl/issues/992),
       [#1002](https://github.com/PingoLee/PormG.jl/issues/1002)): joined onto the base row, it would
       repeat that row once per related row, whatever the `cjoin_on`'s `join_type`. A reverse
       `OneToOneField` is refused too: it repeats nothing, but its `INNER JOIN` drops a base row with no
       match, which a `LEFT` `cjoin_on` was written to keep. `distinct()` does not lift this refusal,
       since it cannot restore a dropped row; projecting the same path does, because the query then asks
-      for that join itself. To match on whether a related row exists, correlate a subquery instead:
+      for that join itself — and so does a `cjoin(field = …)` link, which declares its own join even to a
+      non-unique column. To match on whether a related row exists, correlate a subquery instead:
 
       ```julia
       # Each result, with d2 matched only for drivers who have started a race from pole.

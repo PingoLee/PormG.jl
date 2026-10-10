@@ -362,7 +362,8 @@ _with_config(row::Union{CteJoin,CrossJoin}, ::Nothing, ::Nothing) = row
 # #343 slot; empty for a forward link, whose field holds no binding). `introducer` is the first `RenderScope.introducer` that
 # reached the hop to evaluate something (what a refusal names), `declared` whether a projection or an
 # `on()` / `cjoin` path reached it, and `cjoin_on` whether a `cjoin_on` condition did — the one
-# introducer for which a dropped base row is as wrong as a repeated one (#992).
+# introducer for which a dropped base row is as wrong as a repeated one (#992). `ordered` says an
+# `order_by` term reached it: in an aggregating query that term joins GROUP BY.
 # `link`/`outer_column` name a one-hop reverse relation's columns, for the `Exists(...)` the refusal
 # suggests; empty otherwise.
 @kwdef mutable struct JoinReach
@@ -375,6 +376,7 @@ _with_config(row::Union{CteJoin,CrossJoin}, ::Nothing, ::Nothing) = row
   introducer::Symbol
   declared::Bool
   cjoin_on::Bool
+  ordered::Bool = false
   link::String = ""
   outer_column::String = ""
 end

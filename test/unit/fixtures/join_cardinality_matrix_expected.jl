@@ -485,6 +485,34 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :build, error = "QueryBuildError", message = "PormG fan-out guard (#74): the aggregate n is inflated because it aggregates a column from a table that a to-many join r"),
   ("cjoin link non-unique/grouped Count", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "PormG fan-out guard (#74): the aggregate n is inflated because it aggregates a column from a table that a to-many join r"),
+  ("ForeignKey pk_field non-unique/filter", :postgres) =>
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the link 'carno' to a driver column that is not unique, so its join re"),
+  ("ForeignKey pk_field non-unique/filter", :sqlite) =>
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the link 'carno' to a driver column that is not unique, so its join re"),
+  ("ForeignKey pk_field non-unique/values", :postgres) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"carno__code\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"carno\" = \"Tb_1\".\"number\""),
+  ("ForeignKey pk_field non-unique/values", :sqlite) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"carno__code\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"carno\" = \"Tb_1\".\"number\""),
+  ("count() over a Case projection of the same path", :postgres) =>
+    (stage = :ok, sql = "SELECT COUNT(*) FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" = \$1"),
+  ("count() over a Case projection of the same path", :sqlite) =>
+    (stage = :ok, sql = "SELECT COUNT(*) FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" = ?"),
+  ("count() over a window partitioned by the same path", :postgres) =>
+    (stage = :ok, sql = "SELECT COUNT(*) FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" = \$1"),
+  ("count() over a window partitioned by the same path", :sqlite) =>
+    (stage = :ok, sql = "SELECT COUNT(*) FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" = ?"),
+  ("grouped Max ordered by a to-many path", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "PormG cardinality check (#1002): an order_by term crosses the reverse relation 'results', so its join, which the orderin"),
+  ("grouped Max ordered by a to-many path", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "PormG cardinality check (#1002): an order_by term crosses the reverse relation 'results', so its join, which the orderin"),
+  ("grouped Max ordered by a to-many path, distinct", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "DISTINCT query cannot ORDER BY results__grid: it is not in the SELECT DISTINCT projection. PostgreSQL (and the SQL stand"),
+  ("grouped Max ordered by a to-many path, distinct", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "DISTINCT query cannot ORDER BY results__grid: it is not in the SELECT DISTINCT projection. PostgreSQL (and the SQL stand"),
+  ("grouped Max filtered and ordered by the same to-many path", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "PormG cardinality check (#1002): an order_by term crosses the reverse relation 'results', so its join, which the orderin"),
+  ("grouped Max filtered and ordered by the same to-many path", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "PormG cardinality check (#1002): an order_by term crosses the reverse relation 'results', so its join, which the orderin"),
   ("cjoin link non-unique/cjoin_on condition", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"grid\" = \"Tb_1\".\"number\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") AND \"Tb_1\".\"nationality\" = \$1"),
   ("cjoin link non-unique/cjoin_on condition", :sqlite) =>

@@ -201,6 +201,7 @@ end
   q.order_by("kids__note")
   sql = inspect_query(q)[:sql_text]
   @test occursin("LEFT JOIN \"obj_child\" AS \"Tb_1\" ON \"Tb\".\"id\" = \"Tb_1\".\"parent\"", sql)
+  @test occursin("ORDER BY \"kids__note\" ASC", sql)   # the projection's output alias
   @test _obj_joins(sql) == 1
 end
 

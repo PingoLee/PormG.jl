@@ -303,7 +303,9 @@ constructors by something about their results, compute one value per constructor
   counted, so the repeat matters again and the filter is refused.
 - **An aggregating query.** Its rows are groups, so a repeat shows only inside an aggregate, and
   `Count` / `Sum` / `Avg` meet the [fan-out guard](filters_and_aggregates.md#Aggregating-Across-To-Many-Relations-(Fan-Out-Guard))
-  instead. `Max` and `Min` are exact.
+  instead. `Max` and `Min` are exact. An `order_by` across a to-many path is still refused there: the
+  ordering joins `GROUP BY`, so it would split each group into one per related row, which
+  `distinct()` cannot undo.
 - **A reverse `OneToOneField`**, or a reverse `ForeignKey` declared `unique = true`: each parent has
   at most one child, so nothing repeats.
 

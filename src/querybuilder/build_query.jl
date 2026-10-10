@@ -281,6 +281,12 @@ function build(object::SQLObject;
       rel = _relation_prefix(object, p)
       isempty(rel) || _declare_join_key!(instruct, rel)
     end
+    if instruct.aggregate && instruct.join_reaches !== nothing
+      for p in _projected_paths(object.order)
+        rel = _relation_prefix(object, lstrip(p, '-'))
+        isempty(rel) || _order_join_key!(instruct, rel)
+      end
+    end
     _check_join_cardinality(instruct; semi_join = semi_join, distinct_rows = distinct_rows)
 
     build_row_join_sql_text(instruct)
@@ -323,22 +329,32 @@ function _check_join_cardinality(instruct::SQLInstruction; semi_join::Bool = fal
   # An aggregating query returns one row per group, so a repeated base row shows only inside an
   # aggregate — and COUNT/SUM/AVG, the three that a repeat changes, are #74's question, asked of every
   # to-many join whoever introduced it. MAX/MIN are exact over repeats.
-  exempt = semi_join || distinct_rows || instruct.object.distinct || instruct.aggregate
+  # Not for an ordering, though: an ORDER BY term of an aggregating query joins its GROUP BY (#789), so
+  # a to-many path there splits every group into one per related value (review of #1002).
+  # And `distinct()` cannot undo that split, so in an aggregating query only a semi-join exempts it.
+  exempt = semi_join || distinct_rows || instruct.object.distinct
   for row in instruct.row_join
     r = get(reaches, row.alias_b, nothing)
     (r === nothing || r.declared) && continue
     r.cjoin_on && throw(FilterError(_cjoin_on_cardinality_msg(instruct, r)))
-    (exempt || !_to_many(row)) && continue
-    msg = _cardinality_msg(instruct, r)
-    throw(r.introducer === :filter ? FilterError(msg) : QueryBuildError(msg))
+    _to_many(row) || continue
+    if instruct.aggregate
+      (r.ordered && !semi_join) || continue
+    elseif exempt
+      continue
+    end
+    msg = _cardinality_msg(instruct, r; ordered = instruct.aggregate)
+    throw((r.introducer === :filter && !instruct.aggregate) ? FilterError(msg) : QueryBuildError(msg))
   end
   return nothing
 end
 
 # #1002: the column paths a projection names, for a terminal that clears it before building
-# (`declared_paths`). Its columns, a function's or an expression's operands; not a subquery's, whose
-# `OuterRef`s evaluate a correlation rather than ask for rows. A literal that is not a path declares
-# nothing, since its relation prefix is empty.
+# (`declared_paths`). Its columns, a function's or an expression's operands, a `When` condition's, a
+# window's `PARTITION BY` / `ORDER BY` — the node set `_contains_agg` walks, so a projection `list()`
+# declares through cannot be missed here (review of #1002: a `Case`/`When` and a window were). Not a
+# subquery's, whose `OuterRef`s evaluate a correlation rather than ask for rows. A literal that is not
+# a path declares nothing, since its relation prefix is empty.
 function _projected_paths(values)::Vector{String}
   out = String[]
   _collect_projected_paths!(out, values, 0)
@@ -351,8 +367,19 @@ function _collect_projected_paths!(out::Vector{String}, x, depth::Int)
     occursin("__", x) && push!(out, String(x))
   elseif x isa Pair
     _collect_projected_paths!(out, x.second, depth + 1)
-  elseif x isa SQLField
+  elseif x isa Union{SQLField,SQLOrder}
     _collect_projected_paths!(out, x.field, depth + 1)
+  elseif x isa WindowFunction
+    _collect_projected_paths!(out, x.column, depth + 1)
+    _collect_projected_paths!(out, x.over.partition_by, depth + 1)
+    _collect_projected_paths!(out, x.over.order_by, depth + 1)
+  elseif x isa OperObject
+    _collect_projected_paths!(out, x.column, depth + 1)
+    _is_rhs_expression(x.values) && _collect_projected_paths!(out, x.values, depth + 1)
+  elseif x isa QObject
+    _collect_projected_paths!(out, x.filters, depth + 1)
+  elseif x isa QorObject
+    _collect_projected_paths!(out, x.or, depth + 1)
   elseif x isa FObject
     _collect_projected_paths!(out, x.column, depth + 1)
     for v in values(x.kwargs)
@@ -379,27 +406,38 @@ _cardinality_exists_hint(r::JoinReach)::String = isempty(r.link) ?
   "Exists(M.$(isempty(r.binding) ? "<Related>" : r.binding).objects.filter(\"<link>\" => OuterRef(\"<column>\"), …))" :
   "Exists(M.$(r.binding).objects.filter(\"$(r.link)\" => OuterRef(\"$(r.outer_column)\"), …))"
 
-function _cardinality_msg(instruct::SQLInstruction, r::JoinReach)::String
+# `ordered`: the query aggregates and an `order_by` term reached the join, so what it changes is the
+# groups, not the row count. An ordering gets no `distinct()` fix: `distinct()` refuses an ORDER BY term
+# outside its projection (review of #1002), so the advice would be a second refusal.
+function _cardinality_msg(instruct::SQLInstruction, r::JoinReach; ordered::Bool = false)::String
   base = instruct.object.model.name
-  what = r.introducer === :filter ? "a filter" :
-         r.introducer === :order_by ? "an order_by term" :
-         r.introducer === :outer_ref ? "an OuterRef(...) in a subquery" : "a join PormG added"
-  first_fix = r.introducer === :order_by ?
-    "Order by one value per $(base) row: compute it over the related rows in a correlated " *
-    "\e[4m\e[32mSubquery(...)\e[0m (e.g. their \e[32mMax\e[0m) and order by that.\n" :
-    r.introducer === :outer_ref ?
-    "Correlate the subquery with a column of the outer row, and reach the related rows inside it.\n" :
-    "Keep each $(base) row once when a related row matches, with a correlated subquery: " *
-    "\e[4m\e[32mfilter($(_cardinality_exists_hint(r)))\e[0m.\n"
-  return string(
-    "PormG cardinality check (#1002): ", what, " crosses ", _cardinality_relation(r),
-    ", so its join repeats each ", base, " row once per related ", r.target,
-    " row, and the query does not ask for those rows.\n",
-    "  Fix one of:\n",
-    "    \e[32m1.\e[0m ", first_fix,
-    "    \e[32m2.\e[0m Collapse the repeated rows: add \e[4m\e[32m.distinct()\e[0m.\n",
-    "    \e[32m3.\e[0m If one row per ", r.target, " row is what you want, project the path: ",
-    "\e[4m\e[32mvalues(…, \"", r.path, "__<column>\")\e[0m.\n")
+  intro = ordered ? :order_by : r.introducer
+  what = intro === :filter ? "a filter" :
+         intro === :order_by ? "an order_by term" :
+         intro === :outer_ref ? "an OuterRef(...) in a subquery" : "a join PormG added"
+  effect = ordered ?
+    "so its join, which the ordering adds to GROUP BY, splits each group into one per related $(r.target) row" :
+    "so its join repeats each $(base) row once per related $(r.target) row"
+  fixes = String[]
+  if intro === :order_by
+    push!(fixes, "Order by one value per $(base) row: compute it over the related rows in a correlated " *
+                 "\e[4m\e[32mSubquery(...)\e[0m (e.g. their \e[32mMax\e[0m) and order by that.")
+  elseif intro === :outer_ref
+    push!(fixes, "Correlate the subquery with a column of the outer row, and reach the related rows inside it.")
+  else
+    push!(fixes, "Keep each $(base) row once when a related row matches, with a correlated subquery: " *
+                 "\e[4m\e[32mfilter($(_cardinality_exists_hint(r)))\e[0m.")
+    push!(fixes, "Collapse the repeated rows: add \e[4m\e[32m.distinct()\e[0m.")
+  end
+  push!(fixes, "If one row per $(r.target) row is what you want, project the path: " *
+               "\e[4m\e[32mvalues(…, \"$(r.path)__<column>\")\e[0m.")
+  io = IOBuffer()
+  print(io, "PormG cardinality check (#1002): ", what, " crosses ", _cardinality_relation(r), ", ", effect,
+        ", and the query does not ask for those rows.\n  Fix one of:\n")
+  for (i, f) in enumerate(fixes)
+    print(io, "    \e[32m", i, ".\e[0m ", f, "\n")
+  end
+  return String(take!(io))
 end
 
 # #992's message, now the `cjoin_on` arm of the one check: the condition as the caller wrote it, and

@@ -21,21 +21,26 @@ a projection (`values`) or an `on()` / `cjoin` path that reaches the **same** jo
 | the filter inside `Exists(...)`, an `__@in` subquery, `exists()`, `update(...)` with literal values, or `delete()` | correct | unchanged |
 | the same inside `exists()` / `Exists(...)` with an `offset()`, or an `__@in` subquery with a `limit()` | the repeats counted toward the slice | raises `FilterError` |
 | a grouping or aggregating query (`values("nationality", "n" => Max("number"))`) | unchanged | unchanged: `Count`/`Sum`/`Avg` still meet the #74 fan-out guard |
+| the same aggregating query plus `order_by("result__points")` | grouped by (nationality, points): each nationality split per result | raises `QueryBuildError` |
+| a `filter()` / `order_by()` across a `ForeignKey` whose `pk_field` names a column the target does not declare unique | each base row once per matching target row | raises, like a reverse path |
 | `update("x" => F("rel__col"))` whose `UPDATE … FROM` carries a to-many join | set from an arbitrary related row | raises `QueryBuildError` |
 | a reverse `OneToOneField` (or a reverse `ForeignKey` declared `unique = true`) | counted as to-many by the fan-out guard | to-one: nothing repeats, so the guard no longer fires |
 
 A `cjoin_on` condition crossing a reverse or many-to-many path was already refused (#992), and still
 is; a reverse `OneToOneField` there is still refused, because its `INNER JOIN` can drop the base row. A
 `cjoin(field = …)` link, or a `ForeignKey` `pk_field`, naming a column the target does not declare
-unique now counts as to-many: an aggregate over it meets the fan-out guard, and a `cjoin_on`
-condition through it is refused.
+unique now counts as to-many, so an aggregate over it meets the fan-out guard. Through a model
+`ForeignKey` a filter, an ordering or a `cjoin_on` condition is refused as well; a `cjoin` declares its
+own join, so a filter or a `cjoin_on` condition through the link stands.
 
 ### Who this affects
 
 A `filter()`, `Q(...)`, `Qor(...)` or `order_by()` key whose path crosses a reverse accessor or a
 `ManyToManyField`, on a query that does not project that same path, is not `distinct()`, and does not
-aggregate. Also an `update()` that sets a column from a joined table while a filter crosses a to-many
-relation.
+aggregate; or an `order_by()` key across such a path in an aggregating query. The same for a forward
+`ForeignKey` whose `pk_field` names a column the target does not declare unique (`unique = true`, the
+primary key, or a single-field `UniqueConstraint`). Also an `update()` that sets a column from a joined
+table while a filter crosses a to-many relation.
 
 ### How to find the calls to migrate
 
@@ -47,8 +52,10 @@ PormG cardinality check (#1002)
 ```
 
 To find them in source, list your models' reverse accessors (each `related_name`, or the lowercase
-child model name) and `ManyToManyField` names, and search filter and ordering keys for them, e.g.
-`grep -rnE '(filter|order_by|Q|Qor)\(.*"(result|sponsors)__' --include=*.jl .`.
+child model name) and `ManyToManyField` names, and search every string key for them. Search the key
+itself rather than the call, since a multi-line chain puts it on the line after `filter(`:
+`grep -rnE '"-?(result|sponsors)__' --include=*.jl .`, then keep the hits inside a `filter`, `Q`,
+`Qor` or `order_by`.
 
 ### Migrate your app
 

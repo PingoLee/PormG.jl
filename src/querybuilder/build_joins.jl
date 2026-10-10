@@ -565,10 +565,10 @@ function _forward_target_not_unique(field::PormGField, target::PormGModel)::Bool
   return !_covers_unique_key(target, Set([name]))
 end
 
-# #1002: a reverse hop's child key is unique for a OneToOne, or a ForeignKey declared `unique = true`:
-# each parent then has at most one child, and the hop does not repeat the parent.
-_child_key_unique(join_field::PormGField)::Bool =
-  hasfield(typeof(join_field), :unique) && getfield(join_field, :unique) === true
+# #1002: a reverse hop's child key is unique for a OneToOne, a ForeignKey declared `unique = true`, or
+# one a single-column plain `UniqueConstraint` covers — the forward side's test (`_covers_unique_key`),
+# read from the child: each parent then has at most one child, and the hop does not repeat the parent.
+_child_key_unique(child::PormGModel, fk_field::Symbol)::Bool = _covers_unique_key(child, Set([String(fk_field)]))
 
 # #68 — ONE reverse-relation hop, the mirror of `_forward_fk_hop` and shared the same way. The
 # `length(vector) == 1` refusal stays in the callers (both have it), and so does the loop-only
@@ -598,7 +598,7 @@ function _reverse_hop(instruct::SQLInstruction, src_model::PormGModel, src_table
     how = how,
     # #74: a reverse foreign key (one-to-many) makes the child table the many-side — unless the child's
     # key is unique (a reverse OneToOne), which matches at most one child per parent (#1002).
-    to_many = !_child_key_unique(join_field),
+    to_many = !_child_key_unique(reverse_model, rel.fk_field),
     target_managed = Models.model_is_managed(reverse_model),   # #771
   )
   return (row, reverse_model, last_field)
@@ -651,11 +651,13 @@ function _record_join_reach!(instruct::SQLInstruction, alias::String, key::Strin
   if existing === nothing
     reaches[alias] = JoinReach(key = key, path = path, kind = kind, target = target, binding = binding, repeats = repeats,
                                introducer = declares ? :none : intro, declared = declares,
-                               cjoin_on = intro === :cjoin_on, link = link, outer_column = outer_column)
+                               cjoin_on = intro === :cjoin_on, ordered = intro === :order_by,
+                               link = link, outer_column = outer_column)
   else
     existing.declared |= declares
     existing.repeats |= repeats
     existing.cjoin_on |= intro === :cjoin_on
+    existing.ordered |= intro === :order_by
     (existing.introducer === :none && !declares) && (existing.introducer = intro)
   end
   return nothing
@@ -663,11 +665,19 @@ end
 
 # #1002: an `on()` / `cjoin` path, or a projected path a terminal cleared, declares every hop along it:
 # a reach whose canonical key is the path or a prefix of it.
-function _declare_join_key!(instruct::SQLInstruction, key::String)
+_declare_join_key!(instruct::SQLInstruction, key::String) = _each_reach_on(r -> (r.declared = true), instruct, key)
+
+# #1002: an `order_by` path marks every hop along it as ordered. Read from the query's terms rather than
+# recorded at the reach, because an ordering on a path a filter already joined resolves through the
+# cache and reaches no hop at all.
+_order_join_key!(instruct::SQLInstruction, key::String) = _each_reach_on(r -> (r.ordered = true), instruct, key)
+
+# The reaches a canonical path passes through: the path itself, or a prefix of it.
+function _each_reach_on(f::Function, instruct::SQLInstruction, key::String)
   reaches = instruct.join_reaches
   (reaches === nothing || isempty(key)) && return nothing
   for r in values(reaches)
-    (r.key == key || startswith(key, r.key * "__")) && !isempty(r.key) && (r.declared = true)
+    (r.key == key || startswith(key, r.key * "__")) && !isempty(r.key) && f(r)
   end
   return nothing
 end

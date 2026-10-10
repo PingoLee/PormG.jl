@@ -22,8 +22,8 @@
 
 using Test
 using PormG
-using PormG.QueryBuilder: inspect_query, F, Q, Qor, Subquery, OuterRef, Exists, Joined
-using PormG.Functions: Count, Max
+using PormG.QueryBuilder: inspect_query, F, Q, Qor, Subquery, OuterRef, Exists, Joined, Case, When
+using PormG.Functions: Count, Max, RowNumber, WindowOver
 
 struct JcardMockPostgres <: PormG.PormGPostgres end
 struct JcardMockSQLite <: PormG.PormGSQLite end
@@ -38,7 +38,8 @@ PormG.config["jcard_sl"] = PormG.Configuration.Settings(
 # a reverse one, `profile` a reverse OneToOne (to-one: the child's key is unique), `sponsors` a
 # ManyToMany. `Result` is a leaf — nothing references it, so its `delete()` cascades nowhere — and
 # carries two plain columns a `cjoin` can link to `Driver`: `code` to the unique `Driver.code`, `grid` to
-# the non-unique `Driver.number`.
+# the non-unique `Driver.number` — and `carno`, a model ForeignKey whose `pk_field` names that same
+# non-unique column, so a forward hop that repeats rows without any `cjoin` declaring it.
 for (modname, key) in ((:JcardPGModels, "jcard_pg"), (:JcardSLModels, "jcard_sl"))
   @eval module $modname
   import PormG
@@ -71,6 +72,8 @@ for (modname, key) in ((:JcardPGModels, "jcard_pg"), (:JcardSLModels, "jcard_sl"
     number = Models.IntegerField(),
     points = Models.IntegerField(),
     driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
+    carno = Models.ForeignKey(Driver, pk_field = "number", on_delete = "CASCADE", null = true,
+                              related_name = "numbered_results"),
   )
   PormG.Models.set_models(@__MODULE__, $key)
   end
@@ -180,6 +183,27 @@ const _JCARD_SINGLE_CELLS = (
    (mod -> mod.Result.objects.cjoin("grid" => "Driver", field = _jcard_link(mod, "number"), warn = false).filter("grid__nationality" => "X").values("resultid"), _jcard_read)),
   ("cjoin link non-unique/grouped Count",
    (mod -> mod.Result.objects.cjoin("grid" => "Driver", field = _jcard_link(mod, "number"), warn = false).values("grid__nationality", "n" => Count("resultid")), _jcard_read)),
+  # A model ForeignKey whose `pk_field` is not unique is to-many with no `cjoin` declaring it.
+  ("ForeignKey pk_field non-unique/filter",
+   (mod -> mod.Result.objects.filter("carno__code" => "X").values("resultid"), _jcard_read)),
+  ("ForeignKey pk_field non-unique/values",
+   (mod -> mod.Result.objects.values("resultid", "carno__code"), _jcard_read)),
+  # `count()` clears a plain projection, and the joins it declared must stay declared: a `When` and a
+  # window's PARTITION BY are projections too (review of #1002).
+  ("count() over a Case projection of the same path",
+   (mod -> mod.Driver.objects.filter("results__grid" => 1).values("driverid",
+      "c" => Case(When("results__points__@gt" => 0, then = 1), default = 0)), q -> q.count(show_query = :sql))),
+  ("count() over a window partitioned by the same path",
+   (mod -> mod.Driver.objects.filter("results__grid" => 1).values("driverid",
+      "rn" => RowNumber(over = WindowOver(partition_by = ["results__points"]))), q -> q.count(show_query = :sql))),
+  # An ordering in an aggregating query joins GROUP BY, so a to-many path there splits every group;
+  # `distinct()` cannot undo that.
+  ("grouped Max ordered by a to-many path",
+   (mod -> mod.Driver.objects.values("teamid", "n" => Max("number")).order_by("results__grid"), _jcard_read)),
+  ("grouped Max ordered by a to-many path, distinct",
+   (mod -> mod.Driver.objects.values("teamid", "n" => Max("number")).order_by("results__grid").distinct(), _jcard_read)),
+  ("grouped Max filtered and ordered by the same to-many path",
+   (mod -> mod.Driver.objects.filter("results__grid" => 1).values("teamid", "n" => Max("number")).order_by("results__grid"), _jcard_read)),
   ("cjoin link non-unique/cjoin_on condition",
    (mod -> mod.Result.objects.cjoin("grid" => "Driver", field = _jcard_link(mod, "number"), warn = false).
       cjoin_on("Driver", alias = "d2", on = [Joined("d2", "driverid") == F("driverid"), "grid__nationality" => "X"]).values("resultid"), _jcard_read)),

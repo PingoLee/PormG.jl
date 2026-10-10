@@ -573,8 +573,10 @@ _declaration_instruction(object::SQLObject) =
 # `order_by()` terms are the one part still decided here, conservatively: `get_order_query` tells a
 # projected term from one it groups by matching the RENDERED projection and the memo, which do not
 # exist before the build. A term is taken as projected only when its name is an entry's output name,
-# a literal's included; any other term keeps the projection. The drift guard in
-# `test_fluent_parity_208.jl` compares this answer with the built instruction's.
+# a literal's included; any other term keeps the projection. A labelled term
+# (`SQLOrder(SQLField(Count("id"), "n"))`) never counts (#1138): the build renders what it holds,
+# whatever the label. The drift guard in `test_fluent_parity_208.jl` compares this answer with the built
+# instruction's.
 function _degenerate_aggregate(object::SQLObject)::Bool
   isempty(object.values) && return false
   _filters_name_alias(object) && return false
@@ -592,7 +594,8 @@ function _degenerate_aggregate(object::SQLObject)::Bool
     name === nothing || push!(names, String(name))
   end
   any_agg || return false
-  return all(o -> o.field._as !== nothing && String(o.field._as) in names, object.order)
+  return all(o -> o.field._as !== nothing && !_is_labelled_term(o.field) &&
+                  String(o.field._as) in names, object.order)
 end
 
 # A kept projection that built as an aggregate with no GROUP BY and no HAVING: exactly one row whatever

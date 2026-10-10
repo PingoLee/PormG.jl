@@ -38,7 +38,8 @@ significant digits. PostgreSQL converts a float to `numeric` at 15 of them, so a
 and PostgreSQL is the less exact side; that is documented rather than refused (#1087).
 
 Not checked, as for #1028: `Case(…; output_field = "numeric(p,s)")`, whose value is a branch, and an
-operand PormG cannot type (an untyped `Case`, a `Subquery`). PostgreSQL still rounds those. Nor is
+operand PormG cannot type (an untyped `Case`; a `Subquery` is classified by its projection since
+#1124). PostgreSQL still rounds those. Nor is
 the overflow of a column or a computed value, which depends on the row: PostgreSQL raises on a row
 too large for `p` and SQLite answers it. The literal of a `Coalesce`, `Greatest` or `Least` with an
 `output_field` is not checked for overflow either: it is one candidate value among the operands.

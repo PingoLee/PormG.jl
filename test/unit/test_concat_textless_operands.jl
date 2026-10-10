@@ -223,6 +223,44 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Concat: a Subquery operand is classified by the one expression it projects (#1124)
+# The classifier had no `Subquery` arm: a subquery was typed only through the read kind and the
+# formatter its render records, and neither names a float (no read kind; the number formatter is
+# the integer's too), a decimal or a literal. So `Concat(…, Subquery(<float>))` built — and the two
+# engines printed the number differently — while the same float directly was refused. The inner
+# build now records its projection's own classification under the node (as #929 records the
+# formatter), so the subquery answers what its expression answers alone. The way out is the cast
+# INSIDE the subquery, where the #1028 rules already decide what reads the same.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1124: a Subquery operand is classified by its projection" begin
+  team(expr) = (s = CTO.Cto_team.objects; s.filter("id" => PormG.OuterRef("team")); s.values("t" => expr); PormG.Subquery(s))
+  self(expr) = (s = CTO.Cto_driver.objects; s.filter("id" => PormG.OuterRef("id")); s.values("t" => expr); PormG.Subquery(s))
+  for conn in (_CTO_PG, _CTO_SL)
+    for (sub, named) in ((team("rating"), "a Subquery projecting the FloatField `rating`"),
+                         (team(Fn.Max("rating")), "a Subquery projecting `MAX(…)` over the FloatField `rating`"),
+                         (team(Fn.Avg("rating")), "a Subquery projecting `AVG(…)`"),
+                         (self("price"), "a Subquery projecting the DecimalField `price`"),
+                         (self("active"), "a Subquery projecting the BooleanField `active`"),
+                         (team(Fn.Value(true)), "a Subquery projecting a Bool literal"),
+                         (team(Fn.Value(1.5)), "a Subquery projecting a Float64 literal"),
+                         # A subquery projecting a subquery: the record is read through the inner one.
+                         (self(team("rating")), "a Subquery projecting a Subquery projecting the FloatField `rating`"))
+      err = _cto_refusal(Fn.Concat("surname", Fn.Value(": "), sub); conn = conn)
+      @test err isa QueryBuildError
+      @test occursin("(#1027)", _cto_msg(err))
+      @test occursin(named, _cto_msg(err))
+    end
+    # The same subquery with a projection that has one text builds: a text or integer column, a
+    # count, and the float rounded to an integer inside the subquery (#1028's own escape).
+    for sub in (team("name"), team(Fn.Count("id")), self("number"),
+                team(Fn.Cast(Fn.Round("rating"), Models.IntegerField())))
+      sql = _cto_render(Fn.Concat("surname", Fn.Value(": "), sub); conn = conn)
+      @test occursin(conn === _CTO_PG ? "CONCAT(" : "COALESCE(", sql)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Concat: integer, text and date operands, and explicit text, pass unchanged
 # The refusal is narrow by design: an integer has one base-10 text and a date its ISO text on both
 # engines, and a cast to text or an integer passes when its operand has one text (#1028 refuses the

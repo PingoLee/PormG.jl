@@ -111,6 +111,31 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum interval | subquery", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
   ("Value bool | alone", :postgres) => (type = "Bool", value = "true", read = nothing),
   ("Value bool | alone", :sqlite) => (type = "Int64", value = "1", read = nothing),
+  # #1124: the same shapes inside a `Subquery`, now classified by their projection. The read
+  # kind stays unrecorded (`subquery_kinds` carries only a projection with a parser), so each
+  # driver's own type comes through, as in the `alone` cells.
+  ("Abs decimal | subquery", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
+  ("Abs decimal | subquery", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
+  ("Avg decimal | subquery", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
+  ("Avg decimal | subquery", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
+  ("Avg float | subquery", :postgres) => (type = "Float64", value = "10.0", read = nothing),
+  ("Avg float | subquery", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
+  ("F decimal * 2 | subquery", :postgres) => (type = "Decimal", value = "11", read = nothing),
+  ("F decimal * 2 | subquery", :sqlite) => (type = "Float64", value = "11.0", read = nothing),
+  ("Mod int | subquery", :postgres) => (type = "Decimal", value = "1", read = nothing),
+  ("Mod int | subquery", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
+  ("Round decimal | subquery", :postgres) => (type = "Decimal", value = "6", read = nothing),
+  ("Round decimal | subquery", :sqlite) => (type = "Float64", value = "6.0", read = nothing),
+  ("Round float | subquery", :postgres) => (type = "Decimal", value = "10", read = nothing),
+  ("Round float | subquery", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
+  ("Subquery Avg float | alone", :postgres) => (type = "Float64", value = "10.0", read = nothing),
+  ("Subquery Avg float | alone", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
+  ("Subquery Avg float | subquery", :postgres) => (type = "Float64", value = "10.0", read = nothing),
+  ("Subquery Avg float | subquery", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
+  ("Sum decimal | subquery", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
+  ("Sum decimal | subquery", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
+  ("Value bool | subquery", :postgres) => (type = "Bool", value = "true", read = nothing),
+  ("Value bool | subquery", :sqlite) => (type = "Int64", value = "1", read = nothing),
 )
 
 # The cells whose value comes back as a DIFFERENT TYPE on the two engines, by the table above. Every
@@ -129,6 +154,10 @@ const _EKR_TYPE_DIVERGENT = Set{String}([
   "Sum decimal | alone", "Sum decimal | cte",
   "Value bool | alone",
   "F date - date | alone", "F date - date | subquery",
+  # #1124: the same `numeric` and `Value(true)` families inside a `Subquery`. `Avg float` and
+  # `Subquery Avg float` read a `Float64` on both.
+  "Abs decimal | subquery", "Avg decimal | subquery", "F decimal * 2 | subquery", "Mod int | subquery",
+  "Round decimal | subquery", "Round float | subquery", "Sum decimal | subquery", "Value bool | subquery",
 ])
 
 const _EKR_CELLS = sort!([id for (id, backend) in keys(_EKM_DISAGREEMENTS) if backend === _EKR_ENGINE])

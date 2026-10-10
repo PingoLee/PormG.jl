@@ -591,6 +591,34 @@ end
 # answer, so the criterion's tie-breaker makes it category 1. A literal is certain to overflow; a
 # column or computed value overflows only on some rows, so it is not refused.
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Cast over a Subquery: the operand is classified by the one expression the subquery projects (#1124)
+# The three declared-cast rules read the same classifier `Concat` does, and a `Subquery` had no arm
+# in it, so a cast over a float subquery passed every rule that refuses the float itself. The inner
+# build now records its projection's classification under the node, so each rule answers for a
+# subquery what it answers for the expression alone. A subquery whose projection has one text, or
+# that is rounded to an integer inside, passes as before.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1124: a declared cast over a Subquery is classified by its projection" begin
+  team(expr) = (s = CCD.Ccd_team.objects; s.filter("id" => PormG.OuterRef("team")); s.values("t" => expr); PormG.Subquery(s))
+  for conn in _CCD_ENGINES
+    for (expr, is_rule, named) in ((Fn.Cast(team("rating"), Models.CharField()), _is_1028, "the FloatField `rating`"),
+                                   (Fn.Cast(team("rating"), Models.IntegerField()), _is_1028, "the FloatField `rating`"),
+                                   (Fn.Cast(team(Fn.Avg("rating")), "integer"), _is_1028, "`AVG(…)`"),
+                                   (Fn.Cast(team("rating"), "numeric(10,2)"), _is_1040, "the FloatField `rating`"),
+                                   (Fn.Coalesce(team("rating"), 0; output_field = "integer"), _is_1028, "the FloatField `rating`"))
+      err = _ccd_refusal(expr; conn = conn)
+      @test is_rule(err)
+      @test occursin("a Subquery projecting " * named, _ccd_msg(err))
+    end
+    for expr in (Fn.Cast(team("name"), Models.CharField()), Fn.Cast(team(Fn.Count("id")), Models.CharField()),
+                 Fn.Cast(team(Fn.Cast(Fn.Round("rating"), Models.IntegerField())), Models.CharField()),
+                 Fn.Cast(team("rating"), Models.FloatField()), Fn.Cast(team("rating"), "numeric"))
+      @test _ccd_refusal(expr; conn = conn) === nothing
+    end
+  end
+end
+
 _is_1087(e) = e isa QueryBuildError && occursin("(#1087)", _ccd_msg(e))
 
 @testset "#1087: Cast refuses a literal too large for the precision" begin

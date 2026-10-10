@@ -588,6 +588,13 @@ end
   # `field_canonical_kind` names only the kinds the read path owns, so a uuid column has a formatter
   # but no kind. Same keying and laziness as `subquery_kinds`.
   subquery_formatters::Union{Nothing,IdDict{SubqueryObject,Function}} = nothing
+  # #1124 — and the textless CLASSIFICATION of that column (`_concat_textless_operand` over the inner
+  # instruction, in the same `built` window as the formatter). Kept beside the two above because
+  # neither can stand in for it: a float has no read kind, and the number formatter is the
+  # integer's too, so `Concat(…, Subquery(<float>))` built while the float itself was refused. The
+  # `(kind, what)` pair the classifier answers for the inner expression, read by its `SubqueryObject`
+  # arm. Same keying and laziness as `subquery_kinds`.
+  subquery_textless::Union{Nothing,IdDict{SubqueryObject,Tuple{Symbol,String}}} = nothing
   connection::ConnType = nothing
   # array_defs::SQLTypeArrays = SQLArrays()
   cache::Dict{MemoKey,SQLTypeField} = sizehint!(Dict{MemoKey,SQLTypeField}(), 12)

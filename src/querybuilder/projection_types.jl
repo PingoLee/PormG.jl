@@ -540,8 +540,9 @@ _operand_kind(::Any, ::SQLInstruction) = nothing
 # that reason, and `Concat` makes text from its operands, so it refuses the same three as operands.
 #
 # Only a type that is KNOWN is answered, as everywhere in this file: an operand whose type cannot be
-# named (a `Subquery`, an untyped `Case`, a function PormG does not type) is let through, not guessed
-# at. Read after the operands render, so a joined path's field memo exists (`_alias_column_field`).
+# named (an untyped `Case`, a function PormG does not type) is let through, not guessed at. A
+# `Subquery` is known through its one projection, which the inner build classified (#1124). Read
+# after the operands render, so a joined path's field memo exists (`_alias_column_field`).
 #
 # #1028 adds three kinds, measured on PostgreSQL 16.15 and SQLite 3.45.1 through the F1 fixture:
 # `:timestamp` (`2009-03-29 06:00:00+00` against the stored `2009-03-29T06:00:00.000+00:00`),
@@ -565,6 +566,16 @@ function _concat_textless_operand(p, instruc::SQLInstruction)::Union{Tuple{Symbo
   p isa SQLText && return _textless_literal(p.field)
   # A `Q(...)` / `Qor(...)` renders a predicate, which is a boolean.
   p isa Union{SQLTypeQ,SQLTypeQor} && return (:bool, "a Q(…) condition")
+  # #1124: a `Subquery` answers what its one projected expression answers alone — the inner build
+  # recorded it (`_subquery_projection_textless`). Read before the formatter and the kind below, so
+  # the subquery agrees with the expression it wraps: `Avg(duration)` is `:numeric` both ways, as the
+  # `AVG` rule says, not `:interval` from its read kind. A node with no record — an inner projection
+  # with one text, or a build that did not render the node — falls through, and the kind below still
+  # names a timestamp or an interval.
+  if p isa SubqueryObject
+    recorded = _subquery_textless(p, instruc)
+    recorded === nothing || return (recorded[1], "a Subquery projecting $(recorded[2])")
+  end
   # A boolean column, a comparison, `Exists`, a boolean `Case`, an extremum over one: the one reader
   # that already types all of them.
   if p isa Union{SQLObject,SQLType,AbstractString}
@@ -759,7 +770,8 @@ _literal_exact_value(::Any) = nothing
 # to a scale of at most `s`. Unbounded: a float column, a float literal with more places, a `numeric`
 # function, a decimal of unknown scale, and text — PostgreSQL
 # parses `'1.555'` and rounds it, SQLite converts it and keeps it — including a JSON value. An operand
-# PormG cannot type (an untyped `Case`, a `Subquery`) passes, as it does for #1028.
+# PormG cannot type (an untyped `Case`) passes, as it does for #1028; a `Subquery` is read as its
+# projection (#1124).
 const _SCALE_PRESERVING_FUNCTIONS = ("MAX", "MIN", "ABS", "COALESCE", "GREATEST", "LEAST", "NULLIF")
 function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing}
   _integral_valued(p, instruc) && return nothing
@@ -1035,6 +1047,28 @@ function _record_subquery_formatter!(instruc::SQLInstruction, p::SubqueryObject,
   instruc.subquery_formatters[p] = formatter
   return nothing
 end
+
+# #1124 — the textless classification of a subquery's one projected expression, asked of the INNER
+# instruction in the same `built` window as the formatter (#929): the inner memos are what resolve a
+# joined path, and `_concat_textless_operand` reads the field memo. Asked of the expression itself,
+# not the `SQLField` around it, as `_build_cte_custom_model` asks for a CTE column; a `Value` is its
+# `SQLText`. Filed under the node by `_render_scalar_subquery`, read by the classifier's
+# `SubqueryObject` arm once the enclosing projection has rendered. `nothing` — the expression has
+# one text, or names no type — is not recorded, so the arm falls through to the read kind.
+function _subquery_projection_textless(handler::SQLObjectHandler, inner::SQLInstruction)
+  vals = handler.object.values
+  length(vals) == 1 || return nothing
+  v = only(vals)
+  return _concat_textless_operand(v isa SQLText ? v : v.field, inner)
+end
+function _record_subquery_textless!(instruc::SQLInstruction, p::SubqueryObject, side)
+  side isa Tuple{Symbol,String} || return nothing
+  instruc.subquery_textless === nothing && (instruc.subquery_textless = IdDict{SubqueryObject,Tuple{Symbol,String}}())
+  instruc.subquery_textless[p] = side
+  return nothing
+end
+_subquery_textless(p::SubqueryObject, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing} =
+  instruc.subquery_textless === nothing ? nothing : get(instruc.subquery_textless, p, nothing)
 
 # The kind the inner build recorded. A subquery projects exactly one column (the render refuses any
 # other count), but a wildcard over a one-field model can record that column under two names — its

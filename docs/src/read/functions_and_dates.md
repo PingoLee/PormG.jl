@@ -479,9 +479,11 @@ Three more operand types are refused the same way, because their text differs to
 A date, a time and a uuid read the same text on both engines and pass. A JSON key lookup
 (`"payload__driver"`) passes too: it reads the same text when the value at the key is a string, but a
 boolean or a nested value can still differ (`true` vs `1`), and PormG cannot know which a key holds.
-The check covers only types PormG can name: an operand it cannot type (a `Subquery` over a number,
-an untyped `Case`, an extremum over timestamp arithmetic, `Greatest`/`Least` over computed timestamps
-or intervals) passes.
+The check covers only types PormG can name: an operand it cannot type (an untyped `Case`, an
+extremum over timestamp arithmetic, `Greatest`/`Least` over computed timestamps or intervals)
+passes. A `Subquery` is classified by the one expression it projects (#1124): one over a float
+column or an `Avg` is refused as the float or the `Avg` is, and one over a text or integer column,
+or over `Cast(Round(x), IntegerField())`, passes.
 
 `Cast(…, CharField())` is not a way around this, because a cast to text makes the same split (`25`
 against `25.0`). It is refused too (see the `Cast` section below). Write the text you mean
@@ -852,7 +854,8 @@ So PormG raises `QueryBuildError` when the query is built, on both engines, for:
   `Floor`, `Ceil`), a `DecimalField` with at most `s` places, and a `Decimal` or float literal with
   at most `s` digits after the point (`Value(1.5)` at scale 2 reads `1.5` on both, #1050) pass, and so does a function whose value is one of them (`Max`, `Min`, `Abs`,
   `Coalesce`, `Greatest`, `Least`, `NullIf`). An operand PormG cannot
-  type (an untyped `Case`, a `Subquery`) passes, as it does for the other two rules;
+  type (an untyped `Case`) passes, as it does for the other two rules; a `Subquery` is classified by
+  the expression it projects, for all three (#1124);
 - a `Cast` to `numeric(p, s)` of a literal that does not fit it: rounded to `s` places, it needs
   more than `p - s` digits before the point (`Cast(Value(100), "numeric(3,2)")`, or `9.999`, which
   rounds to `10.00`). PostgreSQL raises a numeric field overflow and SQLite stores the value as it

@@ -473,6 +473,42 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\", \"Tb_3\".\"points\" as \"teamid__drivers__results__points\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" LEFT JOIN \"driver\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" LEFT JOIN \"result\" AS \"Tb_3\" ON \"Tb_2\".\"driverid\" = \"Tb_3\".\"driverid\" AND \"Tb_3\".\"grid\" = \$1"),
   ("on() path through a reverse hop after the first (#1112)", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\", \"Tb_3\".\"points\" as \"teamid__drivers__results__points\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" LEFT JOIN \"driver\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" LEFT JOIN \"result\" AS \"Tb_3\" ON \"Tb_2\".\"driverid\" = \"Tb_3\".\"driverid\" AND \"Tb_3\".\"grid\" = ?"),
+  ("values, a path ending at a reverse accessor, no hop (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column results not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the r"),
+  ("values, a path ending at a reverse accessor, no hop (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column results not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the r"),
+  ("values, a path ending at a reverse accessor, first hop (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column results not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the r"),
+  ("values, a path ending at a reverse accessor, first hop (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column results not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the r"),
+  ("values, a path ending at a reverse accessor after the first hop (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column results not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the r"),
+  ("values, a path ending at a reverse accessor after the first hop (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column results not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the r"),
+  ("filter, a path ending at a reverse accessor after the first hop (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column results not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the r"),
+  ("filter, a path ending at a reverse accessor after the first hop (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column results not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the r"),
+  ("filter, a plain key that is a reverse accessor (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column results not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the r"),
+  ("filter, a plain key that is a reverse accessor (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column results not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the r"),
+  ("filter, a plain key that is a ManyToMany field, with a lookup (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column sponsors not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the "),
+  ("filter, a plain key that is a ManyToMany field, with a lookup (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column sponsors not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the "),
+  ("values, a path ending at a ManyToMany field after the first hop (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column sponsors not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the "),
+  ("values, a path ending at a ManyToMany field after the first hop (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column sponsors not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the "),
+  ("values, a path ending at a reverse ManyToMany accessor (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column drivers not found in sponsor, that contains the fields: name, sponsorid; and the reverse accessors: drivers"),
+  ("values, a path ending at a reverse ManyToMany accessor (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column drivers not found in sponsor, that contains the fields: name, sponsorid; and the reverse accessors: drivers"),
+  ("values, an unknown name before the last segment, after the first hop (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "Invalid field path: the column nope not found in driver"),
+  ("values, an unknown name before the last segment, after the first hop (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "Invalid field path: the column nope not found in driver"),
   ("filter, forward not null from Result", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"code\" = \$1"),
   ("filter, forward not null from Result", :sqlite) =>

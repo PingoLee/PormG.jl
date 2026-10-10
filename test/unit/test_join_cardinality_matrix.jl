@@ -177,6 +177,28 @@ const _JCARD_SINGLE_CELLS = (
    (mod -> mod.Driver.objects.values("driverid", "teamid__drivers__sponsors__drivers__code"), _jcard_read)),
   ("on() path through a reverse hop after the first (#1112)",
    (mod -> mod.Driver.objects.on("teamid__drivers__results", "grid" => 1).values("driverid", "teamid__drivers__results__points"), _jcard_read)),
+  # #1134: a path that ENDS at a relation names no column, so it is refused, at every hop, with one
+  # message that names the relation. And an unknown name before the last segment, past the first hop,
+  # reports through the #446 funnel like the first hop's.
+  ("values, a path ending at a reverse accessor, no hop (#1134)",
+   (mod -> mod.Driver.objects.values("driverid", "results"), _jcard_read)),
+  ("values, a path ending at a reverse accessor, first hop (#1134)",
+   (mod -> mod.Team.objects.values("teamid", "drivers__results"), _jcard_read)),
+  ("values, a path ending at a reverse accessor after the first hop (#1134)",
+   (mod -> mod.Driver.objects.values("driverid", "teamid__drivers__results"), _jcard_read)),
+  ("filter, a path ending at a reverse accessor after the first hop (#1134)",
+   (mod -> mod.Driver.objects.filter("teamid__drivers__results" => 1).values("driverid"), _jcard_read)),
+  # A plain filter key is resolved by the projection-alias branch, not the join builder.
+  ("filter, a plain key that is a reverse accessor (#1134)",
+   (mod -> mod.Driver.objects.filter("results" => 1).values("driverid"), _jcard_read)),
+  ("filter, a plain key that is a ManyToMany field, with a lookup (#1134)",
+   (mod -> mod.Driver.objects.filter("sponsors__@isnull" => true).values("driverid"), _jcard_read)),
+  ("values, a path ending at a ManyToMany field after the first hop (#1134)",
+   (mod -> mod.Driver.objects.values("driverid", "teamid__drivers__sponsors"), _jcard_read)),
+  ("values, a path ending at a reverse ManyToMany accessor (#1134)",
+   (mod -> mod.Driver.objects.values("driverid", "teamid__drivers__sponsors__drivers"), _jcard_read)),
+  ("values, an unknown name before the last segment, after the first hop (#1134)",
+   (mod -> mod.Driver.objects.values("driverid", "teamid__drivers__nope__x"), _jcard_read)),
   ("filter, forward not null from Result",
    (mod -> mod.Result.objects.filter("driverid__code" => "X").values("resultid"), _jcard_read)),
   # An `OuterRef` across a to-many path joins the OUTER query.

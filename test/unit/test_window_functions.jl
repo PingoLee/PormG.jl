@@ -1286,6 +1286,107 @@ _cte_refusal(Model_, expr) = try _cte_case_field(Model_, expr); nothing catch e;
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# An extremum or average in a CTE body types as its operand (#1116)
+# The AVG/MIN/MAX arm looked its operand up among the body model's own fields, so `Max` over a hop
+# path, a `Joined(...)` handle or `F` arithmetic raised `UnknownFieldError: the field v (base column:
+# v)`, naming the alias rather than anything the user wrote — while the same `Max("raceid__date")`
+# projected directly built, and `Lag("raceid__date")` in the body typed as the hop's DateField. It
+# now delegates to the arms a projection takes: the path through the build's field memo, the handle
+# through its `cjoin_on` target, arithmetic as an `F` projected at the top of a body does (#823),
+# whose refusal names `Cast` as the fix. The typed column is what binds the outer filter's value.
+# ─────────────────────────────────────────────────────────────────────────────
+PormG.config["window_1116_pg"] = PormG.Configuration.Settings(connections = WindowMockPostgres(), change_data = true,
+                                                                   db_def_folder = "window_1116_pg")
+PormG.config["window_1116_sl"] = PormG.Configuration.Settings(connections = WindowMockSQLite(), change_data = true,
+                                                                   db_def_folder = "window_1116_sl")
+for (name, key) in ((:Window1116Pg, "window_1116_pg"), (:Window1116Sl, "window_1116_sl"))
+  Core.eval(@__MODULE__, :(module $name
+    import PormG, PormG.Models
+    Race = Models.Model("w1116_race", raceid = Models.IDField(), date = Models.DateField(), round = Models.IntegerField())
+    Result = Models.Model("w1116_result", resultid = Models.IDField(),
+                          raceid = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"),
+                          points = Models.FloatField(), grid = Models.IntegerField(), surname = Models.CharField())
+    PormG.Models.set_models(@__MODULE__, $key)
+  end))
+end
+
+# The body built alone, then typed by the `_build_cte_custom_model` the outer build calls.
+function _cte_aggregate_field(mod, conn, expr; joined::Bool = false)
+  body = mod.Result.objects
+  joined && body.cjoin_on(mod.Race; alias = "rc", on = [PormG.QueryBuilder.Joined("rc", "raceid") == F("raceid")])
+  body.values("resultid", "v" => expr)
+  instruction = PormG.QueryBuilder.build(body.object; connection = conn)
+  cte = PormG.QueryBuilder.CTEDict()
+  PormG.QueryBuilder._build_cte_custom_model(cte, instruction)
+  return cte["model"].fields["v"]
+end
+
+@testset "#1116: Max/Min/Avg in a CTE body type through a path, a Joined handle or F arithmetic" begin
+  Joined_, Min_, Avg_ = PormG.QueryBuilder.Joined, PormG.Functions.Min, PormG.Functions.Avg
+  for (backend, mod, conn) in (("PostgreSQL", Window1116Pg, WindowMockPostgres()), ("SQLite", Window1116Sl, WindowMockSQLite()))
+    @testset "$backend — the column has the operand's field" begin
+      @test _cte_aggregate_field(mod, conn, Max("raceid__date")) isa PormG.Models.sDateField
+      @test _cte_aggregate_field(mod, conn, Min_("raceid__round")) isa PormG.Models.sIntegerField
+      @test _cte_aggregate_field(mod, conn, Avg_("raceid__round")) isa PormG.Models.sIntegerField   # Avg's rule: the operand's field
+      @test _cte_aggregate_field(mod, conn, Max(Joined_("rc", "date")); joined = true) isa PormG.Models.sDateField
+      @test _cte_aggregate_field(mod, conn, Min_(Joined_("rc", "round")); joined = true) isa PormG.Models.sIntegerField
+      @test _cte_aggregate_field(mod, conn, Max(F("grid") * 2)) isa PormG.Models.sIntegerField
+      @test _cte_aggregate_field(mod, conn, Avg_(F("points") * 2)) isa PormG.Models.sFloatField
+      # Controls: a column of the body's own model, and the window arm the fix copies.
+      @test _cte_aggregate_field(mod, conn, Max("points")) isa PormG.Models.sFloatField
+      @test _cte_aggregate_field(mod, conn, Lag("raceid__date", over = WindowOver(order_by = ["resultid"]))) isa
+        PormG.Models.sDateField
+    end
+
+    @testset "$backend — the outer filter binds the operand's type" begin
+      # Typed as a DateField, the outer `c__v__@gte` binds a Date: the issue's shape, end to end.
+      body = mod.Result.objects
+      body.values("resultid", "v" => Max("raceid__date"))
+      q = mod.Result.objects
+      q.with("c" => body, join_field = "resultid" => "resultid", join_type = "INNER")
+      q.values("resultid", "w" => "c__v")
+      q.filter("c__v__@gte" => PormG.QueryBuilder.Dates.Date(2009, 1, 1))
+      sql = inspect_query(q; connection = conn)
+      @test occursin("MAX(", sql[:sql_text])
+      @test sql[:parameters] == Any["2009-01-01"]
+      # The control: the same filter over an integer column is refused, so the bind above is the
+      # DateField's doing.
+      body = mod.Result.objects
+      body.values("resultid", "v" => Max("grid"))
+      q = mod.Result.objects
+      q.with("c" => body, join_field = "resultid" => "resultid", join_type = "INNER")
+      q.values("resultid", "w" => "c__v")
+      q.filter("c__v__@gte" => PormG.QueryBuilder.Dates.Date(2009, 1, 1))
+      err = try inspect_query(q; connection = conn); nothing catch e; e end
+      @test err isa PormG.InvalidValueError
+    end
+
+    @testset "$backend — arithmetic that is not a number is the #823 refusal, not the alias" begin
+      err = try _cte_aggregate_field(mod, conn, Max(F("surname") + 1)); nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      msg = replace(_window_msg(err), r"\e\[[0-9;]*m" => "")
+      @test occursin("The CTE column v cannot be typed", msg) && occursin("(#823)", msg)
+      @test !occursin("base column", msg)
+    end
+
+    @testset "$backend — a function PormG does not type is refused, not typed by the alias's name" begin
+      # Before #1116 an operand the arm could not read fell back to the field the ALIAS names, so
+      # `"points" => Max(Coalesce("points", 0.0))` typed by luck, and `"born" => Max("born__@year")`
+      # typed a year as the DateField `born`. The operand decides now, as it does when the
+      # same function is projected bare: refused, and a declared `output_field` names the type.
+      body = mod.Result.objects
+      body.values("resultid", "points" => Max(Coalesce("points", 0.0)))
+      err = try PormG.QueryBuilder._build_cte_custom_model(PormG.QueryBuilder.CTEDict(),
+                                                          PormG.QueryBuilder.build(body.object; connection = conn)); nothing
+            catch e; e end
+      @test err isa PormG.QueryBuildError && occursin("COALESCE", replace(_window_msg(err), r"\e\[[0-9;]*m" => ""))
+      @test _cte_aggregate_field(mod, conn, Max(Coalesce("points", 0.0, output_field = FloatField()))) isa
+        PormG.Models.sFloatField
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #835: the two readers of a declared type agree on Concat
 # #812 made `_sql_type_field` the one table behind both readers — the CTE column's field and the
 # projection alias's formatter — so they could never disagree. `Concat` did: the CTE typed

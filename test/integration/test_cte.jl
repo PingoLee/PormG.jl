@@ -842,3 +842,37 @@ end
         end
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Max/Min over a path, a Joined handle or F arithmetic in a CTE body reads back (#1116)
+# The CTE typed an extremum by looking its operand up among the body model's own fields, so a
+# `Max("raceid__date")`, a `Min(Joined("rc", "date"))` and a `Max(F("points") * 2)` column raised
+# `UnknownFieldError` naming the alias. Each now types as its operand: a date reads back as a `Date`
+# on both engines and filters by one, and the arithmetic as a number. The expected values are
+# computed in Julia from driver 1's plain result rows, not through the CTE under test.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "CTE column from Max/Min over a path, a Joined handle or arithmetic (#1116)" begin
+    plain = M.Result.objects.filter("driverid" => 1).values("raceid__date", "points") |> DataFrame
+    @test nrow(plain) > 0
+
+    body = M.Result.objects
+    body.cjoin_on("Race", alias = "rc", on = [Joined("rc", "raceid") == F("raceid")])
+    body.values("driverid", "last" => Max("raceid__date"), "first" => Min(Joined("rc", "date")),
+                "double" => Max(F("points") * 2))
+    q = M.Driver.objects
+    q.with("c" => body, join_field = "driverid" => "driverid")
+    q.filter("driverid" => 1)
+    q.values("driverid", "c__last", "c__first", "c__double")
+    df = q |> DataFrame
+    @test nrow(df) == 1
+    @test df.c__last[1] isa Dates.Date && df.c__last[1] == maximum(plain.raceid__date)
+    @test df.c__first[1] isa Dates.Date && df.c__first[1] == minimum(plain.raceid__date)
+    @test df.c__double[1] isa AbstractFloat && df.c__double[1] == 2 * maximum(plain.points)
+
+    # The date column filters by a date: the bound value is the DateField's, not a number's.
+    q = M.Driver.objects
+    q.with("c" => body, join_field = "driverid" => "driverid")
+    q.filter("driverid" => 1, "c__last__@gte" => maximum(plain.raceid__date))
+    q.values("driverid")
+    @test nrow(q |> DataFrame) == 1
+end

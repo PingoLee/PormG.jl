@@ -223,9 +223,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Max Joined date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
   ("Max Joined date | cte", :postgres) =>
-    (stage = :build, error = "UnknownFieldError", message = "Error in _set_field_from_sql_function, the field v (base column: v) not found in result"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", cte_textless = nothing, kind = "CDate()"),
   ("Max Joined date | cte", :sqlite) =>
-    (stage = :build, error = "UnknownFieldError", message = "Error in _set_field_from_sql_function, the field v (base column: v) not found in result"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", cte_textless = nothing, kind = "CDate()"),
   ("Max Joined date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
   ("Max Joined date | subquery", :sqlite) =>
@@ -655,9 +655,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Max hop date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
   ("Max hop date | cte", :postgres) =>
-    (stage = :build, error = "UnknownFieldError", message = "Error in _set_field_from_sql_function, the field v (base column: raceid__date) not found in result"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", cte_textless = nothing, kind = "CDate()"),
   ("Max hop date | cte", :sqlite) =>
-    (stage = :build, error = "UnknownFieldError", message = "Error in _set_field_from_sql_function, the field v (base column: raceid__date) not found in result"),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", cte_textless = nothing, kind = "CDate()"),
   ("Max hop date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
   ("Max hop date | subquery", :sqlite) =>
@@ -703,9 +703,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Max of arithmetic | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = nothing),
   ("Max of arithmetic | cte", :postgres) =>
-    (stage = :build, error = "UnknownFieldError", message = "Error in _set_field_from_sql_function, the field v (base column: v) not found in result"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = nothing),
   ("Max of arithmetic | cte", :sqlite) =>
-    (stage = :build, error = "UnknownFieldError", message = "Error in _set_field_from_sql_function, the field v (base column: v) not found in result"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = nothing),
   ("Max of arithmetic | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = nothing),
   ("Max of arithmetic | subquery", :sqlite) =>

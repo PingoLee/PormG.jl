@@ -157,7 +157,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a reverse hop materializes as a to-many ModelJoin (#487)" begin
   q = JR.Jr_driver.objects
-  q.values("code")
+  q.values("code", "results__points")   # #1002: projected, so the to-many join is asked for
   q.filter("results__points" => 25)
   rows = _jr_rows(q)
 
@@ -178,7 +178,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a many-to-many hop materializes as through + related ModelJoins (#487)" begin
   q = JR.Jr_driver.objects
-  q.values("code")
+  q.values("code", "sponsors__name")   # #1002: projected, so the to-many join is asked for
   q.filter("sponsors__name" => "Marlboro")
   rows = _jr_rows(q)
 
@@ -443,7 +443,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "JoinRow kinds show as one line each (#487)" begin
   q = JR.Jr_driver.objects
-  q.values("code")
+  q.values("code", "sponsors__name")   # #1002: projected, so the to-many join is asked for
   q.filter("sponsors__name" => "M")
   q.cjoin_on("Jr_team"; alias = "t", on = [Joined("t", "id") == F("team")])
   rows = _jr_rows(q)

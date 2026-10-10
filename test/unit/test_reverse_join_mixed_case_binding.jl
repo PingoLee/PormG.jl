@@ -129,6 +129,7 @@ end
     q = MC.Dim_Unidade.objects
     q.values("nome")
     q.filter("dim_cnes__nome" => "unidade-x")
+    q.distinct()   # #1002: a to-many filter alone is refused; the routing below is unchanged
 
     insp = inspect_query(q)
 

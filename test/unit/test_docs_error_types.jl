@@ -222,6 +222,37 @@ Docerr_cycle_b = Models.Model("docerr_cycle_b",
 PormG.Models.set_models(@__MODULE__, "docerr_cycle")
 end
 
+# #1002 — the cardinality claims need a reverse relation (`results`) and a ManyToMany (`sponsors`),
+# and both exist only after `set_models`: it fills `related_objects` and registers the link table.
+# The #992 `cjoin_on` claim moved here too. The check reads the joins the build MADE, and the
+# hand-built `DOCERR_TEAM_PG` cannot build a ManyToMany join at all.
+PormG.config["docerr_tomany"] = PormG.Configuration.Settings(
+    connections = DocErrMockPostgres(), change_data = true, db_def_folder = "docerr_tomany")
+
+module DocErrToManyModels
+import PormG
+import PormG.Models
+
+Docerr_tm_sponsor = Models.Model("docerr_tm_sponsor",
+    sponsorid = Models.IDField(),
+    name      = Models.CharField(),
+)
+
+Docerr_tm_driver = Models.Model("docerr_tm_driver",
+    driverid = Models.IDField(),
+    surname  = Models.CharField(),
+    sponsors = Models.ManyToManyField(Docerr_tm_sponsor, related_name = "drivers"),
+)
+
+Docerr_tm_result = Models.Model("docerr_tm_result",
+    resultid = Models.IDField(),
+    points   = Models.IntegerField(),
+    driverid = Models.ForeignKey(Docerr_tm_driver, on_delete = "CASCADE", related_name = "results"),
+)
+
+PormG.Models.set_models(@__MODULE__, "docerr_tomany")
+end
+
 # #953 — a boolean column on both engines: the refusal of `Sum`/`Avg` over one is engine-independent.
 const DOCERR_ENTRY953_PG, DOCERR_ENTRY953_SL = map(("docerr_pg", "docerr_sl")) do key
     m = Model("docerr_entry953_$key", id = IDField(), raceid = IntegerField(),
@@ -783,16 +814,49 @@ const DOCERR_CASES = [
     ),
     (
         # #992. A path a cjoin_on condition names is joined onto the base row first, so a to-many hop
-        # on it would repeat that row; refused at build. The page names reverse and ManyToMany alike —
-        # these unregistered models carry no reverse relation, and both kinds share one check.
+        # on it would repeat that row; refused at build, by the one cardinality check since #1002.
         "read/custom_joins.md — a cjoin_on condition path crossing a ManyToManyField is refused",
         FilterError,
         () -> begin
-            q = DOCERR_TEAM_PG.objects
-            q.cjoin_on(DOCERR_TEAM_PG, alias = "t2",
-                       on = [Joined("t2", "teamid") == F("teamid"), "sponsors__name" => "X"])
-            q.values("teamid")
+            M = DocErrToManyModels
+            q = M.Docerr_tm_driver.objects
+            q.cjoin_on(M.Docerr_tm_driver, alias = "d2",
+                       on = [Joined("d2", "driverid") == F("driverid"), "sponsors__name" => "X"])
+            q.values("driverid")
             q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #1002. A filter across a reverse relation joins it, and the join repeats each base row once
+        # per related row the query never asked for.
+        "read/values_and_joins.md — Filtering or Ordering Across a To-Many Relation: a filter raises FilterError",
+        FilterError,
+        () -> begin
+            q = DocErrToManyModels.Docerr_tm_driver.objects
+            q.filter("results__points" => 25)
+            q.values("driverid", "surname")
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        "read/values_and_joins.md — Filtering or Ordering Across a To-Many Relation: order_by raises QueryBuildError",
+        QueryBuildError,
+        () -> begin
+            q = DocErrToManyModels.Docerr_tm_driver.objects
+            q.order_by("-results__points")
+            q.values("driverid", "surname")
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
+        # #1002. SET from a joined column renders UPDATE … FROM, where a to-many join would SET from an
+        # arbitrary match.
+        "write/update.md — update() setting a column across a to-many join raises QueryBuildError",
+        QueryBuildError,
+        () -> begin
+            q = DocErrToManyModels.Docerr_tm_result.objects
+            q.filter("driverid__results__points" => 25)
+            q.update("points" => F("driverid__driverid"), show_query = :sql)
         end,
     ),
     (

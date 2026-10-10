@@ -335,8 +335,9 @@ _sdr_where(res) = strip(split(res[:sql_text], " WHERE ")[end])
           ("events__happened",         _SdrTeam), # REVERSE relation (related_name = "events")
           ("tags__tagged",             _SdrEv),   # MANY-TO-MANY (through-table pair)
         ]
-      rewritten = model.objects.filter("$(path)__@year__@gte" => 1991).list(show_query=:dict)
-      baseline  = model.objects.filter("$(path)__@gte" => "1991-01-01").list(show_query=:dict)
+      # #1002: distinct() — a filter across the reverse and M2M paths is refused alone; WHERE is unchanged
+      rewritten = model.objects.filter("$(path)__@year__@gte" => 1991).distinct().list(show_query=:dict)
+      baseline  = model.objects.filter("$(path)__@gte" => "1991-01-01").distinct().list(show_query=:dict)
       @test _sdr_where(rewritten) == _sdr_where(baseline)
       @test rewritten[:parameters] == baseline[:parameters] == ["1991-01-01"]
       @test !occursin("extract", lowercase(rewritten[:sql_text]))
@@ -375,7 +376,8 @@ _sdr_where(res) = strip(split(res[:sql_text], " WHERE ")[end])
           ("events__logged_at",           _SdrTeam, 1),  # reverse relation
           ("tags__seen_at",               _SdrEv,   2),  # M2M: through-table + related table
         ]
-      r = model.objects.filter("$(path)__@yyyy_mm__@lte" => "1991-10").list(show_query=:dict)
+      # #1002: distinct() — a filter across the reverse and M2M paths is refused alone; joins are unchanged
+      r = model.objects.filter("$(path)__@yyyy_mm__@lte" => "1991-10").distinct().list(show_query=:dict)
       @test occursin("to_char", lowercase(r[:sql_text]))          # rejected → rendered twice
       @test length(collect(eachmatch(r"JOIN", r[:sql_text]))) == joins
       @test r[:parameters] == ["1991-10"]

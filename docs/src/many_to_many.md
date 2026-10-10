@@ -319,8 +319,14 @@ Model-level access starts from `.objects` and builds queries across all rows:
 drivers = M.M2m_driver_endorsement_scratch.objects
 drivers.filter("sponsors__name" => "Petrolux")
 drivers.values("driverref")
+drivers.distinct()   # each driver once, however many Petrolux endorsements it has
 rows = drivers.list()
 ```
+
+A filter across a many-to-many relation joins the link table, which repeats a driver once per
+matching sponsor. Without `distinct()` (or a projection of the sponsor rows) PormG refuses the query
+rather than return the repeats: see
+[Filtering or Ordering Across a To-Many Relation](read/values_and_joins.md#Filtering-or-Ordering-Across-a-To-Many-Relation).
 
 Instance-level access starts by fetching one `PormGRow`, then uses the row's relationship accessor:
 
@@ -395,7 +401,7 @@ driver.sponsors.clear()
 
 ## Querying Across Many-To-Many Relations (Multi-hop Joins)
 
-Because PormG understands your relationships, you can use the standard double-underscore `__` syntax to filter across Many-to-Many fields exactly like you would with Foreign Keys. PormG will automatically handle the `INNER JOIN` through the intermediary table.
+Because PormG understands your relationships, you can use the standard double-underscore `__` syntax to filter across Many-to-Many fields as you would with Foreign Keys. PormG will automatically handle the `INNER JOIN` through the intermediary table.
 
 For example, to find all drivers who are endorsed by a sponsor located in Italy:
 
@@ -422,6 +428,12 @@ FROM "m2m_driver_multi_hop_scratch" as "Tb"
   INNER JOIN "m2m_country_scratch" AS "Tb_3" ON "Tb_2"."country_id" = "Tb_3"."id"
 WHERE "Tb_3"."name" = $1
 ```
+
+The result has one row per (driver, Italian sponsor), and that is what the query asks for: it
+projects `sponsors__name`, the same join the filter crosses. With only `values("driverref")` PormG
+would refuse the filter, because nothing asks for the repeated driver rows. Add `.distinct()` to list
+each driver once, or filter with a correlated `Exists(...)` — see
+[Filtering or Ordering Across a To-Many Relation](read/values_and_joins.md#Filtering-or-Ordering-Across-a-To-Many-Relation).
 
 !!! note
     The transparent joining works equally well whether you are using an implicit or an explicit through table!

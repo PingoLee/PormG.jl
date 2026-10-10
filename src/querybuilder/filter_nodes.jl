@@ -96,6 +96,10 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
     connection=instruc.connection,
     parameters=instruc.parameters,
     outer=instruc,
+    # #1002: EXISTS asks whether a row matches, which repeats cannot change — unless an OFFSET counts
+    # them. A projection cleared above still declares its joins.
+    semi_join = offset == 0,
+    declared_paths = keep_values ? String[] : _projected_paths(subquery.object.values),
   )
   _refuse_degenerate_probe(instruction, keep_values, "Exists(...)")
   # Bound before the run is detached, so the OFFSET value travels with the rest of this subquery's
@@ -256,7 +260,8 @@ function _get_filter_query(v::OuterRefObject, instruc::SQLInstruction)
   # #985: an `OuterRef` resolves in the outer statement, so inside an ON clause it is checked there as
   # a right-side column — whichever side of its comparison the subquery sits on (#962's rule). The
   # subquery's own columns render on its own instruction, outside the ON clause's scope.
-  sql = _on_join_right(() -> _get_filter_query(column, outer), outer)
+  # #1002: a `__` path here joins the OUTER query to evaluate a correlation — not a join it asked for.
+  sql = with_scope(() -> _on_join_right(() -> _get_filter_query(column, outer), outer), outer; introducer = :outer_ref)
   # #194: this is the ONE place an OuterRef becomes SQL — `_resolve_outer_ref_field_name` has a
   # single caller and `_get_select_query(::OuterRefObject)` delegates straight here — so recording
   # the reference here cannot miss one that renders. Resolving against `outer` is also what makes
@@ -1056,7 +1061,9 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     _guard_no_nested_cte(v.values, "A membership filter (__@in / __@nin)")
     # #432: same nested-run reordering — the subquery renders inside this predicate's clause.
     nested_mark = nested_parameter_mark(instruc)
-    placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc)
+    # #1002: `IN (…)` is a set test, so a repeated row is invisible — unless a slice picks rows by count.
+    placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc,
+                         semi_join = !_is_sliced(getfield(v.values, :object)))
     reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
     # #586: `column` was rendered before the subquery, so its markers number ahead of the
     # subquery's — the text order. Re-rendering here would bind a composite LHS a second time.

@@ -2301,6 +2301,7 @@ end
     q = M.M2m_rpk_driver_scratch.objects
     q.filter("sponsors__name" => "Petrolux")
     q.values("driverref")
+    q.distinct()   # #1002: a to-many filter alone is refused; the join keys below are unchanged
     sql = inspect_query(q)[:sql_text]
     @test occursin("\"driver_pk\"", sql)    # owner PK resolved → through-join key_a
     @test occursin("\"sponsor_pk\"", sql)   # related PK resolved → related-join key_b

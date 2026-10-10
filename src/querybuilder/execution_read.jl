@@ -279,7 +279,9 @@ function query(q::SQLObjectHandler;
   # #929: called with the inner build's instruction right after `build()`, while its memos still hold
   # what the render resolved — the one window in which a nested render can ask about its own
   # projection. `_render_scalar_subquery` reads the projected column's formatter through it.
-  built::Union{Nothing,Function} = nothing
+  built::Union{Nothing,Function} = nothing,
+  # #1002: passed through to `build()` — a membership subquery (`__@in`) is a semi-join.
+  semi_join::Bool = false
   )
 
   @pormg_debug false
@@ -311,7 +313,8 @@ function query(q::SQLObjectHandler;
 
   # Main query uses the SAME parameters object (will continue numbering from where CTEs left off)
   # Context switching for select/where/join happens inside build()
-  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, outer=outer)
+  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, outer=outer,
+                      semi_join=semi_join)
   built === nothing || built(instruction)
   
   # Prevent SELECT * across JOINs which causes DataFrame column collisions downstream.
@@ -684,8 +687,11 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
   set_context!(parameters, :cte)
   with_clause = build_cte_clause(q.object.ctes, connection, parameters, table_alias)
 
-  # Main query continues from where CTE numbering left off.
-  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters)
+  # Main query continues from where CTE numbering left off. #1002: `count()` counts the rows `list()`
+  # returns, so a projection cleared above still declares the joins it reaches.
+  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters,
+                      distinct_rows = is_distinct,
+                      declared_paths = keep_values ? String[] : _projected_paths(oq.object.values))
   _refuse_constant_terminal(instruction, keep_values, "count()")
   
   # Quote table name and alias to prevent SQL injection
@@ -811,8 +817,12 @@ function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias
     set_context!(parameters, :cte)
     with_clause = build_cte_clause(q.object.ctes, connection, parameters, table_alias)
 
-    # Main query continues from where CTE numbering left off.
-    instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters)
+    # Main query continues from where CTE numbering left off. #1002: `exists()` is a semi-join unless an
+    # OFFSET counts the rows; then it answers for the rows `list()` returns, whose cleared projection
+    # still declares its joins.
+    instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters,
+                        semi_join = q.object.offset <= 0,
+                        declared_paths = keep_values ? String[] : _projected_paths(oq.object.values))
     _refuse_constant_terminal(instruction, keep_values, "exists()")
     # `LIMIT 1` is this query's own shape, not a user value, so it stays literal; the OFFSET the
     # caller set binds (#46). A non-positive offset was always dropped here, and still is.

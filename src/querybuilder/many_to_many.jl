@@ -131,10 +131,19 @@ function (descriptor::ManyToManyDescriptor)(owner)
   return ManyToManyManager(descriptor.owner_model, related_model, descriptor.relation, owner_id)
 end
 
+# #1002: the related rows linked to the owner, as a semi-join — `<related pk> IN (SELECT <related pk> …
+# through the link table … WHERE <owner pk> = $1)`. Filtering the related rows through the inverse
+# accessor directly joins the link table onto them, a to-many join the cardinality check refuses: it
+# cannot know the link pair is unique. The `IN` asks the question the manager means, and returns one row
+# per related row whatever the link table holds, so `all()` stays a queryset a caller can chain.
 function _m2m_query(manager::ManyToManyManager)
+  linked = object(manager.related_model)
+  linked.object.connect_key = manager.owner_model.connect_key
+  linked.filter("$(manager.relation.inverse_accessor)__$(manager.relation.owner_pk)" => manager.owner_id)
+  linked.values(manager.relation.related_pk)
   q = object(manager.related_model)
   q.object.connect_key = manager.owner_model.connect_key
-  q.filter("$(manager.relation.inverse_accessor)__$(manager.relation.owner_pk)" => manager.owner_id)
+  q.filter("$(manager.relation.related_pk)__@in" => linked)
   q.values("*")
   return q
 end

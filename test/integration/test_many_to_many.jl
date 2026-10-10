@@ -141,6 +141,7 @@ _ensure_m2m_scratch_schema!()
     forward_q = M.M2m_driver_endorsement_scratch.objects
     forward_q.filter("sponsors__name" => "Petrolux")
     forward_q.values("driverref")
+    forward_q.distinct()   # #1002: a to-many filter alone is refused; distinct() states the semi-join
     forward_rows = forward_q.list()
     @test length(forward_rows) == 1
     @test forward_rows[1][:driverref] == "ham44"
@@ -149,6 +150,7 @@ _ensure_m2m_scratch_schema!()
     reverse_q = M.M2m_sponsor_scratch.objects
     reverse_q.filter("drivers__driverref" => "ver1")
     reverse_q.values("name")
+    reverse_q.distinct()   # #1002: a to-many filter alone is refused; distinct() states the semi-join
     reverse_rows = reverse_q.list()
     @test Set([row[:name] for row in reverse_rows]) == Set(["AeroFuel", "Stratostream"])
 
@@ -212,6 +214,7 @@ end
     q = M.M2m_driver_multi_hop_scratch.objects
     q.filter("sponsors__country__name" => "Italy")
     q.values("driverref")
+    q.distinct()   # #1002: a to-many filter alone is refused; distinct() states the semi-join
     rows = q.list()
     @test length(rows) == 1
     @test rows[1][:driverref] == "lec"
@@ -220,6 +223,7 @@ end
     rq = M.M2m_country_scratch.objects
     rq.filter("m2m_sponsor_with_country_scratch__drivers__driverref" => "massa")
     rq.values("name")
+    rq.distinct()   # #1002: a to-many filter alone is refused; distinct() states the semi-join
     rrows = rq.list()
     @test length(rrows) == 1
     @test rrows[1][:name] == "Brazil"
@@ -228,6 +232,7 @@ end
     sq = M.M2m_sponsor_with_country_scratch.objects
     sq.filter("drivers__driverref" => "massa")
     sq.values("name")
+    sq.distinct()   # #1002: a to-many filter alone is refused; distinct() states the semi-join
     srows = sq.list()
     @test length(srows) == 1
     @test srows[1][:name] == "Petrobras"
@@ -266,7 +271,7 @@ end
     @test manager.all().list()[1][:name] == "Renault"
 
     # Test reverse traversal via explicit through
-    team_q = M.M2m_team_scratch.objects.filter("drivers__driverref" => "alonso").values("name").list()
+    team_q = M.M2m_team_scratch.objects.filter("drivers__driverref" => "alonso").values("name").distinct().list()   # #1002
     @test length(team_q) == 1
     @test team_q[1][:name] == "Renault"
 end
@@ -464,11 +469,11 @@ end
     @test Set([row[:name] for row in manager.all().list()]) == Set(["Williams"])
 
     # READ path — forward and reverse traversal both join through the physical table.
-    fwd = M.M2m_tester_dbtable_scratch.objects.filter("squads__name" => "Williams").values("driverref").list()
+    fwd = M.M2m_tester_dbtable_scratch.objects.filter("squads__name" => "Williams").values("driverref").distinct().list()   # #1002
     @test length(fwd) == 1
     @test fwd[1][:driverref] == "piquet"
 
-    rev = M.M2m_squad_dbtable_scratch.objects.filter("testers__driverref" => "piquet").values("name").list()
+    rev = M.M2m_squad_dbtable_scratch.objects.filter("testers__driverref" => "piquet").values("name").distinct().list()
     @test length(rev) == 1
     @test rev[1][:name] == "Williams"
 
@@ -536,11 +541,11 @@ end
     @test Set([row[:name] for row in manager.all().list()]) == Set(["March"])
 
     # READ path — forward and reverse traversal both join on the physical columns.
-    fwd = M.M2m_mechanic_dbcol_scratch.objects.filter("crews__name" => "March").values("driverref").list()
+    fwd = M.M2m_mechanic_dbcol_scratch.objects.filter("crews__name" => "March").values("driverref").distinct().list()   # #1002
     @test length(fwd) == 1
     @test fwd[1][:driverref] == "chapman"
 
-    rev = M.M2m_crew_dbcol_scratch.objects.filter("mechanics__driverref" => "chapman").values("name").list()
+    rev = M.M2m_crew_dbcol_scratch.objects.filter("mechanics__driverref" => "chapman").values("name").distinct().list()
     @test length(rev) == 1
     @test rev[1][:name] == "March"
 
@@ -593,6 +598,7 @@ end
     in_q = M.M2m_driver_endorsement_scratch.objects
     in_q.filter("sponsors__name__@in" => ["Petrolux", "Stratostream"])
     in_q.values("driverref")
+    in_q.distinct()   # #1002: a to-many filter alone is refused; distinct() states the semi-join
     in_rows = in_q.list()
     @test Set([row[:driverref] for row in in_rows]) == Set(["ham44", "ver1", "rus55"])
 
@@ -600,6 +606,7 @@ end
     nin_q = M.M2m_driver_endorsement_scratch.objects
     nin_q.filter("sponsors__name__@nin" => ["Stratostream"])
     nin_q.values("driverref")
+    nin_q.distinct()   # #1002: a to-many filter alone is refused; distinct() states the semi-join
     nin_rows = nin_q.list()
     @test Set([row[:driverref] for row in nin_rows]) == Set(["ham44", "rus55"])
 
@@ -610,6 +617,7 @@ end
         Q("sponsors__name" => "Red Bull"),
     ))
     qor_q.values("driverref")
+    qor_q.distinct()   # #1002: a to-many filter alone is refused; distinct() states the semi-join
     qor_rows = qor_q.list()
     @test Set([row[:driverref] for row in qor_rows]) == Set(["ham44"])
 
@@ -632,6 +640,7 @@ end
     reverse_default_q = M.M2m_brand_scratch.objects
     reverse_default_q.filter("m2m_driver_default_reverse_scratch__driverref" => "def_rev1")
     reverse_default_q.values("name")
+    reverse_default_q.distinct()   # #1002: a to-many filter alone is refused; distinct() states the semi-join
     reverse_default_rows = reverse_default_q.list()
     @test Set([row[:name] for row in reverse_default_rows]) == Set(["LegacyBrand", "FutureBrand"])
 
@@ -702,6 +711,7 @@ end
         forward = M.M2m_teammate_scratch.objects
         forward.filter("teammates__driverref" => "prost")
         forward.values("driverref")
+        forward.distinct()   # #1002: a to-many filter alone is refused; distinct() states the semi-join
         forward_rows = forward.list()
         @test length(forward_rows) == 1
         @test forward_rows[1][:driverref] == "senna"
@@ -713,6 +723,7 @@ end
         reverse = M.M2m_teammate_scratch.objects
         reverse.filter("teammate_of__driverref" => "senna")
         reverse.values("driverref")
+        reverse.distinct()   # #1002: a to-many filter alone is refused; distinct() states the semi-join
         reverse_rows = reverse.list()
         @test Set([row[:driverref] for row in reverse_rows]) == Set(["prost", "berger"])
         @test forward_rows[1][:driverref] ∉ [row[:driverref] for row in reverse_rows]

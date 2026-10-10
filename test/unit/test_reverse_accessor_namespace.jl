@@ -223,11 +223,13 @@ end
   via_fk = SELF.Driver.objects
   via_fk.filter("ran_self_driver_mentor_id__surname" => "senna")
   via_fk.values("surname")
+  via_fk.distinct()   # #1002: a to-many filter alone is refused; the join is what this pins
   fk_sql = inspect_query(via_fk)[:sql_text]
 
   via_m2m = SELF.Driver.objects
   via_m2m.filter("ran_self_driver_teammates__surname" => "prost")
   via_m2m.values("surname")
+  via_m2m.distinct()
   m2m_sql = inspect_query(via_m2m)[:sql_text]
 
   # The FK reverse is a single join back onto the same table.

@@ -354,6 +354,33 @@ function _with_config(row::ModelJoin, join_type_override::Union{String,Nothing},
 end
 _with_config(row::Union{CteJoin,CrossJoin}, ::Nothing, ::Nothing) = row
 
+# #1002: one hop that can change how many times a base row appears — what `_check_join_cardinality`
+# reads. `kind` is the relation (`:reverse`, `:many_to_many`, or `:forward` for a link to a non-unique
+# column); `repeats` is the row's `to_many` (a reverse OneToOne is a reverse hop that does not repeat,
+# but its INNER join can still drop a base row); `key` the canonical path, `path` the spelling the
+# traversal used, `target` the model reached and `binding` the Julia name a user types for it (the
+# #343 slot; empty for a forward link, whose field holds no binding). `introducer` is the first `RenderScope.introducer` that
+# reached the hop to evaluate something (what a refusal names), `declared` whether a projection or an
+# `on()` / `cjoin` path reached it, and `cjoin_on` whether a `cjoin_on` condition did — the one
+# introducer for which a dropped base row is as wrong as a repeated one (#992). `ordered` says an
+# `order_by` term reached it: in an aggregating query that term joins GROUP BY.
+# `link`/`outer_column` name a one-hop reverse relation's columns, for the `Exists(...)` the refusal
+# suggests; empty otherwise.
+@kwdef mutable struct JoinReach
+  key::String
+  path::String
+  kind::Symbol
+  target::String
+  binding::String
+  repeats::Bool
+  introducer::Symbol
+  declared::Bool
+  cjoin_on::Bool
+  ordered::Bool = false
+  link::String = ""
+  outer_column::String = ""
+end
+
 #
 # SQLTypeArrays Objects
 #
@@ -439,6 +466,12 @@ hand it the inner query's.
   join_side::Symbol = :none
   join_left::Tuple{Vararg{String}} = ()
   join_right::Tuple{Vararg{String}} = ()
+  # #1002 — what is reaching a join path right now, for the cardinality check (`_check_join_cardinality`).
+  # `:projection` and `:join_path` (an `on()` / `cjoin` path) DECLARE the join: the caller asked for its
+  # rows. Every other value evaluates something through it — `:filter`, `:order_by`, `:cjoin_on` (a
+  # `cjoin_on` condition), `:outer_ref` — and `:other` is the default, so a clause that forgets to set
+  # it is checked rather than let through.
+  introducer::Symbol = :other
 end
 
 _with_scope(s::RenderScope; kw...) =
@@ -501,7 +534,16 @@ end
   # alias rows, so rendering that ON clause adds no join; `cjoin_on_order` is the order the alias rows
   # are emitted in — every alias after the aliases its ON clause names, declaration order otherwise.
   cjoin_on_paths::Vector{Vector{String}} = Vector{String}[]
+  # #1002: for each `cjoin_on_paths` entry, the alias whose ON clause names it and the column as the
+  # caller wrote it — what a cardinality refusal quotes.
+  cjoin_on_written::Vector{Tuple{String,String}} = Tuple{String,String}[]
   cjoin_on_order::Vector{String} = String[]
+  # #1002: every hop of this build that can repeat or drop a base row — a reverse or ManyToMany hop, or
+  # a forward one to a non-unique column — keyed by the alias of the row that survived dedup, with what
+  # first reached it and whether a declaring introducer reached it too (`_record_join_reach!`).
+  # `_check_join_cardinality` reads it. `nothing` until the first such hop: most builds have none, and a
+  # build is allocation-sensitive (#41).
+  join_reaches::Union{Nothing,Dict{String,JoinReach}} = nothing
   # #174: each alias's ON conditions as `build_row_join_sql_text` rendered them — markers bound once,
   # into `:join`. The correlated UPDATE … FROM carries them into its WHERE from here; rendering them a
   # second time would bind every value twice.

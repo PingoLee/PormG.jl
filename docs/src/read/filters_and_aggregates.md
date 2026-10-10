@@ -1011,6 +1011,8 @@ df = query |> DataFrame
 
 **Exemptions.** `Max` and `Min` are immune to row duplication and are never blocked; an aggregate built with `distinct=true` is treated as an explicit opt-in.
 
+**Who introduced the join does not matter here.** In the first example the to-many join comes from a filter. A query that does *not* aggregate refuses such a filter outright ([Filtering or Ordering Across a To-Many Relation](values_and_joins.md#Filtering-or-Ordering-Across-a-To-Many-Relation)); one that aggregates returns one row per group, so the repeat can only show inside an aggregate, and this guard is the one that answers. A `cjoin(field = …)` link to a column the target does not declare unique counts as a to-many join for it as well.
+
 **A `cjoin_on` join.** A [`cjoin_on`](custom_joins.md) self-join or custom join is to-many unless its `ON` clause pins a primary key or a declared-unique column of the target to one value per base row (see *When PormG treats a `cjoin_on` join as to-many* in [Custom Joins](custom_joins.md)). A self-join on a shared, non-unique column is the typical case:
 
 ```julia

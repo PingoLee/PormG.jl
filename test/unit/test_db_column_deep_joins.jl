@@ -131,6 +131,7 @@ end
       q = DC2.Dc2_top.objects
       q.values("label")
       q.filter("mids__leaves__tag" => "x")
+      q.distinct()   # #1002: a to-many filter alone is refused; the join keys below are unchanged
       sql = inspect_query(q; connection = conn)[:sql_text]
 
       # Hop 1: Top.code (physical "top_pk") <- Mid.top (physical "top_fk").

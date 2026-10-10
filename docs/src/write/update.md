@@ -341,6 +341,15 @@ WHERE "Tb"."raceid" = "Tb_1"."raceid"
   AND "Tb"."resultid" = $1
 ```
 
+Setting a column from a joined table renders `UPDATE … FROM`, which matches each updated row with
+**one** row of every joined table. A join across a reverse relation, a `ManyToManyField` or a link to
+a column that is not unique can match several, and `UPDATE … FROM` would then set the column from an
+arbitrary one. Such an `update()` raises `QueryBuildError`, whether the to-many join is the one you set
+from or one a filter added
+([#1002](https://github.com/PingoLee/PormG.jl/issues/1002)). Scope the rows with a correlated
+`Exists(...)` filter instead. An `update()` that sets literal values is not affected: it selects its
+rows through the primary key, where a repeated row cannot change which rows are updated.
+
 ### Setting a column from a `cjoin_on` copy
 
 A [`cjoin_on`](../read/custom_joins.md) join can supply the new value too: pass `Joined(alias, column)`

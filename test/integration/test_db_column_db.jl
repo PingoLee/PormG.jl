@@ -143,7 +143,7 @@ end
 
         # Reverse traversal parent → children, filtering on a child column.
         rev = M.Db_column_scratch.objects.
-            filter("children__note" => "child-note").values("sku").first()
+            filter("children__note" => "child-note").values("sku").distinct().first()   # #1002
         @test rev.sku == "P1"
     finally
         M.Db_column_child_scratch.objects.delete(allow_delete_all=true)
@@ -169,7 +169,7 @@ end
 
         # Reverse traversal parent → children.
         rev = M.Db_column_pk_scratch.objects.
-            filter("pkchildren__tag" => "rp-child").values("label").first()
+            filter("pkchildren__tag" => "rp-child").values("label").distinct().first()   # #1002
         @test rev.label == "RP"
     finally
         M.Db_column_pk_child_scratch.objects.delete(allow_delete_all=true)
@@ -196,7 +196,7 @@ end
 
         # Reverse traversal parent → children over the string-declared FK.
         rev = M.Db_column_pk_scratch.objects.
-            filter("pkstrchildren__tag" => "sp-child").values("label").first()
+            filter("pkstrchildren__tag" => "sp-child").values("label").distinct().first()   # #1002
         @test rev.label == "SP"
     finally
         M.Db_column_pk_strchild_scratch.objects.delete(allow_delete_all=true)
@@ -294,6 +294,7 @@ end
         fwd = M.M2m_rpk_driver_scratch.objects
         fwd.filter("sponsors__name" => "Petrolux")
         fwd.values("driverref")
+        fwd.distinct()   # #1002: a to-many filter alone is refused; distinct() states the semi-join
         fwd_rows = fwd.list()
         @test length(fwd_rows) == 1
         @test fwd_rows[1][:driverref] == "ham44"
@@ -302,6 +303,7 @@ end
         rev = M.M2m_rpk_sponsor_scratch.objects
         rev.filter("rpkdrivers__driverref" => "ham44")
         rev.values("name")
+        rev.distinct()   # #1002: a to-many filter alone is refused; distinct() states the semi-join
         @test Set([row[:name] for row in rev.list()]) == Set(["Petrolux", "AeroFuel"])
     finally
         M.M2m_rpk_driver_scratch.objects.delete(allow_delete_all=true)

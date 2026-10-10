@@ -132,7 +132,17 @@ function build(object::SQLObject;
   table_alias::Union{Nothing,SQLTableAlias}=nothing,
   connection::Union{Nothing,PormGPostgres,PormGSQLite}=nothing,
   parameters::Union{Nothing,AbstractPormGParam}=nothing,
-  outer::Union{Nothing,SQLInstruction}=nothing)
+  outer::Union{Nothing,SQLInstruction}=nothing,
+  # #1002: the statement only asks whether a row matches — an `EXISTS`, an `IN (…)`, a mutation scoped by
+  # `pk IN (…)` — so a repeated base row cannot be observed and the cardinality check does not apply.
+  # Off by default: a caller that forgets it is checked, not let through.
+  semi_join::Bool=false,
+  # #1002: the caller collapses repeated rows itself, as `count(distinct = true)`'s `SELECT DISTINCT`
+  # derived table does — the `distinct()` exemption for a terminal that does not set it on the query.
+  distinct_rows::Bool=false,
+  # #1002: projected paths a terminal cleared before building (`count()`, `exists()`), which still
+  # declare their joins — `count()` counts the rows `list()` returns.
+  declared_paths::Vector{String}=String[])
 
   settings, connection, conn_key = get_settings(object, connection=connection)
   ensure_transaction_scope(object.model, connection)
@@ -177,12 +187,12 @@ function build(object::SQLObject;
   # HAVING sets its own inside `get_filter_query`, and a grouping aggregate's argument in
   # `_render_function_typed`.
   with_bucket(instruct, :select) do
-    with_scope(() -> get_select_query(object.values, instruct), instruct; phase = :group)
+    with_scope(() -> get_select_query(object.values, instruct), instruct; phase = :group, introducer = :projection)
   end
   _record_wildcard_projection_kinds!(instruct)
 
   with_bucket(instruct, :where) do
-    with_scope(() -> get_filter_query(object, instruct), instruct; phase = :row, label = "a filter")
+    with_scope(() -> get_filter_query(object, instruct), instruct; phase = :row, label = "a filter", introducer = :filter)
   end
 
   # #404: ORDER BY resolves HERE, before build_row_join_sql_text renders row_join into SQL. A path
@@ -208,7 +218,8 @@ function build(object::SQLObject;
   # PostgreSQL numbers `$N` at render and was always right. In a nested build the `:order` values are
   # lifted into text order by `detach_nested_run!` like any other clause's.
   with_bucket(instruct, :order) do
-    with_scope(() -> get_order_query(object, instruct), instruct; phase = :group, label = "an order_by term")
+    with_scope(() -> get_order_query(object, instruct), instruct; phase = :group, label = "an order_by term",
+               introducer = :order_by)
   end
   _group_window_terms!(instruct)   # #789: after ORDER BY, which also extends GROUP BY
 
@@ -232,8 +243,13 @@ function build(object::SQLObject;
         # Membership by CANONICAL path (#977): `row_path` holds each traversal's own spelling, so
         # `on("status", …)` must recognise a join `values("status_id__name")` built.
         key = _join_key(instruct, path)
-        any(p -> _join_key(instruct, p) == key, instruct.row_path) && continue
-        _build_row_join(_join_path_columns(object, path, config), instruct)
+        # #1002: `on(path, …)` / `cjoin` declares the join whether this loop builds it or traversal did.
+        if any(p -> _join_key(instruct, p) == key, instruct.row_path)
+          _declare_join_key!(instruct, key)
+          continue
+        end
+        with_scope(() -> _build_row_join(_join_path_columns(object, path, config), instruct), instruct;
+                   introducer = :join_path)
       end
 
       # ALIAS loop (#45) — materialize the anchor-less `cjoin_on` joins: no equi-anchor, explicit alias,
@@ -253,12 +269,19 @@ function build(object::SQLObject;
       # the same `_build_row_join` call its column's render makes, so that render finds the row and adds
       # none.
       for segments in instruct.cjoin_on_paths
-        _build_row_join(segments, instruct, as = false)
+        with_scope(() -> _build_row_join(segments, instruct, as = false), instruct; introducer = :cjoin_on)
       end
       for user_alias in instruct.cjoin_on_order
         _build_cjoin_on_row_join(object.alias_join[user_alias], user_alias, instruct)
       end
     end
+
+    # #1002: every row exists now, and nothing has rendered (#977, #982) — the one cardinality check.
+    for p in declared_paths
+      rel = _relation_prefix(object, p)
+      isempty(rel) || _declare_join_key!(instruct, rel)
+    end
+    _check_join_cardinality(instruct; semi_join = semi_join, distinct_rows = distinct_rows)
 
     build_row_join_sql_text(instruct)
   end
@@ -268,6 +291,140 @@ function build(object::SQLObject;
   _check_mixed_grouping(instruct)        # #798: refuse a mixed column+aggregate term on an ungrouped column
 
   return instruct
+end
+
+# #1002 cardinality check -------------------------------------------------------------------------
+# A join the caller did not ask for never repeats a base row. A projection, an `on()` path and a `cjoin`
+# path ASK for a join's rows (`RenderScope.introducer`); every other join is one PormG adds to evaluate
+# something — a filter, an ordering, a correlation, a `cjoin_on` condition — and must be to-one. A
+# to-many join there repeated each base row once per related row, silently: `count()` counted the
+# repeats, `aggregate()` summed them, `list()` returned them, and only an inflated COUNT/SUM/AVG met
+# #74. This replaces the local guards that each answered it for one introducer (#992 for a `cjoin_on`
+# condition; #74 still answers its own question, an aggregate over a join the caller DID ask for).
+#
+# Four things let a to-many evaluating join stand:
+#   - the same join is also declared — the same alias, not another path to the same table;
+#   - the query is `distinct()`, which collapses the repeats the caller can see;
+#   - the build is a semi-join (`semi_join`): an `EXISTS`, an `IN (…)`, a mutation scoped by `pk IN (…)`,
+#     where a repeated row is not observable. Its caller decides, because only it knows (`exists()`
+#     without an offset is one; with an offset the repeats change the answer, so it is not);
+#   - the query aggregates, so its rows are groups and #74 answers for the aggregates a repeat inflates.
+#
+# A `cjoin_on` condition is checked more strictly, as #992 did: only a declaration exempts it, and a
+# reverse OneToOne is refused too. Its path is joined onto the base row before the alias, so an INNER
+# join with no match drops the base row, which `distinct()` cannot restore and a LEFT `cjoin_on` was
+# written to keep.
+#
+# Runs after every row exists and before anything renders (#977, #982), on the deduped `row_join`, in
+# its order, so the first offending join is the one named.
+function _check_join_cardinality(instruct::SQLInstruction; semi_join::Bool = false, distinct_rows::Bool = false)
+  reaches = instruct.join_reaches
+  reaches === nothing && return nothing
+  # An aggregating query returns one row per group, so a repeated base row shows only inside an
+  # aggregate — and COUNT/SUM/AVG, the three that a repeat changes, are #74's question, asked of every
+  # to-many join whoever introduced it. MAX/MIN are exact over repeats.
+  exempt = semi_join || distinct_rows || instruct.object.distinct || instruct.aggregate
+  for row in instruct.row_join
+    r = get(reaches, row.alias_b, nothing)
+    (r === nothing || r.declared) && continue
+    r.cjoin_on && throw(FilterError(_cjoin_on_cardinality_msg(instruct, r)))
+    (exempt || !_to_many(row)) && continue
+    msg = _cardinality_msg(instruct, r)
+    throw(r.introducer === :filter ? FilterError(msg) : QueryBuildError(msg))
+  end
+  return nothing
+end
+
+# #1002: the column paths a projection names, for a terminal that clears it before building
+# (`declared_paths`). Its columns, a function's or an expression's operands; not a subquery's, whose
+# `OuterRef`s evaluate a correlation rather than ask for rows. A literal that is not a path declares
+# nothing, since its relation prefix is empty.
+function _projected_paths(values)::Vector{String}
+  out = String[]
+  _collect_projected_paths!(out, values, 0)
+  return out
+end
+
+function _collect_projected_paths!(out::Vector{String}, x, depth::Int)
+  depth > 32 && return nothing
+  if x isa AbstractString
+    occursin("__", x) && push!(out, String(x))
+  elseif x isa Pair
+    _collect_projected_paths!(out, x.second, depth + 1)
+  elseif x isa SQLField
+    _collect_projected_paths!(out, x.field, depth + 1)
+  elseif x isa FObject
+    _collect_projected_paths!(out, x.column, depth + 1)
+    for v in values(x.kwargs)
+      v isa Union{SQLTypeFunction,FExpression} && _collect_projected_paths!(out, v, depth + 1)
+    end
+  elseif x isa FExpression
+    _collect_projected_paths!(out, x.field_name, depth + 1)
+    _collect_projected_paths!(out, x.column, depth + 1)
+    _collect_projected_paths!(out, x.operand, depth + 1)
+  elseif x isa AbstractVector && !(x isa AbstractVector{UInt8})
+    for v in x; _collect_projected_paths!(out, v, depth + 1); end
+  end
+  return nothing
+end
+
+_cardinality_relation(r::JoinReach)::String =
+  r.kind === :reverse ? "the reverse relation '$(r.path)'" :
+  r.kind === :many_to_many ? "the ManyToMany relation '$(r.path)'" :
+  "the link '$(r.path)' to a $(r.target) column that is not unique"
+
+# The `Exists(...)` a refusal suggests: concrete for a one-hop reverse relation, whose two columns are
+# known; a template otherwise.
+_cardinality_exists_hint(r::JoinReach)::String = isempty(r.link) ?
+  "Exists(M.$(isempty(r.binding) ? "<Related>" : r.binding).objects.filter(\"<link>\" => OuterRef(\"<column>\"), …))" :
+  "Exists(M.$(r.binding).objects.filter(\"$(r.link)\" => OuterRef(\"$(r.outer_column)\"), …))"
+
+function _cardinality_msg(instruct::SQLInstruction, r::JoinReach)::String
+  base = instruct.object.model.name
+  what = r.introducer === :filter ? "a filter" :
+         r.introducer === :order_by ? "an order_by term" :
+         r.introducer === :outer_ref ? "an OuterRef(...) in a subquery" : "a join PormG added"
+  first_fix = r.introducer === :order_by ?
+    "Order by one value per $(base) row: compute it over the related rows in a correlated " *
+    "\e[4m\e[32mSubquery(...)\e[0m (e.g. their \e[32mMax\e[0m) and order by that.\n" :
+    r.introducer === :outer_ref ?
+    "Correlate the subquery with a column of the outer row, and reach the related rows inside it.\n" :
+    "Keep each $(base) row once when a related row matches, with a correlated subquery: " *
+    "\e[4m\e[32mfilter($(_cardinality_exists_hint(r)))\e[0m.\n"
+  return string(
+    "PormG cardinality check (#1002): ", what, " crosses ", _cardinality_relation(r),
+    ", so its join repeats each ", base, " row once per related ", r.target,
+    " row, and the query does not ask for those rows.\n",
+    "  Fix one of:\n",
+    "    \e[32m1.\e[0m ", first_fix,
+    "    \e[32m2.\e[0m Collapse the repeated rows: add \e[4m\e[32m.distinct()\e[0m.\n",
+    "    \e[32m3.\e[0m If one row per ", r.target, " row is what you want, project the path: ",
+    "\e[4m\e[32mvalues(…, \"", r.path, "__<column>\")\e[0m.\n")
+end
+
+# #992's message, now the `cjoin_on` arm of the one check: the condition as the caller wrote it, and
+# the alias whose ON clause holds it — found by the path it names, which only a refusal pays for.
+function _cjoin_on_cardinality_msg(instruct::SQLInstruction, r::JoinReach)::String
+  q = instruct.object
+  alias, written = "?", "\"$(r.path)__…\""
+  for (alias_i, written_i) in instruct.cjoin_on_written
+    # `"<path>"` or `F("<path>")`, as `_each_condition_column` spells it.
+    m = match(r"\"([^\"]*)\"", written_i)
+    m === nothing && continue
+    rel = _relation_prefix(q, String(first(split(m.captures[1], "__@"))))
+    if rel == r.key || startswith(rel, r.key * "__")
+      alias, written = alias_i, written_i
+      break
+    end
+  end
+  return string(
+    "\e[4m\e[31m", written, "\e[0m in the ON clause of cjoin_on alias \e[4m\e[31m", alias, "\e[0m crosses ",
+    _cardinality_relation(r), ". PormG joins a path a cjoin_on condition names onto the base row, and ",
+    "that join ", r.repeats ? "repeats each base row once per related '$(r.target)' row, and " : "",
+    "can drop it when there is none.\n  To match on the existence of a related row, correlate a subquery over it: ",
+    "\e[4m\e[32mExists(M.<Related>.objects.filter(\"<link>\" => OuterRef(\"<column>\"), …))\e[0m. ",
+    "If the predicate was never about ", alias, ", pass that \e[4m\e[32mExists(...)\e[0m to ",
+    "\e[4m\e[32m.filter(...)\e[0m instead — a to-many path there is refused the same way (#992, #1002).")
 end
 
 # #74 fan-out guard ------------------------------------------------------------------------------

@@ -1029,7 +1029,8 @@ but a row predicate has no projection (#765, the #668 move).
 function _build_entry(connection::Union{PormGPostgres, PormGSQLite}, key::Dict{Symbol, Union{String, SQLObjectHandler}}, parameters)
   work = deepcopy(key[:objct].object)
   empty!(work.values)
-  return build(work, connection=connection, parameters=parameters)
+  # #1002: a row predicate — `pk IN (…)` and an `EXISTS` fence — so a repeated row is invisible.
+  return build(work, connection=connection, parameters=parameters, semi_join=true)
 end
 
 function delete_objects(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},

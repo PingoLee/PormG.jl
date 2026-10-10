@@ -154,7 +154,7 @@ end
 @testset "of = ManyToMany, reverse and cjoin_on targets (#169)" begin
   q = SFU.Result.objects.
     filter("driverid__sponsors__name" => "Petrobras").
-    values("resultid").
+    values("resultid", "driverid__sponsors__name").   # #1002: the locked rows are projected, so asked for
     select_for_update(of = ("driverid__sponsors",))
   sql = q.list(show_query = :sql)
   s = _sfu_alias(sql, "sponsor")
@@ -165,7 +165,7 @@ end
   # Reverse accessor: Driver → its results.
   q = SFU.Driver.objects.
     filter("results__points" => 25).
-    values("driverid").
+    values("driverid", "results__points").
     select_for_update(of = ("self", "results"))
   sql = q.list(show_query = :sql)
   @test _sfu_lock(sql) == "FOR UPDATE OF \"Tb\", \"$(_sfu_alias(sql, "result"))\""

@@ -396,6 +396,9 @@ function _apply_many_to_many_branch(
   # #74: the related table reached through a many-to-many is the "many-side". Flag the (deduped)
   # row_join entry so the fan-out guard can refuse silently-inflated aggregates over base columns.
   row_join = _flag_to_many!(instruct.row_join, tb_alias)
+  # #1002: the related row is the hop the path names; the link-table row is internal.
+  _record_join_reach!(instruct, tb_alias, track_path ? _join_key(instruct, join_path) : "", join_path,
+                      :many_to_many, foreign_model.name, relation.related_binding; repeats = true)
   return (tb_alias, row_join, foreign_model, last_field)
 end
 
@@ -533,6 +536,11 @@ function _forward_fk_hop(instruct::SQLInstruction, src_model::PormGModel, src_ta
   row = ModelJoin(
     a = src_table,
     alias_a = src_alias,
+    # #1002: a forward hop matches at most one row only when the column it joins is a key of the
+    # target. A `cjoin(field = …)` link — or a `pk_field` — naming a column the target never declared
+    # unique (#174's `_covers_unique_key`) can match many, and the #74 and #1002 checks read it as the
+    # to-many join it is. A `pk_field` that is not a field of the target is left to-one, as before.
+    to_many = _forward_target_not_unique(field, next_model),
     # Local FK column and referenced parent column both honor db_column (#50). When `src_model` is a
     # CTE model this stays correct WITHOUT a branch (#376): its fields carry no db_column, so `key_a`
     # resolves to the projection alias the CTE actually exposes, while `key_b` reads the REAL target
@@ -546,6 +554,21 @@ function _forward_fk_hop(instruct::SQLInstruction, src_model::PormGModel, src_ta
   )
   return (row, next_model, last_field)
 end
+
+# #1002: does a forward hop's target column fail to be a declared key of the target? Declared, not
+# checked, as #174 reads a `cjoin_on` key: an unmanaged model or a view is taken at its word.
+function _forward_target_not_unique(field::PormGField, target::PormGModel)::Bool
+  pk = hasproperty(field, :pk_field) ? field.pk_field : nothing
+  pk === nothing && return false
+  name = String(pk)
+  haskey(target.fields, name) || return false
+  return !_covers_unique_key(target, Set([name]))
+end
+
+# #1002: a reverse hop's child key is unique for a OneToOne, or a ForeignKey declared `unique = true`:
+# each parent then has at most one child, and the hop does not repeat the parent.
+_child_key_unique(join_field::PormGField)::Bool =
+  hasfield(typeof(join_field), :unique) && getfield(join_field, :unique) === true
 
 # #68 — ONE reverse-relation hop, the mirror of `_forward_fk_hop` and shared the same way. The
 # `length(vector) == 1` refusal stays in the callers (both have it), and so does the loop-only
@@ -573,8 +596,9 @@ function _reverse_hop(instruct::SQLInstruction, src_model::PormGModel, src_table
     alias_b = _get_alias_name(instruct),
     key_b = Models.model_column(reverse_model, String(rel.fk_field)),
     how = how,
-    # #74: a reverse foreign key (one-to-many) makes the child table the many-side.
-    to_many = true,
+    # #74: a reverse foreign key (one-to-many) makes the child table the many-side — unless the child's
+    # key is unique (a reverse OneToOne), which matches at most one child per parent (#1002).
+    to_many = !_child_key_unique(join_field),
     target_managed = Models.model_is_managed(reverse_model),   # #771
   )
   return (row, reverse_model, last_field)
@@ -592,7 +616,10 @@ end
 # `.with(...)` declaration. #484: the registry no longer holds `cjoin_on` entries either, so the same
 # gate covers a MODEL hop whose path equals a declared alias — the third instance of this family.
 # `track_path = !cte` for the same reason: a CTE hop must not claim its name in `row_path`.
-function _finish_hop!(instruct::SQLInstruction, row::JoinRow, join_path::String; cte::Bool)
+#
+# #1002: `reach` is what the hop was, for the cardinality check — `(kind, target model, its binding,
+# link, outer column)` from the arm that built it, or `nothing` for a CTE hop.
+function _finish_hop!(instruct::SQLInstruction, row::JoinRow, join_path::String; cte::Bool, reach = nothing)
   # #977: the conditions and join type as bound at the start of this build, not as stored on the
   # query — under the canonical path, so the spelling this traversal used does not decide whether
   # they are found.
@@ -603,7 +630,46 @@ function _finish_hop!(instruct::SQLInstruction, row::JoinRow, join_path::String;
   alias = _insert_join(instruct.row_join, row, instruct.row_path, join_path; track_path = !cte)
   # #169: `alias` is the dedup SURVIVOR's, so every spelling of one relation maps to the row emitted.
   cte || _record_join_alias!(instruct, key, alias)
+  # #1002: a reverse hop always (it repeats the parent, or — a reverse OneToOne — can drop it), a
+  # forward one only when it is to-many (a link to a non-unique column).
+  if reach !== nothing && (reach[1] === :reverse || _to_many(row))
+    _record_join_reach!(instruct, alias, key, join_path, reach...; repeats = _to_many(row))
+  end
   return (alias, row)
+end
+
+# #1002: note that `alias` was reached, by what (`instruct.scope.introducer`), and whether that
+# DECLARES the join. A hop reached twice keeps its first introducer and is declared if any reach was.
+function _record_join_reach!(instruct::SQLInstruction, alias::String, key::String, path::String,
+                             kind::Symbol, target::String, binding::String, link::String = "",
+                             outer_column::String = ""; repeats::Bool)
+  intro = instruct.scope.introducer
+  declares = intro === :projection || intro === :join_path
+  reaches = instruct.join_reaches
+  reaches === nothing && (reaches = instruct.join_reaches = Dict{String,JoinReach}())
+  existing = get(reaches, alias, nothing)
+  if existing === nothing
+    reaches[alias] = JoinReach(key = key, path = path, kind = kind, target = target, binding = binding, repeats = repeats,
+                               introducer = declares ? :none : intro, declared = declares,
+                               cjoin_on = intro === :cjoin_on, link = link, outer_column = outer_column)
+  else
+    existing.declared |= declares
+    existing.repeats |= repeats
+    existing.cjoin_on |= intro === :cjoin_on
+    (existing.introducer === :none && !declares) && (existing.introducer = intro)
+  end
+  return nothing
+end
+
+# #1002: an `on()` / `cjoin` path, or a projected path a terminal cleared, declares every hop along it:
+# a reach whose canonical key is the path or a prefix of it.
+function _declare_join_key!(instruct::SQLInstruction, key::String)
+  reaches = instruct.join_reaches
+  (reaches === nothing || isempty(key)) && return nothing
+  for r in values(reaches)
+    (r.key == key || startswith(key, r.key * "__")) && !isempty(r.key) && (r.declared = true)
+  end
+  return nothing
 end
 
 # #169: whether this build's lock names `of` targets — the only reader of `join_alias_by_path`, so the
@@ -642,6 +708,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # they skip `_finish_hop!` — which also means a `cjoin`/`on()` config keyed on an M2M path is
   # never consulted. Long-standing behavior; #68 preserves it rather than fixing it in passing.
   inserted = false
+  hop_reach = nothing   # #1002: what the hop is, for `_finish_hop!`; a CTE hop leaves it `nothing`
 
   # #27: a non-terminal JSON base field is a value extraction (`payload__key`, `payload__0__name`),
   # not a join hop. Fire before the CTE/FK cascade — otherwise `payload` enters the forward-FK
@@ -835,6 +902,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       instruct, instruct.object.model, Models.model_table_name(instruct.object.model), instruct.alias,
       first_column, first_field, vector; prev_how = nothing,
       no_target_message = "Invalid field path: the column $(first_column) does not have a foreign key")
+    hop_reach = (:forward, foreign_table_name.name, "")
   elseif haskey(instruct.object.model.related_objects, vector[1])
     related_object = instruct.object.model.related_objects[vector[1]]
     if related_object isa Models.ManyToManyRelation
@@ -854,6 +922,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       row_join, foreign_table_name, last_field = _reverse_hop(
         instruct, instruct.object.model, Models.model_table_name(instruct.object.model), instruct.alias,
         rel, vector; prev_how = nothing)
+      hop_reach = (:reverse, foreign_table_name.name, String(rel.binding), String(rel.fk_field), String(rel.target_pk))
     end
   else
     @pormg_debug false
@@ -891,7 +960,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # `cjoin` / `on()` entry that happened to share the CTE's name from handing the CTE's join its
   # type and predicates, and `track_path = !cte` is what stopped `_insert_join` claiming the CTE
   # name in `row_path` — the three symptoms of that issue, all unrepresentable now.
-  inserted || ((tb_alias, row_join) = _finish_hop!(instruct, row_join, join_path; cte = cte))
+  inserted || ((tb_alias, row_join) = _finish_hop!(instruct, row_join, join_path; cte = cte, reach = hop_reach))
   
   vector = vector[2:end]  
 
@@ -922,6 +991,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     prev_b = row_join.b
 
     inserted = false
+    hop_reach = nothing
 
     if haskey(new_object.fields, first_column) && Models.is_many_to_many_field(new_object.fields[first_column])
       relation = Models.get_many_to_many_relation(new_object, first_column)
@@ -940,6 +1010,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
         instruct, new_object, prev_b, tb_alias, first_column, first_field, vector; prev_how = prev_how,
         # #197: this used to blame `vector[2]`, but the FK-less column is `first_column`.
         no_target_message = "Invalid field path: the column $(first_column) in $(new_object.name) does not have a foreign key target")
+      hop_reach = (:forward, foreign_table_name.name, "")
     elseif haskey(new_object.related_objects, vector[1])
       related_object = new_object.related_objects[vector[1]]
       if related_object isa Models.ManyToManyRelation
@@ -957,6 +1028,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
         !(vector[2] in rel.model_resolved.field_names) && throw(UnknownFieldError("Invalid field path: the column $(vector[2]) not found in $(rel.model_resolved.name)"))
         row_join, foreign_table_name, last_field = _reverse_hop(
           instruct, new_object, prev_b, tb_alias, rel, vector; prev_how = prev_how)
+        hop_reach = (:reverse, foreign_table_name.name, String(rel.binding))
       end
 
     else
@@ -964,7 +1036,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     end
 
     @pormg_debug false   
-    inserted || ((tb_alias, row_join) = _finish_hop!(instruct, row_join, join_path; cte = cte))
+    inserted || ((tb_alias, row_join) = _finish_hop!(instruct, row_join, join_path; cte = cte, reach = hop_reach))
 
     # Every arm consumes exactly ONE segment per iteration. The reverse arm used to advance in-arm
     # and set a `_reverse_advanced` flag that made this line skip — a no-op pair, since the two

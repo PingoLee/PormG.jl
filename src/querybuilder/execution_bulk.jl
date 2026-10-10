@@ -2463,7 +2463,8 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
   for filter in static_filters
     work.filter(filter)
   end
-  instruction = build(work.object, connection=connection)
+  # #1002: semi-join — the chunk builder refuses any join itself, with its own message.
+  instruction = build(work.object, connection=connection, semi_join=true)
 
   # Build a list of row value strings by applying each model field formatter.
   rows = String[]

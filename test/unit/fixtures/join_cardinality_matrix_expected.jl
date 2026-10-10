@@ -22,33 +22,33 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("filter/forward nullable", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" = ?"),
   ("filter/reverse", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" = \$1"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results', so its join repeats each driver row on"),
   ("filter/reverse", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" = ?"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results', so its join repeats each driver row on"),
   ("filter/reverse OneToOne", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" = \$1"),
   ("filter/reverse OneToOne", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" = ?"),
   ("filter/ManyToMany", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" = \$1"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
   ("filter/ManyToMany", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" = ?"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
   ("order_by/forward nullable", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" ORDER BY \"Tb_1\".\"name\" ASC NULLS LAST"),
   ("order_by/forward nullable", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" ORDER BY \"Tb_1\".\"name\" ASC NULLS LAST"),
   ("order_by/reverse", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" ORDER BY \"Tb_1\".\"grid\" ASC NULLS LAST"),
+    (stage = :build, error = "QueryBuildError", message = "PormG cardinality check (#1002): an order_by term crosses the reverse relation 'results', so its join repeats each drive"),
   ("order_by/reverse", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" ORDER BY \"Tb_1\".\"grid\" ASC NULLS LAST"),
+    (stage = :build, error = "QueryBuildError", message = "PormG cardinality check (#1002): an order_by term crosses the reverse relation 'results', so its join repeats each drive"),
   ("order_by/reverse OneToOne", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" ORDER BY \"Tb_1\".\"bio\" ASC NULLS LAST"),
   ("order_by/reverse OneToOne", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" ORDER BY \"Tb_1\".\"bio\" ASC NULLS LAST"),
   ("order_by/ManyToMany", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" ORDER BY \"Tb_2\".\"name\" ASC NULLS LAST"),
+    (stage = :build, error = "QueryBuildError", message = "PormG cardinality check (#1002): an order_by term crosses the ManyToMany relation 'sponsors', so its join repeats each d"),
   ("order_by/ManyToMany", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" ORDER BY \"Tb_2\".\"name\" ASC NULLS LAST"),
+    (stage = :build, error = "QueryBuildError", message = "PormG cardinality check (#1002): an order_by term crosses the ManyToMany relation 'sponsors', so its join repeats each d"),
   ("filter + distinct()/forward nullable", :postgres) =>
     (stage = :ok, sql = "SELECT DISTINCT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" = \$1"),
   ("filter + distinct()/forward nullable", :sqlite) =>
@@ -86,49 +86,49 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("filter + Qor/forward nullable", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE (\"Tb_1\".\"name\" = ? OR \"Tb\".\"number\" = ?)"),
   ("filter + Qor/reverse", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb_1\".\"grid\" = \$1 OR \"Tb\".\"number\" = \$2)"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results', so its join repeats each driver row on"),
   ("filter + Qor/reverse", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb_1\".\"grid\" = ? OR \"Tb\".\"number\" = ?)"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results', so its join repeats each driver row on"),
   ("filter + Qor/reverse OneToOne", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb_1\".\"bio\" = \$1 OR \"Tb\".\"number\" = \$2)"),
   ("filter + Qor/reverse OneToOne", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE (\"Tb_1\".\"bio\" = ? OR \"Tb\".\"number\" = ?)"),
   ("filter + Qor/ManyToMany", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE (\"Tb_2\".\"name\" = \$1 OR \"Tb\".\"number\" = \$2)"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
   ("filter + Qor/ManyToMany", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE (\"Tb_2\".\"name\" = ? OR \"Tb\".\"number\" = ?)"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
   ("filter + limit/forward nullable", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" = \$1 LIMIT \$2"),
   ("filter + limit/forward nullable", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" = ? LIMIT ?"),
   ("filter + limit/reverse", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" = \$1 LIMIT \$2"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results', so its join repeats each driver row on"),
   ("filter + limit/reverse", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" = ? LIMIT ?"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results', so its join repeats each driver row on"),
   ("filter + limit/reverse OneToOne", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" = \$1 LIMIT \$2"),
   ("filter + limit/reverse OneToOne", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" = ? LIMIT ?"),
   ("filter + limit/ManyToMany", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" = \$1 LIMIT \$2"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
   ("filter + limit/ManyToMany", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" = ? LIMIT ?"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
   ("count()/forward nullable", :postgres) =>
     (stage = :ok, sql = "SELECT COUNT(*) FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" = \$1"),
   ("count()/forward nullable", :sqlite) =>
     (stage = :ok, sql = "SELECT COUNT(*) FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" = ?"),
   ("count()/reverse", :postgres) =>
-    (stage = :ok, sql = "SELECT COUNT(*) FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" = \$1"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results', so its join repeats each driver row on"),
   ("count()/reverse", :sqlite) =>
-    (stage = :ok, sql = "SELECT COUNT(*) FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" = ?"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results', so its join repeats each driver row on"),
   ("count()/reverse OneToOne", :postgres) =>
     (stage = :ok, sql = "SELECT COUNT(*) FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" = \$1"),
   ("count()/reverse OneToOne", :sqlite) =>
     (stage = :ok, sql = "SELECT COUNT(*) FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" = ?"),
   ("count()/ManyToMany", :postgres) =>
-    (stage = :ok, sql = "SELECT COUNT(*) FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" = \$1"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
   ("count()/ManyToMany", :sqlite) =>
-    (stage = :ok, sql = "SELECT COUNT(*) FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" = ?"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
   ("count(distinct = true)/forward nullable", :postgres) =>
     (stage = :ok, sql = "SELECT COUNT(*) FROM ( SELECT DISTINCT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" = \$1 ) as \"__pormg_distinct_count\""),
   ("count(distinct = true)/forward nullable", :sqlite) =>
@@ -182,17 +182,17 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("exists() with offset/forward nullable", :sqlite) =>
     (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" = ? LIMIT 1 OFFSET ?"),
   ("exists() with offset/reverse", :postgres) =>
-    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" = \$1 LIMIT 1 OFFSET \$2"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results', so its join repeats each driver row on"),
   ("exists() with offset/reverse", :sqlite) =>
-    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" = ? LIMIT 1 OFFSET ?"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results', so its join repeats each driver row on"),
   ("exists() with offset/reverse OneToOne", :postgres) =>
     (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" = \$1 LIMIT 1 OFFSET \$2"),
   ("exists() with offset/reverse OneToOne", :sqlite) =>
     (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" = ? LIMIT 1 OFFSET ?"),
   ("exists() with offset/ManyToMany", :postgres) =>
-    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" = \$1 LIMIT 1 OFFSET \$2"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
   ("exists() with offset/ManyToMany", :sqlite) =>
-    (stage = :ok, sql = "SELECT 1 FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" = ? LIMIT 1 OFFSET ?"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
   ("aggregate()/forward nullable", :postgres) =>
     (stage = :ok, sql = "SELECT MAX(\"Tb\".\"number\") as \"n\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" = \$1"),
   ("aggregate()/forward nullable", :sqlite) =>
@@ -209,6 +209,38 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, sql = "SELECT MAX(\"Tb\".\"number\") as \"n\" FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" = \$1"),
   ("aggregate()/ManyToMany", :sqlite) =>
     (stage = :ok, sql = "SELECT MAX(\"Tb\".\"number\") as \"n\" FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" = ?"),
+  ("aggregate() Count/forward nullable", :postgres) =>
+    (stage = :ok, sql = "SELECT COUNT(\"Tb\".\"driverid\") as \"n\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" = \$1"),
+  ("aggregate() Count/forward nullable", :sqlite) =>
+    (stage = :ok, sql = "SELECT COUNT(\"Tb\".\"driverid\") as \"n\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" = ?"),
+  ("aggregate() Count/reverse", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "PormG fan-out guard (#74): the aggregate n is inflated because it aggregates a column from a table that a to-many join r"),
+  ("aggregate() Count/reverse", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "PormG fan-out guard (#74): the aggregate n is inflated because it aggregates a column from a table that a to-many join r"),
+  ("aggregate() Count/reverse OneToOne", :postgres) =>
+    (stage = :ok, sql = "SELECT COUNT(\"Tb\".\"driverid\") as \"n\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" = \$1"),
+  ("aggregate() Count/reverse OneToOne", :sqlite) =>
+    (stage = :ok, sql = "SELECT COUNT(\"Tb\".\"driverid\") as \"n\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" = ?"),
+  ("aggregate() Count/ManyToMany", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "PormG fan-out guard (#74): the aggregate n is inflated because it aggregates a column from a table that a to-many join r"),
+  ("aggregate() Count/ManyToMany", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "PormG fan-out guard (#74): the aggregate n is inflated because it aggregates a column from a table that a to-many join r"),
+  ("count(column, distinct = true)/forward nullable", :postgres) =>
+    (stage = :ok, sql = "SELECT COUNT(DISTINCT \"Tb\".\"driverid\") as \"pormg_count\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" = \$1"),
+  ("count(column, distinct = true)/forward nullable", :sqlite) =>
+    (stage = :ok, sql = "SELECT COUNT(DISTINCT \"Tb\".\"driverid\") as \"pormg_count\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" = ?"),
+  ("count(column, distinct = true)/reverse", :postgres) =>
+    (stage = :ok, sql = "SELECT COUNT(DISTINCT \"Tb\".\"driverid\") as \"pormg_count\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" = \$1"),
+  ("count(column, distinct = true)/reverse", :sqlite) =>
+    (stage = :ok, sql = "SELECT COUNT(DISTINCT \"Tb\".\"driverid\") as \"pormg_count\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" = ?"),
+  ("count(column, distinct = true)/reverse OneToOne", :postgres) =>
+    (stage = :ok, sql = "SELECT COUNT(DISTINCT \"Tb\".\"driverid\") as \"pormg_count\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" = \$1"),
+  ("count(column, distinct = true)/reverse OneToOne", :sqlite) =>
+    (stage = :ok, sql = "SELECT COUNT(DISTINCT \"Tb\".\"driverid\") as \"pormg_count\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" = ?"),
+  ("count(column, distinct = true)/ManyToMany", :postgres) =>
+    (stage = :ok, sql = "SELECT COUNT(DISTINCT \"Tb\".\"driverid\") as \"pormg_count\" FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" = \$1"),
+  ("count(column, distinct = true)/ManyToMany", :sqlite) =>
+    (stage = :ok, sql = "SELECT COUNT(DISTINCT \"Tb\".\"driverid\") as \"pormg_count\" FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" = ?"),
   ("grouped Count/forward nullable", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", COUNT(\"Tb\".\"driverid\") as \"n\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" = \$1 GROUP BY 1"),
   ("grouped Count/forward nullable", :sqlite) =>
@@ -218,13 +250,29 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("grouped Count/reverse", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "PormG fan-out guard (#74): the aggregate n is inflated because it aggregates a column from a table that a to-many join r"),
   ("grouped Count/reverse OneToOne", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "PormG fan-out guard (#74): the aggregate n is inflated because it aggregates a column from a table that a to-many join r"),
+    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", COUNT(\"Tb\".\"driverid\") as \"n\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" = \$1 GROUP BY 1"),
   ("grouped Count/reverse OneToOne", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "PormG fan-out guard (#74): the aggregate n is inflated because it aggregates a column from a table that a to-many join r"),
+    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", COUNT(\"Tb\".\"driverid\") as \"n\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" = ? GROUP BY 1"),
   ("grouped Count/ManyToMany", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "PormG fan-out guard (#74): the aggregate n is inflated because it aggregates a column from a table that a to-many join r"),
   ("grouped Count/ManyToMany", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "PormG fan-out guard (#74): the aggregate n is inflated because it aggregates a column from a table that a to-many join r"),
+  ("grouped Max/forward nullable", :postgres) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", MAX(\"Tb\".\"number\") as \"n\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" = \$1 GROUP BY 1"),
+  ("grouped Max/forward nullable", :sqlite) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", MAX(\"Tb\".\"number\") as \"n\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" WHERE \"Tb_1\".\"name\" = ? GROUP BY 1"),
+  ("grouped Max/reverse", :postgres) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", MAX(\"Tb\".\"number\") as \"n\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" = \$1 GROUP BY 1"),
+  ("grouped Max/reverse", :sqlite) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", MAX(\"Tb\".\"number\") as \"n\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" = ? GROUP BY 1"),
+  ("grouped Max/reverse OneToOne", :postgres) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", MAX(\"Tb\".\"number\") as \"n\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" = \$1 GROUP BY 1"),
+  ("grouped Max/reverse OneToOne", :sqlite) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", MAX(\"Tb\".\"number\") as \"n\" FROM \"driver\" as \"Tb\" INNER JOIN \"profile\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"bio\" = ? GROUP BY 1"),
+  ("grouped Max/ManyToMany", :postgres) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", MAX(\"Tb\".\"number\") as \"n\" FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" = \$1 GROUP BY 1"),
+  ("grouped Max/ManyToMany", :sqlite) =>
+    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", MAX(\"Tb\".\"number\") as \"n\" FROM \"driver\" as \"Tb\" INNER JOIN \"driver_sponsors\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"Tb_2\" ON \"Tb_1\".\"sponsor_sponsorid\" = \"Tb_2\".\"sponsorid\" WHERE \"Tb_2\".\"name\" = ? GROUP BY 1"),
   ("Exists() subquery/forward nullable", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" WHERE EXISTS (SELECT 1 FROM \"driver\" as \"R1\" LEFT JOIN \"team\" AS \"R1_1\" ON \"R1\".\"teamid\" = \"R1_1\".\"teamid\" WHERE \"R1\".\"teamid\" = \"Tb\".\"teamid\" AND \"R1_1\".\"name\" = \$1 LIMIT 1)"),
   ("Exists() subquery/forward nullable", :sqlite) =>
@@ -246,17 +294,17 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Exists() subquery with offset/forward nullable", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" WHERE EXISTS (SELECT 1 FROM \"driver\" as \"R1\" LEFT JOIN \"team\" AS \"R1_1\" ON \"R1\".\"teamid\" = \"R1_1\".\"teamid\" WHERE \"R1\".\"teamid\" = \"Tb\".\"teamid\" AND \"R1_1\".\"name\" = ? LIMIT 1 OFFSET ?)"),
   ("Exists() subquery with offset/reverse", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" WHERE EXISTS (SELECT 1 FROM \"driver\" as \"R1\" INNER JOIN \"result\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driverid\" WHERE \"R1\".\"teamid\" = \"Tb\".\"teamid\" AND \"R1_1\".\"grid\" = \$1 LIMIT 1 OFFSET \$2)"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results', so its join repeats each driver row on"),
   ("Exists() subquery with offset/reverse", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" WHERE EXISTS (SELECT 1 FROM \"driver\" as \"R1\" INNER JOIN \"result\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driverid\" WHERE \"R1\".\"teamid\" = \"Tb\".\"teamid\" AND \"R1_1\".\"grid\" = ? LIMIT 1 OFFSET ?)"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results', so its join repeats each driver row on"),
   ("Exists() subquery with offset/reverse OneToOne", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" WHERE EXISTS (SELECT 1 FROM \"driver\" as \"R1\" INNER JOIN \"profile\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driverid\" WHERE \"R1\".\"teamid\" = \"Tb\".\"teamid\" AND \"R1_1\".\"bio\" = \$1 LIMIT 1 OFFSET \$2)"),
   ("Exists() subquery with offset/reverse OneToOne", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" WHERE EXISTS (SELECT 1 FROM \"driver\" as \"R1\" INNER JOIN \"profile\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driverid\" WHERE \"R1\".\"teamid\" = \"Tb\".\"teamid\" AND \"R1_1\".\"bio\" = ? LIMIT 1 OFFSET ?)"),
   ("Exists() subquery with offset/ManyToMany", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" WHERE EXISTS (SELECT 1 FROM \"driver\" as \"R1\" INNER JOIN \"driver_sponsors\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"R1_2\" ON \"R1_1\".\"sponsor_sponsorid\" = \"R1_2\".\"sponsorid\" WHERE \"R1\".\"teamid\" = \"Tb\".\"teamid\" AND \"R1_2\".\"name\" = \$1 LIMIT 1 OFFSET \$2)"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
   ("Exists() subquery with offset/ManyToMany", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" WHERE EXISTS (SELECT 1 FROM \"driver\" as \"R1\" INNER JOIN \"driver_sponsors\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"R1_2\" ON \"R1_1\".\"sponsor_sponsorid\" = \"R1_2\".\"sponsorid\" WHERE \"R1\".\"teamid\" = \"Tb\".\"teamid\" AND \"R1_2\".\"name\" = ? LIMIT 1 OFFSET ?)"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
   ("__@in subquery/forward nullable", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" WHERE \"Tb\".\"teamid\" IN (SELECT \"R1\".\"teamid\" as \"teamid\" FROM \"driver\" as \"R1\" LEFT JOIN \"team\" AS \"R1_1\" ON \"R1\".\"teamid\" = \"R1_1\".\"teamid\" WHERE \"R1_1\".\"name\" = \$1 )"),
   ("__@in subquery/forward nullable", :sqlite) =>
@@ -278,33 +326,33 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("__@in subquery, sliced/forward nullable", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" WHERE \"Tb\".\"teamid\" IN (SELECT \"R1\".\"teamid\" as \"teamid\" FROM \"driver\" as \"R1\" LEFT JOIN \"team\" AS \"R1_1\" ON \"R1\".\"teamid\" = \"R1_1\".\"teamid\" WHERE \"R1_1\".\"name\" = ? LIMIT ? )"),
   ("__@in subquery, sliced/reverse", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" WHERE \"Tb\".\"teamid\" IN (SELECT \"R1\".\"teamid\" as \"teamid\" FROM \"driver\" as \"R1\" INNER JOIN \"result\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driverid\" WHERE \"R1_1\".\"grid\" = \$1 LIMIT \$2 )"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results', so its join repeats each driver row on"),
   ("__@in subquery, sliced/reverse", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" WHERE \"Tb\".\"teamid\" IN (SELECT \"R1\".\"teamid\" as \"teamid\" FROM \"driver\" as \"R1\" INNER JOIN \"result\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driverid\" WHERE \"R1_1\".\"grid\" = ? LIMIT ? )"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results', so its join repeats each driver row on"),
   ("__@in subquery, sliced/reverse OneToOne", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" WHERE \"Tb\".\"teamid\" IN (SELECT \"R1\".\"teamid\" as \"teamid\" FROM \"driver\" as \"R1\" INNER JOIN \"profile\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driverid\" WHERE \"R1_1\".\"bio\" = \$1 LIMIT \$2 )"),
   ("__@in subquery, sliced/reverse OneToOne", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" WHERE \"Tb\".\"teamid\" IN (SELECT \"R1\".\"teamid\" as \"teamid\" FROM \"driver\" as \"R1\" INNER JOIN \"profile\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driverid\" WHERE \"R1_1\".\"bio\" = ? LIMIT ? )"),
   ("__@in subquery, sliced/ManyToMany", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" WHERE \"Tb\".\"teamid\" IN (SELECT \"R1\".\"teamid\" as \"teamid\" FROM \"driver\" as \"R1\" INNER JOIN \"driver_sponsors\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"R1_2\" ON \"R1_1\".\"sponsor_sponsorid\" = \"R1_2\".\"sponsorid\" WHERE \"R1_2\".\"name\" = \$1 LIMIT \$2 )"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
   ("__@in subquery, sliced/ManyToMany", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" WHERE \"Tb\".\"teamid\" IN (SELECT \"R1\".\"teamid\" as \"teamid\" FROM \"driver\" as \"R1\" INNER JOIN \"driver_sponsors\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"R1_2\" ON \"R1_1\".\"sponsor_sponsorid\" = \"R1_2\".\"sponsorid\" WHERE \"R1_2\".\"name\" = ? LIMIT ? )"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
   ("scalar Subquery/forward nullable", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", (SELECT \"R1\".\"code\" as \"code\" FROM \"driver\" as \"R1\" LEFT JOIN \"team\" AS \"R1_1\" ON \"R1\".\"teamid\" = \"R1_1\".\"teamid\" WHERE \"R1\".\"teamid\" = \"Tb\".\"teamid\" AND \"R1_1\".\"name\" = \$1 LIMIT \$2 ) as \"c\" FROM \"team\" as \"Tb\""),
   ("scalar Subquery/forward nullable", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", (SELECT \"R1\".\"code\" as \"code\" FROM \"driver\" as \"R1\" LEFT JOIN \"team\" AS \"R1_1\" ON \"R1\".\"teamid\" = \"R1_1\".\"teamid\" WHERE \"R1\".\"teamid\" = \"Tb\".\"teamid\" AND \"R1_1\".\"name\" = ? LIMIT ? ) as \"c\" FROM \"team\" as \"Tb\""),
   ("scalar Subquery/reverse", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", (SELECT \"R1\".\"code\" as \"code\" FROM \"driver\" as \"R1\" INNER JOIN \"result\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driverid\" WHERE \"R1\".\"teamid\" = \"Tb\".\"teamid\" AND \"R1_1\".\"grid\" = \$1 LIMIT \$2 ) as \"c\" FROM \"team\" as \"Tb\""),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results', so its join repeats each driver row on"),
   ("scalar Subquery/reverse", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", (SELECT \"R1\".\"code\" as \"code\" FROM \"driver\" as \"R1\" INNER JOIN \"result\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driverid\" WHERE \"R1\".\"teamid\" = \"Tb\".\"teamid\" AND \"R1_1\".\"grid\" = ? LIMIT ? ) as \"c\" FROM \"team\" as \"Tb\""),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results', so its join repeats each driver row on"),
   ("scalar Subquery/reverse OneToOne", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", (SELECT \"R1\".\"code\" as \"code\" FROM \"driver\" as \"R1\" INNER JOIN \"profile\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driverid\" WHERE \"R1\".\"teamid\" = \"Tb\".\"teamid\" AND \"R1_1\".\"bio\" = \$1 LIMIT \$2 ) as \"c\" FROM \"team\" as \"Tb\""),
   ("scalar Subquery/reverse OneToOne", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", (SELECT \"R1\".\"code\" as \"code\" FROM \"driver\" as \"R1\" INNER JOIN \"profile\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driverid\" WHERE \"R1\".\"teamid\" = \"Tb\".\"teamid\" AND \"R1_1\".\"bio\" = ? LIMIT ? ) as \"c\" FROM \"team\" as \"Tb\""),
   ("scalar Subquery/ManyToMany", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", (SELECT \"R1\".\"code\" as \"code\" FROM \"driver\" as \"R1\" INNER JOIN \"driver_sponsors\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"R1_2\" ON \"R1_1\".\"sponsor_sponsorid\" = \"R1_2\".\"sponsorid\" WHERE \"R1\".\"teamid\" = \"Tb\".\"teamid\" AND \"R1_2\".\"name\" = \$1 LIMIT \$2 ) as \"c\" FROM \"team\" as \"Tb\""),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
   ("scalar Subquery/ManyToMany", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", (SELECT \"R1\".\"code\" as \"code\" FROM \"driver\" as \"R1\" INNER JOIN \"driver_sponsors\" AS \"R1_1\" ON \"R1\".\"driverid\" = \"R1_1\".\"driver_driverid\" INNER JOIN \"sponsor\" AS \"R1_2\" ON \"R1_1\".\"sponsor_sponsorid\" = \"R1_2\".\"sponsorid\" WHERE \"R1\".\"teamid\" = \"Tb\".\"teamid\" AND \"R1_2\".\"name\" = ? LIMIT ? ) as \"c\" FROM \"team\" as \"Tb\""),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the ManyToMany relation 'sponsors', so its join repeats each driver ro"),
   ("cjoin_on condition/forward nullable", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" INNER JOIN \"team\" AS \"t2\" ON (\"t2\".\"teamid\" = \"Tb\".\"teamid\") AND \"Tb_1\".\"name\" = \$1"),
   ("cjoin_on condition/forward nullable", :sqlite) =>
@@ -342,17 +390,17 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("update() SET from a join/forward nullable", :sqlite) =>
     (stage = :ok, sql = "UPDATE \"result\" AS \"Tb\" SET \"number\" = \"Tb_1\".\"number\" FROM \"driver\" AS \"Tb_1\", \"team\" AS \"Tb_2\" WHERE \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" AND \"Tb_2\".\"name\" = ?"),
   ("update() SET from a join/reverse", :postgres) =>
-    (stage = :ok, sql = "UPDATE \"result\" AS \"Tb\" SET \"number\" = \"Tb_1\".\"number\" FROM \"driver\" AS \"Tb_1\", \"result\" AS \"Tb_2\" WHERE \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" AND \"Tb_2\".\"grid\" = \$1"),
+    (stage = :build, error = "QueryBuildError", message = "The join to \"result\" (alias \"Tb_2\") may match more than one row per updated row (a reverse or ManyToMany relation, or a "),
   ("update() SET from a join/reverse", :sqlite) =>
-    (stage = :ok, sql = "UPDATE \"result\" AS \"Tb\" SET \"number\" = \"Tb_1\".\"number\" FROM \"driver\" AS \"Tb_1\", \"result\" AS \"Tb_2\" WHERE \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" AND \"Tb_2\".\"grid\" = ?"),
+    (stage = :build, error = "QueryBuildError", message = "The join to \"result\" (alias \"Tb_2\") may match more than one row per updated row (a reverse or ManyToMany relation, or a "),
   ("update() SET from a join/reverse OneToOne", :postgres) =>
     (stage = :ok, sql = "UPDATE \"result\" AS \"Tb\" SET \"number\" = \"Tb_1\".\"number\" FROM \"driver\" AS \"Tb_1\", \"profile\" AS \"Tb_2\" WHERE \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" AND \"Tb_2\".\"bio\" = \$1"),
   ("update() SET from a join/reverse OneToOne", :sqlite) =>
     (stage = :ok, sql = "UPDATE \"result\" AS \"Tb\" SET \"number\" = \"Tb_1\".\"number\" FROM \"driver\" AS \"Tb_1\", \"profile\" AS \"Tb_2\" WHERE \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" AND \"Tb_2\".\"bio\" = ?"),
   ("update() SET from a join/ManyToMany", :postgres) =>
-    (stage = :ok, sql = "UPDATE \"result\" AS \"Tb\" SET \"number\" = \"Tb_1\".\"number\" FROM \"driver\" AS \"Tb_1\", \"driver_sponsors\" AS \"Tb_2\", \"sponsor\" AS \"Tb_3\" WHERE \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"driverid\" = \"Tb_2\".\"driver_driverid\" AND \"Tb_2\".\"sponsor_sponsorid\" = \"Tb_3\".\"sponsorid\" AND \"Tb_3\".\"name\" = \$1"),
+    (stage = :build, error = "QueryBuildError", message = "The join to \"sponsor\" (alias \"Tb_3\") may match more than one row per updated row (a reverse or ManyToMany relation, or a"),
   ("update() SET from a join/ManyToMany", :sqlite) =>
-    (stage = :ok, sql = "UPDATE \"result\" AS \"Tb\" SET \"number\" = \"Tb_1\".\"number\" FROM \"driver\" AS \"Tb_1\", \"driver_sponsors\" AS \"Tb_2\", \"sponsor\" AS \"Tb_3\" WHERE \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND \"Tb_1\".\"driverid\" = \"Tb_2\".\"driver_driverid\" AND \"Tb_2\".\"sponsor_sponsorid\" = \"Tb_3\".\"sponsorid\" AND \"Tb_3\".\"name\" = ?"),
+    (stage = :build, error = "QueryBuildError", message = "The join to \"sponsor\" (alias \"Tb_3\") may match more than one row per updated row (a reverse or ManyToMany relation, or a"),
   ("delete()/forward nullable", :postgres) =>
     (stage = :ok, sql = "DELETE FROM \"result\" AS \"Tb\" WHERE \"Tb\".\"resultid\" IN (SELECT DISTINCT \"Tb\".\"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"team\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" WHERE \"Tb_2\".\"name\" = \$1) AND EXISTS (SELECT 1 FROM (SELECT 1) AS \"__pormg_anchor\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" LEFT JOIN \"team\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" WHERE \"Tb_2\".\"name\" = \$2)"),
   ("delete()/forward nullable", :sqlite) =>
@@ -390,25 +438,25 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("same alias, another column projected", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\", \"Tb_1\".\"points\" as \"results__points\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"grid\" = ?"),
   ("another path to the same table projected", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\", \"Tb_1\".\"points\" as \"results__points\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" INNER JOIN \"result\" AS \"Tb_3\" ON \"Tb_2\".\"driverid\" = \"Tb_3\".\"driverid\" WHERE \"Tb_3\".\"grid\" = \$1"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results__driverid__results', so its join repeats"),
   ("another path to the same table projected", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\", \"Tb_1\".\"points\" as \"results__points\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"driver\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" INNER JOIN \"result\" AS \"Tb_3\" ON \"Tb_2\".\"driverid\" = \"Tb_3\".\"driverid\" WHERE \"Tb_3\".\"grid\" = ?"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'results__driverid__results', so its join repeats"),
   ("order_by on a projected to-many path", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\", \"Tb_1\".\"grid\" as \"results__grid\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" ORDER BY \"results__grid\" DESC NULLS FIRST"),
   ("order_by on a projected to-many path", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\", \"Tb_1\".\"grid\" as \"results__grid\" FROM \"driver\" as \"Tb\" INNER JOIN \"result\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" ORDER BY \"results__grid\" DESC NULLS FIRST"),
   ("filter, reverse then forward", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" LEFT JOIN \"team\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" WHERE \"Tb_2\".\"name\" = \$1"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'drivers', so its join repeats each team row once"),
   ("filter, reverse then forward", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\" FROM \"team\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" LEFT JOIN \"team\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" WHERE \"Tb_2\".\"name\" = ?"),
+    (stage = :build, error = "FilterError", message = "PormG cardinality check (#1002): a filter crosses the reverse relation 'drivers', so its join repeats each team row once"),
   ("filter, forward not null from Result", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"code\" = \$1"),
   ("filter, forward not null from Result", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"code\" = ?"),
   ("OuterRef across a reverse path", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", (SELECT \"R1\".\"number\" as \"number\" FROM \"driver\" as \"R1\" WHERE \"R1\".\"code\" = \"Tb_1\".\"code\" LIMIT \$1 ) as \"c\" FROM \"team\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\""),
+    (stage = :build, error = "QueryBuildError", message = "PormG cardinality check (#1002): an OuterRef(...) in a subquery crosses the reverse relation 'drivers', so its join repe"),
   ("OuterRef across a reverse path", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"teamid\" as \"teamid\", (SELECT \"R1\".\"number\" as \"number\" FROM \"driver\" as \"R1\" WHERE \"R1\".\"code\" = \"Tb_1\".\"code\" LIMIT ? ) as \"c\" FROM \"team\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\""),
+    (stage = :build, error = "QueryBuildError", message = "PormG cardinality check (#1002): an OuterRef(...) in a subquery crosses the reverse relation 'drivers', so its join repe"),
   ("on() condition past the hop, reverse (#973)", :postgres) =>
     (stage = :call, error = "FilterError", message = "\"results__grid\" in on(\"driverid\", …) / cjoin(filters = …) reaches 'driverid__results', past the join path 'driverid'. A "),
   ("on() condition past the hop, reverse (#973)", :sqlite) =>
@@ -434,9 +482,9 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("cjoin link non-unique/filter", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"grid\" = \"Tb_1\".\"number\" WHERE \"Tb_1\".\"nationality\" = ?"),
   ("cjoin link non-unique/grouped Count", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb_1\".\"nationality\" as \"grid__nationality\", COUNT(\"Tb\".\"resultid\") as \"n\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"grid\" = \"Tb_1\".\"number\" GROUP BY 1"),
+    (stage = :build, error = "QueryBuildError", message = "PormG fan-out guard (#74): the aggregate n is inflated because it aggregates a column from a table that a to-many join r"),
   ("cjoin link non-unique/grouped Count", :sqlite) =>
-    (stage = :ok, sql = "SELECT \"Tb_1\".\"nationality\" as \"grid__nationality\", COUNT(\"Tb\".\"resultid\") as \"n\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"grid\" = \"Tb_1\".\"number\" GROUP BY 1"),
+    (stage = :build, error = "QueryBuildError", message = "PormG fan-out guard (#74): the aggregate n is inflated because it aggregates a column from a table that a to-many join r"),
   ("cjoin link non-unique/cjoin_on condition", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"grid\" = \"Tb_1\".\"number\" INNER JOIN \"driver\" AS \"d2\" ON (\"d2\".\"driverid\" = \"Tb\".\"driverid\") AND \"Tb_1\".\"nationality\" = \$1"),
   ("cjoin link non-unique/cjoin_on condition", :sqlite) =>

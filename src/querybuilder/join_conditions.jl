@@ -137,6 +137,8 @@ end
 # A ManyToMany hop is two joins through a link table, built by `_apply_many_to_many_branch`, which never
 # reads the `custom_join` entry for its path — so an `on()` predicate or `join_type` on one was dropped
 # from the statement, silently, traversed or not. Refused until it is supported, rather than ignored.
+# Not the cardinality check's (#1002): `on()` declares its join, so the rows it repeats are rows the
+# caller asked for. What is refused here is the condition being dropped.
 function _refuse_many_to_many_join_path(q::SQLObject, path::String)
   model = q.model
   for (i, seg) in enumerate(split(path, "__"))
@@ -242,7 +244,7 @@ end
 #     rendered SQL onto that later join (Phase 1b, #421, #435): out of the ON clause the caller wrote
 #     it in, into a join of another type. Under a LEFT `cjoin_on` that turned "null the alias's
 #     columns" into "drop the row". Only a to-one path is built: a reverse or ManyToMany hop would
-#     multiply the base row, and is refused (#992).
+#     multiply the base row, and the cardinality check refuses it (#992, #1002).
 #   - Another alias is a dependency. Alias rows are emitted every alias after the ones it names, so a
 #     reference always points backwards (#449's declaration order breaks the ties). A cycle has no such
 #     order, and is refused.
@@ -267,10 +269,10 @@ function _bind_cjoin_on_conditions!(instruct::SQLInstruction)
             (column.alias in names || push!(names, column.alias))
         elseif !isempty(_relation_prefix(q, column))
           path = String(first(split(column, "__@")))
-          _refuse_to_many_cjoin_on_path(q, alias, path, written)
           path in built && return nothing
           push!(built, path)
           push!(instruct.cjoin_on_paths, String.(split(path, "__")))
+          push!(instruct.cjoin_on_written, (alias, written))   # #1002: what a refusal quotes
         end
         return nothing
       end
@@ -283,39 +285,12 @@ function _bind_cjoin_on_conditions!(instruct::SQLInstruction)
   return instruct
 end
 
-# #992: a path built first must be a FORWARD path. A forward hop to a primary key matches at most one
-# row per base row (a nullable FK becomes LEFT through `_determine_join_type`), so joining it first
-# adds no rows. (A `cjoin(field = …)` link to a non-unique column can repeat rows, but that is the
-# link's own semantics, the same wherever its path is referenced.) A reverse or ManyToMany hop does
-# not: joined onto the base row it repeats it once per related row, and an INNER join drops it when
-# there is none — a reverse OneToOne too, which is to-one but may have no match. Under a LEFT
-# `cjoin_on` nothing undoes either. No SQL placement gives the caller
-# what they wrote — in the path's ON the predicate filters the base row (the pre-#982 bug), in the
-# alias's ON the path's join multiplies it — and no aggregate is projected for #74's guard to catch.
-# The intent is a correlated existence test, which `Exists(… OuterRef …)` spells explicitly.
-function _refuse_to_many_cjoin_on_path(q::SQLObject, alias::String, path::String, written::String)
-  model = q.model
-  segments = split(path, "__")
-  for (i, seg) in enumerate(segments)
-    step = _relation_step(q, model, seg, i == 1)
-    step === nothing && return nothing   # the column; every hop before it was to-one
-    if step[3] !== :forward
-      hop = join(segments[1:i], "__")
-      kind = step[3] === :reverse ? "reverse" : "ManyToMany"
-      throw(FilterError(
-        "\e[4m\e[31m$(written)\e[0m in the ON clause of cjoin_on alias \e[4m\e[31m$(alias)\e[0m crosses the " *
-        "$(kind) relation '$(hop)'. PormG joins a path a cjoin_on condition names onto the base row, and " *
-        "that join repeats each base row once per related '$(step[2].name)' row, and can drop it when there " *
-        "is none.\n  To match on the existence of a related row, correlate a subquery over it: " *
-        "\e[4m\e[32mExists(M.<Related>.objects.filter(\"<link>\" => OuterRef(\"<column>\"), …))\e[0m. " *
-        "If the predicate was never about $(alias), pass that \e[4m\e[32mExists(...)\e[0m to " *
-        "\e[4m\e[32m.filter(...)\e[0m instead — a to-many path there joins and repeats rows the same " *
-        "way (#992)."))
-    end
-    model = step[2]
-  end
-  return nothing
-end
+# #992: a path a `cjoin_on` condition names is joined onto the base row before the alias, so a hop that
+# repeats the base row (a reverse or ManyToMany one, or a link to a non-unique column) or drops it (a
+# reverse OneToOne joined INNER) changes the rows the query returns, and no SQL placement gives the
+# caller what they wrote. That refusal is the `cjoin_on` arm of the one cardinality check now
+# (`_check_join_cardinality`, #1002), which reads the hops the build actually made rather than walking
+# the path a second time.
 
 # Kahn's algorithm over "alias → the aliases its ON clause names", taking the earliest-declared ready
 # alias each step, so a query whose aliases already name only earlier ones keeps its declaration order
@@ -393,9 +368,10 @@ end
 # transformed or arithmetic side, a key the model never declared unique. Declared, not checked: the key
 # of an unmanaged model or a view is taken on the declaration's word, as a forward FK's is.
 #
-# The answer feeds the EXISTING guards — #74's aggregate fan-out check reads it through `_to_many`,
-# and the correlated UPDATE … FROM refuses a to-many alias (`_get_join_condition_list`). It is not a
-# guard of its own: the general cardinality invariant is #1002's. Total by construction: it never
+# The answer feeds the guards — #74's aggregate fan-out check reads it through `_to_many`, and the
+# correlated UPDATE … FROM refuses a to-many alias (`_get_join_condition_list`). It is not a guard of
+# its own. `_check_join_cardinality` (#1002) does not refuse a to-many alias either: a `cjoin_on` join
+# is one the caller declared, so its rows are rows they asked for. Total by construction: it never
 # throws, so it cannot change which error a malformed condition reports.
 function _cjoin_on_to_many(cfg::AliasJoin, alias::String, instruct::SQLInstruction)::Bool
   keyed = Set{String}()
@@ -488,6 +464,10 @@ _join_key(instruct::SQLInstruction, join_path::AbstractString) = _canonical_join
 # #985 made this walk the HINT, not the guarantee: a node type it misses still renders through
 # `_column_sql`, and the recorder refuses the column there. It stays because it refuses before any
 # join is appended, with the spelling the caller wrote and the `on(...)` that would join it.
+#
+# Not folded into the cardinality check (#1002): the question here is WHICH row a condition names,
+# and a forward hop past the path (`on("driverid", "teamid__name" => …)`) is refused too, though it
+# repeats nothing. Row multiplication is only the reverse half of what it prevents.
 function _refuse_lhs_past_hop(x, q::SQLObject, path::String, hop::String, depth::Int)
   depth > 32 && return nothing
   if x isa Pair
@@ -1024,6 +1004,9 @@ end
 #
 # `base` is the query's own model, which only the bare-string arithmetic operand needs (see the
 # `FExpression` arm of `_prefix_join_filter`); every arm passes it along.
+#
+# A typed `ColRef(node, column)` IR in place of this string lowering was considered and declined in
+# #990, whose closing comment lists when to reopen it — one trigger is this function gaining methods.
 _prefix_join_column(x::String, prefix::String, foreign_model; base = nothing) =
   _normalize_cjoin_filter_key(x, prefix, foreign_model)
 _prefix_join_column(x::SQLTypeText, ::String, _; base = nothing) = x

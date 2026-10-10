@@ -181,16 +181,26 @@ end
 # The same defect with the join direction flipped — the ON sides swap to
 # `"Tb"."id" = "Tb_1"."parent"`. Covered separately because a reverse path takes a different branch
 # of `_build_row_join` than a forward FK, and only the branch that runs can be vouched for.
+#
+# #1002: that join repeats each parent once per child, which the query never asked for, so the shape
+# is refused now — and the refusal is raised from the join #404 made sure is built, so it still proves
+# the reverse branch ran. Projected, the path is declared and ordered through its output alias.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "order_by() on a reverse-relation path emits its join (#404)" begin
   q = OBJ.Par.objects
   q.values("name")
   q.order_by("kids__note")
 
-  sql = inspect_query(q)[:sql_text]
+  err = try inspect_query(q); nothing catch e; e end
+  @test err isa PormG.QueryBuildError
+  msg = replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
+  @test occursin("an order_by term crosses the reverse relation 'kids'", msg)
 
+  q = OBJ.Par.objects
+  q.values("name", "kids__note")
+  q.order_by("kids__note")
+  sql = inspect_query(q)[:sql_text]
   @test occursin("LEFT JOIN \"obj_child\" AS \"Tb_1\" ON \"Tb\".\"id\" = \"Tb_1\".\"parent\"", sql)
-  @test occursin("ORDER BY \"Tb_1\".\"note\" ASC", sql)
   @test _obj_joins(sql) == 1
 end
 

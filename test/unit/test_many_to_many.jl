@@ -164,6 +164,7 @@ const M2MDBC = ManyToManyDbColumnModels
   forward_query = M2M.Driver_championship.objects
   forward_query.filter("drivers__surname" => "Senna")
   forward_query.values("name")
+  forward_query.distinct()   # #1002: a to-many filter alone is refused; distinct() collapses the repeats
   forward_inspection = forward_query.list(show_query=:dict)
   forward_sql = forward_inspection[:sql_text]
 
@@ -176,6 +177,7 @@ const M2MDBC = ManyToManyDbColumnModels
   reverse_query = M2M.Driver.objects
   reverse_query.filter("championships__name" => "World Drivers' Championship")
   reverse_query.values("surname")
+  reverse_query.distinct()   # #1002
   reverse_inspection = reverse_query.list(show_query=:dict)
   reverse_sql = reverse_inspection[:sql_text]
 
@@ -789,7 +791,7 @@ end
       "teams__name" => "Renault"
     ).values(
       "surname"
-    ).list(show_query=:dict)[:sql_text]
+    ).distinct().list(show_query=:dict)[:sql_text]   # #1002: distinct() — a to-many filter alone is refused
   @test occursin("\"racing_membership\"", fwd_sql)
   @test !occursin("\"membership\"", fwd_sql)
   # The two sides join through it, so their physical tables are in the statement too (#59).
@@ -800,7 +802,7 @@ end
       "drivers__surname" => "Senna"
     ).values(
       "name"
-    ).list(show_query=:dict)[:sql_text]
+    ).distinct().list(show_query=:dict)[:sql_text]
   @test occursin("\"racing_membership\"", rev_sql)
   @test !occursin("\"membership\"", rev_sql)
 end
@@ -849,7 +851,7 @@ end
       "marques__name" => "Renault"
     ).values(
       "surname"
-    ).list(show_query=:dict)[:sql_text]
+    ).distinct().list(show_query=:dict)[:sql_text]   # #1002: distinct() — a to-many filter alone is refused
   @test occursin("\"plt\"", fwd_sql)
   @test occursin("\"mrq\"", fwd_sql)
   @test !occursin("\"pilot_id\"", fwd_sql)
@@ -863,7 +865,7 @@ end
       "pilots__surname" => "Senna"
     ).values(
       "name"
-    ).list(show_query=:dict)[:sql_text]
+    ).distinct().list(show_query=:dict)[:sql_text]
   @test occursin("\"plt\"", rev_sql)
   @test occursin("\"mrq\"", rev_sql)
   @test !occursin("\"pilot_id\"", rev_sql)
@@ -1459,6 +1461,7 @@ end
   forward = M2MSELF.Teammate.objects
   forward.filter("teammates__driverref" => "senna")
   forward.values("driverref")
+  forward.distinct()   # #1002: a to-many filter alone is refused; the joins below are unchanged
   forward_sql = inspect_query(forward)[:sql_text]
 
   @test occursin("FROM \"teammate\" as \"Tb\"", forward_sql)
@@ -1469,6 +1472,7 @@ end
   reverse = M2MSELF.Teammate.objects
   reverse.filter("teammate_of__driverref" => "prost")
   reverse.values("driverref")
+  reverse.distinct()
   reverse_sql = inspect_query(reverse)[:sql_text]
 
   @test occursin("\"teammate_teammates\" AS \"Tb_1\" ON \"Tb\".\"id\" = \"Tb_1\".\"to_teammate_id\"", reverse_sql)

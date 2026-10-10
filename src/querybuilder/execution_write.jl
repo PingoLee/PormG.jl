@@ -749,6 +749,16 @@ function _get_join_condition_list(row_join::Vector{JoinRow}, connection;
         "INNER join and drop the rows it was declared to keep, which a cjoin_on ON clause may match on. " *
         "Scope the mutation with a filter instead (#174)."))
     end
+    # #1002: the same rule for a path join. A reverse, ManyToMany or non-unique-link join in the FROM
+    # list matches several rows per updated row, so SET reads an arbitrary one — `build()` lets it
+    # through because `update()` builds as a semi-join, which holds only for the `pk IN (…)` form.
+    if row isa ModelJoin && row.to_many
+      throw(QueryBuildError(
+        "The join to \"$(row.b)\" (alias \"$(row.alias_b)\") may match more than one row per updated row " *
+        "(a reverse or ManyToMany relation, or a link to a column that is not unique), so a correlated " *
+        "UPDATE ... FROM setting a column from a joined table would SET from an arbitrary match. Scope the " *
+        "rows with a correlated Exists(...) filter instead, or set from a to-one path (#1002)."))
+    end
     # #174: a `cjoin_on` join's ON clause moves into this statement's WHERE, which is an INNER join by
     # construction, and SET reads one joined row per updated row. Both hold only for an INNER alias
     # proven to-one; anything else is refused rather than rendered differently from what it says.
@@ -1113,7 +1123,10 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   # not "Tb". A joined update builds twice (#765 — selection, then fence), so the fence gets an
   # untouched copy of whatever the caller passed; `nothing` makes a fresh one either way.
   fence_alias = deepcopy(table_alias)
-  instruction = build(work, table_alias=table_alias, connection=connection)
+  # #1002: the rows are scoped by `pk IN (SELECT DISTINCT …) AND EXISTS (…)`, where a repeated row is
+  # invisible. A SET reading a joined column takes UPDATE … FROM instead, which refuses a to-many join
+  # itself (`_get_join_condition_list`).
+  instruction = build(work, table_alias=table_alias, connection=connection, semi_join=true)
 
   # Don't allow to update a field without filter
   instruction._where |> isempty && throw(UnsafeMutationError("update() requires a filter — refusing to update every row. Add .filter(...) before .update(...)."))
@@ -1214,7 +1227,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
           fence_work = deepcopy(real_obj)
           empty!(fence_work.values)
           mark = nested_parameter_mark(parameters)
-          fence = build(fence_work, table_alias=fence_alias, connection=connection, parameters=parameters)
+          fence = build(fence_work, table_alias=fence_alias, connection=connection, parameters=parameters, semi_join=true)
           fence_run = detach_nested_run!(parameters, mark)
           set_context!(parameters, :where)
           reattach_parameters!(parameters, fence_run)

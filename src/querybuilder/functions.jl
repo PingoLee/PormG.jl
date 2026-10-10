@@ -820,6 +820,19 @@ function _cast_divergent_refusal(fname::AbstractString, kind::Symbol, what::Abst
     return QueryBuildError(
       "\e[4m\e[31m$(fname)\e[0m cannot make the same number from $(what) on both engines: $(why) (#1040). $(fix)")
   end
+  # #1087: a literal too large for the precision. The way out is a precision that holds it.
+  if target === :precision
+    precision, scale = something(_numeric_cast_size(flag), (0, 0))
+    # A scale at or above the precision leaves no digit before the point: `numeric(2,3)` holds below 0.1.
+    holds = precision > scale ? "at most $(_digit_count(precision - scale)) before the point" :
+            "only values below $(precision == scale ? "1" : "0." * "0"^(scale - precision - 1) * "1")"
+    why = "$(flag) holds $(holds), so PostgreSQL raises a " *
+          "numeric field overflow and SQLite stores the value as it is"
+    fix = "Declare a precision that holds it (\e[32mCast(x, \"numeric(p, $(scale))\")\e[0m with a larger p), or cast to an " *
+          "unscaled \e[32m\"numeric\"\e[0m."
+    return QueryBuildError(
+      "\e[4m\e[31m$(fname)\e[0m cannot make the same number from $(what) on both engines: $(why) (#1087). $(fix)")
+  end
   if target === :integer
     why = "PostgreSQL rounds a fractional number cast to an integer (`1.5` → `2`) and SQLite truncates it (`1.5` → `1`)"
     fix = "Say how to round it: \e[32mCast(Round(x), IntegerField())\e[0m, \e[32mFloor(x)\e[0m or \e[32mCeil(x)\e[0m read the same integer on both engines."

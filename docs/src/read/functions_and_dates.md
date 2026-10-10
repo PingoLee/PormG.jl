@@ -463,7 +463,10 @@ literal, and an expression of one of those types: a comparison or `Q(...)` condi
 float or decimal type, arithmetic, an extremum or a window value over a float, and the functions
 PostgreSQL computes as `numeric` (`Avg`, `Round`, `Mod`, `Sqrt`, `Exp`, `Ln`, `Power`), which SQLite
 answers as a REAL (`1` vs `1.0`). A literal is refused when the `Concat` is built, and a column when
-the query is.
+the query is. A `DecimalField` with `decimal_places = 0` is not refused: it holds whole numbers, which
+read `14` on both engines, as an integer column's do (#1087). Divided, it is refused again: SQLite
+stores those whole values as integers and divides them as integers (`15 / 2` is `7`), where
+PostgreSQL's `numeric` gives `7.5`.
 
 Three more operand types are refused the same way, because their text differs too:
 
@@ -835,21 +838,30 @@ So PormG raises `QueryBuildError` when the query is built, on both engines, for:
   `Concat` refuses: a boolean, a float, a decimal, a function PostgreSQL computes as `numeric`, a
   timestamp, an interval, or a whole JSON document;
 - a cast to an integer (`IntegerField()`, `BigIntegerField()`, `"integer"`, `"bigint"`, `"int8"`,
-  …) of a float, a decimal or a `numeric` function. A boolean casts to `1`/`0` on both engines and
+  …) of a float, a decimal with places (a `decimal_places = 0` column passes unless it is divided, #1087) or a `numeric`
+  function. A boolean casts to `1`/`0` on both engines and
   passes;
 - a cast to `numeric(p, s)` or `decimal(p, s)` (and `numeric(p)`, whose scale is 0) of an operand
   that can carry more than `s` digits after the point: a float column, a float literal with more
-  than `s` places or more than 15 significant digits (PostgreSQL converts a float to `numeric` at
-  15, so `12345678901234.56` is `12345678901234.6` there), a
+  than `s` places, a
   function PostgreSQL computes as `numeric` (`Round(x, d)` with `d` above `s` included), a decimal with more places
   than `s` or of unknown scale, and text, which PostgreSQL parses and rounds while SQLite keeps it
   (#1040). A JSON value counts as text: PostgreSQL casts the key's text, SQLite the number.
-  `dec(p, s)` is the same type as `numeric(p, s)`. PostgreSQL rounds to the scale and SQLite reads the type name only, so a filter or a
+  `dec(p, s)` is the same type as `numeric(p, s)`, and `"dec"`, sized or not, is typed as `"decimal"` is (#1078). PostgreSQL rounds to the scale and SQLite reads the type name only, so a filter or a
   `GROUP BY` over the cast would see different values. An integer, a whole number (`Round(x)`,
   `Floor`, `Ceil`), a `DecimalField` with at most `s` places, and a `Decimal` or float literal with
   at most `s` digits after the point (`Value(1.5)` at scale 2 reads `1.5` on both, #1050) pass, and so does a function whose value is one of them (`Max`, `Min`, `Abs`,
   `Coalesce`, `Greatest`, `Least`, `NullIf`). An operand PormG cannot
-  type (an untyped `Case`, a `Subquery`) passes, as it does for the other two rules.
+  type (an untyped `Case`, a `Subquery`) passes, as it does for the other two rules;
+- a `Cast` to `numeric(p, s)` of a literal that does not fit it: rounded to `s` places, it needs
+  more than `p - s` digits before the point (`Cast(Value(100), "numeric(3,2)")`, or `9.999`, which
+  rounds to `10.00`). PostgreSQL raises a numeric field overflow and SQLite stores the value as it
+  is (#1087). Only a literal is refused, because only a literal is certain to overflow. A column or
+  a computed value overflows on the rows that hold a large value and not on the others — a
+  `DecimalField(max_digits = 10, decimal_places = 2)` cast to `numeric(5,2)` is fine while every
+  value is under 1000 — so it is not checked, and on such a row PostgreSQL raises while SQLite
+  answers. Neither is the literal of a `Coalesce`, `Greatest` or `Least` with an `output_field`,
+  which is one candidate value among the operands. Declare a precision that holds the value.
 
 To get an integer, say how to round first. `Round(x)`, `Floor(x)` and `Ceil(x)` give the same whole
 number on both engines for every stored value measured (PostgreSQL's `round` is the `numeric` one,
@@ -857,7 +869,10 @@ half away from zero, as SQLite's is), so a cast over them passes. `Mod` of whole
 `-`, `*` of them pass too, since they have nothing to round. `Round(x, 2)` keeps a fraction, so a
 cast to an integer over it is refused. One caveat: PostgreSQL turns a float into `numeric` at 15 significant digits
 before it rounds, so a computed value a hair below a half (`2.4999999999999996`) can still round up
-there and down on SQLite. For
+there and down on SQLite. The same conversion reaches a float cast to a scaled `numeric`: a literal
+or value with more than 15 significant digits (`12345678901234.56` becomes `12345678901234.6`)
+differs in its 16th digit, and PostgreSQL is the less exact side. Like `Round`'s tie, it is
+documented rather than refused (#1087). For
 text, the way out is the same as for `Concat`: a `Case` for a boolean, `ToChar` for a timestamp, and
 Julia formatting for the rest.
 

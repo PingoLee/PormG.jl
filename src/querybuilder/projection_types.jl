@@ -442,14 +442,17 @@ end
 # and `LEAST` declared `date` are dates for the `Cast` reason: since #852 they render the cast on both
 # engines (`date(…)` on SQLite). Otherwise their value is one operand's own: they are typed only when
 # every operand agrees (`_multi_operand_kind`). `NULLIF(a, b)` returns `a` or NULL, so it is `a`.
-const _KIND_PRESERVING_FUNCTIONS = ("MAX", "MIN", "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE")
-const _AGREEING_OPERAND_FUNCTIONS = ("COALESCE", "GREATEST", "LEAST")
+#
+# #1034: which function is which is its `_result_rule`, stated beside its constructor
+# (`functions.jl`): `:operand`, `:one_of`, `:first_operand`, a declaration (`:declared`, and the
+# `output_field` of a `:one_of`), and `DATE`'s fixed `CDate()`.
 function _function_projection_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)::Union{CanonicalType,Nothing}
-  if p isa FObject && p.function_name in ("CAST", "CASE", "COALESCE", "GREATEST", "LEAST")
+  rule = _result_rule(p)
+  if p isa FObject && rule in (:declared, :one_of)
     declared = get(p.kwargs, p.function_name == "CAST" ? "type" : "output_field", nothing)
     declared isa AbstractString && _sql_type_field(declared) isa Models.sDateField && return CDate()
   end
-  p isa FObject && p.function_name == "DATE" && return CDate()
+  rule isa CDate && return CDate()
   # #953, #965: a boolean value is typed a boolean, whichever function produced it. PostgreSQL's
   # driver types it already; SQLite delivers the 0/1 it stores, which `value_parser(::CBool, …)` turns
   # back into a `Bool`. `field_canonical_kind` names no boolean kind (the table also feeds the
@@ -457,9 +460,9 @@ function _function_projection_kind(p::Union{FObject,WindowFunction}, instruc::SQ
   # extremum over a boolean, a `Cast`/`output_field` naming one, `Coalesce` or `Case` over booleans. A
   # window value function returns its operand's own value, so its operand decides.
   _is_boolean_valued(p, instruc) && return CBool()
-  p isa FObject && p.function_name in _AGREEING_OPERAND_FUNCTIONS && return _multi_operand_kind(p, instruc)
-  p isa FObject && p.function_name == "NULLIF" && return _operand_kind(first(p.column), instruc)
-  p.function_name in _KIND_PRESERVING_FUNCTIONS || return nothing
+  p isa FObject && rule === :one_of && return _multi_operand_kind(p, instruc)
+  p isa FObject && rule === :first_operand && return _operand_kind(first(p.column), instruc)
+  rule === :operand || return nothing
   return _operand_kind(p.column, instruc)
 end
 _function_projection_kind(::Any, ::SQLInstruction) = nothing
@@ -467,13 +470,13 @@ function _is_boolean_valued(p::FObject, instruc::SQLInstruction)
   # `_expression_formatter` takes the FIRST operand that names a type, which is right for a filter
   # value but would type `Coalesce("is_active", "points")` a boolean. A declared `output_field` is
   # the cast's type and decides alone.
-  if p.function_name in _AGREEING_OPERAND_FUNCTIONS && !(get(p.kwargs, "output_field", nothing) isa AbstractString)
+  if _result_rule(p) === :one_of && !(get(p.kwargs, "output_field", nothing) isa AbstractString)
     return _all_boolean(p.column isa AbstractVector ? p.column : (p.column,), instruc; paths = true)
   end
   return _expression_formatter(p, instruc) === Models.format_bool_sql
 end
 _is_boolean_valued(p::WindowFunction, instruc::SQLInstruction) =
-  p.function_name in _KIND_PRESERVING_FUNCTIONS && _expression_formatter(p.column, instruc) === Models.format_bool_sql
+  _result_rule(p) === :operand && _expression_formatter(p.column, instruc) === Models.format_bool_sql
 
 # #824 — the kind of a function whose value is one of several operands' own values. Typed only on
 # agreement: every operand names the SAME kind (a `CDecimal` of the same width, a `CDateTime` of the
@@ -553,14 +556,10 @@ _operand_kind(::Any, ::SQLInstruction) = nothing
 #
 # `:numeric` is the functions PostgreSQL computes as `numeric` whatever the operand (`Dialect` casts
 # each operand `::numeric`, and `avg` of an integer is numeric too) while SQLite answers a REAL:
-# `Mod(7, 3)` reads `1` and `1.0`. Measured on SQLite 3.45.1 for #1027.
-const _FRACTIONAL_FUNCTIONS = ("AVG", "ROUND", "MOD", "SQRT", "EXP", "LN", "POWER")
-# Functions whose value has their operands' type: one boolean, float or decimal operand makes the
-# result one (PostgreSQL's numeric promotion for a number), so any operand decides. `FLOOR`/`CEIL` are
-# `numeric` on PostgreSQL but agree with SQLite's integer over an integer operand, so they are here,
-# not above.
-const _NUMERIC_OPERAND_FUNCTIONS = ("MAX", "MIN", "SUM", "ABS", "FLOOR", "CEIL", "COALESCE", "GREATEST",
-                                    "LEAST", "NULLIF", "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE")
+# `Mod(7, 3)` reads `1` and `1.0`. Measured on SQLite 3.45.1 for #1027. They are the `:numeric`
+# `_result_rule`s; the functions whose value has their operands' type are `_OPERAND_TYPED_RULES`
+# (`functions.jl`, #1034). `FLOOR`/`CEIL` are `numeric` on PostgreSQL but agree with SQLite's integer
+# over an integer operand, so they are `:promoting`, not `:numeric`.
 function _concat_textless_operand(p, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing}
   p isa SQLText && return _textless_literal(p.field)
   # A `Q(...)` / `Qor(...)` renders a predicate, which is a boolean.
@@ -958,7 +957,7 @@ _zero_scale_decimal(p::FExpression, instruc::SQLInstruction) =
             p.operation === nothing ? nothing : _zero_scale_decimal(p.operand, instruc), Some(nothing))
 function _zero_scale_decimal(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   # `Coalesce`/`Greatest`/`Least` always carry the key (`nothing` when none was given): read its value.
-  (p.function_name in _NUMERIC_OPERAND_FUNCTIONS && !(get(p.kwargs, "output_field", nothing) isa AbstractString)) ||
+  (_result_rule(p) in _OPERAND_TYPED_RULES && !(get(p.kwargs, "output_field", nothing) isa AbstractString)) ||
     return nothing
   for operand in (p.column isa AbstractVector ? p.column : (p.column,))
     side = _zero_scale_decimal(operand, instruc)
@@ -978,8 +977,9 @@ function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruct
     field isa Models.sDecimalField && return (:decimal, "a value cast to $(declared)")
     return nothing
   end
-  name in _FRACTIONAL_FUNCTIONS && return (:numeric, "`$(name)(…)`")
-  name in _NUMERIC_OPERAND_FUNCTIONS || return nothing
+  rule = _result_rule(p)
+  rule === :numeric && return (:numeric, "`$(name)(…)`")
+  rule in _OPERAND_TYPED_RULES || return nothing
   # The whole classifier, not only the number half: `Lag("active")` is the boolean's own value, and
   # `_expression_formatter` does not type a window value function.
   for operand in (p.column isa AbstractVector ? p.column : (p.column,))

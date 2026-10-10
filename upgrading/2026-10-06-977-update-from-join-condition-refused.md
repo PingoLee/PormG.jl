@@ -16,8 +16,7 @@ through a subquery that renders join conditions correctly. So is a `cjoin(...)` 
 
 ### Who this affects
 
-Apps that combine `on()` or `cjoin(filters = …)` with an `update()` reading a joined column. Measured
-on 2026-10-06: **0** call sites in the consuming apps, which make no `on()` or `cjoin()` calls at all.
+Apps that combine `on()` or `cjoin(filters = …)` with an `update()` reading a joined column.
 
 ### How to find the calls to migrate
 

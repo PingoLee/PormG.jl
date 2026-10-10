@@ -22,8 +22,7 @@ The `@yyyy_q` / `@yyyy_quad` labels are not affected. They stay NULL for a NULL 
 
 ### Who this affects
 
-Code on SQLite that relies on a `Concat` reading `missing` when an operand is NULL. Measured on
-2026-10-07: **0** `Concat(` call sites in the consuming apps.
+Code on SQLite that relies on a `Concat` reading `missing` when an operand is NULL.
 
 ### How to find the calls to migrate
 

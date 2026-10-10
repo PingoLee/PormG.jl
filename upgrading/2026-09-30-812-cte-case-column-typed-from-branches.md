@@ -41,9 +41,6 @@ The column is now typed the way Django's `output_field` resolution works:
 - Apps whose CTE body projects a `Case` with text and numbers mixed, only `NULL` branches, or a
   branch PormG cannot type. These now raise when the query is built.
 
-Measured before the change: the consuming apps have **0** `Case` calls inside a CTE body, so none
-needs an edit.
-
 ### How to find the calls to migrate
 
 ```bash

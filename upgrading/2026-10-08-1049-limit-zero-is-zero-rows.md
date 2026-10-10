@@ -38,11 +38,9 @@ rows, the same as `limit(0)`.
   database error. The error is now a `QueryBuildError`, raised before any SQL is sent.
 - Code that reads `query.object.limit` and compares it to `0`. An unset limit is now `nothing`.
 
-Measured on 2026-10-08 across the consuming apps: **11** runtime `limit`/`offset`/`page` call sites.
-Every one clamps its page size to at least 1 or uses a constant, so none reaches `limit(0)`. Three
-compute an offset from a page number that is not checked for a negative value. On PostgreSQL those
-already failed with a `StatementError`, and now fail with a `QueryBuildError`. No app catches either
-type by name.
+A page size clamped to at least 1, or a constant, never reaches `limit(0)`. An offset computed from
+a page number that is not checked for a negative value already failed on PostgreSQL with a
+`StatementError`, and now fails with a `QueryBuildError`; check any code that catches the old type.
 
 ### How to find the calls to migrate
 

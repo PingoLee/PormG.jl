@@ -22,8 +22,7 @@ renders no cast. The value already is text.
 ### Who this affects
 
 Apps that pass a non-text type (`IntegerField()`, `"integer"`, `"date"`, `"boolean"`, …) to
-`Concat`'s `output_field`. Measured before the change: the consuming apps have **0** such call
-sites, so none needs an edit.
+`Concat`'s `output_field`.
 
 ### How to find the calls to migrate
 

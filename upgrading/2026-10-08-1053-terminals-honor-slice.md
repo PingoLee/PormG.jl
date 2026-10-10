@@ -37,9 +37,7 @@ Code that calls one of the terminals above on a handler that already has `limit(
 `page()` set. The usual case is a pagination handler that slices a query and then counts the same
 handler for its total — that count is now the page size.
 
-Measured on 2026-10-08 across the consuming apps: **11** runtime `limit`/`offset`/`page` call sites,
-and **0** call a read terminal on the sliced handler. Every total is counted on a fresh query, or
-before the slice is applied.
+A total counted on a fresh query, or before the slice is applied, is unaffected.
 
 ### How to find the calls to migrate
 

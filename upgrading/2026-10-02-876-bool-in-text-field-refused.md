@@ -27,8 +27,7 @@ integers, dates and times behave exactly as before.
 
 Apps that write or filter a Julia `Bool` against a text column: a flag column declared as
 `CharField` instead of `BooleanField`, a DataFrame column of `Bool`s going to `bulk_insert` /
-`bulk_update` / `bulk_copy`, or a filter built from a computed value. This was not measured in the
-consuming apps: the value is a runtime type, so no grep can count the call sites.
+`bulk_update` / `bulk_copy`, or a filter built from a computed value. The value is a runtime type, so a grep cannot find every call site.
 
 ### How to find the calls to migrate
 

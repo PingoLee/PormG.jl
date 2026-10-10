@@ -32,8 +32,7 @@ A function whose result type PormG cannot name is **not** checked, and still ren
 ### Who this affects
 
 Apps that used a function's value as a truth value. That only ever ran on SQLite, and there it
-usually read text as false. Measured on 2026-10-05: **0** call sites in the consuming apps. All
-seven `When` calls there use a `"column" => value` condition.
+usually read text as false. A `When` with a `"column" => value` condition is unaffected.
 
 ### How to find the calls to migrate
 

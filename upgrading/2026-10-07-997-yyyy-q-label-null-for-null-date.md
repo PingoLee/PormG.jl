@@ -24,8 +24,8 @@ PostgreSQL; its NULL handling on SQLite is the #1006 entry's.
 ### Who this affects
 
 Code on PostgreSQL that reads a label over a nullable date and treats `"-Q"` as the "no date"
-marker: a comparison against `"-Q"`, or a group keyed on it. Measured on 2026-10-07: **0** call sites
-in the consuming apps use `@yyyy_q`, `@yyyy_quad`, `@quarter` or `@quadrimester`.
+marker: a comparison against `"-Q"`, or a group keyed on it, through `@yyyy_q`, `@yyyy_quad`, `@quarter` or
+`@quadrimester`.
 
 ### How to find the calls to migrate
 

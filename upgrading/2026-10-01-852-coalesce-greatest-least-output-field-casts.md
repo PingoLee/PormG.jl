@@ -30,8 +30,7 @@ these three functions too.
 
 ### Who this affects
 
-Apps that pass `output_field` to `Coalesce`, `Greatest` or `Least`. Before the change, the consuming
-apps were measured at **0** such call sites, so none needs an edit.
+Apps that pass `output_field` to `Coalesce`, `Greatest` or `Least`.
 
 ### How to find the calls to migrate
 

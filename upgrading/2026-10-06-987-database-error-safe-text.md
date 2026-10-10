@@ -31,11 +31,9 @@ message.
 ### Who this affects
 
 Code that reads the database's text out of a `DatabaseError`'s rendering: a parse of `DETAIL`, a
-search for the key value, or a test that asserts on the full driver message. Measured on 2026-10-06:
-**0** call sites in the consuming apps name a `DatabaseError` type, call `error_message`, read
-`.cause`, or match driver text. One app passes `sprint(showerror, error)` from its generic handlers
-straight into HTTP responses about 40 times. Those now return the safe text with no edit, which is
-the exposure this closes.
+search for the key value, or a test that asserts on the full driver message. Code that passes `sprint(showerror, error)` from a generic handler
+straight into an HTTP response now returns the safe text with no edit, which is the exposure this
+closes.
 
 ### How to find the calls to migrate
 

@@ -46,9 +46,8 @@ too large for `p` and SQLite answers it. The literal of a `Coalesce`, `Greatest`
 
 ### Who this affects
 
-Code that casts a float, text or a computed number to a scaled numeric in SQL. Measured on
-2026-10-08: **0** `Cast(` call sites to a scaled numeric and **0** numeric `output_field` call sites
-in the consuming apps' Julia code.
+Code that casts a float, text or a computed number to a scaled numeric in SQL, or that
+declares a scaled numeric `output_field`.
 
 ### How to find the calls to migrate
 

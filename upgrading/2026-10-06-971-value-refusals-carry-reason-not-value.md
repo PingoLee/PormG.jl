@@ -46,9 +46,8 @@ than on the message text. A refusal on a projection alias or a transform carries
 ### Who this affects
 
 Code that catches `FilterError` around a `filter()` to report a bad user-supplied value, and code
-that matches refusal messages by text. Measured before the change: no consuming app catches
-`FilterError` or matches either old message; one returns `e.msg` from any caught exception in an
-HTTP 400 body, which is exactly the leak this closes.
+that matches refusal messages by text. Code that returns `e.msg` from a caught exception in an HTTP response
+now returns the reason without the value, with no edit: that is the leak this closes.
 
 ### How to find the calls to migrate
 

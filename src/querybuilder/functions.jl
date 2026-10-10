@@ -102,6 +102,37 @@ _aggregate_refusal(fn::String, y) =
   "Its operand is a column path (a string), an `F(...)` expression or a function; wrap a literal " *
   "as \e[4m\e[32mValue(x)\e[0m (#867)."
 
+# #1034 — WHAT EACH FUNCTION'S VALUE IS, stated beside the function rather than in name lists kept
+# elsewhere. Keyed by `function_name`, the name `Dialect` renders by; one method per name, defined
+# under the constructor that builds it. The answer is a rule, not a kind, because the readers that
+# consult it walk the operands themselves (the `Concat` refusal names the operand that decides):
+#
+# - `:operand`       — the value is its one operand's own value (`Max`, `Lag`, …), so it has that kind;
+# - `:one_of`        — the value is one of several operands' own values (`Coalesce`, `Greatest`,
+#                      `Least`), so it has a kind only when they agree. A declared `output_field` is
+#                      the cast these render (#852);
+# - `:first_operand` — the value is the first operand's or NULL (`NullIf`);
+# - `:promoting`     — a number computed from its operand's type (`Sum`, `Abs`, `Floor`, `Ceil`): on
+#                      SQLite an integer stays one; on PostgreSQL the type is the function's own
+#                      (`Dialect` casts `Abs`/`Floor`/`Ceil` to `numeric`, and `Sum` widens), which
+#                      `_computed_kind` states;
+# - `:numeric`       — a fractional number: PostgreSQL computes it as `numeric` (`Dialect` casts the
+#                      operand; `Avg` renders bare and averages a `double precision` to one) and SQLite
+#                      as a REAL (`Avg`, `Round`, `Mod`, …), measured for #1027;
+# - `:declared`      — the type the call declares (`Cast`'s type, `Case`'s `output_field`);
+# - a `CanonicalType` — the value always has that kind (`Count` is a `bigint`, `Lower` text);
+# - `:unknown`       — not stated: the readers treat the value as untyped, the fail-open default.
+#
+# The fallback answers `:unknown` so a build never fails on a name without a method, and
+# `test/unit/test_expression_kind_rules.jl` fails instead: every name a constructor builds must state
+# its rule here, `:unknown` included, so a new function cannot be typed in one reader and forgotten in
+# another.
+_result_rule(p::SQLTypeFunction) = _result_rule(Val(Symbol(p.function_name)))
+_result_rule(::Val) = :unknown
+# The rules whose value is a number with its operands' type, or one of its operands' own values: one
+# boolean, float or decimal operand makes the result one, so any operand decides.
+const _OPERAND_TYPED_RULES = (:operand, :one_of, :first_operand, :promoting)
+
 """
     Sum(column; distinct=false)
 
@@ -114,6 +145,15 @@ A `Sum` over a `BooleanField` is refused with a `QueryBuildError` (#953): Postgr
 function Sum(x; distinct::Bool = false)
   return FObject(function_name = "SUM", column = _aggregate_operand("Sum", x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
+_result_rule(::Val{:SUM}) = :promoting
+# `SUM` renders bare on both engines, so it has each one's aggregate type, not the `::numeric` cast the
+# other `:promoting` functions render on PostgreSQL (`_computed_kind`, `expression_kind.jl`). PostgreSQL
+# widens `sum(smallint|integer)` to `bigint` and `sum(bigint)` to `numeric`.
+_computed_kind(::Val{:SUM}, ::Symbol, ::Union{CInt16,CInt32}, ::PormGPostgres) = CInt64()
+_computed_kind(::Val{:SUM}, ::Symbol, ::Union{CInt64,CDecimal}, ::PormGPostgres) = CDecimal(nothing, nothing)
+_computed_kind(::Val{:SUM}, ::Symbol, k::Union{CFloat64,CInterval}, ::PormGPostgres) = k
+_computed_kind(::Val{:SUM}, ::Symbol, ::Any, ::PormGPostgres) = nothing
+_computed_kind(::Val{:SUM}, ::Symbol, k::CInterval, ::PormGSQLite) = k
 
 """
     Avg(x; distinct::Bool = false)
@@ -136,6 +176,13 @@ See also [Filters and Aggregates](@ref).
 function Avg(x; distinct::Bool = false)
   return FObject(function_name = "AVG", column = _aggregate_operand("Avg", x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
+_result_rule(::Val{:AVG}) = :numeric
+# `AVG` renders bare too: PostgreSQL averages a `double precision` to one and an interval to an
+# interval, and every other number to a `numeric`. SQLite answers a REAL, but an interval stays one.
+_computed_kind(::Val{:AVG}, ::Symbol, k::Union{CFloat64,CInterval}, ::PormGPostgres) = k
+_computed_kind(::Val{:AVG}, ::Symbol, ::Union{CInt16,CInt32,CInt64,CDecimal}, ::PormGPostgres) = CDecimal(nothing, nothing)
+_computed_kind(::Val{:AVG}, ::Symbol, ::Any, ::PormGPostgres) = nothing
+_computed_kind(::Val{:AVG}, ::Symbol, k::CInterval, ::PormGSQLite) = k
 """
   Count(x; distinct::Bool = false)
 
@@ -157,6 +204,7 @@ df = query |> DataFrame
 function Count(x; distinct::Bool = false)
   return FObject(function_name = "COUNT", column = _aggregate_operand("Count", x), aggregate = true, kwargs = Dict{String, Any}("distinct" => distinct))
 end
+_result_rule(::Val{:COUNT}) = CInt64()   # `bigint` on PostgreSQL
 """
     Max(x)
 
@@ -183,6 +231,7 @@ See also [`Min`](@ref), [Filters and Aggregates](@ref).
 function Max(x)
   return FObject(function_name = "MAX", column = _aggregate_operand("Max", x), aggregate = true)
 end
+_result_rule(::Val{:MAX}) = :operand
 
 """
     Min(x)
@@ -197,6 +246,7 @@ See also [Filters and Aggregates](@ref).
 function Min(x)
   return FObject(function_name = "MIN", column = _aggregate_operand("Min", x), aggregate = true)
 end
+_result_rule(::Val{:MIN}) = :operand
 
 # #444 — aggregates DO accept a CTE column handle, and this note records why there is no guard here.
 #
@@ -356,6 +406,7 @@ See also [`DenseRank`](@ref) (no gaps), [`RowNumber`](@ref) (always unique),
 """
 Rank(; over::WindowSpec=WindowOver()) = WindowFunction(function_name="RANK", column=nothing, over=over)
 Rank(over::WindowSpec) = Rank(over=over)
+_result_rule(::Val{:RANK}) = CInt64()
 
 """
     DenseRank(; over::WindowSpec = WindowOver())
@@ -371,6 +422,7 @@ See also [`RowNumber`](@ref), [Window Functions](@ref).
 """
 DenseRank(; over::WindowSpec=WindowOver()) = WindowFunction(function_name="DENSE_RANK", column=nothing, over=over)
 DenseRank(over::WindowSpec) = DenseRank(over=over)
+_result_rule(::Val{:DENSE_RANK}) = CInt64()
 
 """
     RowNumber(; over::WindowSpec = WindowOver())
@@ -386,6 +438,7 @@ See also [Window Functions](@ref).
 """
 RowNumber(; over::WindowSpec=WindowOver()) = WindowFunction(function_name="ROW_NUMBER", column=nothing, over=over)
 RowNumber(over::WindowSpec) = RowNumber(over=over)
+_result_rule(::Val{:ROW_NUMBER}) = CInt64()
 
 """
     Lag(x; offset::Integer = 1, default = nothing, over::WindowSpec = WindowOver())
@@ -412,6 +465,7 @@ function Lag(x::WindowColumnArg; offset::Integer=1, default=nothing, over::Windo
   default !== nothing && (kwargs["default"] = default)
   return WindowFunction(function_name="LAG", column=_norm_fn_arg(x), over=over, kwargs=kwargs)
 end
+_result_rule(::Val{:LAG}) = :operand
 
 """
     Lead(x; offset::Integer = 1, default = nothing, over::WindowSpec = WindowOver())
@@ -429,6 +483,7 @@ function Lead(x::WindowColumnArg; offset::Integer=1, default=nothing, over::Wind
   default !== nothing && (kwargs["default"] = default)
   return WindowFunction(function_name="LEAD", column=_norm_fn_arg(x), over=over, kwargs=kwargs)
 end
+_result_rule(::Val{:LEAD}) = :operand
 
 """
     FirstValue(x; over::WindowSpec = WindowOver())
@@ -442,6 +497,7 @@ its docstring.
 See also [`NthValue`](@ref), [Window Functions](@ref).
 """
 FirstValue(x::WindowColumnArg; over::WindowSpec=WindowOver()) = WindowFunction(function_name="FIRST_VALUE", column=_norm_fn_arg(x), over=over)
+_result_rule(::Val{:FIRST_VALUE}) = :operand
 
 """
     LastValue(x; over::WindowSpec = WindowOver())
@@ -470,6 +526,7 @@ Window `LAST_VALUE(x)` — the value of `x` in the last row of the window frame.
 See also [`FirstValue`](@ref), [Window Functions](@ref).
 """
 LastValue(x::WindowColumnArg; over::WindowSpec=WindowOver()) = WindowFunction(function_name="LAST_VALUE", column=_norm_fn_arg(x), over=over)
+_result_rule(::Val{:LAST_VALUE}) = :operand
 
 """
     NthValue(x, n::Integer; over::WindowSpec = WindowOver())
@@ -496,6 +553,7 @@ function NthValue(x::WindowColumnArg, n::Integer; over::WindowSpec=WindowOver())
   n <= 0 && throw(QueryBuildError("NthValue n must be a positive integer"))
   return WindowFunction(function_name="NTH_VALUE", column=_norm_fn_arg(x), over=over, kwargs=Dict{String,Any}("n" => n))
 end
+_result_rule(::Val{:NTH_VALUE}) = :operand
 
 """
     Value(x)
@@ -683,6 +741,7 @@ See also [Functions and Dates](@ref).
 function Cast(x::_ScalarOperand, type::AbstractString)
   return FObject(function_name = "CAST", column = _norm_fn_arg(x), aggregate = _any_agg(x), kwargs = Dict{String, Any}("type" => Dialect.cast_type_name(type)))
 end
+_result_rule(::Val{:CAST}) = :declared
 function Cast(x::_ScalarOperand, type::PormGField)
   return Cast(x, type.type)
 end
@@ -753,6 +812,7 @@ function Concat(x::Vector; output_field::Union{N, AbstractString, Nothing} where
   end
   return FObject(function_name = "CONCAT", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field, "as" => String(_as)))
 end
+_result_rule(::Val{:CONCAT}) = CText()   # its `output_field` renders no cast (#835): the value is text
 # #835: `CONCAT(…)` / `a || b` is text on both engines, and `Dialect.CONCAT` renders no cast, so a
 # non-text `output_field` named a type the SQL never applied. The CTE typing believed it (a column
 # of `'Hamilton1'` typed INTEGER, refusing "abc" and binding 7 as a number against text — on SQLite
@@ -998,6 +1058,7 @@ function Extract(x::_TemporalOperand, part::AbstractString; formatter::Union{Not
   formatter === nothing && (formatter = _EXTRACT_PART_ROWS[up].formatter)
   return FObject(function_name = "EXTRACT", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = formatter, kwargs = Dict{String, Any}("part" => String(part)))
 end
+_result_rule(::Val{:EXTRACT}) = :unknown   # an integer on SQLite; PostgreSQL's `extract` type is not stated here yet
 # Build a WHEN fragment. When `otherwise` is provided, wrap it in a CASE automatically so
 # When(..., otherwise=x) is a complete standalone expression. When used inside Case([...]),
 # `otherwise` is always missing (the default) so no wrapping occurs — Case owns the ELSE branch.
@@ -1055,6 +1116,7 @@ See also [`Case`](@ref), [Functions and Dates](@ref).
 function When(x::NTuple{N, <:Pair}; then::Any = 0, otherwise::Any = missing) where N
   return When(Q(x), then = then, otherwise = otherwise)
 end
+_result_rule(::Val{:WHEN}) = :unknown   # a branch of a `Case`, never a value of its own
 # #444: a CASE branch keyed on a CTE column. `When` dispatches on the Pair's KEY TYPE, so this is a
 # new method rather than a widened union — and it is the one function in the family with no
 # alternative spelling, since a CASE over a CTE column cannot be written any other way.
@@ -1130,6 +1192,7 @@ function Case(conditions::Vector{N} where N <: SQLTypeFunction; default::Any = "
   output_field = _output_field_type(output_field)   # #603, #696
   return FObject(function_name = "CASE", column = conditions, aggregate = _any_agg(conditions, default), kwargs = Dict{String, Any}("else" => default, "output_field" => output_field))
 end
+_result_rule(::Val{:CASE}) = :declared   # its `output_field`; without one, a branch's value
 function Case(conditions::SQLTypeFunction; default::Any = "NULL", output_field::Union{N, AbstractString, Nothing} where N <: PormGField = nothing)
   output_field = _output_field_type(output_field)   # #603, #696
   return FObject(function_name = "CASE", column = conditions, aggregate = _any_agg(conditions, default), kwargs = Dict{String, Any}("else" => default, "output_field" => output_field))
@@ -1190,6 +1253,7 @@ function ToChar(x::_TemporalOperand, format::AbstractString; formatter::Union{No
   formatter === nothing && format == "YYYY-MM" && (formatter = Models.format_yyyy_mm)
   return FObject(function_name = "EXTRACT_DATE", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = formatter, kwargs = Dict{String, Any}("format" => String(format)))
 end
+_result_rule(::Val{:EXTRACT_DATE}) = CText()
 
 
 """
@@ -1221,6 +1285,7 @@ function Coalesce(x...; output_field::Union{N, AbstractString, Nothing} where N 
   processed_cols = Any[_function_operand(v) for v in x]   # #705
   return FObject(function_name = "COALESCE", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field))
 end
+_result_rule(::Val{:COALESCE}) = :one_of
 
 """
     Greatest(args...; output_field=nothing)
@@ -1251,6 +1316,7 @@ function Greatest(x...; output_field::Union{N, AbstractString, Nothing} where N 
   processed_cols = Any[_function_operand(v) for v in x]   # #705
   return FObject(function_name = "GREATEST", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field))
 end
+_result_rule(::Val{:GREATEST}) = :one_of
 
 """
     Least(args...; output_field=nothing)
@@ -1281,6 +1347,7 @@ function Least(x...; output_field::Union{N, AbstractString, Nothing} where N <: 
   processed_cols = Any[_function_operand(v) for v in x]   # #705
   return FObject(function_name = "LEAST", column = processed_cols, aggregate = _any_agg(processed_cols), kwargs = Dict{String, Any}("output_field" => output_field))
 end
+_result_rule(::Val{:LEAST}) = :one_of
 
 
 
@@ -1292,6 +1359,7 @@ Converts a string to lowercase.
 function Lower(x::_ScalarOperand)
   return FObject(function_name = "LOWER", column = _norm_fn_arg(x), aggregate = _any_agg(x))
 end
+_result_rule(::Val{:LOWER}) = CText()
 
 """
     Upper(column)
@@ -1301,6 +1369,7 @@ Converts a string to uppercase.
 function Upper(x::_ScalarOperand)
   return FObject(function_name = "UPPER", column = _norm_fn_arg(x), aggregate = _any_agg(x))
 end
+_result_rule(::Val{:UPPER}) = CText()
 
 """
     Length(column)
@@ -1310,6 +1379,7 @@ Returns the length of a string.
 function Length(x::_ScalarOperand)
   return FObject(function_name = "LENGTH", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
+_result_rule(::Val{:LENGTH}) = CInt32()   # `integer` on PostgreSQL
 
 """
     Abs(column)
@@ -1319,6 +1389,7 @@ Returns the absolute value of a number.
 function Abs(x::_ScalarOperand)
   return FObject(function_name = "ABS", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
+_result_rule(::Val{:ABS}) = :promoting
 
 """
     Round(column, precision=0)
@@ -1348,6 +1419,7 @@ function Round(x::_ScalarOperand, precision::Integer = 0)
     "and round it in Julia: \e[32mround(x, RoundNearestTiesAway; digits = $(precision))\e[0m.", :range))
   return FObject(function_name = "ROUND", column = _norm_fn_arg(x), aggregate = _any_agg(x), kwargs = Dict{String, Any}("precision" => precision), formatter = Models.format_number_sql)
 end
+_result_rule(::Val{:ROUND}) = :numeric
 
 """
     NullIf(field1, field2)
@@ -1368,6 +1440,7 @@ function NullIf(x, y)
   column = Any[_function_operand(x), _function_operand(y)]   # #705
   return FObject(function_name = "NULLIF", column = column, aggregate = _any_agg(column))
 end
+_result_rule(::Val{:NULLIF}) = :first_operand
 
 
 """
@@ -1384,6 +1457,7 @@ function Replace(x, find, replace)
   column = Any[_function_operand(x), _text_operand(find, does), _text_operand(replace, does)]
   return FObject(function_name = "REPLACE", column = column, aggregate = _any_agg(column))
 end
+_result_rule(::Val{:REPLACE}) = CText()
 
 """
     Trim(column)
@@ -1393,6 +1467,7 @@ Removes leading and trailing whitespace from a string.
 function Trim(x::_ScalarOperand)
   return FObject(function_name = "TRIM", column = _norm_fn_arg(x), aggregate = _any_agg(x))
 end
+_result_rule(::Val{:TRIM}) = CText()
 
 """
     LTrim(column)
@@ -1402,6 +1477,7 @@ Removes leading whitespace from a string.
 function LTrim(x::_ScalarOperand)
   return FObject(function_name = "LTRIM", column = _norm_fn_arg(x), aggregate = _any_agg(x))
 end
+_result_rule(::Val{:LTRIM}) = CText()
 
 """
     RTrim(column)
@@ -1411,6 +1487,7 @@ Removes trailing whitespace from a string.
 function RTrim(x::_ScalarOperand)
   return FObject(function_name = "RTRIM", column = _norm_fn_arg(x), aggregate = _any_agg(x))
 end
+_result_rule(::Val{:RTRIM}) = CText()
 
 # #122 — `LPad`/`RPad`. All three arguments stay in `column`, in text order, so the two bound
 # parameters (`len`, then a literal `fill`) are numbered as they are written — a kwarg binds after
@@ -1460,6 +1537,7 @@ M.Driver.objects.
 ```
 """
 LPad(x, len::Integer, fill = " ") = _pad_function("LPAD", x, len, fill)
+_result_rule(::Val{:LPAD}) = CText()
 
 """
     RPad(column, len, fill = " ")
@@ -1473,6 +1551,7 @@ NULL string is NULL, on PostgreSQL (`RPAD`) and SQLite (`pormg_rpad`) alike.
 the query is built, and a `len` below 0 or above 268435454 raises `InvalidValueError`.
 """
 RPad(x, len::Integer, fill = " ") = _pad_function("RPAD", x, len, fill)
+_result_rule(::Val{:RPAD}) = CText()
 
 """
     Floor(column)
@@ -1482,6 +1561,7 @@ Returns the largest integer less than or equal to a number.
 function Floor(x::_ScalarOperand)
   return FObject(function_name = "FLOOR", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
+_result_rule(::Val{:FLOOR}) = :promoting
 
 """
     Ceil(column)
@@ -1491,6 +1571,7 @@ Returns the smallest integer greater than or equal to a number.
 function Ceil(x::_ScalarOperand)
   return FObject(function_name = "CEIL", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
+_result_rule(::Val{:CEIL}) = :promoting
 
 
 
@@ -1502,6 +1583,7 @@ Returns the square root of a number.
 function Sqrt(x::_ScalarOperand)
   return FObject(function_name = "SQRT", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
+_result_rule(::Val{:SQRT}) = :numeric
 
 """
     Exp(column)
@@ -1511,6 +1593,7 @@ Returns the exponential value (e^x) of a number.
 function Exp(x::_ScalarOperand)
   return FObject(function_name = "EXP", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
+_result_rule(::Val{:EXP}) = :numeric
 
 """
     Ln(column)
@@ -1520,6 +1603,7 @@ Returns the natural logarithm of a number.
 function Ln(x::_ScalarOperand)
   return FObject(function_name = "LN", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
+_result_rule(::Val{:LN}) = :numeric
 
 """
     Power(base, exponent)
@@ -1535,6 +1619,7 @@ function Power(x, y)
   column = Any[_function_operand(x), _function_operand(y)]   # #705
   return FObject(function_name = "POWER", column = column, aggregate = _any_agg(column), formatter = Models.format_number_sql)
 end
+_result_rule(::Val{:POWER}) = :numeric
 
 """
     Mod(dividend, divisor)
@@ -1550,6 +1635,7 @@ function Mod(x, y)
   column = Any[_function_operand(x), _function_operand(y)]   # #705
   return FObject(function_name = "MOD", column = column, aggregate = _any_agg(column), formatter = Models.format_number_sql)
 end
+_result_rule(::Val{:MOD}) = :numeric
 
 # ──────────────────────────────────────────────────────────────────────────────
 # #31: PostgreSQL full-text search, after `django.contrib.postgres.search`. Four `FObject`s, rendered by
@@ -1616,6 +1702,7 @@ function SearchQuery(text::AbstractString; config = nothing, search_type = "plai
   return FObject(function_name = "SEARCH_QUERY", column = Any[Value(String(text))],
                  kwargs = Dict{String,Any}("config" => cfg, "search_type" => String(search_type)))
 end
+_result_rule(::Val{:SEARCH_QUERY}) = :unknown   # a `tsquery`, which no `CanonicalType` names
 # `a & b`, `a | b`, `~a` (#1021): Django's `SearchQuery` combinators, PostgreSQL's `&&`, `||` and `!!`
 # on `tsquery`. The result is a SEARCH_QUERY node, so the lookup, `SearchRank` and `SearchHeadline`
 # take it as they take one query. Each leaf keeps its own search type and its text stays bound.
@@ -1678,6 +1765,7 @@ function SearchVector(fields::_ScalarOperand...; config = nothing, weight = noth
                  kwargs = Dict{String,Any}("config" => Dialect.ts_config_name(config),
                                            "weight" => Dialect.ts_weight_name(weight)))
 end
+_result_rule(::Val{:SEARCH_VECTOR}) = CTsVector()
 SearchVector(fields...; kwargs...) = throw(QueryBuildError(
   "SearchVector takes column paths (strings) or expressions as its fields (#31)."))
 
@@ -1765,6 +1853,7 @@ function SearchRank(vector, query; normalization = nothing, cover_density = fals
                  kwargs = Dict{String,Any}("normalization" => normalization, "cover_density" => cover_density,
                                            "weights" => w))
 end
+_result_rule(::Val{:SEARCH_RANK}) = :unknown   # a `real` (float4), which no `CanonicalType` names
 
 # PostgreSQL's ts_headline option names, in the order they are written. The values are checked here
 # and bound as ONE text parameter, never written into the SQL.
@@ -1849,6 +1938,7 @@ function SearchHeadline(expression::_ScalarOperand, query; config = nothing, sta
   return FObject(function_name = "SEARCH_HEADLINE", column = column, aggregate = _any_agg(column),
                  formatter = Models.format_text_sql, kwargs = Dict{String,Any}("config" => cfg))
 end
+_result_rule(::Val{:SEARCH_HEADLINE}) = CText()
 SearchHeadline(expression, query; kwargs...) = throw(QueryBuildError(
   "SearchHeadline marks up a column path (a string) or an expression (#31)."))
 
@@ -1875,6 +1965,7 @@ ISO_WEEK_DAY(x) = Extract(x, "ISODOW")
 WEEK_DAY(x) = (y = _transform_operand("WEEK_DAY", x);
                FObject(function_name = "WEEK_DAY", column = y, aggregate = _any_agg(y),
                        formatter = _TEMPORAL_FUNCTION_ROWS["WEEK_DAY"].formatter))
+_result_rule(::Val{:WEEK_DAY}) = :unknown   # as `QUARTER`
 Y_M(x) = ToChar(x, "YYYY-MM")
 # #562: `@date` no longer goes through `ToChar`. A `ToChar` node carries the format mask as SQL
 # text, which forces one spelling on both engines; `DATE` is the one transform where the correct
@@ -1900,6 +1991,7 @@ function _transform_operand(fn::String, x)
 end
 DATE(x) = (y = _transform_operand("DATE", x);
            FObject(function_name = "DATE", column = y, aggregate = _any_agg(y), formatter = _TEMPORAL_FUNCTION_ROWS["DATE"].formatter))
+_result_rule(::Val{:DATE}) = CDate()
 # Same that function CAST in django ORM
 # # relatorio = relatorio.annotate(quarter=functions.Concat(functions.Cast(f'{data}__year', CharField()), Value('-Q'), Case(
 # # 					When(**{ f'{data}__month__lte': 4 }, then=Value('1')),
@@ -1972,14 +2064,17 @@ end
 # #878: through `_transform_operand` (above `DATE`), for the same reason.
 QUARTER(x) = (y = _transform_operand("QUARTER", x);
               FObject(function_name = "QUARTER", column = y, aggregate = _any_agg(y), formatter = _TEMPORAL_FUNCTION_ROWS["QUARTER"].formatter))
+_result_rule(::Val{:QUARTER}) = :unknown   # an integer on SQLite; the PostgreSQL type is not stated here yet
 QUADRIMESTER(x) = (y = _transform_operand("QUADRIMESTER", x);
                    FObject(function_name = "QUADRIMESTER", column = y, aggregate = _any_agg(y), formatter = _TEMPORAL_FUNCTION_ROWS["QUADRIMESTER"].formatter))
+_result_rule(::Val{:QUADRIMESTER}) = :unknown   # as `QUARTER`
 # #28: `@len`, an `ArrayField`'s element count (`Dialect.ARRAY_LEN`). A count, so its right-hand side
 # is a number. Unlike the date parts it is checked against its operand's type when it renders
 # (`_get_select_query(::FObject)`): `cardinality` over a column that is not an array is an error only
 # the server would report, so the build refuses it first, naming the path.
 ARRAY_LEN(x) = (y = _transform_operand("LEN", x);
                 FObject(function_name = "ARRAY_LEN", column = y, aggregate = _any_agg(y), formatter = Models.format_number_sql))
+_result_rule(::Val{:ARRAY_LEN}) = :unknown   # PostgreSQL only; the `cardinality` type is not stated here yet
 
 
 function ISNULL(v::AbstractString, value::Bool; expression::Bool = false)

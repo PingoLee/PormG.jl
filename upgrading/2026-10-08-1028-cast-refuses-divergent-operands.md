@@ -25,8 +25,10 @@ Now refused, when the query is built, on both engines:
 
 - a cast to text (`Cast`, or `output_field` on `Coalesce`/`Greatest`/`Least`) of a boolean, a
   float, a decimal, a function PostgreSQL computes as `numeric` (`Avg`, `Round`, …), a timestamp, an
-  interval or a whole JSON document;
-- a cast to an integer of a float, a decimal or a `numeric` function, unless the operand is
+  interval or a whole JSON document. A `DecimalField` with `decimal_places = 0` holds whole numbers,
+  which read the same on both engines, and passes, as an integer column does — unless it is divided,
+  which SQLite does as integer division (#1087);
+- a cast to an integer of a float, a decimal with places or a `numeric` function, unless the operand is
   `Round(x)`, `Floor(x)` or `Ceil(x)`, which agree on both engines, or a whole number (`Mod` of
   integers, `+`/`-`/`*` of whole numbers);
 - a `Concat` operand that is a timestamp (a column, `F("start_at") + Day(1)`, a `DateTime` literal

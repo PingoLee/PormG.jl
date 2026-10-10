@@ -7,6 +7,7 @@ import DataFrames, Tables, JSON, CSV, OrderedCollections
 import DataFrames: DataFrame
 using Dates, TimeZones, Decimals, UUIDs
 import Sockets  # #28: a `Sockets.IPAddr` is a network-address field value
+import Printf   # #1087: PostgreSQL's `float8` → `numeric` conversion is `%.15g`
 
 # `sForeignKey` is imported for `src/precompile.jl`, which warms `_determine_join_type` through
 # `QB.sForeignKey`; nothing in this module or `src/querybuilder/` names it any more, since the

@@ -27,3 +27,7 @@ test/integration/Manifest.toml
 test/integration/db_sl/connection.yml
 test/integration/db_2/connection.yml
 test/integration/db_sl/migrations/
+
+# Maintainer-local agent configuration (gitignored; absent in a contributor's clone, and that
+# is fine). scripts/worktree_setup.sh links the matching skills when the private checkout exists.
+CLAUDE.local.md

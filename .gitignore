@@ -52,3 +52,9 @@ test/integration/db_test_migration_pg/migrations/
 # Personal Claude Code settings (machine-specific permission grants). Shared,
 # repo-wide permissions live in .claude/settings.json instead.
 .claude/settings.local.json
+# Maintainer-local agent material, linked in from a private checkout; never committed.
+# pormg-usage is the one skill that ships to users (install_ai_skills), so it stays tracked.
+.claude/skills/*
+!.claude/skills/pormg-usage/
+.claude/agents/
+CLAUDE.local.md

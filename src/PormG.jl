@@ -285,8 +285,9 @@ include("precompile.jl")
 function __init__()
     # Runtime side effects belong in __init__, NOT the module body: with cached precompilation the
     # module body runs only in the precompile worker, so a top-level `atexit` was never registered at
-    # runtime and connection pools were never closed at process exit — issue #203. See the
-    # "no module-body side effects" non-negotiable in .github/instructions/general.instructions.md.
+    # runtime and connection pools were never closed at process exit — issue #203. Every runtime
+    # side effect (atexit, ENV mutation, hook registration, service wiring) goes here, never in a
+    # module body.
     atexit(Configuration.__cleanup__)
 end
 

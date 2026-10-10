@@ -79,8 +79,8 @@
 #       the red run is telling you to fix PormG instead. Read this file before moving a bound.
 #
 #   Neither half subsumes the third check: #560's break lived in a CONSUMING APP's environment,
-#   which no PormG-side resolve can observe. `general.instructions.md` -> the two-scratch-env
-#   recipe still stands.
+#   which no PormG-side resolve can observe. The two-scratch-env recipe (one env carrying LibPQ,
+#   one carrying a consuming app's declared dependency set) still stands before any narrowing.
 #
 # Deterministic, DB-free, no network.
 # ============================================================
@@ -129,7 +129,7 @@ end
   bounds = strip.(split(decimals, ","))
   # 0.4 is not a legacy range being carried for politeness — it is the ONLY Decimals major
   # any LibPQ release accepts. Dropping it is what made all four CI jobs die before a
-  # testset ran. README.md → Requirements and general.instructions.md both state why.
+  # testset ran. README.md → Requirements states why, user-facing.
   @test "0.4" in bounds
 
   # The premise this guard rests on: PormG still ships LibPQ as the PostgreSQL weakdep at
@@ -188,8 +188,8 @@ end
 #          bare `julia test/runtests.jl` does not — so it was invisible to a local rehearsal and
 #          surfaced only once CI ran `julia-runtest` (run 35018968976). Rehearse through
 #          `Pkg.test`, not by invoking the suite directly.
-#   Consuming-app blast radius, measured before raising these (#574, the env-#2 half of the rule in
-#   general.instructions.md): `TimeZones` is the only one of the four that is a hard `[deps]` entry,
+#   Consuming-app blast radius, measured before raising these (#574, the second scratch env of
+#   the recipe above): `TimeZones` is the only one of the four that is a hard `[deps]` entry,
 #   so it is the only one an app resolves at all — `Aqua` is a test-only extra, and the `CSV`/
 #   `SQLite` floors are old. Resolving a scratch env carrying each #560 capping pin plus PormG:
 #   `XLSX 0.11.3`, `Genie 5.35.5`, and both together all resolve, landing on TimeZones 1.22.2 —

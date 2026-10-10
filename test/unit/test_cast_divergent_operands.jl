@@ -34,8 +34,11 @@ every digit on SQLite, measured on the same servers:
 | `Round(x)`, and `Cast(x, "numeric")` unscaled | equal on both (±1.5, ±2.5, 1.555, 2.675, 25.0, every `points` row) | |
 
 #1050 narrows the float-literal arm to what diverges: `Cast(Value(1.5 / 0.1 / 2.25), "numeric(10,2)")`
-reads the same on both engines, so only a literal with more than `s` places, or more than 15
-significant digits, is refused.
+reads the same on both engines, so only a literal with more than `s` places is refused. #1087 drops
+the 15-significant-digit bound #1050 also had (PostgreSQL's `float8` → `numeric` is the less exact
+side, in the 16th digit) and refuses a `Cast` literal too large for the precision: `Cast(100,
+"numeric(3,2)")` raises an overflow on PostgreSQL and is `100` on SQLite. A zero-scale `DecimalField`
+holds whole numbers and is read like an integer column.
 
 `Round(x, d)` renders each engine's own `ROUND`, as Django's does (#1061): the two can round a decimal
 tie apart in its last digit, which is documented rather than refused. Text is refused (PostgreSQL
@@ -85,6 +88,7 @@ Ccd_driver = Models.Model("ccd_driver",
   active   = Models.BooleanField(null = true),
   points   = Models.FloatField(null = true),
   price    = Models.DecimalField(max_digits = 10, decimal_places = 2, null = true),
+  grid     = Models.DecimalField(max_digits = 4, decimal_places = 0, null = true),  # whole numbers (#1087)
   start_at = Models.DateTimeField(null = true),
   laptime  = Models.DurationField(null = true),
   clock    = Models.TimeField(null = true),
@@ -538,10 +542,10 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # #1050: a float literal that fits the scale passes, as a Decimal literal does
-# What diverges is a literal with more fractional digits than `s`, or more than the 15 significant
-# digits PostgreSQL converts `float8` to `numeric` at. Measured on PostgreSQL 16.15 / SQLite 3.45.1:
-# `1.5`, `0.1`, `2.25` read the same at scale 2; `2.675` at scale 2 is `2.68` / `2.675`; and
-# `12345678901234.56` becomes `12345678901234.6` on PostgreSQL before any scale applies.
+# What diverges is a literal with more fractional digits than `s`. Measured on PostgreSQL 16.15 /
+# SQLite 3.45.1: `1.5`, `0.1`, `2.25` read the same at scale 2; `2.675` at scale 2 is `2.68` / `2.675`.
+# `12345678901234.56` becomes `12345678901234.6` on PostgreSQL before any scale applies, a 16th-digit
+# difference where PostgreSQL is the less exact side: category 3, documented, not refused (#1087).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1050: a float literal is bounded by its shortest decimal form" begin
   # A cast and the shared classifier's other route, an output_field.
@@ -554,29 +558,155 @@ end
   end
   for (v, named) in (2.675 => "a Float64 literal with 3 decimal places",
                      1.555 => "a Float64 literal with 3 decimal places",
-                     1.0e-5 => "a Float64 literal with 5 decimal places",
-                     12345678901234.56 => "a Float64 literal with 16 significant digits",
-                     # Whole, but not at 15 digits: PostgreSQL reads 12345678901234600.
-                     12345678901234567.0 => "with 17 significant digits"),
+                     1.0e-5 => "a Float64 literal with 5 decimal places"),
       shape in shapes, conn in _CCD_ENGINES
     err = _ccd_refusal(shape(v); conn = conn)
     @test _is_1040(err)
     @test occursin(named, _ccd_msg(err))
   end
-  # The significant-digit bound holds at any scale, and the place bound moves with it.
+  # #1087: more than 15 significant digits is not refused — PostgreSQL's 16th digit is the less exact
+  # one — and the place bound moves with the scale.
+  for v in (12345678901234.56, 12345678901234567.0), conn in _CCD_ENGINES
+    @test _ccd_refusal(Fn.Cast(Fn.Value(v), "numeric(30,8)"); conn = conn) === nothing
+    @test _ccd_refusal(Fn.Coalesce(Fn.Value(v), 0; output_field = "numeric(30,2)"); conn = conn) === nothing
+  end
   for conn in _CCD_ENGINES
-    @test _is_1040(_ccd_refusal(Fn.Cast(Fn.Value(12345678901234.56), "numeric(30,8)"); conn = conn))
     @test _ccd_refusal(Fn.Cast(Fn.Value(2.675), "numeric(10,3)"); conn = conn) === nothing
     @test _is_1040(_ccd_refusal(Fn.Cast(Fn.Value(0.1), "numeric(10,0)"); conn = conn))
   end
-  # The digit count itself, through the exponent forms `string` writes.
-  @test PormG.QueryBuilder._float_literal_digits(1.5) == (1, 2)
-  @test PormG.QueryBuilder._float_literal_digits(2.675) == (3, 4)
-  @test PormG.QueryBuilder._float_literal_digits(1.0e-5) == (5, 1)
-  @test PormG.QueryBuilder._float_literal_digits(1.5e-7) == (8, 2)
-  @test PormG.QueryBuilder._float_literal_digits(12345678901234.56) == (2, 16)
-  @test PormG.QueryBuilder._float_literal_digits(1.0e20) == (0, 1)
-  @test PormG.QueryBuilder._float_literal_digits(-0.125) == (3, 3)
+  # The place count itself, through the exponent forms `string` writes.
+  @test PormG.QueryBuilder._float_literal_places(1.5) == 1
+  @test PormG.QueryBuilder._float_literal_places(2.675) == 3
+  @test PormG.QueryBuilder._float_literal_places(1.0e-5) == 5
+  @test PormG.QueryBuilder._float_literal_places(1.5e-7) == 8
+  @test PormG.QueryBuilder._float_literal_places(12345678901234.56) == 2
+  @test PormG.QueryBuilder._float_literal_places(1.0e20) == 0
+  @test PormG.QueryBuilder._float_literal_places(-0.125) == 3
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1087: a Cast literal too large for numeric(p, s), and a zero-scale DecimalField
+# Rounded to `s` places, a value needs at most `p − s` digits before the point. PostgreSQL raises a
+# numeric field overflow on one that needs more; SQLite stores it as it is — a silent different
+# answer, so the criterion's tie-breaker makes it category 1. A literal is certain to overflow; a
+# column or computed value overflows only on some rows, so it is not refused.
+# ─────────────────────────────────────────────────────────────────────────────
+_is_1087(e) = e isa QueryBuildError && occursin("(#1087)", _ccd_msg(e))
+
+@testset "#1087: Cast refuses a literal too large for the precision" begin
+  refused = (
+    (100, "numeric(3,2)", "an Int64 literal with 3 digits before the point", "at most 1 digit before the point"),
+    (-100, "numeric(3,2)", "an Int64 literal with 3 digits before the point", "at most 1 digit before the point"),
+    # 9.999 has places to round too; the overflow is checked first, after rounding to 10.00.
+    (9.999, "numeric(3,2)", "a Float64 literal with 2 digits before the point", "at most 1 digit before the point"),
+    (0.995, "decimal(2,2)", "a Float64 literal with 1 digit before the point", "only values below 1"),
+    # A scale above the precision leaves no digit before the point.
+    (0.5, "numeric(2,3)", "a Float64 literal with 0 digits before the point", "only values below 0.1"),
+    # A Float32 binds as double precision on PostgreSQL: read as the Float64 it widens to.
+    (100f0, "numeric(3,2)", "a Float32 literal with 3 digits before the point", "at most 1 digit before the point"),
+    (Float16(100), "numeric(3,2)", "a Float16 literal with 3 digits before the point", "at most 1 digit before the point"),
+    (UInt8(100), "numeric(3,2)", "a UInt8 literal with 3 digits before the point", "at most 1 digit before the point"),
+    (99.5, "numeric(2)", "a Float64 literal with 3 digits before the point", "at most 2 digits before the point"),
+    (12345678901234.56, "numeric(10,2)", "a Float64 literal with 14 digits before the point", "at most 8 digits before the point"),
+    (Decimal(0, 12345, 0), "dec(4,0)", "a Decimal literal with 5 digits before the point", "at most 4 digits before the point"),
+    (Decimal(1, 99995, -3), "numeric(4,2)", "a Decimal literal with 3 digits before the point", "at most 2 digits before the point"),
+  )
+  for (v, target, named, holds) in refused, conn in _CCD_ENGINES
+    err = _ccd_refusal(Fn.Cast(Fn.Value(v), target); conn = conn)
+    @test _is_1087(err)
+    msg = _ccd_msg(err)
+    @test occursin("Cast cannot make the same number from $(named)", msg)
+    @test occursin("holds $(holds)", msg) && occursin("numeric field overflow", msg)
+    @test occursin("Declare a precision that holds it", msg)
+  end
+  # What fits passes: a value just under the bound, and one that only rounds to it at a wider scale.
+  for (v, target) in ((99, "numeric(4,2)"), (9.99, "numeric(3,2)"), (-9.99, "numeric(3,2)"), (0.5, "numeric(2,2)"),
+                      (0.994, "numeric(3,3)"), (Decimal(0, 1234, 0), "numeric(4,0)"), (100, "numeric")),
+      conn in _CCD_ENGINES
+    @test _ccd_refusal(Fn.Cast(Fn.Value(v), target); conn = conn) === nothing
+  end
+  # Not certain, so not refused: a column, a computed value, and an output_field's literal, which is one
+  # candidate value among the operands.
+  for expr in (Fn.Cast("price", "numeric(3,2)"), Fn.Cast("number", "numeric(2,0)"), Fn.Cast(_CF("number") * 1000, "numeric(3,0)"),
+               Fn.Coalesce("number", 100; output_field = "numeric(3,2)")),
+      conn in _CCD_ENGINES
+    @test _ccd_refusal(expr; conn = conn) === nothing
+  end
+  # The value is never printed (#971).
+  for conn in _CCD_ENGINES
+    msg = _ccd_msg(_ccd_refusal(Fn.Cast(Fn.Value(10871087), "numeric(3,2)"); conn = conn))
+    @test !occursin("10871087", msg)
+  end
+end
+
+@testset "#1087: a zero-scale DecimalField reads like an integer column" begin
+  # Both engines write a whole-number decimal `14`, so Concat and a cast to text or an integer pass.
+  for expr in (Fn.Concat("surname", "grid"), Fn.Cast("grid", Models.CharField()), Fn.Cast("grid", Models.IntegerField()),
+               Fn.Cast(Fn.Max("grid"), Models.CharField()), Fn.Cast("grid", "numeric(10,0)")),
+      conn in _CCD_ENGINES
+    @test _ccd_refusal(expr; conn = conn) === nothing
+  end
+  # A DecimalField with places is still refused, as #1027/#1028 refuse it.
+  for expr in (Fn.Cast("price", Models.CharField()), Fn.Cast("price", Models.IntegerField())), conn in _CCD_ENGINES
+    @test _is_1028(_ccd_refusal(expr; conn = conn))
+  end
+  # Until it is divided: SQLite stores the whole values as INTEGER and divides them as integers
+  # (`15 / 2` is `7`), where PostgreSQL's `numeric / int` is `7.5`. Through an aggregate too.
+  for (expr, is_rule) in ((Fn.Cast(_CF("grid") / 2, Models.IntegerField()), _is_1028),
+                          (Fn.Cast(_CF("grid") / _CF("number"), Models.CharField()), _is_1028),
+                          (Fn.Cast(_CF("grid") / 2, "numeric(10,1)"), _is_1040),
+                          (Fn.Cast((_CF("grid") + 1) / 2, Models.IntegerField()), _is_1028),
+                          (Fn.Cast(Fn.Sum("grid") / Fn.Count("id"), Models.IntegerField()), _is_1028),
+                          # `Coalesce` always carries an `output_field` key, `nothing` when none was given.
+                          (Fn.Cast(Fn.Coalesce("grid", 0) / 2, Models.IntegerField()), _is_1028),
+                          (Fn.Cast(Fn.Greatest("grid", 1) / 2, Models.CharField()), _is_1028)),
+      conn in _CCD_ENGINES
+    err = _ccd_refusal(expr; conn = conn)
+    @test is_rule(err) && occursin("DecimalField `grid`", _ccd_msg(err))
+  end
+  for conn in _CCD_ENGINES
+    @test _ccd_refusal(Fn.Concat("surname", _CF("grid") / 2); conn = conn) isa QueryBuildError
+    # `+`, `-`, `*` keep a whole number whole on both engines, and an integer column divides alike.
+    for expr in (Fn.Cast(_CF("grid") * 2, Models.IntegerField()), Fn.Cast(_CF("grid") + 1, Models.CharField()),
+                 Fn.Cast(_CF("number") / 2, Models.IntegerField()))
+      @test _ccd_refusal(expr; conn = conn) === nothing
+    end
+  end
+end
+
+@testset "#1087: the precision, the scale and a Decimal exponent are bounded before they size a BigInt" begin
+  size = PormG.QueryBuilder._numeric_cast_size
+  @test size("numeric(1000,1000)") == (1000, 1000)
+  @test size("numeric(10)") == (10, 0)
+  # Past PostgreSQL's own bound of 1000 the server refuses the type: a larger size reads as 1001, never
+  # parsed whole, so the overflow check leaves it to the server while the scale rule still applies.
+  for (t, read) in ("numeric(99999999999999999999)" => (1001, 0), "numeric(1001,2)" => (1001, 2),
+                    "numeric(10,1001)" => (10, 1001), "numeric(10,99999999999999999999)" => (10, 1001))
+    @test size(t) == read
+  end
+  for conn in _CCD_ENGINES
+    @test _ccd_refusal(Fn.Cast(Fn.Value(100), "numeric(99999999999999999999)"); conn = conn) === nothing
+    @test _is_1040(_ccd_refusal(Fn.Cast(Fn.Value(2.675), "numeric(1001,2)"); conn = conn))
+    @test _is_1040(_ccd_refusal(Fn.Cast("points", "numeric(1001,2)"); conn = conn))
+    # A zero Decimal is zero on both engines, whatever its exponent.
+    @test _ccd_refusal(Fn.Cast(Fn.Value(Decimal(0, 0, -5)), "numeric(10,2)"); conn = conn) === nothing
+    # A huge or tiny Decimal exponent is decided without building the power of ten.
+    huge = Fn.Cast(Fn.Value(Decimal(0, 1, 10^9)), "numeric(10,2)")
+    started = time(); err = _ccd_refusal(huge; conn = conn)
+    @test time() - started < 5
+    @test occursin("a Decimal literal with more than 2000 digits before the point", _ccd_msg(err))
+    @test _is_1087(err)
+    # A Decimal is an AbstractFloat, and Base's `isinteger` calls 1e-30 whole: it used to pass the
+    # #1040 scale rule as a whole number. PostgreSQL makes it `0.00`, SQLite keeps it.
+    err = _ccd_refusal(Fn.Cast(Fn.Value(Decimal(0, 1, -30)), "numeric(10,2)"); conn = conn)
+    @test _is_1040(err) && occursin("a Decimal literal with 30 decimal places", _ccd_msg(err))
+  end
+  # A tiny one rounds to zero at any scale PostgreSQL accepts, decided from the exponent alone.
+  exact = PormG.QueryBuilder._literal_exact_value
+  started = time()
+  @test exact(Decimal(0, 1, -10^9)) == 0
+  @test exact(Decimal(1, 7, 10^9)) < -big(10)^2000
+  @test time() - started < 1
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -699,5 +829,32 @@ end
     @test err isa PormG.InvalidValueError
     msg = _ccd_msg(err)
     @test occursin("(#1044)", msg) && occursin("Round(…, $(d))", msg) && occursin("round(x, RoundNearestTiesAway; digits = $(d))", msg)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1078: `dec` is typed as `decimal` is
+# PostgreSQL's third spelling of `numeric`; SQLite gives `DEC` NUMERIC affinity, as it does `DECIMAL`.
+# `_numeric_cast_scale` read a scaled `dec(p, s)`, but the type reader did not know an unscaled
+# `"dec"`, so every rule that types a declared cast let it through: a cast to an integer over it
+# (PostgreSQL rounds `1.5` to `2`, SQLite truncates it to `1`), `Concat`, and the alias filter.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1078: an unscaled dec cast is typed as decimal is" begin
+  for t in ("dec", "DEC", "Dec")
+    @test PormG.QueryBuilder._sql_type_field(t) isa Models.sDecimalField
+  end
+  for t in ("dec", "decimal"), conn in _CCD_ENGINES
+    # A cast to an integer or to text over it is the #1028 refusal, through either spelling.
+    @test _is_1028(_ccd_refusal(Fn.Cast(Fn.Cast("points", t), Models.IntegerField()); conn = conn))
+    @test _is_1028(_ccd_refusal(Fn.Cast(Fn.Cast("number", t), Models.CharField()); conn = conn))
+    @test _ccd_refusal(Fn.Concat("surname", Fn.Cast("number", t)); conn = conn) isa QueryBuildError
+    # The alias filter checks the value as a number.
+    q = CCD.Ccd_driver.objects; q.values("d" => Fn.Cast("number", t)); q.filter("d" => "abc")
+    @test (try _ccd_sql(q; conn = conn); nothing catch e; e end) isa PormG.InvalidValueError
+    q = CCD.Ccd_driver.objects; q.values("d" => Fn.Cast("number", t)); q.filter("d" => 3)
+    @test !isempty(_ccd_sql(q; conn = conn))
+    # #1085: Round(x, d) renders each engine's own ROUND over it, as over any number.
+    sql = _ccd_render(Fn.Round(Fn.Cast("points", t), 2); conn = conn)
+    @test occursin("ROUND(", uppercase(sql)) && !occursin("FLOOR(", uppercase(sql))
   end
 end

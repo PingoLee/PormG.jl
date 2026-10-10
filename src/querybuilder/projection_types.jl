@@ -676,11 +676,69 @@ _whole_number(x, instruc::SQLInstruction) = _integral_valued(x, instruc) || _con
 # `"DECIMAL"`) keeps the value on both, and an array is not a number, so neither has a scale here.
 # The name is `Dialect.cast_type_name`'s validated spelling, so the size is plain digits.
 function _numeric_cast_scale(type_name::AbstractString)::Union{Int,Nothing}
+  size = _numeric_cast_size(type_name)
+  return size === nothing ? nothing : size[2]
+end
+# `(p, s)` of a sized numeric type, or `nothing`; `numeric(p)` has scale 0.
+function _numeric_cast_size(type_name::AbstractString)::Union{Tuple{Int,Int},Nothing}
   # `dec` is PostgreSQL's third spelling of `numeric` (its grammar's `DEC opt_type_modifiers`).
   m = match(r"^(?i:numeric|decimal|dec)\((\d+)(?:,(\d+))?\)$", type_name)
   m === nothing && return nothing
-  return m.captures[2] === nothing ? 0 : parse(Int, m.captures[2])
+  # PostgreSQL takes a precision and a scale of at most 1000 and rejects the type otherwise. The name
+  # may be request input, and `_precision_overflow_operand` sizes a BigInt by it, so a larger size
+  # reads as 1001 — past the bound — rather than parsed (`numeric(99999999999999999999)` overflowed
+  # `parse`). The scale rule still sees the declared scale; the overflow check leaves 1001 to the server.
+  bounded(c) = ncodeunits(c) > 4 ? 1001 : min(parse(Int, c), 1001)
+  return (bounded(m.captures[1]), m.captures[2] === nothing ? 0 : bounded(m.captures[2]))
 end
+
+# #1087 — a literal `Cast` operand that does not fit `numeric(p, s)`: rounded to `s` places, it has
+# more than `p − s` digits before the point (`100`, or `9.999`, which rounds to `10.00`, at
+# `numeric(3,2)`). PostgreSQL raises a numeric field overflow and SQLite stores the value as it is,
+# so by the criterion's tie-breaker it is a silent different answer, not an error on one engine.
+# Only a literal is certain to overflow: a column or a computed value overflows on the rows that
+# hold a large value and not on the others, which nothing can know before the query runs. That is
+# why `Coalesce`/`Greatest`/`Least` are not checked either: their literal is one candidate value.
+#
+# `(kind, what)` names the literal by its type and its digit count, never its value (#971).
+function _precision_overflow_operand(p, precision::Int, scale::Int)::Union{Tuple{Symbol,String},Nothing}
+  x = p isa SQLField ? p.field : p isa FExpression && p.operation === nothing ? p.field_name : p
+  x isa SQLText && (x = x.field)
+  value = _literal_exact_value(x)
+  value === nothing && return nothing
+  # Half away from zero, as PostgreSQL's `numeric` rounds; the magnitude decides, so the sign is dropped.
+  rounded = floor(BigInt, abs(value) * big(10)^scale + 1//2)
+  rounded < big(10)^precision && return nothing
+  whole = rounded < big(10)^scale ? 0 : ndigits(rounded ÷ big(10)^scale)
+  type = string(nameof(typeof(x)))
+  article = first(type) in "AEIO" ? "an" : "a"   # `a UInt8`: the U is said "you"
+  return (:overflow, "$(article) $(type) literal with $(whole > 2000 ? "more than 2000 digits" : _digit_count(whole)) before the point")
+end
+_digit_count(n::Integer) = n == 1 ? "1 digit" : "$(n) digits"
+# The exact value each engine is handed, or `nothing` for a literal this does not read. A `Float64`
+# is the value PostgreSQL converts `float8` to: 15 significant digits (`%.15g`, as its `float8_numeric`
+# does). A `Float32` or `Float16` binds as `double precision` on PostgreSQL and a REAL on SQLite,
+# so it is read as the `Float64` it widens to, exactly.
+_literal_exact_value(::Bool) = nothing
+_literal_exact_value(x::Integer) = Rational{BigInt}(x)
+function _literal_exact_value(x::Float64)
+  isfinite(x) || return nothing
+  m = match(r"^-?(\d)\.(\d+)e([+-]\d+)$", Printf.@sprintf("%.14e", x))
+  mantissa, exponent = parse(BigInt, m.captures[1] * m.captures[2]), parse(Int, m.captures[3]) - length(m.captures[2])
+  return exponent >= 0 ? Rational{BigInt}(mantissa * big(10)^exponent) : mantissa // big(10)^(-exponent)
+end
+_literal_exact_value(x::Union{Float16,Float32}) = _literal_exact_value(Float64(x))
+function _literal_exact_value(x::Decimals.Decimal)
+  iszero(x.c) && return big(0) // 1
+  # The exponent is the caller's (a bound value may be request input), so it is bounded before a
+  # BigInt is sized by it. A precision and a scale are at most 1000 (`_numeric_cast_size`), so past
+  # 2000 digits either way the answer is decided: an overflow above, a zero below.
+  x.q > 2000 && return (iszero(x.s) ? 1 : -1) * big(10)^2001 // 1
+  x.q + ndigits(x.c) < -2000 && return big(0) // 1
+  magnitude = x.q >= 0 ? Rational{BigInt}(big(x.c) * big(10)^x.q) : big(x.c) // big(10)^(-x.q)
+  return iszero(x.s) ? magnitude : -magnitude
+end
+_literal_exact_value(::Any) = nothing
 
 # #1040 — an operand of a cast to `numeric(p, s)` that can carry more than `s` fractional digits, as
 # `(kind, what)`, or `nothing` when PostgreSQL's rounding cannot change it. Rounding first is the
@@ -696,10 +754,10 @@ end
 #
 # Bounded: a whole number (`_integral_valued`, and any operand with no fractional kind — an integer
 # column, a type PormG cannot name), a `DecimalField` column of at most `s` places, a `Decimal`
-# literal of at most `s` digits, a `Float64` literal whose shortest form has at most `s` places and 15
-# significant digits (#1050: `1.5` at scale 2 reads `1.5` on both engines, there is nothing to round),
-# and a nested cast to a scale of at most `s`. Unbounded: a float column, a float literal with more
-# places or digits, a `numeric` function, a decimal of unknown scale, and text — PostgreSQL
+# literal of at most `s` digits, a `Float64` literal whose shortest form has at most `s` places
+# (#1050: `1.5` at scale 2 reads `1.5` on both engines, there is nothing to round), and a nested cast
+# to a scale of at most `s`. Unbounded: a float column, a float literal with more places, a `numeric`
+# function, a decimal of unknown scale, and text — PostgreSQL
 # parses `'1.555'` and rounds it, SQLite converts it and keeps it — including a JSON value. An operand
 # PormG cannot type (an untyped `Case`, a `Subquery`) passes, as it does for #1028.
 const _SCALE_PRESERVING_FUNCTIONS = ("MAX", "MIN", "ABS", "COALESCE", "GREATEST", "LEAST", "NULLIF")
@@ -710,18 +768,19 @@ function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union
     x = operand.field
     x isa AbstractString && return (:text, "a string literal")
     if x isa Float64 && isfinite(x)
-      places, significant = _float_literal_digits(x)
-      places <= scale && significant <= 15 && return nothing
-      return (:float, significant > 15 ? "a Float64 literal with $(significant) significant digits" :
-                                         "a Float64 literal with $(places) decimal places")
+      places = _float_literal_places(x)
+      return places <= scale ? nothing : (:float, "a Float64 literal with $(places) decimal places")
+    end
+    # Ahead of the float line below: a `Decimal` is an `AbstractFloat`, and Base's `isinteger` for one
+    # answers `true` for `Decimal(0, 1, -30)` (1e-30), which let it past the scale (#1087's review).
+    if x isa Decimals.Decimal
+      iszero(x.c) && return nothing   # `0.00000` is zero on both engines, whatever its exponent
+      digits = _decimal_scale(x)
+      return digits <= scale ? nothing : (:decimal, "a Decimal literal with $(digits) decimal places")
     end
     # Another float type binds through its own type, which was not measured: a whole one passes, as a
     # whole number does anywhere here, and a fraction is refused below.
     x isa AbstractFloat && isinteger(x) && return nothing
-    if x isa Decimals.Decimal
-      digits = _decimal_scale(x)
-      return digits <= scale ? nothing : (:decimal, "a Decimal literal with $(digits) decimal places")
-    end
   end
   if operand isa Union{String,JoinedReference,CTEReference}
     field = _alias_column_field(operand, instruc)
@@ -774,17 +833,16 @@ function _decimal_scale(x::Decimals.Decimal)::Int
   end
   return max(0, -q)
 end
-# #1050 — the digits a float literal's shortest decimal form needs, `(places, significant)`: `1.5` is
-# `(1, 2)`, `2.675` `(3, 4)`, `1.0e-5` `(5, 1)`, `12345678901234.56` `(2, 16)`. That form is the value
-# both engines read, as long as it has at most 15 significant digits: PostgreSQL converts `float8` to
-# `numeric` at 15 (`12345678901234.56` becomes `12345678901234.6` before any scale applies), and
-# SQLite keeps the double.
-function _float_literal_digits(x::Float64)::Tuple{Int,Int}
+# #1050 — the places a float literal's shortest decimal form needs after the point: `1.5` needs 1,
+# `2.675` 3, `1.0e-5` 5, `1.0e20` none. That form is the value SQLite keeps. PostgreSQL converts
+# `float8` to `numeric` at 15 significant digits first (`12345678901234.56` becomes
+# `12345678901234.6`), a difference in the 16th digit where PostgreSQL is the less exact side: the
+# criterion's category 3, documented beside `Round`'s tie rather than refused (#1087).
+function _float_literal_places(x::Float64)::Int
   m = match(r"^-?(\d+)(?:\.(\d+))?(?:e(-?\d+))?$", string(x))
-  whole, frac = m.captures[1], rstrip(something(m.captures[2], ""), '0')
+  frac = rstrip(something(m.captures[2], ""), '0')
   exponent = m.captures[3] === nothing ? 0 : parse(Int, m.captures[3])
-  digits = rstrip(lstrip(whole * frac, '0'), '0')
-  return (max(0, length(frac) - exponent), max(1, length(digits)))
+  return max(0, length(frac) - exponent)
 end
 _text_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "a text expression" : "the text column `$(l)`")
 
@@ -797,7 +855,8 @@ _text_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "a text 
 #
 # #1040 adds a third target, `:scale`: a `numeric(p, s)` cast over an operand with more than `s`
 # fractional digits (`_scale_divergent_operand`). Its fourth slot is the declared type, which the
-# message names, instead of a column flag.
+# message names, instead of a column flag. #1087 adds `:precision`, same slots: a literal `Cast`
+# operand too large for `p` (`_precision_overflow_operand`).
 #
 # The OPERAND is classified, not the node: the node's own declared type is what makes it a text or an
 # integer, which `_textless_number` reads as an acceptable `Concat` operand once this has passed it.
@@ -810,9 +869,16 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::
   declared = get(v.kwargs, v.function_name == "CAST" ? "type" : "output_field", nothing)
   (declared isa AbstractString && !isempty(declared)) || return nothing
   # #1040: a scaled numeric target rounds on PostgreSQL only.
-  scale = _numeric_cast_scale(declared)
-  if scale !== nothing
+  size = _numeric_cast_size(declared)
+  if size !== nothing
+    precision, scale = size
     for operand in (v.column isa AbstractVector ? v.column : (v.column,))
+      # #1087: a literal that overflows the precision, checked first — it fails on PostgreSQL
+      # whatever its scale. A `Cast` only: an `output_field` literal is one candidate value.
+      if v.function_name == "CAST" && precision <= 1000 && scale <= 1000   # past the bound PostgreSQL rejects the type
+        side = _precision_overflow_operand(operand, precision, scale)
+        side === nothing || return (side[1], side[2], :precision, declared)
+      end
       side = _scale_divergent_operand(operand, scale, instruc)
       side === nothing || return (side[1], side[2], :scale, declared)
     end
@@ -861,15 +927,46 @@ _concat_flag(p) = (l = _concat_operand_label(p); l isa String && !occursin('(', 
 function _textless_number(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction)
   field = _alias_column_field(p, instruc)
   field isa Models.sFloatField && return (:float, "the FloatField `$(_concat_operand_label(p))`")
-  field isa Models.sDecimalField && return (:decimal, "the DecimalField `$(_concat_operand_label(p))`")
+  # #1087: a zero-scale DecimalField holds whole numbers, which read `14` on both engines, as an
+  # integer column's do.
+  field isa Models.sDecimalField && field.decimal_places > 0 &&
+    return (:decimal, "the DecimalField `$(_concat_operand_label(p))`")
   return nothing
 end
 _textless_number(p::SQLField, instruc::SQLInstruction) = _textless_number(p.field, instruc)
 function _textless_number(p::FExpression, instruc::SQLInstruction)
   p.operation === nothing && return _textless_number(p.field_name, instruc)
   side = something(_textless_number(p.field_name, instruc), _textless_number(p.operand, instruc), Some(nothing))
+  # #1087: a zero-scale DecimalField reads like an integer column until it is divided. SQLite stores
+  # its whole values as INTEGER and divides them as integers (`15 / 2` is `7`), where PostgreSQL's
+  # `numeric / int` is `7.5`. So under `/` it is a decimal again.
+  if side === nothing && p.operation == "/"
+    side = something(_zero_scale_decimal(p.field_name, instruc), _zero_scale_decimal(p.operand, instruc), Some(nothing))
+  end
   return side === nothing ? nothing : (side[1], "arithmetic over $(side[2])")
 end
+# A zero-scale DecimalField the value is made of: the column, arithmetic over it, or a function whose
+# value has its operand's type (`Sum("grid") / Count("id")` divides integers on SQLite too).
+function _zero_scale_decimal(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction)
+  field = _alias_column_field(p, instruc)
+  field isa Models.sDecimalField && field.decimal_places == 0 || return nothing
+  return (:decimal, "the DecimalField `$(_concat_operand_label(p))`")
+end
+_zero_scale_decimal(p::SQLField, instruc::SQLInstruction) = _zero_scale_decimal(p.field, instruc)
+_zero_scale_decimal(p::FExpression, instruc::SQLInstruction) =
+  something(_zero_scale_decimal(p.field_name, instruc),
+            p.operation === nothing ? nothing : _zero_scale_decimal(p.operand, instruc), Some(nothing))
+function _zero_scale_decimal(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
+  # `Coalesce`/`Greatest`/`Least` always carry the key (`nothing` when none was given): read its value.
+  (p.function_name in _NUMERIC_OPERAND_FUNCTIONS && !(get(p.kwargs, "output_field", nothing) isa AbstractString)) ||
+    return nothing
+  for operand in (p.column isa AbstractVector ? p.column : (p.column,))
+    side = _zero_scale_decimal(operand, instruc)
+    side === nothing || return (side[1], "`$(p.function_name)(…)` over $(side[2])")
+  end
+  return nothing
+end
+_zero_scale_decimal(::Any, ::SQLInstruction) = nothing
 function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   name = p.function_name
   # A declared type is the cast the SQL renders, so it decides alone: `Cast(points, IntegerField())`
@@ -977,7 +1074,10 @@ function _sql_type_field(type_name::AbstractString)::Union{PormGField,Nothing}
   base in ("smallint", "integer", "int", "int2", "int4", "integer unsigned") && return Models.IntegerField()
   base in ("bigint", "int8") && return Models.BigIntegerField()
   base in ("real", "double precision", "float", "float4", "float8") && return Models.FloatField()
-  base in ("numeric", "decimal") && return Models.DecimalField()
+  # #1078: `dec` is the third spelling `_numeric_cast_scale` already reads; SQLite gives it NUMERIC
+  # affinity, as it does `decimal`. Unnamed, `Cast(Cast(x, "dec"), IntegerField())` passed the
+  # #1028 rule that refuses the same cast through `"decimal"`.
+  base in ("numeric", "decimal", "dec") && return Models.DecimalField()
   base in ("boolean", "bool") && return Models.BooleanField()
   base == "date" && return Models.DateField()
   # #929: the types a pattern lookup must read as text (`_pattern_text_kind`). Without them a

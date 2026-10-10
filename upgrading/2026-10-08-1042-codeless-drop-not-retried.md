@@ -34,10 +34,10 @@ flight, or a silently broken network path.
 
 ### Who this affects
 
-Apps that relied on `fetch` hiding a mid-statement drop. Measured on 2026-10-08: the consuming
-apps have **0** handlers for `OperationalError` (or `DatabaseError` / `PormGError`), and their
-background task runners already run with retries off. So the error propagates to the request or task
-that ran the statement, where it used to be absorbed.
+Apps that relied on `fetch` hiding a mid-statement drop, reads included. Where nothing catches
+`OperationalError` (or `DatabaseError` / `PormGError`), and no task runner retries the failed job,
+the error now propagates to the request or task that ran the statement, where it used to be
+absorbed.
 
 ### How to find the calls to migrate
 

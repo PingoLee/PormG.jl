@@ -69,7 +69,8 @@ with `FilterError`.** So a bad value — the part of a filter an end user usuall
 | `atomic(durable = true)` inside an open transaction on the same database | `TransactionError` | It must be the outermost transaction |
 | an ORM call on a database with no open transaction — by the model's binding or routed with `.db()` — while a transaction is open on another | `TransactionError` | Wrap the call in `atomic` on the database it runs on, or move it outside the transaction |
 | `without_foreign_keys` inside an open transaction on the same database | `TransactionError` | It must be the outermost transaction, on both engines |
-| any query, connection lost mid-flight | `OperationalError` | Transient. Retry the **whole transaction**, never the statement |
+| any query inside a transaction, connection lost mid-flight | `OperationalError` | Transient. Retry the **whole transaction**, never the statement |
+| any query outside a transaction, connection lost mid-flight | `OperationalError` | Transient, and the pool has already recovered. A read (`list`, `first`, `get`, `count`, `exists`, …) is safe to run again; a write only when a second run changes nothing, because it may already have committed — see [Dropped connections](configuration/advanced.md) |
 | any query, pool saturated | `PoolTimeoutError` | Raise `pool_size`/`pool_timeout` — see [Advanced Configuration](configuration/advanced.md) |
 | any query, database unreachable | `PoolConnectError` | Carries the `cause` and a redacted connection string |
 | any query, PostgreSQL connection string libpq cannot parse | `PoolConnectError` | Fails fast; `cause` is an `InvalidConfigurationError` with the quoted fragment masked — see [Advanced Configuration](configuration/advanced.md) |

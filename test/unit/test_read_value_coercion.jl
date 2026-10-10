@@ -842,6 +842,34 @@ end
     @test isempty(s.object.projection_kinds)
   end
 
+  # #1122: a projected `Value(true)` records `CBool`, so SQLite's stored 0/1 reads back as a `Bool`, as
+  # a boolean column does since #965. Before, it recorded nothing alone or inside a `Subquery`, and was
+  # typed under a CTE only through the CTE model's `BooleanField`. The kind is the projection's alone:
+  # `literal_canonical_kind` stays temporal-only, because it also feeds `_operand_kind` and the
+  # binders, which have no boolean representation to undo (#882).
+  @testset "a Bool literal records CBool alone, in a Subquery and under a CTE (#1122)" begin
+    F_ = PormG.Functions
+    sub(e) = (s = RVC.Rvc_row.objects; s.filter("id" => PormG.OuterRef("id")); s.values("t" => e); s)
+    for conn in (_RVC_SL, _RVC_PG), b in (true, false)
+      kinds = _rvc_kinds(q -> q.values("id", "v" => F_.Value(b), "s" => PormG.Subquery(sub(F_.Value(b)).limit(1)),
+                                       "c" => F_.Case([F_.When("id" => 1, then = F_.Value(b))], default = !b));
+                         connection = conn)
+      @test kinds[:v] == PormG.CBool()
+      @test kinds[:s] == PormG.CBool()
+      @test kinds[:c] == PormG.CBool()
+      cte = _rvc_kinds(q -> begin
+        q.with("g" => RVC.Rvc_row.objects.values("id", "v" => F_.Value(b)), join_field = "id" => "id", join_type = "INNER")
+        q.values("id", "w" => "g__v")
+      end; connection = conn)
+      @test cte[:w] == PormG.CBool()
+    end
+    @test PormG.literal_canonical_kind(true) === nothing   # the binders' table is unchanged
+    # A non-boolean, non-temporal literal still records nothing; a temporal one keeps its kind (#721).
+    kinds = _rvc_kinds(q -> q.values("i" => F_.Value(1), "d" => F_.Value(Date(2009, 3, 29))))
+    @test !haskey(kinds, :i)
+    @test kinds[:d] == PormG.CDate()
+  end
+
   # #648: a DecimalField column records its kind, WITH its width, on every projection spelling that
   # names the column itself — so the SQLite parser runs. An aggregate or arithmetic over it records
   # nothing and stays as the driver delivered it: that value is computed through a double, so no

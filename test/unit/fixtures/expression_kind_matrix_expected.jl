@@ -447,17 +447,17 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Value text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing),
   ("Value bool | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool"),
   ("Value bool | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool"),
   ("Value bool | cte", :postgres) =>
-    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", cte_textless = "bool"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", cte_textless = "bool"),
   ("Value bool | cte", :sqlite) =>
-    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", cte_textless = "bool"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", cte_textless = "bool"),
   ("Value bool | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = nothing, textless = "bool"),
   ("Value bool | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool"),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = nothing, textless = "bool"),
   ("Value datetime | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp"),
   ("Value datetime | alone", :sqlite) =>
@@ -1051,14 +1051,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:conflict, "cte_field=float vs cte_textless=bool"), (:conflict, "formatter=number vs cte_textless=bool"), (:conflict, "formatter=number vs textless=bool"), (:conflict, "operand=bool vs cte_field=float"), (:conflict, "operand=bool vs formatter=number"), (:conflict, "read=bool vs cte_field=float"), (:conflict, "read=bool vs formatter=number"), (:conflict, "textless=bool vs cte_field=float")],
   ("F comparison | cte", :sqlite) =>
     [(:conflict, "cte_field=float vs cte_textless=bool"), (:conflict, "formatter=number vs cte_textless=bool"), (:conflict, "formatter=number vs textless=bool"), (:conflict, "operand=bool vs cte_field=float"), (:conflict, "operand=bool vs formatter=number"), (:conflict, "read=bool vs cte_field=float"), (:conflict, "read=bool vs formatter=number"), (:conflict, "textless=bool vs cte_field=float")],
-  ("Value bool | alone", :postgres) =>
-    [(:gap, "read=none vs textless=bool")],
-  ("Value bool | alone", :sqlite) =>
-    [(:gap, "read=none vs textless=bool")],
-  ("Value bool | subquery", :postgres) =>
-    [(:gap, "read=none vs textless=bool")],
-  ("Value bool | subquery", :sqlite) =>
-    [(:gap, "read=none vs textless=bool")],
   ("Sum float | cte", :postgres) =>
     [(:conflict, "cte_field=int vs cte_textless=float"), (:conflict, "textless=float vs cte_field=int")],
   ("Sum float | cte", :sqlite) =>
@@ -1188,9 +1180,9 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
   ("Value text", :sqlite) =>
     ["drops formatter: alone=none, cte=text_or_time, subquery=none"],
   ("Value bool", :postgres) =>
-    ["drops read: alone=none, cte=bool, subquery=none", "drops formatter: alone=none, cte=bool, subquery=none"],
+    ["drops formatter: alone=none, cte=bool, subquery=none"],
   ("Value bool", :sqlite) =>
-    ["drops read: alone=none, cte=bool, subquery=none", "drops formatter: alone=none, cte=bool, subquery=none"],
+    ["drops formatter: alone=none, cte=bool, subquery=none"],
   ("Case untyped int", :postgres) =>
     ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Case untyped int", :sqlite) =>

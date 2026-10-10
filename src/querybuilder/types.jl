@@ -595,6 +595,11 @@ end
   # `(kind, what)` pair the classifier answers for the inner expression, read by its `SubqueryObject`
   # arm. Same keying and laziness as `subquery_kinds`.
   subquery_textless::Union{Nothing,IdDict{SubqueryObject,Tuple{Symbol,String}}} = nothing
+  # #1111 — and what the same expression answers once DIVIDED (`_whole_numeric_operand`: a whole
+  # number PostgreSQL types `numeric`), recorded in the same window, so `Subquery(…) / 2` is refused
+  # where `Floor(x) / 2` is. Separate from the textless record because the expression alone has one
+  # text; only the division splits it.
+  subquery_whole_numeric::Union{Nothing,IdDict{SubqueryObject,Tuple{Symbol,String}}} = nothing
   connection::ConnType = nothing
   # array_defs::SQLTypeArrays = SQLArrays()
   cache::Dict{MemoKey,SQLTypeField} = sizehint!(Dict{MemoKey,SQLTypeField}(), 12)

@@ -89,6 +89,7 @@ Ccd_driver = Models.Model("ccd_driver",
   points   = Models.FloatField(null = true),
   price    = Models.DecimalField(max_digits = 10, decimal_places = 2, null = true),
   grid     = Models.DecimalField(max_digits = 4, decimal_places = 0, null = true),  # whole numbers (#1087)
+  laps_total = Models.BigIntegerField(null = true),  # `sum(bigint)` is `numeric` on PostgreSQL (#1111)
   start_at = Models.DateTimeField(null = true),
   laptime  = Models.DurationField(null = true),
   clock    = Models.TimeField(null = true),
@@ -697,6 +698,83 @@ end
     # `+`, `-`, `*` keep a whole number whole on both engines, and an integer column divides alike.
     for expr in (Fn.Cast(_CF("grid") * 2, Models.IntegerField()), Fn.Cast(_CF("grid") + 1, Models.CharField()),
                  Fn.Cast(_CF("number") / 2, Models.IntegerField()))
+      @test _ccd_refusal(expr; conn = conn) === nothing
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Floor/Ceil/Abs over an integer, and Sum of a BIGINT column, divided (#1111)
+# PostgreSQL renders `FLOOR((x)::numeric)` (and `CEIL`, `ABS`), so the value is `numeric` there and
+# `/ 2` keeps the half, where SQLite keeps the integer operand's type and divides as integers. Its
+# `sum` of a `bigint` is `numeric` too, and SQLite's an integer. Measured on the F1 fixture
+# (`Result.grid` 1, 5, 7): `Floor(grid) / 2` read `0.5`, `2.5`, `3.5` on PostgreSQL 16 and `0`, `2`,
+# `3` on SQLite 3.45. The #1087 shape again: under `/` the value is refused through every rule the
+# classifier feeds, and through an aggregate or arithmetic over it; `+`, `-`, `*`, a bare cast, and
+# the aggregates both engines keep integer (`Max`, `Count`, `Sum` of an INTEGER column) still pass.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1111: Floor/Ceil/Abs and Sum of a BIGINT over an integer, divided" begin
+  team(expr) = (s = CCD.Ccd_team.objects; s.filter("id" => PormG.OuterRef("team")); s.values("t" => expr); PormG.Subquery(s))
+  for conn in _CCD_ENGINES
+    for (expr, is_rule, named) in (
+        (Fn.Cast(Fn.Floor("number") / 2, Models.IntegerField()), _is_1028, "arithmetic over `FLOOR(…)`"),
+        (Fn.Cast(Fn.Ceil("number") / 2, Models.CharField()), _is_1028, "arithmetic over `CEIL(…)`"),
+        (Fn.Cast(Fn.Abs("number") / 2, "numeric(10,1)"), _is_1040, "arithmetic over `ABS(…)`"),
+        (Fn.Cast((Fn.Floor("number") + 1) / 2, Models.IntegerField()), _is_1028, "arithmetic over `FLOOR(…)`"),
+        (Fn.Cast(Fn.Max(Fn.Abs("number")) / 2, Models.IntegerField()), _is_1028, "`MAX(…)` over `ABS(…)`"),
+        (Fn.Cast(Fn.Sum("id") / Fn.Count("id"), Models.IntegerField()), _is_1028, "`SUM(…)` over the IDField `id`"),
+        (Fn.Cast(Fn.Sum("laps_total") / 2, Models.CharField()), _is_1028, "`SUM(…)` over the BigIntegerField `laps_total`"),
+        (Fn.Cast(Fn.Sum("team") / 2, Models.IntegerField()), _is_1028, "`SUM(…)` over the ForeignKey `team`"),
+        (Fn.Cast(Fn.Sum(_CF("id") + 1) / 2, Models.IntegerField()), _is_1028, "`SUM(…)` over the IDField `id`"),
+        # Over a whole number by type: a count, integer arithmetic, a cast to an integer, a literal.
+        (Fn.Cast(Fn.Floor(Fn.Count("id")) / 2, Models.IntegerField()), _is_1028, "arithmetic over `FLOOR(…)`"),
+        (Fn.Cast(Fn.Ceil(_CF("number") + 1) / 2, Models.IntegerField()), _is_1028, "arithmetic over `CEIL(…)`"),
+        (Fn.Cast(Fn.Abs(Fn.Cast(Fn.Round("points"), Models.IntegerField())) / 2, Models.IntegerField()), _is_1028, "arithmetic over `ABS(…)`"),
+        (Fn.Cast(Fn.Floor(Fn.Value(7)) / 2, Models.IntegerField()), _is_1028, "arithmetic over `FLOOR(…)`"),
+        # Review of #1111: rounding the quotient cannot bring the half back — `ROUND(7.5)` is `8` on
+        # PostgreSQL and `round(7)` is `7` on SQLite — so the rounding functions are not whole over it,
+        # for an integer target, a scaled one, and the #1087 shape alike.
+        (Fn.Cast(Fn.Round(Fn.Floor("number") / 2), Models.IntegerField()), _is_1028, "`ROUND(…)` over arithmetic over `FLOOR(…)`"),
+        (Fn.Cast(Fn.Ceil(Fn.Floor("number") / 2), Models.IntegerField()), _is_1028, "`CEIL(…)` over arithmetic over `FLOOR(…)`"),
+        (Fn.Cast(Fn.Floor(Fn.Sum("id") / 2), Models.CharField()), _is_1028, "`FLOOR(…)` over arithmetic over `SUM(…)` over the IDField `id`"),
+        (Fn.Cast(Fn.Round(_CF("grid") / 2), Models.IntegerField()), _is_1028, "`ROUND(…)` over arithmetic over the DecimalField `grid`"),
+        (Fn.Cast(Fn.Round(Fn.Floor("number") / 2, 1), "numeric(10,1)"), _is_1040, "`ROUND(…)` over arithmetic over `FLOOR(…)`"),
+        (Fn.Cast(Fn.Round(Fn.Floor("number") / 2), "numeric(10,0)"), _is_1040, "`ROUND(…)` over arithmetic over `FLOOR(…)`"),
+        # A Subquery projecting one of these answers the same once divided (#1124's record). No
+        # operator takes a Subquery directly; `Coalesce` carries its operand's value.
+        (Fn.Cast(Fn.Coalesce(team(Fn.Floor("id")), 0) / 2, Models.IntegerField()), _is_1028,
+         "`COALESCE(…)` over a Subquery projecting `FLOOR(…)`"),
+        (Fn.Cast(Fn.Coalesce(team(Fn.Sum("id")), 0) / 2, Models.IntegerField()), _is_1028,
+         "`COALESCE(…)` over a Subquery projecting `SUM(…)` over the IDField `id`"))
+      err = _ccd_refusal(expr; conn = conn)
+      @test is_rule(err)
+      @test occursin(named, _ccd_msg(err))
+      @test occursin("SQLite as an integer", _ccd_msg(err))
+    end
+    err = _ccd_refusal(Fn.Concat("surname", Fn.Floor("number") / 2); conn = conn)
+    @test err isa QueryBuildError && occursin("(#1027)", _ccd_msg(err)) && occursin("arithmetic over `FLOOR(…)`", _ccd_msg(err))
+    # The integer-target advice has to divide as a float first: rounding after an integer division
+    # cannot bring the half back on SQLite.
+    err = _ccd_refusal(Fn.Cast(Fn.Floor("number") / 2, Models.IntegerField()); conn = conn)
+    @test occursin("x / 2.0", _ccd_msg(err))
+    # The scale target's usual way out, an unscaled `numeric`, keeps `7` on SQLite: not offered here.
+    err = _ccd_refusal(Fn.Cast(Fn.Abs("number") / 2, "numeric(10,1)"); conn = conn)
+    @test occursin("x / 2.0", _ccd_msg(err)) && !occursin("unscaled", _ccd_msg(err))
+    # Over an operand PormG cannot type, `Floor` is not refused: a float under it is a REAL on SQLite
+    # too, and the engines agree. Only a type that is known is answered (review of #1111).
+    for expr in (Fn.Cast(Fn.Floor(Fn.Case(Fn.When("active" => true, then = "points"), default = "points")) / 2, Models.IntegerField()),
+                 Fn.Cast(Fn.Floor("payload__points") / 2, Models.IntegerField()))
+      @test _ccd_refusal(expr; conn = conn) === nothing
+    end
+    # Unchanged: `+`, `-`, `*`, a bare cast, the documented escape, and the aggregates both engines
+    # keep integer.
+    for expr in (Fn.Cast(Fn.Floor("number") * 2, Models.IntegerField()), Fn.Cast(Fn.Floor("number") + 1, Models.CharField()),
+                 Fn.Cast(Fn.Floor("number"), Models.IntegerField()), Fn.Cast(Fn.Abs("number"), Models.CharField()),
+                 Fn.Cast(Fn.Round(Fn.Floor("number") / 2.0), Models.IntegerField()),
+                 Fn.Cast(Fn.Max("number") / 2, Models.IntegerField()), Fn.Cast(Fn.Sum("number") / 2, Models.IntegerField()),
+                 Fn.Cast(Fn.Count("id") / 2, Models.IntegerField()), Fn.Cast(_CF("number") / 2, Models.IntegerField()),
+                 Fn.Cast(Fn.Max("laps_total") / 2, Models.IntegerField()), Fn.Concat("surname", Fn.Floor("number")),
+                 Fn.Cast(team(Fn.Floor("id")), Models.IntegerField()))
       @test _ccd_refusal(expr; conn = conn) === nothing
     end
   end

@@ -31,9 +31,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("path float | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = nothing),
   ("path float | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("path float | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("path text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing),
   ("path text | alone", :sqlite) =>
@@ -79,9 +79,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("path decimal | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = nothing),
   ("path decimal | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("path decimal | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("path bool | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool"),
   ("path bool | alone", :sqlite) =>
@@ -299,9 +299,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F bare float | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = nothing),
   ("F bare float | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("F bare float | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("F bare hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing),
   ("F bare hop date | alone", :sqlite) =>
@@ -335,9 +335,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F float * 2 | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float"),
   ("F float * 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("F float * 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("F decimal * 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal"),
   ("F decimal * 2 | alone", :sqlite) =>
@@ -347,9 +347,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F decimal * 2 | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sFloatField", cte_textless = "decimal"),
   ("F decimal * 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("F decimal * 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("F date + Day(1) | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = nothing, textless = nothing),
   ("F date + Day(1) | alone", :sqlite) =>
@@ -419,9 +419,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Value float | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float"),
   ("Value float | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float"),
   ("Value float | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float"),
   ("Value date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing),
   ("Value date | alone", :sqlite) =>
@@ -455,9 +455,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Value bool | cte", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", cte_textless = "bool"),
   ("Value bool | subquery", :postgres) =>
-    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = nothing, textless = "bool"),
   ("Value bool | subquery", :sqlite) =>
-    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = nothing, textless = "bool"),
   ("Value datetime | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp"),
   ("Value datetime | alone", :sqlite) =>
@@ -575,9 +575,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum float | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sIntegerField", cte_textless = "float"),
   ("Sum float | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("Sum float | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("Sum decimal | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("Sum decimal | alone", :sqlite) =>
@@ -587,9 +587,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum decimal | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sIntegerField", cte_textless = "decimal"),
   ("Sum decimal | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("Sum decimal | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("Sum interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval"),
   ("Sum interval | alone", :sqlite) =>
@@ -611,9 +611,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Avg float | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", cte_field = "sFloatField", cte_textless = "numeric"),
   ("Avg float | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Avg float | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Avg decimal | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Avg decimal | alone", :sqlite) =>
@@ -623,9 +623,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Avg decimal | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", cte_field = "sDecimalField", cte_textless = "numeric"),
   ("Avg decimal | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Avg decimal | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Avg interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Avg interval | alone", :sqlite) =>
@@ -635,9 +635,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Avg interval | cte", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "numeric", cte_field = "sDurationField", cte_textless = "numeric"),
   ("Avg interval | subquery", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Avg interval | subquery", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval"),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Count | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
   ("Count | alone", :sqlite) =>
@@ -671,9 +671,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Max decimal | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal"),
   ("Max decimal | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("Max decimal | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("Max bool | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool"),
   ("Max bool | alone", :sqlite) =>
@@ -695,9 +695,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Min float | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float"),
   ("Min float | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("Min float | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("Max of arithmetic | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("Max of arithmetic | alone", :sqlite) =>
@@ -707,9 +707,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Max of arithmetic | cte", :sqlite) =>
     (stage = :build, error = "UnknownFieldError", message = "Error in _set_field_from_sql_function, the field v (base column: v) not found in result"),
   ("Max of arithmetic | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("Max of arithmetic | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("Coalesce date date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing),
   ("Coalesce date date | alone", :sqlite) =>
@@ -731,9 +731,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce float int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
   ("Coalesce float int | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("Coalesce float int | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("Coalesce int float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("Coalesce int float | alone", :sqlite) =>
@@ -743,9 +743,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce int float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
   ("Coalesce int float | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("Coalesce int float | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("Coalesce bool literal | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool"),
   ("Coalesce bool literal | alone", :sqlite) =>
@@ -779,9 +779,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Least decimal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LEAST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Least decimal | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("Least decimal | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("NullIf date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing),
   ("NullIf date | alone", :sqlite) =>
@@ -815,9 +815,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Lag bool | cte", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", cte_textless = "bool"),
   ("Lag bool | subquery", :postgres) =>
-    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = nothing, textless = "bool"),
   ("Lag bool | subquery", :sqlite) =>
-    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = nothing, textless = "bool"),
   ("FirstValue float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float"),
   ("FirstValue float | alone", :sqlite) =>
@@ -827,9 +827,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("FirstValue float | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float"),
   ("FirstValue float | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float"),
   ("FirstValue float | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float"),
   ("FirstValue decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = nothing, textless = "decimal"),
   ("FirstValue decimal | alone", :sqlite) =>
@@ -839,9 +839,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("FirstValue decimal | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal"),
   ("FirstValue decimal | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = nothing, textless = nothing),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = nothing, textless = "decimal"),
   ("FirstValue decimal | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = nothing, textless = nothing),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = nothing, textless = "decimal"),
   ("Lead hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = nothing, textless = nothing),
   ("Lead hop date | alone", :sqlite) =>
@@ -863,9 +863,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("LastValue float | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float"),
   ("LastValue float | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float"),
   ("LastValue float | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float"),
   ("Rank | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing),
   ("Rank | alone", :sqlite) =>
@@ -923,9 +923,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Round float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round float | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Round float | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Round decimal | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Round decimal | alone", :sqlite) =>
@@ -935,9 +935,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Round decimal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round decimal | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Round decimal | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Abs float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("Abs float | alone", :sqlite) =>
@@ -947,9 +947,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Abs float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs float | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("Abs float | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float"),
   ("Abs decimal | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("Abs decimal | alone", :sqlite) =>
@@ -959,9 +959,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Abs decimal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs decimal | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("Abs decimal | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("Mod int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Mod int | alone", :sqlite) =>
@@ -971,9 +971,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Mod int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function MOD is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Mod int | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Mod int | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Subquery Max hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing),
   ("Subquery Max hop date | alone", :sqlite) =>
@@ -987,29 +987,29 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Subquery Max hop date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing),
   ("Subquery Avg float | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Subquery Avg float | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Subquery Avg float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
   ("Subquery Avg float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
   ("Subquery Avg float | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Subquery Avg float | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric"),
   ("Subquery path decimal | alone", :postgres) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("Subquery path decimal | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("Subquery path decimal | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
   ("Subquery path decimal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
   ("Subquery path decimal | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("Subquery path decimal | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing),
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal"),
   ("Exists | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool"),
   ("Exists | alone", :sqlite) =>
@@ -1035,6 +1035,10 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:conflict, "cte_field=float vs cte_textless=decimal"), (:conflict, "textless=decimal vs cte_field=float"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
   ("F decimal * 2 | cte", :sqlite) =>
     [(:conflict, "cte_field=float vs cte_textless=decimal"), (:conflict, "textless=decimal vs cte_field=float"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("F decimal * 2 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("F decimal * 2 | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
   ("F date - date | alone", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | alone", :sqlite) =>
@@ -1059,6 +1063,10 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:conflict, "cte_field=int vs cte_textless=decimal"), (:conflict, "textless=decimal vs cte_field=int"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
   ("Sum decimal | cte", :sqlite) =>
     [(:conflict, "cte_field=int vs cte_textless=decimal"), (:conflict, "textless=decimal vs cte_field=int"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Sum decimal | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Sum decimal | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
   ("Sum interval | alone", :postgres) =>
     [(:conflict, "formatter=number vs textless=interval"), (:conflict, "read=interval vs formatter=number"), (:conflict, "render=interval vs formatter=number")],
   ("Sum interval | alone", :sqlite) =>
@@ -1079,6 +1087,10 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:gap, "read=none vs cte_textless=numeric"), (:gap, "read=none vs textless=numeric")],
   ("Avg float | cte", :sqlite) =>
     [(:gap, "read=none vs cte_textless=numeric"), (:gap, "read=none vs textless=numeric")],
+  ("Avg float | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Avg float | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=numeric")],
   ("Avg decimal | alone", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
   ("Avg decimal | alone", :sqlite) =>
@@ -1087,6 +1099,10 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=numeric"), (:gap, "read=none vs textless=numeric")],
   ("Avg decimal | cte", :sqlite) =>
     [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=numeric"), (:gap, "read=none vs textless=numeric")],
+  ("Avg decimal | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Avg decimal | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=numeric")],
   ("Avg interval | alone", :postgres) =>
     [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric"), (:conflict, "render=interval vs formatter=number"), (:conflict, "render=interval vs textless=numeric")],
   ("Avg interval | alone", :sqlite) =>
@@ -1096,49 +1112,53 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
   ("Avg interval | cte", :sqlite) =>
     [(:conflict, "cte_field=interval vs cte_textless=numeric"), (:conflict, "formatter=interval vs cte_textless=numeric"), (:conflict, "formatter=interval vs textless=numeric"), (:conflict, "operand=interval vs cte_textless=numeric"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs cte_textless=numeric"), (:conflict, "read=interval vs textless=numeric"), (:conflict, "textless=numeric vs cte_field=interval")],
   ("Avg interval | subquery", :postgres) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "operand=interval vs formatter=number"), (:conflict, "read=interval vs formatter=number")],
+    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
   ("Avg interval | subquery", :sqlite) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "operand=interval vs formatter=number"), (:conflict, "read=interval vs formatter=number")],
+    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
   ("Round float | alone", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
   ("Round float | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Round float | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Round float | subquery", :sqlite) =>
     [(:gap, "read=none vs textless=numeric")],
   ("Round decimal | alone", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
   ("Round decimal | alone", :sqlite) =>
     [(:gap, "read=none vs textless=numeric")],
+  ("Round decimal | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Round decimal | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=numeric")],
   ("Abs decimal | alone", :postgres) =>
     [(:gap, "read=none vs textless=decimal")],
   ("Abs decimal | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Abs decimal | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Abs decimal | subquery", :sqlite) =>
     [(:gap, "read=none vs textless=decimal")],
   ("Mod int | alone", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
   ("Mod int | alone", :sqlite) =>
     [(:gap, "read=none vs textless=numeric")],
+  ("Mod int | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Mod int | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Subquery Avg float | alone", :postgres) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Subquery Avg float | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Subquery Avg float | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Subquery Avg float | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=numeric")],
 )
 
 # The shapes whose channels answer differently across contexts, by `_ekm_cross_context`' rule.
 const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
-  ("path float", :postgres) =>
-    ["drops textless: alone=float, after_when=float, cte=float, subquery=none"],
-  ("path float", :sqlite) =>
-    ["drops textless: alone=float, after_when=float, cte=float, subquery=none"],
-  ("path decimal", :postgres) =>
-    ["drops textless: alone=decimal, after_when=decimal, cte=decimal, subquery=none"],
-  ("path decimal", :sqlite) =>
-    ["drops textless: alone=decimal, after_when=decimal, cte=decimal, subquery=none"],
-  ("F bare float", :postgres) =>
-    ["drops textless: alone=float, cte=float, subquery=none"],
-  ("F bare float", :sqlite) =>
-    ["drops textless: alone=float, cte=float, subquery=none"],
-  ("F float * 2", :postgres) =>
-    ["drops textless: alone=float, cte=float, subquery=none"],
-  ("F float * 2", :sqlite) =>
-    ["drops textless: alone=float, cte=float, subquery=none"],
-  ("F decimal * 2", :postgres) =>
-    ["drops textless: alone=decimal, cte=decimal, subquery=none"],
-  ("F decimal * 2", :sqlite) =>
-    ["drops textless: alone=decimal, cte=decimal, subquery=none"],
   ("F datetime - datetime", :postgres) =>
     ["drops textless: alone=none, subquery=interval"],
   ("F datetime - datetime", :sqlite) =>
@@ -1152,17 +1172,17 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
   ("Value int", :sqlite) =>
     ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Value float", :postgres) =>
-    ["drops formatter: alone=none, cte=number, subquery=none", "drops textless: alone=float, cte=float, subquery=none"],
+    ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Value float", :sqlite) =>
-    ["drops formatter: alone=none, cte=number, subquery=none", "drops textless: alone=float, cte=float, subquery=none"],
+    ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Value text", :postgres) =>
     ["drops formatter: alone=none, cte=text_or_time, subquery=none"],
   ("Value text", :sqlite) =>
     ["drops formatter: alone=none, cte=text_or_time, subquery=none"],
   ("Value bool", :postgres) =>
-    ["drops formatter: alone=none, cte=bool, subquery=none", "drops textless: alone=bool, cte=bool, subquery=none"],
+    ["drops formatter: alone=none, cte=bool, subquery=none"],
   ("Value bool", :sqlite) =>
-    ["drops formatter: alone=none, cte=bool, subquery=none", "drops textless: alone=bool, cte=bool, subquery=none"],
+    ["drops formatter: alone=none, cte=bool, subquery=none"],
   ("Case untyped int", :postgres) =>
     ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Case untyped int", :sqlite) =>
@@ -1171,96 +1191,36 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
     ["drops formatter: alone=none, cte=number, subquery=none", "drops textless: alone=none, cte=float, subquery=none"],
   ("Case untyped float col", :sqlite) =>
     ["drops formatter: alone=none, cte=number, subquery=none", "drops textless: alone=none, cte=float, subquery=none"],
-  ("Sum float", :postgres) =>
-    ["drops textless: alone=float, cte=float, subquery=none"],
-  ("Sum float", :sqlite) =>
-    ["drops textless: alone=float, cte=float, subquery=none"],
-  ("Sum decimal", :postgres) =>
-    ["drops textless: alone=decimal, cte=decimal, subquery=none"],
-  ("Sum decimal", :sqlite) =>
-    ["drops textless: alone=decimal, cte=decimal, subquery=none"],
-  ("Avg float", :postgres) =>
-    ["drops textless: alone=numeric, cte=numeric, subquery=none"],
-  ("Avg float", :sqlite) =>
-    ["drops textless: alone=numeric, cte=numeric, subquery=none"],
-  ("Avg decimal", :postgres) =>
-    ["drops textless: alone=numeric, cte=numeric, subquery=none"],
-  ("Avg decimal", :sqlite) =>
-    ["drops textless: alone=numeric, cte=numeric, subquery=none"],
   ("Avg interval", :postgres) =>
-    ["conflict formatter: alone=number, cte=interval, subquery=number", "conflict textless: alone=numeric, cte=numeric, subquery=interval"],
+    ["conflict formatter: alone=number, cte=interval, subquery=number"],
   ("Avg interval", :sqlite) =>
-    ["conflict formatter: alone=number, cte=interval, subquery=number", "conflict textless: alone=numeric, cte=numeric, subquery=interval"],
-  ("Max decimal", :postgres) =>
-    ["drops textless: alone=decimal, cte=decimal, subquery=none"],
-  ("Max decimal", :sqlite) =>
-    ["drops textless: alone=decimal, cte=decimal, subquery=none"],
-  ("Min float", :postgres) =>
-    ["drops textless: alone=float, cte=float, subquery=none"],
-  ("Min float", :sqlite) =>
-    ["drops textless: alone=float, cte=float, subquery=none"],
-  ("Max of arithmetic", :postgres) =>
-    ["drops textless: alone=float, subquery=none"],
-  ("Max of arithmetic", :sqlite) =>
-    ["drops textless: alone=float, subquery=none"],
-  ("Coalesce float int", :postgres) =>
-    ["drops textless: alone=float, subquery=none"],
-  ("Coalesce float int", :sqlite) =>
-    ["drops textless: alone=float, subquery=none"],
-  ("Coalesce int float", :postgres) =>
-    ["drops textless: alone=float, subquery=none"],
-  ("Coalesce int float", :sqlite) =>
-    ["drops textless: alone=float, subquery=none"],
-  ("Least decimal", :postgres) =>
-    ["drops textless: alone=decimal, subquery=none"],
-  ("Least decimal", :sqlite) =>
-    ["drops textless: alone=decimal, subquery=none"],
+    ["conflict formatter: alone=number, cte=interval, subquery=number"],
   ("Lag hop date", :postgres) =>
     ["drops formatter: alone=none, cte=date, subquery=none"],
   ("Lag hop date", :sqlite) =>
     ["drops formatter: alone=none, cte=date, subquery=none"],
   ("Lag bool", :postgres) =>
-    ["drops formatter: alone=none, cte=bool, subquery=none", "drops textless: alone=bool, cte=bool, subquery=none"],
+    ["drops formatter: alone=none, cte=bool, subquery=none"],
   ("Lag bool", :sqlite) =>
-    ["drops formatter: alone=none, cte=bool, subquery=none", "drops textless: alone=bool, cte=bool, subquery=none"],
+    ["drops formatter: alone=none, cte=bool, subquery=none"],
   ("FirstValue float", :postgres) =>
-    ["drops formatter: alone=none, cte=number, subquery=none", "drops textless: alone=float, cte=float, subquery=none"],
+    ["drops formatter: alone=none, cte=number, subquery=none"],
   ("FirstValue float", :sqlite) =>
-    ["drops formatter: alone=none, cte=number, subquery=none", "drops textless: alone=float, cte=float, subquery=none"],
+    ["drops formatter: alone=none, cte=number, subquery=none"],
   ("FirstValue decimal", :postgres) =>
-    ["drops formatter: alone=none, cte=number, subquery=none", "drops textless: alone=decimal, cte=decimal, subquery=none"],
+    ["drops formatter: alone=none, cte=number, subquery=none"],
   ("FirstValue decimal", :sqlite) =>
-    ["drops formatter: alone=none, cte=number, subquery=none", "drops textless: alone=decimal, cte=decimal, subquery=none"],
+    ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Lead hop date", :postgres) =>
     ["drops formatter: alone=none, cte=date, subquery=none"],
   ("Lead hop date", :sqlite) =>
     ["drops formatter: alone=none, cte=date, subquery=none"],
   ("LastValue float", :postgres) =>
-    ["drops formatter: alone=none, cte=number, subquery=none", "drops textless: alone=float, cte=float, subquery=none"],
+    ["drops formatter: alone=none, cte=number, subquery=none"],
   ("LastValue float", :sqlite) =>
-    ["drops formatter: alone=none, cte=number, subquery=none", "drops textless: alone=float, cte=float, subquery=none"],
+    ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Rank", :postgres) =>
     ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Rank", :sqlite) =>
     ["drops formatter: alone=none, cte=number, subquery=none"],
-  ("Round float", :postgres) =>
-    ["drops textless: alone=numeric, subquery=none"],
-  ("Round float", :sqlite) =>
-    ["drops textless: alone=numeric, subquery=none"],
-  ("Round decimal", :postgres) =>
-    ["drops textless: alone=numeric, subquery=none"],
-  ("Round decimal", :sqlite) =>
-    ["drops textless: alone=numeric, subquery=none"],
-  ("Abs float", :postgres) =>
-    ["drops textless: alone=float, subquery=none"],
-  ("Abs float", :sqlite) =>
-    ["drops textless: alone=float, subquery=none"],
-  ("Abs decimal", :postgres) =>
-    ["drops textless: alone=decimal, subquery=none"],
-  ("Abs decimal", :sqlite) =>
-    ["drops textless: alone=decimal, subquery=none"],
-  ("Mod int", :postgres) =>
-    ["drops textless: alone=numeric, subquery=none"],
-  ("Mod int", :sqlite) =>
-    ["drops textless: alone=numeric, subquery=none"],
 )

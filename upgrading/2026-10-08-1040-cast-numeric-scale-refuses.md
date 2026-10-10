@@ -31,14 +31,15 @@ places, it needs more than `p - s` digits before the point: `Cast(Value(100), "n
 value as it is.
 
 Unchanged: an unscaled `"numeric"`/`"decimal"` or `DecimalField()` target, and an operand that has
-nothing to round: an integer (a literal one still has to fit `p`, #1087), `Round(x)`, `Floor(x)`, `Ceil(x)`, a `DecimalField` with at most `s`
+nothing to round: an integer (a literal one still has to fit `p`, #1087), `Round(x)`, `Floor(x)`, `Ceil(x)` (unless divided, #1111), a `DecimalField` with at most `s`
 places (and `Max`/`Min`/`Abs`/`Coalesce` of one), a `Decimal` literal with at most `s` digits, a
 `Float64` literal with at most `s` places (`Value(1.5)` at scale 2, #1050), whatever its count of
 significant digits. PostgreSQL converts a float to `numeric` at 15 of them, so a 16th digit differs
 and PostgreSQL is the less exact side; that is documented rather than refused (#1087).
 
 Not checked, as for #1028: `Case(…; output_field = "numeric(p,s)")`, whose value is a branch, and an
-operand PormG cannot type (an untyped `Case`, a `Subquery`). PostgreSQL still rounds those. Nor is
+operand PormG cannot type (an untyped `Case`; a `Subquery` is classified by its projection since
+#1124). PostgreSQL still rounds those. Nor is
 the overflow of a column or a computed value, which depends on the row: PostgreSQL raises on a row
 too large for `p` and SQLite answers it. The literal of a `Coalesce`, `Greatest` or `Least` with an
 `output_field` is not checked for overflow either: it is one candidate value among the operands.

@@ -466,7 +466,10 @@ answers as a REAL (`1` vs `1.0`). A literal is refused when the `Concat` is buil
 the query is. A `DecimalField` with `decimal_places = 0` is not refused: it holds whole numbers, which
 read `14` on both engines, as an integer column's do (#1087). Divided, it is refused again: SQLite
 stores those whole values as integers and divides them as integers (`15 / 2` is `7`), where
-PostgreSQL's `numeric` gives `7.5`.
+PostgreSQL's `numeric` gives `7.5`. `Floor`, `Ceil` and `Abs` over an integer, and `Sum` of a BIGINT
+column (an `IDField`, a `BigIntegerField`, a `ForeignKey`), are the same shape: PostgreSQL computes
+them as `numeric` (`FLOOR(x::numeric)`, `sum(bigint)`), so they read as integers until they are
+divided, and `Floor("grid") / 2` is refused (#1111). Divide as a float and fetch the number instead.
 
 Three more operand types are refused the same way, because their text differs too:
 
@@ -479,9 +482,11 @@ Three more operand types are refused the same way, because their text differs to
 A date, a time and a uuid read the same text on both engines and pass. A JSON key lookup
 (`"payload__driver"`) passes too: it reads the same text when the value at the key is a string, but a
 boolean or a nested value can still differ (`true` vs `1`), and PormG cannot know which a key holds.
-The check covers only types PormG can name: an operand it cannot type (a `Subquery` over a number,
-an untyped `Case`, an extremum over timestamp arithmetic, `Greatest`/`Least` over computed timestamps
-or intervals) passes.
+The check covers only types PormG can name: an operand it cannot type (an untyped `Case`, an
+extremum over timestamp arithmetic, `Greatest`/`Least` over computed timestamps or intervals)
+passes. A `Subquery` is classified by the one expression it projects (#1124): one over a float
+column or an `Avg` is refused as the float or the `Avg` is, and one over a text or integer column,
+or over `Cast(Round(x), IntegerField())`, passes.
 
 `Cast(…, CharField())` is not a way around this, because a cast to text makes the same split (`25`
 against `25.0`). It is refused too (see the `Cast` section below). Write the text you mean
@@ -839,7 +844,8 @@ So PormG raises `QueryBuildError` when the query is built, on both engines, for:
   timestamp, an interval, or a whole JSON document;
 - a cast to an integer (`IntegerField()`, `BigIntegerField()`, `"integer"`, `"bigint"`, `"int8"`,
   …) of a float, a decimal with places (a `decimal_places = 0` column passes unless it is divided, #1087) or a `numeric`
-  function. A boolean casts to `1`/`0` on both engines and
+  function, and of `Floor`/`Ceil`/`Abs` over an integer or `Sum` of a BIGINT column once divided
+  (#1111). A boolean casts to `1`/`0` on both engines and
   passes;
 - a cast to `numeric(p, s)` or `decimal(p, s)` (and `numeric(p)`, whose scale is 0) of an operand
   that can carry more than `s` digits after the point: a float column, a float literal with more
@@ -852,7 +858,8 @@ So PormG raises `QueryBuildError` when the query is built, on both engines, for:
   `Floor`, `Ceil`), a `DecimalField` with at most `s` places, and a `Decimal` or float literal with
   at most `s` digits after the point (`Value(1.5)` at scale 2 reads `1.5` on both, #1050) pass, and so does a function whose value is one of them (`Max`, `Min`, `Abs`,
   `Coalesce`, `Greatest`, `Least`, `NullIf`). An operand PormG cannot
-  type (an untyped `Case`, a `Subquery`) passes, as it does for the other two rules;
+  type (an untyped `Case`) passes, as it does for the other two rules; a `Subquery` is classified by
+  the expression it projects, for all three (#1124);
 - a `Cast` to `numeric(p, s)` of a literal that does not fit it: rounded to `s` places, it needs
   more than `p - s` digits before the point (`Cast(Value(100), "numeric(3,2)")`, or `9.999`, which
   rounds to `10.00`). PostgreSQL raises a numeric field overflow and SQLite stores the value as it
@@ -866,7 +873,11 @@ So PormG raises `QueryBuildError` when the query is built, on both engines, for:
 To get an integer, say how to round first. `Round(x)`, `Floor(x)` and `Ceil(x)` give the same whole
 number on both engines for every stored value measured (PostgreSQL's `round` is the `numeric` one,
 half away from zero, as SQLite's is), so a cast over them passes. `Mod` of whole numbers and `+`,
-`-`, `*` of them pass too, since they have nothing to round. `Round(x, 2)` keeps a fraction, so a
+`-`, `*` of them pass too, since they have nothing to round. Dividing one does not: PostgreSQL
+computes `Floor`, `Ceil` and `Abs` as `numeric`, so `Floor("grid") / 2` keeps the half there and
+SQLite divides the integer (`7.5` against `7`); it is refused, as `Sum` of a BIGINT column divided is
+(#1111). To round a quotient, divide as a float first: `Cast(Round(Floor("grid") / 2.0), IntegerField())`
+reads the same on both engines. `Round(x, 2)` keeps a fraction, so a
 cast to an integer over it is refused. One caveat: PostgreSQL turns a float into `numeric` at 15 significant digits
 before it rounds, so a computed value a hair below a half (`2.4999999999999996`) can still round up
 there and down on SQLite. The same conversion reaches a float cast to a scaled `numeric`: a literal

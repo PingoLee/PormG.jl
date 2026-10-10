@@ -469,7 +469,11 @@ stores those whole values as integers and divides them as integers (`15 / 2` is 
 PostgreSQL's `numeric` gives `7.5`. `Floor`, `Ceil` and `Abs` over an integer, and `Sum` of a BIGINT
 column (an `IDField`, a `BigIntegerField`, a `ForeignKey`), are the same shape: PostgreSQL computes
 them as `numeric` (`FLOOR(x::numeric)`, `sum(bigint)`), so they read as integers until they are
-divided, and `Floor("grid") / 2` is refused (#1111). Divide as a float and fetch the number instead.
+divided, and `Floor("grid") / 2` is refused (#1111). An integer literal counts as a BIGINT here,
+because PostgreSQL binds it as `bigint`: `Sum(F("grid") + 1) / 2`, `Sum(Coalesce("grid", 0)) / 2` and
+the conditional count `Sum(Case(When("grid__@gt" => 3, then = 1), default = 0)) / 2` are
+`sum(bigint)` there, and are refused too, as is a `Sum` over a cast to `bigint` (#1141). Divide as a
+float and fetch the number instead.
 A CTE column built from one of them is refused the same way when it is divided (#1127): the CTE
 gives a `Sum` column an integer type whatever it sums, so PormG reads the body's own expression
 instead, and `Coalesce(CTE("totals", "id_sum"), 0) / 2` is refused as `Sum("resultid") / 2` is.

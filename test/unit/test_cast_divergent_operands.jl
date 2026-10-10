@@ -837,8 +837,8 @@ end
     # INTEGER column, `Max`, `Count`: `bigint / integer` divides as an integer on both), an extremum
     # over one, the record read outside a division, and a sum of integer-column arithmetic
     # (`number * number` is `int4`, its sum an `int8` that divides as one). Not `F("number") / 2`:
-    # PostgreSQL binds the literal `2` as `bigint`, so that sum is `numeric` — a #1111 gap of its
-    # own (#1141).
+    # PostgreSQL binds the literal `2` as `bigint`, so that sum is `numeric`, and it is refused
+    # (#1141, below).
     for outer in (Fn.Cast(Fn.Coalesce(PormG.CTE("c", "s_int"), 0) / 2, Models.IntegerField()),
                   Fn.Cast(Fn.Coalesce(PormG.CTE("c", "top"), 0) / 2, Models.IntegerField()),
                   Fn.Cast(Fn.Coalesce(PormG.CTE("c", "cnt"), 0) / 2, Models.IntegerField()),
@@ -848,6 +848,117 @@ end
       @test refusal(outer, conn) === nothing
     end
     @test _ccd_refusal(Fn.Cast(Fn.Sum(_CF("number") * _CF("number")) / 2, Models.IntegerField()); conn = conn) === nothing
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sum over an integer literal, divided, is refused like Sum of a BIGINT column (#1141)
+# PostgreSQL binds an integer literal as `$n::bigint`, and `int4 + int8` is `int8`, so
+# `SUM(("Tb"."number" + $1::bigint))` is a `sum(bigint)`: a `numeric` that keeps the half once
+# divided, where SQLite's sum is an integer and drops it (#1111's split, `7.5` → `8` against `7`).
+# #1111 named the BIGINT by the column's field only, so a literal in the summed arithmetic, or as a
+# `Coalesce` fallback, built. The same reaches a CTE column: `Sum(F("number") + 1)` is recorded as
+# a `numeric`, and a `Lag(Count(…))` column as the `bigint` it is. Expected SQL: none — the build
+# raises, on both engines (the refusal is decided once, as #1111's is).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1141: Sum over an integer literal, divided, is refused as a sum(bigint)" begin
+  literal = "an integer literal (a `bigint` on PostgreSQL)"
+  function withcte(outer)
+    q = CCD.Ccd_team.objects
+    body = CCD.Ccd_driver.objects
+    body.values("team", "plus" => Fn.Sum(_CF("number") + 1),
+                "lagc" => PormG.QueryBuilder.Lag(Fn.Count("id"), over = PormG.QueryBuilder.WindowOver(order_by = ["team"])),
+                # `LAG("number", $1::integer, $2::bigint)`: PostgreSQL resolves the default with the
+                # operand, so the column is an `int8`.
+                "prev" => PormG.QueryBuilder.Lag("number", default = 0, over = PormG.QueryBuilder.WindowOver(order_by = ["number"])),
+                "prev_int" => PormG.QueryBuilder.Lag("number", over = PormG.QueryBuilder.WindowOver(order_by = ["number"])),
+                # `LAG(RANK() OVER …, $1::integer, $2::bigint)`: a `bigint` either way.
+                "prank" => PormG.QueryBuilder.Lag(PormG.QueryBuilder.Rank(over = PormG.QueryBuilder.WindowOver(order_by = ["number"])),
+                                                  default = 0, over = PormG.QueryBuilder.WindowOver(order_by = ["number"])))
+    q.with("c" => body, join_field = "id" => "team")
+    q.values("x" => outer)
+    return q
+  end
+  refusal(outer, conn) = try _ccd_sql(withcte(outer); conn = conn); nothing catch e; e end
+  for conn in _CCD_ENGINES
+    # The premise: the literal really is bound as `bigint` on PostgreSQL.
+    conn === _CCD_PG && @test occursin("SUM((\"Tb\".\"number\" + \$1::bigint))", _ccd_render(Fn.Sum(_CF("number") + 1); conn = conn))
+    for (expr, named) in (
+        (Fn.Cast(Fn.Sum(_CF("number") + 1) / 2, Models.IntegerField()), "`SUM(…)` over $(literal)"),
+        (Fn.Cast(Fn.Sum(1 + _CF("number")) / 2, Models.IntegerField()), "`SUM(…)` over $(literal)"),
+        (Fn.Cast(Fn.Sum(_CF("number") / 2) / 2, Models.CharField()), "`SUM(…)` over $(literal)"),
+        (Fn.Cast(Fn.Sum(Fn.Coalesce("number", 0)) / 2, Models.IntegerField()), "`SUM(…)` over `COALESCE(…)` over $(literal)"),
+        # A function carrying its operand's value carries a BIGINT column too.
+        (Fn.Cast(Fn.Sum(Fn.Coalesce("laps_total", Fn.Value(nothing))) / 2, Models.IntegerField()),
+         "`SUM(…)` over `COALESCE(…)` over the BigIntegerField `laps_total`"),
+        (Fn.Cast(Fn.Sum(Fn.Greatest("number", 1)) / 2, Models.IntegerField()), "`SUM(…)` over `GREATEST(…)` over $(literal)"),
+        # Review of #1141: the conditional count — `CASE … THEN $2::bigint ELSE $3::bigint` — the
+        # bitwise operators, a shift's left operand, and a declared `bigint`.
+        (Fn.Cast(Fn.Sum(Fn.Case(Fn.When("number__@gt" => 3, then = 1), default = 0)) / 2, Models.IntegerField()),
+         "`SUM(…)` over `CASE(…)` over $(literal)"),
+        (Fn.Cast(Fn.Sum(Fn.Case(Fn.When("number__@gt" => 3, then = _CF("id")), default = nothing)) / 2, Models.IntegerField()),
+         "`SUM(…)` over `CASE(…)` over the IDField `id`"),
+        (Fn.Cast(Fn.Sum(_CF("number") & 1) / 2, Models.IntegerField()), "`SUM(…)` over $(literal)"),
+        (Fn.Cast(Fn.Sum(xor(_CF("number"), 1)) / 2, Models.IntegerField()), "`SUM(…)` over $(literal)"),
+        (Fn.Cast(Fn.Sum(_CF("laps_total") << 1) / 2, Models.IntegerField()),
+         "`SUM(…)` over the BigIntegerField `laps_total`"),
+        # A value PormG cannot type beside the `bigint` does not hide it: `COALESCE(("Tb"."number"
+        # / $1::bigint), $2::bigint)` is an `int8`, and so is `coalesce(int4 << int4, int8)`.
+        (Fn.Cast(Fn.Sum(Fn.Coalesce(_CF("number") / 2, 0)) / 2, Models.IntegerField()),
+         "`SUM(…)` over `COALESCE(…)` over $(literal)"),
+        (Fn.Cast(Fn.Sum(Fn.Coalesce(1 << _CF("number"), 0)) / 2, Models.IntegerField()),
+         "`SUM(…)` over `COALESCE(…)` over $(literal)"),
+        (Fn.Cast(Fn.Sum(Fn.Cast("number", Models.BigIntegerField())) / 2, Models.IntegerField()),
+         "`SUM(…)` over a value cast to BIGINT"),
+        (Fn.Cast(Fn.Sum(Fn.Coalesce("number", 0; output_field = Models.BigIntegerField())) / 2, Models.IntegerField()),
+         "`SUM(…)` over a value cast to BIGINT"))
+      err = _ccd_refusal(expr; conn = conn)
+      @test _is_1028(err)
+      @test occursin(named, _ccd_msg(err))
+      @test occursin("SQLite as an integer", _ccd_msg(err))
+    end
+    for (outer, named) in (
+        (Fn.Cast(Fn.Coalesce(PormG.CTE("c", "plus"), 0) / 2, Models.IntegerField()),
+         "the CTE column `CTE(\"c\", \"plus\")` (`SUM(…)` over $(literal))"),
+        (Fn.Cast(Fn.Sum(PormG.CTE("c", "lagc")) / 2, Models.IntegerField()),
+         "`SUM(…)` over the CTE column `CTE(\"c\", \"lagc\")` (`LAG(…)` over `COUNT(…)`)"),
+        (Fn.Cast(Fn.Sum(PormG.CTE("c", "prev")) / 2, Models.IntegerField()),
+         "`SUM(…)` over the CTE column `CTE(\"c\", \"prev\")` (`LAG(…)` over $(literal))"),
+        (Fn.Cast(Fn.Sum(PormG.CTE("c", "prank")) / 2, Models.IntegerField()),
+         "`SUM(…)` over the CTE column `CTE(\"c\", \"prank\")` (`LAG(…)` over $(literal))"))
+      err = refusal(outer, conn)
+      @test err isa QueryBuildError
+      @test occursin(named, _ccd_msg(err))
+    end
+    # Unchanged: a `sum(integer)` is a `bigint` and divides as an integer on both, and so does a
+    # `bigint` that is not summed (`Max`, `Coalesce`); undivided, a `sum(bigint)` reads the same.
+    for expr in (Fn.Cast(Fn.Sum("number") / 2, Models.IntegerField()),
+                 Fn.Cast(Fn.Sum(_CF("number") * _CF("number")) / 2, Models.IntegerField()),
+                 Fn.Cast(Fn.Max(_CF("number") + 1) / 2, Models.IntegerField()),
+                 Fn.Cast(Fn.Coalesce("number", 0) / 2, Models.IntegerField()),
+                 Fn.Cast(Fn.Sum(_CF("number") + 1), Models.IntegerField()),
+                 Fn.Cast(Fn.Sum(_CF("number") + 1) * 2, Models.IntegerField()),
+                 # A declared `integer` decides alone, though the operands hold a `bigint` literal.
+                 Fn.Cast(Fn.Sum(Fn.Coalesce("number", 0; output_field = Models.IntegerField())) / 2, Models.IntegerField()),
+                 # `NULLIF(a, b)` has `a`'s type; a shift has its left operand's and binds a literal
+                 # on either side `::integer` (`$1::integer << …`, review of #1141); `~` and `&` of
+                 # integer columns are integers; a `Case` NULL branch is no value.
+                 Fn.Cast(Fn.Sum(Fn.NullIf("number", 0)) / 2, Models.IntegerField()),
+                 Fn.Cast(Fn.Sum(_CF("number") << 2) / 2, Models.IntegerField()),
+                 Fn.Cast(Fn.Sum(1 << _CF("number")) / 2, Models.IntegerField()),
+                 Fn.Cast(Fn.Sum(1024 >> _CF("number")) / 2, Models.IntegerField()),
+                 Fn.Cast(Fn.Sum(~_CF("number")) / 2, Models.IntegerField()),
+                 Fn.Cast(Fn.Sum(_CF("number") & _CF("number")) / 2, Models.IntegerField()),
+                 Fn.Cast(Fn.Sum(Fn.Case(Fn.When("number__@gt" => 3, then = _CF("number")), default = nothing)) / 2, Models.IntegerField()))
+      @test _ccd_refusal(expr; conn = conn) === nothing
+    end
+    @test refusal(Fn.Cast(Fn.Max(PormG.CTE("c", "lagc")) / 2, Models.IntegerField()), conn) === nothing
+    @test refusal(Fn.Cast(Fn.Sum(PormG.CTE("c", "prev_int")) / 2, Models.IntegerField()), conn) === nothing
+    # The widest value wins: a float branch makes the `Case` a `float8`, so it is never named as the
+    # `bigint` its integer branch alone would be. (An untyped `Case` is otherwise let through, the
+    # #1111 fail-open; this asserts only that the `bigint` rule does not answer for it.)
+    err = _ccd_refusal(Fn.Cast(Fn.Sum(Fn.Case(Fn.When("number__@gt" => 3, then = 1.5), default = 0)) / 2, Models.IntegerField()); conn = conn)
+    @test err === nothing || !occursin(literal, _ccd_msg(err))
   end
 end
 

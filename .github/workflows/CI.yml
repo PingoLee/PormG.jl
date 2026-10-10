@@ -151,7 +151,7 @@ jobs:
   # 1` the floor is load-bearing — that file records why, with the measurements — and
   # raising it is precisely the wrong edit; there the job is telling you to fix PormG.
   #
-  # Of the two scratch envs general.instructions.md requires before narrowing a range,
+  # Of the two scratch envs a `[compat]` narrowing must be resolved in before it lands,
   # this job covers the FIRST: it installs LibPQ, so a `Decimals` narrowing fails its
   # resolve here. It cannot cover the SECOND — a consuming app's declared dependency
   # set lives in another repository, and #560's break was invisible to every PormG-side

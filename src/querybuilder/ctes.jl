@@ -1015,6 +1015,13 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   # is typed as an integer and an `Avg` one as its operand's field, so `Concat` and `Cast` over the
   # column would let through what they refuse when the same aggregate is written directly.
   textless = Dict{String,Tuple{Symbol,String}}()
+  # #1127: and what the same column answers once DIVIDED (`_whole_numeric_operand`, #1111), for the
+  # same reason: a `Sum` of a BIGINT column is typed as an integer, but it is `numeric` on PostgreSQL,
+  # so the column divided split the engines (`7.5` and `7`) while the aggregate divided was refused.
+  # And whether it is a `bigint` there (`_bigint_valued`): a `Count` or a `Sum` of an integer is typed
+  # as an integer too, so an outer `Sum` over it read as `sum(integer)` where it is `sum(bigint)`.
+  whole_numeric = Dict{String,Tuple{Symbol,String}}()
+  bigint = Dict{String,Tuple{Symbol,String}}()
   @pormg_debug false
   for value_part in values
     # fields[value_part.field] = _set_field_from_sql_function(value_part.field, value_part._as, instruct)
@@ -1057,6 +1064,10 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
       if path === nothing
         side = _concat_textless_operand(source, instruct)
         side === nothing || (textless[key_new] = side)
+        side = _whole_numeric_operand(source, instruct)
+        side === nothing || (whole_numeric[key_new] = side)
+        side = _bigint_valued(source, instruct)
+        side === nothing || (bigint[key_new] = side)
       elseif memo_json_lookup(instruct, memo_key(:base, path))
         textless[key_new] = (:json_value, "")
       end
@@ -1075,5 +1086,7 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
     connect_key = instruct.object.model.connect_key
   )
   cte["textless"] = textless
+  cte["whole_numeric"] = whole_numeric
+  cte["bigint"] = bigint
 
 end

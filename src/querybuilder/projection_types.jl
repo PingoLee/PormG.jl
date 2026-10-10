@@ -916,16 +916,36 @@ end
 # - `SUM` of a BIGINT column (#1111) — an `IDField`, a `BigIntegerField`, a `ForeignKey` or
 #   `OneToOneField`: PostgreSQL's `sum(bigint)` is `numeric`, where `sum(integer)` is `bigint` and
 #   divides as an integer on both. `MAX`/`MIN` keep the operand's type and `COUNT` is a `bigint`.
+# A CTE column built from any of these answers as it did in the body (#1127), and so does a
+# `Subquery` projecting one (#1124): each is a record the inner build kept, not its typed field.
 # Measured on PostgreSQL 16 and SQLite 3.45 through the F1 fixture: `Floor("grid") / 2` over grid
 # 1, 5, 7 reads `0.5`, `2.5`, `3.5` and `0`, `2`, `3`; `Sum("resultid") / 2` over two rows `1.5` and
 # `1`. The kind is `:integer_division`, so the refusal says what differs — the division, not a
 # decimal's text — and the integer and scale targets advise dividing as a float first
 # (`_cast_divergent_refusal`): rounding after an integer division cannot bring the half back.
 const _NUMERIC_WHOLE_FUNCTIONS = ("FLOOR", "CEIL", "ABS")
-function _whole_numeric_operand(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction)
+_whole_numeric_operand(p::Union{String,JoinedReference}, instruc::SQLInstruction) = _whole_decimal_column(p, instruc)
+function _whole_decimal_column(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction)
   field = _alias_column_field(p, instruc)
   field isa Models.sDecimalField && field.decimal_places == 0 || return nothing
   return (:integer_division, "the DecimalField `$(_concat_operand_label(p))`")
+end
+# #1127 — a CTE column answers as its body's expression did, recorded while the body built
+# (`_build_cte_custom_model`): its field cannot say it, since a `Sum` column is typed as an integer
+# whatever it sums. A column with no record — a plain path, a body not built in this pass — is read
+# by its field. A path that hops on through the column ends at a real model field.
+function _whole_numeric_operand(p::CTEReference, instruc::SQLInstruction)
+  side = _cte_division_record(p, "whole_numeric", instruc)
+  return side === nothing ? _whole_decimal_column(p, instruc) : side
+end
+# One of the two division records `_build_cte_custom_model` keeps per computed column, as a
+# `(kind, what)` naming the column, or `nothing`: no record, or a path past the column.
+function _cte_division_record(p::CTEReference, key::String, instruc::SQLInstruction)
+  occursin("__", p.path) && return nothing
+  cte = get(instruc.object.ctes, p.name, nothing)
+  record = cte === nothing ? nothing : get(cte, key, nothing)
+  side = record isa Dict ? get(record, p.path, nothing) : nothing
+  return side === nothing ? nothing : (side[1], "the CTE column `$(_concat_operand_label(p))` ($(side[2]))")
 end
 _whole_numeric_operand(p::SQLField, instruc::SQLInstruction) = _whole_numeric_operand(p.field, instruc)
 _whole_numeric_operand(p::FExpression, instruc::SQLInstruction) =
@@ -965,12 +985,48 @@ function _bigint_column(p, instruc::SQLInstruction)
   p isa SQLField && return _bigint_column(p.field, instruc)
   if p isa FExpression
     p.operation === nothing && return _bigint_column(p.field_name, instruc)
-    p.operation in ("+", "-", "*") || return nothing
+    # #1127: `bigint / integer` is still a `bigint` on PostgreSQL, so `Sum(F("id") / 2)` sums one.
+    # Only over two whole numbers: a float divisor makes the quotient a `float8`, whose `sum` is a
+    # float on both engines.
+    p.operation == "/" && !(_whole_quotient_side(p.field_name, instruc) && _whole_quotient_side(p.operand, instruc)) &&
+      return nothing
+    p.operation in ("+", "-", "*", "/") || return nothing
     return something(_bigint_column(p.field_name, instruc), _bigint_column(p.operand, instruc), Some(nothing))
+  end
+  # #1127: a CTE column the body computed as a `bigint` (`Count`, `Sum` of an integer, a ranking
+  # window, arithmetic over a BIGINT column) is typed as a plain integer, so its record says it.
+  if p isa CTEReference
+    side = _cte_division_record(p, "bigint", instruc)
+    side === nothing || return side
   end
   field = _alias_column_field(p, instruc)
   field isa Union{Models.sIDField,Models.sBigIntegerField,Models.sForeignKey,Models.sOneToOneField} || return nothing
   return (:integer_division, "the $(string(nameof(typeof(field)))[2:end]) `$(_concat_operand_label(p))`")
+end
+# A side of an integer division that keeps it integer division: a whole number by type, or itself a
+# quotient of two (`(F("id") / 2) / 2`), which both engines divide as integers too.
+function _whole_quotient_side(x, instruc::SQLInstruction)
+  x isa SQLField && return _whole_quotient_side(x.field, instruc)
+  x isa FExpression && x.operation == "/" &&
+    return _whole_quotient_side(x.field_name, instruc) && _whole_quotient_side(x.operand, instruc)
+  return _known_whole(x, instruc)
+end
+# #1127 — the `bigint` record of a computed CTE column, `(kind, what)` or `nothing`. The CTE types
+# all of these as a plain integer, so an outer `Sum(CTE(…))` read them as `sum(integer)` — a `bigint`
+# on PostgreSQL, divided as an integer — where it is `sum(bigint)`, a `numeric` that keeps the half.
+# `COUNT` and the ranking windows return `bigint`; `SUM` of an integer returns one, and `SUM` of a
+# `bigint` returns `numeric`, which the `whole_numeric` record already carries.
+const _BIGINT_WINDOWS = ("RANK", "DENSE_RANK", "ROW_NUMBER")
+function _bigint_valued(p, instruc::SQLInstruction)
+  side = _bigint_column(p, instruc)
+  side === nothing || return side
+  p isa Union{FObject,WindowFunction} || return nothing
+  name = p.function_name
+  (name == "COUNT" || name in _BIGINT_WINDOWS) && return (:integer_division, "`$(name)(…)`")
+  name == "SUM" || return nothing
+  operand = p.column isa AbstractVector ? first(p.column) : p.column
+  _whole_numeric_operand(p, instruc) === nothing && _known_whole(operand, instruc) || return nothing
+  return (:integer_division, "`SUM(…)` over an integer")
 end
 # #1111 — the first operand of a rounding function that is an integer division (`Round(Floor("n") / 2)`,
 # `Ceil(Sum("id") / 2)`): its `(kind, what)`, or `nothing`. The function cannot bring the half back —

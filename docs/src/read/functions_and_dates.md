@@ -470,6 +470,9 @@ PostgreSQL's `numeric` gives `7.5`. `Floor`, `Ceil` and `Abs` over an integer, a
 column (an `IDField`, a `BigIntegerField`, a `ForeignKey`), are the same shape: PostgreSQL computes
 them as `numeric` (`FLOOR(x::numeric)`, `sum(bigint)`), so they read as integers until they are
 divided, and `Floor("grid") / 2` is refused (#1111). Divide as a float and fetch the number instead.
+A CTE column built from one of them is refused the same way when it is divided (#1127): the CTE
+gives a `Sum` column an integer type whatever it sums, so PormG reads the body's own expression
+instead, and `Coalesce(CTE("totals", "id_sum"), 0) / 2` is refused as `Sum("resultid") / 2` is.
 
 Three more operand types are refused the same way, because their text differs too:
 
@@ -845,7 +848,7 @@ So PormG raises `QueryBuildError` when the query is built, on both engines, for:
 - a cast to an integer (`IntegerField()`, `BigIntegerField()`, `"integer"`, `"bigint"`, `"int8"`,
   …) of a float, a decimal with places (a `decimal_places = 0` column passes unless it is divided, #1087) or a `numeric`
   function, and of `Floor`/`Ceil`/`Abs` over an integer or `Sum` of a BIGINT column once divided
-  (#1111). A boolean casts to `1`/`0` on both engines and
+  (#1111), a CTE column built from one of them included (#1127). A boolean casts to `1`/`0` on both engines and
   passes;
 - a cast to `numeric(p, s)` or `decimal(p, s)` (and `numeric(p)`, whose scale is 0) of an operand
   that can carry more than `s` digits after the point: a float column, a float literal with more

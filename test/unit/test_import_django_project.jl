@@ -1895,8 +1895,9 @@ end
 """
     import_one_app(source; kwargs...) -> (generated_text, config_key, db_dir_existed)
 
-The SINGLE-APP arity under a throwaway config with no `django_prefix` — the default call, and the
-one configuration in which nothing pins a table. Callers must `cleanup_project_test!` in a `finally`.
+The SINGLE-APP arity under a throwaway config with no `django_prefix` — the default call, where no
+app label pins a table (only `Meta.db_table`, a rename or a leading underscore does). Callers must
+`cleanup_project_test!` in a `finally`.
 """
 function import_one_app(source::String; output_file::String = "django_one_app_unit.jl", kwargs...)
     config_key, db_dir_existed = project_config!()
@@ -2044,19 +2045,53 @@ class _thing(models.Model):
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Django Importer (#346): the collision key is EXACT, not merely conservative
+# Django Importer (#1095): an unlabelled leading-underscore class pins its table and loads
 #
-# `Model_to_str` strips leading underscores from the positional name only when a `db_table` is
-# pinned. So `_Internal` and `Internal` in an UNLABELLED import — no app label, no `Meta.db_table`,
-# nothing pinned — are deduped on plain `lowercase` and do not collide at any layer.
-#
-# Comparing them on the stripped key anyway looked like the safe direction, and is not: step 1
-# app-qualification is skipped for unlabelled entries, so the manufactured conflict falls through to
-# the digit backstop, which renames whichever class was declared SECOND. That replaces a silent
-# order-dependent rename with a loud one instead of removing it — and order-independence is the
-# property these passes exist to establish. Both declaration orders must come out clean.
+# With no app label and no `Meta.db_table`, `class _Pit_window` used to emit
+# `Models.Model("_pit_window", …)`. The #306 gate refuses a model name starting with `_` at `include`
+# time, so that one line aborted loading the WHOLE generated module. The importer now does what the
+# labelled path (#345) and `inspectdb` already do: pin Django's table as `db_table` and let the
+# positional slot drop the underscore. Expected line:
+# `_Pit_window = Models.Model("pit_window", db_table = "_pit_window", …)`.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "an unlabelled `_Internal`/`Internal` pair is not a collision, in either order (#346)" begin
+@testset "an unlabelled leading-underscore class pins its table, so the file loads (#1095)" begin
+    generated, config_key, db_dir_existed = import_one_app("""
+from django.db import models
+
+class _Pit_window(models.Model):
+    lap = models.IntegerField()
+"""; output_file = "django_1095_lone.jl")
+    try
+        # The binding keeps Django's class name. The logical name loses the `_`, and the table keeps it.
+        @test occursin("\n_Pit_window = Models.Model(\"pit_window\", db_table = \"_pit_window\",", generated)
+        # The pre-fix spelling, which raised `ModelDefinitionError` at include time.
+        @test !occursin("Models.Model(\"_pit_window\"", generated)
+        # A lone class has nothing to collide with, so there is no rename and no marker.
+        @test !occursin("# PormG:", generated)
+
+        # The point of the issue: the generated module LOADS. Before the fix this `Core.eval` threw.
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        pit = Core.eval(sandbox, :(django_1095_lone._Pit_window))
+        @test Base.invokelatest(PormG.Models.model_table_name, pit) == "_pit_window"
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#1095, revising #346): an unlabelled `_Internal`/`Internal` pair collides, and
+# `_Internal` yields in either declaration order
+#
+# Under #346 the pair did not collide, but only because `_Internal` kept the positional name
+# `_internal`, which does not load (#1095). Once its table is pinned, its logical name is `internal`,
+# the same name `Internal` derives, so one of them must be renamed. The rename must not depend on
+# declaration order, which is the property the #346 testset guarded. The class WITHOUT the underscore
+# keeps the name Django gives it. `_Internal` becomes `_Internal2 = Models.Model("internal2",
+# db_table = "_internal", …)`, with a `# PormG:` marker naming the MODEL NAME that clashed, because its
+# binding `_Internal` was never taken.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an unlabelled `_Internal`/`Internal` pair: `_Internal` yields, in either order (#1095)" begin
     for (label, source, outfile) in (
             ("declared _Internal first", """
 from django.db import models
@@ -2078,15 +2113,116 @@ class _Internal(models.Model):
 """, "django_one_app_orderB.jl"))
         generated, config_key, db_dir_existed = import_one_app(source; output_file = outfile)
         try
-            # Neither class is renamed, so neither needs a marker and neither needs a pinned table.
-            @test !occursin("internal2", generated)
-            @test !occursin("# PormG:", generated)
-            @test !occursin("db_table", generated)
-            # Both keep the name Django derives, whichever order they were declared in.
-            # `_internal` keeps its positional slot: the #1043 short form never applies to a name
-            # starting with `_` (the #306 rule), so this spelling is unchanged.
-            @test occursin("\n_Internal = Models.Model(\"_internal\"", generated)
-            @test occursin("\nInternal = Models.Model(", generated)
+            # `Internal` is untouched: the #1043 short form, no table pinned. The `id` line directly
+            # after the opening paren shows the call carries no positional name and no `db_table`.
+            @test occursin("\nInternal = Models.Model(\n  id = Models.IDField(),", generated)
+            # `_Internal` is the one renamed, whichever class came first in models.py. Its table is
+            # still Django's.
+            @test occursin("\n_Internal2 = Models.Model(\"internal2\", db_table = \"_internal\",", generated)
+            # The marker names the clash correctly: the model name, not a binding nobody holds.
+            @test occursin("# PormG: '_Internal' would be the model name 'internal', which is " *
+                           "already used by 'Internal' — emitted as '_Internal2' instead.", generated)
+            @test !occursin("would be the Julia binding '_Internal'", generated)
+            # Exactly one rename, so exactly one marker.
+            @test count("# PormG:", generated) == 1
+
+            # Both load and address distinct tables. `_Internal2` pins Django's `_internal`.
+            # `Internal` pins nothing: its name, and so its table `internal`, is filled from the
+            # binding at registration (#1043), so before `set_models` the check is that no table
+            # is pinned.
+            mod = Symbol(first(splitext(outfile)))
+            sandbox = Module()
+            Core.eval(sandbox, Meta.parse(generated))
+            under = Core.eval(sandbox, :($(mod)._Internal2))
+            plain = Core.eval(sandbox, :($(mod).Internal))
+            @test Base.invokelatest(PormG.Models.model_table_name, under) == "_internal"
+            @test !Base.invokelatest(PormG.Models.model_has_db_table, plain)
+        finally
+            cleanup_project_test!(config_key, db_dir_existed)
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#1095): ManyToMany join columns at an underscore class follow Django
+#
+# Django names an auto join table's columns `<lowercased class>_id`, so `_pit_window_id` and
+# `_stint_id`. PormG derives `<model name>_id`, and the model name is now the stripped `pit_window`, so
+# both ends must be pinned. `_pin_m2m_join_columns!` compared `model.name` with the class, which still
+# matches before stripping, so it pinned neither end. A labelled `_Foo` had the same gap.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "ManyToMany join columns at a leading-underscore class keep Django's `_<class>_id` (#1095)" begin
+    generated, config_key, db_dir_existed = import_one_app("""
+from django.db import models
+
+class _Pit_window(models.Model):
+    lap = models.IntegerField()
+
+class Race(models.Model):
+    windows = models.ManyToManyField(_Pit_window)
+
+class _Stint(models.Model):
+    races = models.ManyToManyField(Race)
+"""; output_file = "django_1095_m2m.jl")
+    try
+        # Underscore class as the TARGET: `target_field` pinned. `Race` is unchanged, so its own end
+        # stays derived (`race_id`).
+        @test occursin("windows = Models.ManyToManyField(\"_Pit_window\", target_field=\"_pit_window_id\")", generated)
+        # Underscore class as the OWNER: `source_field` pinned. The join table is
+        # `<owner db_table>_<field>`, which is `_stint_races`, as in Django.
+        @test occursin("races = Models.ManyToManyField(\"Race\", db_table=\"_stint_races\", source_field=\"_stint_id\")", generated)
+
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        @test Base.invokelatest(PormG.Models.model_table_name,
+                                Core.eval(sandbox, :(django_1095_m2m._Stint))) == "_stint"
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # The LABELLED half, which loaded before but addressed `foo_id` where Django created `_foo_id`.
+    # The owner's table carries the label (`dash__foo`), and so does the join table. The join column
+    # does not, because Django builds it from the class alone.
+    generated, config_key, db_dir_existed = import_one_app("""
+from django.db import models
+
+class Race(models.Model):
+    name = models.CharField(max_length=50)
+
+class _Foo(models.Model):
+    races = models.ManyToManyField(Race)
+"""; output_file = "django_1095_m2m_labelled.jl", django_prefix = "dash")
+    try
+        @test occursin("races = Models.ManyToManyField(\"Race\", db_table=\"dash__foo_races\", source_field=\"_foo_id\")", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#1095): a digit suffix never takes another class's own name
+#
+# The backstop searched for a free suffix only among names already CLAIMED. With `Internal`,
+# `_Internal` and a declared `_Internal2`, the renamed `_Internal` took `_Internal2` whenever it
+# claimed first, and the real `_Internal2` was pushed to `_Internal22`. So the binding `_Internal2`
+# addressed `_internal` or `_internal2` depending on declaration order. Every natural name is now
+# reserved up front, so the rename lands on `_Internal3` in every order.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a digit suffix never takes another class's natural name, in any order (#1095)" begin
+    cls(n) = "class $(n)(models.Model):\n    name = models.CharField(max_length=50)\n\n"
+    for (i, order) in enumerate((["Internal", "_Internal", "_Internal2"],
+                                 ["Internal", "_Internal2", "_Internal"],
+                                 ["_Internal", "_Internal2", "Internal"]))
+        generated, config_key, db_dir_existed = import_one_app(
+            "from django.db import models\n\n" * join(cls.(order));
+            output_file = "django_1095_three_$(i).jl")
+        try
+            # The declared `_Internal2` keeps its own binding and table…
+            @test occursin("\n_Internal2 = Models.Model(\"internal2\", db_table = \"_internal2\",", generated)
+            # …and the renamed `_Internal` skips past it to `_Internal3`, still on Django's `_internal`.
+            @test occursin("\n_Internal3 = Models.Model(\"internal3\", db_table = \"_internal\",", generated)
+            @test !occursin("_Internal22", generated)
+            @test occursin("\nInternal = Models.Model(\n", generated)
         finally
             cleanup_project_test!(config_key, db_dir_existed)
         end
@@ -2130,6 +2266,44 @@ class Pessoa(models.Model):
         # The message must name the override the caller actually typed, not a reserved binding.
         @test occursin("binding_overrides", msg)
         @test occursin("core.Pessoa", msg)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (found with #1095): an underscore override on an UNLABELLED class is keyed stripped
+#
+# Renaming an unlabelled class pins its table, so `Model_to_str` strips a leading underscore from the
+# new name: `"Foo" => "_Bar"` loads as the model name `bar`. Pass 1 still keyed it `_bar`, because
+# `pins_table` was decided from the class before the override applied. The collision with
+# `class Bar` therefore went unseen, and `Model_to_str` renamed `Bar` to `bar2` with no marker,
+# silently moving a model the caller never mentioned. The rule above says that must raise.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an underscore override on an unlabelled class collides on its STRIPPED name (#1095)" begin
+    config_key, db_dir_existed = project_config!()
+    try
+        err = nothing
+        try
+            import_models_from_django("""
+from django.db import models
+
+class Foo(models.Model):
+    name = models.CharField(max_length=50)
+
+class Bar(models.Model):
+    name = models.CharField(max_length=50)
+"""; db = config_key, file = "django_1095_override.jl", force_replace = true,
+                 binding_overrides = Dict("Foo" => "_Bar"))
+        catch e
+            err = e
+        end
+        # Before: no error, and the file held `Bar = Models.Model("bar2", db_table = "bar", …)`.
+        @test err isa PormG.InvalidMigrationError
+        msg = sprint(showerror, err)
+        # It names the override the caller typed, the model it would displace, and the stripped name.
+        @test occursin("binding_overrides gives 'Foo' the model name 'bar'", msg)
+        @test occursin("derived by 'Bar'", msg)
     finally
         cleanup_project_test!(config_key, db_dir_existed)
     end

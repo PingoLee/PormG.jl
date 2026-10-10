@@ -63,9 +63,14 @@ Consequences worth knowing before you add one:
 - **Every entry needs a `- **Recorded**:` bullet.** Its date is what names the file, and the suite
   asserts the filename prefix equals it. Without it the entry still parses, but under a name the
   sort cannot trust.
-- **Not for additive features.** This log is only what **forces** an app edit. A new opt-in
-  capability (operator, kwarg, function) requires no change to keep an app working → document it in
-  `docs/`, not here.
+- **What owes an entry: any call that returns a different value, or raises where the last released
+  version did not — bug fixes included.** "It fixes a bug" is why the change is right, not a reason
+  the caller needs no warning: an app may depend on the old value, and a new refusal breaks code that
+  ran. Only a purely additive change owes none — a new opt-in capability (operator, kwarg, function),
+  or a call that used to raise and now succeeds → document it in `docs/`, not here.
+- **One train, one statement.** When a later change in the same train alters what an `Unreleased`
+  entry says, amend that entry in the same PR instead of adding a second one that contradicts it. A
+  released entry is never edited; a new entry supersedes it.
 - **No consuming-app details.** *Who this affects* names the affected **call pattern** and how to
   find it; it never reports how many calls the maintainer's apps make, how many apps there are, or
   any name, model or code taken from them. Those apps are private and this repository is public; a

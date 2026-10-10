@@ -1666,8 +1666,8 @@ end
 #
 # `inet` and `cidr` are what the general rule calls SPECIALIZED: SQLite has no type that stores and
 # compares an address with PostgreSQL's semantics (network order, a mask, one value for every
-# spelling). The default for such a type is to refuse it on SQLite rather than emulate it — see
-# `general.instructions.md` → *Keep PostgreSQL and SQLite aligned*. Emulating one is a maintainer's
+# spelling). The default for such a type is to refuse it on SQLite rather than emulate it — the
+# engine-alignment rule: core types stay aligned, specialized ones are refused. Emulating one is a maintainer's
 # decision, made with its cost on the table; #28 built a TEXT fallback first and reverted it.
 #
 # Here for #648's reasons, word for word: every caller of the SQLite `field_to_column` renders the

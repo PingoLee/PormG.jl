@@ -32,7 +32,7 @@
 # THE INTEGRATION RESCUE IS FLAGGED TOO (#628) — `--project=. test/integration/<file>.jl`.
 # That one RUNS, because `common_setup.jl` redirects the package env to the integration env
 # before anything loads, and the redirect stays (silently) on purpose. But it is not
-# DOCUMENTABLE: `general.instructions.md` → *Verification* calls it a rescue for a wrong
+# DOCUMENTABLE: `CONTRIBUTING.md` → *Verification* calls it a rescue for a wrong
 # invocation rather than the spelling to teach, and "works because something else rescued it"
 # is exactly how #624's command stayed documented everywhere until its rescue stopped applying.
 # This guard exempted it until #628 swept the ~30 integration headers that still taught it.
@@ -79,9 +79,10 @@ using PormG
     # A line that quotes the broken command in order to warn against it (see ESCAPE HATCH).
     exempt = "624-counterexample"
 
-    # Where the escape hatch may appear, so a third use has to be added here on purpose.
-    # NOT extendable into docs/src/** — the marker renders as visible text there.
-    EXPECTED_COUNTEREXAMPLES = [joinpath(".github", "instructions", "general.instructions.md")]
+    # Where the escape hatch may appear, so a use has to be added here on purpose. Empty today:
+    # the one file that quoted the broken command (the maintainer's agent ruleset) no longer lives
+    # in this repository. NOT extendable into docs/src/** — the marker renders as visible text there.
+    EXPECTED_COUNTEREXAMPLES = String[]
 
     function flagged(line)
         occursin(broken, line) || return false
@@ -118,8 +119,8 @@ using PormG
     # empty — the failure mode a hand-written list has by construction.
     @testset "the scan reaches the files that carry commands" begin
         rel = Set(relpath(p, repo) for p in targets)
-        for must in (joinpath(".github", "instructions", "general.instructions.md"),
-                     joinpath(".github", "skills", "pormg-issue-workflow", "SKILL.md"),
+        for must in ("CONTRIBUTING.md",
+                     joinpath(".github", "skills", "pormg-usage", "SKILL.md"),
                      joinpath(".github", "workflows", "CI.yml"),
                      joinpath("docs", "src", "contributing.md"),
                      joinpath("scripts", "worktree_setup.sh"),

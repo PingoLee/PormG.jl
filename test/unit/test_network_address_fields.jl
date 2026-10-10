@@ -2,7 +2,7 @@
 Unit tests for the network-address fields (#28): `GenericIPAddressField` (PostgreSQL `inet`) and
 `CIDRField` (PostgreSQL `cidr`). PostgreSQL only: SQLite has no column for either, and rendering one
 there raises `BackendCapabilityError` — PormG refuses a specialized type on SQLite rather than
-emulate it (`general.instructions.md` → *Keep PostgreSQL and SQLite aligned*).
+emulate it (the engine-alignment rule: core types stay aligned, specialized ones are refused).
 
 This file covers:
 - Construction: defaults, `protocol`, `unpack_ipv4`, `default=` normalization and refusal

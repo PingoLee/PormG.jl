@@ -852,8 +852,8 @@ function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias
     # The only legitimate false return is from `length(result) > 0` above.
     # Names the fluent method the caller typed, not the `_exists` helper behind it — the same
     # reason the helpers are `_`-prefixed at all (#281): an internal spelling in a log line sends
-    # the reader looking for something that appears nowhere in their code. Structured form per
-    # AGENTS.md; `(e, catch_backtrace())` rather than a bare `e` because only the tuple form logs a
+    # the reader looking for something that appears nowhere in their code. Structured logging form
+    # (`@error "Msg" exception=e key=value`); `(e, catch_backtrace())` rather than a bare `e` because only the tuple form logs a
     # backtrace, matching the sibling catch in object_manager.jl.
     @error "Error in exists()" model=oq.object.model.name exception=(e, catch_backtrace())
     rethrow(e)

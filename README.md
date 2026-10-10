@@ -241,8 +241,9 @@ which has no exact decimal type), and `auto_now` /
 
 ## Contributing
 
-Contributions are welcome — please open an issue or pull request on GitHub. See the
-[Contributing & Debugging](https://pingolee.github.io/PormG.jl/dev/contributing/) page for the
+Contributions are welcome — please open an issue or pull request on GitHub.
+[`CONTRIBUTING.md`](CONTRIBUTING.md) has the architecture map and the test commands; the
+[Contributing & Debugging](https://pingolee.github.io/PormG.jl/dev/contributing/) page has the
 development workflow, debugging guide, and testing conventions.
 
 ## License

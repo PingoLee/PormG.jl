@@ -69,9 +69,7 @@ Consequences worth knowing before you add one:
 - **No consuming-app details.** *Who this affects* names the affected **call pattern** and how to
   find it; it never reports how many calls the maintainer's apps make, how many apps there are, or
   any name, model or code taken from them. Those apps are private and this repository is public; a
-  measurement is reported to the maintainer in conversation
-  ([`general.instructions.md`](.github/instructions/general.instructions.md) → *No consuming-app
-  details in anything public*).
+  measurement is reported to the maintainer in conversation, never written here.
 - **No per-entry rollout tables.** An app's own PormG dependency pin *is* its rollout state, and
   `upgrade_guide(from = <that pin>)` derives what it still needs — so there is nothing to maintain
   per app.

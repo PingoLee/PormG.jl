@@ -31,9 +31,7 @@ no-limit spelling. PostgreSQL keeps `OFFSET $N`.
 ### Who this affects
 
 Only code that asserts PormG's rendered SQL or parameter vector for a limited or offset query, such
-as a golden-SQL test suite. Application code that executes queries needs no change. Measured on
-2026-10-08 across the consuming apps: **0** runtime call sites, and **4** golden testsets in one
-app's `test/` tree. Each of those pins both the text (`LIMIT 25 OFFSET 25`) and the parameter vector.
+as a golden-SQL test suite. Application code that executes queries needs no change. A golden test typically pins both the text (`LIMIT 25 OFFSET 25`) and the parameter vector.
 
 ### How to find the calls to migrate
 

@@ -24,8 +24,7 @@ and a period with a named unit (`Hour(5)`, `Minute(30)`) behave exactly as befor
 
 ### Who this affects
 
-Model files that give a `TimeField` a number or `Bool` default. The consuming apps were measured
-before the change: no `TimeField` in them declares a `default`. `inspectdb` never produced a
+Model files that give a `TimeField` a number or `Bool` default. `inspectdb` never produced a
 numeric `TimeField` default, so generated model files are not affected.
 
 ### How to find the calls to migrate

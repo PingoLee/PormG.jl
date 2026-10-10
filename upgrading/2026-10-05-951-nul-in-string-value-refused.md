@@ -28,8 +28,7 @@ in its own entry: *A NUL in a JSONField value raises*.
 
 Apps that pass client input with a NUL in it, most often a web route whose query string carries
 `%00`. On LibPQ — and on SQLite for a `LIKE` lookup — that input used to run silently against a
-different value; on Postgres.jl it was already an error, now a typed one. Not measured in the
-consuming apps: the value is runtime input, so no grep can count the call sites.
+different value; on Postgres.jl it was already an error, now a typed one. The value is runtime input, so a grep cannot find every call site.
 
 ### How to find the calls to migrate
 

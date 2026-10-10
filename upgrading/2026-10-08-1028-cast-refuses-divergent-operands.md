@@ -48,9 +48,7 @@ since #1040); a JSON key lookup
 ### Who this affects
 
 Code that casts a float, decimal or boolean to text or an integer in SQL, or that concatenates a
-timestamp, interval or JSON column. Measured on 2026-10-08: **0** `Cast(` call sites over such an
-operand in the consuming apps' Julia code (one comment casts an integer column, which is
-unaffected), and **0** `Concat(` call sites (#1027).
+timestamp, interval or JSON column. A cast of an integer column is unaffected.
 
 ### How to find the calls to migrate
 

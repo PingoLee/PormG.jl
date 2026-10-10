@@ -33,8 +33,7 @@ written.
 Apps that store client-supplied JSON in a `JSONField`. On PostgreSQL that input was already an error,
 now a typed one raised before the round trip. On SQLite it used to be stored: a dev database built
 on SQLite accepted a document that the production PostgreSQL database rejected, and now both refuse
-it. Not measured in the consuming apps: the value is runtime input, so no grep can count the call
-sites.
+it. The value is runtime input, so a grep cannot find every call site.
 
 ### How to find the calls to migrate
 

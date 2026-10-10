@@ -28,8 +28,7 @@ Apps that hand a `BooleanField` an integer from data rather than a `Bool`: an im
 codes a flag numerically, a form value parsed with `parse(Int, …)`, or a DataFrame column of codes
 going to `bulk_insert` / `bulk_update`. The common trap is a source that codes
 `1` = yes, `2` = no, `9` = unknown. The `2` happened to be stored as the right answer (`false`), and
-the `9` was stored as `false` too, which was wrong. The consuming apps have **0** literal call sites
-(measured 2026-10-05), but the value is runtime data, so no grep can count the rest.
+the `9` was stored as `false` too, which was wrong. The value is usually runtime data, so a grep cannot find every call site.
 
 ### How to find the calls to migrate
 

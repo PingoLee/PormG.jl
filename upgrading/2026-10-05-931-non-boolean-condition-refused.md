@@ -25,8 +25,7 @@ value goes: a projection, `then`, the right of a comparison.
 
 ### Who this affects
 
-Apps that used a number as a truth value, which only ever worked on SQLite. Measured on
-2026-10-05: **0** call sites in the consuming apps.
+Apps that used a number as a truth value, which only ever worked on SQLite.
 
 ### How to find the calls to migrate
 

@@ -1,10 +1,9 @@
 # Upgrading PormG — consumer-app rollout log
 
-Tracks **breaking / behavior changes in PormG** that require source-code changes in the internal
-apps that depend on it. PormG is pre-publish (single maintainer, a few private apps, no external
-users), so breaking changes are intentional and cheap on the *PormG* side — but each one still has
-to be rolled out by hand in every consuming app. This file is the contract for *writing* that
-rollout log; the log itself lives in [`upgrading/`](upgrading/).
+Tracks **breaking / behavior changes in PormG** that require source-code changes in the apps that
+depend on it. PormG is pre-publish, so breaking changes are intentional and cheap on the *PormG*
+side — but each one still has to be rolled out by hand in every app that uses it. This file is the
+contract for *writing* that rollout log; the log itself lives in [`upgrading/`](upgrading/).
 
 > ⚠️ **Not database migrations.** This log is about migrating **app source code** to keep up with
 > the PormG API. It is unrelated to the `makemigrations` / `migrate` schema engine that manages your

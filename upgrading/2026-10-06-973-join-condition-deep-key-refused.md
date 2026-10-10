@@ -25,8 +25,7 @@ A ForeignKey column of the hop itself (`"circuitid"` on `on("raceid", …)`) is 
 
 ### Who this affects
 
-Apps that write a join-condition key through a relation of the joined model. Measured on 2026-10-06:
-**0** call sites in the consuming apps, which make no `on()` or `cjoin()` calls at all.
+Apps that write a join-condition key through a relation of the joined model.
 
 ### How to find the calls to migrate
 

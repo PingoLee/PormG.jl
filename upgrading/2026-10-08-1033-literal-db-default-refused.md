@@ -33,8 +33,7 @@ any other constant as a `db_default`.
 
 ### Who this affects
 
-Models that declare a constant as a `db_default`. Measured on 2026-10-08: **0** `db_default` call
-sites in the consuming apps' Julia code.
+Models that declare a constant as a `db_default`.
 
 ### How to find the calls to migrate
 

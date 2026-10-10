@@ -27,9 +27,8 @@ it, and `with_transaction*` still returns it to you in the result tuple.
 
 ### Who this affects
 
-Only code that passes `conn =` to `fetch` or `fetch_async`. Measured before the change: no consuming
-app does, and nothing inside PormG does. The four sites that could have done so avoided it because
-`fetch` released the connection.
+Only code that passes `conn =` to `fetch` or `fetch_async`. Nothing inside PormG does: the sites that could have
+done so avoided it because `fetch` released the connection.
 
 ### How to find the calls to migrate
 

@@ -20,8 +20,7 @@ Paths that cross no ManyToMany relation are not affected, and neither is `cjoin_
 
 ### Who this affects
 
-Apps with an `on()` on a ManyToMany path. Measured on 2026-10-06: **0** call sites in the consuming
-apps, which make no `on()` or `cjoin()` calls at all.
+Apps with an `on()` on a ManyToMany path.
 
 ### How to find the calls to migrate
 

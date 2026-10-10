@@ -25,7 +25,6 @@ meets the [#74](https://github.com/PingoLee/PormG.jl/issues/74) fan-out guard, a
 ### Who this affects
 
 Apps that call `on()` on a path the same query does not otherwise project, filter or order by.
-Measured on 2026-10-06: **0** call sites in the consuming apps, which make no `on()` calls at all.
 
 ### How to find the calls to migrate
 

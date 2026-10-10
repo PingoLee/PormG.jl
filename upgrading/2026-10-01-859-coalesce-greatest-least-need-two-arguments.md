@@ -24,8 +24,8 @@ fewer than two expressions in the same way.
 ### Who this affects
 
 Apps that call one of the three functions with a single argument, or with a computed argument list
-that can hold one element. Before the change, the consuming apps were measured at **0** call sites
-of any of the three (code search; the `coalesce` hits there are Julia's own `Base.coalesce`).
+that can hold one element. A search for `coalesce` also finds Julia's own `Base.coalesce`, which
+is unaffected.
 
 ### How to find the calls to migrate
 

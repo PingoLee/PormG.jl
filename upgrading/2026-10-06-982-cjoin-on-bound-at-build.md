@@ -33,8 +33,7 @@ Two things are unchanged:
 
 ### Who this affects
 
-Apps with a `cjoin_on(...)` whose `on` list names a `__` path, or names another alias declared after
-it. Measured on 2026-10-06 (for #977, PR #981): **0** `cjoin_on()` call sites in the consuming apps.
+Apps with a `cjoin_on(...)` whose `on` list names a `__` path, or names another alias declared after it.
 
 ### How to find the calls to migrate
 

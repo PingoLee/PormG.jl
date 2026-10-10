@@ -37,9 +37,6 @@ or read by the window's own `partition_by` / `order_by`. An aggregated argument 
 - Apps on **PostgreSQL**: only the error type and its timing change, because the query already
   failed there.
 
-Measured before the change: the consuming apps have **0** window-function call sites, so none
-needs an edit.
-
 ### How to find the calls to migrate
 
 ```bash

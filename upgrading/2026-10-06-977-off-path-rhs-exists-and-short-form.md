@@ -23,9 +23,7 @@ own path still renders exactly as before. `cjoin_on(...)` is not affected.
 
 ### Who this affects
 
-Apps with a join condition that uses `Exists(...)` or the FK short form to compare two sibling
-relations. Measured on 2026-10-06: **0** call sites in the consuming apps, which make no `on()` or
-`cjoin()` calls at all.
+Apps with a join condition that uses `Exists(...)` or the FK short form to compare two sibling relations.
 
 ### How to find the calls to migrate
 

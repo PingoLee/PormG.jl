@@ -35,8 +35,7 @@ Text, integer and date operands are unchanged, and so are the `@yyyy_q` / `@yyyy
 
 ### Who this affects
 
-Code that concatenates a boolean, float or decimal value in SQL. Measured on 2026-10-07: **0**
-`Concat(` call sites in the consuming apps' Julia code.
+Code that concatenates a boolean, float or decimal value in SQL.
 
 ### How to find the calls to migrate
 

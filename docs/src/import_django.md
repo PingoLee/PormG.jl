@@ -382,9 +382,12 @@ Three things to read off that output, and a fourth that shows up only when somet
   loading derives from the binding when a model has no positional name, so the importer leaves it
   out — the [no-name form](models.md) the hand-written examples use. A renamed model (a collision,
   `binding_overrides`) takes the short form too, because the new name *is* its binding lowercased.
-  The one class that keeps it is a leading-underscore one (`_Internal`). With a table pinned it keeps
-  `"internal"`, which its binding would not derive; with none, its name would start with `_`, which
-  a PormG model name never does, and the short form must not be a way around that. `inspectdb` output always writes
+  The one class that keeps it is a leading-underscore one (`_Internal`). A PormG model name never
+  starts with `_`, so the importer always pins such a class's table, with or without an app label:
+  `_Internal = Models.Model("internal", db_table = "_internal", …)` in an unlabelled import. The name
+  `"internal"` is not what the binding `_Internal` derives, so it stays written. If the same import
+  also has a plain `Internal`, the plain class keeps `"internal"` and `_Internal` is renamed
+  `_Internal2` with a `# PormG:` line, whichever class is declared first. `inspectdb` output always writes
   the name, because that file is edited by hand afterwards and a renamed binding there must not
   rename the model.
 - **The Julia binding is the class name, unchanged.** It never carried the prefix, so `M.Dim_uf` in a
@@ -399,8 +402,10 @@ Three things to read off that output, and a fourth that shows up only when somet
   `django_prefix` *is* the Django app label, so there is a label to qualify with. See
   [Meta Options](#Meta-Options).
 
-Without a `django_prefix` nothing is pinned: no app label is known, so the models import unprefixed
-and no `db_table` is emitted.
+Without a `django_prefix`, no app label is known, so the models import unprefixed and there is no
+prefix to write into `db_table`. A model still gets one when the derived name would not reach its
+real table: an explicit `Meta.db_table`, a renamed model (a collision or `binding_overrides`), or a
+leading-underscore class, as described above.
 
 !!! note "Why `db_table` rather than the model name"
     `django_prefix` is one value per *connection*, so it can only ever express one app label. A real

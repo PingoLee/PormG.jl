@@ -1079,7 +1079,9 @@ end
 One app in an import run: its Django **app label** and the parsed class graph of its `models.py`.
 
 `label === nothing` is the unlabelled single-app import (no `django_prefix`), where PormG derives the
-physical table from the logical name and nothing is pinned as `db_table`. A label is never `""` —
+physical table from the logical name and nothing is pinned as `db_table`, except for a
+leading-underscore class, whose table is pinned because no model name may start with `_` (#1095).
+A label is never `""` —
 `_django_app_label` normalizes an empty prefix to `nothing` before it reaches here, and the multi-app
 method rejects an empty label outright.
 """
@@ -1114,10 +1116,11 @@ mutable struct _DjangoClass
   # positional name on: `lstrip(lowercase(name), '_')` when a table is pinned, plain `lowercase(name)`
   # when it is not (`src/Models.jl`). The collision passes have to compare on the same relation, so
   # they read this rather than guess — guessing "always stripped" invented an order-dependent rename
-  # for an unlabelled `_Internal`/`Internal` pair that collides on neither relation.
+  # for a pair that collided on neither relation (#346).
   #
-  # Decidable here, and only here: an app label pins unconditionally, and the one other source is
-  # `Meta.db_table`, which is readable from the graph at construction. It cannot be derived later
+  # Decidable here, and only here: an app label pins unconditionally, and the other sources are
+  # `Meta.db_table`, which is readable from the graph at construction, and a leading-underscore class
+  # name (`_django_class_pins_own_table`, #1095). It cannot be derived later
   # from `name` alone, because by then a rename may have moved it.
   pins_table::Bool
   # The built model, filled during emission. `nothing` until then. It exists so the ManyToMany
@@ -1150,9 +1153,8 @@ _django_app_key(app::Union{Nothing, String})::String = app === nothing ? "" : lo
 #
 #   - too FINE (plain `lowercase` everywhere) lets `_Foo`/`Foo` in one labelled app through, and
 #     `Model_to_str` then renames one `foo`/`foo2` by declaration order, silently and unmarked;
-#   - too COARSE (stripping everywhere) manufactures a conflict for an unlabelled `_Internal`/
-#     `Internal` pair that collides on nothing, and — since step 1 skips unlabelled entries — routes
-#     it to the digit backstop, whose outcome depends on which class was declared second.
+#   - too COARSE (stripping everywhere) manufactures a conflict for a name that keeps its underscore
+#     because nothing pins its table (before #1095, an unlabelled `_Internal` beside `Internal`).
 #
 # Both directions are order-dependent renames, which is the one property these passes exist to
 # remove, so neither approximation is the safe one. `pins_table` is carried on the entry precisely so
@@ -1215,12 +1217,11 @@ Collision policy, in order:
    suffix on the NAME rather than on the binding alone, so `Model_to_str` re-derives exactly the
    binding recorded here and its own `taken_bindings` dedup (#338) is a no-op backstop.
 
-   Honest about what that buys: with today's code the two agree either way, because pass 2 walks the
-   same classes in the same order through the same `_dedupe_taken` against an identically-seeded set,
-   so suffixing only the binding lands on the same string. Mutating it to do that is an EQUIVALENT
-   mutation — no test can tell. The reason to adjust the name is that agreement then holds by
-   construction instead of by two independent dedup runs happening to stay in step, and "these two
-   sequences must not drift" is the failure mode this file has paid for more than once.
+   This is load-bearing since #1095. Until then the two agreed either way, because pass 2 walked the
+   same classes in the same order through the same `_dedupe_taken`, so suffixing only the binding was
+   an equivalent mutation. Step 3 now claims in its own order (fewer leading underscores first) and
+   skips every class's natural name. Pass 2's declaration-order dedup would pick a different loser,
+   so only a rename recorded on the name keeps the two in step.
 """
 function _build_class_index(apps::Vector{_DjangoApp},
                             binding_overrides::Dict{String, String},
@@ -1239,10 +1240,11 @@ function _build_class_index(apps::Vector{_DjangoApp},
       # exactly this set and pass 2 emits exactly this set, so a cross-app FK can never name a
       # binding the generated file does not define — and pass 2 hard-errors if the two ever disagree.
       _is_emitted(app.graph.info[cls.name]) || continue
-      # An app label pins a table for every model it covers; without one the only other source is an
-      # explicit `Meta.db_table`. `_effective_meta` rather than the raw `info[...].meta` so an
-      # inherited `db_table` counts exactly as pass 2 will count it.
-      pins_table = app.label !== nothing || haskey(_effective_meta(app.graph, cls), "db_table")
+      # An app label pins a table for every model it covers; without one the other sources are an
+      # explicit `Meta.db_table` and a leading-underscore class name (#1095). `_effective_meta` rather
+      # than the raw `info[...].meta` so an inherited `db_table` counts exactly as pass 2 will count it.
+      pins_table = app.label !== nothing || haskey(_effective_meta(app.graph, cls), "db_table") ||
+                   _django_class_pins_own_table(cls.name)
       push!(entries, _DjangoClass(i, app.label, cls.name, cls.name, "", false, pins_table, nothing))
     end
   end
@@ -1308,6 +1310,15 @@ function _build_class_index(apps::Vector{_DjangoApp},
 
   # 2. Explicit overrides.
   _apply_binding_overrides!(entries, by_ref, by_class, binding_overrides)
+  # An override that renames an UNLABELLED class also pins its table: `_django_physical_table` pins
+  # Django's table whenever the handle differs from the class, so `Model_to_str` then strips a leading
+  # underscore from the new name. `pins_table` has to say so, or the collision key below stays
+  # unstripped. `"Foo" => "_Bar"` beside `class Bar` was keyed `_bar` here and loaded as `bar` there,
+  # and `Model_to_str` silently renamed `Bar` to `bar2`, with no marker (found with #1095). The
+  # comparison is the one `_django_physical_table` makes.
+  for e in entries
+    e.overridden && (e.pins_table |= lowercase(e.name) != lowercase(e.class))
+  end
 
   rename_notes = String[]
 
@@ -1327,11 +1338,19 @@ function _build_class_index(apps::Vector{_DjangoApp},
   # all-lowercase-and-also-uppercasefirst name, which does not exist for any non-empty string.
   #
   # The positional half uses the SAME key as step 1 — `_django_positional_key`, per entry, which
-  # reads `pins_table` rather than assuming. Assuming "always stripped" here was itself a defect: step
-  # 1 skips unlabelled entries, so an unlabelled `_Internal`/`Internal` pair that collides on neither
-  # relation fell through to the digit backstop below, and the backstop renames whichever class was
-  # declared SECOND. That trades a silent order-dependent rename for a loud one; it does not remove
-  # it.
+  # reads `pins_table` rather than assuming. Assuming "always stripped" was a defect (#346): it made
+  # an unlabelled `_Foo` collide with an unlabelled `Foo` on a key `Model_to_str` never compared.
+  #
+  # Since #1095 that pair DOES collide. An unlabelled `_Internal` pins its table `_internal` and takes
+  # the positional name `internal`, the one `Internal` derives. Step 1 skips unlabelled entries, so the
+  # pair reaches the digit backstop below, and the backstop renames whichever entry claims SECOND. The
+  # claim order is therefore not declaration order: entries with fewer leading underscores claim
+  # first, so `_Internal` yields to `Internal` (and `__Internal` to both) whichever was declared
+  # first. Two UNLABELLED entries with the same count can only share a positional key if their
+  # lowercased class names are equal, and the `by_ref` guard above refuses that. So for an unlabelled
+  # import the outcome depends on the class names alone. A labelled name that step 1 qualified can
+  # still tie with another app's class of the same count (`p._Q` → `p__q` beside `r._P__q`), and app
+  # order decides that contrived case, as it did before #1095.
   #
   # Honest about the rest: with step 1 counting the positional equivalence too, the positional check
   # HERE is unreachable for LABELLED entries. Two labelled names that collide on it are qualified to
@@ -1369,7 +1388,21 @@ function _build_class_index(apps::Vector{_DjangoApp},
     end
     claim!(e, b)
   end
+  # `sort` is stable, so equal underscore counts keep declaration order. See the #1095 paragraph above.
+  leading_underscores(e) = length(e.class) - length(lstrip(e.class, '_'))
+  # A suffix never lands on another class's NATURAL name, claimed yet or not. Searching only against
+  # `taken` left the outcome order-dependent: with `Internal`, `_Internal` and a declared `_Internal2`,
+  # the renamed `_Internal` took `_Internal2` when it claimed first, and the real `_Internal2` was
+  # pushed to `_Internal22`. So one binding addressed a different table depending on declaration
+  # order. Reserving every natural name up front sends the rename to `_Internal3` in either order.
+  natural = Set{String}()
   for e in entries
+    e.overridden && continue
+    push!(natural, Models._model_binding_name(e.name)); push!(natural, _django_positional_key(e))
+  end
+  natural_for(nm, pins) = Models._model_binding_name(nm) in natural ||
+                          _django_positional_key(nm, pins) in natural
+  for e in sort(entries; by = leading_underscores)
     e.overridden && continue
     b = Models._model_binding_name(e.name)
     if conflicts(e.name, e.pins_table)
@@ -1395,16 +1428,20 @@ function _build_class_index(apps::Vector{_DjangoApp},
       end
       base = e.name
       suffix = 2
-      while conflicts(string(base, suffix), e.pins_table)
+      while conflicts(string(base, suffix), e.pins_table) || natural_for(string(base, suffix), e.pins_table)
         suffix += 1
       end
       # A rename nobody asked for is reported (#70): the artifact carries a marker naming the class
       # it collided with, and the console gets a @warn. Before, `class CASCADE` quietly became
       # `CASCADE2` and nothing anywhere said why the binding you expected is not the binding you got.
       other = claimant(e, b)
-      @warn "import: binding is already claimed; this model was renamed to keep the generated file loadable" class=_django_ref_label(e) wanted=b renamed_to=Models._model_binding_name(string(base, suffix)) taken_by=(other === nothing ? "a reserved binding" : _django_ref_label(other))
-      push!(rename_notes, "# PormG: '$(_django_ref_label(e))' would be the Julia binding " *
-                          "'$(b)', which is already " *
+      # Name the equivalence that clashed, as the override error above does. An unlabelled `_Internal`
+      # beside `Internal` (#1095) keeps its binding free and loses only the MODEL NAME `internal`;
+      # calling that "the Julia binding '_Internal'" names a binding nobody holds.
+      wanted = b in taken ? "the Julia binding '$(b)'" :
+                            "the model name '$(_django_positional_key(e))'"
+      @warn "import: a binding or model name is already claimed; this model was renamed to keep the generated file loadable" class=_django_ref_label(e) wanted=wanted renamed_to=Models._model_binding_name(string(base, suffix)) taken_by=(other === nothing ? "a reserved binding" : _django_ref_label(other))
+      push!(rename_notes, "# PormG: '$(_django_ref_label(e))' would be $(wanted), which is already " *
                           (other === nothing ? "reserved by the generated module's own imports" :
                                                "used by '$(_django_ref_label(other))'") *
                           " — emitted as '$(Models._model_binding_name(string(base, suffix)))' " *
@@ -1668,7 +1705,10 @@ never enters it. PormG's `_many_to_many_column_name` derives `<lowercased model.
 the two agree only while BOTH of these hold:
 
 - the emitted `model.name` is still the class name — a cross-app collision rename or a
-  `binding_overrides` entry breaks it;
+  `binding_overrides` entry breaks it, and so does a leading-underscore class with a pinned table,
+  whose positional name `Model_to_str` strips (`_Foo` loads as `foo`, so PormG derives `foo_id` where
+  Django created `_foo_id`). Compared on `_django_positional_key`, the name the model loads under;
+  comparing `model.name` missed the stripped case (#1095);
 - the model's primary key is called `id` — a legacy schema with `codigo = CharField(primary_key=True)`
   breaks it, and then PormG addresses `driver_codigo` where Django created `driver_id`.
 
@@ -1732,11 +1772,11 @@ function _pin_m2m_join_columns!(index::_DjangoClassIndex)
       # An unreadable primary key means "do not know", not "not `id`" — pinning on a guess would
       # write a column name into the artifact with nothing behind it.
       if field.source_field === nothing && owner_pk !== nothing &&
-         (lowercase(owner.name) != lowercase(owner.class) || owner_pk != "id")
+         (_django_positional_key(owner) != lowercase(owner.class) || owner_pk != "id")
         field.source_field = string(lowercase(owner.class), "_id")
       end
       if field.target_field === nothing && target_pk !== nothing &&
-         (lowercase(target.name) != lowercase(target.class) || target_pk != "id")
+         (_django_positional_key(target) != lowercase(target.class) || target_pk != "id")
         field.target_field = string(lowercase(target.class), "_id")
       end
       if target === owner
@@ -1898,8 +1938,8 @@ end
 # and the importer had to mirror its precedence to pin M2M join tables correctly.
 #
 # `Meta.db_table` is ABSOLUTE in Django and overrides the app label. Without a label the app is
-# unknown, so nothing is pinned and PormG's own derivation stands — the status quo for an unprefixed
-# single-app import.
+# unknown, so usually nothing is pinned and PormG's own derivation stands. That is the status quo for
+# an unprefixed single-app import, with the two exceptions below.
 #
 # That status quo holds only while the handle still IS the class name. `Model_to_str` renders the
 # positional slot as `lowercase(model.name)`, and `model.name` is `entry.name` — which pass 1 rewrites
@@ -1915,13 +1955,26 @@ end
 # while querying a table that does not exist. Moving the dedup into pass 1 bypassed that guard: the
 # name `Model_to_str` now receives is already unique, so its own dedup never fires. Same rule, applied
 # where the rename now happens.
+#
+# A leading-underscore class is the other exception (#1095). Its derived table `_pit_window` cannot be
+# the positional name, because the #306 gate refuses a model name starting with `_` at `include` time
+# and the whole generated module fails to load. So the table is pinned here, and `Model_to_str` then
+# strips the positional slot to `pit_window`, as it does for a labelled `_Internal` (#345) and for
+# `inspectdb`'s `name_is_physical_table`.
 function _django_physical_table(model, app_label::Union{Nothing, String},
                                 class_name::AbstractString,
                                 handle::AbstractString)::Union{Nothing, String}
   Models.model_has_db_table(model) && return Models.model_table_name(model)
   app_label !== nothing && return string(app_label, "_", lowercase(class_name))
+  _django_class_pins_own_table(class_name) && return lowercase(class_name)
   return lowercase(handle) == lowercase(class_name) ? nothing : lowercase(class_name)
 end
+
+# Whether an UNLABELLED class with no `Meta.db_table` still has its table pinned (#1095). Pass 1
+# (`pins_table`, which picks the collision key) and pass 2 (`_django_physical_table`, which applies
+# the pin) both read this one predicate. If they disagreed, pass 1 would dedup on a key that
+# `Model_to_str` never compares, which is the #346 defect.
+_django_class_pins_own_table(class_name::AbstractString)::Bool = Base.startswith(class_name, "_")
 
 """
     _import_django_apps(apps, render_settings; kwargs...) -> Nothing

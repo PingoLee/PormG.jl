@@ -1,7 +1,7 @@
 # ============================================================
 # test/unit/test_skill_graphql_pagination.jl
 #
-# The agent rulesets under `.github/` carry copy-paste `gh api graphql` recipes, and the board
+# The agent rulesets carry copy-paste `gh api graphql` recipes, and the board
 # skill's two most important ones -- the reconcile projection and the membership sweep in
 # `pormg-board` §1 -- hardcoded `items(first:99)` and never followed the cursor (#625).
 #
@@ -32,7 +32,12 @@
 
 using Test
 
-const PAGINATION_REPO_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
+# The rulesets no longer live in this repository: they moved to the maintainer's private
+# agent-config checkout (`pormg/skills/`, `pormg/instructions/`), which a fresh clone and CI cannot
+# see. The real-tree testset therefore runs only when `PORMG_AGENT_CONFIG` names that checkout --
+#   PORMG_AGENT_CONFIG=~/app/agent-config julia --project=test/integration test/unit/test_skill_graphql_pagination.jl
+# -- and is skipped otherwise. The detector testsets below are self-contained and always run.
+const PAGINATION_AGENT_CONFIG = expanduser(get(ENV, "PORMG_AGENT_CONFIG", ""))
 
 # Connections whose size tracks the backlog, so any fixed page size is eventually too small.
 const GROWING_CONNECTIONS = ("items", "issues", "pullRequests")
@@ -139,12 +144,13 @@ function pagination_problems(block::AbstractString)
 end
 
 """
-Every fenced block under the agent-ruleset trees that the rule applies to, as
-`(relpath, line, block)`. Kept separate from the verdict so a guard can prove it saw something.
+Every fenced block under the agent-ruleset trees of an agent-config checkout `root` that the rule
+applies to, as `(relpath, line, block)`. Kept separate from the verdict so a guard can prove it saw
+something.
 """
 function graphql_recipes(root::AbstractString)
     found = Tuple{String,Int,String}[]
-    for tree in (joinpath(root, ".github", "skills"), joinpath(root, ".github", "instructions"))
+    for tree in (joinpath(root, "pormg", "skills"), joinpath(root, "pormg", "instructions"))
         isdir(tree) || continue
         for (dir, _, files) in walkdir(tree), f in files
             endswith(f, ".md") || continue
@@ -299,14 +305,18 @@ end
 # cannot parse would otherwise slip through. A failure lists `file:line — missing piece`; the fix is
 # to add the cursor loop there, never to lower the page size or exempt a growing connection.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "every growing-connection recipe in .github/ paginates" begin
-    recipes = graphql_recipes(PAGINATION_REPO_ROOT)
-    board = joinpath(".github", "skills", "pormg-board", "SKILL.md")
+@testset "every growing-connection recipe in the agent rulesets paginates" begin
+    if !isdir(joinpath(PAGINATION_AGENT_CONFIG, "pormg", "skills"))
+        @test_skip "PORMG_AGENT_CONFIG does not name an agent-config checkout; the rulesets live outside this repository"
+    else
+        recipes = graphql_recipes(PAGINATION_AGENT_CONFIG)
+        board = joinpath("pormg", "skills", "pormg-board", "SKILL.md")
 
-    # The reconcile projection and the membership sweep, at minimum.
-    @test count(r -> r[1] == board, recipes) >= 2
+        # The reconcile projection and the membership sweep, at minimum.
+        @test count(r -> r[1] == board, recipes) >= 2
 
-    offenders = unpaginated_recipes(PAGINATION_REPO_ROOT)
-    isempty(offenders) || @info "unpaginated gh api graphql recipes\n" * join(offenders, "\n")
-    @test offenders == String[]
+        offenders = unpaginated_recipes(PAGINATION_AGENT_CONFIG)
+        isempty(offenders) || @info "unpaginated gh api graphql recipes\n" * join(offenders, "\n")
+        @test offenders == String[]
+    end
 end

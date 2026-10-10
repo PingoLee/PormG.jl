@@ -1,43 +1,41 @@
 # ============================================================
 # test/unit/test_skill_stubs.jl
 #
-# PormG's agent rulesets live in `.github/skills/`, deliberately: `AGENTS.md` -> *Tool notes*
-# makes "one copy, readable by any agent" the whole point of that location, and the sibling
-# `.github/instructions/` is what Copilot picks up via `applyTo: '**'`.
+# The one skill this repository ships is `pormg-usage`, under `.github/skills/`, deliberately:
+# that is the copy `install_ai_skills()` writes into consuming projects, so every agent tool reads
+# the same file. Claude Code does not scan that tree. It registers a skill only when it finds
+# `.claude/skills/<name>/SKILL.md`, so `.claude/skills/pormg-usage/SKILL.md` is a DISCOVERY STUB:
+# real frontmatter, and a body that says nothing except "read the canonical file". Before the stub
+# existed, `Skill(pormg-usage)` returned `Unknown skill` -- and the failure mode was not the error.
+# It was what came next: the session carried on WITHOUT the ruleset it had just tried to load. A
+# skill that silently does not bind is strictly worse than one that loudly fails.
 #
-# Claude Code does not scan that tree. It registers a skill only when it finds
-# `.claude/skills/<name>/SKILL.md`. So for as long as `.claude/skills/` did not exist,
-# `Skill(pormg-board)` returned `Unknown skill` -- and the failure mode was not the error.
-# It was what came next: the session carried on WITHOUT the ruleset it had just tried to load.
-# For `pormg-board` that ruleset is a stop rule ("planning only, no implementation"), and for
-# `pormg-issue-workflow` it is the verification tiers that buy the merge gate its autonomy.
-# A skill that silently does not bind is strictly worse than one that loudly fails.
-#
-# THE FIX, AND WHY IT IS A STUB RATHER THAN A LINK. `.claude/skills/<name>/SKILL.md` is a
-# discovery stub: real frontmatter so Claude Code registers the name, and a body that says
-# nothing except "read the canonical file". Three alternatives were rejected:
+# WHY A STUB RATHER THAN A LINK. Two alternatives were rejected:
 #
 #   * a git symlink (mode 120000) -- `core.symlinks` is false in this checkout, so it lands as
 #     a text file containing a path, and on any Windows clone without Developer Mode it always
 #     will. The stub is what a symlink would degrade into anyway, only legible.
-#   * a Windows junction -- not representable in git at all, so it could not be pushed.
-#   * copying the rulesets -- `general.instructions.md` forbids a second copy, and it is right:
-#     the copy is what drifts.
+#   * copying the skill -- the copy is what drifts.
+#
+# THE MAINTAINER'S OTHER SKILLS ARE NOT IN THIS REPOSITORY. The agent process skills
+# (`pormg-board`, `pormg-issue-workflow`, ...) live in a private checkout and reach a local clone
+# as GITIGNORED SYMLINKS under `.claude/skills/` (see `.gitignore`). A fresh clone and CI never
+# see them, so this guard IGNORES symlinked entries and pins only what the repository ships.
 #
 # WHAT THIS GUARD PINS. The stub duplicates exactly one thing -- the YAML frontmatter, because
 # discovery needs `name` and `description` in the file Claude Code actually reads. Duplication
 # is the defect class this repo keeps hitting (#244-#246, #239), so the duplicated bytes are
 # pinned byte-for-byte rather than trusted:
 #
-#   1. the two trees hold the SAME set of skill names -- a skill added to one and not the other
-#      is either invisible to Claude Code or a stub pointing at nothing;
-#   2. each stub's frontmatter block is byte-identical to its canonical file's;
-#   3. each stub actually names its canonical path, so "read the real one" is checkable;
-#   4. each stub stays under a SIZE CEILING. This is the load-bearing one and it is deliberately
+#   1. the public skill set is exactly `pormg-usage`, in BOTH trees -- a second tracked skill is a
+#      deliberate decision (it ships to users), and a stub with no canonical file points at nothing;
+#   2. the stub's frontmatter block is byte-identical to its canonical file's;
+#   3. the stub actually names its canonical path, so "read the real one" is checkable;
+#   4. the stub stays under a SIZE CEILING. This is the load-bearing one and it is deliberately
 #      quantitative, in the spirit of `test_repl_display.jl`: the way a stub fails is not by
 #      being wrong, it is by slowly accreting "just one note" until it is a second, stale copy
 #      of the ruleset. A byte count is the only check that catches that while it is still small.
-#   5. each frontmatter is SAFE TO PARSE as plain YAML, in BOTH trees. Discovery fails silently:
+#   5. the frontmatter is SAFE TO PARSE as plain YAML, in BOTH trees. Discovery fails silently:
 #      an unquoted ": " makes the block unparseable and the skill is never registered at all, while
 #      an unquoted " #" opens a comment and truncates the description mid-sentence. Three
 #      descriptions shipped with one or the other, and nothing noticed -- until the stubs existed,
@@ -69,8 +67,15 @@ function frontmatter(path::AbstractString)
     return join(lines[1:closing], "\n")
 end
 
+# Symlinked entries are the maintainer's private skills, linked in locally and gitignored; they are
+# not part of what the repository ships, so they are not part of what this guard pins.
 skill_names(dir) = sort!([d for d in readdir(dir)
-                          if isdir(joinpath(dir, d)) && isfile(joinpath(dir, d, "SKILL.md"))])
+                          if isdir(joinpath(dir, d)) && !islink(joinpath(dir, d)) &&
+                             isfile(joinpath(dir, d, "SKILL.md"))])
+
+# The skills this repository ships. Adding one here is the deliberate edit: it means a second
+# skill is installed into every consuming project by `install_ai_skills()`.
+const PUBLIC_SKILLS = ["pormg-usage"]
 
 """
 Return `nothing` if the `key: value` line is safe as YAML, or a reason string if it is not.
@@ -115,19 +120,22 @@ function frontmatter_pairs(path::AbstractString)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Skill stubs: the two trees agree on which skills exist
-# Every `.github/skills/<n>/` needs a `.claude/skills/<n>/` stub or Claude Code cannot see it,
-# and every stub needs a canonical file or it points at nothing. Checked as a set comparison so
-# the failure message names the missing skill instead of a count.
+# Skill stubs: the two trees agree on which skills exist, and it is the public set
+# Every tracked `.github/skills/<n>/` needs a `.claude/skills/<n>/` stub or Claude Code cannot see
+# it, and every stub needs a canonical file or it points at nothing. Checked as a set comparison
+# so the failure message names the missing skill instead of a count. The set itself is pinned:
+# the agent process skills left this repository on purpose, and one of them reappearing as a
+# tracked file is the regression this testset exists to catch.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "skill name sets match" begin
+@testset "skill name sets match and are the public set" begin
     @test isdir(CANON_DIR)
     @test isdir(STUB_DIR)
 
     canon = skill_names(CANON_DIR)
     stubs = skill_names(STUB_DIR)
 
-    @test !isempty(canon)                      # a globbing mistake must not pass vacuously
+    @test canon == PUBLIC_SKILLS               # a globbing mistake must not pass vacuously
+    @test stubs == PUBLIC_SKILLS               # a symlinked private skill is ignored, a tracked one is not
     @test setdiff(canon, stubs) == String[]    # canonical skill with no stub -> invisible to Claude Code
     @test setdiff(stubs, canon) == String[]    # stub with no canonical file -> points at nothing
 end

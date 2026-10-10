@@ -80,7 +80,16 @@ if [[ -f "$sl" ]]; then
   fi
 fi
 
-# 4) Instantiate BOTH test environments (#624).
+# 4) Maintainer-local agent material — optional. The agent rulesets and skills are not in this
+#    repository; a private checkout provides `link.sh`, which links them into a checkout as
+#    gitignored symlinks under .claude/ and writes CLAUDE.local.md. Absent in a contributor's
+#    clone, and nothing here depends on it.
+linker="${PORMG_AGENT_CONFIG:-$HOME/app/agent-config}/pormg/link.sh"
+if [[ -x "$linker" ]]; then
+  "$linker" "$WT" || echo "  ! $linker failed — agent skills not linked (see its message above)"
+fi
+
+# 5) Instantiate BOTH test environments (#624).
 #      --project=.                loads PormG itself. It carries NO SQL driver — they are
 #                                 weakdeps — so it can run `Pkg.test()` but not a test script.
 #      --project=test/integration carries LibPQ + SQLite + PormG (via [sources]). This is the

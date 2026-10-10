@@ -1,8 +1,8 @@
 """
 Unit tests for `ArrayField` (#28): a one-dimensional PostgreSQL array of a base field's values.
 PostgreSQL only: SQLite has no array type, and rendering one there raises `BackendCapabilityError`
-— PormG refuses a specialized type on SQLite rather than emulate it (`general.instructions.md` →
-*Keep PostgreSQL and SQLite aligned*).
+— PormG refuses a specialized type on SQLite rather than emulate it (the engine-alignment rule:
+core types stay aligned, specialized ones are refused).
 
 This file covers:
 - Construction: the element table (`array_element_kind`), the refused bases and base keywords, `size`,

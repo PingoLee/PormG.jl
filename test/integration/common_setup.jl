@@ -92,8 +92,8 @@ end
 # database*). A PostgreSQL session-level advisory lock makes the second run QUEUE instead.
 #
 # It lives here, not in runtests.jl, on purpose: all 40 integration entry points include this file
-# (`if !isdefined(Main, :PormG) …`), and a single `test_*.jl` run is the normal target per
-# AGENTS.md — exactly the case a runtests.jl-only guard would leave unguarded.
+# (`if !isdefined(Main, :PormG) …`), and a single `test_*.jl` run is the normal target
+# (CONTRIBUTING.md → *Verification*) — exactly the case a runtests.jl-only guard would leave unguarded.
 #
 # Why a dedicated pool instead of `PormG.with_advisory_lock`: that helper is scoped — it takes a
 # closure and releases on exit — and a prelude cannot wrap the includes that come after it. The

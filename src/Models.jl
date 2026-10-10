@@ -4365,7 +4365,7 @@ _is_through_pin_for(through_model::PormGModel, pin::String, target_model::PormGM
   haskey(through_model.fields, pin) && _through_fk_for(through_model.fields[pin], target_model)
 
 # Composes the refusal for a pin `_is_through_pin_for` rejected; the CALL SITE throws it, per the
-# funnel convention in `.github/skills/pormg-querybuilder-internals`. It separates the two rejection
+# query-builder funnel convention (helpers compose the message, call sites throw). It separates the two rejection
 # reasons because the remedies differ — a name that is not a field at all is usually a `db_column`
 # written where a field name belongs, while a name that IS a field but points elsewhere is usually
 # the two ends written the wrong way round. Lists the foreign keys that would have worked, because

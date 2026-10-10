@@ -45,6 +45,18 @@ struct GenMockPg11 <: PormG.PormGPostgres end
 fetch(::GenMockPg11, sql::String, args...; kwargs...) =
   occursin("server_version_num", sql) ? DataFrame(v = [110022]) : error("the schema query must not run on PostgreSQL 11")
 
+# One below the floor: PostgreSQL 12 reads `attgenerated` but has no `DROP EXPRESSION` (#1108).
+struct GenMockPg12 <: PormG.PormGPostgres end
+fetch(::GenMockPg12, sql::String; kwargs...) =
+  occursin("server_version_num", sql) ? DataFrame(v = [120022]) : error("the schema query must not run on PostgreSQL 12")
+fetch(::GenMockPg12, sql::String, params::AbstractVector; kwargs...) = error("the schema query must not run on PostgreSQL 12")
+
+# The floor itself: the probe lets it through, so the schema query is reached — and stops here.
+struct GenMockPg13 <: PormG.PormGPostgres end
+fetch(::GenMockPg13, sql::String; kwargs...) =
+  occursin("server_version_num", sql) ? DataFrame(v = [130000]) : error("schema query reached on PostgreSQL 13")
+fetch(::GenMockPg13, sql::String, params::AbstractVector; kwargs...) = error("schema query reached on PostgreSQL 13")
+
 _gen_err(f) = try f(); nothing catch e; e end
 _gen_plain(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
 
@@ -426,15 +438,28 @@ _gen_steps(plan) = collect(keys(get(plan, :doc, Dict{String, String}())))
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # The schema-management floor is PostgreSQL 12, asked before the schema query
-  # The schema query reads `attgenerated`, which PostgreSQL 11 lacks; an older server gets the
-  # requirement by name, as BackendCapabilityError, and the query never runs.
+  # The schema-management floor is PostgreSQL 13, asked before the schema query
+  # The schema query reads `attgenerated` (12+) and the planner can produce `DROP EXPRESSION` (13+),
+  # so the floor is 13 (#1108): on 12, `makemigrations` would accept a plan `migrate` then fails on
+  # with a raw syntax error. An older server gets the requirement by name, as BackendCapabilityError,
+  # and the query never runs; 13 itself is let through.
+  # Mutation gate: with the floor back at 120000 the PostgreSQL 12 case reaches the schema query; at
+  # 130001 the PostgreSQL 13 case is refused.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "an older server is refused by name, before the schema query" begin
     e = _gen_err(() -> Migrations.get_database_schema(GenMockPg11()))
     @test e isa PormG.BackendCapabilityError
     msg = _gen_plain(e)
-    @test occursin("needs PostgreSQL 12 or newer", msg) && occursin("server_version_num 110022", msg)
+    @test occursin("needs PostgreSQL 13 or newer", msg) && occursin("server_version_num 110022", msg)
     @test occursin("Queries and writes are not affected", msg)
+  end
+
+  @testset "PostgreSQL 12 is refused (no DROP EXPRESSION); 13 reaches the schema query (#1108)" begin
+    e = _gen_err(() -> Migrations.get_database_schema(GenMockPg12()))
+    @test e isa PormG.BackendCapabilityError
+    @test occursin("server_version_num 120022", _gen_plain(e))
+    e13 = _gen_err(() -> Migrations.get_database_schema(GenMockPg13()))
+    @test !(e13 isa PormG.BackendCapabilityError)
+    @test occursin("schema query reached on PostgreSQL 13", _gen_plain(e13))
   end
 end

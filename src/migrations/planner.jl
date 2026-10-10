@@ -1962,7 +1962,7 @@ end
 #     column itself, so it depends on no other step;
 #   * it is removed, and one of its sources is retyped or removed too — a `DROP EXPRESSION` is added at
 #     the front, so the source change no longer depends on which column the deletion loop meets first.
-#     Only then: an ordinary removal needs no PostgreSQL 13 statement;
+#     Only then: an ordinary removal needs no extra statement;
 #   * it stays generated — renamed, or a hand-made column under a plain declaration — and one of its
 #     sources is retyped or removed: refused, because no order of this plan's steps can apply it.
 #

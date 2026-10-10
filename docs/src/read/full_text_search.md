@@ -88,6 +88,8 @@ M.Circuit.objects.filter("name__@search" => SearchQuery("circuits"; config = "en
 A `"raw"` query is PostgreSQL's own syntax, and PormG does not parse it. A text the server cannot
 read, such as `"a & | b"`, raises `DatabaseError` (a `StatementError`) when the query runs, not when
 it is built. Use `"websearch"` for text a user typed, because it accepts any input.
+`websearch_to_tsquery` needs PostgreSQL 11 or newer; an older server refuses it with its own error
+when the query runs ([Server versions](../postgres.md#Server-versions)).
 
 An unknown `search_type`, or text containing a NUL character, raises `InvalidValueError` when the
 `SearchQuery` is built.
@@ -424,8 +426,8 @@ the same way.
   and from then on they no longer follow the text.
 - A generated column that PormG did not create is left as it is while the model declares a plain
   `SearchVectorField`. Declare `generated_from` and PormG re-creates it as its own.
-- Generated columns need PostgreSQL 12, and `DROP EXPRESSION` needs 13. On SQLite the column is
-  refused, as every `SearchVectorField` is.
+- Schema management needs PostgreSQL 13, which covers both generated columns (12) and
+  `DROP EXPRESSION` (13). On SQLite the column is refused, as every `SearchVectorField` is.
 
 ## Indexing
 

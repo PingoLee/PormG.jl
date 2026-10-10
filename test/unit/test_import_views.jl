@@ -207,7 +207,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 struct ViewsCaptureMockPg767 <: PormG.PormGPostgres end
 const IV_PG_SQL = String[]
-# #1032: the schema reader asks the server version first (the PostgreSQL 12 floor); answered here
+# #1032: the schema reader asks the server version first (the PostgreSQL 13 floor, #1108); answered here
 # and not recorded, so the captured statements are the schema reads alone.
 fetch(::ViewsCaptureMockPg767, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
   occursin("server_version_num", sql) ? DataFrame(v = [160000]) :

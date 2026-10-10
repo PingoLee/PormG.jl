@@ -3496,11 +3496,12 @@ on it raises `FilterError`: search it with `@search`. `SearchVector`, `SearchHea
 `to_tsvector` the lookup puts around a text column do not take it, since it is already a document.
 
 **PostgreSQL only**: on SQLite, rendering the column raises `BackendCapabilityError`. A generated
-one needs PostgreSQL 12, and PormG writes nothing to it: naming it in `create`, `update`, `save` or a
-bulk write raises `InvalidValueError`, and leaving it out lets PostgreSQL compute it. Turning a
-generated column back into a plain one (removing `generated_from`) keeps its data and needs
-PostgreSQL 13. Turning a plain column into a generated one, or changing what it is generated from,
-drops and re-creates the column and its indexes, which `migrate` runs only with `destructive = true`.
+one is created by schema management, which needs PostgreSQL 13, and PormG writes nothing to it:
+naming it in `create`, `update`, `save` or a bulk write raises `InvalidValueError`, and leaving it out
+lets PostgreSQL compute it. Turning a generated column back into a plain one (removing
+`generated_from`) keeps its data. Turning a plain column into a generated one, or changing what it
+is generated from, drops and re-creates the column and its indexes, which `migrate` runs only with
+`destructive = true`.
 
 # Keyword Arguments
 - `verbose_name::Union{String, Nothing} = nothing`: A human-readable name for the field

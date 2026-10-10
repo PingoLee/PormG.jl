@@ -1190,7 +1190,7 @@ index carries `pg_get_expr(indpred, indrelid, true)` as its `condition`, whichev
 are read. A UNIQUE one of either kind stays unread: `UniqueConstraint` declares neither.
 
 `indnkeyatts` is PostgreSQL 11+, which the pre-existing `indexes` CTE already requires, so this adds
-no floor of its own. (The schema-management floor is 12 since #1032; see `get_database_schema`.)
+no floor of its own. (The schema-management floor is 13 since #1108; see `get_database_schema`.)
 
 The partition with the `db_index` reader is per INDEX — `indnkeyatts = 1` there, `> 1` here, except
 that since #29 a one-column index that is advanced or carries the `pormg:index` marker is read here
@@ -1493,11 +1493,14 @@ function read_live_views(db::PormGPostgres; ignore_table::Vector{String} = postg
   return out
 end
 
-# The PostgreSQL version schema management needs (#1032): the statement below reads
-# `pg_attribute.attgenerated`, which PostgreSQL 12 added. It is the floor for `makemigrations`,
-# `migrate`, `check` and `inspectdb` — the only callers of this reader — and nothing else: queries and
-# writes never read the catalog, so they state no floor of their own.
-const _PG_SCHEMA_MANAGEMENT_FLOOR = 120000
+# The PostgreSQL version schema management needs. The statement below reads
+# `pg_attribute.attgenerated`, which PostgreSQL 12 added (#1032), and the planner can produce
+# `ALTER COLUMN … DROP EXPRESSION` (removing `generated_from`), which PostgreSQL 13 added (#1108). One
+# floor at the higher of the two means every plan the planner produces runs on every server this probe
+# accepts, with no per-statement version rule. It is the floor for `makemigrations`, `migrate`,
+# `check` and `inspectdb` — the only callers of this reader — and nothing else: queries and writes
+# never read these catalog columns, so they state no floor of their own (#1097).
+const _PG_SCHEMA_MANAGEMENT_FLOOR = 130000
 
 # Asked rather than left to the statement, so an older server gets the requirement by name instead of
 # `column a.attgenerated does not exist` out of the middle of a 300-line query. The same probe the
@@ -1506,9 +1509,9 @@ function _require_pg_schema_management_floor(db::PormGPostgres)::Nothing
   v = Int(DataFrame(fetch(db, "SELECT current_setting('server_version_num')::integer AS v"))[1, :v])
   v >= _PG_SCHEMA_MANAGEMENT_FLOOR && return nothing
   throw(BackendCapabilityError(
-    "PormG's schema management (makemigrations, migrate, check, inspectdb) needs PostgreSQL 12 or " *
-    "newer, to read which columns are generated; this server is $(v ÷ 10000) (server_version_num " *
-    "$(v)). Queries and writes are not affected (#1032)."))
+    "PormG's schema management (makemigrations, migrate, check, inspectdb) needs PostgreSQL 13 or " *
+    "newer, to read which columns are generated and to run every statement it plans; this server is " *
+    "$(v ÷ 10000) (server_version_num $(v)). Queries and writes are not affected (#1108)."))
 end
 
 function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} = "public", table::Union{String, Nothing} = nothing,
@@ -1525,8 +1528,8 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
   # THIS SAME STATEMENT — so 11 was the effective floor for every introspection and nothing could
   # reach the `else` branch. #455 made `identity` a JSON field read straight from `a.attidentity`,
   # which left the probe with no consumer at all. #1032 raised the schema-management floor to 12
-  # (`a.attgenerated`) and probes for it once, above, so the requirement is reported by name; the
-  # statement itself still has no version branch.
+  # (`a.attgenerated`) and #1108 to 13 (the planner's `DROP EXPRESSION`); it is probed once, above, so
+  # the requirement is reported by name, and the statement itself still has no version branch.
   #
   # #455: every aggregate that is TRANSPORTED to the reader is `json_agg(...)::text`, not
   # `array_to_string(array_agg(...), ', ')`. (`unique_constraints` and `non_negative_checks` still
@@ -1752,7 +1755,7 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
             -- false when it was written: the `indexes` CTE above uses `indnkeyatts`, which is
             -- PostgreSQL 11+, and it sits in THIS SAME STATEMENT — the one every introspection runs.
             -- So 11 was the effective floor for this query (12 since #1032, for `attgenerated`; the
-            -- schema-management floor) and `regexp_match` (10+) would have been safe too. #415 leans on the same fact for multi-argument `unnest` in FROM (9.4+).
+            -- schema-management floor is 13 since #1108) and `regexp_match` (10+) would have been safe too. #415 leans on the same fact for multi-argument `unnest` in FROM (9.4+).
             --
             -- Scope of that claim, deliberately narrow: it is about THIS statement. It used to be
             -- the reason a `major_version >= 10` gate on an `identity_case` fragment could never
@@ -1803,7 +1806,7 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
             'identity', a.attidentity::text,
             -- #1032: "s" for a STORED generated column, "v" for a VIRTUAL one (PostgreSQL 18), ""
             -- otherwise. Its expression is the `default` above: PostgreSQL keeps both in
-            -- `pg_attrdef`. PostgreSQL 12+, the schema-management floor probed before this runs.
+            -- `pg_attrdef`. PostgreSQL 12+, below the schema-management floor (13) probed before this runs.
             'generated', a.attgenerated::text,
             -- #318: plain membership. `unique_cols` already holds ONLY single-column constraints
             -- (filtered per-constraint in the CTE above), so the old `array_length(...) = 1` guard

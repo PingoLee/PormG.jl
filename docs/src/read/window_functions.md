@@ -538,6 +538,8 @@ WindowOver(order_by=["positionorder"], frame="ROWS BETWEEN 1 FOLLOWING AND CURRE
 # window frame (the frame end comes before its start). Accepted: ROWS, RANGE or GROUPS, …
 ```
 
+`GROUPS`, a `RANGE` bound with an offset, and `EXCLUDE` need PostgreSQL 11 or newer. An older server refuses them with its own error when the query runs. See [Server versions](../postgres.md#Server-versions).
+
 ---
 
 ## Ranking Functions

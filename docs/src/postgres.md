@@ -11,6 +11,19 @@ The deep-dive pages own the full reference and verified examples; this guide poi
 !!! tip "Keep code backend-agnostic"
     Where a query or write feature is PostgreSQL-only, PormG provides a SQLite-safe fallback (`with_advisory_lock` becomes a no-op; use `bulk_insert` instead of `bulk_copy`) so the *same* source runs against SQLite in tests and PostgreSQL in production. Prefer that over branching on the backend. The exception is a [PostgreSQL-only field type](#PostgreSQL-only-field-types): a model that declares one has no SQLite table, so its tests run on PostgreSQL.
 
+## Server versions
+
+PormG states two PostgreSQL requirements, because the two halves of the library ask the server different things:
+
+| | Needs | Why |
+|---|---|---|
+| **Schema management**: `makemigrations`, `migrate`, `check`, `inspectdb` | **PostgreSQL 13 or newer**, checked up front | They read the catalog, including which columns are generated (12+), and can plan `ALTER COLUMN … DROP EXPRESSION` (13+). An older server is refused with `BackendCapabilityError` before anything runs. |
+| **Queries and writes**: `filter`, `list`, `create`, `update`, `bulk_*`, `delete`, … | **No stated floor** | They use ordinary SQL, and none of the catalog columns schema management depends on; the few catalog lookups they make, such as `pg_get_serial_sequence` for a bulk insert, are long-standing. They are tested only against the PostgreSQL version the integration suite runs, so an older server is best effort. |
+
+A query feature that needs a newer server than yours fails with PostgreSQL's own error when the query runs. Two opt-in features need PostgreSQL 11: [`GROUPS` window frames](read/window_functions.md) (and `RANGE` offsets and `EXCLUDE`), and [`search_type = "websearch"`](read/full_text_search.md).
+
+A database whose schema is managed by something else can therefore still be read and written by PormG on an older server; running PormG's migrations against it cannot.
+
 ## PostgreSQL-only capabilities
 
 ### Ultra-fast bulk loading — `bulk_copy()`

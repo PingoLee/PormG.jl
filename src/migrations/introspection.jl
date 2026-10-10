@@ -1499,7 +1499,7 @@ end
 # floor at the higher of the two means every plan the planner produces runs on every server this probe
 # accepts, with no per-statement version rule. It is the floor for `makemigrations`, `migrate`,
 # `check` and `inspectdb` — the only callers of this reader — and nothing else: queries and writes
-# never read the catalog, so they state no floor of their own (#1097).
+# never read these catalog columns, so they state no floor of their own (#1097).
 const _PG_SCHEMA_MANAGEMENT_FLOOR = 130000
 
 # Asked rather than left to the statement, so an older server gets the requirement by name instead of
@@ -1528,8 +1528,8 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
   # THIS SAME STATEMENT — so 11 was the effective floor for every introspection and nothing could
   # reach the `else` branch. #455 made `identity` a JSON field read straight from `a.attidentity`,
   # which left the probe with no consumer at all. #1032 raised the schema-management floor to 12
-  # (`a.attgenerated`) and probes for it once, above, so the requirement is reported by name; the
-  # statement itself still has no version branch.
+  # (`a.attgenerated`) and #1108 to 13 (the planner's `DROP EXPRESSION`); it is probed once, above, so
+  # the requirement is reported by name, and the statement itself still has no version branch.
   #
   # #455: every aggregate that is TRANSPORTED to the reader is `json_agg(...)::text`, not
   # `array_to_string(array_agg(...), ', ')`. (`unique_constraints` and `non_negative_checks` still
@@ -1755,7 +1755,7 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
             -- false when it was written: the `indexes` CTE above uses `indnkeyatts`, which is
             -- PostgreSQL 11+, and it sits in THIS SAME STATEMENT — the one every introspection runs.
             -- So 11 was the effective floor for this query (12 since #1032, for `attgenerated`; the
-            -- schema-management floor) and `regexp_match` (10+) would have been safe too. #415 leans on the same fact for multi-argument `unnest` in FROM (9.4+).
+            -- schema-management floor is 13 since #1108) and `regexp_match` (10+) would have been safe too. #415 leans on the same fact for multi-argument `unnest` in FROM (9.4+).
             --
             -- Scope of that claim, deliberately narrow: it is about THIS statement. It used to be
             -- the reason a `major_version >= 10` gate on an `identity_case` fragment could never

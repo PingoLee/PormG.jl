@@ -568,7 +568,7 @@ end
 # The query text is asserted for the two predicates no synthetic row can exercise: the backing
 # constraint must be joined on the index's OWN table and kind — a foreign key also records
 # `conindid`, the PARENT's unique index — and `indnullsnotdistinct` must not be named at all, as
-# it is PostgreSQL 15+ and the stated floor is 11.
+# it is PostgreSQL 15+ and the schema-management floor is 13 (#1108).
 # Mutation gate: drop the `(unique && !constraint)` arm and `ux_g` vanishes; drop the refusal line
 # and all four refused indexes come back. (Since #29 `ix_desc` is read — a non-unique DESC index is a
 # `Models.Index(fields = ["-c", "-d"])`; the #29 testset below covers the advanced shapes.)

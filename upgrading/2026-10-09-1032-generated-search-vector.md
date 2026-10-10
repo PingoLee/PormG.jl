@@ -22,7 +22,8 @@ the new keywords, that changes the following:
 | `check` on a generated column | reported it as an expression default to declare with `db_default=` | not reported |
 | a pending plan written before upgrading, for a table that has a generated column | applied | refused by the schema precondition (the table's fingerprint now records the column as generated) |
 
-Queries and writes read no catalog, so they have no new floor.
+Queries and writes do not read the catalog columns schema management reads, so they have no new
+floor (#1097).
 
 ### Who this affects
 

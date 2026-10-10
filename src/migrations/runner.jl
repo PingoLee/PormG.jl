@@ -2262,8 +2262,9 @@ end
 # paid for on every write, and silent from then on, because it is no longer invalid. PostgreSQL's
 # own advice for either is to drop it. For any other index the cause has to go first (a unique build
 # that failed on duplicates fails the same way again), and `REINDEX … CONCURRENTLY` is 12+ while
-# PormG's floor was 11 when this was written, so it is the alternative, not the instruction. (#1032
-# raised the schema-management floor to 12; the advice was left as it was.)
+# the schema-management floor was 11 when this was written, so it is the alternative, not the
+# instruction. (#1032 and #1108 raised that floor to 13, so `check` now always runs where REINDEX
+# CONCURRENTLY exists; the advice, and its "12 or later", were left as they were.)
 const _REINDEX_LEFTOVER_RE = r"_cc(new|old)\d*$"
 
 function _invalid_index_message(schema::AbstractString, index_name::AbstractString, unique::Bool,

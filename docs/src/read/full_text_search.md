@@ -88,6 +88,8 @@ M.Circuit.objects.filter("name__@search" => SearchQuery("circuits"; config = "en
 A `"raw"` query is PostgreSQL's own syntax, and PormG does not parse it. A text the server cannot
 read, such as `"a & | b"`, raises `DatabaseError` (a `StatementError`) when the query runs, not when
 it is built. Use `"websearch"` for text a user typed, because it accepts any input.
+`websearch_to_tsquery` needs PostgreSQL 11 or newer; an older server refuses it with its own error
+when the query runs ([Server versions](../postgres.md#Server-versions)).
 
 An unknown `search_type`, or text containing a NUL character, raises `InvalidValueError` when the
 `SearchQuery` is built.

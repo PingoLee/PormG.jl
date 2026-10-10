@@ -79,6 +79,15 @@ end
   # Unstated names are the failure this file exists for; stale methods are typos.
   @test setdiff(built, stated) == Set{String}()
   @test setdiff(stated, built) == Set{String}()
+  # A per-engine override (`_computed_kind(::Val{:SUM}, …)`) under a misspelt name would never be
+  # dispatched to, and the rule's fallback would answer instead: each must name a built function.
+  overrides = Set{String}()
+  for m in methods(_EKR_QB._computed_kind)
+    arg = m.sig.parameters[2]
+    arg isa DataType && arg <: Val && !isempty(arg.parameters) && push!(overrides, String(arg.parameters[1]))
+  end
+  @test !isempty(overrides)
+  @test setdiff(overrides, built) == Set{String}()
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

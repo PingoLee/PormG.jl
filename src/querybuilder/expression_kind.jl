@@ -229,8 +229,11 @@ _numeric_rank(::CanonicalType) = nothing
 _computed_kind(::Val, ::Symbol, k, ::PormGPostgres) = CDecimal(nothing, nothing)
 _computed_kind(::Val, rule::Symbol, k, ::PormGSQLite) = rule === :numeric ? CFloat64() : _sqlite_number_kind(k)
 _computed_kind(::Val, ::Symbol, k, ::Any) = nothing
-# A number SQLite computes over `k` without a cast: an integer is a 64-bit integer, a decimal keeps
-# PormG's decimal storage without its width, and anything else is not a number this names.
+# A number SQLite computes over `k` without a cast: an integer is a 64-bit integer, and anything else
+# is not a number this names. Over a `DecimalField` SQLite computes a REAL or an INTEGER from its
+# NUMERIC-affinity storage; it is named a width-less decimal, the type PostgreSQL gives the same call,
+# and no reader parses one (`value_parser` has no width-less `CDecimal` arm, so #648's double never
+# reaches the decimal parser). A reader that adds one must decide this cell first.
 _sqlite_number_kind(::Union{CInt16,CInt32,CInt64}) = CInt64()
 _sqlite_number_kind(::CFloat64) = CFloat64()
 _sqlite_number_kind(::CDecimal) = CDecimal(nothing, nothing)

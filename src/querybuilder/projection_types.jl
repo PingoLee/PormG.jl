@@ -916,6 +916,8 @@ end
 # - `SUM` of a BIGINT column (#1111) — an `IDField`, a `BigIntegerField`, a `ForeignKey` or
 #   `OneToOneField`: PostgreSQL's `sum(bigint)` is `numeric`, where `sum(integer)` is `bigint` and
 #   divides as an integer on both. `MAX`/`MIN` keep the operand's type and `COUNT` is a `bigint`.
+#   An integer literal is a `bigint` there too (#1141): PostgreSQL binds it `$n::bigint`, so
+#   `Sum(F("grid") + 1)` and `Sum(Coalesce("grid", 0))` are `sum(bigint)` (`_bigint_column`).
 # A CTE column built from any of these answers as it did in the body (#1127), and so does a
 # `Subquery` projecting one (#1124): each is a record the inner build kept, not its typed field.
 # Measured on PostgreSQL 16 and SQLite 3.45 through the F1 fixture: `Floor("grid") / 2` over grid
@@ -981,8 +983,14 @@ end
 _whole_numeric_operand(::Any, ::SQLInstruction) = nothing
 # A column PostgreSQL stores as BIGINT, named by its field: `(:integer_division, "the IDField `id`")`.
 # Through `+`, `-`, `*` too: `sum(bigint + integer)` is a `sum(bigint)`.
+# #1141: an integer literal is one too. PostgreSQL binds it as `$n::bigint`
+# (`_infer_parameter_sql_type`), and `int4 + int8` is `int8`, so `Sum(F("number") + 1)` is a
+# `sum(bigint)`, a `numeric` that keeps the half, where SQLite's sum is an integer. The refusal is
+# decided once for both engines, as #1111's is.
 function _bigint_column(p, instruc::SQLInstruction)
   p isa SQLField && return _bigint_column(p.field, instruc)
+  literal = p isa SQLText ? p.field : p
+  literal isa Integer && !(literal isa Bool) && return (:integer_division, "an integer literal (a `bigint` on PostgreSQL)")
   if p isa FExpression
     p.operation === nothing && return _bigint_column(p.field_name, instruc)
     # #1127: `bigint / integer` is still a `bigint` on PostgreSQL, so `Sum(F("id") / 2)` sums one.
@@ -990,9 +998,17 @@ function _bigint_column(p, instruc::SQLInstruction)
     # float on both engines.
     p.operation == "/" && !(_whole_quotient_side(p.field_name, instruc) && _whole_quotient_side(p.operand, instruc)) &&
       return nothing
-    p.operation in ("+", "-", "*", "/") || return nothing
+    # #1141: the bitwise operators resolve their type as arithmetic does (`int4 & int8` is `int8`);
+    # `~` has its operand's type. A shift has its left operand's, and binds a literal on either side
+    # as `::integer` (`1 << F("n")` renders `$1::integer << …`), so only a column can make it a `bigint`.
+    p.operation == "~" && return _bigint_column(p.field_name, instruc)
+    p.operation in ("<<", ">>") && return p.field_name isa Integer ? nothing : _bigint_column(p.field_name, instruc)
+    p.operation in ("+", "-", "*", "/", "&", "|", "xor") || return nothing
     return something(_bigint_column(p.field_name, instruc), _bigint_column(p.operand, instruc), Some(nothing))
   end
+  # #1141: a declared `bigint`, a `Case` with a `bigint` branch, and a function whose value is one
+  # of its operands' own values over a `bigint` (`_bigint_operand_function`).
+  p isa Union{FObject,WindowFunction} && return _bigint_operand_function(p, _bigint_column, instruc)
   # #1127: a CTE column the body computed as a `bigint` (`Count`, `Sum` of an integer, a ranking
   # window, arithmetic over a BIGINT column) is typed as a plain integer, so its record says it.
   if p isa CTEReference
@@ -1002,6 +1018,61 @@ function _bigint_column(p, instruc::SQLInstruction)
   field = _alias_column_field(p, instruc)
   field isa Union{Models.sIDField,Models.sBigIntegerField,Models.sForeignKey,Models.sOneToOneField} || return nothing
   return (:integer_division, "the $(string(nameof(typeof(field)))[2:end]) `$(_concat_operand_label(p))`")
+end
+# #1141 — whether a function whose value is one of its operands' own values (an extremum, a window
+# value function, `Coalesce`/`Greatest`/`Least`, `NullIf`) is a `bigint` on PostgreSQL, asking `of`
+# of its operands: `Coalesce("number", 0)` is a `bigint` there, since PostgreSQL resolves the
+# `coalesce(int4, int8)` to `int8`, and so is `Lag(Count("id"))`. Over several values the widest
+# wins, as PostgreSQL resolves them: a `bigint` when ANY value is one and NO value is known to be
+# wider (`_numeric_valued`) — a float or decimal value makes it a `float8` or a `numeric` instead,
+# which other rules answer. A value PormG cannot type (a quotient, a `Subquery`, a shift, a ranking
+# window) is not wider for that, so it does not hide the `bigint` beside it. Those values are a
+# `:one_of` function's operands; a `Case`'s branch values
+# (`Case(When(…, then = 1), default = 0)` is a `bigint`, its literals bound so); and a `Lag`/`Lead`
+# operand with its `default` (`lag(int4, int, int8)` is `int8`). In those two a string is a text
+# literal, not a path (`_case_kind`), so it is no `bigint`. `NullIf` is its first operand. Not the
+# `:promoting` rule: `SUM` of a `bigint` is a `numeric` and `FLOOR`/`CEIL`/`ABS` render over
+# `::numeric`, which `_whole_numeric_operand` answers. A declared type (`Cast`'s, or an
+# `output_field`) is the cast the SQL renders, so it decides alone: a `bigint` when it names one
+# (`Sum(Cast("grid", BigIntegerField()))` is a `sum(bigint)`), and nothing else.
+function _bigint_operand_function(p::Union{FObject,WindowFunction}, of::Function, instruc::SQLInstruction)
+  declared = get(p.kwargs, p.function_name == "CAST" ? "type" : "output_field", nothing)
+  if declared isa AbstractString && !isempty(declared)
+    _sql_type_field(declared) isa Models.sBigIntegerField || return nothing
+    return (:integer_division, "a value cast to $(declared)")
+  end
+  rule = _result_rule(p)
+  operands = p.column isa AbstractVector ? p.column : (p.column,)
+  literal_strings = false   # whether a string value is a literal (`Case`, a window `default`)
+  if p isa FObject && p.function_name == "CASE"
+    operands = Any[get(branch.kwargs, "then", nothing) for branch in operands if branch isa SQLTypeFunction]
+    push!(operands, get(p.kwargs, "else", nothing))
+    literal_strings = true
+  elseif rule in (:operand, :first_operand)
+    operands = Any[first(operands)]
+    if p isa WindowFunction
+      default = get(p.kwargs, "default", nothing)
+      default isa AbstractString || push!(operands, default)
+    end
+  elseif rule !== :one_of
+    return nothing
+  end
+  values = Any[v for v in operands if !_is_null_literal(v isa SQLText ? v.field : v)]
+  literal_strings && any(v -> v isa AbstractString, values) && return nothing
+  length(values) > 1 && any(v -> _numeric_valued(v, instruc), values) && return nothing
+  for operand in values
+    side = of(operand, instruc)
+    side === nothing || return (side[1], "`$(p.function_name)(…)` over $(side[2])")
+  end
+  return nothing
+end
+# #1141 — a value PostgreSQL types wider than `bigint`, so a `Case`/`Coalesce` holding it is not one:
+# a float or decimal (`_textless_number` names them, a `numeric` function included), or a whole number
+# PostgreSQL types `numeric` (`_whole_numeric_operand`: `Floor(x)`, a zero-scale `DecimalField`).
+function _numeric_valued(v, instruc::SQLInstruction)::Bool
+  side = _textless_number(v, instruc)
+  side !== nothing && side[1] in (:float, :decimal, :numeric) && return true
+  return _whole_numeric_operand(v, instruc) !== nothing
 end
 # A side of an integer division that keeps it integer division: a whole number by type, or itself a
 # quotient of two (`(F("id") / 2) / 2`), which both engines divide as integers too.
@@ -1023,7 +1094,8 @@ function _bigint_valued(p, instruc::SQLInstruction)
   p isa Union{FObject,WindowFunction} || return nothing
   name = p.function_name
   (name == "COUNT" || name in _BIGINT_WINDOWS) && return (:integer_division, "`$(name)(…)`")
-  name == "SUM" || return nothing
+  # #1141: `Lag(Count("id"))`, `Max(Rank(…))` — one of the operand's own values, so its `bigint`.
+  name == "SUM" || return _bigint_operand_function(p, _bigint_valued, instruc)
   operand = p.column isa AbstractVector ? first(p.column) : p.column
   _whole_numeric_operand(p, instruc) === nothing && _known_whole(operand, instruc) || return nothing
   return (:integer_division, "`SUM(…)` over an integer")
@@ -1040,8 +1112,10 @@ function _divided_whole_operand(p::Union{FObject,WindowFunction}, instruc::SQLIn
 end
 # An operand that is a whole number on both engines BY TYPE: an integer column (the BIGINT ones
 # included), an integer literal, `COUNT`, a cast to an integer, or a whole-keeping function (`Floor`,
-# `Ceil`, `Abs`, `Round(x)`, `Mod`, an extremum, `Coalesce`, a window value) or `+`/`-`/`*` of such.
-# A transform (`"ts__@year"`), a JSON key lookup, a text column and an untyped `Case` are not known.
+# `Ceil`, `Abs`, `Round(x)`, `Mod`, an extremum, `Coalesce`, a window value) or `+`/`-`/`*` of such,
+# and an integer-valued date part (`_integer_transform`), as a function or a `"dob__@year"` path. A
+# text or date transform (`"dob__@yyyy_mm"`, `"dob__@date"`), a JSON key lookup, a text column and
+# an untyped `Case` are not known.
 const _INTEGER_FIELDS = Union{Models.sIntegerField,Models.sBigIntegerField,Models.sPositiveIntegerField,
                               Models.sPositiveSmallIntegerField,Models.sIDField,Models.sForeignKey,
                               Models.sOneToOneField}
@@ -1050,7 +1124,9 @@ function _known_whole(p, instruc::SQLInstruction)::Bool
   p isa SQLText && return p.field isa Integer && !(p.field isa Bool)
   p isa Integer && return !(p isa Bool)
   if p isa Union{String,CTEReference,JoinedReference}
-    p isa String && occursin("__@", p) && return false
+    # #1135: a transformed path is the transform's result, not the column — through the one ladder
+    # (#562), as `_infer_kind(::String)` reads it.
+    p isa String && occursin("__@", p) && return _known_whole(_check_function(p), instruc)
     return _alias_column_field(p, instruc) isa _INTEGER_FIELDS
   end
   if p isa FExpression
@@ -1060,6 +1136,7 @@ function _known_whole(p, instruc::SQLInstruction)::Bool
   if p isa Union{FObject,WindowFunction}
     name = p.function_name
     name == "COUNT" && return true
+    _integer_transform(p) && return true
     declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
     declared isa AbstractString && !isempty(declared) &&
       return _sql_type_field(declared) isa Union{Models.sIntegerField,Models.sBigIntegerField}
@@ -1069,6 +1146,24 @@ function _known_whole(p, instruc::SQLInstruction)::Bool
     return all(x -> _known_whole(x, instruc), p.column isa AbstractVector ? p.column : (p.column,))
   end
   return false
+end
+# #1135 — a date part both engines compute as an integer, whatever its operand's type: `Dialect`
+# renders `EXTRACT(… FROM x)::integer` (`trunc(…)::integer` for `SECOND`) on PostgreSQL and
+# `CAST(strftime(…) AS INTEGER)` or integer arithmetic on SQLite, and `QUARTER`, `QUADRIMESTER` and
+# `WEEK_DAY` are integer arithmetic on both. Only the parts BOTH engines render: one SQLite cannot
+# (`CENTURY`, `TIMEZONE_HOUR`, an `EXTRACT` `QUARTER`, `@len`) raises `BackendCapabilityError` there,
+# so it has no SQLite answer to split from, and refusing it on PostgreSQL would be a false refusal.
+# `EPOCH` and the sub-second parts are fractional on PostgreSQL besides. Stated here because
+# `_result_rule` answers `:unknown` for these until #1034's phase 3 states their type — the place
+# this list belongs once it does.
+const _INTEGER_TRANSFORMS = ("QUARTER", "QUADRIMESTER", "WEEK_DAY")
+const _INTEGER_EXTRACT_PARTS = ("YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "DOW", "DOY",
+                                "WEEK", "ISOYEAR", "ISODOW")
+function _integer_transform(p::Union{FObject,WindowFunction})::Bool
+  p.function_name in _INTEGER_TRANSFORMS && return true
+  p.function_name == "EXTRACT" || return false
+  part = get(p.kwargs, "part", nothing)
+  return part isa AbstractString && Dialect.extract_part(part) in _INTEGER_EXTRACT_PARTS
 end
 function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   name = p.function_name

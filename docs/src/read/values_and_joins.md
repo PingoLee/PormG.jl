@@ -246,6 +246,10 @@ query.filter("test_deletion__just_a_nested_roll_back__description" => "nested-va
 query.values("resultid", "test_deletion__just_a_nested_roll_back__id")
 ```
 
+Forward and reverse hops mix in any order. A reverse hop can follow a forward one, and another reverse
+hop or a `ManyToManyField` can follow that. Every reverse hop is to-many, so a filter across one is
+refused unless the path is projected; the next section explains why.
+
 
 ### Filtering or Ordering Across a To-Many Relation
 

@@ -1559,6 +1559,7 @@ rows = query.list()
 driver_query = Driver.objects
 driver_query.filter("collections__label" => "World champions")
 driver_query.values("forename", "surname")
+driver_query.distinct()   # a filter across a to-many relation needs it (#1002)
 champions = driver_query.list()
 ```
 

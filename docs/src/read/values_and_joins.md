@@ -246,6 +246,73 @@ query.filter("test_deletion__just_a_nested_roll_back__description" => "nested-va
 query.values("resultid", "test_deletion__just_a_nested_roll_back__id")
 ```
 
+
+### Filtering or Ordering Across a To-Many Relation
+
+A reverse relation or a `ManyToManyField` is **to-many**: one constructor has many results. A join
+across it repeats each base row once per related row. When you ask for those rows by projecting the
+path, the repeat is the answer, and this query returns one row per winning result:
+
+```julia
+# ✓ one row per (constructor, winning result): values() asks for the result rows
+query = M.Constructor.objects
+query.values("constructorid", "name", "result__points")
+query.filter("result__positionorder" => 1)
+```
+
+A filter or an ordering on its own does not ask for them. Django renders it as the same join and
+returns each constructor once per win, which `.distinct()` then removes. PormG refuses it instead,
+so a silently repeated row never reaches `list()` or `count()`
+([#1002](https://github.com/PingoLee/PormG.jl/issues/1002)):
+
+```julia
+# ✗ raises FilterError: the filter's join would repeat each constructor once per winning result
+query = M.Constructor.objects
+query.filter("result__positionorder" => 1)
+query.values("constructorid", "name")
+query.list()   # FilterError: PormG cardinality check (#1002): a filter crosses the reverse relation 'result', …
+```
+
+Pick the spelling that says what you mean:
+
+```julia
+# ✓ each constructor once, when it has a winning result: a correlated EXISTS, no join
+query = M.Constructor.objects
+query.filter(Exists(M.Result.objects.filter("constructorid" => OuterRef("constructorid"), "positionorder" => 1)))
+query.values("constructorid", "name")
+
+# ✓ the same rows, by collapsing the repeats
+query = M.Constructor.objects
+query.filter("result__positionorder" => 1)
+query.values("constructorid", "name")
+query.distinct()
+```
+
+`order_by("result__points")` is refused the same way, and raises `QueryBuildError`. To order
+constructors by something about their results, compute one value per constructor in a correlated
+[`Subquery`](subqueries_and_ctes.md) and order by that.
+
+**What is not refused.** The rule is about rows the caller can see repeated:
+
+- **The same join, declared.** A projection (`values`) or an `on()` / `cjoin` path that reaches the
+  **same** join asks for its rows, as in the first example. Another path that reaches the same table
+  through a different join does not.
+- **`distinct()`**, and `count(distinct = true)`.
+- **Questions a repeat cannot change**: `exists()`, `Exists(...)` and an `__@in` subquery, and the
+  rows `update()` and `delete()` act on. With an `offset()` (or a `limit()`, for `__@in`) the rows are
+  counted, so the repeat matters again and the filter is refused.
+- **An aggregating query.** Its rows are groups, so a repeat shows only inside an aggregate, and
+  `Count` / `Sum` / `Avg` meet the [fan-out guard](filters_and_aggregates.md#Aggregating-Across-To-Many-Relations-(Fan-Out-Guard))
+  instead. `Max` and `Min` are exact.
+- **A reverse `OneToOneField`**, or a reverse `ForeignKey` declared `unique = true`: each parent has
+  at most one child, so nothing repeats.
+
+A forward relation can be to-many too: a `ForeignKey` whose `pk_field`, or a `cjoin(field = …)` link
+whose target column, is not declared unique on the target (its primary key, a `unique = true` field,
+or every field of a `UniqueConstraint`). A filter across such a `ForeignKey` is refused like a reverse
+one. A `cjoin` declares its own join, so a filter through it stands, but an aggregate over it meets
+the fan-out guard.
+
 ---
 
 ## Wildcard Selection with `*`

@@ -18,7 +18,6 @@ and are now refused on both engines:
 |---|---|---|---|
 | `Round(125, -1)` | `130` | `125.0` (a negative `n` read as 0) | `InvalidValueError` |
 | `Round(<text> 'abc', 2)` | error: not a number | `0.0` | `QueryBuildError` |
-| `Round(<text> '1.555', 2)` | `1.56` | `1.55` | `QueryBuildError`: cast it first |
 
 A JSON value counts as text. `Round(x)` and `Round(x, n)` over a number are unchanged.
 

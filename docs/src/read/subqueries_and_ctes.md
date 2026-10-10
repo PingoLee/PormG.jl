@@ -712,7 +712,7 @@ compared with the column is bound. PormG derives the type from the body's projec
 |---|---|
 | A field path (`"points"`, `"driverid__surname"`) | That field |
 | `Count`, `Sum` | Integer |
-| `Avg`, `Min`, `Max` | The aggregated column's field |
+| `Avg`, `Min`, `Max` | The type of what they aggregate: a field path (`Max("raceid__date")`) or a `Joined(...)` column is that field, and `F` arithmetic (`Max(F("points") * 2)`) is typed as the arithmetic row below says. A function is typed as it is when projected bare, so `Max(Coalesce("points", 0.0))` needs an `output_field` (#1116) |
 | `Rank`, `DenseRank`, `RowNumber` | Integer |
 | `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` | The column the window reads |
 | A function given `output_field = …`, or `Cast(x, type)` | The type it names |
@@ -731,7 +731,7 @@ This type is for **binding** a value compared with the column. **Reading** the c
 separate question, and the answer is the body's own. A column the body selects, such as
 `"date"`, `Max("date")` or `Cast(x, "date")`, reads back with the same Julia type the body would give
 it (a `Date` on both engines). A column the body computes, such as `Avg("points")` or `F` arithmetic,
-comes back as the engine delivers it, even though the table above binds it as the aggregated column's
+comes back as the engine delivers it, even though the table above binds it as its operand's
 field (#824). This is the same rule `values(...)` follows outside a CTE.
 
 The type you declare can be a text, integer, bigint, float, numeric, boolean or date type, and on

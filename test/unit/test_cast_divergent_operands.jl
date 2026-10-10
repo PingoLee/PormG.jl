@@ -780,6 +780,77 @@ end
   end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# A CTE column built from Sum of a BIGINT column, divided, is refused like the Sum (#1127)
+# The CTE model types a `SUM` column as an integer, whatever it sums, so `CTE("c", "s") / 2` read as
+# an integer column divided and built — while `Sum("id") / 2` is refused (#1111): PostgreSQL's
+# `sum(bigint)` is `numeric` and keeps the half, SQLite's is an integer and drops it. The body's
+# answer is recorded while it builds, as #1028 records its text classification, and the division
+# check reads it on each route the column reaches a `/`: under `Coalesce` and under an outer
+# aggregate, to an integer, a text and a scaled target. Expected SQL: none — the build raises.
+# Also `Sum(F("id") / 2) / 2`: `bigint / integer` is a `bigint` on PostgreSQL, so the sum is one.
+# Review of #1127: a `Count`, a `Sum` of an integer or a `Rank` column is a `bigint` on PostgreSQL
+# though the CTE types it as an integer, so an outer `Sum` over it is `sum(bigint)`, a `numeric`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1127: a CTE column from Sum of a BIGINT, divided, is refused like the Sum" begin
+  function withcte(outer)
+    q = CCD.Ccd_team.objects
+    body = CCD.Ccd_driver.objects
+    body.values("team", "s" => Fn.Sum("id"), "laps" => Fn.Sum("laps_total"), "fl" => Fn.Sum(Fn.Floor("number")),
+                "s_int" => Fn.Sum("number"), "top" => Fn.Max("id"), "cnt" => Fn.Count("id"),
+                "rk" => PormG.QueryBuilder.Rank(over = PormG.QueryBuilder.WindowOver(order_by = ["number"])))
+    q.with("c" => body, join_field = "id" => "team")
+    q.values("x" => outer)
+    return q
+  end
+  refusal(outer, conn) = try _ccd_sql(withcte(outer); conn = conn); nothing catch e; e end
+  for conn in _CCD_ENGINES
+    for (outer, named) in (
+        (Fn.Cast(Fn.Coalesce(PormG.CTE("c", "s"), 0) / 2, Models.IntegerField()),
+         "`COALESCE(…)` over the CTE column `CTE(\"c\", \"s\")` (`SUM(…)` over the IDField `id`)"),
+        (Fn.Cast(Fn.Coalesce(PormG.CTE("c", "laps"), 0) / 2, Models.CharField()),
+         "the CTE column `CTE(\"c\", \"laps\")` (`SUM(…)` over the BigIntegerField `laps_total`)"),
+        (Fn.Cast(Fn.Sum(PormG.CTE("c", "s")) / 2, Models.IntegerField()),
+         "`SUM(…)` over the CTE column `CTE(\"c\", \"s\")`"),
+        (Fn.Cast(Fn.Max(PormG.CTE("c", "laps")) / 2, "numeric(10,1)"),
+         "`MAX(…)` over the CTE column `CTE(\"c\", \"laps\")`"),
+        (Fn.Concat("name", Fn.Coalesce(PormG.CTE("c", "fl"), 0) / 2),
+         "the CTE column `CTE(\"c\", \"fl\")` (`SUM(…)` over `FLOOR(…)`)"),
+        (Fn.Cast(Fn.Sum(PormG.CTE("c", "cnt")) / 2, Models.IntegerField()),
+         "`SUM(…)` over the CTE column `CTE(\"c\", \"cnt\")` (`COUNT(…)`)"),
+        (Fn.Cast(Fn.Sum(PormG.CTE("c", "s_int")) / 2, Models.IntegerField()),
+         "`SUM(…)` over the CTE column `CTE(\"c\", \"s_int\")` (`SUM(…)` over an integer)"),
+        (Fn.Cast(Fn.Sum(PormG.CTE("c", "rk")) / 2, Models.IntegerField()),
+         "`SUM(…)` over the CTE column `CTE(\"c\", \"rk\")` (`RANK(…)`)"))
+      err = refusal(outer, conn)
+      @test err isa QueryBuildError
+      @test occursin(named, _ccd_msg(err))
+      @test occursin("SQLite as an integer", _ccd_msg(err))
+    end
+    # The sibling: a BIGINT divided by a whole number inside the sum is still a BIGINT on PostgreSQL.
+    err = _ccd_refusal(Fn.Cast(Fn.Sum(_CF("id") / 2) / 2, Models.IntegerField()); conn = conn)
+    @test _is_1028(err) && occursin("`SUM(…)` over the IDField `id`", _ccd_msg(err))
+    # A nested quotient of whole numbers is still integer division, so still a BIGINT.
+    err = _ccd_refusal(Fn.Cast(Fn.Sum((_CF("id") / 2) / 2) / 2, Models.IntegerField()); conn = conn)
+    @test _is_1028(err) && occursin("`SUM(…)` over the IDField `id`", _ccd_msg(err))
+    # Unchanged: the CTE columns both engines keep integer when divided directly (a `Sum` of an
+    # INTEGER column, `Max`, `Count`: `bigint / integer` divides as an integer on both), an extremum
+    # over one, the record read outside a division, and a sum of integer-column arithmetic
+    # (`number * number` is `int4`, its sum an `int8` that divides as one). Not `F("number") / 2`:
+    # PostgreSQL binds the literal `2` as `bigint`, so that sum is `numeric` — a #1111 gap of its
+    # own (#1141).
+    for outer in (Fn.Cast(Fn.Coalesce(PormG.CTE("c", "s_int"), 0) / 2, Models.IntegerField()),
+                  Fn.Cast(Fn.Coalesce(PormG.CTE("c", "top"), 0) / 2, Models.IntegerField()),
+                  Fn.Cast(Fn.Coalesce(PormG.CTE("c", "cnt"), 0) / 2, Models.IntegerField()),
+                  Fn.Cast(Fn.Max(PormG.CTE("c", "cnt")) / 2, Models.IntegerField()),
+                  Fn.Cast(Fn.Coalesce(PormG.CTE("c", "s"), 0) * 2, Models.IntegerField()),
+                  Fn.Cast(PormG.CTE("c", "s"), Models.CharField()))
+      @test refusal(outer, conn) === nothing
+    end
+    @test _ccd_refusal(Fn.Cast(Fn.Sum(_CF("number") * _CF("number")) / 2, Models.IntegerField()); conn = conn) === nothing
+  end
+end
+
 @testset "#1087: the precision, the scale and a Decimal exponent are bounded before they size a BigInt" begin
   size = PormG.QueryBuilder._numeric_cast_size
   @test size("numeric(1000,1000)") == (1000, 1000)

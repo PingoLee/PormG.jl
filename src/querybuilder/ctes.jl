@@ -891,34 +891,24 @@ function _set_field_from_sql_function(func::SQLTypeFunction, field::String, inst
       "— or name the column's type by wrapping it in \e[32mCast(…, \"text\")\e[0m (or the type it returns) (#812)."))
   end
 
-  if func.function_name in ["COUNT", "SUM"]
-    return IntegerField()
-  else
-    # For AVG/MIN/MAX: resolve the base column from func.column to determine the output type.
-    # `field` is the alias (e.g. "points_avg"), but we need the actual model column (e.g. "round")
-    base_col = if func.column isa String
-      func.column
-    elseif hasproperty(func.column, :field) && func.column.field isa String
-      func.column.field
-    elseif hasproperty(func.column, :_as) && func.column._as isa String
-      func.column._as
-    else
-      field  # fallback to alias
-    end
-
-    @pormg_debug false
-
-    fields = instruct.object.model.fields
-    if haskey(fields, base_col)
-      return fields[base_col]
-    elseif haskey(fields, field)
-      return fields[field]
-    else
-      throw(UnknownFieldError("Error in _set_field_from_sql_function, the field \e[4m\e[31m$(field)\e[0m (base column: \e[31m$(base_col)\e[0m) not found in \e[4m\e[32m$(instruct.object.model.name)\e[0m"))
-    end
-  end
-
+  func.function_name in ["COUNT", "SUM"] && return IntegerField()
+  # AVG/MIN/MAX type as their operand. #1116: through the same arms a projection takes, as the window
+  # arm below does — the operand was looked up among the base model's own fields, so a hop path, a
+  # `Joined(...)` handle or `F` arithmetic died as an UnknownFieldError naming the alias.
+  return _aggregate_operand_field(func.column, func, field, instruct)
 end
+# A path is looked up by itself, not by the alias (`field`): the `::String` arm reads its second
+# argument, which for a window or an aggregate would be the column's alias.
+_aggregate_operand_field(x::SQLField, func, field::String, instruct::SQLInstruction) =
+  _aggregate_operand_field(x.field, func, field, instruct)
+_aggregate_operand_field(x::String, func, ::String, instruct::SQLInstruction) =
+  _set_field_from_sql_function(x, x, instruct)
+_aggregate_operand_field(x::Union{JoinedReference,SQLTypeFunction}, func, field::String, instruct::SQLInstruction) =
+  _set_field_from_sql_function(x, field, instruct)
+_aggregate_operand_field(x::FExpression, func, field::String, instruct::SQLInstruction) =
+  _f_expression_field(x, field, instruct, _refuse_projection_type)
+_aggregate_operand_field(x, func, field::String, ::SQLInstruction) =
+  _refuse_projection_type(field, "it is $(func.function_name) over a $(nameof(typeof(x))), whose type PormG does not infer")
 # #685 — a CTE body that projects a window function. More specific than the `::SQLTypeFunction` arm
 # above, whose name allow-list refused every window with "RANK is not a recognized function" — which
 # made the CTE route the #537 refusal recommends for filtering on a window unreachable. The column
@@ -1015,6 +1005,13 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   # is typed as an integer and an `Avg` one as its operand's field, so `Concat` and `Cast` over the
   # column would let through what they refuse when the same aggregate is written directly.
   textless = Dict{String,Tuple{Symbol,String}}()
+  # #1127: and what the same column answers once DIVIDED (`_whole_numeric_operand`, #1111), for the
+  # same reason: a `Sum` of a BIGINT column is typed as an integer, but it is `numeric` on PostgreSQL,
+  # so the column divided split the engines (`7.5` and `7`) while the aggregate divided was refused.
+  # And whether it is a `bigint` there (`_bigint_valued`): a `Count` or a `Sum` of an integer is typed
+  # as an integer too, so an outer `Sum` over it read as `sum(integer)` where it is `sum(bigint)`.
+  whole_numeric = Dict{String,Tuple{Symbol,String}}()
+  bigint = Dict{String,Tuple{Symbol,String}}()
   @pormg_debug false
   for value_part in values
     # fields[value_part.field] = _set_field_from_sql_function(value_part.field, value_part._as, instruct)
@@ -1057,6 +1054,10 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
       if path === nothing
         side = _concat_textless_operand(source, instruct)
         side === nothing || (textless[key_new] = side)
+        side = _whole_numeric_operand(source, instruct)
+        side === nothing || (whole_numeric[key_new] = side)
+        side = _bigint_valued(source, instruct)
+        side === nothing || (bigint[key_new] = side)
       elseif memo_json_lookup(instruct, memo_key(:base, path))
         textless[key_new] = (:json_value, "")
       end
@@ -1075,5 +1076,7 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
     connect_key = instruct.object.model.connect_key
   )
   cte["textless"] = textless
+  cte["whole_numeric"] = whole_numeric
+  cte["bigint"] = bigint
 
 end

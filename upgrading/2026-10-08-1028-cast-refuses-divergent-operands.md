@@ -30,7 +30,7 @@ Now refused, when the query is built, on both engines:
   which read the same on both engines, and passes, as an integer column does — unless it is divided,
   which SQLite does as integer division (#1087);
 - a cast to an integer of a float, a decimal with places or a `numeric` function, unless the operand is
-  `Round(x)`, `Floor(x)` or `Ceil(x)`, which agree on both engines, or a whole number (`Mod` of
+  `Round(x)`, `Floor(x)` or `Ceil(x)`, which agree on both engines (unless divided, #1111), or a whole number (`Mod` of
   integers, `+`/`-`/`*` of whole numbers);
 - a `Concat` operand that is a timestamp (a column, `F("start_at") + Day(1)`, a `DateTime` literal
   — refused when the `Concat` is built), an interval (a `DurationField`, a timestamp difference, `Sum`

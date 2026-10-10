@@ -234,6 +234,8 @@ const _EKM_FORMATTER_FAMILY = Dict(
   "format_yyyy_mm" => :text)   # `ToChar(…, "YYYY-MM")`
 const _EKM_TEXTLESS_FAMILY = Dict(
   "bool" => :bool, "float" => :float, "decimal" => :decimal, "numeric" => :numeric,
+  # #1111: a whole number PostgreSQL types `numeric`, divided — an engine-dependent number too.
+  "integer_division" => :numeric,
   "timestamp" => :datetime, "interval" => :interval, "json" => :json, "json_value" => :json)
 const _EKM_FIELD_FAMILY = Dict(
   "sIntegerField" => :int, "sBigIntegerField" => :int, "sSmallIntegerField" => :int, "sFloatField" => :float,

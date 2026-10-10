@@ -109,26 +109,48 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum interval | cte", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
   ("Sum interval | subquery", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
   ("Sum interval | subquery", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
-  ("Value bool | alone", :postgres) => (type = "Bool", value = "true", read = nothing),
-  ("Value bool | alone", :sqlite) => (type = "Int64", value = "1", read = nothing),
+  # #1124: the same shapes inside a `Subquery`, now classified by their projection. The read
+  # kind stays unrecorded (`subquery_kinds` carries only a projection with a parser), so each
+  # driver's own type comes through, as in the `alone` cells.
+  ("Abs decimal | subquery", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
+  ("Abs decimal | subquery", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
+  ("Avg decimal | subquery", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
+  ("Avg decimal | subquery", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
+  ("Avg float | subquery", :postgres) => (type = "Float64", value = "10.0", read = nothing),
+  ("Avg float | subquery", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
+  ("F decimal * 2 | subquery", :postgres) => (type = "Decimal", value = "11", read = nothing),
+  ("F decimal * 2 | subquery", :sqlite) => (type = "Float64", value = "11.0", read = nothing),
+  ("Mod int | subquery", :postgres) => (type = "Decimal", value = "1", read = nothing),
+  ("Mod int | subquery", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
+  ("Round decimal | subquery", :postgres) => (type = "Decimal", value = "6", read = nothing),
+  ("Round decimal | subquery", :sqlite) => (type = "Float64", value = "6.0", read = nothing),
+  ("Round float | subquery", :postgres) => (type = "Decimal", value = "10", read = nothing),
+  ("Round float | subquery", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
+  ("Subquery Avg float | alone", :postgres) => (type = "Float64", value = "10.0", read = nothing),
+  ("Subquery Avg float | alone", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
+  ("Subquery Avg float | subquery", :postgres) => (type = "Float64", value = "10.0", read = nothing),
+  ("Subquery Avg float | subquery", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
+  ("Sum decimal | subquery", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
+  ("Sum decimal | subquery", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
 )
 
 # The cells whose value comes back as a DIFFERENT TYPE on the two engines, by the table above. Every
-# other disagreeing cell reads back the same type on both, with `==` values. Three families:
+# other disagreeing cell reads back the same type on both, with `==` values. Two families:
 # - a number PostgreSQL computes as `numeric` — an aggregate, `Abs`, `Round` or arithmetic over a
 #   `DecimalField` (the shapes #648 left untyped), and `Round`/`Mod` over a float or an integer — comes
 #   back as a `Decimal` there and a `Float64` on SQLite. The textless channel already names each one
 #   (`decimal` / `numeric`); no read kind records it;
-# - a `Value(true)` literal comes back as a `Bool` on PostgreSQL and SQLite's stored `1`: the textless
-#   channel names it `bool`, the read kind records nothing (#965 typed boolean COLUMNS and expressions);
 # - `F date - date` records `CInt32`, which no read parser undoes, so each driver's integer width
 #   comes through (`Int32` vs `Int64`).
 const _EKR_TYPE_DIVERGENT = Set{String}([
   "Abs decimal | alone", "Avg decimal | alone", "Avg decimal | cte", "F decimal * 2 | alone",
   "F decimal * 2 | cte", "Mod int | alone", "Round decimal | alone", "Round float | alone",
   "Sum decimal | alone", "Sum decimal | cte",
-  "Value bool | alone",
   "F date - date | alone", "F date - date | subquery",
+  # #1124: the same `numeric` family inside a `Subquery`. `Avg float` and `Subquery Avg float`
+  # read a `Float64` on both, and `Value bool | subquery` left the set with #1122.
+  "Abs decimal | subquery", "Avg decimal | subquery", "F decimal * 2 | subquery", "Mod int | subquery",
+  "Round decimal | subquery", "Round float | subquery", "Sum decimal | subquery",
 ])
 
 const _EKR_CELLS = sort!([id for (id, backend) in keys(_EKM_DISAGREEMENTS) if backend === _EKR_ENGINE])
@@ -181,4 +203,34 @@ end
                   if haskey(_EKR_EXPECTED, (id, :postgres)) && haskey(_EKR_EXPECTED, (id, :sqlite)) &&
                      _EKR_EXPECTED[(id, :postgres)].type != _EKR_EXPECTED[(id, :sqlite)].type)
   @test divergent == _EKR_TYPE_DIVERGENT
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A Bool literal reads back as a Bool, in every context (#1122)
+# `Value(true)` / `Value(false)` projected alone, under a CTE, inside a `Subquery` and as a `When`
+# branch, on result 1. SQLite binds a boolean as 0/1 and hands the integer back unless the build
+# recorded `CBool`; before #1122 it did so only under a CTE, so the literal read back as `1` alone and
+# inside a `Subquery` while PostgreSQL's driver delivered `true`. Its cell left the disagreement set
+# with the fix, so this testset is what keeps it read back on both engines.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Expression-kind matrix: a Bool literal reads back as a Bool (#1122)" begin
+  for b in (true, false)
+    for ctx in (:alone, :cte, :subquery)
+      @testset "Value($b) | $ctx" begin
+        q, name = ekm_query(M, :Result, m -> _EKM_FN.Value(b), ctx)
+        q.filter("resultid" => _EKR_ROW[:Result])
+        v = only(q.list())[name]
+        @test v isa Bool
+        @test v === b
+      end
+    end
+    @testset "When(..., then = Value($b))" begin
+      q = M.Result.objects
+      q.filter("resultid" => _EKR_ROW[:Result])
+      q.values("resultid", "c" => _EKM_FN.Case([_EKM_FN.When("resultid" => _EKR_ROW[:Result], then = _EKM_FN.Value(b))], default = !b))
+      v = only(q.list())[:c]
+      @test v isa Bool
+      @test v === b
+    end
+  end
 end

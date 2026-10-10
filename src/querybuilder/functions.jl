@@ -851,6 +851,8 @@ _divergent_text_why(kind::Symbol) =
   kind === :timestamp ? "a timestamp reads `2009-03-29 06:00:00+00` on PostgreSQL and `2009-03-29T06:00:00.000+00:00` on SQLite" :
   kind === :interval ? "PostgreSQL writes an interval in its `IntervalStyle` (`PT25.021S`, `1 day 02:00:00`) and SQLite as PormG stored it (`00:00:25.021`)" :
   kind === :json ? "PostgreSQL's `jsonb` re-renders a document (`{\"a\": [1, 2]}`) and SQLite keeps the stored text (`{\"a\":[1,2]}`)" :
+  # #1087/#1111: a whole number PostgreSQL types `numeric`, divided — the split is the division.
+  kind === :integer_division ? "PostgreSQL divides it as `numeric` (`15 / 2` is `7.5`) and SQLite as an integer (`7`)" :
                    "PostgreSQL computes it as `numeric` (`1`) and SQLite as a REAL (`1.0`)"
 _divergent_text_fix(kind::Symbol, flag::AbstractString) =
   kind === :bool ?
@@ -872,11 +874,18 @@ function _cast_divergent_refusal(fname::AbstractString, kind::Symbol, what::Abst
   # `numeric`, which keeps the value.
   if target === :scale
     why = "PostgreSQL rounds a value cast to $(flag) to its scale (`1.555` → `1.56` at scale 2, `1.5` → `2` at scale 0) and SQLite keeps every digit"
+    # #1111: an integer division has no fraction on SQLite at all, so the split is the division, and
+    # the way out is to divide as a float first.
+    kind === :integer_division && (why = _divergent_text_why(kind) * ", so only PostgreSQL has a fraction to round to $(flag)")
     scale = something(_numeric_cast_scale(flag), 0)
     # Text is not rounded either (`_round_text_refusal`): it is made a number first.
     spelled = kind === :text ? "Cast(x, FloatField())" : "x"
     fix = "Round it to the scale first (\e[32mCast(Round($(spelled), $(scale)), \"$(flag)\")\e[0m, #1061), or cast to an " *
           "unscaled \e[32m\"numeric\"\e[0m, which keeps the value on both engines."
+    # An unscaled cast keeps `7` on SQLite and `7.5` on PostgreSQL, so it is no way out here.
+    kind === :integer_division && (fix =
+      "Divide as a float first, so SQLite keeps the fraction too, then round it to the scale " *
+      "(\e[32mCast(Round(x / 2.0, $(scale)), \"$(flag)\")\e[0m, #1061), or fetch the number and divide it in Julia.")
     return QueryBuildError(
       "\e[4m\e[31m$(fname)\e[0m cannot make the same number from $(what) on both engines: $(why) (#1040). $(fix)")
   end
@@ -896,6 +905,13 @@ function _cast_divergent_refusal(fname::AbstractString, kind::Symbol, what::Abst
   if target === :integer
     why = "PostgreSQL rounds a fractional number cast to an integer (`1.5` → `2`) and SQLite truncates it (`1.5` → `1`)"
     fix = "Say how to round it: \e[32mCast(Round(x), IntegerField())\e[0m, \e[32mFloor(x)\e[0m or \e[32mCeil(x)\e[0m read the same integer on both engines."
+    # #1111: rounding after an integer division cannot bring the half back on SQLite. The fraction
+    # exists on both engines only when the division is a float's.
+    if kind === :integer_division
+      why = _divergent_text_why(kind) * ", and PostgreSQL rounds the quotient cast to an integer (`7.5` → `8`)"
+      fix = "Divide as a float first, so SQLite keeps the fraction too, then say how to round it: " *
+            "\e[32mCast(Round(x / 2.0), IntegerField())\e[0m reads the same integer on both engines."
+    end
     return QueryBuildError(
       "\e[4m\e[31m$(fname)\e[0m cannot make the same integer from $(what) on both engines: $(why) (#1028). $(fix)")
   end

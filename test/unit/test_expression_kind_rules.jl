@@ -92,7 +92,8 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Function result rules: every rule is one the readers know
-# `_infer_function_kind`, `_textless_number` and `_zero_scale_decimal` branch on these symbols;
+# `_infer_function_kind`, `_textless_number`, `_whole_numeric_operand` and `_known_whole` branch on
+# these symbols;
 # a misspelt rule would match none of their branches and silently read as untyped.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1034: every result rule is in the vocabulary" begin

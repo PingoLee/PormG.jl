@@ -952,6 +952,45 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1157: a whole number is one the type walk names an integer
+# `_known_whole` was a hand-built classifier, and it named fewer integers than the walk: `Length`, the
+# ranking windows, an integer `Case` and `Coalesce(x, NULL)` were not whole to it. It is now the walk's
+# integer kind, so those divide as integers on both engines under `Floor`/`Ceil`/`Abs` (PostgreSQL casts
+# the floor back, `FLOOR((LENGTH("Tb"."surname"))::numeric)::integer`, as over any integer, #1147).
+# The `SUM` arm of the #1111 division check now fires only over an operand the walk cannot type: a
+# sum it names another kind is that kind's sum. `Sum(F("id") + F("grid"))` over a zero-scale decimal
+# was refused on PostgreSQL as an integer quotient (`sum(bigint)` read through the `id`), though both
+# engines compute the decimal quotient `7.5` (#1150): it is the #1028 fraction to an integer, refused
+# on SQLite, and builds to text on both.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1157: a whole number is the walk's integer; a sum it types otherwise is no integer quotient" begin
+  rank() = PormG.QueryBuilder.Rank(over = PormG.QueryBuilder.WindowOver(order_by = ["number"]))
+  for operand in (Fn.Length("surname"), rank(), Fn.Case(Fn.When("number" => 1, then = 1), default = 0),
+                  Fn.Coalesce("number", Fn.Value(nothing))),
+      f in (Fn.Floor, Fn.Ceil, Fn.Abs), target in (Models.IntegerField(), Models.CharField())
+    @test _ccd_builds(Fn.Cast(f(operand) / 2, target))
+  end
+  @test occursin("((FLOOR((LENGTH(\"Tb\".\"surname\"))::numeric)::integer / \$1::bigint))::integer as \"x\"",
+                 _ccd_render(Fn.Cast(Fn.Floor(Fn.Length("surname")) / 2, Models.IntegerField()); conn = _CCD_PG))
+  @test occursin("CAST((FLOOR(LENGTH(\"Tb\".\"surname\")) / ?) AS INTEGER) as \"x\"",
+                 _ccd_render(Fn.Cast(Fn.Floor(Fn.Length("surname")) / 2, Models.IntegerField()); conn = _CCD_SL))
+  # The sum of a `bigint` and a decimal is a decimal: no integer quotient on PostgreSQL.
+  _ccd_expect(Fn.Cast(Fn.Sum(_CF("id") + _CF("grid")) / 2, Models.IntegerField()); departs = _SL_ONLY, issue = "#1028",
+              named = "a decimal quotient")
+  @test _ccd_builds(Fn.Cast(Fn.Sum(_CF("id") + _CF("grid")) / 2, "text"))
+  @test occursin("CAST((CAST(SUM((\"Tb\".\"id\" + \"Tb\".\"grid\")) AS REAL) / ?) AS TEXT) as \"x\"",
+                 _ccd_render(Fn.Cast(Fn.Sum(_CF("id") + _CF("grid")) / 2, "text"); conn = _CCD_SL))
+  # `Mod` and `Round(x)` are whole in value but no integer in type (a `numeric` on PostgreSQL, a REAL
+  # on SQLite): a quotient over them keeps the half on both, so it is a fraction, not an integer one.
+  @test _ccd_builds(Fn.Cast(Fn.Floor(Fn.Round("number")) / 2, "text"))
+  # What still reaches the #1111 row: a `bigint` summed with an operand the walk cannot type (a JSON
+  # key lookup), which PostgreSQL's `sum(bigint)` would widen. Fail-closed on PostgreSQL until #1034's
+  # phase 4 decides what an unknown kind means per view.
+  _ccd_expect(Fn.Cast(Fn.Sum(_CF("laps_total") + _CF("payload__n")) / 2, Models.IntegerField()); departs = _PG_ONLY,
+              issue = "#1111", named = "`SUM(…)` over the BigIntegerField `laps_total`")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # A CTE column from Sum of a BIGINT, divided, builds on both engines (#1127, #1147, #1153)
 # The CTE model types a `SUM` column as an integer, whatever it sums. Under #1127 the body's answer was
 # recorded and `CTE("c", "s") / 2` refused on both engines, since PostgreSQL's `sum(bigint)` is

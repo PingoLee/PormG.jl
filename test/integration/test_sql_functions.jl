@@ -2369,6 +2369,15 @@ end
         order_by("raceid").limit(10).list(:dict)
     @test length(races) == 10
     @test all(r -> r[:y] isa Integer && r[:y] == div(r[:year], 2), races)
+    # #1157: `Length` and a ranking window are integers to the type walk, so a `Floor` over them divides
+    # as an integer on both engines too (checked against Julia over the same rows).
+    drivers = M.Driver.objects.values("driverid", "surname", "h" => Floor(Length("surname")) / 2,
+                                      "r" => Floor(Rank(over = WindowOver(order_by = "driverid"))) / 2).
+        order_by("driverid").limit(20).list(:dict)
+    @test length(drivers) == 20
+    @test any(d -> isodd(length(d[:surname])), drivers)   # a half to drop is exercised
+    @test all(d -> d[:h] isa Integer && d[:h] == div(length(d[:surname]), 2), drivers)
+    @test all(((i, d),) -> d[:r] isa Integer && d[:r] == div(i, 2), enumerate(drivers))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

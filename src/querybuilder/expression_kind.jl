@@ -135,6 +135,9 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
     declared isa AbstractString && !isempty(declared) && return _declared_kind(declared, instruc.connection)
   end
   rule isa CanonicalType && return rule
+  # #1147: a date part both engines compute as an integer (`_integer_transform`) is one, whatever its
+  # operand. Its rule stays `:unknown` until phase 3 states it, so the read kind is unchanged.
+  _integer_transform(p) && return _integer_transform_kind(instruc.connection)
   rule === :operand && return _infer_kind(p.column, instruc, policy)
   rule === :first_operand && return _infer_kind(first(p.column), instruc, policy)
   rule === :one_of && return _agreeing_kind(p, instruc, policy)
@@ -144,6 +147,25 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
   return nothing
 end
 _infer_function_kind(::Any, ::SQLInstruction, ::_KindPolicy) = nothing
+
+# The integer an integer date part is on the engine: PostgreSQL renders `EXTRACT(…)::integer` (and
+# `QUARTER`/`QUADRIMESTER`/`WEEK_DAY` as an `integer` too), SQLite computes a 64-bit integer.
+_integer_transform_kind(::PormGPostgres) = CInt32()
+_integer_transform_kind(::PormGSQLite) = CInt64()
+_integer_transform_kind(::Any) = nothing
+
+"""
+    _integer_operand_kind(p, instruc) -> Union{CInt16, CInt32, CInt64, Nothing}
+
+The integer kind of `p`'s first operand on `instruc`'s engine, or `nothing` when it is not one PormG
+can name. `Abs`/`Floor`/`Ceil` keep it (#1147): `Dialect` renders them over that integer, not over
+`(x)::numeric`, and `_computed_kind` answers the same kind — both read this, so the SQL and the walk
+cannot disagree. Read after the operand renders.
+"""
+function _integer_operand_kind(p::SQLTypeFunction, instruc::SQLInstruction)
+  k = _infer_kind(_first_operand(p), instruc, _AllKinds())
+  return k isa Union{CInt16,CInt32,CInt64} ? k : nothing
+end
 
 _declared_cast(p::FObject) = get(p.kwargs, p.function_name == "CAST" ? "type" : "output_field", nothing)
 _first_operand(p::SQLTypeFunction) = p.column isa AbstractVector ? first(p.column) : p.column
@@ -218,8 +240,9 @@ _numeric_rank(::CanonicalType) = nothing
 # A computed number's kind on the engine, from its rule and its (first) operand's kind `k` — the
 # engine-dependent results #1034 asks to state once, as data. What `Dialect` renders decides:
 #
-# - PostgreSQL renders every `:numeric` function and `Abs`/`Floor`/`Ceil` over `(x)::numeric`, so the
-#   value is a `numeric` whatever the operand;
+# - PostgreSQL renders every `:numeric` function over `(x)::numeric`, so the value is a `numeric`
+#   whatever the operand; so are `Abs`/`Floor`/`Ceil`, except over an integer, which they keep
+#   (#1147: their methods beside their constructors override this, `_integer_operand_kind`);
 # - SQLite renders them bare: a `:promoting` function keeps its operand's type (an integer stays one,
 #   #1087) and a `:numeric` one answers a REAL (`Mod(7, 3)` reads `1.0`, #1027).
 #

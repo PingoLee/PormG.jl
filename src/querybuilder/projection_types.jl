@@ -910,9 +910,11 @@ end
 # the functions whose value has an operand's type carry it, as arithmetic does (`Max(Abs("n")) / 2`,
 # `Sum("grid") / Count("id")`, `(Floor("n") + 1) / 2`):
 # - a zero-scale `DecimalField` column (#1087): SQLite stores its whole values as INTEGER;
-# - `FLOOR`, `CEIL`, `ABS` (#1111): `Dialect` renders `FLOOR((x)::numeric)` on PostgreSQL, and SQLite
-#   keeps the integer operand's type. `ROUND(x)` renders `::numeric` too, but it is `:numeric`
-#   through its `:numeric` `_result_rule` whatever the operator, so it never reaches this;
+# - `FLOOR`, `CEIL`, `ABS` (#1111) over a whole number PormG does not type as an integer (`Floor(F("n")
+#   + 1)`, `Floor(Round(x))`): `Dialect` renders `FLOOR((x)::numeric)` on PostgreSQL, and SQLite keeps
+#   the operand's type. Over an integer they keep it on both engines (#1147, `_integer_operand_kind`),
+#   so `Floor("grid") / 2` divides as an integer on both. `ROUND(x)` renders `::numeric` too, but it is
+#   `:numeric` through its `:numeric` `_result_rule` whatever the operator, so it never reaches this;
 # - `SUM` of a BIGINT column (#1111) — an `IDField`, a `BigIntegerField`, a `ForeignKey` or
 #   `OneToOneField`: PostgreSQL's `sum(bigint)` is `numeric`, where `sum(integer)` is `bigint` and
 #   divides as an integer on both. `MAX`/`MIN` keep the operand's type and `COUNT` is a `bigint`.
@@ -921,8 +923,8 @@ end
 # A CTE column built from any of these answers as it did in the body (#1127), and so does a
 # `Subquery` projecting one (#1124): each is a record the inner build kept, not its typed field.
 # Measured on PostgreSQL 16 and SQLite 3.45 through the F1 fixture: `Floor("grid") / 2` over grid
-# 1, 5, 7 reads `0.5`, `2.5`, `3.5` and `0`, `2`, `3`; `Sum("resultid") / 2` over two rows `1.5` and
-# `1`. The kind is `:integer_division`, so the refusal says what differs — the division, not a
+# 1, 5, 7 read `0.5`, `2.5`, `3.5` and `0`, `2`, `3` before #1147; `Sum("resultid") / 2` over two rows
+# `1.5` and `1`. The kind is `:integer_division`, so the refusal says what differs — the division, not a
 # decimal's text — and the integer and scale targets advise dividing as a float first
 # (`_cast_divergent_refusal`): rounding after an integer division cannot bring the half back.
 const _NUMERIC_WHOLE_FUNCTIONS = ("FLOOR", "CEIL", "ABS")
@@ -962,7 +964,15 @@ function _whole_numeric_operand(p::Union{FObject,WindowFunction}, instruc::SQLIn
     # lookup) is let through, not guessed at: a float under `FLOOR` is a REAL on SQLite, which
     # divides as one, so the engines agree there and the integer answer would be a false refusal.
     operand = p.column isa AbstractVector ? first(p.column) : p.column
-    return _known_whole(operand, instruc) ? (:integer_division, "`$(name)(…)`") : nothing
+    _known_whole(operand, instruc) || return nothing
+    # #1147: over an integer the function is that integer on both engines, so it is `numeric` on
+    # PostgreSQL only when its operand is (`Floor(Sum("resultid"))`). Asked first, because the
+    # operand's integer kind is the one fact that differs per engine here — a `Sum` of a `bigint` is a
+    # `numeric` on PostgreSQL and an integer on SQLite — and its answer is the same on both.
+    side = _whole_numeric_operand(operand, instruc)
+    side === nothing || return (side[1], "`$(name)(…)` over $(side[2])")
+    # A whole number the render still casts to `numeric` on PostgreSQL.
+    return _integer_operand_kind(p, instruc) === nothing ? (:integer_division, "`$(name)(…)`") : nothing
   end
   _result_rule(p) in _OPERAND_TYPED_RULES || return nothing
   for operand in (p.column isa AbstractVector ? p.column : (p.column,))
@@ -1030,9 +1040,10 @@ end
 # `:one_of` function's operands; a `Case`'s branch values
 # (`Case(When(…, then = 1), default = 0)` is a `bigint`, its literals bound so); and a `Lag`/`Lead`
 # operand with its `default` (`lag(int4, int, int8)` is `int8`). In those two a string is a text
-# literal, not a path (`_case_kind`), so it is no `bigint`. `NullIf` is its first operand. Not the
-# `:promoting` rule: `SUM` of a `bigint` is a `numeric` and `FLOOR`/`CEIL`/`ABS` render over
-# `::numeric`, which `_whole_numeric_operand` answers. A declared type (`Cast`'s, or an
+# literal, not a path (`_case_kind`), so it is no `bigint`. `NullIf` is its first operand. `FLOOR`/
+# `CEIL`/`ABS` over an integer keep it (#1147), so they are its own value too: `Sum(Floor("id"))` is a
+# `sum(bigint)`. Not the rest of the `:promoting` rule: `SUM` of a `bigint` is a `numeric`, and so are
+# `FLOOR`/`CEIL`/`ABS` over anything else, which `_whole_numeric_operand` answers. A declared type (`Cast`'s, or an
 # `output_field`) is the cast the SQL renders, so it decides alone: a `bigint` when it names one
 # (`Sum(Cast("grid", BigIntegerField()))` is a `sum(bigint)`), and nothing else.
 function _bigint_operand_function(p::Union{FObject,WindowFunction}, of::Function, instruc::SQLInstruction)
@@ -1048,6 +1059,8 @@ function _bigint_operand_function(p::Union{FObject,WindowFunction}, of::Function
     operands = Any[get(branch.kwargs, "then", nothing) for branch in operands if branch isa SQLTypeFunction]
     push!(operands, get(p.kwargs, "else", nothing))
     literal_strings = true
+  elseif p.function_name in _NUMERIC_WHOLE_FUNCTIONS && _integer_operand_kind(p, instruc) !== nothing
+    operands = Any[first(operands)]
   elseif rule in (:operand, :first_operand)
     operands = Any[first(operands)]
     if p isa WindowFunction

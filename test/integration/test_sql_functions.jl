@@ -2196,3 +2196,35 @@ end
     @test_throws PormG.InvalidValueError M.Race.objects.filter("date__@year" => 99999).list(:dict)
     @test_throws PormG.InvalidValueError M.Race.objects.filter("date__@year__@in" => [99999]).list(:dict)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1147: Floor/Ceil/Abs over an integer keep it on both engines, so an integer quotient is one.
+# PostgreSQL rendered `FLOOR(("Tb"."grid")::numeric)`, a `numeric`, so `Floor("grid") / 2` kept the half
+# (`3.5`) where SQLite divides integers (`3`). It now renders `FLOOR(("Tb"."grid")::numeric)::integer`
+# and `ABS("Tb"."grid")`. Expected: every value equals the Julia integer computed from the row's own
+# column, read back as an `Integer` on both engines. `Abs(Value(-5))` binds `$1::bigint`: the case the
+# `::numeric` cast was once for (an untyped parameter, which `abs` cannot resolve) stays covered.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1147: Floor/Ceil/Abs over an integer read an integer and divide as one" begin
+    rows = M.Result.objects.filter("grid__@gt" => 0).
+        values("resultid", "grid", "f" => Floor("grid"), "c" => Ceil("grid"), "a" => Abs("grid"),
+               "fid" => Floor("resultid"), "half" => Floor("grid") / 2, "ahalf" => Abs("grid") / 2,
+               "lit" => Abs(Value(-5))).
+        order_by("resultid").limit(20).list(:dict)
+    @test length(rows) == 20
+    @test any(r -> isodd(r[:grid]), rows)   # an odd grid is where the half would show
+    for r in rows
+        @test r[:f] isa Integer && r[:f] == r[:grid]
+        @test r[:c] isa Integer && r[:c] == r[:grid]
+        @test r[:a] isa Integer && r[:a] == r[:grid]
+        @test r[:fid] isa Integer && r[:fid] == r[:resultid]
+        @test r[:half] isa Integer && r[:half] == div(r[:grid], 2)
+        @test r[:ahalf] isa Integer && r[:ahalf] == div(r[:grid], 2)
+        @test r[:lit] == 5
+    end
+    # An integer date part is one too (#1135's refusal of it, divided, is gone).
+    races = M.Race.objects.values("raceid", "year", "y" => Floor("date__@year") / 2).
+        order_by("raceid").limit(10).list(:dict)
+    @test length(races) == 10
+    @test all(r -> r[:y] isa Integer && r[:y] == div(r[:year], 2), races)
+end

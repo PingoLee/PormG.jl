@@ -1086,7 +1086,17 @@ function LENGTH(column::String, format::Dict{String,Any}, conn::Union{PormGPostg
   return "LENGTH($(column))"
 end
 
+# #1147 — over an integer (`integer_kind`, set by the build from `_integer_operand_kind`) `Abs`, `Floor`
+# and `Ceil` keep it, as SQLite does: an integer `Floor("grid") / 2` divides as an integer on both
+# engines. Any other operand is cast to `numeric` (since `b0642e96`), where `abs`/`floor`/`ceil` are
+# exact. PostgreSQL has `abs(int2|int4|int8)`; it has no `floor`/`ceil` over an integer, and resolves
+# a bare `FLOOR(int)` to `double precision`, so those two round through `numeric` and cast the result
+# back to the operand's type — exact for every `bigint`, where a `double` is not.
+_pg_integer_type(::CInt16) = "smallint"
+_pg_integer_type(::CInt32) = "integer"
+_pg_integer_type(::CInt64) = "bigint"
 function ABS(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+  get(format, "integer_kind", nothing) === nothing || return "ABS($(column))"
   return "ABS(($(column))::numeric)"
 end
 function ABS(column::String, format::Dict{String,Any}, conn::PormGSQLite)
@@ -1147,6 +1157,8 @@ function RTRIM(column::String, format::Dict{String,Any}, conn::Union{PormGPostgr
 end
 
 function FLOOR(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+  kind = get(format, "integer_kind", nothing)
+  kind === nothing || return "FLOOR(($(column))::numeric)::$(_pg_integer_type(kind))"
   return "FLOOR(($(column))::numeric)"
 end
 function FLOOR(column::String, format::Dict{String,Any}, conn::PormGSQLite)
@@ -1154,6 +1166,8 @@ function FLOOR(column::String, format::Dict{String,Any}, conn::PormGSQLite)
 end
 
 function CEIL(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+  kind = get(format, "integer_kind", nothing)
+  kind === nothing || return "CEIL(($(column))::numeric)::$(_pg_integer_type(kind))"
   return "CEIL(($(column))::numeric)"
 end
 function CEIL(column::String, format::Dict{String,Any}, conn::PormGSQLite)

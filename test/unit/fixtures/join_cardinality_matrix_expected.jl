@@ -473,6 +473,42 @@ const _JCARD_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\", \"Tb_3\".\"points\" as \"teamid__drivers__results__points\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" LEFT JOIN \"driver\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" LEFT JOIN \"result\" AS \"Tb_3\" ON \"Tb_2\".\"driverid\" = \"Tb_3\".\"driverid\" AND \"Tb_3\".\"grid\" = \$1"),
   ("on() path through a reverse hop after the first (#1112)", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"driverid\" as \"driverid\", \"Tb_3\".\"points\" as \"teamid__drivers__results__points\" FROM \"driver\" as \"Tb\" LEFT JOIN \"team\" AS \"Tb_1\" ON \"Tb\".\"teamid\" = \"Tb_1\".\"teamid\" LEFT JOIN \"driver\" AS \"Tb_2\" ON \"Tb_1\".\"teamid\" = \"Tb_2\".\"teamid\" LEFT JOIN \"result\" AS \"Tb_3\" ON \"Tb_2\".\"driverid\" = \"Tb_3\".\"driverid\" AND \"Tb_3\".\"grid\" = ?"),
+  ("values, a path ending at a reverse accessor, no hop (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "the path results ends at results, a reverse relation from driver to result, not a column. A relation needs a column afte"),
+  ("values, a path ending at a reverse accessor, no hop (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "the path results ends at results, a reverse relation from driver to result, not a column. A relation needs a column afte"),
+  ("values, a path ending at a reverse accessor, first hop (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "the path drivers__results ends at results, a reverse relation from driver to result, not a column. A relation needs a co"),
+  ("values, a path ending at a reverse accessor, first hop (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "the path drivers__results ends at results, a reverse relation from driver to result, not a column. A relation needs a co"),
+  ("values, a path ending at a reverse accessor after the first hop (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "the path teamid__drivers__results ends at results, a reverse relation from driver to result, not a column. A relation ne"),
+  ("values, a path ending at a reverse accessor after the first hop (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "the path teamid__drivers__results ends at results, a reverse relation from driver to result, not a column. A relation ne"),
+  ("filter, a path ending at a reverse accessor after the first hop (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "the path teamid__drivers__results ends at results, a reverse relation from driver to result, not a column. A relation ne"),
+  ("filter, a path ending at a reverse accessor after the first hop (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "the path teamid__drivers__results ends at results, a reverse relation from driver to result, not a column. A relation ne"),
+  ("filter, a plain key that is a reverse accessor (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "the path results ends at results, a reverse relation from driver to result, not a column. A relation needs a column afte"),
+  ("filter, a plain key that is a reverse accessor (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "the path results ends at results, a reverse relation from driver to result, not a column. A relation needs a column afte"),
+  ("filter, a plain key that is a ManyToMany field, with a lookup (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "the path sponsors ends at sponsors, a ManyToMany field from driver to sponsor, not a column. A relation needs a column a"),
+  ("filter, a plain key that is a ManyToMany field, with a lookup (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "the path sponsors ends at sponsors, a ManyToMany field from driver to sponsor, not a column. A relation needs a column a"),
+  ("values, a path ending at a ManyToMany field after the first hop (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "the path teamid__drivers__sponsors ends at sponsors, a ManyToMany field from driver to sponsor, not a column. A relation"),
+  ("values, a path ending at a ManyToMany field after the first hop (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "the path teamid__drivers__sponsors ends at sponsors, a ManyToMany field from driver to sponsor, not a column. A relation"),
+  ("values, a path ending at a reverse ManyToMany accessor (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "the path teamid__drivers__sponsors__drivers ends at drivers, a reverse ManyToMany accessor from sponsor to driver, not a"),
+  ("values, a path ending at a reverse ManyToMany accessor (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "the path teamid__drivers__sponsors__drivers ends at drivers, a reverse ManyToMany accessor from sponsor to driver, not a"),
+  ("values, an unknown name before the last segment, after the first hop (#1134)", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column nope not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the reve"),
+  ("values, an unknown name before the last segment, after the first hop (#1134)", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "the column nope not found in driver, that contains the fields: code, driverid, nationality, number, teamid; and the reve"),
   ("filter, forward not null from Result", :postgres) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" WHERE \"Tb_1\".\"code\" = \$1"),
   ("filter, forward not null from Result", :sqlite) =>

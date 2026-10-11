@@ -372,15 +372,13 @@ function _apply_many_to_many_branch(
   join_path::String,
   vector::Vector{String};
   previus_how::Union{String, Nothing}=nothing,
-  reverse::Bool=false,
   track_path::Bool=true,
 )
   foreing_table_module = instruct.object.model._module::Module
   foreign_model = _resolve_many_to_many_related_model(foreing_table_module, relation)
-  if length(vector) == 1
-    msg = reverse ? "many-to-many reverse field" : "many-to-many field"
-    throw(QueryBuildError("Invalid field path: $(vector[1]) is a $(msg), you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
-  end
+  # #1134: no `length(vector) == 1` refusal. A hop always has a segment after it — `_build_row_join`
+  # only ever receives two or more, and its loop only runs while two remain — so a path ending at
+  # this relation reaches `_solve_field`, which refuses it as a relation (`_relation_terminal`).
   # `get(..., nothing)` rather than a raw index (#446). An unknown terminal column used to die here
   # with a bare `KeyError` naming an internal dict lookup. Falling through leaves `last_field`
   # unset and lets `_solve_field` at the end of this function raise the typed `UnknownFieldError`
@@ -570,10 +568,13 @@ end
 # read from the child: each parent then has at most one child, and the hop does not repeat the parent.
 _child_key_unique(child::PormGModel, fk_field::Symbol)::Bool = _covers_unique_key(child, Set([String(fk_field)]))
 
-# #68 — ONE reverse-relation hop, the mirror of `_forward_fk_hop` and shared the same way. The
-# `length(vector) == 1` refusal stays in the callers (both have it). Neither checks the segment after
-# the accessor against the child's columns: the loop did until #1112, which refused a path continuing
-# through another relation.
+# #68 — ONE reverse-relation hop, the mirror of `_forward_fk_hop` and shared the same way.
+#
+# The callers check nothing about the segment after the accessor. Not whether there is one: a path
+# ENDING at the accessor was refused by a copy in each caller, both unreachable because a hop always
+# has a segment after it; `_solve_field` refuses a relation as the last segment, for every hop alike
+# (#1134). Nor what it is, against the child's columns: the loop did until #1112, which refused a path
+# continuing through another relation.
 function _reverse_hop(instruct::SQLInstruction, src_model::PormGModel, src_table::String,
                       src_alias::String, rel::Models.ReverseRelation, vector::Vector{String};
                       prev_how::Union{String,Nothing})
@@ -701,6 +702,13 @@ function _record_join_alias!(instruct::SQLInstruction, canonical_path::String, a
 end
 
 function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bool=true, cte::Bool=false)
+  # #1134: every caller passes a relation AND what follows it — the render entries split only a path
+  # containing `__`, `_join_path_columns` appends a key, a `cjoin_on` path has a relation prefix — which
+  # is why no hop below refuses a path that ends at it (`_solve_field` does). Fail closed for a future
+  # caller that passes one segment, rather than index past the end. Not for a CTE handle: the CTE arm
+  # has its own backstop, worded with the `CTE(...)` spelling the caller wrote.
+  !cte && length(field) < 2 && throw(QueryBuildError(
+    "Invalid field path: $(join(field, "__")) is not a join path — a join needs a relation and a column after it."))
   vector = copy(field)
   # #68 narrowed this from `Union{String, PormGModel, Nothing}`: every arm stores a resolved model
   # (#388 made the String member unreachable and asked for the narrowing in a change that runs the
@@ -919,13 +927,12 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       relation = related_object::Models.ManyToManyRelation
       tb_alias, row_join, foreign_model, last_field = _apply_many_to_many_branch(
         relation, instruct, Models.model_table_name(instruct.object.model), instruct.alias,
-        join_path, vector; reverse=true, track_path = !cte
+        join_path, vector; track_path = !cte
       )
       foreign_table_name = foreign_model
       inserted = true
     else
       rel = related_object::Models.ReverseRelation
-      length(vector) == 1 && throw(QueryBuildError("Invalid field path: $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
       # No check of `vector[2]` against the child's field names — an unknown terminal column falls
       # through to `_solve_field`'s typed error (#446). The loop's reverse arm agrees since #1112.
       row_join, foreign_table_name, last_field = _reverse_hop(
@@ -1025,13 +1032,12 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       if related_object isa Models.ManyToManyRelation
         relation = related_object::Models.ManyToManyRelation
         tb_alias, row_join, foreign_model, last_field = _apply_many_to_many_branch(
-          relation, instruct, prev_b, tb_alias, join_path, vector; previus_how=prev_how, reverse=true, track_path = !cte
+          relation, instruct, prev_b, tb_alias, join_path, vector; previus_how=prev_how, track_path = !cte
         )
         foreign_table_name = foreign_model
         inserted = true
       else
         rel = related_object::Models.ReverseRelation
-        length(vector) == 1 && throw(QueryBuildError("Invalid field path: $(vector[1]) is a reverse field, you must inform the column to be selected. Example: ...filter(\"$(vector[1])__column\")"))
         # #1112: no check of `vector[2]` against the child's columns, as at the first hop. That check
         # refused a reverse accessor or a ManyToMany field there, neither of which is in `field_names`;
         # the next iteration resolves those, and an unknown name reaches its `else` or `_solve_field`.
@@ -1041,7 +1047,10 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       end
 
     else
-      throw(UnknownFieldError("Invalid field path: the column $(vector[1]) not found in $(new_object.name)"))
+      # #1134: through the #446 funnel, as the first hop's `else` is — this site built its own
+      # sentence, without the names that ARE available, so the same typo read differently one hop
+      # later. No CTE hint: a CTE name is only ever a path's first segment.
+      throw(_unknown_field(new_object, vector[1]))
     end
 
     @pormg_debug false   
@@ -1071,6 +1080,8 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   # return without it, so a model built by `Models.Model(...)` and never registered through
   # `set_models` — no `_module` — can still take a key path or an index.
   foreing_table_module = instruct.object.model._module::Module
-  return _column_sql(instruct, tb_alias, _solve_field(vector[end], foreing_table_module, foreign_table_name, instruct))   # #985
+  # #1134: `path` so a last segment that is a relation is refused quoting the path the caller wrote.
+  return _column_sql(instruct, tb_alias, _solve_field(vector[end], foreing_table_module, foreign_table_name, instruct;
+                                                      path = join(field, "__")))   # #985
   
 end

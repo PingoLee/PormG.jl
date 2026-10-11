@@ -104,6 +104,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Left Side of a Join Condition (#961)" include("unit/test_join_condition_lhs_prefix.jl")
     @testset "Join-Condition Matrix (#977)" include("unit/test_join_condition_matrix.jl")
     @testset "Join-Cardinality Matrix (#1002)" include("unit/test_join_cardinality_matrix.jl")
+    @testset "Join Path Ending at a Relation (#1134)" include("unit/test_join_path_relation_terminal.jl")
     @testset "Expression-Kind Matrix (#1034)" include("unit/test_expression_kind_matrix.jl")
     @testset "Function Result Rules (#1034)" include("unit/test_expression_kind_rules.jl")
     @testset "One Join-Path Resolver (#977)" include("unit/test_join_resolver_single.jl")

@@ -138,8 +138,17 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
   rule === :operand && return _infer_kind(p.column, instruc, policy)
   rule === :first_operand && return _infer_kind(first(p.column), instruc, policy)
   rule === :one_of && return _agreeing_kind(p, instruc, policy)
-  rule in (:promoting, :numeric) &&
-    return _computed_kind(Val(Symbol(p.function_name)), rule, _infer_kind(_first_operand(p), instruc, policy), instruc.connection)
+  if rule in (:promoting, :numeric)
+    op = _first_operand(p)
+    k = _infer_kind(op, instruc, policy)
+    # #1147: `Abs`/`Floor`/`Ceil` keep an integer where the render does — over an operand
+    # `_known_whole` names, the predicate that sets the render's flag. Over an integer it does not name
+    # (`Length`, a ranking window) PostgreSQL computes `(x)::numeric`, whatever the walk says of `x`.
+    if p isa FObject && p.function_name in _INTEGER_KEEPING_FUNCTIONS && k isa Union{CInt16,CInt32,CInt64}
+      k = _kept_integer_kind(k, _known_whole(op, instruc), instruc.connection)
+    end
+    return _computed_kind(Val(Symbol(p.function_name)), rule, k, instruc.connection)
+  end
   rule === :declared && p isa FObject && p.function_name == "CASE" && return _case_kind(p, instruc, policy)
   return nothing
 end
@@ -230,6 +239,11 @@ _numeric_rank(::CanonicalType) = nothing
 _computed_kind(::Val, ::Symbol, k, ::PormGPostgres) = CDecimal(nothing, nothing)
 _computed_kind(::Val, rule::Symbol, k, ::PormGSQLite) = rule === :numeric ? CFloat64() : _sqlite_number_kind(k)
 _computed_kind(::Val, ::Symbol, k, ::Any) = nothing
+# #1147 — the operand kind an integer-keeping function computes over on the engine: PostgreSQL keeps the
+# integer only over one `_known_whole` names (`Dialect.FLOOR`'s `integer_operand`) and casts any other to
+# `numeric`; SQLite keeps it always.
+_kept_integer_kind(k::CanonicalType, whole::Bool, ::PormGPostgres) = whole ? k : CDecimal(nothing, nothing)
+_kept_integer_kind(k::CanonicalType, ::Bool, ::Any) = k
 # A number SQLite computes over `k` without a cast: an integer is a 64-bit integer, and anything else
 # is not a number this names. Over a `DecimalField` SQLite computes a REAL or an INTEGER from its
 # NUMERIC-affinity storage; it is named a width-less decimal, the type PostgreSQL gives the same call,

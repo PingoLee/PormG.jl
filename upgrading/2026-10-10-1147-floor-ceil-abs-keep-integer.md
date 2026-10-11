@@ -15,8 +15,10 @@ integer by type — an integer column (`IDField`, `ForeignKey` and `BigIntegerFi
 integer arithmetic, an integer cast or literal, an integer date part such as `"dob__@year"` — renders
 without it: `ABS("Tb"."grid")`, and for `Floor`/`Ceil` the integer itself, `("Tb"."grid")` (the floor
 of an integer is the integer, and PostgreSQL has no `floor(integer)`: `floor(int)` is a
-`double precision`). Every other operand — a float, a decimal, a JSON value, a quotient — keeps
-`(x)::numeric`.
+`double precision`). Every other operand — a float, a decimal, a JSON value, a quotient, a CTE column
+its body computed as anything but an integer (an `Avg`, a `Sum` of floats) — keeps `(x)::numeric`.
+One edge follows PostgreSQL's own `abs(integer)`: `Abs` of an `IntegerField` holding −2147483648
+raises *integer out of range* there, where SQLite answers 2147483648.
 
 Measured on the F1 fixture (`Result.grid` is 1, 5, 7 on the first three rows):
 

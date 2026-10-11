@@ -601,7 +601,7 @@ end
   subquery_textless::Union{Nothing,IdDict{SubqueryObject,Tuple{Symbol,String}}} = nothing
   # #1111 — and what the same expression answers once DIVIDED (`_whole_numeric_operand`: a whole
   # number PostgreSQL types `numeric`), recorded in the same window, so `Subquery(…) / 2` is refused
-  # where `Floor(x) / 2` is. Separate from the textless record because the expression alone has one
+  # where `Sum("id") / 2` is. Separate from the textless record because the expression alone has one
   # text; only the division splits it.
   subquery_whole_numeric::Union{Nothing,IdDict{SubqueryObject,Tuple{Symbol,String}}} = nothing
   connection::ConnType = nothing
@@ -911,7 +911,7 @@ function _copy_ctes(ctes::OrderedCollections.OrderedDict{String,CTEDict})::Order
   for (name, cte_dict) in ctes
     fresh = CTEDict()
     for (k, v) in cte_dict
-      k in ("model", "textless", "whole_numeric", "bigint") && continue  # transient per-build artifacts; re-materialized each build
+      k in ("model", "textless", "whole_numeric", "bigint", "whole") && continue  # transient per-build artifacts; re-materialized each build
       fresh[k] = v isa SQLObjectHandler ? deepcopy(v) : v
     end
     out[name] = fresh

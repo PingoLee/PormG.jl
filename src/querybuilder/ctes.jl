@@ -1012,6 +1012,10 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   # as an integer too, so an outer `Sum` over it read as `sum(integer)` where it is `sum(bigint)`.
   whole_numeric = Dict{String,Tuple{Symbol,String}}()
   bigint = Dict{String,Tuple{Symbol,String}}()
+  # #1147: and whether it is an integer by type (`_known_whole`), which decides how `Floor`/`Ceil`/`Abs`
+  # over it render on PostgreSQL: an `Avg` or a `Sum` of floats is typed as an integer here too, and
+  # rendered as an integer it would lose its rounding. `(:whole, "")` or `(:not_whole, "")`.
+  whole = Dict{String,Tuple{Symbol,String}}()
   @pormg_debug false
   for value_part in values
     # fields[value_part.field] = _set_field_from_sql_function(value_part.field, value_part._as, instruct)
@@ -1058,6 +1062,7 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
         side === nothing || (whole_numeric[key_new] = side)
         side = _bigint_valued(source, instruct)
         side === nothing || (bigint[key_new] = side)
+        whole[key_new] = (_known_whole(source, instruct) ? :whole : :not_whole, "")
       elseif memo_json_lookup(instruct, memo_key(:base, path))
         textless[key_new] = (:json_value, "")
       end
@@ -1078,5 +1083,6 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   cte["textless"] = textless
   cte["whole_numeric"] = whole_numeric
   cte["bigint"] = bigint
+  cte["whole"] = whole
 
 end

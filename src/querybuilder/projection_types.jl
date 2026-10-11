@@ -1127,6 +1127,12 @@ function _known_whole(p, instruc::SQLInstruction)::Bool
     # #1135: a transformed path is the transform's result, not the column — through the one ladder
     # (#562), as `_infer_kind(::String)` reads it.
     p isa String && occursin("__@", p) && return _known_whole(_check_function(p), instruc)
+    # #1147: a computed CTE column is what its body's expression was, not the field the CTE types
+    # it with (`Avg("number")` and `Sum("points")` are typed as integers): the body's record decides.
+    if p isa CTEReference
+      side = _cte_division_record(p, "whole", instruc)
+      side === nothing || return side[1] === :whole
+    end
     return _alias_column_field(p, instruc) isa _INTEGER_FIELDS
   end
   if p isa FExpression

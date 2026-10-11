@@ -128,6 +128,8 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Ceil int",                :Result,              m -> _EKM_FN.Ceil("grid")),
   ("Floor int / 2",           :Result,              m -> _EKM_FN.Floor("grid") / 2),
   ("Floor transform @year",   :Race,                m -> _EKM_FN.Floor("start_at__@year")),
+  # An integer `_known_whole` does not name renders `(x)::numeric` on PostgreSQL: a `numeric` there.
+  ("Floor Length text",       :Result,              m -> _EKM_FN.Floor(_EKM_FN.Length("positiontext"))),
   ("Mod int",                 :Result,              m -> _EKM_FN.Mod("grid", 2)),
   # ── subqueries ─────────────────────────────────────────────────────────────────────────────────
   ("Subquery Max hop date",   :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Max("raceid__date")))),

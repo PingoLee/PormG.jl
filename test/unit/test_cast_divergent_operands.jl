@@ -775,6 +775,23 @@ end
     @test occursin(pg, _ccd_render(expr; conn = _CCD_PG))
     @test occursin(sl, _ccd_render(expr; conn = _CCD_SL))
   end
+  # Review of #1147: a CTE types an `Avg` column and a `Sum` of floats as integers, so read by its
+  # field such a column rendered as itself under `Floor`/`Ceil` on PostgreSQL — `7.5` unrounded, where
+  # SQLite's `FLOOR` gives `7`. The body's own record decides instead: only a column the body computed
+  # as an integer by type (`Sum("number")`) renders without the cast.
+  function withcte(outer)
+    q = CCD.Ccd_team.objects
+    body = CCD.Ccd_driver.objects
+    body.values("team", "av" => Fn.Avg("number"), "sp" => Fn.Sum("points"), "sn" => Fn.Sum("number"))
+    q.with("c" => body, join_field = "id" => "team")
+    q.values("x" => outer)
+    return _ccd_sql(q; conn = _CCD_PG)
+  end
+  for (outer, col) in ((Fn.Floor(PormG.CTE("c", "av")), "av"), (Fn.Ceil(PormG.CTE("c", "sp")), "sp"),
+                       (Fn.Cast(Fn.Floor(PormG.CTE("c", "av")), Models.IntegerField()), "av"))
+    @test occursin(Regex("(FLOOR|CEIL)\\(\\(\"R\\d+_\\d+\"\\.\"$(col)\"\\)::numeric\\)"), withcte(outer))
+  end
+  @test occursin(r"SELECT\s+\(\"R\d+_\d+\"\.\"sn\"\) as \"x\"", withcte(Fn.Floor(PormG.CTE("c", "sn"))))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

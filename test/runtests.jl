@@ -93,6 +93,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Transform Ladder Parity (#562)" include("unit/test_transform_ladder_parity.jl")
     @testset "Concat Operands With No Single Text (#1027)" include("unit/test_concat_textless_operands.jl")
     @testset "Divergent Casts And Concat Operands (#1028)" include("unit/test_cast_divergent_operands.jl")
+    @testset "Abs/Floor/Ceil Over an Integer Keep It (#1147)" include("unit/test_integer_floor_ceil_abs.jl")
     @testset "Deep FK Traversal (3 hops)" include("unit/test_deep_fk_traversal.jl")
     @testset "Window Function SQL Generation" include("unit/test_window_functions.jl")
     @testset "Window Frame Grammar (#713)" include("unit/test_window_frame_validation.jl")

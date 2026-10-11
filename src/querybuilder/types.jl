@@ -216,9 +216,11 @@ const OptionalString = Union{String,Nothing}
 """Database connections."""
 const ConnType = Union{PormGSQLite,PormGPostgres,Nothing}
 
-# #1028: `"textless"` holds the body's own classification of each column (`_build_cte_custom_model`).
+# #1028: `"textless"` holds the body's own classification of each column (`_build_cte_custom_model`);
+# #1147: `"kinds"` the type of each column's expression (`_expression_kind`).
 """CTE configuration dictionary."""
-const CTEDict = Dict{String,Union{SQLObjectHandler,PormGModel,Pair,String,Nothing,Dict{String,Tuple{Symbol,String}}}}
+const CTEDict = Dict{String,Union{SQLObjectHandler,PormGModel,Pair,String,Nothing,Dict{String,Tuple{Symbol,String}},
+                                  Dict{String,CanonicalType}}}
 
 # #487 — one materialized JOIN, typed by KIND.
 #
@@ -911,7 +913,7 @@ function _copy_ctes(ctes::OrderedCollections.OrderedDict{String,CTEDict})::Order
   for (name, cte_dict) in ctes
     fresh = CTEDict()
     for (k, v) in cte_dict
-      k in ("model", "textless", "whole_numeric", "bigint") && continue  # transient per-build artifacts; re-materialized each build
+      k in ("model", "textless", "whole_numeric", "bigint", "kinds") && continue  # transient per-build artifacts; re-materialized each build
       fresh[k] = v isa SQLObjectHandler ? deepcopy(v) : v
     end
     out[name] = fresh

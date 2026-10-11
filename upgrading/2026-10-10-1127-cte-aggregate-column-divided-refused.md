@@ -3,7 +3,7 @@
 - **Version**: Unreleased
 - **PormG ref**: #1127 ; `src/querybuilder/ctes.jl` (`_build_cte_custom_model`), `src/querybuilder/projection_types.jl` (`_whole_numeric_operand`, `_bigint_column`, `_bigint_valued`)
 - **Recorded**: 2026-10-10
-- **Severity**: breaking. A `Concat` operand, or a `Cast` (or `output_field` cast) to text, to an integer or to `numeric(p, s)`, over a division of a CTE column whose body projects `Sum(<BIGINT column>)` or `Sum` over `Floor`/`Ceil`/`Abs` of an integer, raises `QueryBuildError` where it used to render. So does an outer `Sum(CTE(…)) / y` over a CTE column whose body projects `Count`, `Sum` of an integer column or a ranking window (`Rank`, `DenseRank`, `RowNumber`), and `Sum(F(<BIGINT column>) / <integer>) / y`.
+- **Severity**: breaking. A `Concat` operand, or a `Cast` (or `output_field` cast) to text, to an integer or to `numeric(p, s)`, over a division of a CTE column whose body projects `Sum(<BIGINT column>)` or `Sum` over `Floor`/`Ceil`/`Abs` of a BIGINT column or of a whole-number expression PormG does not type as an integer (an integer column under them is summed as one since #1147), raises `QueryBuildError` where it used to render. So does an outer `Sum(CTE(…)) / y` over a CTE column whose body projects `Count`, `Sum` of an integer column or a ranking window (`Rank`, `DenseRank`, `RowNumber`), and `Sum(F(<BIGINT column>) / <integer>) / y`.
 
 ### What changed
 

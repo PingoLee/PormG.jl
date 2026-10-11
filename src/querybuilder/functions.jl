@@ -147,7 +147,7 @@ function Sum(x; distinct::Bool = false)
 end
 _result_rule(::Val{:SUM}) = :promoting
 # `SUM` renders bare on both engines, so it has each one's aggregate type, not the `::numeric` cast the
-# other `:promoting` functions render on PostgreSQL (`_computed_kind`, `expression_kind.jl`). PostgreSQL
+# other `:promoting` functions render on PostgreSQL over a non-integer (`_computed_kind`, `expression_kind.jl`). PostgreSQL
 # widens `sum(smallint|integer)` to `bigint` and `sum(bigint)` to `numeric`.
 _computed_kind(::Val{:SUM}, ::Symbol, ::Union{CInt16,CInt32}, ::PormGPostgres) = CInt64()
 _computed_kind(::Val{:SUM}, ::Symbol, ::Union{CInt64,CDecimal}, ::PormGPostgres) = CDecimal(nothing, nothing)
@@ -1384,12 +1384,15 @@ _result_rule(::Val{:LENGTH}) = CInt32()   # `integer` on PostgreSQL
 """
     Abs(column)
 
-Returns the absolute value of a number.
+Returns the absolute value of a number. Over an integer it is an integer of the same type on both
+engines; over any other number PostgreSQL computes a `numeric` (#1147).
 """
 function Abs(x::_ScalarOperand)
   return FObject(function_name = "ABS", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:ABS}) = :promoting
+# #1147: over an integer PostgreSQL's own `abs(int2|int4|int8)` renders, which keeps its type.
+_computed_kind(::Val{:ABS}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
 
 """
     Round(column, precision=0)
@@ -1556,22 +1559,29 @@ _result_rule(::Val{:RPAD}) = CText()
 """
     Floor(column)
 
-Returns the largest integer less than or equal to a number.
+Returns the largest integer less than or equal to a number. Over an integer it is that integer, of
+the same type, on both engines; over any other number PostgreSQL computes a `numeric` (#1147).
 """
 function Floor(x::_ScalarOperand)
   return FObject(function_name = "FLOOR", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:FLOOR}) = :promoting
+# #1147: PostgreSQL has no `floor(integer)`, so over an integer it renders `FLOOR((x)::numeric)` cast back
+# to the operand's type (`Dialect.FLOOR`): the integer it was.
+_computed_kind(::Val{:FLOOR}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
 
 """
     Ceil(column)
 
-Returns the smallest integer greater than or equal to a number.
+Returns the smallest integer greater than or equal to a number. Over an integer it is that integer,
+of the same type, on both engines; over any other number PostgreSQL computes a `numeric` (#1147).
 """
 function Ceil(x::_ScalarOperand)
   return FObject(function_name = "CEIL", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:CEIL}) = :promoting
+# #1147: as `Floor`'s, cast back to the operand's type (`Dialect.CEIL`).
+_computed_kind(::Val{:CEIL}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
 
 
 

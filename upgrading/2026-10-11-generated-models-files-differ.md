@@ -1,7 +1,7 @@
-## Regenerated models files differ: `import_models_from_django`, `inspectdb` and `convertSQLToModel` emit what they used to skip or get wrong (#1095, #1041, #948, #1043, #943, #768, #28, #29, #934, #1021, #837)
+## Regenerated models files differ: `import_models_from_django`, `inspectdb` and `convertSQLToModel` emit what they used to skip or get wrong (#1095, #1041, #948, #1043, #943, #768, #28, #29, #934, #1021, #837, #1172, #1171)
 
 - **Version**: Unreleased
-- **PormG ref**: #1095, #1041, #948, #1043, #943, #768, #28, #29, #934, #1021, #837 ; `src/migrations/importers.jl`, `src/migrations/introspection.jl`, `src/migrations/column_spec.jl`, `src/Models.jl` (`Model_to_str`)
+- **PormG ref**: #1095, #1041, #948, #1043, #943, #768, #28, #29, #934, #1021, #837, #1172, #1171 ; `src/migrations/importers.jl`, `src/migrations/introspection.jl`, `src/migrations/column_spec.jl`, `src/Models.jl` (`Model_to_str`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. The functions that write a models file now write a different file
   for the same Django project or the same live schema. Nothing changes until the file is
@@ -18,6 +18,8 @@ fixes or new readings; none removes a declaration the old output had, except whe
 | Django: an unlabelled class whose name starts with `_` (`class _Pit_window`), no `Meta.db_table` (#1095) | `_Pit_window = Models.Model("_pit_window", …)` — a file that does not load (a model name cannot start with `_`) | `_Pit_window = Models.Model("pit_window", db_table = "_pit_window", …)` |
 | Django: an unlabelled `_Internal` beside an `Internal` (#1095) | `_Internal = Models.Model("_internal", …)`, the same unloadable spelling | `Internal` keeps it; `_Internal` becomes `_Internal2` with `db_table = "_internal"` and a `# PormG:` marker |
 | Django: an auto ManyToMany at a class whose name starts with `_`, labelled or not (#1095) | join column addressed as `foo_id` | pinned to Django's `_foo_id` |
+| Django: `rivals = ManyToManyField("DriverProxy")` on `Driver`, a proxy of the owner (#1171, #1172) | `source_field="from_driver_id", target_field="to_driver_id"` — columns Django never created; the file loads and every query through `rivals` fails at the server | `source_field="driver_id", target_field="driverproxy_id"`, Django's columns |
+| Django: `reserves = ManyToManyField("imports.Driver")` on `racing.Driver`, another app's class with the owner's name (#1172) | `source_field="driver_id", target_field="driver_id"` — `set_models` raises `ModelDefinitionError` | `source_field="from_driver_id", target_field="to_driver_id"`, Django's columns |
 | `binding_overrides = Dict("Foo" => "_Bar")` beside a `class Bar` (#1095) | `Bar` silently renamed `bar2` | raises the documented override-collision error |
 | Django: a field whose class subclasses a Django field (`class LapTimeField(models.IntegerField)`) (#1041) | left out, with a marker saying the next `makemigrations` would drop the column | imported as its Django base (`Models.IntegerField(…)`), with a `# PormG:` note naming the class. A chain that overrides `db_type` and its kin keeps the old marker |
 | Django: an option written as a module constant (`max_length = REF_LEN`) (#948) | the whole import aborted with `FieldValidationError` | the constant's literal value is used when the same `models.py` binds it to a literal above the field |

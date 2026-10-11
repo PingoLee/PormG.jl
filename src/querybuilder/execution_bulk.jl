@@ -1943,7 +1943,7 @@ function bulk_copy(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   settings, connection, conn_key = get_settings(objct)
   ensure_transaction_scope(model, connection)
 
-  !(connection isa PormGPostgres) && throw(BackendCapabilityError("bulk_copy is only supported for PostgreSQL. Use bulk_insert for SQLite."))
+  _supports(connection, :copy) || throw(_capability_error(connection, :copy, "bulk_copy"; why = "Use bulk_insert instead."))
 
   # check if is allowed to insert
   !settings.change_data && throw(_write_not_allowed("bulk_copy", conn_key))

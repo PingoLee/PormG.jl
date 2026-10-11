@@ -943,7 +943,8 @@ struct _MockSQLiteRegex635 <: PormG.PormGSQLite end
         err
       end
       @test e isa PormG.BackendCapabilityError
-      @test occursin("The $(op) lookup requires PostgreSQL", PormG.error_message(e))
+      @test occursin("The $(op) lookup needs POSIX regular-expression matching", PormG.error_message(e)) &&
+            occursin("which SQLite does not support (supported on PostgreSQL)", PormG.error_message(e))   # #1129
     end
   end
 

@@ -2903,13 +2903,16 @@ end
 # empty delta that renders nothing. The model would then run on SQLite with text semantics, which is
 # exactly the emulation the rule forbids. The rule is "a model that DECLARES one cannot be planned on
 # SQLite", not "a column that is RENDERED". Sorted, so the field it names does not depend on Dict order.
-_refuse_specialized_sqlite_fields(::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn)::Nothing = nothing
-function _refuse_specialized_sqlite_fields(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}},
-                                           ::PormGSQLite)::Nothing
+# #1129: on every backend, not SQLite by name — each declared field is asked of the capability
+# table (`Dialect._refuse_unsupported_type`), so a backend that has the feature passes and one that
+# lacks it refuses the first declaration.
+function _refuse_unsupported_fields(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}},
+                                   conn)::Nothing
+  conn isa PormGBackend || return nothing
   for table in sort!(collect(keys(current_schema)))
     model = current_schema[table][:model]
     for name in sort!(collect(keys(model.fields)))
-      Dialect._refuse_specialized_sqlite_type(Models.field_db_column(model.fields[name], string(name)), model.fields[name])
+      Dialect._refuse_unsupported_type(conn, Models.field_db_column(model.fields[name], string(name)), model.fields[name])
     end
   end
   return nothing
@@ -2921,9 +2924,10 @@ end
 # plan creates: one that matches nothing live renders nothing, and the model would then run on SQLite
 # as if it had the index it declared. A descending column is core and is not refused. Sorted by table,
 # then in declaration order, so the index it names does not depend on Dict order.
-_refuse_postgres_only_indexes(::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, conn)::Nothing = nothing
-function _refuse_postgres_only_indexes(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}},
-                                       ::PormGSQLite)::Nothing
+function _refuse_unsupported_indexes(current_schema::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}},
+                                    conn)::Nothing
+  # #1129: any backend without the feature, not SQLite by name.
+  (conn isa PormGBackend && !_supports(conn, :index_methods)) || return nothing
   for table in sort!(collect(keys(current_schema)))
     model = current_schema[table][:model]
     for ix in get(get(model.cache, "composite_indexes", Dict{String, Any}()), "indexes", Models.Index[])
@@ -2931,10 +2935,9 @@ function _refuse_postgres_only_indexes(current_schema::Dict{Symbol, Dict{Symbol,
              any(!isnothing, ix.opclasses) ? "opclasses = $(Tuple(ix.opclasses))" :
              !isempty(ix.include) ? "include = $(Tuple(ix.include))" : nothing   # #934
       what === nothing && continue
-      throw(BackendCapabilityError(
-        "Model '$(model.name)' declares an Index over $(Models._index_label(ix)) with $(what), which " *
-        "is PostgreSQL-only: SQLite has b-tree indexes, no operator classes and no covering indexes. " *
-        "PormG refuses it rather than create a different index; migrate this model on PostgreSQL."))
+      throw(_capability_error(conn, :index_methods,
+        "The Index over $(Models._index_label(ix)) on model '$(model.name)', declared with $(what),";
+        why = "PormG refuses it rather than create a different index."))
     end
   end
   return nothing
@@ -3037,8 +3040,8 @@ current_schema = Models.synthesize_many_to_many_through_models(current_schema, s
 unmanaged_tables = _exclude_unmanaged_models!(current_schema)
 _refuse_constrained_keys_into_unmanaged(current_schema)
 _refuse_managed_models_on_ignored_tables(current_schema, conn, settings)
-_refuse_specialized_sqlite_fields(current_schema, conn)
-_refuse_postgres_only_indexes(current_schema, conn)
+_refuse_unsupported_fields(current_schema, conn)
+_refuse_unsupported_indexes(current_schema, conn)
 all_live = live
 isempty(unmanaged_tables) || (live = LiveTable[t for t in all_live if !(t.name in unmanaged_tables)])
 # #739: the tables this diff compares — every managed declared table (many-to-many join tables

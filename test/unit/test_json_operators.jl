@@ -97,7 +97,7 @@ _pg(q) = inspect_query(q; connection = _JO_PG)
       q.filter("payload__@$(suffix)" => val)
       q.values("id")
       # message-match so an unrelated error can't masquerade as the PG-only guard
-      @test_throws "requires PostgreSQL" inspect_query(q; connection = _JO_SL)
+      @test_throws "which SQLite does not support (supported on PostgreSQL)" inspect_query(q; connection = _JO_SL)   # #1129: the capability table's wording
     end
   end
 

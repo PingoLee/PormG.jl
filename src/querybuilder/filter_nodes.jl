@@ -842,7 +842,7 @@ end
 # text (`Dialect._pattern_text_operand`), because PostgreSQL has no `LIKE` for `inet`, `cidr` or
 # `uuid`. Everything else — `=`, `@in`, `@isnull`, the ordering lookups — compares the column itself,
 # natively. On SQLite a UUID column already holds that text, and a network column cannot exist (the
-# DDL that would create one is refused, `Dialect._refuse_specialized_sqlite_type`), so there the
+# DDL that would create one is refused, `Dialect._refuse_unsupported_type`), so there the
 # predicate is left as written.
 function _pattern_operand(column::AbstractString, formatter, operator::AbstractString,
                           instruc::SQLInstruction; label::AbstractString = column)::String

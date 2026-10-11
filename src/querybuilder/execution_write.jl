@@ -1173,7 +1173,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
           "update(\"$(field)\" => $(_is_fts_node(value, "SEARCH_VECTOR") ? "SearchVector" : "SearchQuery")(…)): " *
           "a SearchVector fills a SearchVectorField column, and nothing else is written from a full-text " *
           "operand (#1021)."))
-      connection isa PormGSQLite && throw(Dialect.fts_capability_error("SearchVector"))
+      _supports(connection, :full_text_search) || throw(Dialect.fts_capability_error(connection, "SearchVector"))
       push!(set_clause_parts, "$(quoted_field) = $(_render_fts_operand(value, instruction))")
     # #174: a `Joined(...)` handle is a column of a `cjoin_on` copy — never a literal, so it must not
     # reach the field formatter (#481). It renders `"<alias>"."<col>"`, which sends the statement down

@@ -162,7 +162,10 @@ function _build_over_clause(over::WindowSpec, instruc::SQLInstruction)::String
     # directly never passed through it. Parsed BEFORE the SQLite refusal, so that message echoes
     # PormG's rebuilt spelling rather than the caller's text.
     frame = Dialect.window_frame_sql(over.frame)
-    instruc.connection isa PormGSQLite && throw(BackendCapabilityError("SQLite window functions in PormG do not support explicit frame specifications yet. Remove frame=$(repr(frame)) or use PostgreSQL."))
+    # Not a capability-table row: SQLite has window frames (3.25+); PormG does not render them there yet.
+    instruc.connection isa PormGSQLite && throw(BackendCapabilityError(
+      "frame = $(repr(frame)): PormG does not render explicit window frames on SQLite yet. Remove " *
+      "frame= to use the default frame."))
     push!(parts, frame)
   end
 
@@ -311,7 +314,7 @@ const _FTS_FUNCTION_NAMES = Dict("SEARCH_VECTOR" => "SearchVector", "SEARCH_QUER
 function _check_fts_render(v::SQLTypeFunction, instruc::SQLInstruction)
   name = get(_FTS_FUNCTION_NAMES, v.function_name, nothing)
   name === nothing && return nothing
-  instruc.connection isa PormGSQLite && throw(Dialect.fts_capability_error(name))
+  _supports(instruc.connection, :full_text_search) || throw(Dialect.fts_capability_error(instruc.connection, name))
   # #1021: a SearchVector may be PROJECTED under a name (`build_select.jl` renders it past this
   # check), so the message says what is left: comparing and wrapping.
   v.function_name == "SEARCH_VECTOR" && throw(QueryBuildError(

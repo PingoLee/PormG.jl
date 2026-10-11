@@ -1086,7 +1086,7 @@ end
         e
       end
       @test err_pg !== nothing
-      @test occursin("requires PostgreSQL", sprint(showerror, err_pg))
+      @test occursin("which SQLite does not support (supported on PostgreSQL)", sprint(showerror, err_pg))   # #1129: the capability table's wording
     end
 end
 

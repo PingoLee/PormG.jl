@@ -258,9 +258,9 @@ In an `on()` or `cjoin(filters = …)` condition:
 - **A right-side `F` names the base row**, the query's own model, in every spelling: a bare pair,
   `Q(...)`, `Qor(...)`, `OP(...)` or `F(...) == F(...)`, and at any hop depth. On a deep hop, a table
   earlier on the same path is reached through its path from the base model: in
-  `on("driverid__results", …)`, `F("driverid__number")` is the driver's `number`.
+  `on("driverid__result", …)`, `F("driverid__number")` is the driver's `number`.
 - **A left side stays on its hop.** A key whose relation part goes past the join path —
-  `on("driverid", "results__grid" => 1)`, or `cjoin("raceid" => "Race", filters =
+  `on("driverid", "result__grid" => 1)`, or `cjoin("raceid" => "Race", filters =
   ["circuitid__country" => "Italy"])` — raises `FilterError`, at the call (or, for a path through a
   `cjoin(field = …)` link, when the query is built). It names a row of a further
   relation, and PormG used to add that relation's join silently, with the predicate in its `ON`

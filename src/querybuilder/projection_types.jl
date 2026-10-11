@@ -1149,6 +1149,15 @@ function _known_whole(p, instruc::SQLInstruction)::Bool
     whole = name == "MOD" || _result_rule(p) in _OPERAND_TYPED_RULES ||
             (name == "ROUND" && get(p.kwargs, "precision", 0) == 0)
     whole || return false
+    # #1147 review: a `Lag`/`Lead` answers its `default` where the offset row is missing, so the default
+    # is one of its values too (`lag(int4, int, float8)` is a `float8`). A string there is a text
+    # literal, as in `_bigint_operand_function`.
+    if p isa WindowFunction
+      default = get(p.kwargs, "default", nothing)
+      if default !== nothing && !_is_null_literal(default isa SQLText ? default.field : default)
+        (default isa AbstractString || !_known_whole(default, instruc)) && return false
+      end
+    end
     return all(x -> _known_whole(x, instruc), p.column isa AbstractVector ? p.column : (p.column,))
   end
   return false

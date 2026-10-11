@@ -792,6 +792,14 @@ end
     @test occursin(Regex("(FLOOR|CEIL)\\(\\(\"R\\d+_\\d+\"\\.\"$(col)\"\\)::numeric\\)"), withcte(outer))
   end
   @test occursin(r"SELECT\s+\(\"R\d+_\d+\"\.\"sn\"\) as \"x\"", withcte(Fn.Floor(PormG.CTE("c", "sn"))))
+  # Review of #1147: a `Lag`/`Lead` answers its `default` on the first rows, so a float default makes
+  # the window a `double precision` on PostgreSQL (`lag(int4, int, float8)`): `FLOOR` must stay. An
+  # integer default binds `$n::bigint` and keeps the integer, so the window renders as itself.
+  over = PormG.QueryBuilder.WindowOver(order_by = ["id"])
+  for expr in (Fn.Floor(Fn.Lag("number", default = 1.5, over = over)), Fn.Ceil(Fn.Lead("number", default = 0.5, over = over)))
+    @test occursin(r"(FLOOR|CEIL)\(\(LAG|(FLOOR|CEIL)\(\(LEAD", _ccd_render(expr; conn = _CCD_PG))
+  end
+  @test occursin(r"SELECT\s+\(LAG\(", _ccd_render(Fn.Floor(Fn.Lag("number", default = 1, over = over)); conn = _CCD_PG))
   # Delta review of #1147: a ranking window and a `Case` of integers are a `bigint` on PostgreSQL and an
   # integer on SQLite, though `_known_whole` does not name them, so the body records them whole too.
   # `Floor` over the column then renders it as itself and divides as integers on both engines, and

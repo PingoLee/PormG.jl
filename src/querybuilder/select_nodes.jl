@@ -706,6 +706,10 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     end
   end
 
+  # #1147: `Abs`/`Floor`/`Ceil` over a whole number render with no `::numeric` cast on PostgreSQL. Read
+  # here, once the operand renders, as the checks above are.
+  v isa FObject && v.function_name in _NUMERIC_WHOLE_FUNCTIONS && _whole_operand_function(v, instruc) &&
+    (resolved_kwargs["whole"] = true)
   sql = getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection)
   # #900: PostgreSQL's `avg(interval)` is an interval; the milliseconds' mean is rounded to one, the
   # precision every SQLite interval has (#881).

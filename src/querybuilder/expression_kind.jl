@@ -135,7 +135,7 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
     declared isa AbstractString && !isempty(declared) && return _declared_kind(declared, instruc.connection)
   end
   rule isa CanonicalType && return rule
-  rule === :operand && return _infer_kind(p.column, instruc, policy)
+  rule === :operand && return _window_default_kind(p, _infer_kind(p.column, instruc, policy), instruc, policy)
   rule === :first_operand && return _infer_kind(first(p.column), instruc, policy)
   rule === :one_of && return _agreeing_kind(p, instruc, policy)
   rule in (:promoting, :numeric) &&
@@ -144,6 +144,20 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
   return nothing
 end
 _infer_function_kind(::Any, ::SQLInstruction, ::_KindPolicy) = nothing
+
+# #1147 — a `Lag`/`Lead` with a `default` is that default on the rows it has no neighbour for, so its
+# kind is the operand's and the default's together, as PostgreSQL resolves `lag(anycompatible, int,
+# anycompatible)`: `Lag("number", default = 1.5)` is a `float8`. A string default is a text literal
+# (`_bigint_operand_function`); a NULL default is never the value.
+function _window_default_kind(p, k, instruc::SQLInstruction, policy::_AllKinds)
+  p isa WindowFunction || return k
+  default = get(p.kwargs, "default", nothing)
+  (default === nothing || _is_null_literal(default isa SQLText ? default.field : default)) && return k
+  dk = default isa AbstractString ? CText() :
+       default isa Union{SQLObject,SQLType} ? _infer_kind(default, instruc, policy) : _literal_kind(default, policy)
+  (k === nothing || dk === nothing) && return nothing
+  return _unify_kinds(k, dk, policy)
+end
 
 _declared_cast(p::FObject) = get(p.kwargs, p.function_name == "CAST" ? "type" : "output_field", nothing)
 _first_operand(p::SQLTypeFunction) = p.column isa AbstractVector ? first(p.column) : p.column
@@ -218,8 +232,9 @@ _numeric_rank(::CanonicalType) = nothing
 # A computed number's kind on the engine, from its rule and its (first) operand's kind `k` — the
 # engine-dependent results #1034 asks to state once, as data. What `Dialect` renders decides:
 #
-# - PostgreSQL renders every `:numeric` function and `Abs`/`Floor`/`Ceil` over `(x)::numeric`, so the
-#   value is a `numeric` whatever the operand;
+# - PostgreSQL renders every `:numeric` function over `(x)::numeric`, so the value is a `numeric`
+#   whatever the operand; so are `Abs`/`Floor`/`Ceil` except over a whole number, which they keep
+#   (#1147: their methods beside their constructors, `functions.jl`);
 # - SQLite renders them bare: a `:promoting` function keeps its operand's type (an integer stays one,
 #   #1087) and a `:numeric` one answers a REAL (`Mod(7, 3)` reads `1.0`, #1027).
 #

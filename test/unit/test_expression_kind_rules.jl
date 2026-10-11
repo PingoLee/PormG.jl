@@ -177,8 +177,9 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Expression kind: a computed number's type on each engine
-# The engine-dependent results #1034 states once. PostgreSQL: `Dialect` casts `Abs`/`Floor`/`Ceil` and
-# every `:numeric` function to `numeric`; `Sum` and `Avg` render bare and take PostgreSQL's aggregate
+# The engine-dependent results #1034 states once. PostgreSQL: `Dialect` casts every `:numeric` function
+# to `numeric`, and `Abs`/`Floor`/`Ceil` too except over a whole number, which they keep (#1147); an
+# operand of no kind may be either, so it states none. `Sum` and `Avg` render bare and take PostgreSQL's aggregate
 # types (`sum(integer)` is `bigint`, `sum(bigint)` and `avg(integer)` `numeric`, `avg(double)` a
 # double). SQLite: a `:promoting` function keeps an integer an integer, a `:numeric` one is a REAL.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -187,8 +188,12 @@ end
   pg, sl = EkrMockPostgres(), EkrMockSQLite()
   int, big, flt, dec, ivl = PormG.CInt32(), PormG.CInt64(), PormG.CFloat64(), PormG.CDecimal(10, 2), PormG.CInterval()
   numeric = PormG.CDecimal(nothing, nothing)
-  # PostgreSQL: the `::numeric` cast decides whatever the operand.
-  @test ck(:ABS, int, pg) == numeric
+  # PostgreSQL: the `::numeric` cast decides, except `Abs`/`Floor`/`Ceil` over an integer (#1147).
+  @test ck(:ABS, int, pg) == int
+  @test ck(:FLOOR, big, pg) == big
+  @test ck(:CEIL, int, pg) == int
+  @test ck(:CEIL, nothing, pg) === nothing
+  @test ck(:ABS, dec, pg) == numeric
   @test ck(:FLOOR, flt, pg) == numeric
   @test ck(:ROUND, flt, pg) == numeric
   @test ck(:MOD, int, pg) == numeric

@@ -911,7 +911,7 @@ function _copy_ctes(ctes::OrderedCollections.OrderedDict{String,CTEDict})::Order
   for (name, cte_dict) in ctes
     fresh = CTEDict()
     for (k, v) in cte_dict
-      k in ("model", "textless", "whole_numeric", "bigint") && continue  # transient per-build artifacts; re-materialized each build
+      k in ("model", "textless", "whole_numeric", "bigint", "whole") && continue  # transient per-build artifacts; re-materialized each build
       fresh[k] = v isa SQLObjectHandler ? deepcopy(v) : v
     end
     out[name] = fresh

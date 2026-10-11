@@ -1012,6 +1012,11 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   # as an integer too, so an outer `Sum` over it read as `sum(integer)` where it is `sum(bigint)`.
   whole_numeric = Dict{String,Tuple{Symbol,String}}()
   bigint = Dict{String,Tuple{Symbol,String}}()
+  # #1147: and whether the column is a whole number (`_whole_value`), which decides whether an outer
+  # `Floor`/`Ceil`/`Abs` renders over it with no `::numeric` cast. The field cannot say it: an `Avg`
+  # of an integer column is typed as that `IntegerField`, and dropping the floor of `7.5` is wrong. A
+  # column is in it (as `(:whole, "")`, the shape of the records beside it) only when it is whole.
+  whole = Dict{String,Tuple{Symbol,String}}()
   @pormg_debug false
   for value_part in values
     # fields[value_part.field] = _set_field_from_sql_function(value_part.field, value_part._as, instruct)
@@ -1051,6 +1056,7 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
              source isa SQLField && source.field isa AbstractString ? String(source.field) :
              source isa FExpression && source.operation === nothing && source.field_name isa String ? source.field_name :
              nothing
+      _whole_value(source, instruct) && (whole[key_new] = (:whole, ""))
       if path === nothing
         side = _concat_textless_operand(source, instruct)
         side === nothing || (textless[key_new] = side)
@@ -1078,5 +1084,6 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   cte["textless"] = textless
   cte["whole_numeric"] = whole_numeric
   cte["bigint"] = bigint
+  cte["whole"] = whole
 
 end

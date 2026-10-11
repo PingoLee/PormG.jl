@@ -466,18 +466,20 @@ answers as a REAL (`1` vs `1.0`). A literal is refused when the `Concat` is buil
 the query is. A `DecimalField` with `decimal_places = 0` is not refused: it holds whole numbers, which
 read `14` on both engines, as an integer column's do (#1087). Divided, it is refused again: SQLite
 stores those whole values as integers and divides them as integers (`15 / 2` is `7`), where
-PostgreSQL's `numeric` gives `7.5`. `Floor`, `Ceil` and `Abs` over an integer, and `Sum` of a BIGINT
-column (an `IDField`, a `BigIntegerField`, a `ForeignKey`), are the same shape: PostgreSQL computes
-them as `numeric` (`FLOOR(x::numeric)`, `sum(bigint)`), so they read as integers until they are
-divided, and `Floor("grid") / 2` is refused (#1111). An integer literal counts as a BIGINT here,
+PostgreSQL's `numeric` gives `7.5`. `Sum` of a BIGINT column (an `IDField`, a `BigIntegerField`, a
+`ForeignKey`) is the same shape: PostgreSQL's `sum(bigint)` is a `numeric`, so it reads as an integer
+until it is divided, and `Sum("resultid") / 2` is refused (#1111). `Floor`, `Ceil` and `Abs` over a
+whole number keep it whole on both engines (on PostgreSQL they render no `::numeric` cast over one,
+#1147), so `Floor("grid") / 2` divides as integers on both and builds; over a zero-scale
+`DecimalField` they keep its split, and are refused divided. An integer literal counts as a BIGINT here,
 because PostgreSQL binds it as `bigint`: `Sum(F("grid") + 1) / 2`, `Sum(Coalesce("grid", 0)) / 2` and
 the conditional count `Sum(Case(When("grid__@gt" => 3, then = 1), default = 0)) / 2` are
 `sum(bigint)` there, and are refused too, as is a `Sum` over a cast to `bigint` (#1141). An integer
-date part counts as an integer operand (`@year`, `@month`, `@day`, `@hour`, `@quarter`, `@week_day`,
-… and the same `Extract` fields), so `Floor("dob__@year") / 2` is refused as `Floor("grid") / 2` is
-(#1135); `@yyyy_mm` is text and `Extract(…, "epoch")` is fractional, so neither counts, and a part
-SQLite has no spelling for (`Extract(…, "century")`) raises there rather than dividing differently.
-Divide as a float and fetch the number instead.
+date part counts as a whole number (`@year`, `@month`, `@day`, `@hour`, `@quarter`, `@week_day`, …
+and the same `Extract` fields), so `Floor("dob__@year") / 2` divides as integers on both engines
+(#1147); `@yyyy_mm` is text and `Extract(…, "epoch")` is fractional, so neither counts, and a part
+SQLite has no spelling for (`Extract(…, "century")`) raises there. To keep the half, divide as a
+float; to format it, fetch the number.
 A CTE column built from one of them is refused the same way when it is divided (#1127): the CTE
 gives a `Sum` column an integer type whatever it sums, so PormG reads the body's own expression
 instead, and `Coalesce(CTE("totals", "id_sum"), 0) / 2` is refused as `Sum("resultid") / 2` is.
@@ -855,8 +857,8 @@ So PormG raises `QueryBuildError` when the query is built, on both engines, for:
   timestamp, an interval, or a whole JSON document;
 - a cast to an integer (`IntegerField()`, `BigIntegerField()`, `"integer"`, `"bigint"`, `"int8"`,
   …) of a float, a decimal with places (a `decimal_places = 0` column passes unless it is divided, #1087) or a `numeric`
-  function, and of `Floor`/`Ceil`/`Abs` over an integer or `Sum` of a BIGINT column once divided
-  (#1111), a CTE column built from one of them included (#1127). A boolean casts to `1`/`0` on both engines and
+  function, and of `Sum` of a BIGINT column once divided (#1111), a CTE column built from one
+  included (#1127). A boolean casts to `1`/`0` on both engines and
   passes;
 - a cast to `numeric(p, s)` or `decimal(p, s)` (and `numeric(p)`, whose scale is 0) of an operand
   that can carry more than `s` digits after the point: a float column, a float literal with more
@@ -884,11 +886,11 @@ So PormG raises `QueryBuildError` when the query is built, on both engines, for:
 To get an integer, say how to round first. `Round(x)`, `Floor(x)` and `Ceil(x)` give the same whole
 number on both engines for every stored value measured (PostgreSQL's `round` is the `numeric` one,
 half away from zero, as SQLite's is), so a cast over them passes. `Mod` of whole numbers and `+`,
-`-`, `*` of them pass too, since they have nothing to round. Dividing one does not: PostgreSQL
-computes `Floor`, `Ceil` and `Abs` as `numeric`, so `Floor("grid") / 2` keeps the half there and
-SQLite divides the integer (`7.5` against `7`); it is refused, as `Sum` of a BIGINT column divided is
-(#1111). To round a quotient, divide as a float first: `Cast(Round(Floor("grid") / 2.0), IntegerField())`
-reads the same on both engines. `Round(x, 2)` keeps a fraction, so a
+`-`, `*` of them pass too, since they have nothing to round. Over an integer column `Floor`, `Ceil`
+and `Abs` are that integer on both engines, so `Floor("grid") / 2` divides as integers (`7`) on both
+(#1147). `Sum` of a BIGINT column divided is refused (#1111): PostgreSQL's `sum(bigint)` is `numeric`
+and keeps the half. To round a quotient, divide as a float first: `Cast(Round(Sum("resultid") / 2.0),
+IntegerField())` reads the same on both engines. `Round(x, 2)` keeps a fraction, so a
 cast to an integer over it is refused. One caveat: PostgreSQL turns a float into `numeric` at 15 significant digits
 before it rounds, so a computed value a hair below a half (`2.4999999999999996`) can still round up
 there and down on SQLite. The same conversion reaches a float cast to a scaled `numeric`: a literal

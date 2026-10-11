@@ -1086,7 +1086,14 @@ function LENGTH(column::String, format::Dict{String,Any}, conn::Union{PormGPostg
   return "LENGTH($(column))"
 end
 
+# #1147: `"whole"` is set by the render (`_whole_operand_function`) when the operand is a whole number
+# by type. Then PostgreSQL computes over it as it is, as SQLite does: `abs(integer)` is an `integer`
+# and the floor or ceiling of a whole number is that number. PostgreSQL has no `floor(integer)`: it
+# resolves one to `floor(double precision)`, a double that loses a bigint's digits past 2^53, so
+# `FLOOR`/`CEIL` render the operand itself. Any other operand is cast `::numeric`, as since the first
+# version, so a float keeps the exact `numeric` value it always read.
 function ABS(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+  get(format, "whole", false) === true && return "ABS($(column))"
   return "ABS(($(column))::numeric)"
 end
 function ABS(column::String, format::Dict{String,Any}, conn::PormGSQLite)
@@ -1147,6 +1154,7 @@ function RTRIM(column::String, format::Dict{String,Any}, conn::Union{PormGPostgr
 end
 
 function FLOOR(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+  get(format, "whole", false) === true && return "($(column))"   # #1147, see `ABS`
   return "FLOOR(($(column))::numeric)"
 end
 function FLOOR(column::String, format::Dict{String,Any}, conn::PormGSQLite)
@@ -1154,6 +1162,7 @@ function FLOOR(column::String, format::Dict{String,Any}, conn::PormGSQLite)
 end
 
 function CEIL(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+  get(format, "whole", false) === true && return "($(column))"   # #1147, see `ABS`
   return "CEIL(($(column))::numeric)"
 end
 function CEIL(column::String, format::Dict{String,Any}, conn::PormGSQLite)

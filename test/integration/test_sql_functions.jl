@@ -2196,3 +2196,36 @@ end
     @test_throws PormG.InvalidValueError M.Race.objects.filter("date__@year" => 99999).list(:dict)
     @test_throws PormG.InvalidValueError M.Race.objects.filter("date__@year__@in" => [99999]).list(:dict)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Floor/Ceil/Abs over a whole number read back as an integer on both engines (#1147)
+# PostgreSQL rendered `FLOOR((x)::numeric)` whatever `x` was, so `Floor("grid")` read a `Decimal` there
+# and `Floor("grid") / 2` kept the half (`2.5`) where SQLite divided the integer (`2`). Over a whole
+# number it now renders the operand itself (`ABS(x)` for `Abs`), so the value is the integer, divided
+# as integers on both engines, and a bigint keeps every digit. Expected SQL on PostgreSQL:
+# `("Tb"."grid")`, `ABS("Tb"."resultid")`; SQLite as before (`FLOOR("Tb"."grid")`).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1147: Floor/Ceil/Abs over a whole number read back as an integer" begin
+    rows = M.Result.objects.
+        filter("grid__@gt" => 0).
+        values("resultid", "grid", "f" => Floor("grid"), "c" => Ceil("grid"), "a" => Abs("resultid"),
+               "half" => Cast(Floor("grid") / 2, PormG.Models.IntegerField())).
+        order_by("resultid").
+        limit(20).
+        list()
+    @test length(rows) == 20
+    for r in rows
+        # The integer itself, not a `Decimal` (PostgreSQL before #1147) — compared by type and value.
+        @test r[:f] isa Integer && r[:f] == r[:grid]
+        @test r[:c] isa Integer && r[:c] == r[:grid]
+        @test r[:a] isa Integer && r[:a] == r[:resultid]
+        # Integer division on both engines: `5 / 2` is `2`, as Julia's `div` says.
+        @test r[:half] == div(r[:grid], 2)
+    end
+    # An integer date part is a whole number too (#1135's shape): the year itself, not a `Decimal`.
+    race = only(M.Race.objects.filter("raceid" => 1).values("y" => Floor("date__@year")).list())
+    @test race[:y] isa Integer && race[:y] == 2009
+    # A float keeps its `::numeric` cast on PostgreSQL, so its floor is the `Decimal` it always was there.
+    pts = only(M.Result.objects.filter("resultid" => 1).values("points", "f" => Floor("points")).list())
+    @test Float64(pts[:f]) == floor(Float64(pts[:points]))
+end

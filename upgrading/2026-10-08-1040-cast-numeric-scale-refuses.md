@@ -31,7 +31,7 @@ places, it needs more than `p - s` digits before the point: `Cast(Value(100), "n
 value as it is.
 
 Unchanged: an unscaled `"numeric"`/`"decimal"` or `DecimalField()` target, and an operand that has
-nothing to round: an integer (a literal one still has to fit `p`, #1087), `Round(x)`, `Floor(x)`, `Ceil(x)` (unless divided, #1111), a `DecimalField` with at most `s`
+nothing to round: an integer (a literal one still has to fit `p`, #1087), `Round(x)`, `Floor(x)`, `Ceil(x)` (unless over a quotient the engines split, #1111), a `DecimalField` with at most `s`
 places (and `Max`/`Min`/`Abs`/`Coalesce` of one), a `Decimal` literal with at most `s` digits, a
 `Float64` literal with at most `s` places (`Value(1.5)` at scale 2, #1050), whatever its count of
 significant digits. PostgreSQL converts a float to `numeric` at 15 of them, so a 16th digit differs

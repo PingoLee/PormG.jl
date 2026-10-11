@@ -25,8 +25,8 @@ concatenated value matched different rows per engine. `Concat` now refuses such 
 
 - a literal (`true`, `1.5`, `Value(Decimal(…))`) when the `Concat` is built;
 - a `BooleanField`, `FloatField` or `DecimalField` column (a joined path too; a `DecimalField` with
-  `decimal_places = 0` holds whole numbers and passes unless it is divided, #1087; so do `Floor`/`Ceil`/`Abs`
-  over an integer and `Sum` of a BIGINT column, #1111), or an expression of
+  `decimal_places = 0` holds whole numbers and passes unless it is divided, #1087; so does `Sum` of a BIGINT column, #1111;
+  `Floor`/`Ceil`/`Abs` over an integer pass even divided, #1147), or an expression of
   one of those types (a comparison, a `Cast` or `output_field` naming a float or decimal type,
   arithmetic or an extremum over a float, `Avg`/`Round`/`Mod`/`Sqrt`/`Exp`/`Ln`/`Power`) when the
   query is built.

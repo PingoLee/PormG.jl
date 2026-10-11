@@ -814,8 +814,9 @@ end
 # #28/#903: the kind of column a pattern lookup must read as TEXT, or `nothing` for one it reads as it
 # is. Keyed on the formatter because that is the one piece of evidence a column and a projection alias
 # share: a field carries it, and an alias over one resolves it (`_having_alias_formatter`) — the alias
-# has no field to ask.
-function _pattern_text_kind(formatter)::Union{Symbol,Nothing}
+# has no field to ask. `kind` is the operand's `_expression_kind`, read only for a number: an integer,
+# a float and a decimal column share `format_number_sql`, and only the kind tells them apart (#1168).
+function _pattern_text_kind(formatter; kind = nothing)::Union{Symbol,Nothing}
   # #28: an array has no one text to match — refused in `_pattern_operand`, never read as text.
   formatter isa Models.ArrayFormatter && return :array
   (formatter === Models.format_inet_sql || formatter === Models.format_inet_unpacked_sql) && return :inet
@@ -832,11 +833,47 @@ function _pattern_text_kind(formatter)::Union{Symbol,Nothing}
   # engine (PostgreSQL prints the session's zone offset), so a fragment would match different rows.
   formatter === Models.format_date_sql && return :date
   # #1086 (review): a date part (`@hour`, `@year`, an `Extract`) is an integer, whose text is the same
-  # digits on both engines — unlike a float or a decimal column, which shares `format_number_sql`
-  # with an integer one and so cannot be told apart here, and is left as written.
+  # digits on both engines.
   formatter in Models.PERIOD_FORMATTERS && return :integer
+  # #1168: a number column. PostgreSQL has no `LIKE` for one, so it was a server error there while
+  # SQLite matched the number's text. An integer prints the same digits on both engines, so it reads
+  # as that text — Django's backend reads every column `::text` (`lookup_cast`). A float or a decimal
+  # does not: `2.0` prints `2` on PostgreSQL and `2.0` on SQLite, a `numeric(5,2)` `2.00` against the
+  # `2` SQLite stores, so one fragment would select different rows. It is refused on every engine,
+  # and so is a number PormG cannot type (`kind === nothing`): it cannot say which text it would match.
+  if formatter === Models.format_number_sql
+    return kind isa Union{CInt16,CInt32,CInt64} ? :integer : :inexact_number
+  end
   return nothing
 end
+
+# #1168: the kind of a number operand a pattern lookup reads — a column's field, an alias's expression,
+# or the walk over the operand. A CTE column is asked of the CTE's own record (`_cte_column_kind`, the
+# walk over the body's expression), never of its memo field: that is a surrogate, which
+# `_set_field_from_sql_function` types `IntegerField` for every `Count`/`Sum` and as the operand for
+# an `Avg`, so a CTE's `Avg("grid")` — a numeric — would read as an integer's digits on PostgreSQL.
+function _pattern_number_kind(v::SQLTypeOper, operand_field, alias, instruc::SQLInstruction)
+  v.column isa CTEReference && return _expression_kind(v.column, instruc)
+  key = v.column isa SQLField ? memo_key(v.column) : nothing
+  if key !== nothing && key[1] === :cte
+    # The memo name is `<cte>__<path>`, and a CTE name may hold `__` itself (`CTE("my__cte", …)`), which
+    # only the handle can address, while the string spelling resolves the text before the first `__`.
+    # The memo name does not say which spelling built it, so every declared CTE it can belong to is
+    # asked, and a kind is trusted only when they all agree; otherwise it is untyped, which refuses.
+    name = key[2]
+    kinds = [_cte_column_kind(CTEReference(name = k, path = name[ncodeunits(k) + 3:end]), instruc, _AllKinds())
+             for k in keys(instruc.object.ctes) if startswith(name, k * "__")]
+    return !isempty(kinds) && allequal(kinds) ? first(kinds) : nothing
+  end
+  operand_field !== nothing && return _field_kind(operand_field)
+  alias !== nothing && return _having_alias_kind(memo_key(:base, alias), instruc)
+  return _expression_kind(v.column, instruc)
+end
+
+# The label a refused pattern lookup names: the path the user wrote, where the operand has one.
+# `_filter_path_label` asks `memo_key`, which has no method for every operand (an `F` expression).
+_pattern_refusal_label(v::SQLTypeOper, column::AbstractString) =
+  v.column isa Union{SQLField,CTEReference,JoinedReference} ? _filter_path_label(v) : String(column)
 
 # What such a column needs before its predicate renders. A pattern lookup reads the column's printed
 # text (`Dialect._pattern_text_operand`), because PostgreSQL has no `LIKE` for `inet`, `cidr` or
@@ -845,9 +882,10 @@ end
 # DDL that would create one is refused, `Dialect._refuse_unsupported_type`), so there the
 # predicate is left as written.
 function _pattern_operand(column::AbstractString, formatter, operator::AbstractString,
-                          instruc::SQLInstruction; label::AbstractString = column)::String
+                          instruc::SQLInstruction; label::AbstractString = column,
+                          operand_kind = nothing)::String
   operator in PATTERN_LOOKUP_OPERATORS || return String(column)
-  kind = _pattern_text_kind(formatter)
+  kind = _pattern_text_kind(formatter; kind = operand_kind)
   kind === nothing && return String(column)
   # #28. Django spells array containment `contains`, and PormG's `@contains` is a LIKE. Reading the
   # array as text and matching a fragment of `{a,b}` would answer a different question than the one
@@ -866,6 +904,12 @@ function _pattern_operand(column::AbstractString, formatter, operator::AbstractS
     "Error in filter '$(label)': a pattern lookup (`@contains`, `@startswith`, `@regex`, …) matches " *
     "text, and this is a SearchVectorField, a stored document of lexemes. Search it with " *
     "\"$(label)__@search\" => SearchQuery(…) (#1021)."))
+  kind === :inexact_number && throw(FilterError(
+    "Error in filter '$(label)': a pattern lookup (`@contains`, `@startswith`, `@regex`, …) matches " *
+    "text, and this is a number that is not an integer (a float, a decimal, or a number PormG cannot " *
+    "type), whose text differs per database engine. Compare it as a number (`@gte`, `@range`), or " *
+    "match the engine's own text explicitly: project values(\"t\" => Cast(<the column or expression>, " *
+    "\"text\")) and filter(\"t__@startswith\" => …) (#1168)."))
   return Dialect._pattern_text_operand(instruc.connection, Val(kind), column)
 end
 
@@ -958,12 +1002,18 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
                       alias !== nothing ? _having_alias_formatter(memo_key(:base, alias), instruc) :
                       v.column isa SQLTypeField && v.column.field isa SQLTypeFunction ? v.column.field.formatter :
                       nothing
-  # The label is derived only for an array or a SearchVectorField column (#1021) — the kinds that
-  # refuse here and name a path. `_filter_path_label` has no method for every column kind (an `F`
-  # transform), so it is not asked for the others.
-  refuses = operand_formatter isa Models.ArrayFormatter || operand_formatter === Models.format_tsvector_sql
+  # #1168: a number's kind, which its formatter does not carry — read only where it decides something.
+  operand_kind = operand_formatter === Models.format_number_sql && v.operator in PATTERN_LOOKUP_OPERATORS ?
+    _pattern_number_kind(v, operand_field, alias, instruc) : nothing
+  # The label is derived only for the kinds that refuse here and name a path: an array, a
+  # SearchVectorField (#1021) and a number that is not an integer (#1168). `_filter_path_label` has no
+  # method for every column kind (an `F` transform), so it is not asked for the others.
+  refuses = operand_formatter isa Models.ArrayFormatter || operand_formatter === Models.format_tsvector_sql ||
+            (v.operator in PATTERN_LOOKUP_OPERATORS &&
+             _pattern_text_kind(operand_formatter; kind = operand_kind) === :inexact_number)
   column = _pattern_operand(column, operand_formatter, v.operator, instruc;
-                            label = refuses ? _filter_path_label(v) : column)
+                            label = refuses ? _pattern_refusal_label(v, column) : column,
+                            operand_kind = operand_kind)
   if isa(v.values, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
     @pormg_debug false
     # #894: a `DurationField` ordered against an `F` interval — another `DurationField`, a timestamp

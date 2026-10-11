@@ -310,6 +310,17 @@ function _having_alias_formatter(alias::MemoKey, instruc::SQLInstruction)
   return formatter
 end
 
+# #1168: the alias's `_expression_kind`, the evidence `_having_alias_formatter` cannot give — an integer,
+# a float and a decimal all resolve to `format_number_sql`. Same two sources, in the same order: the
+# column an alias projects, then the projected expression.
+function _having_alias_kind(alias::MemoKey, instruc::SQLInstruction)
+  memoized = memo_field(instruc, alias)
+  memoized === nothing || return _field_kind(memoized)
+  source = _projected_source(alias, instruc)
+  (source === nothing || source isa SQLTypeText) && return nothing
+  return _expression_kind(source, instruc)
+end
+
 # Functions whose result is text whatever their operands are. Checked BEFORE `output_field`: none of
 # them renders a cast, and `Concat` — the one that takes `output_field` — refuses a non-text type when
 # it is built (#835), so whenever a CTE body can type a `Concat` column (it needs an `output_field`
@@ -1550,9 +1561,14 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   interval === nothing || return interval
   # #903: the alias's own column type decides what a pattern lookup reads — `HOST(MAX(…))` for an alias
   # over an `inet`, exactly as `_get_filter_query(::SQLTypeOper)` wraps the column itself.
+  alias_formatter = _having_alias_formatter(having_key, instruc)
   field = _pattern_operand(string(_alias_lhs(having_key, having_cached, instruc)),
-                           _having_alias_formatter(having_key, instruc), v.operator, instruc;
-                           label = having_key[2])
+                           alias_formatter, v.operator, instruc;
+                           label = having_key[2],
+                           # #1168: a number alias's kind, only where it decides the read.
+                           operand_kind = alias_formatter === Models.format_number_sql &&
+                                          v.operator in PATTERN_LOOKUP_OPERATORS ?
+                                          _having_alias_kind(having_key, instruc) : nothing)
   # #618: `contains=` / `operator=` are what run `_apply_like_wildcards` (and with it
   # `escape_like_pattern`) inside `add_parameter!`. Without them a pattern lookup on an alias
   # bound its value undecorated AND unescaped — no `%`, and a user-supplied `%` or `_` in the

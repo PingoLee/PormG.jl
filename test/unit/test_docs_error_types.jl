@@ -260,6 +260,15 @@ const DOCERR_ENTRY953_PG, DOCERR_ENTRY953_SL = map(("docerr_pg", "docerr_sl")) d
     m.connect_key = key; m._module = Main; m
 end
 
+# #1168 — a float and a decimal column on both engines: a pattern lookup on either is refused on both,
+# because each engine prints the number differently.
+const DOCERR_RESULT1168_PG, DOCERR_RESULT1168_SL = map(("docerr_pg", "docerr_sl")) do key
+    m = Model("docerr_result1168_$key", resultid = IDField(), grid = IntegerField(),
+              fastestlapspeed = FloatField(null = true),
+              points = DecimalField(max_digits = 8, decimal_places = 2))
+    m.connect_key = key; m._module = Main; m
+end
+
 # (docs claim this test pins, expected type, the call that must raise it).
 # Keep the doc reference exact — it is how a maintainer finds the sentence to update when a type
 # legitimately changes.
@@ -3180,6 +3189,17 @@ const DOCERR_CASES = [
         QueryBuildError,
         () -> DOCERR_ENTRY953_SL.objects.values("raceid", "n" => Sum(PormG.Functions.Case(
             [PormG.Functions.When("raceid" => 1, then = true)], default = false))).list(show_query = :dict),
+    ),
+    # #1168 — String Matching: a pattern lookup on a float or decimal column raises on both backends.
+    (
+        "read/filters_and_aggregates.md — a pattern lookup on a float column raises FilterError on SQLite (#1168)",
+        FilterError,
+        () -> DOCERR_RESULT1168_SL.objects.filter("fastestlapspeed__@startswith" => "2").list(show_query = :dict),
+    ),
+    (
+        "read/filters_and_aggregates.md — a pattern lookup on a decimal column raises FilterError on PostgreSQL (#1168)",
+        FilterError,
+        () -> DOCERR_RESULT1168_PG.objects.filter("points__@contains" => "2").list(show_query = :dict),
     ),
 ]
 

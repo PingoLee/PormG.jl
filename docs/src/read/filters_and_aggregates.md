@@ -176,9 +176,18 @@ bound as text whatever the column holds, as in Django. `"date__@startswith" => "
 race in 2009, and so does `"date__@yyyy_mm__@startswith" => "2009"`, though an exact `@yyyy_mm`
 needs a whole `"2009-03"`. A date column, or a transform that yields a date (`@date`), is matched
 as its `YYYY-MM-DD` text on both backends, and a date part (`@year`, `@hour`, an `Extract`) as its
-digits: `"date__@year__@startswith" => "200"` selects the 2000s. A timestamp or number column is
-compared as written: SQLite matches its stored text, and PostgreSQL, which has no `LIKE` for those
-types, raises.
+digits: `"date__@year__@startswith" => "200"` selects the 2000s. An integer column, a relation's
+key included, is matched as its digits too: `"grid__@startswith" => "1"` selects grid slots 1 and
+10–19 on both backends.
+
+A float or decimal column raises a `FilterError` on both backends, because each engine prints it
+differently: `2.0` is `2` on PostgreSQL and `2.0` on SQLite, so one fragment would select different
+rows. So does an alias or a CTE column whose value is not an integer (an `Avg`, a `Sum` over a
+decimal), and a number whose type PormG cannot name (a `Subquery` alias), whose text it cannot
+vouch for. Compare it as a number (`"fastestlapspeed__@gte" => 200`), or match the engine's own
+text explicitly through a cast: `values("t" => Cast("fastestlapspeed", "text"));
+filter("t__@startswith" => "2")`. A timestamp column is still compared as written: SQLite matches
+its stored text, and PostgreSQL, which has no `LIKE` for a timestamp, raises.
 
 ### Case-Sensitive (`@contains`)
 

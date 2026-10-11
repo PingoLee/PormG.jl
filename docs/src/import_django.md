@@ -208,6 +208,17 @@ tell which model it is (no `AbstractUser` subclass, or more than one, and no `au
 every model in a real project points at the user model, so one omitted keyword would quietly turn the
 whole user graph into integer columns.
 
+An auto-derived `ManyToManyField` whose join column would contain `__`, PormG's lookup separator, is
+also dropped and marked, whatever `strict_relations` says: the target resolves, but PormG cannot
+name the column. Django names those columns from the lowercased class name: `<class>_id`, or
+`from_<class>_id` / `to_<class>_id` on a self-relation. A class whose name starts or ends with `_`
+or contains `__` therefore yields one: `_Driver`'s self-relation gives `from__driver_id`. Django's
+own checks refuse those class names too (`models.E023`, `models.E024`). To keep the relation,
+declare its `through` model by hand:
+- set its `db_table` to Django's join table, which the marker names when the import knows it;
+- give it one `ForeignKey` per end, each naming the column with `db_column = "from__driver_id"`;
+- pin `source_field` / `target_field` to those keys.
+
 ## Importing a multi-app project
 
 A real Django project splits its models across apps. Pass one `"<app_label>" => "<models.py>"` pair per

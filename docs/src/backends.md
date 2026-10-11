@@ -26,7 +26,7 @@ The table below is the list PormG checks. A unit test fails when this page and t
 
 ## What is not in this table
 
-- **A version.** Window functions need an SQLite library of 3.25 or later, checked against the one PormG loads ([Window Functions](read/window_functions.md)). PormG's schema management needs a PostgreSQL server of 13 or later, checked against the server you connect to ([PostgreSQL Guide](postgres.md)).
+- **A version.** Window functions need an SQLite library of 3.25 or later, checked against the one PormG loads ([Window Functions](read/window_functions.md)). PormG's schema introspection (`makemigrations`, `migrate`, `check`, `inspectdb`) needs a PostgreSQL server of 11 or later, and a migration plan statement may need more: a generated column needs 12, removing a column's generation expression 13. Each is checked against the server you connect to ([PostgreSQL Guide](postgres.md)).
 - **A feature one backend supports only in part.** For example, `ToChar` formats or `Extract` parts that SQLite cannot spell, or a cast to a time type. Each raises `BackendCapabilityError` where it is used, and its page says which forms work.
 - **A gap in PormG, not in an engine.** SQLite has explicit window frames, but PormG does not render `WindowOver(frame = …)` there yet, and raises `BackendCapabilityError` saying so ([Window Functions](read/window_functions.md)).
 - **A difference in what a query returns.** When two backends would compute different values or rows for the same query, PormG refuses it on the backend that departs, or documents the difference. That is not a missing feature ([Functions and Dates](read/functions_and_dates.md)).

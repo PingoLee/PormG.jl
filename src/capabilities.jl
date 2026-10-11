@@ -14,11 +14,12 @@
 # `test/unit/test_capability_table.jl` fails when the page and the table disagree.
 #
 # Not in the table, deliberately: a feature that depends on a SERVER VERSION (window functions on
-# SQLite < 3.25, schema management on PostgreSQL < 13 — probed at run time, `Dialect` and
-# `Migrations`), a feature supported only in part (`ToChar` formats, `Extract` parts, casts SQLite
-# spells differently), a difference in MEANING (a decimal SQLite stores as a double), and a gap in
-# PormG rather than in an engine (explicit window frames, which SQLite has and PormG does not render
-# there yet).
+# SQLite < 3.25; on PostgreSQL, the introspection floor, 11, and plan statements above it, 12 and 13
+# (#1146) — probed at run time in `Dialect` and `Migrations`, and moved into the table by #1163), a
+# feature supported only in part (`ToChar` formats, `Extract` parts, casts SQLite spells
+# differently), a difference in MEANING (a decimal SQLite stores as a double), and a gap in PormG
+# rather than in an engine (explicit window frames, which SQLite has and PormG does not render there
+# yet).
 
 # feature => what it is, in words a refusal can say after "needs".
 const _BACKEND_FEATURES = (

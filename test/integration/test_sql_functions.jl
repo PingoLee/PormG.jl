@@ -2447,3 +2447,89 @@ end
     total = only(M.Result.objects.filter("raceid" => 18).values("x" => Sum(Floor(case()))).list(:dict))[:x]
     @test Float64(total) == sum(r -> r[:grid] > 10 ? 7 : 3, rows)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite's ISO-week parts and its date cast give PostgreSQL's values, across year boundaries
+# `@week` / `@iso_year` / `@iso_week_day` (`Extract(x, "WEEK" | "ISOYEAR" | "ISODOW")`) render
+# `EXTRACT(WEEK FROM x)::integer` on PostgreSQL, and on SQLite arithmetic over the Thursday of x's
+# Monday-started week, `date(x, '-3 days', 'weekday 4')` (#636). `Cast(x, "date")` renders `x::date`
+# on PostgreSQL and `date(x)` on SQLite (#822).
+# Why: dates are a core type, and both SQLite spellings render the same value with SQLite's own date
+# functions (Django's SQLite backend casts to a date with `date()` too). That is rendering, not an
+# emulated feature, so neither raises `BackendCapabilityError`, on the condition that the values
+# are the same. The year boundary is where an ISO week leaves the calendar: Dec 29 – Jan 3 can
+# belong to either year, and a year can have a week 53. So every day from Dec 25 to Jan 7 of
+# 2014/15 … 2027/28 is checked. That covers every weekday Jan 1 falls on, and the 53-week years 2015,
+# 2020 and 2026. The expected values come from Julia's calendar (`Dates.week`, the year of the
+# week's Thursday, `Dates.dayofweek`), plus literal pins, so db_2 and db_sl must give the same
+# numbers. Timestamps are read in UTC, the session time zone PormG opens both drivers with.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "ISO-week parts and the date cast: the same values on both engines, across year boundaries" begin
+    iso(d::Date) = (week(d), year(d + Day(4 - dayofweek(d))), dayofweek(d))
+    parts(x) = ("w" => Extract(x, "WEEK"), "y" => Extract(x, "ISOYEAR"), "d" => Extract(x, "ISODOW"))
+    got(r) = (Int(r[:w]), Int(r[:y]), Int(r[:d]))
+    asdate(v) = Date(string(v)[1:10])
+    utc_date(z) = Date(DateTime(TimeZones.astimezone(z, TimeZones.tz"UTC")))
+    function one_row(pairs...)
+        q = M.Race.objects
+        q.filter("raceid" => 1)
+        q.values(pairs...)
+        return only(q.list())
+    end
+    edge(d::Date) = (month(d) == 12 && day(d) >= 29) || (month(d) == 1 && day(d) <= 3)
+
+    @testset "a date column: every driver's birth date" begin
+        q = M.Driver.objects
+        q.values("dob", "w" => "dob__@week", "y" => "dob__@iso_year", "d" => "dob__@iso_week_day",
+                 "c" => Cast("dob", "date"))
+        rows = q.list()
+        @test length(rows) > 800
+        @test all(r -> got(r) == iso(asdate(r[:dob])), rows)
+        @test all(r -> asdate(r[:c]) == asdate(r[:dob]), rows)
+        # Not vacuous: some drivers were born in the Dec 29 – Jan 3 window.
+        @test count(r -> edge(asdate(r[:dob])), rows) >= 10
+    end
+
+    @testset "date literals from Dec 25 to Jan 7, 2014/15 … 2027/28" begin
+        for y in 2014:2027, d in Date(y, 12, 25):Day(1):Date(y + 1, 1, 7)
+            r = one_row("c" => Cast(Value(d), "date"), parts(Cast(Value(d), "date"))...)
+            @test asdate(r[:c]) == d
+            @test got(r) == iso(d)
+        end
+    end
+
+    @testset "literal pins at the boundary" begin
+        for (d, want) in (Date(2014, 12, 29) => (1, 2015, 1),    # a Monday: week 1 of the next year
+                          Date(2016, 1, 3)   => (53, 2015, 7),   # a Sunday: week 53 of the year before
+                          Date(2019, 12, 30) => (1, 2020, 1),
+                          Date(2021, 1, 1)   => (53, 2020, 5),
+                          Date(2022, 1, 2)   => (52, 2021, 7),   # 2021 has no week 53
+                          Date(2027, 1, 1)   => (53, 2026, 5))
+            @test got(one_row(parts(Cast(Value(d), "date"))...)) == want
+        end
+    end
+
+    # A zoned literal at an offset other than UTC is left out until #1175: PostgreSQL binds a
+    # `ZonedDateTime` untyped, so `::date` reads the wall-clock date of the offset written.
+    @testset "timestamps near midnight, cast to a date" begin
+        for (v, want) in (DateTime(2020, 12, 31, 23, 30) => Date(2020, 12, 31),
+                          DateTime(2021, 1, 3, 23, 59, 59) => Date(2021, 1, 3),   # Sunday of 2020's week 53
+                          DateTime(2021, 1, 4, 0, 0, 1) => Date(2021, 1, 4),     # Monday of 2021's week 1
+                          TimeZones.ZonedDateTime(DateTime(2020, 12, 31, 23, 30), TimeZones.tz"UTC") => Date(2020, 12, 31))
+            r = one_row("c" => Cast(Value(v), "date"), parts(Cast(Value(v), "date"))...)
+            @test asdate(r[:c]) == want
+            @test got(r) == iso(want)
+        end
+    end
+
+    @testset "a timestamp column: every race's start" begin
+        q = M.Race.objects
+        q.filter("start_at__@isnull" => false)
+        q.values("start_at", "c" => Cast("start_at", "date"),
+                 "w" => "start_at__@week", "y" => "start_at__@iso_year", "d" => "start_at__@iso_week_day")
+        rows = q.list()
+        @test length(rows) > 300
+        @test all(r -> asdate(r[:c]) == utc_date(r[:start_at]), rows)
+        @test all(r -> got(r) == iso(utc_date(r[:start_at])), rows)
+    end
+end

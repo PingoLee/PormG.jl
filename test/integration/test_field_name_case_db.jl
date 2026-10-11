@@ -80,7 +80,7 @@ end
         # Reverse traversal: parent → children via related_name, filtering on a
         # mixed-case child column.
         rev = M.Case_preserve_parent_scratch.objects.
-            filter("children__lapTime" => 88).values("driverRef").first()
+            filter("children__lapTime" => 88).values("driverRef").distinct().first()   # #1002
         @test rev.driverRef == "prost"
     finally
         M.Case_preserve_child_scratch.objects.delete(allow_delete_all=true)

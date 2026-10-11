@@ -568,7 +568,7 @@ end
 # The query text is asserted for the two predicates no synthetic row can exercise: the backing
 # constraint must be joined on the index's OWN table and kind — a foreign key also records
 # `conindid`, the PARENT's unique index — and `indnullsnotdistinct` must not be named at all, as
-# it is PostgreSQL 15+ and the schema-management floor is 13 (#1108).
+# it is PostgreSQL 15+ and the introspection floor is 11 (#1146).
 # Mutation gate: drop the `(unique && !constraint)` arm and `ux_g` vanishes; drop the refusal line
 # and all four refused indexes come back. (Since #29 `ix_desc` is read — a non-unique DESC index is a
 # `Models.Index(fields = ["-c", "-d"])`; the #29 testset below covers the advanced shapes.)
@@ -986,7 +986,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 struct OwnershipMockPg730 <: PormG.PormGPostgres end
 const PG730_SQL = String[]
-# #1032: the schema reader asks the server version first (the PostgreSQL 13 floor, #1108); answered here
+# #1032: the schema reader asks the server version first (the introspection floor, #1146); answered here
 # and not recorded, so the captured statements are the schema reads alone.
 fetch(::OwnershipMockPg730, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
   occursin("server_version_num", sql) ? DataFrame(v = [160000]) :
@@ -1020,7 +1020,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 struct IndexCteMockPg847 <: PormG.PormGPostgres end
 const PG847_SQL = String[]
-# #1032: the schema reader asks the server version first (the PostgreSQL 13 floor, #1108); answered here
+# #1032: the schema reader asks the server version first (the introspection floor, #1146); answered here
 # and not recorded, so the captured statements are the schema reads alone.
 fetch(::IndexCteMockPg847, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
   occursin("server_version_num", sql) ? DataFrame(v = [160000]) :
@@ -1076,7 +1076,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 struct NonNegSqlMockPg731 <: PormG.PormGPostgres end
 const PG731_CALLS = Tuple{String, Any}[]
-# #1032: the schema reader asks the server version first (the PostgreSQL 13 floor, #1108); answered here
+# #1032: the schema reader asks the server version first (the introspection floor, #1146); answered here
 # and not recorded, so the captured statements are the schema reads alone.
 fetch(::NonNegSqlMockPg731, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
   occursin("server_version_num", sql) ? DataFrame(v = [160000]) :
@@ -1210,7 +1210,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 struct ByteLenSqlMockPg747 <: PormG.PormGPostgres end
 const PG747_CALLS = Tuple{String, Any}[]
-# #1032: the schema reader asks the server version first (the PostgreSQL 13 floor, #1108); answered here
+# #1032: the schema reader asks the server version first (the introspection floor, #1146); answered here
 # and not recorded, so the captured statements are the schema reads alone.
 fetch(::ByteLenSqlMockPg747, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
   occursin("server_version_num", sql) ? DataFrame(v = [160000]) :

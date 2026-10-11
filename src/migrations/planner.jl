@@ -3275,6 +3275,10 @@ archive without re-applying. A missing models file raises `MissingConfigurationE
 `String` form). A failure reading the live schema raises the read's own error and writes no plan
 (#1018); an empty database is not a failure — it reads as no tables, and every model is planned.
 
+On PostgreSQL, reading the schema needs PostgreSQL 11, and a plan holding a statement the server
+cannot run raises `BackendCapabilityError` and writes nothing (#1146): adding a generated column
+(`generated_from`) needs PostgreSQL 12, and removing `generated_from` (`DROP EXPRESSION`) needs 13.
+
 A pending plan holding hand-written data steps — entries labelled `Data (pre): …` or
 `Data (post): …` — is neither overwritten nor moved aside: those steps exist only in that file, so
 `makemigrations` raises `InvalidMigrationError` naming them instead (#740). Apply the plan with
@@ -3314,6 +3318,10 @@ schema_scope = Set{String}()
 live_fingerprints = _schema_table_fingerprints(live_schema, (t.name for t in live_schema))
 migration_plan = get_migration_plan(live_schema, current_models, connection, settings, interactive=interactive,
                                     lossy_alters = lossy_alters, schema_scope = schema_scope, renames = renames)
+# #1146: a plan this server cannot run is refused before it is written, not when `migrate` reaches it.
+# Here and not in `get_migration_plan`: `check(kinds = [:schema_drift])` plans the same diff, and
+# reports the step as drift rather than raising.
+_refuse_statements_above_server(connection, String[sql for steps in values(migration_plan) for sql in values(steps)])
 
 @pormg_debug false
 

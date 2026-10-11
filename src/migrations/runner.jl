@@ -895,10 +895,10 @@ function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
 end
 
 # `pg_input_is_valid` arrived in PostgreSQL 16 (`server_version_num` 160000); PormG's
-# schema-management floor is 13 (#1108).
+# introspection floor is 11 (#1146).
 const _PG_INPUT_IS_VALID = 160000
 
-# PostgreSQL 13–15 has no `pg_input_is_valid`, so the `:text_cast` count falls back to the grammar of
+# PostgreSQL 11–15 has no `pg_input_is_valid`, so the `:text_cast` count falls back to the grammar of
 # the target type's input function, as an anchored regex over the text (#828). Exact for an integer
 # (and its range), a numeric (and its precision) and a boolean; close for a float and a UUID, whose
 # input functions accept a few rare spellings these do not (a hex float; a UUID hyphenated at odd
@@ -1031,8 +1031,7 @@ function _precheck_lossy_alters(conn::PormGPostgres, findings::Vector{LossyAlter
     # mid-transaction, #139; it is borrowed now.)
     Configuration.with_tx_context(conn, leased) do
       # #828: the `:text_cast` count depends on the server's version; read once, and only for one.
-      version = any(f -> f.kind === :text_cast, findings) ?
-        Int(DataFrame(fetch(conn, "SELECT current_setting('server_version_num')::integer AS v"))[1, :v]) : nothing
+      version = any(f -> f.kind === :text_cast, findings) ? _pg_server_version(conn) : nothing
       for f in findings
         with_transaction(conn, "SAVEPOINT pormg_precheck;", conn = leased)
         counted = try
@@ -2263,8 +2262,8 @@ end
 # own advice for either is to drop it. For any other index the cause has to go first (a unique build
 # that failed on duplicates fails the same way again), and `REINDEX … CONCURRENTLY` is 12+ while
 # the schema-management floor was 11 when this was written, so it is the alternative, not the
-# instruction. (#1032 and #1108 raised that floor to 13, so `check` now always runs where REINDEX
-# CONCURRENTLY exists; the advice, and its "12 or later", were left as they were.)
+# instruction. (#1108 raised that floor to 13 and #1146 put it back at 11, so `check` can run on a
+# server without REINDEX CONCURRENTLY, which is why the advice keeps its "12 or later".)
 const _REINDEX_LEFTOVER_RE = r"_cc(new|old)\d*$"
 
 function _invalid_index_message(schema::AbstractString, index_name::AbstractString, unique::Bool,
@@ -3168,6 +3167,8 @@ several instances at once — see the [Deploying](@ref deploying-migrations) gui
 
 # Lifecycle
 1. Validate: `change_db`, then read and order the plan from disk and detect destructive statements.
+   On PostgreSQL, a statement the server cannot run raises `BackendCapabilityError` here (#1146): a
+   generated column needs PostgreSQL 12, and `DROP EXPRESSION` (removing `generated_from`) needs 13.
    **Nothing is written to the database before step 3.**
 2. Confirm: the schema precondition (#739 — the tables the plan header records are read again and
    compared, and a difference raises [`PlanPreconditionError`](@ref); skipped for the #81 case
@@ -3252,6 +3253,10 @@ function migrate(connection::PormGBackend, settings::PormGSettings;
   # #739: the schema the plan was generated against, read here so a damaged header is refused before
   # anything is written. `nothing` for a plan without one, which applies without the check.
   schema_tables = isempty(ordered_statements) ? nothing : _plan_schema_tables(_pending_plan_path(settings))
+  # #1146: a statement this server cannot run — `DROP EXPRESSION` below PostgreSQL 13, a generated
+  # column below 12 — is refused here, before anything is written. `makemigrations` refuses it too,
+  # but a plan made against a newer server can be applied to an older one.
+  _refuse_statements_above_server(connection, ordered_statements)
 
   # --- Phase 2: Confirm, BEFORE the lock (#737). A prompt waits on a human; holding the migration
   # lock meanwhile would stall every other instance booting against this database. TTY-aware:

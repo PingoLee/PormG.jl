@@ -1190,7 +1190,7 @@ index carries `pg_get_expr(indpred, indrelid, true)` as its `condition`, whichev
 are read. A UNIQUE one of either kind stays unread: `UniqueConstraint` declares neither.
 
 `indnkeyatts` is PostgreSQL 11+, which the pre-existing `indexes` CTE already requires, so this adds
-no floor of its own. (The schema-management floor is 13 since #1108; see `get_database_schema`.)
+no floor of its own. (11 is the introspection floor since #1146; see `get_database_schema`.)
 
 The partition with the `db_index` reader is per INDEX — `indnkeyatts = 1` there, `> 1` here, except
 that since #29 a one-column index that is advanced or carries the `pormg:index` marker is read here
@@ -1493,30 +1493,110 @@ function read_live_views(db::PormGPostgres; ignore_table::Vector{String} = postg
   return out
 end
 
-# The PostgreSQL version schema management needs. The statement below reads
-# `pg_attribute.attgenerated`, which PostgreSQL 12 added (#1032), and the planner can produce
-# `ALTER COLUMN … DROP EXPRESSION` (removing `generated_from`), which PostgreSQL 13 added (#1108). One
-# floor at the higher of the two means every plan the planner produces runs on every server this probe
-# accepts, with no per-statement version rule. It is the floor for `makemigrations`, `migrate`,
-# `check` and `inspectdb` — the only callers of this reader — and nothing else: queries and writes
-# never read these catalog columns, so they state no floor of their own (#1097).
-const _PG_SCHEMA_MANAGEMENT_FLOOR = 130000
+# The server's version, as `server_version_num` (`130004` for 13.4). Every version question schema
+# management asks goes through here: the introspection floor below, the plan-statement gate after it,
+# and the lossy-ALTER pre-check (`runner.jl`, `_PG_INPUT_IS_VALID`).
+_pg_server_version(db::PormGPostgres)::Int =
+  Int(DataFrame(fetch(db, "SELECT current_setting('server_version_num')::integer AS v"))[1, :v])
+
+# Each schema operation asks for what IT needs (#1146), not one floor for the whole block. #1108 had set
+# one, PostgreSQL 13, because the planner can produce `DROP EXPRESSION`; that refused `inspectdb` on a
+# server whose version the user does not choose (a legacy or third-party database) for a statement only
+# `migrate` would ever run.
+#
+#   * Introspection — the schema read under `makemigrations`, `migrate`, `check` and `inspectdb` —
+#     needs PostgreSQL 11: the `indexes` CTE reads `pg_index.indnkeyatts`. `pg_attribute.attgenerated`
+#     (12, #1032) is asked only where it exists; below 12 the column is read as not generated, which
+#     is exact, since generated columns do not exist there.
+#   * A plan statement that needs more is refused by `_refuse_statements_above_server`, at
+#     `makemigrations` and again at `migrate`, before any statement runs.
+#
+# Queries and writes never read these catalog columns, so they state no floor of their own (#1097).
+const _PG_INTROSPECTION_FLOOR = 110000
+const _PG_ATTGENERATED = 120000
 
 # Asked rather than left to the statement, so an older server gets the requirement by name instead of
-# `column a.attgenerated does not exist` out of the middle of a 300-line query. The same probe the
-# lossy-ALTER pre-check uses (`runner.jl`, `_PG_INPUT_IS_VALID`).
-function _require_pg_schema_management_floor(db::PormGPostgres)::Nothing
-  v = Int(DataFrame(fetch(db, "SELECT current_setting('server_version_num')::integer AS v"))[1, :v])
-  v >= _PG_SCHEMA_MANAGEMENT_FLOOR && return nothing
+# `column i.indnkeyatts does not exist` out of the middle of a 300-line query. Returns the version, which
+# the schema read needs again for `attgenerated`.
+function _require_pg_introspection_floor(db::PormGPostgres)::Int
+  v = _pg_server_version(db)
+  v >= _PG_INTROSPECTION_FLOOR && return v
   throw(BackendCapabilityError(
-    "PormG's schema management (makemigrations, migrate, check, inspectdb) needs PostgreSQL 13 or " *
-    "newer, to read which columns are generated and to run every statement it plans; this server is " *
-    "$(v ÷ 10000) (server_version_num $(v)). Queries and writes are not affected (#1108)."))
+    "PormG's schema introspection (makemigrations, migrate, check, inspectdb) needs PostgreSQL 11 or " *
+    "newer, to read which columns each index keys; this server is $(v ÷ 10000) (server_version_num $(v)). " *
+    "Queries and writes are not affected (#1146)."))
+end
+
+# The plan statements that need a newer server than introspection does, with the version each needs:
+#
+#   * `GENERATED ALWAYS AS (…) STORED` — a generated column, PostgreSQL 12 (#1032). `GENERATED … AS
+#     IDENTITY` (10) does not match: the pattern requires the opening parenthesis;
+#   * `ALTER COLUMN "<col>" DROP EXPRESSION` — removing `generated_from`, or releasing a generated column
+#     whose source the plan changes (`planner.jl`, `_release_generated_first!`), PostgreSQL 13 (#1108).
+#
+# Read off the statement text, as `detect_destructive_actions` reads a plan: the same test applies to a
+# plan `makemigrations` just built and to a pending file `migrate` reads, hand-written steps included.
+# So the patterns take what PostgreSQL takes, not only what PormG renders: any case and spacing, a
+# quoted name with no space after it, an unquoted one (any non-blank run), and `ALTER <col>` without
+# the optional `COLUMN`. A false positive (the text inside a string literal) can only refuse a plan on
+# an older server. Each row carries its own way out, since the two point in opposite directions.
+const _PG_STATEMENT_FLOORS = (
+  (r"\bGENERATED\s+ALWAYS\s+AS\s*\("i, 120000, "a generated column (GENERATED ALWAYS AS (…) STORED)",
+   "declare the field without `generated_from` (an ordinary column), or upgrade the server to 12"),
+  (r"\bALTER\s+(?:COLUMN\s+)?(?:\"(?:[^\"]|\"\")*\"\s*|[^\s\"(),;]+\s+)DROP\s+EXPRESSION\b"i, 130000,
+   "removing a column's generation expression (ALTER COLUMN … DROP EXPRESSION)",
+   "keep `generated_from` on the field, or upgrade the server to 13; a generated column removed " *
+   "together with a column it reads can be removed in a migration of its own first"),
+)
+
+# The part of a refused statement the error shows: its first line (the table) and, when the match
+# starts on another line (a CREATE TABLE's column), that one too, each cut at 120 characters. The whole
+# DDL of a wide table would bury the column the message is about. The line is found by where the match
+# STARTS, so a hand-written clause broken across lines still names its column.
+function _refused_statement_excerpt(stmt::AbstractString, re::Regex)::String
+  cut(l) = (l = strip(l); length(l) > 120 ? first(l, 119) * "…" : l)
+  text = strip(stmt)
+  lines = split(text, '\n')
+  m = match(re, text)
+  at = m === nothing ? 1 : count(==('\n'), SubString(text, 1, prevind(text, m.offset))) + 1
+  return at == 1 ? cut(lines[1]) : cut(lines[1]) * " … " * cut(lines[at])
+end
+
+# The `::Any` method is every other backend: SQLite refuses a `SearchVectorField` before it is planned
+# (#1032), so it never renders these statements. A backend that does (MySQL, #1130) states its own
+# method, not this one.
+"""
+    _refuse_statements_above_server(conn, statements) -> Nothing
+
+Raise `BackendCapabilityError` when a plan statement needs a newer PostgreSQL than the server runs
+(#1146): a generated column needs 12, `DROP EXPRESSION` 13. Called by `makemigrations` before it writes
+the plan and by `migrate` before any statement runs. The server is asked only when a statement needs
+more than introspection does, so a plan without one costs no query.
+"""
+_refuse_statements_above_server(::Any, ::AbstractVector{<:AbstractString})::Nothing = nothing
+
+function _refuse_statements_above_server(conn::PormGPostgres, statements::AbstractVector{<:AbstractString})::Nothing
+  needed = [(stmt, row) for stmt in statements for row in _PG_STATEMENT_FLOORS if occursin(row[1], stmt)]
+  isempty(needed) && return nothing
+  v = _pg_server_version(conn)
+  refused = [(stmt, row) for (stmt, row) in needed if v < row[2]]
+  isempty(refused) && return nothing
+  # Each statement with its own way out: a plan can hold both, and they point in opposite directions.
+  lines = join(("  - $(what), PostgreSQL $(need ÷ 10000)+:\n      $(_refused_statement_excerpt(stmt, re))\n" *
+                "    $(uppercasefirst(way_out))."
+                for (stmt, (re, need, what, way_out)) in refused), "\n")
+  throw(BackendCapabilityError(
+    "This migration plan needs a newer PostgreSQL than this server, which is $(v ÷ 10000) " *
+    "(server_version_num $(v)):\n$(lines)\n" *
+    _emsg("Every other plan runs on PostgreSQL 11 (#1146).")))
 end
 
 function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} = "public", table::Union{String, Nothing} = nothing,
                              views::Bool = false)
-  _require_pg_schema_management_floor(db)
+  server_version = _require_pg_introspection_floor(db)
+  # #1146: `attgenerated` exists from PostgreSQL 12. Below it there is no generated column to report,
+  # so the field is the empty code every reader takes for "not generated".
+  generated_sql = server_version >= _PG_ATTGENERATED ? "a.attgenerated::text" : "''::text"
   # #767: by default every relation PormG could own (#730); `views = true` reads views and
   # materialized views instead, for `inspectdb`'s `include_views` only. The extension filter applies
   # to both — an extension can own a view too (`pg_stat_statements`) — and `relispartition` is never
@@ -1527,9 +1607,9 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
   # gate was dead: the `indexes` CTE below uses `indnkeyatts`, which is PostgreSQL 11+, and it sits in
   # THIS SAME STATEMENT — so 11 was the effective floor for every introspection and nothing could
   # reach the `else` branch. #455 made `identity` a JSON field read straight from `a.attidentity`,
-  # which left the probe with no consumer at all. #1032 raised the schema-management floor to 12
-  # (`a.attgenerated`) and #1108 to 13 (the planner's `DROP EXPRESSION`); it is probed once, above, so
-  # the requirement is reported by name, and the statement itself still has no version branch.
+  # which left the probe with no consumer at all. The version is probed again since #1032, once, above:
+  # the introspection floor (11) is reported by name, and the one version branch in the statement is
+  # `attgenerated` (#1146), which exists from 12 and is replaced by the empty code below it.
   #
   # #455: every aggregate that is TRANSPORTED to the reader is `json_agg(...)::text`, not
   # `array_to_string(array_agg(...), ', ')`. (`unique_constraints` and `non_negative_checks` still
@@ -1754,8 +1834,8 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
             -- no version question at all. The 9.x rationale this comment used to give was already
             -- false when it was written: the `indexes` CTE above uses `indnkeyatts`, which is
             -- PostgreSQL 11+, and it sits in THIS SAME STATEMENT — the one every introspection runs.
-            -- So 11 was the effective floor for this query (12 since #1032, for `attgenerated`; the
-            -- schema-management floor is 13 since #1108) and `regexp_match` (10+) would have been safe too. #415 leans on the same fact for multi-argument `unnest` in FROM (9.4+).
+            -- So 11 was the effective floor for this query (stated and probed since #1146; `attgenerated`
+            -- is asked only from 12) and `regexp_match` (10+) would have been safe too. #415 leans on the same fact for multi-argument `unnest` in FROM (9.4+).
             --
             -- Scope of that claim, deliberately narrow: it is about THIS statement. It used to be
             -- the reason a `major_version >= 10` gate on an `identity_case` fragment could never
@@ -1806,8 +1886,9 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
             'identity', a.attidentity::text,
             -- #1032: "s" for a STORED generated column, "v" for a VIRTUAL one (PostgreSQL 18), ""
             -- otherwise. Its expression is the `default` above: PostgreSQL keeps both in
-            -- `pg_attrdef`. PostgreSQL 12+, below the schema-management floor (13) probed before this runs.
-            'generated', a.attgenerated::text,
+            -- `pg_attrdef`. `attgenerated` is PostgreSQL 12+; below it the code is "" (#1146), which is
+            -- exact: a server without the column has no generated column either.
+            'generated', $(generated_sql),
             -- #318: plain membership. `unique_cols` already holds ONLY single-column constraints
             -- (filtered per-constraint in the CTE above), so the old `array_length(...) = 1` guard
             -- here was testing the wrong thing — the merged per-table array — and rejected every

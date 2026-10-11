@@ -88,7 +88,8 @@ function _explain_sql(connection::Union{PormGPostgres, PormGSQLite}, sql::Abstra
   if connection isa PormGSQLite
     if analyze || buffers || verbose
       requested = join([name for (name, on) in (("analyze", analyze), ("buffers", buffers), ("verbose", verbose)) if on], ", ")
-      throw(BackendCapabilityError("explain($(requested) = true) is PostgreSQL-only: SQLite has no EXPLAIN ANALYZE, BUFFERS or VERBOSE, only EXPLAIN QUERY PLAN. Call explain() without them on SQLite, or run on PostgreSQL."))
+      throw(_capability_error(connection, :explain_options, "explain($(requested) = true)";
+                               why = "Call explain() without them for the plan this backend gives."))
     end
     return "EXPLAIN QUERY PLAN " * sql
   end

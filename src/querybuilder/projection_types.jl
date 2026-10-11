@@ -1429,7 +1429,7 @@ function _render_alias_search(v::SQLTypeOper, source, label::AbstractString, ins
     "The projection alias \e[31m$(label)\e[0m is a SearchVector, and the only lookup on it is " *
     "\e[32m@search\e[0m: \e[32m\"$(label)__@search\" => SearchQuery(…)\e[0m. A tsvector has no order or " *
     "equality worth filtering on (#1021)."))
-  instruc.connection isa PormGSQLite && throw(Dialect.fts_capability_error("The @search lookup"))
+  _supports(instruc.connection, :full_text_search) || throw(Dialect.fts_capability_error(instruc.connection, "The @search lookup"))
   query = v.values
   if query isa AbstractString
     get(vector.kwargs, "mixed_config", false) === true && throw(FilterError(

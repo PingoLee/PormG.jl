@@ -340,13 +340,13 @@ end
 @testset "SQLite refuses a method or an opclass at the planner and the renderer (#29)" begin
   e = try; _ix_plan_one(IXMockSQLite(), :driver_ix, IXA.Driver_ix); nothing; catch x; x; end
   @test e isa PormG.BackendCapabilityError
-  @test occursin("PostgreSQL-only", sprint(showerror, e))
+  @test occursin("which SQLite does not support (supported on PostgreSQL)", sprint(showerror, e))   # #1129: the capability table's wording
   @test occursin("driver_ix", sprint(showerror, e))
 
   e_m = try; PormG.Dialect.create_index(IXMockSQLite(), "\"i\"", "\"t\"", ["\"a\""]; method = "gin"); nothing; catch x; x; end
-  @test e_m isa PormG.BackendCapabilityError && occursin("access method \"gin\"", sprint(showerror, e_m))
+  @test e_m isa PormG.BackendCapabilityError && occursin("method = \"gin\" needs index options beyond a plain b-tree", sprint(showerror, e_m))
   e_o = try; PormG.Dialect.create_index(IXMockSQLite(), "\"i\"", "\"t\"", ["\"a\""]; opclasses = ["text_pattern_ops"]); nothing; catch x; x; end
-  @test e_o isa PormG.BackendCapabilityError && occursin("no operator classes", sprint(showerror, e_o))
+  @test e_o isa PormG.BackendCapabilityError && occursin("opclasses = (\"text_pattern_ops\",) needs index options beyond a plain b-tree", sprint(showerror, e_o))
   # A descending column is NOT refused — SQLite orders an index the same way.
   @test occursin("DESC", PormG.Dialect.create_index(IXMockSQLite(), "\"i\"", "\"t\"", ["\"a\""]; descending = [true]))
   # The renderer's own guard against a hand-built caller: an opclass and a method are rendered bare.
@@ -364,7 +364,7 @@ end
 # the index advanced, so one key field is accepted and the index is owned through `pormg:index`. The
 # planner renders `INCLUDE` between the member list and the `WHERE`, over PHYSICAL columns; SQLite is
 # refused at both sites (the #648 pattern). `Model_to_str` and inspectdb round-trip it.
-# Mutation gate: drop the `include` arm of `_refuse_postgres_only_indexes` and the planner half of
+# Mutation gate: drop the `include` arm of `_refuse_unsupported_indexes` and the planner half of
 # the SQLite refusal fails; drop `_index_include` from the PostgreSQL renderer and the render fails.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Index(include = …) is a PostgreSQL covering index (#934)" begin
@@ -402,9 +402,9 @@ end
   # SQLite: refused at the planner, before anything is diffed, and at the renderer.
   e = try; _ix_plan_one(IXMockSQLite(), :result_cov, cov); nothing; catch x; x; end
   @test e isa PormG.BackendCapabilityError
-  @test occursin("include = (\"points\",)", sprint(showerror, e)) && occursin("PostgreSQL-only", sprint(showerror, e))
+  @test occursin("include = (\"points\",)", sprint(showerror, e)) && occursin("which SQLite does not support (supported on PostgreSQL)", sprint(showerror, e))
   e_r = try; PormG.Dialect.create_index(IXMockSQLite(), "\"i\"", "\"t\"", ["\"a\""]; include = ["\"b\""]); nothing; catch x; x; end
-  @test e_r isa PormG.BackendCapabilityError && occursin("no covering indexes", sprint(showerror, e_r))
+  @test e_r isa PormG.BackendCapabilityError && occursin("include = (\"\\\"b\\\"\",) needs index options beyond a plain b-tree", sprint(showerror, e_r))
 
   # Model_to_str writes the payload under the field's (possibly re-spelled) name, and it reloads.
   src = Models.Model_to_str(cov)

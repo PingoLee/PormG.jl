@@ -15,6 +15,7 @@ import PormG: backend_sqlite_version  # SQLite library-version probe (driver bod
 #                                a DecimalField wider than SQLite stores exactly #648).
 #   QueryBuildError            — the caller passed an impossible argument shape (on_conflict_clause).
 import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError, InvalidMigrationError
+import PormG: _supports, _capability_error  # #1129: the backend capability table (Kernel)
 # #496: the `db_default` vocabulary (Kernel, layer 1). `db_default_sql` below renders from it, and
 # `Migrations._column_default` compiles the declared side through the same function.
 import PormG: PORTABLE_DB_DEFAULTS
@@ -680,7 +681,7 @@ function cast_type_sql(type::AbstractString, conn::PormGPostgres; context::Abstr
 end
 function cast_type_sql(type::AbstractString, conn::PormGSQLite; context::AbstractString = "Cast")
   name, suffix = _parse_cast_type(type, context)
-  occursin('[', suffix) && throw(BackendCapabilityError("$(context): SQLite has no array types; $(repr(name * suffix)) is PostgreSQL-only."))
+  occursin('[', suffix) && throw(_capability_error(conn, :arrays, "$(context): a cast to $(repr(name * suffix))"))
   return uppercase(_map_cast_name(sqlite_type_map_reverse, name, suffix) * suffix)
 end
 
@@ -717,7 +718,7 @@ for the other temporal targets, which SQLite's NUMERIC affinity would turn into 
 function sqlite_cast_sql(expr::AbstractString, type::AbstractString, conn::PormGSQLite; context::AbstractString = "Cast")
   name, suffix = _parse_cast_type(type, context)
   # `cast_type_sql` below refuses an array too, but a `date[]` must not reach the temporal message.
-  occursin('[', suffix) && throw(BackendCapabilityError("$(context): SQLite has no array types; $(repr(name * suffix)) is PostgreSQL-only."))
+  occursin('[', suffix) && throw(_capability_error(conn, :arrays, "$(context): a cast to $(repr(name * suffix))"))
   base = uppercase(first(split(name)))
   base == "DATE" && isempty(suffix) && return "date($(expr))"
   if base == "DATE" || base in _SQLITE_NUMERIC_TEMPORAL_CASTS
@@ -1582,7 +1583,7 @@ function _get_column_type(field::PormGField, conn::PormGSQLite; type_map::Dict{S
     return sql_type
   elseif field isa Union{sGenericIPAddressField, sCIDRField, sArrayField, sSearchVectorField}
     # #28 (and #1021's `tsvector`): for the migration compiler only — `field_to_column` refuses these on SQLite, so no DDL
-    # PormG writes carries it. See `_refuse_specialized_sqlite_type`.
+    # PormG writes carries it. See `_refuse_unsupported_type`.
     return sql_type
   elseif field isa sBinaryField
     # `BLOB` takes no length parameter (and SQLite would ignore one anyway — BLOB affinity means
@@ -1681,27 +1682,26 @@ end
 struct _PostgresTypeEngine <: PormGPostgres end
 const _PG_TYPE_ENGINE = _PostgresTypeEngine()
 
-function _refuse_specialized_sqlite_type(col_name::AbstractString, field::PormGField)::Nothing
-  if field isa sArrayField
-    pg = _get_column_type(field, _PG_TYPE_ENGINE)
-    throw(BackendCapabilityError(
-      "ArrayField \"$(col_name)\" is a PostgreSQL array (`$(pg)`), and SQLite has no array type: " *
-      "it cannot store, compare or index the elements of one value. PormG refuses the column on " *
-      "SQLite rather than emulate it as text. Run this model on PostgreSQL, or keep the elements in " *
-      "a related model (a ForeignKey per element) if it must run on SQLite."))
-  end
-  field isa sSearchVectorField && throw(BackendCapabilityError(
-    "SearchVectorField \"$(col_name)\" is PostgreSQL's native `tsvector`, a stored full-text document, " *
-    "and SQLite has no such type: its FTS5 is a separate index table with its own query syntax. PormG " *
-    "refuses the column on SQLite rather than emulate it (#1021). Run this model on PostgreSQL."))
-  field isa Union{sGenericIPAddressField, sCIDRField} || return nothing
-  name = field isa sCIDRField ? "CIDRField" : "GenericIPAddressField"
-  pg = field isa sCIDRField ? "cidr" : "inet"
-  throw(BackendCapabilityError(
-    "$(name) \"$(col_name)\" is PostgreSQL's native `$(pg)` type, which SQLite does not have: it has " *
-    "no type that compares an address by network or stores one value for every spelling of it. " *
-    "PormG refuses the column on SQLite rather than emulate it as text. Run this model on " *
-    "PostgreSQL, or declare the column as a CharField/TextField if you only need to store the text."))
+# #1129: each specialized type is a row of the capability table, and a backend without it refuses a
+# model that declares one — whatever the backend, not SQLite by name. The PostgreSQL type the field
+# has is named, so the message says what was declared.
+_field_feature(::sArrayField) = :arrays
+_field_feature(::sSearchVectorField) = :full_text_search
+_field_feature(::Union{sGenericIPAddressField, sCIDRField}) = :network_types
+_field_feature(::PormGField) = nothing
+const _UNSUPPORTED_TYPE_WHY = Dict(
+  :arrays => "PormG refuses the column rather than emulate it as text; on a backend without arrays, " *
+             "keep the elements in a related model (a ForeignKey per element).",
+  :full_text_search => "PormG refuses the column rather than emulate it: an engine's own full-text index " *
+                       "is a separate structure with its own query syntax (#1021).",
+  :network_types => "PormG refuses the column rather than emulate it as text, which would not compare " *
+                    "an address by network; declare it as a CharField/TextField if you only need the text.")
+function _refuse_unsupported_type(conn, col_name::AbstractString, field::PormGField)::Nothing
+  feature = _field_feature(field)
+  (feature === nothing || !(conn isa PormGBackend) || _supports(conn, feature)) && return nothing
+  label = string(nameof(typeof(field)))[2:end]   # `sArrayField` → `ArrayField`
+  throw(_capability_error(conn, feature, "$(label) \"$(col_name)\" (`$(_get_column_type(field, _PG_TYPE_ENGINE))`)";
+                          why = _UNSUPPORTED_TYPE_WHY[feature]))
 end
 
 # ── Physical-column identity ── moved out (#507) ───────────────────────────────────────
@@ -1813,8 +1813,8 @@ function field_to_column(col_name::String, field::PormGField, conn::PormGSQLite;
   col_name = field_db_column(field, col_name)
   # #648: a DecimalField SQLite cannot store exactly is refused before any DDL exists.
   _refuse_inexact_sqlite_decimal(col_name, field)
-  # #28: so is a specialized PostgreSQL type (`inet`, `cidr`).
-  _refuse_specialized_sqlite_type(col_name, field)
+  # #28, #1129: so is a type this backend lacks (`inet`, `cidr`, an array, a `tsvector`).
+  _refuse_unsupported_type(conn, col_name, field)
   # Determine the base SQL type
   base_type = _get_column_type(field, conn)
   # #496: is this the deferred ADD COLUMN rendering? Computed before the nullability block, which
@@ -2069,7 +2069,7 @@ end
 
 # SQLite has no access method and no operator class, and refuses them here rather than create a
 # different index — the renderer half of the #648 rule; the planner refuses the declaration first
-# (`_refuse_postgres_only_indexes`). A `DESC` member is core: SQLite orders an index the same way.
+# (`_refuse_unsupported_indexes`). A `DESC` member is core: SQLite orders an index the same way.
 #
 # The marker is an SQL comment INSIDE the column list, after the last member: SQLite keeps the
 # `CREATE INDEX` text verbatim in `sqlite_master` — comments included, through `RENAME TO` and
@@ -2082,17 +2082,11 @@ function create_index(conn::PormGSQLite, index_name::String, table_name::String,
                       descending::AbstractVector{Bool} = Bool[], opclasses::AbstractVector = Union{String, Nothing}[],
                       expressions::AbstractVector = String[], condition::Union{AbstractString, Nothing} = nothing,
                       marker::Union{String, Nothing} = nothing, include::AbstractVector = String[])
-  method == "btree" || throw(BackendCapabilityError(
-    "SQLite has no index access method \"$(method)\" — only b-tree. An index declared with " *
-    "method = \"$(method)\" is PostgreSQL-only; declare it on a model that migrates on PostgreSQL."))
-  any(!isnothing, opclasses) && throw(BackendCapabilityError(
-    "SQLite has no operator classes, so an index declaring opclasses = $(Tuple(opclasses)) is " *
-    "PostgreSQL-only; declare it on a model that migrates on PostgreSQL."))
+  method == "btree" || throw(_capability_error(conn, :index_methods, "An index declaring method = \"$(method)\""))
+  any(!isnothing, opclasses) && throw(_capability_error(conn, :index_methods, "An index declaring opclasses = $(Tuple(opclasses))"))
   # #934: SQLite has no covering indexes. Refused rather than created without the payload, which
   # would be a different index — the renderer half of the #648 rule.
-  isempty(include) || throw(BackendCapabilityError(
-    "SQLite has no covering indexes, so an index declaring include = $(Tuple(include)) is " *
-    "PostgreSQL-only; declare it on a model that migrates on PostgreSQL."))
+  isempty(include) || throw(_capability_error(conn, :index_methods, "An index declaring include = $(Tuple(include))"))
   members = join(_index_text_members(columns, descending, opclasses, expressions), ", ")
   marker === nothing || (members *= " /* $(marker) */")
   return """CREATE INDEX $(if_not_exists ? "IF NOT EXISTS " : "")$(index_name) ON $(table_name) ($(members))$(_index_where(condition));"""
@@ -3117,8 +3111,8 @@ end
 function jcontains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) @> $(value)"                    # jsonb contains the given document
 end
-function jcontains(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The @jcontains lookup (JSONB @>) requires PostgreSQL"))
+function jcontains(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :jsonb_operators, "The @jcontains lookup (JSONB @>)"))
 end
 function jcontains(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @jcontains lookup (JSONB @>) requires PostgreSQL"))
@@ -3127,8 +3121,8 @@ end
 function has_key(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) ? $(value)"                     # top-level key exists
 end
-function has_key(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The @has_key lookup (JSONB ?) requires PostgreSQL"))
+function has_key(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :jsonb_operators, "The @has_key lookup (JSONB ?)"))
 end
 function has_key(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @has_key lookup (JSONB ?) requires PostgreSQL"))
@@ -3137,8 +3131,8 @@ end
 function has_any_keys(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) ?| $(value)"                    # any of the given keys exists
 end
-function has_any_keys(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The @has_any_keys lookup (JSONB ?|) requires PostgreSQL"))
+function has_any_keys(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :jsonb_operators, "The @has_any_keys lookup (JSONB ?|)"))
 end
 function has_any_keys(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @has_any_keys lookup (JSONB ?|) requires PostgreSQL"))
@@ -3147,8 +3141,8 @@ end
 function has_keys(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) ?& $(value)"                    # all of the given keys exist
 end
-function has_keys(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The @has_keys lookup (JSONB ?&) requires PostgreSQL"))
+function has_keys(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :jsonb_operators, "The @has_keys lookup (JSONB ?&)"))
 end
 function has_keys(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @has_keys lookup (JSONB ?&) requires PostgreSQL"))
@@ -3161,8 +3155,8 @@ end
 function acontains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) @> $(value)"                    # the array holds every given element
 end
-function acontains(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The @acontains lookup (array @>) requires PostgreSQL"))
+function acontains(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :arrays, "The @acontains lookup (array @>)"))
 end
 function acontains(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @acontains lookup (array @>) requires PostgreSQL"))
@@ -3171,8 +3165,8 @@ end
 function contained_by(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) <@ $(value)"                    # every element is among the given ones
 end
-function contained_by(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The @contained_by lookup (array <@) requires PostgreSQL"))
+function contained_by(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :arrays, "The @contained_by lookup (array <@)"))
 end
 function contained_by(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @contained_by lookup (array <@) requires PostgreSQL"))
@@ -3181,8 +3175,8 @@ end
 function overlap(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) && $(value)"                    # at least one element in common
 end
-function overlap(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The @overlap lookup (array &&) requires PostgreSQL"))
+function overlap(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :arrays, "The @overlap lookup (array &&)"))
 end
 function overlap(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @overlap lookup (array &&) requires PostgreSQL"))
@@ -3195,8 +3189,8 @@ end
 function ARRAY_LEN(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   return "cardinality($(column))"
 end
-function ARRAY_LEN(column::String, format::Dict{String,Any}, conn::PormGSQLite)
-  throw(BackendCapabilityError("The @len transform (array cardinality) requires PostgreSQL: SQLite has no array type."))
+function ARRAY_LEN(column::String, format::Dict{String,Any}, conn::PormGBackend)
+  throw(_capability_error(conn, :arrays, "The @len transform (array cardinality)"))
 end
 
 # #28: an index (`tags__0`) and a slice (`tags__0_2`) into an `ArrayField`. The bounds are 1-based
@@ -3209,21 +3203,21 @@ _array_index_expr(::PormGPostgres, column::AbstractString, index::Int)::String =
   string(column, "[", index, "]")
 _array_slice_expr(::PormGPostgres, column::AbstractString, lower::Int, upper::Int)::String =
   string(column, "[", lower, ":", upper, "]")
-_array_index_expr(::PormGSQLite, column::AbstractString, index::Int) =
-  throw(BackendCapabilityError("An ArrayField index (`__$(index - 1)`) requires PostgreSQL: SQLite has no array type."))
-_array_slice_expr(::PormGSQLite, column::AbstractString, lower::Int, upper::Int) =
-  throw(BackendCapabilityError("An ArrayField slice (`__$(lower - 1)_$(upper)`) requires PostgreSQL: SQLite has no array type."))
+_array_index_expr(conn::PormGBackend, column::AbstractString, index::Int) =
+  throw(_capability_error(conn, :arrays, "An ArrayField index (`__$(index - 1)`)"))
+_array_slice_expr(conn::PormGBackend, column::AbstractString, lower::Int, upper::Int) =
+  throw(_capability_error(conn, :arrays, "An ArrayField slice (`__$(lower - 1)_$(upper)`)"))
 
 # #904: PostgreSQL network operators over an `inet`/`cidr` column. The same three arms as the JSON
 # four: PostgreSQL emits the operator, SQLite and the abstract arm refuse. SQLite cannot declare
-# either column (`_refuse_specialized_sqlite_type`), so its arm is reached only by a model that
+# either column (`_refuse_unsupported_type`), so its arm is reached only by a model that
 # declares one and is queried without being migrated. A containment operand arrives already cast
 # (`$1::inet`) — `<<` is ambiguous on an untyped parameter — or as a column, which needs no cast.
 function net_contained(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) << $(value)"                    # strictly inside the given network
 end
-function net_contained(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The @net_contained lookup (inet <<) requires PostgreSQL"))
+function net_contained(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :network_types, "The @net_contained lookup (inet <<)"))
 end
 function net_contained(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @net_contained lookup (inet <<) requires PostgreSQL"))
@@ -3232,8 +3226,8 @@ end
 function net_contained_or_equal(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) <<= $(value)"                   # inside the given network, or equal to it
 end
-function net_contained_or_equal(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The @net_contained_or_equal lookup (inet <<=) requires PostgreSQL"))
+function net_contained_or_equal(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :network_types, "The @net_contained_or_equal lookup (inet <<=)"))
 end
 function net_contained_or_equal(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @net_contained_or_equal lookup (inet <<=) requires PostgreSQL"))
@@ -3242,8 +3236,8 @@ end
 function net_contains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) >> $(value)"                    # strictly contains the given value
 end
-function net_contains(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The @net_contains lookup (inet >>) requires PostgreSQL"))
+function net_contains(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :network_types, "The @net_contains lookup (inet >>)"))
 end
 function net_contains(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @net_contains lookup (inet >>) requires PostgreSQL"))
@@ -3252,8 +3246,8 @@ end
 function net_contains_or_equals(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) >>= $(value)"                   # contains the given value, or equals it
 end
-function net_contains_or_equals(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The @net_contains_or_equals lookup (inet >>=) requires PostgreSQL"))
+function net_contains_or_equals(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :network_types, "The @net_contains_or_equals lookup (inet >>=)"))
 end
 function net_contains_or_equals(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @net_contains_or_equals lookup (inet >>=) requires PostgreSQL"))
@@ -3262,8 +3256,8 @@ end
 function net_overlaps(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) && $(value)"                    # either contains or equals the other
 end
-function net_overlaps(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The @net_overlaps lookup (inet &&) requires PostgreSQL"))
+function net_overlaps(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :network_types, "The @net_overlaps lookup (inet &&)"))
 end
 function net_overlaps(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @net_overlaps lookup (inet &&) requires PostgreSQL"))
@@ -3272,8 +3266,8 @@ end
 function family(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "family($(column)) = $(value)"             # 4 or 6
 end
-function family(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The @family lookup (inet family()) requires PostgreSQL"))
+function family(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :network_types, "The @family lookup (inet family())"))
 end
 function family(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @family lookup (inet family()) requires PostgreSQL"))
@@ -3282,8 +3276,8 @@ end
 function prefixlen(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "masklen($(column)) = $(value)"            # the netmask length
 end
-function prefixlen(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The @prefixlen lookup (inet masklen()) requires PostgreSQL"))
+function prefixlen(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :network_types, "The @prefixlen lookup (inet masklen())"))
 end
 function prefixlen(conn::PormGAbstractType, column::AbstractString, value)
   throw(BackendCapabilityError("The @prefixlen lookup (inet masklen()) requires PostgreSQL"))
@@ -3367,8 +3361,8 @@ function iunaccent_contains(conn::PormGPostgres, column::AbstractString, value::
   # expression can be backed by a functional/pg_trgm index on large tables.
   return "public.immutable_unaccent($(column)) ILIKE public.immutable_unaccent($(value))$(_like_escape_clause())"
 end
-function iunaccent_contains(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The iunaccent_contains lookup requires PostgreSQL and the unaccent extension"))
+function iunaccent_contains(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :unaccent, "The iunaccent_contains lookup"))
   return nothing
 end
 function iunaccent_contains(conn::PormGAbstractType, column::AbstractString, value)
@@ -3382,8 +3376,8 @@ function iunaccent_exact(conn::PormGPostgres, column::AbstractString, value::Abs
   # index on LOWER(public.immutable_unaccent(column)).
   return "LOWER(public.immutable_unaccent($(column))) = LOWER(public.immutable_unaccent($(value)))"
 end
-function iunaccent_exact(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The iunaccent_exact lookup requires PostgreSQL and the unaccent extension"))
+function iunaccent_exact(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :unaccent, "The iunaccent_exact lookup"))
   return nothing
 end
 function iunaccent_exact(conn::PormGAbstractType, column::AbstractString, value)
@@ -3402,9 +3396,8 @@ end
 # with, so the two cannot drift apart. `ts_config_name` is bound here too, as `Dialect.ts_config_name`.
 # The search text and the headline options are always bound.
 # ──────────────────────────────────────────────────────────────────────────────
-fts_capability_error(what::AbstractString) = BackendCapabilityError(
-  "$(what) requires PostgreSQL full-text search: SQLite has no tsvector or tsquery, and PormG does " *
-  "not emulate full-text search (#31).")
+fts_capability_error(conn, what::AbstractString) =
+  _capability_error(conn, :full_text_search, what; why = "PormG does not emulate full-text search (#31).")
 
 const _TS_QUERY_FUNCTIONS = Dict("plain" => "plainto_tsquery", "phrase" => "phraseto_tsquery",
                                  "websearch" => "websearch_to_tsquery", "raw" => "to_tsquery")
@@ -3414,13 +3407,13 @@ const _TS_QUERY_FUNCTIONS = Dict("plain" => "plainto_tsquery", "phrase" => "phra
 # lookup renderer, `(conn, column, value)`, which `test_operators.jl` reads back by reflection.
 ts_vector_sql(column::AbstractString, config, conn::PormGPostgres) = ts_lookup_document_sql(column, config)
 ts_vector_sql(column::AbstractString, config, conn::PormGAbstractType) =
-  throw(fts_capability_error("The @search lookup"))
+  throw(fts_capability_error(conn, "The @search lookup"))
 
 search(conn::PormGPostgres, vector::AbstractString, query::AbstractString)::String = "$(vector) @@ $(query)"
-search(conn::PormGSQLite, vector::AbstractString, query::AbstractString) =
-  throw(fts_capability_error("The @search lookup"))
+search(conn::PormGBackend, vector::AbstractString, query::AbstractString) =
+  throw(fts_capability_error(conn, "The @search lookup"))
 search(conn::PormGAbstractType, vector::AbstractString, query) =
-  throw(fts_capability_error("The @search lookup"))
+  throw(fts_capability_error(conn, "The @search lookup"))
 
 # Django's document (`ts_vector_document_sql`), labelled by its weight (`setweight`, #1021).
 # `Models.search_vector_expression` writes an index on it from the same functions
@@ -3503,10 +3496,10 @@ end
 
 # The build refuses all four on SQLite first (`_render_function_typed`); these are the backstop that
 # keeps a hand-built node from reaching the driver as a `MethodError`.
-SEARCH_VECTOR(column, format::Dict{String,Any}, conn::PormGAbstractType) = throw(fts_capability_error("SearchVector"))
-SEARCH_QUERY(column, format::Dict{String,Any}, conn::PormGAbstractType) = throw(fts_capability_error("SearchQuery"))
-SEARCH_RANK(column, format::Dict{String,Any}, conn::PormGAbstractType) = throw(fts_capability_error("SearchRank"))
-SEARCH_HEADLINE(column, format::Dict{String,Any}, conn::PormGAbstractType) = throw(fts_capability_error("SearchHeadline"))
+SEARCH_VECTOR(column, format::Dict{String,Any}, conn::PormGAbstractType) = throw(fts_capability_error(conn, "SearchVector"))
+SEARCH_QUERY(column, format::Dict{String,Any}, conn::PormGAbstractType) = throw(fts_capability_error(conn, "SearchQuery"))
+SEARCH_RANK(column, format::Dict{String,Any}, conn::PormGAbstractType) = throw(fts_capability_error(conn, "SearchRank"))
+SEARCH_HEADLINE(column, format::Dict{String,Any}, conn::PormGAbstractType) = throw(fts_capability_error(conn, "SearchHeadline"))
 
 # #635: POSIX regular-expression lookups — PostgreSQL only. `~` is case-sensitive, `~*` folds case;
 # the pattern is the bound placeholder like every renderer here, and it is never LIKE-escaped or
@@ -3517,16 +3510,16 @@ SEARCH_HEADLINE(column, format::Dict{String,Any}, conn::PormGAbstractType) = thr
 # one filter would silently return different rows per engine. A capability error cannot.
 # Indexing: an anchored, case-sensitive `~ '^…'` can use a `text_pattern_ops` / C-locale btree just
 # as `LIKE 'x%'` can; unanchored patterns and `~*` are evaluated row by row (`pg_trgm` GIN helps).
-_regex_capability_error(op::AbstractString) =
-  BackendCapabilityError("The $(op) lookup requires PostgreSQL: SQLite has no built-in regular " *
-                         "expressions, and PormG does not emulate them because the pattern " *
-                         "dialect would differ from PostgreSQL's POSIX syntax")
+_regex_capability_error(conn, op::AbstractString) =
+  _capability_error(conn, :regex, "The $(op) lookup"; why = "PormG does not emulate it: a Julia-side "
+                    * "pattern would be PCRE, which disagrees with POSIX syntax on backreferences, lazy "
+                    * "quantifiers and lookaround.")
 
 function regex(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) ~ $(value)"
 end
-function regex(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(_regex_capability_error("regex"))
+function regex(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_regex_capability_error(conn, "regex"))
   return nothing
 end
 function regex(conn::PormGAbstractType, column::AbstractString, value)
@@ -3537,8 +3530,8 @@ end
 function iregex(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) ~* $(value)"
 end
-function iregex(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(_regex_capability_error("iregex"))
+function iregex(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_regex_capability_error(conn, "iregex"))
   return nothing
 end
 function iregex(conn::PormGAbstractType, column::AbstractString, value)
@@ -3639,8 +3632,8 @@ end
 function niunaccent_contains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "public.immutable_unaccent($(column)) NOT ILIKE public.immutable_unaccent($(value))$(_like_escape_clause())"
 end
-function niunaccent_contains(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The niunaccent_contains lookup requires PostgreSQL and the unaccent extension"))
+function niunaccent_contains(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :unaccent, "The niunaccent_contains lookup"))
   return nothing
 end
 function niunaccent_contains(conn::PormGAbstractType, column::AbstractString, value)
@@ -3651,8 +3644,8 @@ end
 function niunaccent_exact(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "LOWER(public.immutable_unaccent($(column))) <> LOWER(public.immutable_unaccent($(value)))"
 end
-function niunaccent_exact(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(BackendCapabilityError("The niunaccent_exact lookup requires PostgreSQL and the unaccent extension"))
+function niunaccent_exact(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_capability_error(conn, :unaccent, "The niunaccent_exact lookup"))
   return nothing
 end
 function niunaccent_exact(conn::PormGAbstractType, column::AbstractString, value)
@@ -3665,8 +3658,8 @@ end
 function nregex(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) !~ $(value)"
 end
-function nregex(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(_regex_capability_error("nregex"))
+function nregex(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_regex_capability_error(conn, "nregex"))
   return nothing
 end
 function nregex(conn::PormGAbstractType, column::AbstractString, value)
@@ -3677,8 +3670,8 @@ end
 function niregex(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) !~* $(value)"
 end
-function niregex(conn::PormGSQLite, column::AbstractString, value::AbstractString)
-  throw(_regex_capability_error("niregex"))
+function niregex(conn::PormGBackend, column::AbstractString, value::AbstractString)
+  throw(_regex_capability_error(conn, "niregex"))
   return nothing
 end
 function niregex(conn::PormGAbstractType, column::AbstractString, value)

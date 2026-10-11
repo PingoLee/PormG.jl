@@ -69,6 +69,7 @@ makedocs(
         ],
         "Guides" => [
             "Error Handling" => "errors.md",
+            "Backend Capabilities" => "backends.md",
             "PostgreSQL Guide" => "postgres.md",
             "Async & Concurrency" => "async.md",
             "Advisory Locks" => "advisory_lock.md",

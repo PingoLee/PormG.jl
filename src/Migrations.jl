@@ -30,6 +30,7 @@ import PormG: PormGError, MigrationError, InvalidMigrationError, ModelDefinition
 # importers.jl reports a wrong-backend connection with the precise type rather than folding it
 # into MigrationError — an unknown key already fails earlier as InvalidConfigurationError.
 import PormG: BackendCapabilityError
+import PormG: _supports, _capability_error  # #1129: the backend capability table (Kernel)
 # #749: a managed model on a table the connection's `ignore_tables:` hides contradicts the config.
 import PormG: InvalidConfigurationError
 # #472: introspection catches this NARROWLY to drop a column default it cannot represent

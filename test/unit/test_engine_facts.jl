@@ -4,9 +4,10 @@
 # A branch that decided for two engines at once (`conn isa PormGPostgres ? A : B`) became a call to an
 # ENGINE FACT: one method per engine, none for `PormGBackend` or `Any`. A third backend then gets a
 # `MethodError` naming the fact it must decide, instead of silently taking another engine's arm. This
-# file holds that contract for every fact, wherever it lives: `src/querybuilder/engine_facts.jl` is
-# read from the source, so a fact added there is checked without being listed here; the facts that
-# live beside the code they serve (Kernel, `Dialect`, `ConnectionPool`, `explain`, deletion) are listed.
+# file holds that contract for every fact, wherever it lives: `src/querybuilder/engine_facts.jl` and
+# `src/migrations/engine_facts.jl` are read from the source, so a fact added there is checked without
+# being listed here; the facts that live beside the code they serve (Kernel, `Dialect`,
+# `ConnectionPool`, `explain`, deletion, `inspectdb`, `check`) are listed.
 #
 # Run: julia --project=test/integration test/unit/test_engine_facts.jl
 # ==============================================================================
@@ -19,9 +20,9 @@ struct _EfPg <: PormG.PormGPostgres end
 struct _EfSl <: PormG.PormGSQLite end
 struct _EfOther <: PormG.PormGBackend end   # a backend that has decided nothing yet, as #1130 starts
 
-# Every top-level `name(…) =` / `function name(` in the facts file: the registry is the file itself.
-function _ef_file_facts()
-  path = joinpath(pkgdir(PormG), "src", "querybuilder", "engine_facts.jl")
+# Every top-level `name(…) =` / `function name(` in a facts file: the registry is the file itself.
+function _ef_file_facts(parts...)
+  path = joinpath(pkgdir(PormG), "src", parts..., "engine_facts.jl")
   names = Symbol[]
   open(path) do io
     for l in eachline(io)
@@ -32,12 +33,20 @@ function _ef_file_facts()
   return unique(names)
 end
 
+const _EF_MIG = PormG.Migrations
 const _EF_FACTS = vcat(
-  [(_EF_QB, n) for n in _ef_file_facts()],
+  [(_EF_QB, n) for n in _ef_file_facts("querybuilder")],
+  [(_EF_MIG, n) for n in _ef_file_facts("migrations")],
   [(PormG.Kernel, :_engine_key),                    # the engine's NamedTuple key / report label
    (PormG.Dialect, :_parenthesizes_db_default),     # a DEFAULT expression needs parens
    (PormG.ConnectionPool, :_begin_write_sql),       # how a write transaction opens
    (PormG.ConnectionPool, :_after_begin_sql),       # what runs right after it
+   (PormG.ConnectionPool, :_execute_async),         # which driver path a statement runs through
+   (PormG.ConnectionPool, :_acquire_in_mode),       # how a connection is leased for a mode
+   (PormG.ConnectionPool, :_acquire_for_statement), # … and for one statement
+   (_EF_MIG, :_inspectdb_id_pk),                    # inspectdb's fall-through primary key
+   (_EF_MIG, :_expression_default_findings),        # check(): expression defaults
+   (_EF_MIG, :_invalid_index_findings),             # check(): invalid indexes
    (_EF_QB, :_explain_sql),                         # the EXPLAIN statement
    (_EF_QB, :_explain_facts),                       # the facts read from its rows
    (_EF_QB, :_affected_row_count)],                 # the rows a DELETE / bulk UPDATE matched
@@ -52,10 +61,13 @@ _ef_engine(T) = T isa Type && T <: PormG.PormGPostgres ? :postgres :
 # Guards the guard: if the file's definitions stopped matching the scan (a rename to a different
 # spelling, a moved file), every check below would pass vacuously over an empty list.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1129: the engine-fact registry is read from src/querybuilder/engine_facts.jl" begin
-  file_facts = _ef_file_facts()
+@testset "#1129: the engine-fact registry is read from both engine_facts.jl files" begin
+  file_facts = _ef_file_facts("querybuilder")
   @test length(file_facts) >= 15
   @test :_interval_as_ms in file_facts && :_insert_returns_rows in file_facts
+  mig_facts = _ef_file_facts("migrations")
+  @test length(mig_facts) >= 12
+  @test :_rebuilds_table in mig_facts && :_builtin_ignore_tables in mig_facts
   for (mod, name) in _EF_FACTS
     @test isdefined(mod, name)
   end

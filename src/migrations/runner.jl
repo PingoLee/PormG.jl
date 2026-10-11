@@ -836,7 +836,7 @@ function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
     "SELECT COALESCE(SUM(n), 0) AS n FROM (SELECT COUNT(*) AS n FROM \"$table\" WHERE " *
     join(("$c IS NOT NULL" for c in cols), " AND ") * (where === nothing ? "" : " AND ($(where))") *
     " GROUP BY $(join(cols, ", ")) HAVING COUNT(*) > 1) AS pormg_duplicates"
-  if f.kind === :add_unique || (f.kind === :add_primary_key && conn isa PormGSQLite)
+  if f.kind === :add_unique || (f.kind === :add_primary_key && !_pk_precheck_counts_nulls(conn))
     return ("SELECT CAST(($(duplicates([col]))) AS BIGINT) AS n", Any[])
   elseif f.kind === :add_primary_key
     return ("SELECT CAST(($(duplicates([col]))) + (SELECT COUNT(*) FROM \"$table\" WHERE $col IS NULL) AS BIGINT) AS n", Any[])
@@ -867,15 +867,14 @@ function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
     # like `'-5abc'` casts to -5 but stays text in the new column (and passes the CHECK), so it is
     # a refusal the data did not strictly need — the safe direction. PostgreSQL only reaches this
     # with a numeric old type (a text one is `:no_implicit_cast`), so the plain comparison is exact.
-    (conn isa PormGSQLite ? "CAST($col AS REAL) < 0" : "$col < 0"), Any[]
+    _negative_value_predicate(conn, col), Any[]
   elseif f.kind === :byte_length_check
-    (conn isa PormGPostgres ? "octet_length($col) > $(ph(1))::integer" :
-                              "length(CAST($col AS BLOB)) > $(ph(1))"), Any[f.bound]
+    _byte_length_predicate(conn, col, ph(1)), Any[f.bound]
   elseif f.kind === :varchar_length
     # #28: an `inet` is measured as the text the ALTER writes — `abbrev`, the printed form (see
     # `Dialect._postgres_retype_using`) — not as its text cast, which adds the mask (`/32`) and would
     # refuse a value that fits.
-    measured = conn isa PormGPostgres && parse_canonical_type(f.old_type, conn) isa CInet ?
+    measured = _supports(conn, :network_types) && parse_canonical_type(f.old_type, conn) isa CInet ?
       "abbrev($col)" : "CAST($col AS text)"
     "char_length(rtrim($measured)) > $(ph(1))::integer", Any[f.bound]
   elseif f.kind === :host_bits
@@ -2633,24 +2632,14 @@ function check(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSet
 
   if :expression_default in kinds
     ignore = unique(vcat(base_ignore, _EXTRA_IGNORE_TABLES[]))
-    if connection isa PormGSQLite
-      append!(findings, _sqlite_expression_default_findings(connection; ignore_table = ignore,
-                                                            include_table = include_table))
-    else
-      schemas = get_database_schema(connection)
-      if include_table !== nothing
-        schemas = filter(r -> any(included -> r.table_name == included, include_table), schemas)
-      end
-      append!(findings, _pg_expression_default_findings(schemas; ignore_table = ignore))
-    end
+    append!(findings, _expression_default_findings(connection; ignore_table = ignore, include_table = include_table))
   end
 
   # SQLite has no invalid-index state, so the class reports nothing there rather than raising: a
   # `kinds` list shared by both engines' gates must not fail on one of them.
-  if :invalid_index in kinds && connection isa PormGPostgres
+  if :invalid_index in kinds
     ignore = unique(vcat(base_ignore, _EXTRA_IGNORE_TABLES[]))
-    append!(findings, _pg_invalid_index_findings(connection; ignore_table = ignore,
-                                                 include_table = include_table))
+    append!(findings, _invalid_index_findings(connection; ignore_table = ignore, include_table = include_table))
   end
 
   if :schema_drift in kinds
@@ -2660,8 +2649,22 @@ function check(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSet
                                              include_table = include_table, models_file = models_file))
   end
 
-  return SchemaCheckResult(connection isa PormGSQLite ? :sqlite : :postgres, _sort_findings(findings))
+  return SchemaCheckResult(_engine_key(connection), _sort_findings(findings))
 end
+
+# #1129 item 2: `check`'s two engine-specific readers, one method per engine and no fallback.
+_expression_default_findings(connection::PormGSQLite; ignore_table, include_table) =
+  _sqlite_expression_default_findings(connection; ignore_table = ignore_table, include_table = include_table)
+function _expression_default_findings(connection::PormGPostgres; ignore_table, include_table)
+  schemas = get_database_schema(connection)
+  if include_table !== nothing
+    schemas = filter(r -> any(included -> r.table_name == included, include_table), schemas)
+  end
+  return _pg_expression_default_findings(schemas; ignore_table = ignore_table)
+end
+_invalid_index_findings(connection::PormGPostgres; ignore_table, include_table) =
+  _pg_invalid_index_findings(connection; ignore_table = ignore_table, include_table = include_table)
+_invalid_index_findings(::PormGSQLite; ignore_table, include_table) = SchemaCheckFinding[]
 
 function check(settings::PormGSettings; kwargs...)::SchemaCheckResult
   check(settings.connections, settings; kwargs...)

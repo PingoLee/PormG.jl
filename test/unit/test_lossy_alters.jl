@@ -327,6 +327,8 @@ end
            Any[-32768, 32767])
     @test _precheck_sql(PG_LA803, f(:decimal_precision; bound = 1, scale = 2))[2] == Any[2, 1]
     @test _precheck_sql(PG_LA803, f(:non_negative_check))[1] == "SELECT COUNT(*) AS n FROM \"Ev\"\"il\" WHERE \"c\" < 0"
+    @test _precheck_sql(PG_LA803, f(:byte_length_check; bound = 16)) ==
+          ("SELECT COUNT(*) AS n FROM \"Ev\"\"il\" WHERE octet_length(\"c\") > \$1::integer", Any[16])
     # SQLite has no `octet_length`, and `?` placeholders.
     @test _precheck_sql(SL_LA803, f(:byte_length_check; bound = 16)) ==
           ("SELECT COUNT(*) AS n FROM \"Ev\"\"il\" WHERE length(CAST(\"c\" AS BLOB)) > ?", Any[16])

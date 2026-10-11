@@ -982,9 +982,14 @@ end
 
 # The built-in list `unignore_defaults:` is checked against at load(), picked by the `adapter:` key.
 # The migration code picks it from the connection type instead (`_backend_ignore_tables`), and checks
-# again there, so a connection built without load() is still validated.
-_builtin_ignores_for_adapter(adapter)::Vector{String} =
-  adapter == "SQLite" ? sqlite_ignore_schema : postgres_ignore_table
+# again there, so a connection built without load() is still validated. Names both engines and
+# refuses any other (#1129 item 2) — with the refusal `_build_connection_pool!` gives an unknown
+# adapter, so an `adapter: MySQL` is refused here rather than checked against PostgreSQL's list.
+function _builtin_ignores_for_adapter(adapter)::Vector{String}
+  adapter == "PostgreSQL" && return postgres_ignore_table
+  adapter == "SQLite" && return sqlite_ignore_schema
+  throw(InvalidConfigurationError("Unsupported adapter: $(adapter)"))
+end
 
 # Detection-only check run at load() time. Installing extensions is DDL and is
 # handled by the migration runner (gated on change_db, deliberate operator step),
@@ -1807,11 +1812,7 @@ function ping(path_or_key::String)::Bool
   conn = nothing
 
   try
-    if pool isa PormGSQLite
-      conn = CP.acquire_connection(pool; timeout_seconds=5, max_retries=1, mode=:read)
-    else
-      conn = CP.acquire_connection(pool; timeout_seconds=5, max_retries=1)
-    end
+    conn = CP._acquire_in_mode(pool, :read; timeout_seconds=5, max_retries=1)
     return backend_is_alive(pool, conn)
   catch e
     @warn "Database ping failed" key=key db_def_folder=settings.db_def_folder adapter=get(settings.db_config_settings, "adapter", nothing) exception=(e, catch_backtrace())

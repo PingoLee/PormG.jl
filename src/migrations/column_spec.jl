@@ -1256,8 +1256,7 @@ function _lossy_alters(delta::ColumnDelta, conn::Union{PormGPostgres, PormGSQLit
   # until the `USING` runs, so a CHECK count (`"c" < 0`) would compare text or a boolean with a
   # number, which PostgreSQL rejects as a query. The nullability and uniqueness findings below read
   # no value and stay; the CHECK one is left to the database, which still enforces it.
-  castless = conn isa PormGPostgres && :type in delta && readable &&
-             _pg_no_implicit_cast(old_spec.type, new_spec.type)
+  castless = :type in delta && readable && _no_implicit_cast(conn, old_spec.type, new_spec.type)
   # #828: `alter_field` drops the old default before a `USING` retype (PostgreSQL would cast it, and
   # cannot) and sets the DECLARED one after. A live expression default the model does not declare is
   # never part of the delta (`_defaults_equal`), so nothing would set it back: the retype would remove
@@ -1266,8 +1265,8 @@ function _lossy_alters(delta::ColumnDelta, conn::Union{PormGPostgres, PormGSQLit
   #
   # Asked of `_pg_retype_has_using` alone, not of `castless`: `inet` → text has an assignment cast
   # and still gets a `USING` (`abbrev`, #28), and `alter_field` drops the default before ANY `USING`.
-  if conn isa PormGPostgres && :type in delta && readable &&
-     _pg_retype_has_using(old_spec.type, new_spec.type) &&
+  if :type in delta && readable &&
+     _retype_has_using(conn, old_spec.type, new_spec.type) &&
      old_spec.default isa ExpressionDefault && new_spec.default isa NoDefault
     push!(type_found, finding(:drop_default))
   end
@@ -1507,7 +1506,7 @@ PormG can declare.
 """
 _arm_carries_db_default(arm::Symbol, ctype::CanonicalType,
                         conn::Union{PormGPostgres, PormGSQLite})::Bool =
-  arm !== :id_pk || (conn isa PormGSQLite && ctype isa CText)
+  arm !== :id_pk || (_text_key_is_uuid(conn) && ctype isa CText)
 
 # The inverse of `Models._foreign_key_on_delete_sql` for the values a catalog can hold: the stored
 # clause back to the spelling a models file declares. `NO ACTION` is `nothing` — lossless, because
@@ -1649,10 +1648,8 @@ _db_default_from_spec(spec::ColumnSpec, conn::Union{PormGPostgres, PormGSQLite})
     nothing
   elseif db_default_is_portable(spec.default.sql)
     canonical_db_default(spec.default.sql)
-  elseif conn isa PormGPostgres
-    (postgres = spec.default.sql,)
   else
-    (sqlite = spec.default.sql,)
+    NamedTuple{(_engine_key(conn),)}((spec.default.sql,))   # pinned to this engine
   end
 
 # #28: the element field of an adopted array column — the bare constructor of the element's kind, as
@@ -1685,6 +1682,57 @@ function _inspectdb_array_element(kind::CanonicalType, spec::ColumnSpec, table_n
   end
   # Unreachable while `_ArrayElementKind` and this function list the same kinds.
   throw(InvalidMigrationError("inspectdb: no ArrayField element declares $(kind) (column $(spec.name) of $(table_name))"))
+end
+
+# `inspectdb`'s fall-through primary key (`:id_pk`), per engine (#1129 item 2): one method each, no
+# fallback, because what a key PormG cannot otherwise name becomes is an engine fact.
+function _inspectdb_id_pk(conn::PormGPostgres, arm::Symbol, ctype::CanonicalType, spec::ColumnSpec,
+                          table_name::AbstractString, indexed::Bool, default, db_default)::PormGField
+  # INTENTIONAL ENGINE DIVERGENCE, documented: on PostgreSQL every fall-through key stays an
+  # `IDField`, because PostgreSQL renders PormG's own non-integer keys as `uuid` / `varchar(n)` —
+  # which take the arms above — so a bare `text` or `numeric` key here can only be adopted, and
+  # no declaration renders one. SQLite (below) maps a bare `TEXT` key to `UUIDField`, because
+  # that IS what `UUIDField(primary_key = true)` renders there. Both engines say so when they
+  # flatten, never silently.
+  if !_integer_key_arm(arm, ctype)
+    @warn "inspectdb: no PormG field declares a primary key of this type on PostgreSQL; emitting " *
+          "IDField. A declared IDField will NOT match this column, so makemigrations plans a " *
+          "retype unless the column is declared by hand." table = string(table_name) column = spec.name type = spec.raw
+  end
+  identity = spec.identity
+  return Models.IDField(generated = identity !== nothing,
+                        generated_always = identity !== nothing && identity.always,
+                        unique = true, null = false, db_index = true)
+end
+
+function _inspectdb_id_pk(conn::PormGSQLite, arm::Symbol, ctype::CanonicalType, spec::ColumnSpec,
+                          table_name::AbstractString, indexed::Bool, default, db_default)::PormGField
+  if _integer_key_arm(arm, ctype)
+    # `auto_increment` is cosmetic on SQLite (`_column_identity` reads the renderer's condition,
+    # not this slot) and is kept as the readers always set it: only an exact `INTEGER` is a rowid
+    # alias, which is the one spelling that can carry AUTOINCREMENT.
+    return Models.IDField(null = false, primary_key = true,
+                          auto_increment = uppercase(strip(spec.raw)) == "INTEGER")
+  elseif ctype isa CText
+    # A bare `TEXT PRIMARY KEY` is what `UUIDField(primary_key = true)` renders on SQLite (the
+    # reverse map writes `TEXT` for `UUID`), and it is the ONE lengthless textual key PormG can
+    # declare — `TextField` does not accept `primary_key`. Computed `unique`/`db_index`, matching
+    # that constructor's defaults; the retired reader flattened this key to an `IDField`, which
+    # regenerated a models file that rebuilt the table (an `INSERT … SELECT` of uuids into a rowid).
+    # Said out loud like every other lossy choice here: the column may hold text that is not a
+    # UUID, and `UUIDField` validates every write — that is a runtime error a warning at import
+    # time can prevent.
+    @warn "inspectdb: a lengthless TEXT primary key is emitted as UUIDField(primary_key = true), " *
+          "the one declaration that renders it on SQLite. If the key holds text that is not a " *
+          "UUID, declare the column by hand." table = string(table_name) column = spec.name
+    return Models.UUIDField(primary_key = true, unique = spec.unique, null = false,
+                            db_index = indexed, default = default, db_default = db_default)
+  else
+    @warn "inspectdb: no PormG field declares a primary key of this type; emitting IDField. A " *
+          "declared IDField will NOT match this column, so makemigrations plans a retype unless " *
+          "the column is declared by hand." table = string(table_name) column = spec.name type = spec.raw
+    return Models.IDField(null = false, primary_key = true, auto_increment = false)
+  end
 end
 
 function _inspectdb_field(spec::ColumnSpec, table_name::AbstractString,
@@ -1726,48 +1774,7 @@ function _inspectdb_field(spec::ColumnSpec, table_name::AbstractString,
                             null = false, db_index = indexed, default = default,
                             db_default = db_default)
   elseif arm === :id_pk
-    if conn isa PormGPostgres
-      # INTENTIONAL ENGINE DIVERGENCE, documented: on PostgreSQL every fall-through key stays an
-      # `IDField`, because PostgreSQL renders PormG's own non-integer keys as `uuid` / `varchar(n)` —
-      # which take the arms above — so a bare `text` or `numeric` key here can only be adopted, and
-      # no declaration renders one. SQLite (below) maps a bare `TEXT` key to `UUIDField`, because
-      # that IS what `UUIDField(primary_key = true)` renders there. Both engines say so when they
-      # flatten, never silently.
-      if !_integer_key_arm(arm, ctype)
-        @warn "inspectdb: no PormG field declares a primary key of this type on PostgreSQL; emitting " *
-              "IDField. A declared IDField will NOT match this column, so makemigrations plans a " *
-              "retype unless the column is declared by hand." table = string(table_name) column = spec.name type = spec.raw
-      end
-      identity = spec.identity
-      return Models.IDField(generated = identity !== nothing,
-                            generated_always = identity !== nothing && identity.always,
-                            unique = true, null = false, db_index = true)
-    elseif _integer_key_arm(arm, ctype)
-      # `auto_increment` is cosmetic on SQLite (`_column_identity` reads the renderer's condition,
-      # not this slot) and is kept as the readers always set it: only an exact `INTEGER` is a rowid
-      # alias, which is the one spelling that can carry AUTOINCREMENT.
-      return Models.IDField(null = false, primary_key = true,
-                            auto_increment = uppercase(strip(spec.raw)) == "INTEGER")
-    elseif ctype isa CText
-      # A bare `TEXT PRIMARY KEY` is what `UUIDField(primary_key = true)` renders on SQLite (the
-      # reverse map writes `TEXT` for `UUID`), and it is the ONE lengthless textual key PormG can
-      # declare — `TextField` does not accept `primary_key`. Computed `unique`/`db_index`, matching
-      # that constructor's defaults; the retired reader flattened this key to an `IDField`, which
-      # regenerated a models file that rebuilt the table (an `INSERT … SELECT` of uuids into a rowid).
-      # Said out loud like every other lossy choice here: the column may hold text that is not a
-      # UUID, and `UUIDField` validates every write — that is a runtime error a warning at import
-      # time can prevent.
-      @warn "inspectdb: a lengthless TEXT primary key is emitted as UUIDField(primary_key = true), " *
-            "the one declaration that renders it on SQLite. If the key holds text that is not a " *
-            "UUID, declare the column by hand." table = string(table_name) column = spec.name
-      return Models.UUIDField(primary_key = true, unique = spec.unique, null = false,
-                              db_index = indexed, default = default, db_default = db_default)
-    else
-      @warn "inspectdb: no PormG field declares a primary key of this type; emitting IDField. A " *
-            "declared IDField will NOT match this column, so makemigrations plans a retype unless " *
-            "the column is declared by hand." table = string(table_name) column = spec.name type = spec.raw
-      return Models.IDField(null = false, primary_key = true, auto_increment = false)
-    end
+    return _inspectdb_id_pk(conn, arm, ctype, spec, table_name, indexed, default, db_default)
   end
 
   # `:generic` — by canonical type. `base` is the kwarg set every constructor accepts, so #496's
@@ -1780,7 +1787,7 @@ function _inspectdb_field(spec::ColumnSpec, table_name::AbstractString,
     return any(c -> c isa NonNegativeCheck, spec.checks) ? Models.PositiveIntegerField(; base...) :
                                                             Models.IntegerField(; base...)
   elseif ctype isa CInt64
-    return conn isa PormGPostgres ? Models.BigIntegerField(; base...) : Models.IntegerField(; base...)
+    return _declares_bigint(conn) ? Models.BigIntegerField(; base...) : Models.IntegerField(; base...)
   elseif ctype isa CFloat64
     return Models.FloatField(; base...)
   elseif ctype isa CDecimal
@@ -1804,7 +1811,7 @@ function _inspectdb_field(spec::ColumnSpec, table_name::AbstractString,
   elseif ctype isa CDate
     return Models.DateField(; base...)
   elseif ctype isa CDateTime
-    return (conn isa PormGPostgres && !ctype.with_timezone) ?
+    return (_declares_naive_timestamp(conn) && !ctype.with_timezone) ?
            Models.DateTimeField(; base..., type = "TIMESTAMP") : Models.DateTimeField(; base...)
   elseif ctype isa CTime
     return Models.TimeField(; base...)

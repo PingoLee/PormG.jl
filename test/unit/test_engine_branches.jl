@@ -11,10 +11,10 @@
 # `_supports(conn, :feature)`, and if a branch is still the right shape, raise the count with a word
 # on why. A count that FALLS fails too, so the list stays exact (lower it in the same change).
 #
-# What the remaining branches decide, by file: planner — the SQLite table rebuild and which DDL each
-# engine runs; ConnectionPool/Configuration — transactions, pool and adapter wiring;
-# column_spec/runner/introspection — type equivalence and introspection (these are #1129's PR B). In
-# `src/querybuilder/` only `if … elseif … else throw` chains and three recorded quirks remain (below).
+# Since #1129 item 2 what remains is compliant (`if … elseif … else throw` chains that name both
+# engines and refuse any other) or a recorded one-engine quirk whose other arm is the engine-neutral
+# path — each listed with its reason beside the counts below. Engine facts live in
+# `src/querybuilder/engine_facts.jl` and `src/migrations/engine_facts.jl`.
 #
 # Run: julia --project=test/integration test/unit/test_engine_branches.jl
 # ==============================================================================
@@ -26,13 +26,21 @@ using PormG
 const _EB_PATTERN = r"isa\s+(PormG\.)?PormG(Postgres|SQLite)\b|isa\s+Union\{[^}]*PormG(Postgres|SQLite)|isa\([^,()]+,\s*(PormG\.)?PormG(Postgres|SQLite)\b|adapter == \"(SQLite|PostgreSQL)\""
 
 const _EB_REVIEWED = Dict(
+  # #1129 item 2 (PR B): ConnectionPool, Configuration and migrations ask engine facts too
+  # (`migrations/engine_facts.jl`, and the lease/execute/transaction helpers in ConnectionPool.jl).
+  # What remains:
+  #   - Configuration: `_builtin_ignores_for_adapter` and `register_connection` name both adapters
+  #     and refuse any other (two each); the `url:` / `postgres_driver:` warnings are SQLite-only
+  #     advice that fires only for `adapter: SQLite`;
+  #   - ConnectionPool: waiting for the SQLite worker before closing a handle, and SQLite's benign
+  #     "no transaction is active" rollback — quirks whose other arm is the engine-neutral path;
+  #   - planner: SQLite's reserved `sqlite_` index prefix, and its three `ADD COLUMN` limits, whose
+  #     other arm is the plain `ADD COLUMN` every engine has;
+  #   - importers: the SQLite-only importer's capability refusal; tools: the setup wizard's choice.
   "src/Configuration.jl" => 6,
-  "src/ConnectionPool.jl" => 16,
-  "src/migrations/column_spec.jl" => 7,
+  "src/ConnectionPool.jl" => 2,
   "src/migrations/importers.jl" => 1,
-  "src/migrations/introspection.jl" => 1,
-  "src/migrations/planner.jl" => 29,
-  "src/migrations/runner.jl" => 7,
+  "src/migrations/planner.jl" => 4,
   # #1129 item 2 (PR A): every silent branch in `Dialect.jl` and `src/querybuilder/` now asks an engine
   # fact (`querybuilder/engine_facts.jl`). What remains here is compliant or a recorded quirk:
   #   - `if isa PormGPostgres … elseif isa PormGSQLite … else throw(_unsupported_conn(…))` chains,
@@ -90,23 +98,15 @@ end
 # (`sqlite = conn isa PormGSQLite`, then read as "not SQLite"), hands any backend that is neither the
 # second arm, silently: SQLite's SQL, PostgreSQL's casts, no refusal. Ask an engine fact instead —
 # `src/querybuilder/engine_facts.jl`, one method per engine and no fallback, so a new backend gets a
-# `MethodError` naming what it must decide. The allowance below is what PR B of #1129 converts
-# (ConnectionPool, migrations); it only ever shrinks, and a new file in it fails here.
+# `MethodError` naming what it must decide. There is no allowance: since #1129 item 2 no file has one.
 # A line scan, so it is a net, not a proof: a ternary whose `?` starts the next line, or a binding
 # spelled `local x = …` / `x::Bool = …`, slips past, and a `'?'` later on a guard's line is a false
 # positive to reword. A two-way `if … else … end` is the reviewed-count testset's job above.
 # ─────────────────────────────────────────────────────────────────────────────
 const _EB_TERNARY = r"isa\s+(PormG\.)?PormG(Postgres|SQLite)\b[^\n?]*\?|isa\([^,()]+,\s*(PormG\.)?PormG(Postgres|SQLite)\)[^\n?]*\?|^\s*\w+\s*=\s*[\w.]+\s+isa\s+(PormG\.)?PormG(Postgres|SQLite)\s*(#.*)?$"
-const _EB_TERNARY_ALLOWED = Dict(
-  "src/ConnectionPool.jl" => 3,
-  "src/migrations/column_spec.jl" => 2,
-  "src/migrations/introspection.jl" => 1,
-  "src/migrations/planner.jl" => 5,
-  "src/migrations/runner.jl" => 4,
-)
-@testset "#1129: no two-way engine ternary outside the files PR B converts" begin
+@testset "#1129: no two-way engine ternary in src/ or ext/" begin
   root = pkgdir(PormG)
-  found = Dict{String,Vector{String}}()
+  found = String[]
   for top in ("src", "ext"), (dir, _, files) in walkdir(joinpath(root, top)), f in files
     endswith(f, ".jl") || continue
     path = joinpath(dir, f)
@@ -114,13 +114,15 @@ const _EB_TERNARY_ALLOWED = Dict(
     open(path) do io
       for (i, l) in enumerate(eachline(io))
         startswith(lstrip(l), "#") && continue
-        occursin(_EB_TERNARY, l) && push!(get!(found, key, String[]), "$(i): $(strip(l))")
+        occursin(_EB_TERNARY, l) && push!(found, "$(key):$(i): $(strip(l))")
       end
     end
   end
-  for key in sort!(collect(union(keys(found), keys(_EB_TERNARY_ALLOWED))))
-    got, want = length(get(found, key, String[])), get(_EB_TERNARY_ALLOWED, key, 0)
-    got == want || @info "engine ternaries in $(key): $(got), allowed $(want)" lines = get(found, key, String[])
-    @test (key, got) == (key, want)
-  end
+  isempty(found) || @info "engine ternaries found" lines = found
+  @test found == String[]
+  # The scan itself sees what it is for — or the empty list above proves nothing.
+  @test occursin(_EB_TERNARY, "  x = conn isa PormGPostgres ? 1 : 2")
+  @test occursin(_EB_TERNARY, "  sqlite = instruc.connection isa PormGSQLite  # why")
+  @test occursin(_EB_TERNARY, "  y = isa(conn, PormGSQLite) ? a : b")
+  @test !occursin(_EB_TERNARY, "  conn isa PormGSQLite && foo()")
 end

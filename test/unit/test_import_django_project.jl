@@ -2200,6 +2200,120 @@ class _Foo(models.Model):
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#1140): a join column PormG cannot name drops the field, with a marker
+#
+# Django names a self-relation's columns `from_<class>_id` / `to_<class>_id`, so `_Driver` gets
+# `from__driver_id`. `_pin_m2m_join_columns!` pinned that verbatim, and `ManyToManyField` refuses a
+# `__` in `source_field` (the lookup separator), so loading the file raised and the whole generated
+# module was lost. Expected: the field is left out, a `# PormG:` marker names the columns and the
+# hand-written `through` workaround, and the file loads and passes `set_models`.
+#
+# The same defect reaches any class name Django refuses (models.E023/E024) through the plain
+# `<class>_id` column: `Driver_` as a target gives `driver__id`, and `Pit__stop` as an owner gives
+# `pit__stop_id`. Both raised at `set_models` before, so they are checked there too.
+# ─────────────────────────────────────────────────────────────────────────────
+struct Import1140MockPostgres <: PormG.PormGPostgres end
+PormG.config["import_1140_mock"] = PormG.Configuration.Settings(
+    connections = Import1140MockPostgres(), change_data = true, db_def_folder = "import_1140_mock")
+
+@testset "a ManyToMany whose join column contains `__` is dropped with a marker, and the file loads (#1140)" begin
+    # The issue's own shape.
+    generated, config_key, db_dir_existed = import_one_app("""
+from django.db import models
+
+class _Driver(models.Model):
+    teammates = models.ManyToManyField('self')
+"""; output_file = "django_1140_self.jl", django_prefix = "racing")
+    try
+        @test !occursin("teammates", replace(generated, r"# PormG:[^\n]*" => ""))
+        @test occursin("# PormG: 'racing._Driver.teammates' is not imported — its join columns " *
+                       "'from__driver_id' and 'to__driver_id' contain '__'", generated)
+        # The workaround needs Django's join table, which left the artifact with the field.
+        @test occursin("Declare a through model on 'racing__driver_teammates' with one foreign key per end, " *
+                       "each naming its column in db_column", generated)
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        mod = Core.eval(sandbox, :django_1140_self)
+        Base.invokelatest(PormG.Models.set_models, mod, "import_1140_mock")
+        @test Base.invokelatest(PormG.Models.model_table_name, Core.eval(mod, :_Driver)) == "racing__driver"
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # The plain-column siblings: an E023 class as a TARGET, an E024 class as an OWNER. A clean
+    # relation in the same file stays.
+    generated, config_key, db_dir_existed = import_one_app("""
+from django.db import models
+
+class Driver_(models.Model):
+    name = models.CharField(max_length=50)
+
+class Race(models.Model):
+    drivers = models.ManyToManyField(Driver_)
+
+class Pit__stop(models.Model):
+    races = models.ManyToManyField(Race)
+
+class Circuit(models.Model):
+    races = models.ManyToManyField(Race)
+"""; output_file = "django_1140_siblings.jl")
+    try
+        @test occursin("# PormG: 'Race.drivers' is not imported — its join column 'driver__id' contains '__'", generated)
+        @test occursin("# PormG: 'Pit__stop.races' is not imported — its join column 'pit__stop_id' contains '__'", generated)
+        @test !occursin("drivers = Models.ManyToManyField", generated)
+        @test occursin("races = Models.ManyToManyField(\"Race\")", generated)   # Circuit's is untouched
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        mod = Core.eval(sandbox, :django_1140_siblings)
+        Base.invokelatest(PormG.Models.set_models, mod, "import_1140_mock")
+        @test haskey(Core.eval(mod, :Circuit).cache["many_to_many"], "races")
+        # Unlabelled, no table was pinned, so the marker cannot name one.
+        @test occursin("Declare a through model on the join table Django created", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # A custom ManyToMany subclass: its "imported as ManyToManyField" note (#1041) is written before
+    # the pin pass, and must not survive beside the drop marker it contradicts.
+    generated, config_key, db_dir_existed = import_one_app("""
+from django.db import models
+
+class TeammatesField(models.ManyToManyField):
+    pass
+
+class _Driver(models.Model):
+    teammates = TeammatesField('self')
+"""; output_file = "django_1140_subclass.jl")
+    try
+        @test occursin("# PormG: '_Driver.teammates' is not imported", generated)
+        @test !occursin("imported as ManyToManyField", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # The workaround the marker gives: a hand-written through model reaches Django's real columns.
+    sandbox = Module()
+    Core.eval(sandbox, Meta.parse("""
+module django_1140_through
+import PormG.Models
+_Driver = Models.Model("driver", db_table = "racing__driver",
+  id = Models.IDField(),
+  teammates = Models.ManyToManyField("_Driver", through = "Driver_teammates",
+                                     source_field = "from_driver", target_field = "to_driver"))
+Driver_teammates = Models.Model("driver_teammates", db_table = "racing__driver_teammates",
+  id = Models.IDField(),
+  from_driver = Models.ForeignKey("_Driver", db_column = "from__driver_id", on_delete = Models.CASCADE),
+  to_driver = Models.ForeignKey("_Driver", db_column = "to__driver_id", on_delete = Models.CASCADE))
+end
+"""))
+    mod = Core.eval(sandbox, :django_1140_through)
+    Base.invokelatest(PormG.Models.set_models, mod, "import_1140_mock")
+    rel = Core.eval(mod, :_Driver).cache["many_to_many"]["teammates"]
+    @test (rel.through_table, rel.owner_column, rel.related_column) ==
+          ("racing__driver_teammates", "from__driver_id", "to__driver_id")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Django Importer (#1095): a digit suffix never takes another class's own name
 #
 # The backstop searched for a free suffix only among names already CLAIMED. With `Internal`,

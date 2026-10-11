@@ -1695,7 +1695,7 @@ function _resolve_relation_targets!(fields_dict::Dict{Symbol, Any},
 end
 
 """
-    _pin_m2m_join_columns!(index) -> Nothing
+    _pin_m2m_join_columns!(index) -> IdDict{Any, Vector{String}}
 
 Pin `source_field` / `target_field` on every auto-derived `ManyToManyField` whose columns PormG would
 otherwise spell differently from Django.
@@ -1728,6 +1728,14 @@ load-bearing for an `id`-keyed model — the two derivations agree byte for byte
 required for any other primary key, because Django hardcodes `_id` where PormG carries the pk field
 name. Pinning both ends here also routes the field down the explicit branch, which is what keeps the
 importer's output independent of PormG's own derivation.
+
+A field whose Django column cannot be a PormG field name is **dropped**, and the returned
+`# PormG:` markers (keyed by the owning model) say so (#1140). On the auto path a join column is a
+field of the synthesized through model, and `__` is the lookup separator, so `ManyToManyField`
+refuses it at load. Emitting it aborted the whole generated module. Every class name that produces
+one is a name Django refuses too (`models.E023`: a leading or trailing `_`; `models.E024`: `__`):
+`_Driver`'s self-relation gives `from__driver_id`, and `Driver_` gives `driver__id`. A hand-written
+`through` model can still reach that table: its foreign keys carry the column as `db_column`.
 """
 function _pin_m2m_join_columns!(index::_DjangoClassIndex)
   by_binding = Dict{String, _DjangoClass}()
@@ -1747,6 +1755,7 @@ function _pin_m2m_join_columns!(index::_DjangoClassIndex)
   # actually own an auto-derived M2M, and a throw skips the pin rather than the import: the field
   # keeps PormG's own derivation, exactly as before this pass existed. The two-primary-key model is
   # broken either way; that is not this pass's to fix or to escalate.
+  dropped = Tuple{_DjangoClass, String, Vector{String}}[]
   pk_cache = Dict{_DjangoClass, Union{Nothing, String}}()
   function pk_name(e)
     get!(pk_cache, e) do
@@ -1783,9 +1792,47 @@ function _pin_m2m_join_columns!(index::_DjangoClassIndex)
         field.source_field = string("from_", lowercase(owner.class), "_id")
         field.target_field = string("to_", lowercase(owner.class), "_id")
       end
+      # #1140: each end's Django column — the pin when one is set, `<class>_id` otherwise, which is
+      # also what PormG derives whenever no pin was needed. On the auto path that string is a FIELD
+      # name of the synthesized through model, so it must pass the same rule as any field name.
+      bad = filter(!_loadable_m2m_column, [something(field.source_field, string(lowercase(owner.class), "_id")),
+                                           something(field.target_field, string(lowercase(target.class), "_id"))])
+      isempty(bad) || push!(dropped, (owner, field_name, bad))
     end
   end
-  return nothing
+  # Removed after the walk, never while iterating `fields`.
+  out = IdDict{Any, Vector{String}}()
+  for (owner, field_name, bad) in dropped
+    # The join table leaves with the field, and nothing else in the artifact records it, so the
+    # marker carries it: a through model declared without it would address a table Django never
+    # created. Unpinned only when the import pinned no table for the owner, which means no app label
+    # was known to spell Django's.
+    join_table = owner.model.fields[field_name].db_table
+    delete!(owner.model.fields, field_name)
+    label = _django_ref_label(owner)
+    cols = join(("'$(c)'" for c in bad), " and ")
+    which = length(bad) == 1 ? "its join column $(cols) contains" : "its join columns $(cols) contain"
+    table = join_table === nothing ? "the join table Django created" : "'$(join_table)'"
+    @warn "import: a ManyToManyField whose join column contains __ cannot be declared; dropped" class=label field=field_name columns=bad
+    push!(get!(out, owner.model, String[]),
+          "# PormG: '$(label).$(field_name)' is not imported — $(which) '__', " *
+          "PormG's lookup separator (Django refuses the class name it comes from too: models.E023/E024). " *
+          "Declare a through model on $(table) with one foreign key per end, each naming its column in " *
+          "db_column, and pin source_field / target_field to those keys.")
+  end
+  return out
+end
+
+# The rule `ManyToManyField` applies to `source_field` / `target_field` at load, asked rather than
+# restated, so the importer cannot emit a pin that the generated file then refuses.
+function _loadable_m2m_column(name::String)::Bool
+  try
+    Models.format_fild_name(name)
+    return true
+  catch e
+    e isa ModelDefinitionError || rethrow()
+    return false
+  end
 end
 
 """
@@ -2006,7 +2053,7 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
   # error — see `_claim_index_name!`, which owns the rule and the reporting. One registry per
   # generated file, exactly like `taken_bindings` above.
   taken_index_names = Set{String}()
-  pending_renders = Tuple{Int, PormGModel, Vector{String}}[]
+  pending_renders = Tuple{Int, PormGModel, Vector{String}, Dict{String, String}}[]
 
   # Renames nobody asked for, at the top of the file: they have no declaration of their own to sit
   # above, and a reader who typed `M.Cascade` and got `Cascade2` needs to find out here rather than
@@ -2347,9 +2394,13 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       # emitted only for a column that is still there with the type it was built as. A dropped
       # ManyToMany or a ForeignKey degraded to a plain column has its own marker, and "imported as
       # ForeignKey" beside it would contradict it.
+      # Each note is remembered by its field, because `_pin_m2m_join_columns!` can still drop a
+      # ManyToMany after this (#1140); the render loop applies the same rule again then.
+      noted_fields = Dict{String, String}()
       for (key, (n, built)) in subclass_notes
         (haskey(fields_dict, key) && typeof(fields_dict[key]) === built) || continue
         _emit_subclass_note!(markers, class_label, n)
+        noted_fields[String(key)] = n[1]
       end
 
       # Collect all create instructions
@@ -2674,13 +2725,14 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       # standalone `# PormG:` comments around them keep source order. `_pin_m2m_join_columns!`
       # below still has models to mutate, and it needs every one of them to exist first.
       push!(Instructions, "")
-      push!(pending_renders, (length(Instructions), model, copy(markers)))
+      push!(pending_renders, (length(Instructions), model, copy(markers), noted_fields))
 
     end
   end
 
-  # Every model exists now, so both ends of every ManyToManyField are readable.
-  _pin_m2m_join_columns!(index)
+  # Every model exists now, so both ends of every ManyToManyField are readable. A field whose join
+  # column PormG cannot name is dropped, with a marker (#1140).
+  undeclarable = _pin_m2m_join_columns!(index)
   # …and both ends of every key: a managed model's key into an unmanaged one loses its constraint (#741).
   unconstrained = _unconstrain_keys_into_unmanaged!(index)
 
@@ -2693,8 +2745,11 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
   # emitted names differ only in case — distinct bindings, one positional name — where `taken_names`
   # does fire and the winner depends on who is rendered first. Keeping build order costs nothing and
   # keeps that outcome matching the file the reader sees.
-  for (slot, model, markers) in pending_renders
-    markers = vcat(markers, get(unconstrained, model, String[]))
+  for (slot, model, markers, noted_fields) in pending_renders
+    # A custom-class note for a field the pin pass dropped would contradict its drop marker (#1041).
+    gone = Set(note for (key, note) in noted_fields if !haskey(model.fields, key))
+    markers = vcat(filter(m -> !(m in gone), markers),
+                   get(undeclarable, model, String[]), get(unconstrained, model, String[]))
     # #1043: the short form — this file is regenerated from `models.py`, never edited by hand, so a
     # binding that is renamed carries its name with it. `inspectdb` keeps the explicit name.
     rendered = Models.Model_to_str(model; taken_bindings=taken_bindings, taken_names=taken_names,

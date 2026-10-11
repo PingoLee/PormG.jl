@@ -89,7 +89,7 @@ end
     @test joined.parent__name == "ferrari"
 
     # Reverse traversal PARENT → CHILD, the other direction through the same relation.
-    back = M.Db_table_scratch.objects.filter("dbtchildren__note" => "sf90").values("name").first()
+    back = M.Db_table_scratch.objects.filter("dbtchildren__note" => "sf90").values("name").distinct().first()   # #1002
     @test back.name == "ferrari"
 
     # ON DELETE CASCADE reaches the child through the FK — proving the constraint is live in the

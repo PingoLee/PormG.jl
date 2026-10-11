@@ -145,3 +145,70 @@ end
     @test ck(name, k) == PormG.CDecimal(nothing, nothing)
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A CTE column is its expression's own type, not its read kind
+# The CTE body recorded only each column's READ kind, which a `Rank`, an integer `Case` or a plain
+# integer column does not have (the driver reads them back as integers already). So
+# `Floor(CTE("c", "rk"))` kept `FLOOR((…)::numeric)` on PostgreSQL, and divided by 2 kept the half
+# SQLite drops (`2.5` against `2`). The body now records each column's `_expression_kind` too.
+# Expected SQL on PostgreSQL: the cast back to the column's type — `::bigint` for a ranking window and
+# an integer `Case` (its literals bind as `bigint`), `::integer` for an `integer` column — and no cast
+# back over an `Avg`, which is no integer: its floor of `7.5` is `7` on both engines, a `numeric`/`REAL`.
+# SQLite renders `FLOOR("…"."rk")` as before. Found reviewing #1156, the duplicate of this step.
+# ─────────────────────────────────────────────────────────────────────────────
+_ifc_window() = PormG.QueryBuilder.WindowOver(order_by = ["grid", "resultid"])
+function _ifc_cte_body()
+  b = IFC.Ifc_result.objects
+  b.values("resultid", "g" => "grid",
+           "rk" => PormG.QueryBuilder.Rank(over = _ifc_window()),
+           "dr" => PormG.QueryBuilder.DenseRank(over = _ifc_window()),
+           "rn" => PormG.QueryBuilder.RowNumber(over = _ifc_window()),
+           "cs" => _IFC_FN.Case(_IFC_FN.When("grid__@gt" => 10, then = 7), default = 3))
+  return b
+end
+function _ifc_avg_body()
+  b = IFC.Ifc_result.objects
+  b.values("position", "a" => _IFC_FN.Avg("grid"))
+  return b
+end
+function _ifc_cte_render(expr; conn, body = _ifc_cte_body(), on = "resultid" => "resultid")
+  q = IFC.Ifc_result.objects
+  q.with("c" => body, join_field = on)
+  q.values("x" => expr)
+  return inspect_query(q; connection = conn)[:sql_text]
+end
+_ifc_cte_col(name) = PormG.CTE("c", name)
+
+@testset "#1147: Floor/Ceil/Abs over a CTE ranking, Case or integer column keep its type on PostgreSQL" begin
+  pg(expr; kw...) = _ifc_cte_render(expr; conn = _IFC_PG, kw...)
+  sl(expr; kw...) = _ifc_cte_render(expr; conn = _IFC_SL, kw...)
+  col = "\"[A-Za-z0-9_]+\"\\."
+  for name in ("rk", "dr", "rn", "cs")
+    @test occursin(Regex("FLOOR\\(\\($(col)\"$(name)\"\\)::numeric\\)::bigint as \"x\""), pg(_IFC_FN.Floor(_ifc_cte_col(name))))
+    @test occursin(Regex("CEIL\\(\\($(col)\"$(name)\"\\)::numeric\\)::bigint as \"x\""), pg(_IFC_FN.Ceil(_ifc_cte_col(name))))
+    @test occursin(Regex("ABS\\($(col)\"$(name)\"\\) as \"x\""), pg(_IFC_FN.Abs(_ifc_cte_col(name))))
+    # Divided, both engines divide an integer: no refusal, and the PostgreSQL dividend is a `bigint`.
+    @test occursin(Regex("\\(FLOOR\\(\\($(col)\"$(name)\"\\)::numeric\\)::bigint / \\\$\\d+::bigint\\) as \"x\""),
+                   pg(_IFC_FN.Floor(_ifc_cte_col(name)) / 2))
+    @test occursin(Regex("\\(FLOOR\\($(col)\"$(name)\"\\) / \\?\\) as \"x\""), sl(_IFC_FN.Floor(_ifc_cte_col(name)) / 2))
+    for conn in (_IFC_PG, _IFC_SL)
+      @test !isempty(_ifc_cte_render(_IFC_FN.Cast(_IFC_FN.Floor(_ifc_cte_col(name)) / 2, Models.IntegerField()); conn = conn))
+      @test !isempty(_ifc_cte_render(_IFC_FN.Sum(_IFC_FN.Floor(_ifc_cte_col(name))); conn = conn))
+    end
+  end
+  @test occursin(Regex("FLOOR\\(\\($(col)\"g\"\\)::numeric\\)::integer as \"x\""), pg(_IFC_FN.Floor(_ifc_cte_col("g"))))
+  @test occursin(Regex("FLOOR\\($(col)\"rk\"\\) as \"x\""), sl(_IFC_FN.Floor(_ifc_cte_col("rk"))))
+  # An `Avg` column is no integer: the cast stays and nothing is cast back, so the floor of `7.5` is
+  # `7` on both engines; divided it keeps the half on both (`3.5`), and a cast of that quotient to an
+  # integer stays refused on both (PostgreSQL rounds `3.5` to `4`, SQLite truncates it to `3`).
+  avg(expr; conn) = _ifc_cte_render(expr; conn = conn, body = _ifc_avg_body(), on = "position" => "position")
+  a = _ifc_cte_col("a")
+  @test occursin(Regex("FLOOR\\(\\($(col)\"a\"\\)::numeric\\) as \"x\""), avg(_IFC_FN.Floor(a); conn = _IFC_PG))
+  @test occursin(Regex("\\(FLOOR\\(\\($(col)\"a\"\\)::numeric\\) / \\\$\\d+::bigint\\) as \"x\""), avg(_IFC_FN.Floor(a) / 2; conn = _IFC_PG))
+  for conn in (_IFC_PG, _IFC_SL)
+    @test !isempty(avg(_IFC_FN.Cast(_IFC_FN.Floor(a), Models.IntegerField()); conn = conn))
+    @test !isempty(avg(_IFC_FN.Sum(_IFC_FN.Floor(a)); conn = conn))
+    @test_throws PormG.QueryBuildError avg(_IFC_FN.Cast(_IFC_FN.Floor(a) / 2, Models.IntegerField()); conn = conn)
+  end
+end

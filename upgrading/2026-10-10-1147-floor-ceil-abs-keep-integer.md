@@ -11,8 +11,11 @@ PostgreSQL rendered every operand of these functions cast to `numeric` — `FLOO
 — so over an integer the value was a `numeric`: it read as a `Decimal`, and dividing it kept the half,
 where SQLite keeps the integer and divides as integers. Over an operand PormG types as an integer —
 an integer column (`IntegerField`, `BigIntegerField`, an `IDField`, a `ForeignKey`, …), an integer
-literal, `Count`, `Length`, a `Cast` to an integer, an integer date part (`"dob__@year"`,
-`Extract(…, "year")`, `@quarter`, …), or one of these functions over one — PostgreSQL now renders:
+literal, `Count`, `Length`, a ranking window (`Rank`, `DenseRank`, `RowNumber`), a `Case` whose
+values are all integers, a `Cast` to an integer, an integer date part (`"dob__@year"`,
+`Extract(…, "year")`, `@quarter`, …), a CTE column holding an integer (an integer column, `Count`,
+`Sum` of a non-`bigint` integer column, `Max`/`Min` of any integer column, a ranking window, a
+`Lag`/`Lead` of an integer with an integer or no default, a `Case` of integers, a cast to an integer), or one of these functions over one — PostgreSQL now renders:
 
 | call | before | after |
 |---|---|---|
@@ -36,8 +39,8 @@ One edge raises where it did not: `Abs` of the most negative value of an integer
 64-bit (and raises for the most negative 64-bit value, as PostgreSQL does for a `bigint`).
 
 Unchanged: these functions over a float, a decimal, or an expression PormG does not type as an
-integer (`Floor(F("grid") + 1)`, `Abs(Sum("resultid"))`) keep the `::numeric` cast and read a
-`Decimal` on PostgreSQL; and every query on SQLite.
+integer (`Floor(F("grid") + 1)`, `Abs(Sum("resultid"))`, a CTE column computed by `Avg`) keep the
+`::numeric` cast and read a `Decimal` on PostgreSQL; and every query on SQLite.
 
 ### Who this affects
 

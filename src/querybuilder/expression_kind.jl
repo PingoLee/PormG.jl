@@ -311,7 +311,9 @@ end
 #
 # The CTE handle is NOT its inferred field: `_set_field_from_sql_function` hands an `Avg("amount")`
 # column the operand's own `DecimalField`, which would run a computed double through the decimal
-# parser (#648). The body's record is a READ kind under either policy until phase 3 records more.
+# parser (#648). Under `_AllKinds` the column is its expression's own type, which the body recorded
+# while it could still resolve its paths (`cte["kinds"]`, #1147): a `Rank` is an integer there though
+# it reads back with no kind to undo. The read kind stays the body's read record.
 function _cte_column_kind(ref::CTEReference, instruc::SQLInstruction, policy::_KindPolicy = _ReadKinds())::Union{CanonicalType,Nothing}
   if occursin("__", ref.path)
     column_field = _alias_column_field(ref, instruc)
@@ -319,7 +321,14 @@ function _cte_column_kind(ref::CTEReference, instruc::SQLInstruction, policy::_K
   end
   cte = get(instruc.object.ctes, ref.name, nothing)
   cte === nothing && return nothing
+  kind = _cte_expression_kind(cte, ref.path, policy)
+  kind === nothing || return kind
   body = get(cte, "query", nothing)
   body isa SQLObjectHandler || return nothing
   return get(body.object.projection_kinds, Symbol(ref.path), nothing)
+end
+_cte_expression_kind(::AbstractDict, ::String, ::_ReadKinds) = nothing
+function _cte_expression_kind(cte::AbstractDict, path::String, ::_AllKinds)
+  kinds = get(cte, "kinds", nothing)
+  return kinds isa AbstractDict ? get(kinds, path, nothing) : nothing
 end

@@ -647,10 +647,12 @@ query.filter("driverid" => 1)
 df = query |> DataFrame
 ```
 
-Over an integer — a column, an integer literal, a count, an integer date part — `Abs`, `Floor` and
-`Ceil` return an integer of the operand's own type on both engines, so `Abs("number")` reads an
-integer and `Floor("grid") / 2` divides as integers (#1147). Over a float or a decimal, PostgreSQL
-computes them as `numeric` (read as a `Decimal`), and SQLite as its own number type.
+Over an integer — a column, an integer literal, a count, a ranking window, a `Case` of integers, an
+integer date part, or a CTE column holding an integer — `Abs`, `Floor` and `Ceil` return an integer
+of the operand's own type on both engines, so `Abs("number")` reads an integer and
+`Floor("grid") / 2` divides as integers (#1147). Over a float or a decimal — a CTE column computed
+by `Avg` included — PostgreSQL computes them as `numeric` (read as a `Decimal`), and SQLite as its
+own number type: the floor of an average of `7.5` is `7` on both.
 
 ### Rounding to decimal places
 

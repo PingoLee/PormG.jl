@@ -2228,3 +2228,93 @@ end
     @test length(races) == 10
     @test all(r -> r[:y] isa Integer && r[:y] == div(r[:year], 2), races)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1147: Floor over a CTE column — an Avg, a ranking window, an integer Case — and over a Case directly
+# gives one answer on both engines, divided, cast and summed too. Found reviewing #1156, the duplicate
+# of this step. A CTE column was typed by its READ kind only, which a `Rank` or an integer `Case` does
+# not have, so PostgreSQL rendered `FLOOR(("R1_1"."rk")::numeric)` and `/ 2` kept the half SQLite
+# drops (`2.5` against `2`). It now renders `FLOOR(("R1_1"."rk")::numeric)::bigint`. An `Avg` column
+# is no integer, so its floor stays `FLOOR((…)::numeric)` and must floor `7.5` to `7` — not keep it
+# as an integer cast would round it. Expected: every value equals what Julia computes from the row's
+# own CTE column, so both engines give the same numbers (the read type of a `Sum` or an `Avg` floor
+# is each engine's own: a `Decimal` on PostgreSQL).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1147: Floor over a CTE Avg, ranking or Case column, and over a Case, agree on both engines" begin
+    # An `Avg` of grids 7 and 8 in each race is 7.5.
+    avg_body() = M.Result.objects.filter("grid__@in" => [7, 8]).values("raceid", "a" => Avg("grid"))
+    function over_avg(exprs...)
+        q = M.Race.objects
+        q.with("g" => avg_body(), join_field = "raceid" => "raceid", join_type = "INNER")
+        q.filter("raceid__@lte" => 50)
+        q.values("raceid", "raw" => CTE("g", "a"), exprs...)
+        return q.order_by("raceid").list(:dict)
+    end
+    a = CTE("g", "a")
+    rows = over_avg("f" => Floor(a), "h" => Floor(a) / 2, "c" => Cast(Floor(a), Models.IntegerField()))
+    @test !isempty(rows)
+    @test any(r -> Float64(r[:raw]) == 7.5, rows)
+    for r in rows
+        raw = Float64(r[:raw])
+        @test Float64(r[:f]) == floor(raw)
+        raw == 7.5 && @test Float64(r[:f]) == 7.0
+        @test Float64(r[:h]) == floor(raw) / 2          # no integer, so the half stays on both engines
+        @test r[:c] isa Integer && r[:c] == Int(floor(raw))
+    end
+    total = only(M.Race.objects.with("g" => avg_body(), join_field = "raceid" => "raceid", join_type = "INNER").
+        filter("raceid__@lte" => 50).values("x" => Sum(Floor(a))).list(:dict))[:x]
+    @test Float64(total) == sum(r -> floor(Float64(r[:raw])), rows)
+    # PostgreSQL rounds a cast `3.5` to `4` and SQLite truncates it to `3`: refused on both.
+    @test_throws PormG.QueryBuildError over_avg("x" => Cast(Floor(a) / 2, Models.IntegerField()))
+
+    # An integer CTE column: a ranking window, or a `Case` of integers. Its floor is the column, so
+    # divided it is integer division on both engines.
+    function check_integer_column(label, make_body)
+        col = CTE("c", "v")
+        q = M.Result.objects
+        q.with("c" => make_body(), join_field = "resultid" => "resultid", join_type = "INNER")
+        rows = q.values("resultid", "raw" => col, "f" => Floor(col), "h" => Floor(col) / 2,
+                        "c" => Cast(Floor(col), Models.IntegerField()),
+                        "ch" => Cast(Floor(col) / 2, Models.IntegerField())).
+            order_by("resultid").list(:dict)
+        @testset "$label" begin
+            @test length(rows) > 1
+            @test any(r -> isodd(r[:raw]), rows)   # an odd value is where the half would show
+            for r in rows
+                @test r[:f] isa Integer && r[:f] == r[:raw]
+                @test r[:h] isa Integer && r[:h] == div(r[:raw], 2)
+                @test r[:c] == r[:raw]
+                @test r[:ch] == div(r[:raw], 2)
+            end
+            s = M.Result.objects
+            s.with("c" => make_body(), join_field = "resultid" => "resultid", join_type = "INNER")
+            @test Float64(only(s.values("x" => Sum(Floor(col))).list(:dict))[:x]) == sum(r -> r[:raw], rows)
+        end
+    end
+    over() = WindowOver(order_by = ["grid", "resultid"])
+    case() = Case(When("grid__@gt" => 10, then = 7), default = 3)
+    body_of = Dict(
+        "Rank"      => () -> M.Result.objects.filter("raceid" => 18).values("resultid", "v" => Rank(over = over())),
+        "DenseRank" => () -> M.Result.objects.filter("raceid" => 18).values("resultid", "v" => DenseRank(over = over())),
+        "RowNumber" => () -> M.Result.objects.filter("raceid" => 18).values("resultid", "v" => RowNumber(over = over())),
+        "Case"      => () -> M.Result.objects.filter("raceid" => 18).values("resultid", "v" => case()),
+    )
+    for label in ("Rank", "DenseRank", "RowNumber", "Case")
+        check_integer_column(label, body_of[label])
+    end
+
+    # The same `Case`, not through a CTE.
+    rows = M.Result.objects.filter("raceid" => 18).
+        values("resultid", "grid", "f" => Floor(case()), "h" => Floor(case()) / 2,
+               "c" => Cast(Floor(case()), Models.IntegerField()), "ch" => Cast(Floor(case()) / 2, Models.IntegerField())).
+        order_by("resultid").list(:dict)
+    @test length(rows) > 1
+    for r in rows
+        e = r[:grid] > 10 ? 7 : 3
+        @test r[:f] isa Integer && r[:f] == e
+        @test r[:h] isa Integer && r[:h] == div(e, 2)
+        @test r[:c] == e && r[:ch] == div(e, 2)
+    end
+    total = only(M.Result.objects.filter("raceid" => 18).values("x" => Sum(Floor(case()))).list(:dict))[:x]
+    @test Float64(total) == sum(r -> r[:grid] > 10 ? 7 : 3, rows)
+end

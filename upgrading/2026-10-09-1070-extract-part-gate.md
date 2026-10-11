@@ -1,9 +1,9 @@
 ## `Extract` is checked like the `__@` transforms, and an exact filter on a date part is range-checked (#1070)
 
 - **Version**: Unreleased
-- **PormG ref**: #1070, #1088 ; `src/querybuilder/functions.jl` (`_EXTRACT_PART_ROWS`, `Extract`), `src/querybuilder/select_nodes.jl` (`_check_temporal_operand`), `src/Models.jl` (`format_month_sql`, `format_day_sql`, `format_dow_sql`, `format_doy_sql`, `unranged_formatter`), `src/querybuilder/filter_nodes.jl` (`_format_filter_value`)
+- **PormG ref**: #1070, #1088, #1086 ; `src/querybuilder/functions.jl` (`_EXTRACT_PART_ROWS`, `Extract`), `src/querybuilder/select_nodes.jl` (`_check_temporal_operand`), `src/Models.jl` (`format_month_sql`, `format_day_sql`, `format_dow_sql`, `format_doy_sql`, `unranged_formatter`), `src/querybuilder/filter_nodes.jl` (`_format_filter_value`)
 - **Recorded**: 2026-10-09
-- **Severity**: behavior. An `Extract` part over a column it cannot read now raises `QueryBuildError` when the query is built, on both engines. An `=` or `@in` filter value outside a date part's range now raises `InvalidValueError` where it used to match nothing. Every other lookup binds it as a bound. That relaxes the released `@quarter`/`@quadrimester` check, which refused such a value under every operator.
+- **Severity**: behavior. One row (#1086) runs the other way: a non-number pattern fragment on a number column, refused by PormG before, now reaches PostgreSQL's server and fails there (a bug is tracked). An `Extract` part over a column it cannot read now raises `QueryBuildError` when the query is built, on both engines. An `=` or `@in` filter value outside a date part's range now raises `InvalidValueError` where it used to match nothing. Every other lookup binds it as a bound. That relaxes the released `@quarter`/`@quadrimester` check, which refused such a value under every operator.
 
 ### What changed
 
@@ -43,6 +43,8 @@ checked against the same table, with the same message, and get the same range:
 | `filter("date__@quarter" => 1.5)` | `InvalidValueError` with `kind = :range` | `InvalidValueError` with `kind = :format`, on every operator (#1088) |
 | `filter(F("start_at__@hour") == 25)`, `filter(Extract("start_at", "HOUR") == 25)` | matched nothing | `InvalidValueError`, as `"start_at__@hour" => 25` (#1083) |
 | `filter(F("start_at__@hour") == true)`, `filter(F("start_at__@hour") > 1.5)` | bound `1` / `"1.5"` | `InvalidValueError` (`kind = :type` / `:format`) (#1083) |
+| `filter("date__@startswith" => "2009")` on a `DateField` (#1086) | `FilterError` (not a date) | matches: PostgreSQL reads `to_char(date, 'YYYY-MM-DD')`, SQLite the stored text |
+| `filter("grid__@contains" => "x")` — any pattern lookup on a number column with a non-number fragment (#1086) | `FilterError` (not a number) | bound as text: SQLite runs the `LIKE` over the number's text; PostgreSQL fails at the server, which has no `LIKE` for a number (a digit fragment already did) |
 | `filter(F("start_at__@hour") > 25)` | no row | no row, unchanged: an ordering's value is a bound, not refused |
 
 A refusal names the part rather than the spelling: "The `hour` part reads a time of day, …", and a

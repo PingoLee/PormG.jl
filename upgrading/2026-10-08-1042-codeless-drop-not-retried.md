@@ -1,7 +1,7 @@
-## `fetch` — a dropped connection is retried only when the statement never ran (#1042)
+## `fetch` — a dropped connection is retried only when the statement never ran (#1042, #1025)
 
 - **Version**: Unreleased
-- **PormG ref**: #1042 ; `src/ConnectionPool.jl` (`fetch`), `src/Backend.jl` (`backend_is_retry_safe`), `ext/PormGLibPQExt.jl`, `ext/PormGPostgresExt.jl`
+- **PormG ref**: #1042, #1025 ; `src/ConnectionPool.jl` (`fetch`), `src/Backend.jl` (`backend_is_retry_safe`), `ext/PormGLibPQExt.jl`, `ext/PormGPostgresExt.jl`
 - **Recorded**: 2026-10-08
 - **Severity**: behavior change. A statement whose connection drops with no error code raises `OperationalError` where it used to be re-run silently.
 
@@ -9,10 +9,15 @@
 
 Outside a transaction, `fetch` handled every lost connection the same way. It renewed the failed
 connection, retired the pool's idle ones, and ran the statement again. Most lost connections carry
-no error code: `server closed the connection unexpectedly`, `SSL SYSCALL error: EOF detected`, a
-reset, a timeout. Those mean only that the socket went away, and the socket can go away after the
-server received the statement. An autocommit `INSERT`, `UPDATE` or `DELETE` that had already
-committed then ran a second time.
+no error code: `server closed the connection unexpectedly`, a reset, a timeout. Those mean only
+that the socket went away, and the socket can go away after the server received the statement. An
+autocommit `INSERT`, `UPDATE` or `DELETE` that had already committed then ran a second time.
+
+A TLS session cut without its goodbye (`SSL SYSCALL error: EOF detected`, OpenSSL 3's `unexpected
+eof while reading`, `could not receive data from server`, `could not send data to server`) was not recognized as a dropped connection
+at all in `0.7.0`: it raised `StatementError` and left the dead connection in the pool.
+In the same release as this change (#1025) it is classed as a dropped connection, so it now raises
+`OperationalError` (it carries no error code, so it is not re-run) and the pool recovers.
 
 The pool still recovers from every lost connection exactly as before: the failed slot is renewed and
 the idle ones are retired. The statement is now re-run only when it provably never ran, which means

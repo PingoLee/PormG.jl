@@ -1,7 +1,7 @@
-## A date part over a foreign key is checked against the related key (#1068)
+## A date part over a foreign key is checked against the related key (#1068, #1004)
 
 - **Version**: Unreleased
-- **PormG ref**: #1068 ; `src/querybuilder/select_nodes.jl` (`_relation_key_field`, `_check_temporal_operand`)
+- **PormG ref**: #1068, #1004 ; `src/querybuilder/memos.jl` (`memo_name`), `src/querybuilder/select_nodes.jl` (`_relation_key_field`, `_check_temporal_operand`)
 - **Recorded**: 2026-10-09
 - **Severity**: behavior. A date part over a `ForeignKey` or `OneToOneField` whose key is not a date now raises `QueryBuildError` when the query is built. Before, PostgreSQL refused it when it ran, and SQLite answered from the key's text.
 
@@ -23,6 +23,16 @@ relation is followed in turn.
 
 A many-to-many relation has no column and is still passed through, as is a relation whose target
 PormG cannot resolve where the query is built.
+
+**Same release (#1004): the transform no longer answers for the related column's plain path.** A
+transform projection was remembered under its output name with the `@` dropped, so `weekend__@year`
+was stored under `weekend__year`, which is also the plain path to a `year` column on the related
+model. A later `filter`, `Q`/`Qor`, `When` or `order_by` on `weekend__year` read the transform back
+and returned the wrong rows. The same leak needed no projection at all: `filter("weekend__@year" => …)`
+followed by `order_by("weekend__year")` sorted by the transform. Both now read the related column. An `order_by` on such a name that
+matches both a projection's generated name and a related column raises `AmbiguousFieldError`, as the
+same `filter` already did (#703). Over an integer key (`raceid__@year`) the refusal above already
+applies.
 
 ### Who this affects
 

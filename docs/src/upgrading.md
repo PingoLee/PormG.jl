@@ -30,10 +30,13 @@ PormG bumps **per release train, not per pull request**.
 - **`y` is the breaking slot.** Any release that forces an edit in your app bumps `y` and carries a
   matching change-log entry. Pin `PormG = "0.3"` and Pkg will hold you there until you choose to
   move.
-- **`z` is safe.** A purely additive train, or a hotfix to a tagged one. Nothing to port.
+- **`z` is safe.** A purely additive train, or a hotfix that changes no value a call returns.
+  Nothing to port.
 - **During a train,** every breaking or behavior-changing PR adds one new file to `upgrading/`
   marked `- **Version**: Unreleased`, without bumping `Project.toml` — that still holds the last
-  cut train's version.
+  cut train's version. A change is behavior-changing when any call returns a different value, or
+  raises where the last release did not, **bug fixes included**: an app may depend on the old
+  value.
 - **Cutting a train** bumps `y` once and stamps every `Unreleased` entry with that number, then
   dates and tags the release.
 

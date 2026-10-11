@@ -2229,3 +2229,82 @@ end
     pts = only(M.Result.objects.filter("resultid" => 1).values("points", "f" => Floor("points")).list())
     @test Float64(pts[:f]) == floor(Float64(pts[:points]))
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Floor over a CTE column floors by what the body computed, the same on both engines (#1147, #1156)
+# A CTE types its columns by inferring a field: an `Avg` of an integer column becomes that column's
+# `IntegerField`, a ranking window and a `Case` of integers become integers. #1147 drops the
+# `::numeric` cast only over a WHOLE operand, so a CTE column is judged by its body's own record:
+# `Avg` keeps the cast and floors `7.5` to `7`; `Rank`/`DenseRank`/`RowNumber` and an integer `Case`
+# render bare and divide as integers. Each shape is read under `Floor`, `Floor(…) / 2`,
+# `Cast(Floor(…), IntegerField())` and `Sum(Floor(…))`, checked per row against Julia over the raw
+# column, and pinned to literals — so a run on `db_2` and a run on `db_sl` must give the same numbers.
+# A Decimal and a Float64 `7` are the same value spelled two ways, so values compare as numbers.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1147: Floor over a CTE column computed by Avg, a ranking window or an integer Case" begin
+    I = PormG.Models.IntegerField
+    # Races 1–6, grids 1 to 14: each race's mean grid is exactly 7.5.
+    function avg_cte()
+        body = M.Result.objects
+        body.filter("raceid__@lte" => 6, "grid__@gte" => 1, "grid__@lte" => 14)
+        body.values("raceid", "v" => Avg("grid"))
+        q = M.Race.objects
+        q.with("c" => body, join_field = "raceid" => "raceid")
+        q.filter("raceid__@lte" => 6)
+        return q
+    end
+    # Race 1, ordered by points: the non-scorers tie last, so RowNumber differs from the two ranks.
+    function window_cte(win)
+        body = M.Result.objects
+        body.filter("raceid" => 1)
+        body.values("resultid", "v" => win(over = WindowOver(order_by = ["-points"])))
+        q = M.Result.objects
+        q.with("c" => body, join_field = "resultid" => "resultid")
+        q.filter("raceid" => 1)
+        return q
+    end
+    function case_cte()
+        body = M.Result.objects
+        body.filter("raceid" => 1)
+        body.values("resultid", "v" => Case([When("grid__@gt" => 10, then = 7)], default = 3))
+        q = M.Result.objects
+        q.with("c" => body, join_field = "resultid" => "resultid")
+        q.filter("raceid" => 1)
+        return q
+    end
+
+    # (label, query, whole?, Sum(Floor(…)) literal)
+    shapes = (("Avg", avg_cte, false, 42),
+              ("Rank", () -> window_cte(Rank), true, 144),
+              ("DenseRank", () -> window_cte(DenseRank), true, 144),
+              ("RowNumber", () -> window_cte(RowNumber), true, 210),
+              ("integer Case", case_cte, true, 100))
+    for (label, make, whole, total) in shapes
+        @testset "$label" begin
+            v = CTE("c", "v")
+            q = make()
+            q.values("raw" => v, "f" => Floor(v), "half" => Floor(v) / 2, "i" => Cast(Floor(v), I()))
+            rows = q.list()
+            @test !isempty(rows)
+            for r in rows
+                raw = Float64(r[:raw])
+                @test Float64(r[:f]) == floor(raw)
+                @test r[:i] isa Integer && r[:i] == Int(floor(raw))
+                if whole
+                    # A whole column divides as an integer on both engines: `5 / 2` is `2`.
+                    @test r[:f] isa Integer && r[:half] isa Integer
+                    @test r[:half] == div(Int(raw), 2)
+                else
+                    # A fraction keeps its cast: the floor of 7.5 is 7, halved 3.5 — not 3.75, not 3.
+                    @test raw == 7.5 && Float64(r[:f]) == 7.0
+                    @test Float64(r[:half]) == 3.5
+                end
+            end
+            s = make()
+            s.values("s" => Sum(Floor(CTE("c", "v"))))
+            got = Float64(only(s.list())[:s])
+            @test got == sum(floor(Float64(r[:raw])) for r in rows)
+            @test got == total
+        end
+    end
+end

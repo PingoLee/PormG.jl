@@ -38,7 +38,7 @@ const _JCM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("P1 on first hop/F arithmetic", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND ((\"Tb_1\".\"number\" + ?) > ?)", params = Any[1, 3], join = Any[1, 3]),
   ("P1 on first hop/function lhs", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND (ABS((\"Tb_1\".\"number\")::numeric) > \$1::bigint)", params = Any[0], join = nothing),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND (ABS(\"Tb_1\".\"number\") > \$1::bigint)", params = Any[0], join = nothing),
   ("P1 on first hop/function lhs", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND (ABS(\"Tb_1\".\"number\") > ?)", params = Any[0], join = Any[0]),
   ("P1 on first hop/Case lhs", :postgres) =>
@@ -94,7 +94,7 @@ const _JCM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("P2 on deep hop/F arithmetic", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_2\".\"grid\" as \"driverid__results__grid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"result\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" AND ((\"Tb_2\".\"number\" + ?) > ?)", params = Any[1, 3], join = Any[1, 3]),
   ("P2 on deep hop/function lhs", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_2\".\"grid\" as \"driverid__results__grid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"result\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" AND (ABS((\"Tb_2\".\"number\")::numeric) > \$1::bigint)", params = Any[0], join = nothing),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_2\".\"grid\" as \"driverid__results__grid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"result\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" AND (ABS(\"Tb_2\".\"number\") > \$1::bigint)", params = Any[0], join = nothing),
   ("P2 on deep hop/function lhs", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_2\".\"grid\" as \"driverid__results__grid\" FROM \"result\" as \"Tb\" INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" INNER JOIN \"result\" AS \"Tb_2\" ON \"Tb_1\".\"driverid\" = \"Tb_2\".\"driverid\" AND (ABS(\"Tb_2\".\"number\") > ?)", params = Any[0], join = Any[0]),
   ("P2 on deep hop/Case lhs", :postgres) =>
@@ -150,7 +150,7 @@ const _JCM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("P3 cjoin filters/F arithmetic", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND ((\"Tb_1\".\"number\" + ?) > ?)", params = Any[1, 3], join = Any[1, 3]),
   ("P3 cjoin filters/function lhs", :postgres) =>
-    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND (ABS((\"Tb_1\".\"number\")::numeric) > \$1::bigint)", params = Any[0], join = nothing),
+    (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND (ABS(\"Tb_1\".\"number\") > \$1::bigint)", params = Any[0], join = nothing),
   ("P3 cjoin filters/function lhs", :sqlite) =>
     (stage = :ok, sql = "SELECT \"Tb\".\"resultid\" as \"resultid\", \"Tb_1\".\"code\" as \"driverid__code\" FROM \"result\" as \"Tb\" LEFT JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" AND (ABS(\"Tb_1\".\"number\") > ?)", params = Any[0], join = Any[0]),
   ("P3 cjoin filters/Case lhs", :postgres) =>

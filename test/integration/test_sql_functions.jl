@@ -1235,6 +1235,48 @@ end
         end
     end
 
+    @testset "#1147: Floor/Ceil/Abs over an integer keep the integer, divided too" begin
+        # Scenario: halve a driver's grid slot after `Floor`/`Ceil`/`Abs` of it, and the year of birth.
+        # Their meaning is the operand's type, so over an integer the value is an integer on every
+        # engine. PostgreSQL rendered `FLOOR(("Tb"."grid")::numeric)`, a `numeric` read as a `Decimal`
+        # whose `/ 2` kept the half (`2.5` for grid 5) where SQLite divides integers (`2`). It renders
+        # `("Tb"."grid")` and `ABS("Tb"."grid")` now. Expected SQL shape (PostgreSQL):
+        # `(("Tb"."grid") / $1::bigint)`. Checked against Julia's integer division, whichever engine runs.
+        q = M.Result.objects
+        q.values(
+            "resultid",
+            "grid",
+            "f"      => Floor("grid"),
+            "f_half" => Floor("grid") / 2,
+            "c_half" => Ceil("grid") / 2,
+            "a_half" => Abs("grid") / 2,
+            "f_cast" => Cast(Floor("grid") / 2, "integer")
+        )
+        q.filter("grid__@gt" => 0)
+        q.order_by("resultid")
+        q.limit(20)
+
+        df = q |> DataFrame
+        @test size(df, 1) == 20
+        @test all(r -> r.f isa Integer && r.f == r.grid, eachrow(df))
+        @test all(eachrow(df)) do r
+            h = div(r.grid, 2)
+            r.f_half isa Integer && r.f_half == h && r.c_half == h && r.a_half == h && r.f_cast == h
+        end
+        @test any(r -> isodd(r.grid), eachrow(df))   # the half that used to split the engines
+
+        # An integer date part is an integer operand too: 1985 / 2 is 992 on both engines.
+        qd = M.Driver.objects
+        qd.values("driverid", "dob", "y_half" => Cast(Floor("dob__@year") / 2, "integer"))
+        qd.order_by("driverid")
+        qd.limit(20)
+        dfd = qd |> DataFrame
+        @test size(dfd, 1) == 20
+        @test all(eachrow(dfd)) do r
+            ismissing(r.dob) || r.y_half == div(Dates.year(Dates.Date(string(r.dob)[1:10])), 2)
+        end
+    end
+
     @testset "Aggregate expression wrapped in Round" begin
         # Scenario: Average points per result, rounded to a whole number.
         # Sum("points") / Count("resultid") produces an FExpression (field_name=FObject, ...),

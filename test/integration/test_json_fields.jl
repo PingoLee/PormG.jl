@@ -84,6 +84,14 @@ _json_backend_is_pg() = PormG.config[PORMG_DB_FOLDER].connections isa PormG.Porm
             row = q.list() |> first
             @test string(row[:payload__driver]) == "hamilton"
 
+            # #1147: `Floor`/`Abs` over a JSON value keep PostgreSQL's `(x)::numeric`, which is what
+            # parses the key's text there (`#>>` returns text; there is no `floor(text)`). Only an
+            # integer by type renders without it. Expected SQL (PostgreSQL):
+            # `FLOOR(("Tb"."payload" #>> '{"points"}')::numeric)`.
+            q = base(); q.values("f" => Floor("payload__points"), "a" => Abs("payload__points"))
+            row = q.list() |> first
+            @test Float64(row[:f]) == 15.0 && Float64(row[:a]) == 15.0
+
             # order_by on a JSON path executes on BOTH backends (the DB-free unit test cannot reach
             # the SQLite ORDER BY path — it trips the #75 version probe on a mock — so a real
             # connection covers that clause-path here).

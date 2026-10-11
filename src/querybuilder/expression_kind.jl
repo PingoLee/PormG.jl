@@ -219,7 +219,8 @@ _numeric_rank(::CanonicalType) = nothing
 # engine-dependent results #1034 asks to state once, as data. What `Dialect` renders decides:
 #
 # - PostgreSQL renders every `:numeric` function and `Abs`/`Floor`/`Ceil` over `(x)::numeric`, so the
-#   value is a `numeric` whatever the operand;
+#   value is a `numeric` whatever the operand — except `Abs`/`Floor`/`Ceil` over an integer, which keep
+#   it (#1147; their methods, beside their constructors);
 # - SQLite renders them bare: a `:promoting` function keeps its operand's type (an integer stays one,
 #   #1087) and a `:numeric` one answers a REAL (`Mod(7, 3)` reads `1.0`, #1027).
 #

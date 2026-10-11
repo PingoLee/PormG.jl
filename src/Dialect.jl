@@ -1086,7 +1086,14 @@ function LENGTH(column::String, format::Dict{String,Any}, conn::Union{PormGPostg
   return "LENGTH($(column))"
 end
 
+# #1147: PostgreSQL computes `Abs`, `Floor` and `Ceil` over `(x)::numeric`, which is also what parses a
+# JSON key's text value (there is no `abs(text)` or `floor(text)`). Over an integer (`integer_operand`,
+# set by the render) the value keeps the operand's type instead, as SQLite's does: `abs` has integer
+# overloads, and the floor or ceiling of an integer is the integer itself, rendered as such, because
+# PostgreSQL has no `floor(integer)` (`floor(int)` resolves to `double precision`, which divides with
+# a fraction where SQLite divides its integer, #1111).
 function ABS(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+  get(format, "integer_operand", false) === true && return "ABS($(column))"
   return "ABS(($(column))::numeric)"
 end
 function ABS(column::String, format::Dict{String,Any}, conn::PormGSQLite)
@@ -1147,6 +1154,7 @@ function RTRIM(column::String, format::Dict{String,Any}, conn::Union{PormGPostgr
 end
 
 function FLOOR(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+  get(format, "integer_operand", false) === true && return "($(column))"
   return "FLOOR(($(column))::numeric)"
 end
 function FLOOR(column::String, format::Dict{String,Any}, conn::PormGSQLite)
@@ -1154,6 +1162,7 @@ function FLOOR(column::String, format::Dict{String,Any}, conn::PormGSQLite)
 end
 
 function CEIL(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+  get(format, "integer_operand", false) === true && return "($(column))"
   return "CEIL(($(column))::numeric)"
 end
 function CEIL(column::String, format::Dict{String,Any}, conn::PormGSQLite)

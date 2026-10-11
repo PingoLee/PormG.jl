@@ -679,6 +679,13 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     v.function_name in ("SUM", "AVG") && throw(_boolean_sum_refusal(v))
     resolved_kwargs["boolean"] = true
   end
+  # #1147: `Abs`, `Floor` and `Ceil` over an integer keep the integer — their meaning is the operand's
+  # type (`:promoting`), and `Dialect` renders it on each engine. Read after the operand renders, as
+  # the checks above are, through the one "integer by type" the #1111 division check reads
+  # (`_known_whole`), so the render and that check cannot disagree about an operand.
+  if v isa FObject && v.function_name in _INTEGER_KEEPING_FUNCTIONS && !(v.column isa AbstractVector)
+    resolved_kwargs["integer_operand"] = _known_whole(v.column, instruc)
+  end
 
   # #74 fan-out guard: record COUNT/SUM/AVG and the source alias of their column so build() can
   # refuse aggregates a to-many join would silently inflate. MAX/MIN are immune and omitted; a

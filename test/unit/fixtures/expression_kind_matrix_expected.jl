@@ -963,7 +963,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Abs decimal | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = nothing),
   ("Abs int | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()"),
   ("Abs int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()"),
   ("Abs int | cte", :postgres) =>
@@ -975,7 +975,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Abs int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
   ("Floor int | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()"),
   ("Floor int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()"),
   ("Floor int | cte", :postgres) =>
@@ -987,7 +987,7 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Floor int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
   ("Ceil int | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()"),
   ("Ceil int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()"),
   ("Ceil int | cte", :postgres) =>
@@ -999,19 +999,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Ceil int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
   ("Floor int / 2 | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "integer_division", kind = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
   ("Floor int / 2 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "integer_division", kind = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
   ("Floor int / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is FLOOR(…), whose result type PormG does not infer. Name the type the colu"),
   ("Floor int / 2 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is FLOOR(…), whose result type PormG does not infer. Name the type the colu"),
   ("Floor int / 2 | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "integer_division", kind = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
   ("Floor int / 2 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "integer_division", kind = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
   ("Floor transform @year | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CDecimal(nothing, nothing)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
   ("Floor transform @year | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
   ("Floor transform @year | cte", :postgres) =>
@@ -1199,14 +1199,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:gap, "read=none vs textless=decimal")],
   ("Abs decimal | subquery", :sqlite) =>
     [(:gap, "read=none vs textless=decimal")],
-  ("Floor int / 2 | alone", :postgres) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Floor int / 2 | alone", :sqlite) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Floor int / 2 | subquery", :postgres) =>
-    [(:gap, "read=none vs textless=numeric")],
-  ("Floor int / 2 | subquery", :sqlite) =>
-    [(:gap, "read=none vs textless=numeric")],
   ("Mod int | alone", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
   ("Mod int | alone", :sqlite) =>

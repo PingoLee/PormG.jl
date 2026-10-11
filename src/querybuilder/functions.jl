@@ -114,8 +114,8 @@ _aggregate_refusal(fn::String, y) =
 # - `:first_operand` — the value is the first operand's or NULL (`NullIf`);
 # - `:promoting`     — a number computed from its operand's type (`Sum`, `Abs`, `Floor`, `Ceil`): on
 #                      SQLite an integer stays one; on PostgreSQL the type is the function's own
-#                      (`Dialect` casts `Abs`/`Floor`/`Ceil` to `numeric`, and `Sum` widens), which
-#                      `_computed_kind` states;
+#                      (`Dialect` casts `Abs`/`Floor`/`Ceil` to `numeric` but over an integer, #1147,
+#                      and `Sum` widens), which `_computed_kind` states;
 # - `:numeric`       — a fractional number: PostgreSQL computes it as `numeric` (`Dialect` casts the
 #                      operand; `Avg` renders bare and averages a `double precision` to one) and SQLite
 #                      as a REAL (`Avg`, `Round`, `Mod`, …), measured for #1027;
@@ -1390,6 +1390,12 @@ function Abs(x::_ScalarOperand)
   return FObject(function_name = "ABS", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:ABS}) = :promoting
+# #1147: PostgreSQL computes `Abs`, `Floor` and `Ceil` over `(x)::numeric` (the `expression_kind.jl`
+# default), except over an integer, whose type each keeps there as on SQLite (`Dialect.ABS`). An
+# operand the walk cannot name may be either — a date part renders as an integer, a JSON key value
+# over `::numeric` — so the value is not named either.
+_computed_kind(::Val{:ABS}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
+_computed_kind(::Val{:ABS}, ::Symbol, ::Nothing, ::PormGPostgres) = nothing
 
 """
     Round(column, precision=0)
@@ -1562,6 +1568,9 @@ function Floor(x::_ScalarOperand)
   return FObject(function_name = "FLOOR", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:FLOOR}) = :promoting
+# #1147: as `Abs`'s (above): an integer keeps its type on PostgreSQL too.
+_computed_kind(::Val{:FLOOR}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
+_computed_kind(::Val{:FLOOR}, ::Symbol, ::Nothing, ::PormGPostgres) = nothing
 
 """
     Ceil(column)
@@ -1572,6 +1581,9 @@ function Ceil(x::_ScalarOperand)
   return FObject(function_name = "CEIL", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:CEIL}) = :promoting
+# #1147: as `Abs`'s (above): an integer keeps its type on PostgreSQL too.
+_computed_kind(::Val{:CEIL}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
+_computed_kind(::Val{:CEIL}, ::Symbol, ::Nothing, ::PormGPostgres) = nothing
 
 
 

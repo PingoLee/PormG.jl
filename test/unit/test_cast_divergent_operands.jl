@@ -792,6 +792,31 @@ end
     @test occursin(Regex("(FLOOR|CEIL)\\(\\(\"R\\d+_\\d+\"\\.\"$(col)\"\\)::numeric\\)"), withcte(outer))
   end
   @test occursin(r"SELECT\s+\(\"R\d+_\d+\"\.\"sn\"\) as \"x\"", withcte(Fn.Floor(PormG.CTE("c", "sn"))))
+  # Delta review of #1147: a ranking window and a `Case` of integers are a `bigint` on PostgreSQL and an
+  # integer on SQLite, though `_known_whole` does not name them, so the body records them whole too.
+  # `Floor` over the column then renders it as itself and divides as integers on both engines, and
+  # an outer `Sum` over it is still the `sum(bigint)` #1127 refuses — never `FLOOR(x::numeric) / 2`,
+  # which kept the half on PostgreSQL only.
+  function withrank(outer; conn)
+    q = CCD.Ccd_team.objects
+    body = CCD.Ccd_driver.objects
+    body.values("team", "rk" => PormG.QueryBuilder.Rank(over = PormG.QueryBuilder.WindowOver(order_by = ["number"])),
+                "cs" => Fn.Case(Fn.When("active" => true, then = 1), default = 0))
+    q.with("c" => body, join_field = "id" => "team")
+    q.values("x" => outer)
+    return try _ccd_sql(q; conn = conn) catch e; e end
+  end
+  for col in ("rk", "cs"), conn in _CCD_ENGINES
+    for outer in (Fn.Cast(Fn.Floor(PormG.CTE("c", col)) / 2, Models.IntegerField()),
+                  Fn.Cast(Fn.Abs(PormG.CTE("c", col)) / 2, Models.IntegerField()))
+      sql = withrank(outer; conn = conn)
+      @test sql isa String && !occursin("::numeric", sql)
+    end
+    for outer in (Fn.Cast(Fn.Sum(Fn.Floor(PormG.CTE("c", col))) / 2, Models.IntegerField()),
+                  Fn.Cast(Fn.Sum(Fn.Abs(PormG.CTE("c", col))) / 2, Models.IntegerField()))
+      @test _is_1028(withrank(outer; conn = conn))
+    end
+  end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

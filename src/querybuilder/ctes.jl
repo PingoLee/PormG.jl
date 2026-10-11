@@ -1062,7 +1062,9 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
         side === nothing || (whole_numeric[key_new] = side)
         side = _bigint_valued(source, instruct)
         side === nothing || (bigint[key_new] = side)
-        whole[key_new] = (_known_whole(source, instruct) ? :whole : :not_whole, "")
+        # A `bigint` the body computed (`Rank`, a `Case` of integers) is an integer on both engines too,
+        # though `_known_whole` does not name it: the CTE typed it as one, and read so it was whole.
+        whole[key_new] = (side !== nothing || _known_whole(source, instruct) ? :whole : :not_whole, "")
       elseif memo_json_lookup(instruct, memo_key(:base, path))
         textless[key_new] = (:json_value, "")
       end

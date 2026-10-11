@@ -179,8 +179,10 @@ end
 # Expression kind: a computed number's type on each engine
 # The engine-dependent results #1034 states once. PostgreSQL: `Dialect` casts every `:numeric` function,
 # and `Abs`/`Floor`/`Ceil` over anything but an integer, to `numeric` (#1147: over an integer they keep it); `Sum` and `Avg` render bare and take PostgreSQL's aggregate
-# types (`sum(integer)` is `bigint`, `sum(bigint)` and `avg(integer)` `numeric`, `avg(double)` a
-# double). SQLite: a `:promoting` function keeps an integer an integer, a `:numeric` one is a REAL.
+# types (`sum(integer)` is `bigint`, `avg(integer)` `numeric`, `avg(double)` a double), except
+# `sum(bigint)`: PostgreSQL widens it to `numeric`, and PormG renders it `SUM(x)::bigint` (#1147 step 2),
+# so it is a `bigint`. SQLite: a `:promoting` function keeps an integer an integer, a `:numeric` one is
+# a REAL.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1034: _computed_kind, per engine" begin
   ck(name, k, conn) = _EKR_QB._computed_kind(Val(name), _EKR_QB._result_rule(Val(name)), k, conn)
@@ -198,7 +200,8 @@ end
   @test ck(:MOD, int, pg) == numeric
   # PostgreSQL's own aggregate types.
   @test ck(:SUM, int, pg) == PormG.CInt64()
-  @test ck(:SUM, big, pg) == numeric
+  # #1147 step 2: the sum of a `bigint` is cast back to one (`SUM(x)::bigint`), an integer as on SQLite.
+  @test ck(:SUM, big, pg) == PormG.CInt64()
   @test ck(:SUM, flt, pg) == flt
   @test ck(:SUM, dec, pg) == numeric
   @test ck(:SUM, ivl, pg) == ivl

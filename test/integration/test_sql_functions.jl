@@ -1910,15 +1910,15 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Concat: a boolean, float or decimal operand is refused on both engines (#1027)
-# PostgreSQL's CONCAT writes `t` / `25` / `3.00` where SQLite's `||` writes `1` / `25.0` / `3`, so
-# `Concat("driverref", "-", "points")` read 'hamilton-10' on one engine and 'hamilton-10.0' on the
-# other. The #1006 test above uses `Driver.number`, an integer — the one numeric type where the engines
-# agree. Here a FloatField (`Result.points`) and a BooleanField (`New_join_position.boolean_field`)
-# are refused against the live schema, and the documented escape for a yes/no reads the same text on
-# both engines.
+# Concat: a boolean, float or decimal operand is explicit intent, refused on every engine (#1027, #1147)
+# PostgreSQL's CONCAT writes `t` / `25` / `3.00` where SQLite's `||` writes `1` / `25.0` / `3`: the query
+# does not say which text it means, so each engine refuses it and asks for the explicit spelling. The
+# #1006 test above uses `Driver.number`, an integer, which every engine writes the same. Here a
+# FloatField (`Result.points`) and a BooleanField (`New_join_position.boolean_field`) are refused
+# against the live schema, and the two documented escapes are checked against Julia: a `Case` for a
+# yes/no, and a cast to text, which writes the engine's own text of the number.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1027: Concat refuses a Bool, Float or Decimal operand on both engines" begin
+@testset "#1027: Concat refuses a Bool, Float or Decimal operand on every engine; a cast to text says it" begin
     # The refusal itself, not any `QueryBuildError`: a renamed field would raise one too.
     refusal(f) = try f(); nothing catch e; e end
     is_1027(e) = e isa PormG.QueryBuildError && occursin("#1027", sprint(showerror, e))
@@ -1933,45 +1933,74 @@ end
     # A float literal is refused before any query exists.
     @test is_1027(refusal(() -> Concat("driverref", Value("-"), 1.5)))
 
-    # The escape: a `Case` names the two texts, so the value is the same string on both engines. The
-    # expected text is computed in Julia from the projected points column.
+    # The escapes. A `Case` names the two texts, so the value is the same string on both engines; a
+    # cast to text writes the engine's own text of the number. Both checked in Julia against the
+    # projected points column.
     q = M.Result.objects
     q.filter("raceid" => 18)
     q.values("resultid", "driverid__driverref", "points",
              "outcome" => Concat("driverid__driverref", Value(": "),
-                                 Case(When("points__@gt" => 0, then = Value("scored")), default = "no points")))
+                                 Case(When("points__@gt" => 0, then = Value("scored")), default = "no points")),
+             "label" => Concat("driverid__driverref", Value("-"), Cast("points", "text")))
     df = q |> DataFrame
     @test nrow(df) > 0
     @test any(>(0), df.points) && any(==(0), df.points)   # both branches are exercised
     wrong = [r.resultid for r in eachrow(df) if
              r.outcome != r.driverid__driverref * ": " * (r.points > 0 ? "scored" : "no points")]
     @test isempty(wrong)
+    # `10` on PostgreSQL, `10.0` on SQLite: the same number, read back from either text.
+    prefix(r) = r.driverid__driverref * "-"
+    wrong = [r.resultid for r in eachrow(df) if
+             !startswith(r.label, prefix(r)) || parse(Float64, r.label[ncodeunits(prefix(r)) + 1:end]) != r.points]
+    @test isempty(wrong)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Cast to text or an integer, and Concat's timestamp / interval / JSON operands, on both engines (#1028)
-# Measured on PostgreSQL 16.15 and SQLite 3.45.1: `Cast(points, CharField())` is '10' on one and
-# '10.0' on the other, `Cast(1.5, IntegerField())` 2 and 1, and `Concat("|", start_at)` writes
-# '2009-03-29 06:00:00+00' against '2009-03-29T06:00:00.000+00:00'. Each is refused against the live
-# schema, as is a CTE column built from `Sum`. The documented escapes — `Round`/`Floor`/`Ceil` before an
-# integer cast, `ToChar` for a timestamp — read the same value on both engines, checked against Julia.
+# Cast to text or an integer: refused on the engine that departs from the meaning (#1028, #1147)
+# Measured on PostgreSQL 16.15 and SQLite 3.45.1: a boolean cast to text means 'true'/'false' and
+# SQLite writes '1'; a fraction cast to an integer means the nearest integer and SQLite's cast
+# truncates (`1.5` → `1`). SQLite departs from both, so it refuses them and PostgreSQL builds them; the
+# values PostgreSQL returns are checked against Julia. A float's text ('10' or '10.0') is the same value
+# written two ways: it builds on both. `Concat` over a timestamp, an interval or a JSON document is
+# explicit intent, refused on every engine.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1028: divergent casts and Concat operands are refused on both engines" begin
+@testset "#1028: a cast SQLite computes differently is refused there and builds on PostgreSQL" begin
+    engine = PORMG_DB_FOLDER == "db_sl" ? :sqlite : :postgres
+    departs = (sqlite = true, postgres = false)   # this test's own oracle, per engine
     refusal(f) = try f(); nothing catch e; e end
     is_1028(e) = e isa PormG.QueryBuildError && occursin("#1028", sprint(showerror, e))
-    proj(model, expr) = () -> (q = model.objects; q.filter(model === M.Result ? ("raceid" => 18) : ("raceid" => 1));
-                               q.values("x" => expr); q |> DataFrame)
-    # A float column cast to text and to an integer, directly and through an output_field.
-    @test is_1028(refusal(proj(M.Result, Cast("points", PormG.Models.CharField()))))
-    @test is_1028(refusal(proj(M.Result, Concat("driverid__driverref", Value("-"), Cast("points", PormG.Models.CharField())))))
-    @test is_1028(refusal(proj(M.Result, Cast("points", PormG.Models.IntegerField()))))
-    @test is_1028(refusal(proj(M.Result, Greatest("points", 0; output_field = "integer"))))
-    # A timestamp and an interval operand of Concat, and a JSON document (refused at render, so no
-    # scratch row is needed).
-    @test is_1028(refusal(proj(M.Race, Concat(Value("|"), "start_at"))))
-    @test is_1028(refusal(() -> (q = M.Lap_times.objects; q.filter("raceid" => 841); q.values("x" => Concat(Value("|"), "time")); q |> DataFrame)))
-    @test is_1028(refusal(() -> (q = M.Field_validation_scratch.objects; q.values("x" => Concat(Value("|"), "payload")); q |> DataFrame)))
-    # A CTE column built from `Sum("points")`, which the CTE types as an integer.
+    # Race 2, the 2009 Malaysian GP, scored half points: the fractional rows are exercised.
+    points(expr) = () -> (q = M.Result.objects; q.filter("raceid" => 2); q.values("resultid", "points", "x" => expr); q |> DataFrame)
+    race(expr) = () -> (q = M.Race.objects; q.filter("raceid" => 1); q.values("x" => expr); q |> DataFrame)
+    # A fraction cast to an integer, directly and through an output_field.
+    for expr in (Cast("points", PormG.Models.IntegerField()), Greatest("points", 0; output_field = "integer"))
+        if departs[engine]
+            @test is_1028(refusal(points(expr)))
+        else
+            df = points(expr)()
+            @test any(p -> !isinteger(p), df.points)
+            # PostgreSQL's `float8` → `integer` rounds half to even.
+            @test isempty([r.resultid for r in eachrow(df) if r.x != round(Int, max(r.points, 0), RoundNearest)])
+        end
+    end
+    # A boolean cast to text.
+    bool_text = () -> (q = M.New_join_position.objects; q.values("id", "boolean_field", "x" => Cast("boolean_field", "text")); q |> DataFrame)
+    if departs[engine]
+        @test is_1028(refusal(bool_text))
+    else
+        df = bool_text()
+        @test nrow(df) > 0
+        @test isempty([r.id for r in eachrow(df) if !isequal(r.x, ismissing(r.boolean_field) ? missing : string(r.boolean_field))])
+    end
+    # A float cast to text builds on every engine: its own text of the same number.
+    df = points(Cast("points", PormG.Models.CharField()))()
+    @test isempty([r.resultid for r in eachrow(df) if parse(Float64, r.x) != r.points])
+    # A timestamp, an interval and a JSON document in `Concat`: refused on every engine.
+    is_concat(e) = e isa PormG.QueryBuildError && occursin("Concat", sprint(showerror, e)) && occursin("#1028", sprint(showerror, e))
+    @test is_concat(refusal(race(Concat(Value("|"), "start_at"))))
+    @test is_concat(refusal(() -> (q = M.Lap_times.objects; q.filter("raceid" => 841); q.values("x" => Concat(Value("|"), "time")); q |> DataFrame)))
+    @test is_concat(refusal(() -> (q = M.Field_validation_scratch.objects; q.values("x" => Concat(Value("|"), "payload")); q |> DataFrame)))
+    # A CTE column built from `Sum("points")`, which the CTE types as an integer, is a float to Concat.
     q = M.Driver.objects
     body = M.Result.objects
     body.values("driverid", "total" => Sum("points"))
@@ -1980,7 +2009,7 @@ end
     err = refusal(() -> q |> DataFrame)
     @test err isa PormG.QueryBuildError && occursin("the CTE column `CTE(\"c\", \"total\")`", sprint(showerror, err))
 
-    # The integer escape: every rounding function reads what Julia computes, over rows with a fraction.
+    # The integer escape: every rounding function reads what Julia computes, on every engine.
     q = M.Result.objects
     q.filter("raceid__@lte" => 50)
     q.values("resultid", "points",
@@ -1993,26 +2022,36 @@ end
              (r.r, r.f, r.c) != (round(Int, r.points, RoundNearestTiesAway), floor(Int, r.points), ceil(Int, r.points))]
     @test isempty(wrong)
     # The timestamp escape: race 1's start, named in a format both engines write.
-    df = proj(M.Race, Concat(Value("|"), ToChar("start_at", "YYYY-MM-DD HH:MI:SS")))()
+    df = race(Concat(Value("|"), ToChar("start_at", "YYYY-MM-DD HH:MI:SS")))()
     @test df[1, :x] == "|2009-03-29 06:00:00"
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Cast to a scaled numeric, on both engines (#1040)
+# Cast to a scaled numeric: refused on SQLite, which keeps the digits the scale rounds away (#1040)
 # Measured on PostgreSQL 16.15 and SQLite 3.45.1: `Cast(points, "numeric(10,0)")` is 2 for 1.5 on one
-# and 1.5 on the other. The refusal fires against the live schema on both engines; the escapes — an
-# unscaled `numeric`, and a whole number before a scaled cast — read the value Julia computes.
+# and 1.5 on the other. The cast means the value rounded to the scale, so SQLite refuses it and
+# PostgreSQL builds it: its values are checked against Julia's rounding, half away from zero. The
+# escapes (an unscaled `numeric`, a whole number before a scaled cast) build on every engine.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1040: a cast to numeric(p, s) PostgreSQL would round is refused on both engines" begin
+@testset "#1040: a cast to numeric(p, s) is refused on SQLite and rounds on PostgreSQL" begin
+    engine = PORMG_DB_FOLDER == "db_sl" ? :sqlite : :postgres
+    departs = (sqlite = true, postgres = false)
     refusal(f) = try f(); nothing catch e; e end
     is_1040(e) = e isa PormG.QueryBuildError && occursin("#1040", sprint(showerror, e))
-    proj(expr) = () -> (q = M.Result.objects; q.filter("raceid" => 2); q.values("x" => expr); q |> DataFrame)
-    @test is_1040(refusal(proj(Cast("points", "numeric(10,0)"))))
-    @test is_1040(refusal(proj(Cast("points", "numeric(10,2)"))))
+    proj(expr) = () -> (q = M.Result.objects; q.filter("raceid" => 2); q.values("resultid", "points", "x" => expr); q |> DataFrame)
+    for (expr, scale) in ((Cast("points", "numeric(10,0)"), 0), (Coalesce("points", 0; output_field = "numeric(10,1)"), 1))
+        if departs[engine]
+            @test is_1040(refusal(proj(expr)))
+        else
+            df = proj(expr)()
+            @test any(p -> !isinteger(p), df.points)
+            @test isempty([r.resultid for r in eachrow(df) if Float64(r.x) != round(r.points, RoundNearestTiesAway; digits = scale)])
+        end
+    end
+    text_cast = () -> (q = M.Driver.objects; q.filter("driverid" => 1); q.values("x" => Cast("driverref", "numeric(10,2)")); q |> DataFrame)
+    departs[engine] && @test is_1040(refusal(text_cast))
     # Rounding to the scale first is the escape (#1061): `Round("points", 2)` has at most 2 places.
     @test refusal(proj(Cast(Round("points", 2), "numeric(10,2)"))) === nothing
-    @test is_1040(refusal(proj(Coalesce("points", 0; output_field = "numeric(10,1)"))))
-    @test is_1040(refusal(() -> (q = M.Driver.objects; q.filter("driverid" => 1); q.values("x" => Cast("driverref", "numeric(10,2)")); q |> DataFrame)))
 
     # The escapes, over race 2 (the 2009 Malaysian GP, half points): the fractional rows are exercised.
     q = M.Result.objects
@@ -2027,6 +2066,83 @@ end
              (Float64(r.plain), Float64(r.whole), Float64(r.floor)) !=
              (r.points, round(r.points, RoundNearestTiesAway), floor(r.points))]
     @test isempty(wrong)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# `Sum` over a `bigint` is an integer on every engine (#1147)
+# PostgreSQL widens `sum(bigint)` to `numeric`, which read as a `Decimal` and kept the half once divided
+# (`Sum("resultid") / 2` over results 1 and 2 was 1.5 there and 1 on SQLite). PormG renders
+# `SUM(x)::bigint` there, so a sum of an IDField, a conditional count and integer arithmetic read an
+# `Int64` and divide as integers, checked against Julia's own sums over the same rows.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1147: Sum over a bigint reads an Int64 and divides as an integer on every engine" begin
+    # Results 1 and 2: their ids sum to 3, an odd total, so a kept half would show.
+    q = M.Result.objects
+    q.filter("resultid__@in" => [1, 2])
+    q.values("ids" => Sum("resultid"), "half" => Sum("resultid") / 2,
+             "half_int" => Cast(Sum("resultid") / 2, PormG.Models.IntegerField()))
+    df = q |> DataFrame
+    @test nrow(df) == 1
+    @test df[1, :ids] isa Int64 && df[1, :ids] == 3
+    @test df[1, :half] isa Integer && df[1, :half] == 1
+    @test df[1, :half_int] == 1
+
+    q = M.Result.objects
+    q.filter("raceid" => 18)
+    q.values("resultid", "grid", "positionorder")
+    rows = q |> DataFrame
+    @test nrow(rows) > 3
+    q = M.Result.objects
+    q.filter("raceid" => 18)
+    q.values("raceid",
+             "podiums" => Sum(Case(When("positionorder__@lte" => 3, then = 1), default = 0)),
+             "shifted" => Sum(F("grid") + 1))
+    df = q |> DataFrame
+    @test nrow(df) == 1
+    @test df[1, :podiums] isa Int64 && df[1, :podiums] == count(<=(3), rows.positionorder)
+    @test df[1, :shifted] isa Int64 && df[1, :shifted] == sum(rows.grid .+ 1)
+
+    # A `Lag` over an integer with a fractional `default` is a float (`lag(int4, int, float8)`), so its
+    # quotient keeps the fraction: PostgreSQL builds it, checked against Julia's float division, and
+    # SQLite, which divides its integer rows as integers, refuses it.
+    lagged = () -> (q = M.Result.objects; q.filter("raceid" => 18);
+                    q.values("resultid", "grid", "x" => Lag("grid"; default = 1.5, over = WindowOver(order_by = "resultid")) / 2);
+                    q.order_by("resultid"); q |> DataFrame)
+    if PORMG_DB_FOLDER == "db_sl"
+        err = try
+            q = M.Result.objects; q.filter("raceid" => 18)
+            q.values("x" => Cast(Lag("grid"; default = 1.5, over = WindowOver(order_by = "resultid")) / 2, PormG.Models.IntegerField()))
+            q |> DataFrame
+            nothing
+        catch e
+            e
+        end
+        @test err isa PormG.QueryBuildError
+        @test occursin("so PormG refuses it on SQLite (#1147)", sprint(showerror, err))
+    else
+        df = lagged()
+        expected = [i == 1 ? 1.5 / 2 : df.grid[i - 1] / 2 for i in 1:nrow(df)]
+        @test any(i -> isodd(df.grid[i]), 1:nrow(df) - 1)   # a half to keep is exercised
+        @test Float64.(df.x) == expected
+    end
+
+    # A decimal quotient (review of #1147 step 2): SQLite stores a whole `DecimalField` value as an
+    # INTEGER and divides it as one (`9 / 2` is `4`), so a cast to text of it is refused there; on
+    # PostgreSQL it keeps the fraction, checked against Julia. Dividing by a float builds on both.
+    half_text(divisor) = () -> (q = M.Constructor_results.objects; q.filter("points__@gt" => 0);
+                                q.values("constructorresultsid", "points", "t" => Cast(F("points") / divisor, "text"));
+                                q.order_by("constructorresultsid"); q |> DataFrame)
+    if PORMG_DB_FOLDER == "db_sl"
+        err = try half_text(2)(); nothing catch e; e end
+        @test err isa PormG.QueryBuildError && occursin("so PormG refuses it on SQLite (#1087)", sprint(showerror, err))
+    else
+        df = half_text(2)()
+        @test any(p -> isodd(Int(p)), df.points)   # a half to keep is exercised
+        @test isempty([r.constructorresultsid for r in eachrow(df) if parse(Float64, r.t) != Float64(r.points) / 2])
+    end
+    df = half_text(2.0)()
+    @test nrow(df) > 0
+    @test isempty([r.constructorresultsid for r in eachrow(df) if parse(Float64, r.t) != Float64(r.points) / 2])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2049,7 +2165,13 @@ end
     catch e
         e
     end
-    @test err isa PormG.QueryBuildError && occursin("a Float64 literal with 3 decimal places", sprint(showerror, err))
+    # One with more places means the value rounded to the scale (#1147): SQLite, which keeps every
+    # digit, refuses it, and PostgreSQL builds it.
+    if PORMG_DB_FOLDER == "db_sl"
+        @test err isa PormG.QueryBuildError && occursin("a Float64 literal with 3 decimal places", sprint(showerror, err))
+    else
+        @test err === nothing
+    end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2264,8 +2386,15 @@ end
     total = only(M.Race.objects.with("g" => avg_body(), join_field = "raceid" => "raceid", join_type = "INNER").
         filter("raceid__@lte" => 50).values("x" => Sum(Floor(a))).list(:dict))[:x]
     @test Float64(total) == sum(r -> floor(Float64(r[:raw])), rows)
-    # PostgreSQL rounds a cast `3.5` to `4` and SQLite truncates it to `3`: refused on both.
-    @test_throws PormG.QueryBuildError over_avg("x" => Cast(Floor(a) / 2, Models.IntegerField()))
+    # A fraction cast to an integer means the nearest one (#1147): PostgreSQL rounds `3.5` to `4`, and
+    # SQLite, whose cast truncates it to `3`, refuses it.
+    if PORMG_DB_FOLDER == "db_sl"
+        @test_throws PormG.QueryBuildError over_avg("x" => Cast(Floor(a) / 2, Models.IntegerField()))
+    else
+        for r in over_avg("x" => Cast(Floor(a) / 2, Models.IntegerField()))
+            @test r[:x] == round(Int, floor(Float64(r[:raw])) / 2, RoundNearestTiesAway)
+        end
+    end
 
     # An integer CTE column: a ranking window, or a `Case` of integers. Its floor is the column, so
     # divided it is integer division on both engines.

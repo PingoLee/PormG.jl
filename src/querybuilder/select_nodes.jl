@@ -629,23 +629,33 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # the same point as `@len` above, for the same reason, but it fails OPEN — see
   # `_check_temporal_operand`.
   v isa FObject && _check_temporal_operand(v, instruc)
-  # #1027: a `Concat` operand with no single text — a boolean, a float or a decimal column, or an
-  # expression of one — read once the operands render, as the checks around it are. A literal was
-  # refused when the `Concat` was built. This is the one site every `Concat` renders through, the
+  # #1027: a `Concat` operand that is not text — a boolean, a float or a decimal column, a timestamp,
+  # or an expression of one — read once the operands render, as the checks around it are. A literal
+  # was refused when the `Concat` was built. This is the one site every `Concat` renders through, the
   # `@yyyy_q` labels included (their operands are text and integers, so they pass).
+  #
+  # #1147 step 2: such an operand is explicit intent — the query does not say which text it means —
+  # and is refused on every engine, naming the cast that says it. An integer quotient one engine
+  # computes with a fraction is a question of meaning instead: refused only on that engine.
   if v.function_name == "CONCAT" && v.column isa AbstractVector
     for (i, operand) in enumerate(v.column)
       textless = _concat_textless_operand(operand, instruc)
       textless === nothing && (textless = _rendered_kind_textless(get(operand_kinds, i, nothing)))
       textless === nothing && continue
+      if _meaning_kind(:concat, textless[1])
+        row = _departure(instruc.connection, :concat, textless[1])
+        row === nothing || throw(_meaning_refusal("Concat", textless[2], row, instruc.connection; flag = _concat_flag(operand)))
+        continue
+      end
       throw(_concat_textless_refusal(textless...; flag = _concat_flag(operand)))
     end
   end
   # #122: `LPad`/`RPad` over a typed operand that is not text, read at the same point.
   v.function_name in ("LPAD", "RPAD") && _check_pad_operands(v, instruc, operand_kinds)
-  # #1028: the same divergence through a declared cast — `Cast(x, CharField())`, `Cast(x,
-  # IntegerField())`, and the `output_field` cast `Coalesce`/`Greatest`/`Least` apply. Read at the same
-  # point, so a `Concat` over such a cast meets this refusal first, while its operand renders. An
+  # #1028: a declared cast — `Cast(x, CharField())`, `Cast(x, IntegerField())`, `Cast(x, "numeric(p,
+  # s)")`, and the `output_field` cast `Coalesce`/`Greatest`/`Least` apply — over an operand on which
+  # this engine departs from what the cast means (#1147 step 2). Read at the same point, so a `Concat`
+  # over such a cast meets this refusal first, while its operand renders. An
   # `operand_kinds` entry is set only on the arm above: a `Coalesce` of intervals with no
   # `output_field` renders through the millisecond arm instead, and has no cast to check.
   #
@@ -655,8 +665,10 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # answering the same comes first; their typed operands (a column, a function) are still read by name.
   if v.function_name in _DECLARED_CAST_FUNCTIONS && v isa FObject
     rendered = v.function_name in ("GREATEST", "LEAST") ? Any[] : operand_kinds
-    divergent = _cast_divergent_operand(v, instruc; rendered = rendered)
-    divergent === nothing || throw(_cast_divergent_refusal(_declared_cast_label(v), divergent...))
+    # #1147 step 2: only an operand on which this engine departs from the cast's meaning comes back.
+    d = _cast_divergent_operand(v, instruc; rendered = rendered)
+    d === nothing || throw(_meaning_refusal(_declared_cast_label(v), d.what, d.row, instruc.connection;
+                                            flag = d.flag, declared = d.declared))
   end
   # #1061: `Round(x, d)` renders each engine's own `ROUND`, as Django does — `ROUND(x::numeric, d)` on
   # PostgreSQL, exact, and `ROUND(x, d)` over the stored double on SQLite, which can round a tie the
@@ -688,6 +700,13 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   if v isa FObject && v.function_name in _NUMERIC_WHOLE_FUNCTIONS && !(v.column isa AbstractVector)
     integer_kind = _integer_operand_kind(v, instruc)
     integer_kind === nothing || (resolved_kwargs["integer_kind"] = integer_kind)
+  end
+  # #1147 step 2: `Sum` over a `bigint` is an integer — Django's `Sum` of an integer field is one, and
+  # SQLite sums one — but PostgreSQL widens `sum(bigint)` to `numeric`, which keeps the half once
+  # divided. So PostgreSQL renders it back to the `bigint` (`Dialect.SUM`), read from the same walk
+  # its `_computed_kind` answers, so the SQL and the type agree.
+  if v isa FObject && v.function_name == "SUM" && _sums_bigint(v, instruc)
+    resolved_kwargs["bigint"] = true
   end
 
   # #74 fan-out guard: record COUNT/SUM/AVG and the source alias of their column so build() can

@@ -14,8 +14,10 @@ an integer column (`IntegerField`, `BigIntegerField`, an `IDField`, a `ForeignKe
 literal, `Count`, `Length`, a ranking window (`Rank`, `DenseRank`, `RowNumber`), a `Case` whose
 values are all integers, a `Cast` to an integer, an integer date part (`"dob__@year"`,
 `Extract(…, "year")`, `@quarter`, …), a CTE column holding an integer (an integer column, `Count`,
-`Sum` of a non-`bigint` integer column, `Max`/`Min` of any integer column, a ranking window, a
-`Lag`/`Lead` of an integer with an integer or no default, a `Case` of integers, a cast to an integer), or one of these functions over one — PostgreSQL now renders:
+`Sum` of any integer, `Max`/`Min` of any integer column, a ranking window, a
+`Lag`/`Lead` of an integer with an integer or no default, a `Case` of integers, a cast to an integer),
+`+`, `-`, `*` or `/` over two integers (`F("grid") + 1`, since #1147 step 2), or one of these
+functions over one — PostgreSQL now renders:
 
 | call | before | after |
 |---|---|---|
@@ -39,7 +41,7 @@ One edge raises where it did not: `Abs` of the most negative value of an integer
 64-bit (and raises for the most negative 64-bit value, as PostgreSQL does for a `bigint`).
 
 Unchanged: these functions over a float, a decimal, or an expression PormG does not type as an
-integer (`Floor(F("grid") + 1)`, `Abs(Sum("resultid"))`, a CTE column computed by `Avg`) keep the
+integer (`Floor(Mod("grid", 3))`, a CTE column computed by `Avg`) keep the
 `::numeric` cast and read a `Decimal` on PostgreSQL; and every query on SQLite.
 
 ### Who this affects
@@ -47,8 +49,8 @@ integer (`Floor(F("grid") + 1)`, `Abs(Sum("resultid"))`, a CTE column computed b
 Code that runs on PostgreSQL and either reads `Floor`, `Ceil` or `Abs` of an integer as a `Decimal`
 (`row.f isa Decimal`, `Decimal`-only arithmetic, `round(row.f; digits = 2)` on a column that is now
 an integer), or divides one and relies on the fraction PostgreSQL kept. The second was refused by
-the unreleased #1111/#1135 checks inside a `Concat` or a cast; a bare division built and returned
-`3.5`.
+unreleased checks inside a `Concat` or a cast, removed by #1147 step 2; a bare division built and
+returned `3.5`.
 
 ### How to find the calls to migrate
 

@@ -93,9 +93,12 @@ _ifc_render(expr; conn) =
   # Not an integer to the walk: the cast stays.
   @test occursin("ABS((\"Tb\".\"points\")::numeric) as \"x\"", pg(_IFC_FN.Abs("points")))
   @test occursin("FLOOR((\"Tb\".\"price\")::numeric) as \"x\"", pg(_IFC_FN.Floor("price")))
-  @test occursin("CEIL(((\"Tb\".\"grid\" + \$1::bigint))::numeric) as \"x\"", pg(_IFC_FN.Ceil(_IFC_F("grid") + 1)))
-  # `Sum` of a `bigint` is a `numeric` on PostgreSQL, so `Floor` over it keeps the cast.
-  @test occursin("FLOOR((SUM(\"Tb\".\"laps\"))::numeric) as \"x\"", pg(_IFC_FN.Floor(_IFC_FN.Sum("laps"))))
+  # #1147 step 2: `+` over two integers is an integer to the walk (`int4 + int8` is `int8`, the literal
+  # binds `$1::bigint`), so `Ceil` over it casts back to `bigint` as over a `bigint` column.
+  @test occursin("CEIL(((\"Tb\".\"grid\" + \$1::bigint))::numeric)::bigint as \"x\"", pg(_IFC_FN.Ceil(_IFC_F("grid") + 1)))
+  # #1147 step 2: PostgreSQL widens `sum(bigint)` to `numeric`, and PormG renders it back to the
+  # `bigint` (`SUM(x)::bigint`), so `Floor` over it is over an integer and casts back too.
+  @test occursin("FLOOR((SUM(\"Tb\".\"laps\")::bigint)::numeric)::bigint as \"x\"", pg(_IFC_FN.Floor(_IFC_FN.Sum("laps"))))
   @test occursin("FLOOR((SUM(\"Tb\".\"grid\"))::numeric)::bigint as \"x\"", pg(_IFC_FN.Floor(_IFC_FN.Sum("grid"))))
 end
 
@@ -200,8 +203,9 @@ _ifc_cte_col(name) = PormG.CTE("c", name)
   @test occursin(Regex("FLOOR\\(\\($(col)\"g\"\\)::numeric\\)::integer as \"x\""), pg(_IFC_FN.Floor(_ifc_cte_col("g"))))
   @test occursin(Regex("FLOOR\\($(col)\"rk\"\\) as \"x\""), sl(_IFC_FN.Floor(_ifc_cte_col("rk"))))
   # An `Avg` column is no integer: the cast stays and nothing is cast back, so the floor of `7.5` is
-  # `7` on both engines; divided it keeps the half on both (`3.5`), and a cast of that quotient to an
-  # integer stays refused on both (PostgreSQL rounds `3.5` to `4`, SQLite truncates it to `3`).
+  # `7` on both engines; divided it keeps the half on both (`3.5`). A cast of that quotient to an
+  # integer means the nearest integer (`4`): PostgreSQL rounds to it and builds, SQLite truncates
+  # (`3`) and departs, so it is refused on SQLite only (#1028, #1147 step 2).
   avg(expr; conn) = _ifc_cte_render(expr; conn = conn, body = _ifc_avg_body(), on = "position" => "position")
   a = _ifc_cte_col("a")
   @test occursin(Regex("FLOOR\\(\\($(col)\"a\"\\)::numeric\\) as \"x\""), avg(_IFC_FN.Floor(a); conn = _IFC_PG))
@@ -209,6 +213,11 @@ _ifc_cte_col(name) = PormG.CTE("c", name)
   for conn in (_IFC_PG, _IFC_SL)
     @test !isempty(avg(_IFC_FN.Cast(_IFC_FN.Floor(a), Models.IntegerField()); conn = conn))
     @test !isempty(avg(_IFC_FN.Sum(_IFC_FN.Floor(a)); conn = conn))
-    @test_throws PormG.QueryBuildError avg(_IFC_FN.Cast(_IFC_FN.Floor(a) / 2, Models.IntegerField()); conn = conn)
   end
+  @test occursin(Regex("\\(\\(FLOOR\\(\\($(col)\"a\"\\)::numeric\\) / \\\$\\d+::bigint\\)\\)::integer as \"x\""),
+                 avg(_IFC_FN.Cast(_IFC_FN.Floor(a) / 2, Models.IntegerField()); conn = _IFC_PG))
+  err = try avg(_IFC_FN.Cast(_IFC_FN.Floor(a) / 2, Models.IntegerField()); conn = _IFC_SL); nothing catch e; e end
+  @test err isa PormG.QueryBuildError
+  msg = replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
+  @test occursin("(#1028)", msg) && occursin("refuses it on SQLite", msg) && !occursin("PostgreSQL", msg)
 end

@@ -36,7 +36,7 @@ import PormG: PormGError, FieldAccessError, UnknownFieldError, AmbiguousFieldErr
   IntegrityError
 # Locates a formatter's refusal — op, model, field, row — without re-reading its text (#971).
 import PormG: with_location
-import PormG: _supports, _capability_error  # #1129: the backend capability table (Kernel)
+import PormG: _supports, _capability_error, _backend_name  # #1129: the backend capability table (Kernel)
 import PormG: PormGsuffix, PormGtransform, JSON_CONTAINMENT_OPERATORS, ARRAY_CONTAINMENT_OPERATORS,
               run_in_transaction,
               NETWORK_CONTAINMENT_OPERATORS, NETWORK_LOOKUP_OPERATORS,  # #904
@@ -94,6 +94,8 @@ include("querybuilder/value_validation.jl")
 include("querybuilder/parameters.jl")
 
 include("querybuilder/functions.jl")
+# #1147: where an engine departs from what a cast or a `Concat` operand means, as data
+include("querybuilder/engine_departures.jl")
 
 include("querybuilder/object_manager.jl")
 

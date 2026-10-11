@@ -1,9 +1,9 @@
 ## `Concat` and `Cast` classify a `Subquery` operand by the expression it projects (#1124)
 
 - **Version**: Unreleased
-- **PormG ref**: #1124 ; `src/querybuilder/projection_types.jl` (`_concat_textless_operand`, `_subquery_projection_textless`), `src/querybuilder/filter_nodes.jl` (`_render_scalar_subquery`), `src/querybuilder/types.jl` (`subquery_textless`)
+- **PormG ref**: #1124, amended by #1147 ; `src/querybuilder/projection_types.jl` (`_concat_textless_operand`, `_subquery_projection_textless`), `src/querybuilder/filter_nodes.jl` (`_render_scalar_subquery`), `src/querybuilder/types.jl` (`subquery_textless`)
 - **Recorded**: 2026-10-10
-- **Severity**: breaking. A `Concat` with a `Subquery` operand whose projection is a boolean, a float, a decimal or a `numeric` function, and a `Cast` (or `output_field` cast) to text, to an integer or to `numeric(p, s)` over such a subquery, raise `QueryBuildError` where they used to render.
+- **Severity**: breaking. A `Concat` with a `Subquery` operand whose projection is a boolean, a float, a decimal or a `numeric` function raises `QueryBuildError` on every engine where it used to render; a `Cast` (or `output_field` cast) over such a subquery raises where the projection's own cast would (on SQLite, for a boolean to text, a fraction to an integer, and `numeric(p, s)`).
 
 ### What changed
 
@@ -19,18 +19,21 @@ M.Driver.objects.values("label" => Concat("surname", Value(": "), Subquery(avg_p
 ```
 
 and the built one read `hamilton: 10` on PostgreSQL and `hamilton: 10.0` on SQLite, the divergence
-#1027 exists to prevent.
+#1027 exists to prevent: `Concat` refuses a number until the query says which text it means.
 
 The subquery's inner build now records the classification of its one projected expression under
 the node, the way #929 records its formatter, and the outer classifier reads it. A `Subquery` is
 refused exactly where its projection would be:
 
-| `Subquery` projecting | `Concat` | `Cast` to text / integer | `Cast` to `numeric(p, s)` |
-|---|---|---|---|
-| a `FloatField`, a `DecimalField` with places, `Max`/`Min`/`Sum`/`Coalesce` of one | refused (#1027) | refused (#1028) | refused (#1040) |
-| `Avg`, `Round`, `Mod`, … (a `numeric` function) | refused (#1027) | refused (#1028) | refused (#1040) |
-| a `BooleanField`, a `Bool`, `Float64` or `Decimal` literal | refused (#1027) | refused to text (#1028) | — |
-| a text or integer column, `Count`, `Cast(Round(x), IntegerField())` | builds | builds | builds |
+| `Subquery` projecting | `Concat` | `Cast` to text | `Cast` to an integer | `Cast` to `numeric(p, s)` |
+|---|---|---|---|---|
+| a `FloatField`, a `DecimalField` with places, `Max`/`Min`/`Sum`/`Coalesce` of one | refused (#1027) | builds | refused on SQLite (#1028) | refused on SQLite (#1040) |
+| `Avg`, `Round`, `Mod`, … (a `numeric` function) | refused (#1027) | builds | refused on SQLite (#1028) | refused on SQLite (#1040) |
+| a `BooleanField` or a `Bool` literal | refused (#1027) | refused on SQLite (#1028) | builds | — |
+| a text or integer column, `Count`, `Cast(Round(x), IntegerField())` | builds | builds | builds | builds |
+
+Which engine refuses follows #1147: the engine that computes something other than what the cast
+means (see the #1028 and #1040 entries). A `Concat` over a number is refused on every engine.
 
 Unchanged: a timestamp or interval projection was already refused through the read kind, and an
 operand PormG still cannot type (an untyped `Case`) still passes.
@@ -53,11 +56,11 @@ Read each hit that is an operand of `Concat`, `Cast`, or a `Coalesce`/`Greatest`
 
 ### Migrate your app
 
-The way out is the same as for the expression alone, applied inside the subquery, where the #1028
-rules decide what reads the same on both engines:
+The way out is the same as for the expression alone, applied inside the subquery, or a cast to text around it,
+as the #1028 rules describe:
 
 ```julia
-# ✗ before — 'hamilton: 10' on PostgreSQL, 'hamilton: 10.0' on SQLite
+# ✗ before — refused: which text of the average is meant?
 avg_pts = M.Result.objects.filter("driverid" => OuterRef("driverid")).values("a" => Avg("points"))
 M.Driver.objects.values("label" => Concat("surname", Value(": "), Subquery(avg_pts)))
 
@@ -65,6 +68,9 @@ M.Driver.objects.values("label" => Concat("surname", Value(": "), Subquery(avg_p
 avg_pts = M.Result.objects.filter("driverid" => OuterRef("driverid")).
     values("a" => Cast(Round(Avg("points")), IntegerField()))
 M.Driver.objects.values("label" => Concat("surname", Value(": "), Subquery(avg_pts)))
+
+# ✓ after — the engine's own text: cast it inside the Concat
+M.Driver.objects.values("label" => Concat("surname", Value(": "), Cast(Subquery(avg_pts), "text")))
 
 # ✓ after — the digits you mean: fetch the number and format it in Julia
 df = M.Driver.objects.values("surname", "avg" => Subquery(avg_pts)) |> DataFrame

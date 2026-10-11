@@ -254,7 +254,7 @@ These run on SQLite too, but they are where PostgreSQL shines for analytical wor
 
 ## PostgreSQL ↔ SQLite divergences
 
-PormG keeps the two backends aligned wherever it can and documents the differences where it can't. The ones a power user hits:
+PormG gives a query one meaning on every backend. Where a backend computes a different value, that backend refuses the query or PormG normalizes it there; where it only writes the same value differently, the difference is documented; and a feature a backend lacks raises `BackendCapabilityError`. The ones a power user hits:
 
 | Area | PostgreSQL | SQLite |
 |------|-----------|--------|
@@ -282,6 +282,9 @@ PormG keeps the two backends aligned wherever it can and documents the differenc
 | **`ToChar` formats** | any `to_char` template | the portable table only; others raise `BackendCapabilityError` |
 | **`Extract` parts** | every PostgreSQL `EXTRACT` field, any case; a non-field raises `InvalidValueError` | `YEAR` `MONTH` `DAY` `HOUR` `MINUTE` `SECOND` `DOW` `DOY` `WEEK` `ISOYEAR` `ISODOW`, any case; other PostgreSQL fields raise `BackendCapabilityError`, a non-field `InvalidValueError` |
 | **`Round(x, n)` at a decimal tie** | `ROUND(x::numeric, n)` rounds the exact decimal form: `Round(2.675, 2)` is `2.68` | `ROUND(x, n)` rounds the stored double: `2.67` — the last digit only, as with Django ([Rounding to decimal places](read/functions_and_dates.md#Rounding-to-decimal-places)) |
+| **`Sum` of a `bigint`** | `sum(bigint)` is `numeric`; PormG renders `SUM(x)::bigint`, an integer ([What a `Sum` returns](read/filters_and_aggregates.md#What-a-Sum-returns)) | an integer |
+| **`Cast` to text** | builds; a boolean reads `true` | builds; a boolean's cast is refused (SQLite writes `1`) — see [A cast an engine computes differently](read/functions_and_dates.md#A-cast-an-engine-computes-differently) |
+| **`Cast` to an integer or `numeric(p, s)`** | builds: rounds to the nearest integer or to the scale | refused where a fraction or extra places would be truncated or kept |
 | **Row locks** (`select_for_update()`) | `SELECT … FOR UPDATE [OF …]` | silent no-op — a SQLite write already locks the whole database |
 | **`without_foreign_keys`** | `SET CONSTRAINTS ALL DEFERRED`; an orphan fails `COMMIT` with `IntegrityError` | `PRAGMA foreign_keys = OFF` plus a `foreign_key_check` before `COMMIT` (`UnsafeMutationError`) |
 | **Engine-pinned `db_default`** | `db_default = (postgres = "now()",)` renders | rendering it raises `BackendCapabilityError` — add `sqlite = "…"`, or `sqlite = nothing` for no default |

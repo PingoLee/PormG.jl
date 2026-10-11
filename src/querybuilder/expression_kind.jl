@@ -47,7 +47,7 @@ function _infer_kind(p::String, instruc::SQLInstruction, policy::_KindPolicy)
   return column_field === nothing ? nothing : _column_kind(column_field, policy)
 end
 _infer_kind(p::FExpression, instruc::SQLInstruction, policy::_KindPolicy) =
-  p.operation === nothing ? _infer_kind(p.field_name, instruc, policy) : _operation_kind(p, policy)
+  p.operation === nothing ? _infer_kind(p.field_name, instruc, policy) : _operation_kind(p, instruc, policy)
 _infer_kind(p::SQLField, instruc::SQLInstruction, policy::_KindPolicy) = _infer_kind(p.field, instruc, policy)
 _infer_kind(p::SQLText, ::SQLInstruction, policy::_KindPolicy) =
   _is_null_literal(p.field) ? nothing : _literal_kind(p.field, policy)
@@ -66,8 +66,23 @@ _infer_kind(p::SubqueryObject, instruc::SQLInstruction, ::_KindPolicy) = _subque
 _infer_kind(::Union{ExistsObject,SQLTypeQ,SQLTypeQor}, ::SQLInstruction, ::_AllKinds) = CBool()
 _infer_kind(::Any, ::SQLInstruction, ::_KindPolicy) = nothing
 
-_operation_kind(::FExpression, ::_ReadKinds) = nothing
-_operation_kind(p::FExpression, ::_AllKinds) = p.operation in _COMPARISON_OPERATIONS ? CBool() : nothing
+_operation_kind(::FExpression, ::SQLInstruction, ::_ReadKinds) = nothing
+# #1147: `+`, `-`, `*` and `/` over two integers is an integer on both engines — PostgreSQL resolves
+# `int4 + int8` to `int8` and divides two integers as integers, as SQLite does — so the widest of the
+# two is the kind (`_unify_kinds`). An integer literal is a `bigint` there (`$n::bigint`). Anything
+# else stays untyped: a float or a decimal side, whose quotient each engine computes its own way, a
+# date or an interval, and the bitwise operators and shifts, which bind their literals otherwise.
+function _operation_kind(p::FExpression, instruc::SQLInstruction, policy::_AllKinds)
+  p.operation in _COMPARISON_OPERATIONS && return CBool()
+  p.operation in ("+", "-", "*", "/") || return nothing
+  left = _arithmetic_side_kind(p.field_name, instruc, policy)
+  left isa Union{CInt16,CInt32,CInt64} || return nothing
+  right = _arithmetic_side_kind(p.operand, instruc, policy)
+  right isa Union{CInt16,CInt32,CInt64} || return nothing
+  return _unify_kinds(left, right, policy)
+end
+_arithmetic_side_kind(x::Integer, ::SQLInstruction, policy::_AllKinds) = x isa Bool ? nothing : _literal_kind(x, policy)
+_arithmetic_side_kind(x, instruc::SQLInstruction, policy::_AllKinds) = _infer_kind(x, instruc, policy)
 
 # ── Leaves: a column's field and a literal ───────────────────────────────────────────────────────────
 _column_kind(f, ::_ReadKinds) = field_canonical_kind(f)
@@ -183,6 +198,18 @@ function _integer_operand_kind(p::SQLTypeFunction, instruc::SQLInstruction)
   k = _infer_kind(_first_operand(p), instruc, _AllKinds())
   return k isa Union{CInt16,CInt32,CInt64} ? k : nothing
 end
+
+"""
+    _sums_bigint(p, instruc) -> Bool
+
+Whether the `Sum` `p` adds up `bigint` values, by the walk (`CInt64`): its operand is a `bigint`
+column, an integer literal, an integer `Case`, `Count`, or integer arithmetic over one. PostgreSQL
+widens that sum to `numeric`, so `Dialect.SUM` renders it `::bigint` there (#1147 step 2), and
+`_computed_kind(::Val{:SUM}, …)` answers `CInt64` from the same walk. A `sum(smallint|integer)` is a
+`bigint` already. Read after the operand renders.
+"""
+_sums_bigint(p::SQLTypeFunction, instruc::SQLInstruction) =
+  _infer_kind(_first_operand(p), instruc, _AllKinds()) isa CInt64
 
 _declared_cast(p::FObject) = get(p.kwargs, p.function_name == "CAST" ? "type" : "output_field", nothing)
 _first_operand(p::SQLTypeFunction) = p.column isa AbstractVector ? first(p.column) : p.column

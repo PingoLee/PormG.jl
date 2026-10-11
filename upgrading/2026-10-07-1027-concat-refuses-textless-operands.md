@@ -1,16 +1,16 @@
 ## `Concat` — a boolean, float or decimal operand is refused (#1027)
 
 - **Version**: Unreleased
-- **PormG ref**: #1027 ; `src/querybuilder/functions.jl` (`Concat`), `src/querybuilder/projection_types.jl` (`_concat_textless_operand`), `src/querybuilder/select_nodes.jl`
+- **PormG ref**: #1027, amended by #1147 ; `src/querybuilder/functions.jl` (`Concat`, `_concat_textless_refusal`), `src/querybuilder/projection_types.jl` (`_concat_textless_operand`), `src/querybuilder/select_nodes.jl`
 - **Recorded**: 2026-10-07
-- **Severity**: breaking. A `Concat` with a boolean, float or decimal operand raises `QueryBuildError` where it used to render.
+- **Severity**: breaking. A `Concat` with a boolean, float or decimal operand raises `QueryBuildError` on every engine where it used to render.
 
 ### What changed
 
-Each engine turns a non-text operand into text its own way. PostgreSQL's `CONCAT` calls the type's
-output function. SQLite's `||` uses its own number formatting, applied to what PormG stores there
-(a boolean as `0`/`1`, a decimal as an integer or a REAL). So the same `Concat` read differently per
-engine:
+`Concat` joins text. A boolean, a float or a decimal has a text only once the query says which, and
+each engine writes its own: PostgreSQL's `CONCAT` calls the type's output function, and SQLite's
+`||` uses its own number formatting over what PormG stores there (a boolean as `0`/`1`, a decimal as
+an integer or a REAL):
 
 | operand | PostgreSQL | SQLite |
 |---|---|---|
@@ -19,18 +19,18 @@ engine:
 | `DecimalField(decimal_places = 2)` `1.50` / `3` | `1.50` / `3.00` | `1.5` / `3` |
 | `Mod(7, 3)`, `Avg(…)`, `Round(…)` | `numeric` (`1`) | a REAL (`1.0`) |
 
-A test suite on SQLite asserted a string production never produced, and a filter on the
-concatenated value matched different rows per engine. `Concat` now refuses such an operand, as
-#860/#876 already refuse a float, a decimal or a `Bool` as a text value:
+The query does not say which of these it means, so `Concat` now refuses such an operand on every
+engine and asks for the explicit spelling, as Django asks for an `output_field` over mixed types
+(#1147). This follows #860/#876, which already refuse a float, a decimal or a `Bool` as a text
+value:
 
 - a literal (`true`, `1.5`, `Value(Decimal(…))`) when the `Concat` is built;
-- a `BooleanField`, `FloatField` or `DecimalField` column (a joined path too; a `DecimalField` with
-  `decimal_places = 0` holds whole numbers and passes unless it is divided, #1087; so do `Sum` of a BIGINT column
-  and `Floor`/`Ceil`/`Abs` over an untyped whole number, #1111, while over an integer they pass divided
-  too, #1147), or an expression of
-  one of those types (a comparison, a `Cast` or `output_field` naming a float or decimal type,
-  arithmetic or an extremum over a float, `Avg`/`Round`/`Mod`/`Sqrt`/`Exp`/`Ln`/`Power`) when the
-  query is built.
+- a `BooleanField`, `FloatField` or `DecimalField` column, a joined path too, when the query is
+  built. A `DecimalField` with `decimal_places = 0` holds whole numbers and passes, as an integer
+  column does (#1087);
+- an expression of one of those types, when the query is built: a comparison, a `Cast` or
+  `output_field` naming a float or decimal type, arithmetic or an extremum over a float, or
+  `Avg`/`Round`/`Mod`/`Sqrt`/`Exp`/`Ln`/`Power`.
 
 Text, integer and date operands are unchanged, and so are the `@yyyy_q` / `@yyyy_quad` labels.
 
@@ -49,15 +49,19 @@ the query is the definitive check: the refusal message names the operand and cit
 
 ### Migrate your app
 
-`Cast(…, CharField())` does not fix this. It writes `25` on PostgreSQL and `25.0` on SQLite. Write
-the text you mean:
+Say which text you mean. A cast to text writes the engine's own text for the number. A `Case` names
+a boolean's two texts. Julia formatting lets you choose the digits.
 
 ```julia
-# ✗ before — 'hamilton-10' on PostgreSQL, 'hamilton-10.0' on SQLite
+# ✗ before — refused: which text of `points` is meant?
 q = M.Result.objects
 q.values("label" => Concat("driverid__driverref", Value("-"), "points"))
 
-# ✓ after — a number: fetch it and format it in Julia
+# ✓ after — the engine's own text: 'hamilton-10' on PostgreSQL, 'hamilton-10.0' on SQLite
+q = M.Result.objects
+q.values("label" => Concat("driverid__driverref", Value("-"), Cast("points", "text")))
+
+# ✓ after — the digits you choose: fetch it and format it in Julia
 q = M.Result.objects
 q.values("driverid__driverref", "points")
 df = q |> DataFrame

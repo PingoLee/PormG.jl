@@ -14,9 +14,10 @@
 #   because the table also feeds the comparison binder, #882); a literal only a temporal one
 #   (`literal_canonical_kind`, #721); a computed number none (`Sum`/`Avg` went through a double,
 #   #648); and a boolean is the one the build's formatter already names (`_is_boolean_valued`, #965).
-# - `_AllKinds` — `_expression_kind`: every type PormG can name, on this engine. No reader consumes it
-#   yet: the expression-kind matrix records it beside the others (its `kind` channel), and #1034's
-#   phase 3 moves the readers onto it one at a time, each move a reviewed diff of that fixture.
+# - `_AllKinds` — `_expression_kind`: every type PormG can name, on this engine. The expression-kind
+#   matrix records it beside the others (its `kind` channel), and #1034's phase 3 moves the readers
+#   onto it one at a time, each move a reviewed diff of that fixture. Its first reader is
+#   `_integer_operand_kind` (#1147): the `Abs`/`Floor`/`Ceil` render and the #1111 division check.
 #
 # Both are asked AFTER the render, as every reader here is: resolving a joined path is what fills the
 # field memo `_alias_column_field` reads, and a `Subquery` files its kind when it renders.
@@ -135,7 +136,10 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
     declared isa AbstractString && !isempty(declared) && return _declared_kind(declared, instruc.connection)
   end
   rule isa CanonicalType && return rule
-  rule === :operand && return _infer_kind(p.column, instruc, policy)
+  # #1147: a date part both engines compute as an integer (`_integer_transform`) is one, whatever its
+  # operand. Its rule stays `:unknown` until phase 3 states it, so the read kind is unchanged.
+  _integer_transform(p) && return _integer_transform_kind(instruc.connection)
+  rule === :operand && return _with_window_default(p, _infer_kind(p.column, instruc, policy), instruc, policy)
   rule === :first_operand && return _infer_kind(first(p.column), instruc, policy)
   rule === :one_of && return _agreeing_kind(p, instruc, policy)
   rule in (:promoting, :numeric) &&
@@ -144,6 +148,41 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
   return nothing
 end
 _infer_function_kind(::Any, ::SQLInstruction, ::_KindPolicy) = nothing
+
+# A `Lag`/`Lead` `default` is one of the window's values too: PostgreSQL resolves `lag(int4, int,
+# float8)` to a `float8` and `lag(int4, int, int8)` to an `int8` (review of #1147), so the operand's
+# kind and the default's are unified as a `COALESCE`'s are. A string is a bound text literal there,
+# not a path (`_bigint_operand_function`); any other default PormG cannot type leaves the value untyped.
+function _with_window_default(p, kind, instruc::SQLInstruction, policy::_AllKinds)
+  (p isa WindowFunction && kind !== nothing) || return kind
+  default = get(p.kwargs, "default", nothing)
+  default === nothing && return kind
+  literal = default isa SQLText ? default.field : default
+  # A NULL default is never the value (`lag(int4, int, NULL)` is an `int4`): skipped, as `_agreeing_kind`
+  # skips a NULL operand.
+  _is_null_literal(literal) && return kind
+  k = literal isa Union{SQLObject,SQLType} ? _infer_kind(literal, instruc, policy) : _literal_kind(literal, policy)
+  return k === nothing ? nothing : _unify_kinds(kind, k, policy)
+end
+
+# The integer an integer date part is on the engine: PostgreSQL renders `EXTRACT(…)::integer` (and
+# `QUARTER`/`QUADRIMESTER`/`WEEK_DAY` as an `integer` too), SQLite computes a 64-bit integer.
+_integer_transform_kind(::PormGPostgres) = CInt32()
+_integer_transform_kind(::PormGSQLite) = CInt64()
+_integer_transform_kind(::Any) = nothing
+
+"""
+    _integer_operand_kind(p, instruc) -> Union{CInt16, CInt32, CInt64, Nothing}
+
+The integer kind of `p`'s first operand on `instruc`'s engine, or `nothing` when it is not one PormG
+can name. `Abs`/`Floor`/`Ceil` keep it (#1147): `Dialect` renders them over that integer, not over
+`(x)::numeric`. Their `_computed_kind` methods answer the same kind from the same walk of the same
+operand, so the SQL and the walk agree by construction. Read after the operand renders.
+"""
+function _integer_operand_kind(p::SQLTypeFunction, instruc::SQLInstruction)
+  k = _infer_kind(_first_operand(p), instruc, _AllKinds())
+  return k isa Union{CInt16,CInt32,CInt64} ? k : nothing
+end
 
 _declared_cast(p::FObject) = get(p.kwargs, p.function_name == "CAST" ? "type" : "output_field", nothing)
 _first_operand(p::SQLTypeFunction) = p.column isa AbstractVector ? first(p.column) : p.column
@@ -218,8 +257,9 @@ _numeric_rank(::CanonicalType) = nothing
 # A computed number's kind on the engine, from its rule and its (first) operand's kind `k` — the
 # engine-dependent results #1034 asks to state once, as data. What `Dialect` renders decides:
 #
-# - PostgreSQL renders every `:numeric` function and `Abs`/`Floor`/`Ceil` over `(x)::numeric`, so the
-#   value is a `numeric` whatever the operand;
+# - PostgreSQL renders every `:numeric` function over `(x)::numeric`, so the value is a `numeric`
+#   whatever the operand; so are `Abs`/`Floor`/`Ceil`, except over an integer, which they keep
+#   (#1147: their methods beside their constructors override this, `_integer_operand_kind`);
 # - SQLite renders them bare: a `:promoting` function keeps its operand's type (an integer stays one,
 #   #1087) and a `:numeric` one answers a REAL (`Mod(7, 3)` reads `1.0`, #1027).
 #
@@ -271,7 +311,9 @@ end
 #
 # The CTE handle is NOT its inferred field: `_set_field_from_sql_function` hands an `Avg("amount")`
 # column the operand's own `DecimalField`, which would run a computed double through the decimal
-# parser (#648). The body's record is a READ kind under either policy until phase 3 records more.
+# parser (#648). Under `_AllKinds` the column is its expression's own type, which the body recorded
+# while it could still resolve its paths (`cte["kinds"]`, #1147): a `Rank` is an integer there though
+# it reads back with no kind to undo. The read kind stays the body's read record.
 function _cte_column_kind(ref::CTEReference, instruc::SQLInstruction, policy::_KindPolicy = _ReadKinds())::Union{CanonicalType,Nothing}
   if occursin("__", ref.path)
     column_field = _alias_column_field(ref, instruc)
@@ -279,7 +321,14 @@ function _cte_column_kind(ref::CTEReference, instruc::SQLInstruction, policy::_K
   end
   cte = get(instruc.object.ctes, ref.name, nothing)
   cte === nothing && return nothing
+  kind = _cte_expression_kind(cte, ref.path, policy)
+  kind === nothing || return kind
   body = get(cte, "query", nothing)
   body isa SQLObjectHandler || return nothing
   return get(body.object.projection_kinds, Symbol(ref.path), nothing)
+end
+_cte_expression_kind(::AbstractDict, ::String, ::_ReadKinds) = nothing
+function _cte_expression_kind(cte::AbstractDict, path::String, ::_AllKinds)
+  kinds = get(cte, "kinds", nothing)
+  return kinds isa AbstractDict ? get(kinds, path, nothing) : nothing
 end

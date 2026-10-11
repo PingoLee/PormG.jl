@@ -1012,6 +1012,11 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   # as an integer too, so an outer `Sum` over it read as `sum(integer)` where it is `sum(bigint)`.
   whole_numeric = Dict{String,Tuple{Symbol,String}}()
   bigint = Dict{String,Tuple{Symbol,String}}()
+  # #1147: and every type the column's expression has (`_expression_kind`), which the body's read
+  # kind does not carry: a `Rank`, an integer `Case` or a plain integer column read back with no kind
+  # to undo, so `Floor(CTE("c", "rk"))` kept the `::numeric` cast on PostgreSQL and divided by 2 kept
+  # the half SQLite drops.
+  kinds = Dict{String,CanonicalType}()
   @pormg_debug false
   for value_part in values
     # fields[value_part.field] = _set_field_from_sql_function(value_part.field, value_part._as, instruct)
@@ -1047,6 +1052,8 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
       # A plain column path is typed right by its field already, and keeps that field's own wording —
       # except a JSON key lookup, typed by its JSONField although it holds the value at the key.
       source = value_part isa SQLText ? value_part : value_part.field
+      kind = _expression_kind(source, instruct)
+      kind === nothing || (kinds[key_new] = kind)
       path = source isa AbstractString ? String(source) :
              source isa SQLField && source.field isa AbstractString ? String(source.field) :
              source isa FExpression && source.operation === nothing && source.field_name isa String ? source.field_name :
@@ -1078,5 +1085,6 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   cte["textless"] = textless
   cte["whole_numeric"] = whole_numeric
   cte["bigint"] = bigint
+  cte["kinds"] = kinds
 
 end

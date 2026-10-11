@@ -48,6 +48,8 @@ using .Kernel
 # Underscore-private members are not exported by Kernel; import those reached across
 # submodules or pinned by tests (e.g. `PormG._emsg`, `PormG._EXTRA_IGNORE_TABLES`, `PormG._suggest_name`).
 import .Kernel: _emsg, _EXTRA_IGNORE_TABLES, _levenshtein, _suggest_name, with_location
+# #1129: the backend capability table, refused through by every submodule that meets a feature.
+import .Kernel: _supports, _require_feature, _capability_error, _backend_name, _BACKEND_FEATURES, _BACKENDS
 # Models-folder identity (#550) — shared by `Configuration._resolve_loaded_key` and
 # `Models._resolve_connect_key` so the two cannot disagree about whether two spellings
 # name one folder.

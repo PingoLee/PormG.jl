@@ -220,7 +220,7 @@ end
 # `field.type` below. A config that differs from the one the column was filled with is the caller's to
 # match, as in Django: the stored document does not say which it was built with.
 function _render_search_operator(v::SQLTypeOper, column::String, instruc::SQLInstruction)::String
-  instruc.connection isa PormGSQLite && throw(Dialect.fts_capability_error("The @search lookup"))
+  _supports(instruc.connection, :full_text_search) || throw(Dialect.fts_capability_error(instruc.connection, "The @search lookup"))
   field, _ = _operand_field(v, instruc)
   (field !== nothing && field.type in ("VARCHAR", "TEXT", "TSVECTOR")) ||
     throw(FilterError("The \e[31m@search\e[0m lookup searches a text column (a CharField or " *

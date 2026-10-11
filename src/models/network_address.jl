@@ -2,7 +2,7 @@
 # Network-address formatting (#28) — `GenericIPAddressField` (`inet`) and `CIDRField` (`cidr`)
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# PostgreSQL only: these fields have no SQLite column (`Dialect._refuse_specialized_sqlite_type`), so
+# PostgreSQL only: these fields have no SQLite column (`Dialect._refuse_unsupported_type`), so
 # nothing here exists to make SQLite imitate `inet`. It serves PostgreSQL, twice:
 #
 #   * VALIDATION, before a value reaches the server — Django's shape. A bad address is reported as

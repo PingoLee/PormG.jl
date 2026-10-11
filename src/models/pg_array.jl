@@ -2,7 +2,7 @@
 # PostgreSQL array literals (#28) — `ArrayField`
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# PostgreSQL only: an array column has no SQLite counterpart (`Dialect._refuse_specialized_sqlite_type`),
+# PostgreSQL only: an array column has no SQLite counterpart (`Dialect._refuse_unsupported_type`),
 # so nothing here makes SQLite imitate one. Three jobs, all for PostgreSQL:
 #
 #   * WRITE — an `ArrayField` value becomes ONE text parameter in PostgreSQL's own array syntax

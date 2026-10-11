@@ -17,6 +17,7 @@ import PormG.ConnectionPool: NUL_REFUSAL_REASON
 # session-level advisory lock is still held on it. Renewal is what releases that lock.
 import PormG.ConnectionPool: _await_abandoned, _recover_abandoned_connection!
 import PormG: PormGError, DatabaseError, OperationalError, BackendCapabilityError, InvalidValueError
+import PormG: _capability_error  # #1129: the backend capability table (Kernel)
 
 import PormG: @pormg_debug
 export with_advisory_lock
@@ -422,10 +423,8 @@ function with_advisory_lock(f::Function, conn::PormGSQLite, key::AbstractString;
   _refuse_nul_key(key)   # SQLite never sends the key; refused anyway so a call site behaves alike
 
   if on_missing_lock === :error
-    throw(BackendCapabilityError(
-      "with_advisory_lock(on_missing_lock = :error) cannot be honoured on SQLite — it has no " *
-      "advisory locks, so the body for '$key' would run with no mutual exclusion. Use PostgreSQL, " *
-      "or pass on_missing_lock = :ignore to accept the no-op."))
+    throw(_capability_error(conn, :advisory_locks, "with_advisory_lock(on_missing_lock = :error) for '$key'";
+      why = "The body would run with no mutual exclusion; pass on_missing_lock = :ignore to accept the no-op."))
   end
 
   if on_missing_lock === :warn

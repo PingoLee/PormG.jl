@@ -430,6 +430,16 @@ include("exceptions.jl")
 include("constants.jl")
 
 #═══════════════════════════════════════════════════════════════════════════════
+# SECTION: Backend capability table (#1129)
+#
+# Which optional features each backend has, and the one refusal for a feature it lacks. Layer 1
+# because `Dialect`, `QueryBuilder`, `Migrations` and `AdvisoryLock` all refuse through it. Must
+# follow `exceptions.jl`: it builds `BackendCapabilityError`.
+#═══════════════════════════════════════════════════════════════════════════════
+
+include("capabilities.jl")
+
+#═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Canonical column IR (#507)
 #
 # The nouns of the migration diff — what a column IS and how two of them differ. Layer 1 because

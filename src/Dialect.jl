@@ -450,12 +450,12 @@ function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGSQLit
   return "strftime('$(entry.sqlite)', $(column))"
 end
 
+# #1147 step 2 — `bigint` (set by the build from `_sums_bigint`): PostgreSQL's `sum(bigint)` is a
+# `numeric`, where the sum of an integer means an integer (Django's `Sum` of an integer field, and
+# SQLite's sum), so it is cast back. A sum past the `bigint` range then raises, as SQLite's does.
 function SUM(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  if get(format, "distinct", false)
-    return "SUM(DISTINCT $(column))"
-  else
-    return "SUM($(column))"
-  end
+  sql = get(format, "distinct", false) ? "SUM(DISTINCT $(column))" : "SUM($(column))"
+  return get(format, "bigint", false) === true ? "$(sql)::bigint" : sql
 end
 
 function SUM(column::String, format::Dict{String,Any}, conn::PormGSQLite)

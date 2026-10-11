@@ -138,6 +138,12 @@ const _OPERAND_TYPED_RULES = (:operand, :one_of, :first_operand, :promoting)
 
 Computes the sum of all values in the column.
 
+The sum of integers is an integer on both engines. PostgreSQL widens `sum(bigint)` to `numeric`, so
+over a `bigint` (an `IDField`, a `BigIntegerField`, a `ForeignKey`, an integer literal, integer
+arithmetic over one) PormG renders `SUM(x)::bigint` there: `Sum("resultid")` reads an `Int64` and
+`Sum("resultid") / 2` divides as integers on both engines (#1147). A sum past the `bigint` range
+raises, as it does on SQLite.
+
 A `Sum` over a `BooleanField` is refused with a `QueryBuildError` (#953): PostgreSQL has no
 `sum(boolean)`, and SQLite would add up the stored 0/1. Count the true rows explicitly —
 `Sum(When("is_active" => true, then = 1, otherwise = 0))`.
@@ -148,9 +154,10 @@ end
 _result_rule(::Val{:SUM}) = :promoting
 # `SUM` renders bare on both engines, so it has each one's aggregate type, not the `::numeric` cast the
 # other `:promoting` functions render on PostgreSQL over a non-integer (`_computed_kind`, `expression_kind.jl`). PostgreSQL
-# widens `sum(smallint|integer)` to `bigint` and `sum(bigint)` to `numeric`.
-_computed_kind(::Val{:SUM}, ::Symbol, ::Union{CInt16,CInt32}, ::PormGPostgres) = CInt64()
-_computed_kind(::Val{:SUM}, ::Symbol, ::Union{CInt64,CDecimal}, ::PormGPostgres) = CDecimal(nothing, nothing)
+# widens `sum(smallint|integer)` to `bigint` and `sum(bigint)` to `numeric`, which PormG casts back to
+# the `bigint` (#1147 step 2, `_sums_bigint`): the sum of integers is an integer on every engine.
+_computed_kind(::Val{:SUM}, ::Symbol, ::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = CInt64()
+_computed_kind(::Val{:SUM}, ::Symbol, ::CDecimal, ::PormGPostgres) = CDecimal(nothing, nothing)
 _computed_kind(::Val{:SUM}, ::Symbol, k::Union{CFloat64,CInterval}, ::PormGPostgres) = k
 _computed_kind(::Val{:SUM}, ::Symbol, ::Any, ::PormGPostgres) = nothing
 _computed_kind(::Val{:SUM}, ::Symbol, k::CInterval, ::PormGSQLite) = k
@@ -714,19 +721,20 @@ bind parameter, and PormG only writes a spelling it has parsed. The same rule ap
 The expression may be a column path, an `F(...)` expression, another function or a
 `Subquery(...)` — `Cast(Subquery(s), "date")` casts the one value the subquery returns per row.
 
-A cast the two engines apply differently raises `QueryBuildError` when the query is built (#1028):
+A cast is checked against what it means on each engine (#1147): the engine that would compute a
+different value raises `QueryBuildError` when the query is built, and the others build it.
 
-- to text (`CharField()`, `"text"`, …), any operand `Concat` refuses: a boolean (`'true'` vs `'1'`),
-  a float (`'25'` vs `'25.0'`), a decimal, a `numeric` function, a timestamp, an interval or a whole
-  JSON document;
-- to an integer, a float, a decimal or a `numeric` function: PostgreSQL rounds it and SQLite
-  truncates it. Round it first — `Cast(Round(x), IntegerField())`, `Floor(x)` or `Ceil(x)` read the
-  same integer on both engines. A boolean casts to `1`/`0` on both and passes;
+- to text (`CharField()`, `"text"`, …): a float, a decimal, a timestamp, an interval or a JSON
+  document builds everywhere, each engine writing its own text (`'25'` or `'25.0'`). A boolean means
+  `'true'`/`'false'`, and SQLite, which writes `'1'`, refuses it (#1028);
+- to an integer, a float, a decimal or a `numeric` function means the nearest integer, and SQLite,
+  whose cast truncates, refuses it (#1028). Say how to round to build it everywhere:
+  `Cast(Round(x), IntegerField())`, `Floor(x)` or `Ceil(x)`. A boolean casts to `1`/`0` and passes;
 - to `numeric(p, s)` (or `numeric(p)`, scale 0), an operand with more than `s` digits after the
-  point — a float column, a float literal with more places (#1050), text, a `numeric` function, a
-  decimal with more places (#1040): PostgreSQL rounds
-  to the scale and SQLite keeps every digit. Round it to the scale first —
-  `Cast(Round(x, 2), "numeric(10,2)")` — or cast to an unscaled `"numeric"`.
+  point (a float column, a float literal with more places (#1050), text, a `numeric` function, a
+  decimal with more places) means the value rounded to the scale, and SQLite, which keeps every
+  digit, refuses it (#1040). Round it first, `Cast(Round(x, 2), "numeric(10,2)")`, or cast to an
+  unscaled `"numeric"`.
 
 ```julia
 using PormG.Functions: Cast, Round
@@ -757,14 +765,13 @@ This follows Django's `Concat`. PostgreSQL renders `CONCAT(…)`, which skips a 
 SQLite renders `COALESCE(operand, '') || …`. To get NULL when a column is NULL, test it explicitly:
 `Case(When("number__@isnull" => false, then = Concat(…)))` — a `Case` with no match is NULL.
 
-Text, integer, date, time and uuid operands read the same on both engines. A boolean, a float or a
-decimal operand raises `QueryBuildError` — a literal (`true`, `1.5`, a `Decimal`) when the expression
-is built, a `BooleanField`/`FloatField`/`DecimalField` column or an expression of those types when the
-query is — because PostgreSQL's `CONCAT` writes `t`, `25`, `3.00` where SQLite's `||` writes `1`,
-`25.0`, `3` (#1027). So does a timestamp, an interval or a whole JSON document (#1028), whose text
-differs the same way. Write the text yourself: a `Case` for a boolean, `ToChar(x, "YYYY-MM-DD
-HH:MI:SS")` for a timestamp, and for the rest, format the fetched value in Julia.
-`Cast(…, CharField())` is refused over the same operands, for the same reason.
+Text, integer, date, time and uuid operands read the same on both engines. Any other operand (a
+boolean, a float, a decimal, a timestamp, an interval or a whole JSON document) raises
+`QueryBuildError` on every engine, because the query does not say which text it means (#1027,
+#1028, #1147): a literal (`true`, `1.5`, a `Decimal`) when the expression is built, a column or an
+expression of those types when the query is. Say it: `Cast(x, "text")`, which writes each engine's
+own text, a `Case` for a boolean, `ToChar(x, "YYYY-MM-DD HH:MI:SS")` for a timestamp, or format the
+fetched value in Julia.
 
 The result is text on both engines, so `output_field`, when given, must be a text type
 (`CharField()`, `TextField()`, `"text"`, `"varchar(20)"`). Any other type raises
@@ -828,109 +835,38 @@ function _check_concat_output_field(t::Union{String,Nothing})
     "\e[31m$(t)\e[0m. Cast the result instead: \e[32mCast(Concat(…), \"$(lowercase(t))\")\e[0m (#835)."))
 end
 
-# #1027 — the one message for a `Concat` operand with no single text (`_concat_textless_operand`,
-# projection_types.jl), raised at construction for a literal and at render for a column. The way out
-# is the caller's own text. For a boolean, a `Case` writes it on both engines. For a number there is
-# no SQL spelling that agrees: `Cast(x, CharField())` is `'25'` on PostgreSQL and `'25.0'` on SQLite,
-# and `Cast(x, IntegerField())` rounds on one and truncates on the other. So the advice is to format
-# it in Julia, where the caller chooses the digits.
+# #1027 — the one message for a `Concat` operand that is not text (`_concat_textless_operand`,
+# projection_types.jl), raised at construction for a literal and at render for a column. #1147 step 2:
+# this is EXPLICIT INTENT, refused on every engine — a number, a boolean, a date or a document has a
+# text only once the query says which, as Django asks for an `output_field` over mixed types. So the
+# message names the spelling that says it, and no engine: a cast to text builds everywhere and writes
+# each engine's own text (`docs/src/read/functions_and_dates.md`). A boolean's cast to text is a
+# question of meaning on SQLite (`_MEANING_DEPARTURES`), so it is pointed to the `Case` that writes it.
 function _concat_textless_refusal(kind::Symbol, what::AbstractString; flag::AbstractString = "<flag>")
-  why = kind === :bool ? "a boolean reads `t` on PostgreSQL and `1` on SQLite" : _divergent_text_why(kind)
   issue = kind in (:timestamp, :interval, :json) ? "#1028" : "#1027"
   return QueryBuildError(
-    "\e[4m\e[31mConcat\e[0m cannot make the same text from $(what) on both engines: $(why) ($(issue)). " *
-    _divergent_text_fix(kind, flag))
+    "\e[4m\e[31mConcat\e[0m joins text, and $(what) is not text: say which text you mean ($(issue)). " *
+    _concat_text_fix(kind, flag))
 end
-
-# #1028 — the text each engine makes of an operand `_concat_textless_operand` classifies, for both
-# refusals. A boolean differs between them: `CONCAT` writes PostgreSQL's output form `t`, a cast to
-# text the word `true`, so each caller words its own.
-_divergent_text_why(kind::Symbol) =
-  kind === :float ? "a float reads `25` on PostgreSQL and `25.0` on SQLite" :
-  kind === :decimal ? "a decimal reads `3.00` on PostgreSQL and `3` on SQLite" :
-  kind === :timestamp ? "a timestamp reads `2009-03-29 06:00:00+00` on PostgreSQL and `2009-03-29T06:00:00.000+00:00` on SQLite" :
-  kind === :interval ? "PostgreSQL writes an interval in its `IntervalStyle` (`PT25.021S`, `1 day 02:00:00`) and SQLite as PormG stored it (`00:00:25.021`)" :
-  kind === :json ? "PostgreSQL's `jsonb` re-renders a document (`{\"a\": [1, 2]}`) and SQLite keeps the stored text (`{\"a\":[1,2]}`)" :
-  # #1087/#1111: a whole number PostgreSQL types `numeric`, divided — the split is the division.
-  kind === :integer_division ? "PostgreSQL divides it as `numeric` (`15 / 2` is `7.5`) and SQLite as an integer (`7`)" :
-                   "PostgreSQL computes it as `numeric` (`1`) and SQLite as a REAL (`1.0`)"
-_divergent_text_fix(kind::Symbol, flag::AbstractString) =
+_concat_text_fix(kind::Symbol, flag::AbstractString) =
   kind === :bool ?
-    "Write the text you mean: \e[32mCase(When(\"$(flag)\" => true, then = Value(\"yes\")), default = \"no\")\e[0m." :
+    "Write it: \e[32mCase(When(\"$(flag)\" => true, then = Value(\"yes\")), default = \"no\")\e[0m." :
   kind === :timestamp ?
-    "Name the format: \e[32mToChar(\"$(flag)\", \"YYYY-MM-DD HH:MI:SS\")\e[0m reads the same on both engines." :
-  kind in (:interval, :json) ?
-    "PormG does not choose its text: fetch the value and format it in Julia." :
-    "PormG does not choose a number's text: fetch the value and format it in Julia " *
-    "(\e[32mstring(row.points)\e[0m, \e[32mround(x; digits = 2)\e[0m)."
-
-# #1028 — the one message for a declared cast the engines apply differently (`_cast_divergent_operand`,
-# projection_types.jl), raised when the query renders. `fname` is the function as the caller wrote it.
-# To an integer the way out is to say how to round, which `Round`/`Floor`/`Ceil` do on both engines.
-function _cast_divergent_refusal(fname::AbstractString, kind::Symbol, what::AbstractString,
-                                 target::Symbol, flag::AbstractString)
-  # #1040: `flag` is the declared type. The way out is to round first, which makes every value fit the
-  # scale on both engines (only a tie can round apart: #1061 follows Django there), or an unscaled
-  # `numeric`, which keeps the value.
-  if target === :scale
-    why = "PostgreSQL rounds a value cast to $(flag) to its scale (`1.555` → `1.56` at scale 2, `1.5` → `2` at scale 0) and SQLite keeps every digit"
-    # #1111: an integer division has no fraction on SQLite at all, so the split is the division, and
-    # the way out is to divide as a float first.
-    kind === :integer_division && (why = _divergent_text_why(kind) * ", so only PostgreSQL has a fraction to round to $(flag)")
-    scale = something(_numeric_cast_scale(flag), 0)
-    # Text is not rounded either (`_round_text_refusal`): it is made a number first.
-    spelled = kind === :text ? "Cast(x, FloatField())" : "x"
-    fix = "Round it to the scale first (\e[32mCast(Round($(spelled), $(scale)), \"$(flag)\")\e[0m, #1061), or cast to an " *
-          "unscaled \e[32m\"numeric\"\e[0m, which keeps the value on both engines."
-    # An unscaled cast keeps `7` on SQLite and `7.5` on PostgreSQL, so it is no way out here.
-    kind === :integer_division && (fix =
-      "Divide as a float first, so SQLite keeps the fraction too, then round it to the scale " *
-      "(\e[32mCast(Round(x / 2.0, $(scale)), \"$(flag)\")\e[0m, #1061), or fetch the number and divide it in Julia.")
-    return QueryBuildError(
-      "\e[4m\e[31m$(fname)\e[0m cannot make the same number from $(what) on both engines: $(why) (#1040). $(fix)")
-  end
-  # #1087: a literal too large for the precision. The way out is a precision that holds it.
-  if target === :precision
-    precision, scale = something(_numeric_cast_size(flag), (0, 0))
-    # A scale at or above the precision leaves no digit before the point: `numeric(2,3)` holds below 0.1.
-    holds = precision > scale ? "at most $(_digit_count(precision - scale)) before the point" :
-            "only values below $(precision == scale ? "1" : "0." * "0"^(scale - precision - 1) * "1")"
-    why = "$(flag) holds $(holds), so PostgreSQL raises a " *
-          "numeric field overflow and SQLite stores the value as it is"
-    fix = "Declare a precision that holds it (\e[32mCast(x, \"numeric(p, $(scale))\")\e[0m with a larger p), or cast to an " *
-          "unscaled \e[32m\"numeric\"\e[0m."
-    return QueryBuildError(
-      "\e[4m\e[31m$(fname)\e[0m cannot make the same number from $(what) on both engines: $(why) (#1087). $(fix)")
-  end
-  if target === :integer
-    why = "PostgreSQL rounds a fractional number cast to an integer (`1.5` → `2`) and SQLite truncates it (`1.5` → `1`)"
-    fix = "Say how to round it: \e[32mCast(Round(x), IntegerField())\e[0m, \e[32mFloor(x)\e[0m or \e[32mCeil(x)\e[0m read the same integer on both engines."
-    # #1111: rounding after an integer division cannot bring the half back on SQLite. The fraction
-    # exists on both engines only when the division is a float's.
-    if kind === :integer_division
-      why = _divergent_text_why(kind) * ", and PostgreSQL rounds the quotient cast to an integer (`7.5` → `8`)"
-      fix = "Divide as a float first, so SQLite keeps the fraction too, then say how to round it: " *
-            "\e[32mCast(Round(x / 2.0), IntegerField())\e[0m reads the same integer on both engines."
-    end
-    return QueryBuildError(
-      "\e[4m\e[31m$(fname)\e[0m cannot make the same integer from $(what) on both engines: $(why) (#1028). $(fix)")
-  end
-  why = kind === :bool ? "a boolean cast to text reads `true` on PostgreSQL and `1` on SQLite" : _divergent_text_why(kind)
-  return QueryBuildError(
-    "\e[4m\e[31m$(fname)\e[0m cannot make the same text from $(what) on both engines: $(why) (#1028). " *
-    _divergent_text_fix(kind, flag))
-end
+    "Name the format, \e[32mToChar(\"$(flag)\", \"YYYY-MM-DD HH:MI:SS\")\e[0m, or cast it to text first: \e[32mCast(\"$(flag)\", \"text\")\e[0m." :
+  # A quotient one engine computes without its fraction (`_DIVISION_KINDS`): a cast to text alone would
+  # be refused there, so the advice says which division first.
+  kind in (:decimal_whole_division, :mixed_whole_division) ?
+    "Divide by a float, then cast it to text: \e[32mCast(x / 2.0, \"text\")\e[0m, or fetch the value and format it in Julia." :
+    "Cast it to text first: \e[32mCast(\"$(flag)\", \"text\")\e[0m, or fetch the value and format it in Julia."
 
 # #1061 — `Round(x, d)` over text (`_scale_divergent_operand`'s `:text` kind: a text column or
-# function, a string literal, a JSON value). Every number rounds through each engine's own `ROUND`,
-# but text is no number to it: PostgreSQL's `::numeric` rejects `'abc'`, where SQLite reads it as 0
-# and goes on. PormG does not read text as a number implicitly; a cast says it.
+# function, a string literal, a JSON value). EXPLICIT INTENT (#1147 step 2): text is no number to
+# round, and PormG does not read it as one implicitly, on any engine; a cast says it.
 function _round_text_refusal(digits::Integer, what::AbstractString)
   return QueryBuildError(
-    "\e[4m\e[31mRound(…, $(digits))\e[0m cannot round $(what): it is text, and PormG does not read " *
-    "text as a number for you — PostgreSQL rejects text that is not a number and SQLite reads it as 0 " *
-    "(#1061). If it holds numbers, say so with a cast, \e[32mRound(Cast(x, FloatField()), $(digits))\e[0m, " *
-    "or fetch the value and round it in Julia.")
+    "\e[4m\e[31mRound(…, $(digits))\e[0m rounds a number, and $(what) is text: PormG does not read " *
+    "text as a number for you (#1061). If it holds numbers, say so with a cast, " *
+    "\e[32mRound(Cast(x, FloatField()), $(digits))\e[0m, or fetch the value and round it in Julia.")
 end
 
 # Variadic convenience: Concat("forename", Value(" "), "surname") → same as vector form

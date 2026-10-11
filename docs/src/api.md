@@ -402,7 +402,7 @@ df = M.Result.objects.values(
 | `Lower("field")` | Convert to lowercase | `"name_lower" => Lower("surname")` |
 | `Upper("field")` | Convert to uppercase | `"name_upper" => Upper("surname")` |
 | `Length("field")` | String length | `"name_len" => Length("surname")` |
-| `Concat(args...)` | Concatenate values; a NULL operand is skipped, a Bool/Float/Decimal one refused | `"full" => Concat("forename", Value(" "), "surname")` |
+| `Concat(args...)` | Concatenate text; a NULL operand is skipped, and a non-text one (a Bool, Float, Decimal, timestamp, interval or JSON document) is refused on every engine: cast it to text first | `"full" => Concat("forename", Value(" "), "surname")` |
 | `Trim("field")` | Trim whitespace | `"clean" => Trim("name")` |
 | `LTrim("field")` | Left trim | `"clean" => LTrim("name")` |
 | `RTrim("field")` | Right trim | `"clean" => RTrim("name")` |
@@ -433,7 +433,7 @@ df = M.Result.objects.values(
 | `NullIf("field", value)` | Returns NULL if equal | `NullIf("code", Value(""))` |
 | `Greatest(args...)` | Maximum of values (two or more arguments) | `Greatest("points", 0)` |
 | `Least(args...)` | Minimum of values (two or more arguments) | `Least("points", 100)` |
-| `Cast("field", type)` | Type casting — a field object or a [type string](read/functions_and_dates.md#Cast-—-Type-Conversion). A cast to text, an integer (#1028) or a scaled `numeric(p, s)` (#1040) that the engines apply differently raises `QueryBuildError` | `Cast(Round("points"), IntegerField())`, `Cast("points", "numeric")` |
+| `Cast("field", type)` | Type casting — a field object or a [type string](read/functions_and_dates.md#Cast-—-Type-Conversion). A cast to text, an integer (#1028) or a scaled `numeric(p, s)` (#1040) raises `QueryBuildError` on an engine that would compute a different value from what it means (#1147) | `Cast(Round("points"), IntegerField())`, `Cast("points", "numeric")` |
 | `Extract("field", "part")` | Extract date/time part | `Extract("dob", "year")` |
 | `ToChar("field", fmt)` | Format to string | `ToChar("dob", "YYYY-MM")` |
 

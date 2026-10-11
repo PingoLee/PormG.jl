@@ -454,76 +454,74 @@ q = M.Driver.objects
 q.values("driverref", "car" => Case(When("number__@isnull" => false, then = Concat(Value("#"), "number"))))
 ```
 
-Text, integer and date operands read the same on both engines. A boolean, a float or a decimal
-operand raises `QueryBuildError`, because each engine writes it differently: PostgreSQL's `CONCAT`
-gives `t`, `25` and `3.00` where SQLite's `||` gives `1`, `25.0` and `3`. A concatenated value could
-otherwise read one way in tests on SQLite and another in production. The refusal covers a
-`BooleanField`, `FloatField` or `DecimalField` column (joined paths too), a `true`/`1.5`/`Decimal`
-literal, and an expression of one of those types: a comparison or `Q(...)` condition, a `Cast` to a
-float or decimal type, arithmetic, an extremum or a window value over a float, and the functions
-PostgreSQL computes as `numeric` (`Avg`, `Round`, `Mod`, `Sqrt`, `Exp`, `Ln`, `Power`), which SQLite
-answers as a REAL (`1` vs `1.0`). A literal is refused when the `Concat` is built, and a column when
-the query is. A `DecimalField` with `decimal_places = 0` is not refused: it holds whole numbers, which
-read `14` on both engines, as an integer column's do (#1087). Divided, it is refused again: SQLite
-stores those whole values as integers and divides them as integers (`15 / 2` is `7`), where
-PostgreSQL's `numeric` gives `7.5`. `Sum` of a BIGINT column (an `IDField`, a `BigIntegerField`, a
-`ForeignKey`) is the same shape: PostgreSQL computes `sum(bigint)` as `numeric`, so it reads as an
-integer until it is divided, and `Sum("resultid") / 2` is refused (#1111). `Floor`, `Ceil` and `Abs`
-over an integer are integers on both engines (#1147), so `Floor("grid") / 2` divides as integers on
-both and is not refused; over a whole-number expression PormG cannot type as an integer
-(`Floor(F("grid") + 1)`, `Floor(Round("points"))`) PostgreSQL still computes them as `numeric`
-(`FLOOR(x::numeric)`), and divided they are refused. An integer literal counts as a BIGINT here,
-because PostgreSQL binds it as `bigint`: `Sum(F("grid") + 1) / 2`, `Sum(Coalesce("grid", 0)) / 2` and
-the conditional count `Sum(Case(When("grid__@gt" => 3, then = 1), default = 0)) / 2` are
-`sum(bigint)` there, and are refused too, as is a `Sum` over a cast to `bigint` (#1141). An integer
-date part is an integer operand (`@year`, `@month`, `@day`, `@hour`, `@quarter`, `@week_day`, … and
-the same `Extract` fields), so `Floor("dob__@year") / 2` divides as integers on both engines, as
-`Floor("grid") / 2` does (#1135, #1147); `@yyyy_mm` is text and `Extract(…, "epoch")` is fractional,
-so neither counts, and a part SQLite has no spelling for (`Extract(…, "century")`) raises there.
-Divide as a float and fetch the number instead.
-A CTE column built from one of them is refused the same way when it is divided (#1127): the CTE
-gives a `Sum` column an integer type whatever it sums, so PormG reads the body's own expression
-instead, and `Coalesce(CTE("totals", "id_sum"), 0) / 2` is refused as `Sum("resultid") / 2` is.
+Text, integer and date operands read the same on both engines and pass. Any other operand is
+refused with `QueryBuildError` on **every** engine, because the query does not say which text it
+means: a boolean, a float, a decimal, a timestamp, an interval or a whole JSON document has a text
+only once you choose one, and each engine writes its own (the table below). This is Django's rule
+for mixed types (say the type you want), not a difference between engines (#1027, #1147). The
+refusal covers:
 
-Three more operand types are refused the same way, because their text differs too:
+- a `BooleanField`, `FloatField`, `DecimalField`, `DateTimeField`, `DurationField` or `JSONField`
+  column, joined paths included;
+- a `true`, `1.5`, `Decimal`, `DateTime` or `Period` literal;
+- an expression of one of those types: a comparison or `Q(...)` condition, arithmetic, an extremum
+  or window value, a `Cast` to a float or a decimal, `Sum` of a duration, and the functions
+  PostgreSQL computes as `numeric` (`Avg`, `Round`, `Mod`, `Sqrt`, `Exp`, `Ln`, `Power`).
 
-| Operand | PostgreSQL | SQLite |
-|---|---|---|
-| a timestamp (`DateTimeField`, `F("start_at") + Day(1)`, a `DateTime` literal) | `2009-03-29 06:00:00+00` | `2009-03-29T06:00:00.000+00:00` |
-| an interval (`DurationField`, a timestamp difference, `Sum` of a duration, a `Period` literal) | its `IntervalStyle`: `PT25.021S`, `1 day 02:00:00` | `00:00:25.021` |
-| a whole JSON document (`JSONField`) | `{"a": [1, 2]}` | `{"a":[1,2]}` |
+A literal is refused when the `Concat` is built, and a column when the query is. A date, a time and
+a uuid pass. So does a `DecimalField` with `decimal_places = 0`: it holds whole numbers, as an
+integer column does (#1087). Divided, it is a decimal quotient, and refused like any decimal.
 
-A date, a time and a uuid read the same text on both engines and pass. A JSON key lookup
-(`"payload__driver"`) passes too: it reads the same text when the value at the key is a string, but a
-boolean or a nested value can still differ (`true` vs `1`), and PormG cannot know which a key holds.
+Say which text you mean:
+
+- **cast it to text**, `Cast("points", "text")`, which writes the engine's own text:
+
+  | Operand | PostgreSQL | SQLite |
+  |---|---|---|
+  | a float `25.0` | `25` | `25.0` |
+  | a `numeric(10,2)` decimal `3` | `3.00` | `3` |
+  | a timestamp | `2009-03-29 06:00:00+00` | `2009-03-29T06:00:00.000+00:00` |
+  | an interval | its `IntervalStyle`: `PT25.021S`, `1 day 02:00:00` | `00:00:25.021` |
+  | a whole JSON document | `{"a": [1, 2]}` | `{"a":[1,2]}` |
+
+  It is the same value written two ways, so PormG builds it on every engine and leaves the
+  spelling to each. A boolean is the exception: SQLite has no boolean and writes `1`, so a
+  boolean's cast to text is refused there. So is a quotient over a decimal (`F("price") / 2`),
+  which SQLite divides as integers on its whole values: divide by a float, `F("price") / 2.0`
+  (see the `Cast` section below);
+- **for a boolean**, name its two texts with a `Case`;
+- **for a timestamp**, name the format with `ToChar`: `ToChar("start_at", "YYYY-MM-DD HH:MI:SS")`
+  gives `2009-03-29 06:00:00` on both engines;
+- or **fetch the value and format it in Julia**, where you choose the digits.
+
+`Floor`, `Ceil` and `Abs` over an integer, and `Sum` of integers, are integers on both engines
+(#1147), so `Floor("grid") / 2` and `Sum("resultid") / 2` divide as integers and pass. One integer
+quotient is a question of meaning rather than of text: a `Sum` PormG cannot type as an integer,
+which PostgreSQL computes as `numeric` (a sum of a shift over a BIGINT column,
+`Sum(F("resultid") << 1) / 2`), would keep the half there. It is refused on PostgreSQL only (#1111).
+
 The check covers only types PormG can name: an operand it cannot type (an untyped `Case`, an
 extremum over timestamp arithmetic, `Greatest`/`Least` over computed timestamps or intervals)
-passes. A `Subquery` is classified by the one expression it projects (#1124): one over a float
+passes. A JSON key lookup (`"payload__driver"`) passes too: PormG cannot know which type a key
+holds. A `Subquery` is classified by the one expression it projects (#1124): one over a float
 column or an `Avg` is refused as the float or the `Avg` is, and one over a text or integer column,
-or over `Cast(Round(x), IntegerField())`, passes.
-
-`Cast(…, CharField())` is not a way around this, because a cast to text makes the same split (`25`
-against `25.0`). It is refused too (see the `Cast` section below). Write the text you mean
-instead:
-
-- For a boolean, use a `Case`.
-- For a timestamp, name the format with `ToChar`: `ToChar("start_at", "YYYY-MM-DD HH:MI:SS")` gives
-  `2009-03-29 06:00:00` on both engines.
-- For a number, an interval or a document, fetch the value and format it in Julia, where you choose
-  the digits:
+or over `Cast(Round(x), IntegerField())`, passes. A CTE column is classified by its body's own
+expression (#1127), since the CTE gives a computed column a plain type whatever it computes.
 
 ```julia
-using PormG.Functions: Case, When, Concat, Value
+using PormG.Functions: Case, When, Concat, Cast, Value
 
 q = M.Result.objects
 q.filter("raceid" => 18)
 # A yes/no: name its two texts with a `Case`.
 q.values("driverid__driverref", "points",
          "outcome" => Concat("driverid__driverref", Value(": "),
-                             Case(When("points__@gt" => 0, then = Value("scored")), default = "no points")))
+                             Case(When("points__@gt" => 0, then = Value("scored")), default = "no points")),
+         # A number: the engine writes its own text, `10` on PostgreSQL and `10.0` on SQLite.
+         "label" => Concat("driverid__driverref", Value("-"), Cast("points", "text")))
 df = q |> DataFrame
-# A number: `points` is a FloatField (1.5 for a shared fastest lap), so its text is yours to choose.
-df.label = df.driverid__driverref .* "-" .* string.(df.points)
+# Or choose the digits yourself, in Julia.
+df.rounded = df.driverid__driverref .* "-" .* string.(round.(df.points; digits = 1))
 ```
 
 `Concat` takes its operands either variadically or as a single vector — the two spellings build the
@@ -843,78 +841,71 @@ schema-qualified or quoted name (`public.mood`, `"Mood"`), `interval year to mon
 scale, and a `COLLATE` clause. The same rules apply to the `output_field=` string of `Case`,
 `Coalesce`, `Concat`, `Greatest` and `Least`.
 
-#### A cast the engines apply differently is refused
+#### A cast an engine computes differently
 
 A cast to text, to an integer or to a scaled `numeric(p, s)` goes through each engine's own
-conversion, and for some operands the two disagree. Measured on PostgreSQL 16.15 and SQLite 3.45.1:
+conversion. PormG checks each engine against what the cast **means**, never against the other
+engine (#1147). The engine that departs raises `QueryBuildError` when the query is built, and the
+other builds the query as written. Measured on PostgreSQL 16 and SQLite 3.45:
 
-| Expression | PostgreSQL | SQLite |
-|---|---|---|
-| `Cast("points", CharField())`, a float `10.0` | `'10'` | `'10.0'` |
-| `Cast(<bool> true, CharField())` | `'true'` | `'1'` |
-| `Cast(<decimal> 14, CharField())`, a `numeric(10,2)` | `'14.00'` | `'14'` |
-| `Cast(<float> 1.5, IntegerField())` | `2` (rounds) | `1` (truncates) |
-| `Cast(<numeric> 2.5, IntegerField())` | `3` | `2` |
-| `Cast(<float> 1.5, "numeric(10,0)")` | `2` (rounds to the scale) | `1.5` |
-| `Cast(<float> 1.555, "numeric(10,2)")`, or the text `'1.555'` | `1.56` | `1.555` |
+| Cast | It means | PostgreSQL | SQLite |
+|---|---|---|---|
+| to text, of a float, a decimal, a `numeric` function, a timestamp, an interval or a JSON document | the value's text | builds (`'10'`, `'14.00'`) | builds (`'10.0'`, `'14'`) |
+| to text, of a boolean | `'true'` / `'false'` | builds | **refused**: it writes `'1'` / `'0'` |
+| to an integer, of a float, a decimal with places or a `numeric` function | the nearest integer (`1.5` → `2`) | builds | **refused**: its cast truncates (`1`) |
+| to `numeric(p, s)`, of an operand with more than `s` places | the value rounded to `s` places (`1.555` → `1.56`) | builds | **refused**: it keeps every digit |
+| to `numeric(p, s)`, of a literal it cannot hold (`Cast(Value(100), "numeric(3,2)")`) | an overflow | builds, and raises when the query runs | **refused**: it stores `100` |
+| any of these, of a `DecimalField` divided (`F("price") / 2`, `Sum("price") / Count("id")`), or of an integer cast to `numeric` and divided (`Cast("grid", "numeric") / 2`) | a decimal quotient (`15 / 2` is `7.5`) | builds | **refused**: it stores a whole decimal as an integer and divides it as one (`7`) |
+| any of these, of a quotient over a value mixing whole numbers and fractions (`Coalesce("grid", 0.5) / 2`, `NullIf("grid", 0.5) / 2`, a `Case` with an integer and a float branch, `Lag("grid"; default = 1.5) / 2`; a literal `0` is no mix, since `0 / n` is `0` everywhere) | a quotient with its fraction | builds | **refused**: it divides the rows holding an integer as integers |
+| any of these, of a `Sum` PormG cannot type as an integer, divided (`Sum(F("resultid") << 1) / 2`) | an integer quotient (`7`) | **refused**: it computes `numeric` (`7.5`) | builds |
 
-So PormG raises `QueryBuildError` when the query is built, on both engines, for:
+The text of a float, a decimal, a timestamp or a document is the same value written two ways, so it
+is documented, not refused: the `Concat` section above lists each engine's text. A quotient is not
+always one value, though: over a decimal, or over a value mixing whole numbers and fractions, SQLite
+divides its integer rows as integers, which the last rows above refuse there. Divide by a float
+(`F("price") / 2.0`) and the cast builds on both. A cast refused only
+on SQLite cannot run on the development engine, so its test belongs on PostgreSQL. That is the
+intended trade: the engine that cannot give the meaning says so, rather than answering differently.
 
-- a cast to text (`CharField()`, `TextField()`, `"text"`, `"varchar(20)"`, …) of any operand
-  `Concat` refuses: a boolean, a float, a decimal, a function PostgreSQL computes as `numeric`, a
-  timestamp, an interval, or a whole JSON document;
-- a cast to an integer (`IntegerField()`, `BigIntegerField()`, `"integer"`, `"bigint"`, `"int8"`,
-  …) of a float, a decimal with places (a `decimal_places = 0` column passes unless it is divided, #1087) or a `numeric`
-  function, and of `Sum` of a BIGINT column once divided (#1111), or of `Floor`/`Ceil`/`Abs` over a
-  whole-number expression PormG cannot type as an integer (`F("grid") + 1`) once divided, a CTE column
-  built from one of them included (#1127). A boolean casts to `1`/`0` on both engines and
-  passes;
-- a cast to `numeric(p, s)` or `decimal(p, s)` (and `numeric(p)`, whose scale is 0) of an operand
-  that can carry more than `s` digits after the point: a float column, a float literal with more
-  than `s` places, a
-  function PostgreSQL computes as `numeric` (`Round(x, d)` with `d` above `s` included), a decimal with more places
-  than `s` or of unknown scale, and text, which PostgreSQL parses and rounds while SQLite keeps it
-  (#1040). A JSON value counts as text: PostgreSQL casts the key's text, SQLite the number.
-  `dec(p, s)` is the same type as `numeric(p, s)`, and `"dec"`, sized or not, is typed as `"decimal"` is (#1078). PostgreSQL rounds to the scale and SQLite reads the type name only, so a filter or a
-  `GROUP BY` over the cast would see different values. An integer, a whole number (`Round(x)`,
-  `Floor`, `Ceil`), a `DecimalField` with at most `s` places, and a `Decimal` or float literal with
-  at most `s` digits after the point (`Value(1.5)` at scale 2 reads `1.5` on both, #1050) pass, and so does a function whose value is one of them (`Max`, `Min`, `Abs`,
-  `Coalesce`, `Greatest`, `Least`, `NullIf`). An operand PormG cannot
-  type (an untyped `Case`) passes, as it does for the other two rules; a `Subquery` is classified by
-  the expression it projects, for all three (#1124);
-- a `Cast` to `numeric(p, s)` of a literal that does not fit it: rounded to `s` places, it needs
-  more than `p - s` digits before the point (`Cast(Value(100), "numeric(3,2)")`, or `9.999`, which
-  rounds to `10.00`). PostgreSQL raises a numeric field overflow and SQLite stores the value as it
-  is (#1087). Only a literal is refused, because only a literal is certain to overflow. A column or
-  a computed value overflows on the rows that hold a large value and not on the others — a
-  `DecimalField(max_digits = 10, decimal_places = 2)` cast to `numeric(5,2)` is fine while every
-  value is under 1000 — so it is not checked, and on such a row PostgreSQL raises while SQLite
-  answers. Neither is the literal of a `Coalesce`, `Greatest` or `Least` with an `output_field`,
-  which is one candidate value among the operands. Declare a precision that holds the value.
+What each row covers:
 
-To get an integer, say how to round first. `Round(x)`, `Floor(x)` and `Ceil(x)` give the same whole
-number on both engines for every stored value measured (PostgreSQL's `round` is the `numeric` one,
-half away from zero, as SQLite's is), so a cast over them passes. `Mod` of whole numbers and `+`,
-`-`, `*` of them pass too, since they have nothing to round. Over an integer, `Floor`, `Ceil` and `Abs` are that integer on
-both engines (#1147), so `Floor("grid") / 2` divides as integers on both (`7`). Over a whole-number
-expression PormG cannot type as an integer, PostgreSQL computes them as `numeric`, so
-`Floor(F("grid") + 1) / 2` keeps the half there and SQLite divides the integer (`7.5` against `7`); it
-is refused, as `Sum` of a BIGINT column divided is (#1111). To round such a quotient, divide as a float
-first: `Cast(Round(Floor(F("grid") + 1) / 2.0), IntegerField())` reads the same on both engines. `Round(x, 2)` keeps a fraction, so a
-cast to an integer over it is refused. One caveat: PostgreSQL turns a float into `numeric` at 15 significant digits
+- **text**: `CharField()`, `TextField()`, `"text"`, `"varchar(20)"`, and the `output_field` of
+  `Coalesce`, `Greatest` and `Least`, which renders the same cast;
+- **an integer**: `IntegerField()`, `BigIntegerField()`, `"integer"`, `"bigint"`, `"int8"`, … A
+  boolean casts to `1`/`0` on both engines, and a whole number (`Round(x)`, `Floor(x)`, `Ceil(x)`,
+  `Mod` of whole numbers, `+`, `-`, `*` of them) has nothing to round; both pass on every engine;
+- **a scale**: `numeric(p, s)`, `decimal(p, s)`, `dec(p, s)`, and `numeric(p)`, whose scale is 0
+  (#1040, #1078). An operand with more than `s` places is a float column, a float literal with more
+  than `s` places (`Value(1.5)` at scale 2 passes, #1050), a function PostgreSQL computes as
+  `numeric` (`Round(x, d)` with `d` above `s` included), a decimal with more places than `s` or of
+  unknown scale, and text, which PostgreSQL parses and rounds. A JSON value counts as text. An
+  integer, a whole number, a `DecimalField` with at most `s` places and a function whose value is one
+  of them (`Max`, `Min`, `Abs`, `Coalesce`, `Greatest`, `Least`, `NullIf`) pass;
+- **an overflow**: only a literal is checked, because only a literal is certain to overflow (#1087).
+  A column or a computed value overflows on the rows that hold a large value and not on the others,
+  so on such a row PostgreSQL raises and SQLite answers. Neither is the literal of a `Coalesce`,
+  `Greatest` or `Least` with an `output_field`, which is one candidate value among the operands.
+
+An operand PormG cannot type (an untyped `Case`) passes every row, and a `Subquery` is classified by
+the expression it projects (#1124).
+
+To get an integer on every engine, say how to round first. `Round(x)`, `Floor(x)` and `Ceil(x)` give
+the same whole number on both engines for every stored value measured (PostgreSQL's `round` is the
+`numeric` one, half away from zero, as SQLite's is). Over an integer, `Floor`, `Ceil` and `Abs` are
+that integer on both engines, and so is integer arithmetic (#1147): `Floor(F("grid") + 1) / 2`
+divides as integers on both (`7`). `Round(x, 2)` keeps a fraction, so a cast to an integer over it
+is refused on SQLite. One caveat: PostgreSQL turns a float into `numeric` at 15 significant digits
 before it rounds, so a computed value a hair below a half (`2.4999999999999996`) can still round up
-there and down on SQLite. The same conversion reaches a float cast to a scaled `numeric`: a literal
-or value with more than 15 significant digits (`12345678901234.56` becomes `12345678901234.6`)
-differs in its 16th digit, and PostgreSQL is the less exact side. Like `Round`'s tie, it is
-documented rather than refused (#1087). For
-text, the way out is the same as for `Concat`: a `Case` for a boolean, `ToChar` for a timestamp, and
-Julia formatting for the rest.
+there and down on SQLite. The same conversion reaches a float cast to a scaled `numeric`: a value
+with more than 15 significant digits (`12345678901234.56` becomes `12345678901234.6`) differs in its
+16th digit, where PostgreSQL is the less exact side. Like `Round`'s tie, that is representation,
+documented rather than refused (#1087).
 
-For a scaled `numeric`, round to the scale first: `Cast(Round(x, 2), "numeric(10,2)")` passes,
-because `Round(x, d)` has at most `d` places on both engines, so a cast to a scale of at least `d`
-has nothing left to round. Only a decimal tie can differ, in its last digit, as *Rounding to decimal
+For a scaled `numeric`, round to the scale first: `Cast(Round(x, 2), "numeric(10,2)")` builds on
+every engine, because `Round(x, d)` has at most `d` places, so a cast to a scale of at least `d` has
+nothing left to round. Only a decimal tie can differ, in its last digit, as *Rounding to decimal
 places* above describes (#1061). Otherwise cast to an unscaled `"numeric"` (or `DecimalField()`),
-which keeps the value on both engines.
+which keeps the value.
 
 A cast to any other type (`"numeric"`, `"double precision"`, `"date"`) is not checked: it is not a
 text conversion, and `Concat` refuses the result if you then use it as text.
@@ -923,7 +914,8 @@ text conversion, and `Concat` refuses the result if you then use it as text.
 using PormG.Functions: Cast, Ceil, Floor, Round
 using PormG.Models: IntegerField
 
-# Cast("points", IntegerField()) is refused: 1.5 would be 2 on PostgreSQL and 1 on SQLite.
+# Cast("points", IntegerField()) builds on PostgreSQL (1.5 → 2) and is refused on SQLite, which
+# would truncate it to 1. Say how to round, and it builds on both.
 # Race 2, the 2009 Malaysian GP, was stopped early and scored half points.
 M.Result.objects.filter("raceid" => 2).values(
     "resultid", "points",

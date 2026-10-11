@@ -1,10 +1,10 @@
 """
-`Concat` refuses an operand that has no single text: a boolean, a float or a decimal (#1027).
+`Concat` refuses an operand that is not text: a boolean, a float or a decimal (#1027).
 
-#1006 made both engines skip a NULL operand. The second divergence is how each turns a non-text
-operand into text. PostgreSQL's `CONCAT` calls the type's output function; SQLite's `||` uses its
-own number formatting, on top of PormG's SQLite storage (a boolean is `0`/`1`, a decimal an integer
-or a REAL, #648):
+#1006 made both engines skip a NULL operand. The second question is which text a non-text operand
+becomes. PostgreSQL's `CONCAT` calls the type's output function; SQLite's `||` uses its own number
+formatting, on top of PormG's SQLite storage (a boolean is `0`/`1`, a decimal an integer or a REAL,
+#648):
 
 | operand                         | PostgreSQL (measured on 16.15) | SQLite 3.45.1 |
 |---------------------------------|--------------------------------|---------------|
@@ -13,10 +13,17 @@ or a REAL, #648):
 | `DecimalField` `1.50` / `3`     | `1.50` / `3.00`                | `1.5` / `3`   |
 | `Mod(7, 3)`, `Avg`, `Round`, …  | `numeric`                      | a REAL (`1.0`)|
 
-So `Concat("surname", "-", "points")` read differently per engine, and a filter on it matched
-different rows. #860/#876 refused these three as a TEXT value for the same reason; `Concat` makes
-text from its operands, so it refuses them as operands — a literal when the `Concat` is built, a
-column once its path resolves. Integer, text and date operands pass unchanged.
+Each of those is one engine's own spelling of the value, and neither is what the query asked for:
+`Concat("surname", "-", "points")` does not say which text of `points` it means. #1147 step 2 files
+this under EXPLICIT INTENT — Django's `output_field` rule, not parity — so it is refused on every
+engine, the message naming no engine and the spelling that says it: `Cast("points", "text")`, which
+builds everywhere and writes each engine's own text, or a `Case` for a boolean. A literal is refused
+when the `Concat` is built, a column once its path resolves. Integer, text and date operands pass
+unchanged.
+
+One operand is a question of MEANING instead: an integer quotient PostgreSQL computes as `numeric`
+(`sum(bigint)` the type walk cannot name, divided — `7.5` where the quotient means `7`). That one is
+refused on PostgreSQL only (#1111) and built on SQLite.
 
 Everything renders through mock connections — no live database, no fixture.
 
@@ -85,14 +92,17 @@ function _cto_refusal(expr; conn)
   return err
 end
 _cto_msg(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
+# An explicit-intent refusal names no engine: the query is refused for what it does not say, on all.
+_cto_names_no_engine(msg) = !occursin("PostgreSQL", msg) && !occursin("SQLite", msg)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Concat: a boolean, float or decimal COLUMN operand is refused on both engines
+# Concat: a boolean, float or decimal COLUMN operand is refused on every engine (explicit intent)
 # The column's type is known only once its path resolves, so the refusal comes from the render
 # (`_render_function_body`), not the constructor. Each is a `QueryBuildError` naming the column and
-# #1027, and the same build is refused on PostgreSQL and SQLite alike.
+# #1027, raised on PostgreSQL and on SQLite alike because the QUERY is ambiguous, not an engine: the
+# message names no engine (#1147 step 2) and gives the explicit spelling. Expected SQL: none.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1027: a Bool, Float or Decimal column operand is refused" begin
+@testset "#1027: a Bool, Float or Decimal column operand is refused on every engine (explicit intent)" begin
   cases = [
     "active"        => (:bool,    "BooleanField `active`"),
     "points"        => (:float,   "FloatField `points`"),
@@ -106,12 +116,13 @@ _cto_msg(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
     err = _cto_refusal(expr; conn = conn)
     @test err isa QueryBuildError
     msg = _cto_msg(err)
-    @test occursin(named, msg)
-    @test occursin("#1027", msg)
-    # The advice matches the kind: a `Case` for a boolean, Julia formatting for a number. Neither
-    # suggests `Cast(…, CharField())`, which is itself `'25'` vs `'25.0'`.
-    @test occursin(kind === :bool ? "Case(When(\"$(path)\" => true" : "format it in Julia", msg)
-    @test !occursin("CharField", msg)
+    @test occursin("Concat joins text, and the $(named) is not text", msg)
+    @test occursin("(#1027)", msg)
+    # The advice matches the kind: a `Case` for a boolean (its cast to text is SQLite's `1`, a
+    # question of meaning, #1028), and a cast to text naming the column for a number — which builds on
+    # every engine and writes each one's own text (representation, #1147 step 2).
+    @test occursin(kind === :bool ? "Case(When(\"$(path)\" => true" : "Cast(\"$(path)\", \"text\")", msg)
+    @test _cto_names_no_engine(msg)
   end
 end
 
@@ -134,17 +145,19 @@ end
       e
     end
     @test err isa QueryBuildError
-    @test occursin(named, _cto_msg(err))
+    @test occursin("Concat joins text, and $(named) is not text", _cto_msg(err))
+    @test _cto_names_no_engine(_cto_msg(err))
   end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Concat: an EXPRESSION whose type is a boolean, float or decimal is refused
+# Concat: an EXPRESSION whose type is a boolean, float or decimal is refused on every engine
 # The rule is the operand's type, not its spelling: a comparison and `Exists`-like booleans, an
 # extremum or sum over a float, a cast or `output_field` naming one, arithmetic over one, and the
 # functions PostgreSQL computes as `numeric` (`Avg`, `Round`, `Mod`, …) while SQLite answers a REAL.
+# Explicit intent (#1147 step 2): one refusal per engine, the message naming neither.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1027: an expression typed boolean, float or decimal is refused" begin
+@testset "#1027: an expression typed boolean, float or decimal is refused on every engine (explicit intent)" begin
   F = PormG.QueryBuilder.F
   refused = [
     F("number") > 0,                                   # a comparison is a boolean (#949)
@@ -174,27 +187,35 @@ end
   for expr in refused, conn in (_CTO_PG, _CTO_SL)
     err = _cto_refusal(Fn.Concat("surname", Fn.Value("-"), expr); conn = conn)
     @test err isa QueryBuildError
-    @test occursin("#1027", _cto_msg(err))
+    @test occursin("(#1027)", _cto_msg(err))
+    @test _cto_names_no_engine(_cto_msg(err))
   end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Concat: the refusal names the operand and gives the reason for its kind
-# A number computed as `numeric` on PostgreSQL and a REAL on SQLite (`Mod`, `Avg`) splits as `1` vs
-# `1.0`, not as a decimal column's `3.00` vs `3`, so it carries its own reason. A boolean written as
-# `F("active")` still names its column in the `Case` suggestion.
+# Concat: the refusal names the operand and the spelling that says which text it means
+# The message is the same on every engine: the operand is not text, so say which text (#1147 step 2).
+# A number is pointed to a cast to text — naming the column when it is one, `<flag>` for a computed
+# value — and never given an engine's own spelling of it (no `1` vs `1.0`, no `3.00` vs `3`). A
+# boolean written as `F("active")` still names its column in the `Case` suggestion.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1027: the message fits the operand" begin
   F = PormG.QueryBuilder.F
-  msg(expr) = _cto_msg(_cto_refusal(Fn.Concat(Fn.Value("-"), expr); conn = _CTO_SL))
-  for expr in (Fn.Mod("number", 3), Fn.Avg("number"), Fn.Round("number"))
-    @test occursin("`numeric` (`1`) and SQLite as a REAL (`1.0`)", msg(expr))
-    @test !occursin("3.00", msg(expr))
+  for conn in (_CTO_PG, _CTO_SL)
+    msg(expr) = _cto_msg(_cto_refusal(Fn.Concat(Fn.Value("-"), expr); conn = conn))
+    for (expr, named) in ((Fn.Mod("number", 3), "`MOD(…)`"), (Fn.Avg("number"), "`AVG(…)`"), (Fn.Round("number"), "`ROUND(…)`"))
+      m = msg(expr)
+      @test occursin("Concat joins text, and $(named) is not text: say which text you mean (#1027)", m)
+      @test occursin("Cast it to text first: Cast(\"<flag>\", \"text\")", m)
+      @test !occursin("3.00", m) && !occursin("1.0", m)
+      @test _cto_names_no_engine(m)
+    end
+    @test occursin("the DecimalField `price` is not text", msg("price"))
+    @test occursin("Cast(\"price\", \"text\")", msg("price"))
+    @test occursin("`MAX(…)` over the FloatField `points`", msg(Fn.Max("points")))
+    @test occursin("Case(When(\"active\" => true", msg(F("active")))
+    @test occursin("Case(When(\"<flag>\" => true", msg(F("number") > 0))
   end
-  @test occursin("a decimal reads `3.00`", msg("price"))
-  @test occursin("`MAX(…)` over the FloatField `points`", msg(Fn.Max("points")))
-  @test occursin("Case(When(\"active\" => true", msg(F("active")))
-  @test occursin("Case(When(\"<flag>\" => true", msg(F("number") > 0))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -272,9 +293,12 @@ end
   allowed = [
     "number", "surname", "born", "born__@year", "team__name", F("number"), F("number") + 1,
     Fn.Value("-"), Fn.Value(7), 7, Date(2024, 1, 5),
-    # #1028: a cast to text or an integer passes only when the engines agree on it; a float cast to
-    # text (`'25'` vs `'25.0'`) is refused by the cast itself — `test_cast_divergent_operands.jl`.
+    # A cast to text is the explicit spelling, and builds on every engine: over an integer, and over a
+    # float or a decimal too, each engine writing its own text (`'25'` / `'25.0'`, representation,
+    # #1147 step 2). A boolean's cast to text is refused on SQLite only — `test_cast_divergent_operands.jl`.
     Fn.Cast("number", Models.CharField()),             # explicit text over an integer
+    Fn.Cast("points", Models.CharField()),             # explicit text over a float
+    Fn.Cast("price", "text"),                          # explicit text over a decimal
     Fn.Cast(Fn.Round("price"), Models.IntegerField()), # explicit integer, rounded first
     Fn.Floor("number"),                                # integer operand: '7' on both
     Fn.Max("number"), Fn.Count("id"), Fn.Length("surname"),
@@ -286,6 +310,33 @@ end
     sql = _cto_render(Fn.Concat(Fn.Value("-"), expr); conn = conn)
     @test occursin(conn === _CTO_PG ? "CONCAT(" : "COALESCE(", sql)
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Concat: an integer quotient PostgreSQL computes as `numeric` is refused there only (#1111, #1147)
+# The one `Concat` operand that is a question of MEANING, not explicit intent: an integer divided is
+# an integer quotient (`15 / 2` is `7`), and the operand's text is that integer's. A `Sum` of a
+# `bigint` the type walk cannot name — a shift, `F("id") << 1` — is PostgreSQL's `sum(bigint)`, a
+# `numeric`, so `/ 2` keeps the half there (`7.5`): PostgreSQL departs and is refused, naming only
+# itself; SQLite divides as integers and builds `SUM(("Tb"."id" << ?)) / ?`. A `Sum` the walk names
+# (`Sum("id")`) renders `SUM("Tb"."id")::bigint` on PostgreSQL, divides as an integer on both, and
+# builds everywhere.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1111: Concat over an integer quotient PostgreSQL computes as numeric is refused on PostgreSQL only" begin
+  F = PormG.QueryBuilder.F
+  expr = Fn.Concat(Fn.Value("-"), Fn.Sum(F("id") << 1) / 2)
+  err = _cto_refusal(expr; conn = _CTO_PG)
+  @test err isa QueryBuildError
+  msg = _cto_msg(err)
+  @test occursin("Concat of arithmetic over `SUM(…)` over the IDField `id` means an integer quotient", msg)
+  @test occursin("so PormG refuses it on PostgreSQL (#1111)", msg)
+  @test !occursin("SQLite", msg)
+  @test occursin("SUM((\"Tb\".\"id\" << ?)) / ?", _cto_render(expr; conn = _CTO_SL))
+  # The sum the walk names is normalized on PostgreSQL, so it builds on both engines.
+  for conn in (_CTO_PG, _CTO_SL)
+    @test _cto_refusal(Fn.Concat(Fn.Value("-"), Fn.Sum("id") / 2); conn = conn) === nothing
+  end
+  @test occursin("(SUM(\"Tb\".\"id\")::bigint / \$2::bigint)", _cto_render(Fn.Concat(Fn.Value("-"), Fn.Sum("id") / 2); conn = _CTO_PG))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

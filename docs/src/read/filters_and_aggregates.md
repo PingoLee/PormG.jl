@@ -900,6 +900,32 @@ GROUP BY 1, 2, 3, 4   -- groups by non-aggregate columns
 
 You do **not** write `GROUP BY` manually — PormG handles it.
 
+### What a `Sum` returns
+
+`Sum` over integers is an integer on both engines, as Django's `Sum` of an integer field is. SQLite
+sums integers as integers. PostgreSQL sums a `smallint` or an `integer` column to a `bigint`, but
+widens the sum of a `bigint` to `numeric`, which would keep the half once divided. So when what it
+sums is a `bigint` (an `IDField`, a `BigIntegerField`, a `ForeignKey`, an integer literal such as
+the `1` of a conditional count, or integer arithmetic over one), PormG renders `SUM(x)::bigint`
+there (#1147):
+
+```julia
+using PormG.Functions: Sum, Case, When
+
+query = M.Result.objects
+query.filter("raceid" => 18)
+query.values(
+    "id_sum"  => Sum("resultid"),                                                  # Int64 on both engines
+    "half"    => Sum("resultid") / 2,                                              # integer division on both
+    "podiums" => Sum(Case(When("positionorder__@lte" => 3, then = 1), default = 0)))  # Int64 on both
+df = query |> DataFrame
+# PostgreSQL: SUM("Tb"."resultid")::bigint as "id_sum", (SUM("Tb"."resultid")::bigint / $1::bigint) as "half", …
+```
+
+A sum beyond the `bigint` range then raises on PostgreSQL (`bigint out of range`), as it does on
+SQLite (`integer overflow`). A sum of floats or decimals is not cast: it stays a `double precision`
+or a `numeric`.
+
 !!! tip
     Window functions (`Rank`, `RowNumber`, `Lag`, …) can coexist with aggregates in the same `values()` call. PormG keeps window aliases out of `GROUP BY` automatically. See [Window Functions](window_functions.md).
 

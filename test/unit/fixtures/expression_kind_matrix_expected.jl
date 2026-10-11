@@ -315,13 +315,13 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F bare hop date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
   ("F int + int | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()"),
   ("F int + int | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()"),
   ("F int + int | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()"),
   ("F int + int | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = nothing),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()"),
   ("F int + int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
   ("F int + int | subquery", :sqlite) =>
@@ -483,17 +483,17 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast datetime to date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
   ("Cast float to integer | alone", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast cannot make the same integer from the FloatField `points` on both engines: PostgreSQL rounds a fractional number ca"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()"),
   ("Cast float to integer | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast cannot make the same integer from the FloatField `points` on both engines: PostgreSQL rounds a fractional number ca"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the FloatField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated one"),
   ("Cast float to integer | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast cannot make the same integer from the FloatField `points` on both engines: PostgreSQL rounds a fractional number ca"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()"),
   ("Cast float to integer | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast cannot make the same integer from the FloatField `points` on both engines: PostgreSQL rounds a fractional number ca"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the FloatField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated one"),
   ("Cast float to integer | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast cannot make the same integer from the FloatField `points` on both engines: PostgreSQL rounds a fractional number ca"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
   ("Cast float to integer | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast cannot make the same integer from the FloatField `points` on both engines: PostgreSQL rounds a fractional number ca"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the FloatField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated one"),
   ("Cast int to text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()"),
   ("Cast int to text | alone", :sqlite) =>
@@ -1034,6 +1034,162 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
   ("Floor year part | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
+  ("Cast bool to text | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()"),
+  ("Cast bool to text | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1` or `0`, the i"),
+  ("Cast bool to text | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", cte_textless = nothing, kind = "CText()"),
+  ("Cast bool to text | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1` or `0`, the i"),
+  ("Cast bool to text | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = nothing),
+  ("Cast bool to text | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1` or `0`, the i"),
+  ("Cast float to text | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()"),
+  ("Cast float to text | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()"),
+  ("Cast float to text | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", cte_textless = nothing, kind = "CText()"),
+  ("Cast float to text | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", cte_textless = nothing, kind = "CText()"),
+  ("Cast float to text | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = nothing),
+  ("Cast float to text | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = nothing),
+  ("Cast decimal to text | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()"),
+  ("Cast decimal to text | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()"),
+  ("Cast decimal to text | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", cte_textless = nothing, kind = "CText()"),
+  ("Cast decimal to text | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", cte_textless = nothing, kind = "CText()"),
+  ("Cast decimal to text | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = nothing),
+  ("Cast decimal to text | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = nothing),
+  ("Cast decimal to integer | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()"),
+  ("Cast decimal to integer | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DecimalField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated o"),
+  ("Cast decimal to integer | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()"),
+  ("Cast decimal to integer | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DecimalField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated o"),
+  ("Cast decimal to integer | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
+  ("Cast decimal to integer | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DecimalField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated o"),
+  ("Cast float to scale 1 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)"),
+  ("Cast float to scale 1 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
+  ("Cast float to scale 1 | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 1)"),
+  ("Cast float to scale 1 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
+  ("Cast float to scale 1 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = nothing),
+  ("Cast float to scale 1 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
+  ("Concat float | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and the FloatField `points` is not text: say which text you mean (#1027). Cast it to text first: Cast"),
+  ("Concat float | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and the FloatField `points` is not text: say which text you mean (#1027). Cast it to text first: Cast"),
+  ("Concat float | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and the FloatField `points` is not text: say which text you mean (#1027). Cast it to text first: Cast"),
+  ("Concat float | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and the FloatField `points` is not text: say which text you mean (#1027). Cast it to text first: Cast"),
+  ("Concat float | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and the FloatField `points` is not text: say which text you mean (#1027). Cast it to text first: Cast"),
+  ("Concat float | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and the FloatField `points` is not text: say which text you mean (#1027). Cast it to text first: Cast"),
+  ("Sum bigint | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()"),
+  ("Sum bigint | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()"),
+  ("Sum bigint | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt64()"),
+  ("Sum bigint | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt64()"),
+  ("Sum bigint | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
+  ("Sum bigint | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
+  ("Sum bigint / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()"),
+  ("Sum bigint / 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()"),
+  ("Sum bigint / 2 | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt64()"),
+  ("Sum bigint / 2 | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt64()"),
+  ("Sum bigint / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
+  ("Sum bigint / 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
+  ("Cast Sum bigint / 2 int | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()"),
+  ("Cast Sum bigint / 2 int | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()"),
+  ("Cast Sum bigint / 2 int | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()"),
+  ("Cast Sum bigint / 2 int | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()"),
+  ("Cast Sum bigint / 2 int | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
+  ("Cast Sum bigint / 2 int | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
+  ("Sum Case int | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()"),
+  ("Sum Case int | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()"),
+  ("Sum Case int | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt64()"),
+  ("Sum Case int | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt64()"),
+  ("Sum Case int | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
+  ("Sum Case int | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
+  ("Sum F int + 1 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()"),
+  ("Sum F int + 1 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()"),
+  ("Sum F int + 1 | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt64()"),
+  ("Sum F int + 1 | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt64()"),
+  ("Sum F int + 1 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
+  ("Sum F int + 1 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
+  ("F int / int | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()"),
+  ("F int / int | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()"),
+  ("F int / int | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()"),
+  ("F int / int | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()"),
+  ("F int / int | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
+  ("F int / int | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
+  ("Floor F int + 1 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()"),
+  ("Floor F int + 1 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()"),
+  ("Floor F int + 1 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Floor F int + 1 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Floor F int + 1 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
+  ("Floor F int + 1 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing),
   ("Subquery Max hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
   ("Subquery Max hop date | alone", :sqlite) =>
@@ -1207,6 +1363,12 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:gap, "read=none vs textless=numeric")],
   ("Mod int | subquery", :sqlite) =>
     [(:gap, "read=none vs textless=numeric")],
+  ("Cast float to scale 1 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast float to scale 1 | cte", :postgres) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Cast float to scale 1 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
   ("Subquery Avg float | alone", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
   ("Subquery Avg float | alone", :sqlite) =>

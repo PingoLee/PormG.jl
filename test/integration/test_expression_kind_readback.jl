@@ -81,6 +81,10 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Avg interval | cte", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
   ("Avg interval | subquery", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
   ("Avg interval | subquery", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
+  # #1147: SQLite refuses this cell (it keeps every digit the scale rounds away), so only PostgreSQL reads it back.
+  ("Cast float to scale 1 | alone", :postgres) => (type = "Decimal", value = "10", read = nothing),
+  ("Cast float to scale 1 | cte", :postgres) => (type = "Decimal", value = "10", read = nothing),
+  ("Cast float to scale 1 | subquery", :postgres) => (type = "Decimal", value = "10", read = nothing),
   ("F comparison | cte", :postgres) => (type = "Bool", value = "false", read = "CBool()"),
   ("F comparison | cte", :sqlite) => (type = "Bool", value = "false", read = "CBool()"),
   ("F date - date | alone", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
@@ -193,12 +197,15 @@ end
 # Expression-kind matrix: the type-divergence verdict matches the recorded table
 # A consistency check of the conclusion, not of behaviour (the testset above checks behaviour): the
 # cells whose PostgreSQL and SQLite types differ in `_EKR_EXPECTED` must be exactly
-# `_EKR_TYPE_DIVERGENT`, and every disagreeing cell must be recorded for both engines.
+# `_EKR_TYPE_DIVERGENT`, and every disagreeing cell must be recorded on every engine that builds it.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Expression-kind matrix: which disagreements change the type read back (#1034)" begin
   ids = Set(id for (id, _) in keys(_EKM_DISAGREEMENTS))
   @test Set(id for (id, _) in keys(_EKR_EXPECTED)) == ids
-  @test all(id -> haskey(_EKR_EXPECTED, (id, :postgres)) && haskey(_EKR_EXPECTED, (id, :sqlite)), ids)
+  # #1147: a cell the engine that departs from its meaning refuses has nothing to read back there
+  # (`Cast(points, "numeric(10,1)")` on SQLite); every engine that builds it is recorded.
+  builds(id, engine) = _EKM_EXPECTED[(id, engine)].stage === :ok
+  @test all(id -> all(e -> !builds(id, e) || haskey(_EKR_EXPECTED, (id, e)), (:postgres, :sqlite)), ids)
   divergent = Set(id for id in ids
                   if haskey(_EKR_EXPECTED, (id, :postgres)) && haskey(_EKR_EXPECTED, (id, :sqlite)) &&
                      _EKR_EXPECTED[(id, :postgres)].type != _EKR_EXPECTED[(id, :sqlite)].type)

@@ -357,10 +357,14 @@ end
     end
 end
 
-# bulk_copy is a PostgreSQL-only feature (COPY protocol)
-if adapter_name == "SQLite"
-    @info "Skipping bulk_copy tests for SQLite (not supported)"
-    return true
+# bulk_copy is the `:copy` row of the capability table (PostgreSQL's COPY protocol). A backend
+# without it refuses the call before any row is written.
+if !requires(:copy)
+    @testset "a backend without COPY refuses bulk_copy" begin
+        df = DataFrames.DataFrame([(name = "Copy refused", test_result = _bulk_copy_fk_ids[1])])
+        @test_throws PormG.BackendCapabilityError bulk_copy(M.Just_a_test_deletion.objects, df)
+        @test M.Just_a_test_deletion.objects.filter("name" => "Copy refused").count() == 0
+    end
 else
 
 @testset "PostgreSQL COPY Protocol (bulk_copy)" begin
@@ -1040,5 +1044,5 @@ end
     end
 end
 
-end # End of if adapter_name != "SQLite"
+end # requires(:copy)
 

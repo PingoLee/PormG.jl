@@ -2,7 +2,8 @@
 # FULL-TEXT SEARCH — Live-Database Integration Test (#31, part 1)
 #
 # The `@search` lookup and `SearchQuery` / `SearchVector` / `SearchRank` / `SearchHeadline` against the
-# F1 fixture. PostgreSQL only: on SQLite this file asserts the refusal and nothing else.
+# F1 fixture. Each testset asks `requires(:full_text_search)`: a backend without the feature (SQLite
+# today) asserts the refusal and records the skip, and nothing else.
 #
 # A search result is checked against an INDEPENDENT reading of the same rows — every surname or race
 # name, fetched through the ORM and tokenized in Julia — rather than against a list typed from memory,
@@ -35,13 +36,12 @@ _fts31_err(f) = try f(); nothing catch e; e end
 
 @testset "Full-text search, live ($(PORMG_DB_FOLDER)) (#31)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    is_pg = pool isa PormG.PormGPostgres
 
     # ─────────────────────────────────────────────────────────────────────
-    # SQLite: refused when the query is built, before anything runs
+    # A backend without full-text search: refused when the query is built, before anything runs
     # ─────────────────────────────────────────────────────────────────────
-    if !is_pg
-        @testset "SQLite refuses every piece" begin
+    if !requires(:full_text_search)
+        @testset "a backend without full-text search refuses every piece" begin
             for f in (() -> M.Driver.objects.filter("surname__@search" => "senna").list(),
                       () -> M.Driver.objects.values("r" => SearchRank(SearchVector("surname"), "senna")).list(),
                       () -> M.Race.objects.values("h" => SearchHeadline("name", "prix")).list())
@@ -345,14 +345,13 @@ end
 # SearchVectorField (#1021): a stored document, filled by update, searched, ranked and indexed
 #
 # A scratch table built through the planner, as the index testset above builds one, and dropped in a
-# `finally`. Every search result is compared with the tokenized rows, as above. On SQLite the planner
-# refuses the column at `makemigrations`, before a plan exists.
+# `finally`. Every search result is compared with the tokenized rows, as above. On a backend without
+# full-text search the planner refuses the column at `makemigrations`, before a plan exists.
 # ==============================================================================
 const FTS1021_TABLE = "pormg_fts1021_report"
 
 @testset "SearchVectorField, live ($(PORMG_DB_FOLDER)) (#1021)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    is_pg = pool isa PormG.PormGPostgres
     drop() = try; PormG.ConnectionPool.fetch(pool, Dialect.drop_table(pool, FTS1021_TABLE)); catch; end
     model = Models.Model(FTS1021_TABLE;
         id     = Models.IDField(),
@@ -366,8 +365,8 @@ const FTS1021_TABLE = "pormg_fts1021_report"
     settings() = (s = PormG.Configuration.Settings(); s.change_db = true; s)
     live() = PormG.Migrations.read_live_schema(pool; include_table = [FTS1021_TABLE])
 
-    if !is_pg
-        @testset "SQLite refuses the column at makemigrations" begin
+    if !requires(:full_text_search)
+        @testset "a backend without full-text search refuses the column at makemigrations" begin
             drop()
             err = _fts31_err(() -> get_migration_plan(LiveTable[], schema, pool, settings(); interactive = false))
             @test err isa PormG.BackendCapabilityError
@@ -464,14 +463,13 @@ end
 # Generated SearchVectorField (#1032): a document PostgreSQL keeps current
 #
 # A scratch table built through the planner, as above, and dropped in a `finally`. Each step plans
-# from the live schema, runs the plan, and checks the next `makemigrations` plans nothing. On SQLite
-# the planner refuses the column, as it refuses every SearchVectorField.
+# from the live schema, runs the plan, and checks the next `makemigrations` plans nothing. On a backend
+# without full-text search the planner refuses the column, as it refuses every SearchVectorField.
 # ==============================================================================
 const FTS1032_TABLE = "pormg_fts1032_story"
 
 @testset "Generated SearchVectorField, live ($(PORMG_DB_FOLDER)) (#1032)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    is_pg = pool isa PormG.PormGPostgres
     drop() = try; PormG.ConnectionPool.fetch(pool, Dialect.drop_table(pool, FTS1032_TABLE)); catch; end
     story(; title = Models.CharField(max_length = 200), search = nothing) = (m = Models.Model(FTS1032_TABLE;
         id     = Models.IDField(),
@@ -522,8 +520,8 @@ const FTS1032_TABLE = "pormg_fts1032_story"
     senna_ids(m) = Set(r["id"] for r in m.objects.filter("search__@search" => SearchQuery("senna"; config = "simple")).
                                                     values("id").list())
 
-    if !is_pg
-        @testset "SQLite refuses the column at makemigrations" begin
+    if !requires(:full_text_search)
+        @testset "a backend without full-text search refuses the column at makemigrations" begin
             drop()
             err = _fts31_err(() -> get_migration_plan(LiveTable[], schema(story()), pool, settings(); interactive = false))
             @test err isa PormG.BackendCapabilityError

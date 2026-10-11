@@ -553,16 +553,17 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# POSIX regex lookups — PostgreSQL only (#635)
-# PostgreSQL runs `~` / `~*` / `!~` / `!~*` natively; SQLite has no regex engine and PormG will not
-# emulate one with a PCRE UDF, since the two dialects would read the same pattern differently. The
-# oracle is independent of the new code: the anchored patterns are compared against the LIKE lookups
+# POSIX regex lookups — the `:regex` row of the capability table (#635)
+# PostgreSQL runs `~` / `~*` / `!~` / `!~*` natively. A backend without it refuses the lookups: SQLite
+# has no regex engine, and PormG will not emulate one with a PCRE UDF, since the two dialects would
+# read the same pattern differently.
+# The oracle is independent of the new code: the anchored patterns are compared against the LIKE lookups
 # that already pass above, and the class pattern against a Julia-side scan of the same surnames.
 # 861 = drivers with a non-NULL surname; each negated twin is the exact complement.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Regex lookups (#635)" begin
     surnames(q) = Set(String.((q.values("surname") |> DataFrame).surname))
-    if PORMG_DB_FOLDER == "db_sl"
+    if !requires(:regex)
         for op in ("regex", "iregex", "nregex", "niregex")
             @test_throws PormG.BackendCapabilityError M.Driver.objects.filter("surname__@$(op)" => "^Ver").count()
         end

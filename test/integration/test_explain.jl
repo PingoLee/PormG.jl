@@ -9,6 +9,9 @@ import PormG.ConnectionPool: fetch
 import PormG.QueryBuilder: OuterRef, Subquery
 import PormG.Functions: Count
 
+# The plan TEXT each engine prints (an index's name, a scan's relation or alias, its estimates) is
+# representation, so it is a per-engine expectation. Whether an option such as ANALYZE exists is a
+# feature, asked of the capability table with `requires(:explain_options)`.
 const EXPLAIN_IS_PG = PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -59,13 +62,14 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# explain(analyze = true): measured timing on PostgreSQL, refused on SQLite
-# ANALYZE executes the query, so PostgreSQL reports planning and execution time. SQLite has no
-# EXPLAIN ANALYZE, and the option is a BackendCapabilityError rather than a silently ignored flag.
+# explain(analyze = true): measured timing, or refused by a backend without EXPLAIN options
+# ANALYZE executes the query, so PostgreSQL reports planning and execution time. A backend without
+# `:explain_options` (SQLite has no EXPLAIN ANALYZE) raises BackendCapabilityError rather than
+# silently ignoring the flag.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "explain: analyze" begin
     q = M.Result.objects.filter("raceid__year" => 1991).values("points")
-    if EXPLAIN_IS_PG
+    if requires(:explain_options)
         timed = q.explain(analyze = true, buffers = true)
         @test timed[:analyze] === true
         @test timed[:execution_time_ms] isa Float64 && timed[:execution_time_ms] >= 0
@@ -84,9 +88,13 @@ end
 # which outside a transaction it refuses (the unit suite pins the refusal).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "explain: inside run_in_transaction" begin
+    # Asked of the table directly, not through `requires`: this testset runs on every backend, and
+    # only picks the query it explains. (Row locking is not a table row yet; today the backends
+    # with EXPLAIN options are the ones with `select_for_update`.)
+    analyze = PormG.Kernel._supports(PormG.config[PORMG_DB_FOLDER].connections, :explain_options)
     plan = PormG.run_in_transaction(PORMG_DB_FOLDER) do
         q = M.Driver.objects.filter("driverid" => 102).values("surname")
-        EXPLAIN_IS_PG ? q.select_for_update().explain(analyze = true) : q.explain()
+        analyze ? q.select_for_update().explain(analyze = true) : q.explain()
     end
     @test plan[:indexes_used] == (EXPLAIN_IS_PG ? ["driver_pkey"] : ["INTEGER PRIMARY KEY"])
 end

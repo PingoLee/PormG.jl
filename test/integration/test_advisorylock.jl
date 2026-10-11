@@ -2,25 +2,20 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
-if adapter_name == "SQLite"
-    @info "Skipping AdvisoryLock tests for SQLite (not supported)"
-    return true
+if !requires(:advisory_locks)
+  # A backend without advisory locks refuses one when the caller asks for an error; by default it
+  # runs the body unlocked with a warning, which `test/unit/test_advisory_lock_sqlite.jl` pins.
+  @testset "a backend without advisory locks refuses one under on_missing_lock = :error" begin
+    ran = Ref(false)
+    @test_throws PormG.BackendCapabilityError PormG.with_advisory_lock(() -> (ran[] = true),
+        PormG.config[PORMG_DB_FOLDER].connections, "pormg_requires_probe"; on_missing_lock = :error)
+    @test !ran[]
+  end
 else
 
   @testset "AdvisoryLock: non-blocking exclusivity" begin
-    # Find a Postgres DB. Advisory locks are only supported in Postgres.
-    dbname = nothing
-    for k in ["db_2", "db", first(keys(PormG.config))]
-      if haskey(PormG.config, k) && PormG.config[k].db_config_settings["adapter"] == "PostgreSQL"
-        dbname = k
-        break
-      end
-    end
-    
-    if dbname === nothing
-      @warn "Skipping AdvisoryLock tests: No PostgreSQL connection found."
-      return
-    end
+    # This run's backend: `requires(:advisory_locks)` above already said it has the feature.
+    dbname = PORMG_DB_FOLDER
     
     key = "test_advisory_lock_$(uuid4())"
     n = 5
@@ -51,7 +46,7 @@ else
   end
 
   @testset "AdvisoryLock: blocking with timeout" begin
-    dbname = haskey(PormG.config, "db_2") ? "db_2" : first(keys(PormG.config))
+    dbname = PORMG_DB_FOLDER
     key = "test_advisory_lock_timeout_$(uuid4())"
 
     # First, acquire the lock in a separate task and hold it
@@ -117,7 +112,7 @@ else
     # The production scheduler uses wait=false to skip duplicate work instead of
     # queueing. This regression proves the non-blocking path succeeds when free
     # and throws without running the protected block when another session holds it.
-    dbname = haskey(PormG.config, "db_2") ? "db_2" : first(keys(PormG.config))
+    dbname = PORMG_DB_FOLDER
 
     free_key = "test_advisory_lock_wait_false_free_$(uuid4())"
     @test PormG.with_advisory_lock(dbname, free_key; wait=false) do
@@ -179,7 +174,7 @@ else
   # differ, the second acquisition SUCCEEDS, and `@test blocked` fails.
   # ───────────────────────────────────────────────────────────────────────────────────────────
   @testset "AdvisoryLock: migration lock identity is the database, not the folder (#90)" begin
-    base = PormG.config[haskey(PormG.config, "db_2") ? "db_2" : first(keys(PormG.config))]
+    base = PormG.config[PORMG_DB_FOLDER]
 
     # Two settings differing ONLY in `db_def_folder` — the shape the issue describes: separate `db/`
     # directories whose connection.yml resolve to one server and database. Each needs its own pool,
@@ -277,4 +272,4 @@ else
     end
   end
 
-end # End of if adapter_name != "SQLite"
+end # requires(:advisory_locks)

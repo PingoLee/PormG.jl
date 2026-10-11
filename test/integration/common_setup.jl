@@ -66,6 +66,47 @@ const PORMG_DB_FOLDER = get(ENV, "PORMG_DB", "db_2")
 # Load configurations once
 PormG.Configuration.load(PORMG_DB_FOLDER)
 
+# ── Features per backend (#1129): `requires(:feature)` ──────────────────────────────────────────
+# A test of an optional feature asks the capability table (`src/capabilities.jl`, #1161) whether this
+# run's backend has it, never which engine it is: a backend added later (#1130) then runs the
+# feature's tests or its refusal by what it declares, not by inheriting one engine's branch.
+#
+#     if requires(:arrays)
+#         … the feature, live …
+#     else
+#         @test_throws PormG.BackendCapabilityError …   # a backend without it refuses it
+#     end
+#
+# On a backend without the feature, `requires` records the skip with its reason: a `Broken` result
+# in the enclosing testset (it counts, and never fails the run), and an entry in `FEATURE_SKIPS`,
+# which `runtests.jl` lists at the end. The reason is printed the first time a feature is skipped,
+# with `println` because the suite's logger drops `@info` (see `QuietIntegrationLogger` below). An
+# unknown feature name throws `InvalidValueError`, so a typo cannot skip a test silently.
+const FEATURE_SKIPS = Tuple{Symbol,String}[]
+function requires(feature::Symbol; conn = PormG.config[PORMG_DB_FOLDER].connections)::Bool
+    PormG.Kernel._supports(conn, feature) && return true
+    reason = "skipped: $(PormG.Kernel._backend_name(conn)) does not support " *
+             "$(PormG.Kernel._feature_description(feature)) (:$(feature))"
+    Test.record(Test.get_testset(), Test.Broken(:skipped, reason))
+    any(s -> first(s) === feature, FEATURE_SKIPS) || println(reason)
+    push!(FEATURE_SKIPS, (feature, reason))
+    return false
+end
+
+# The skips `requires` recorded, one line per reason with how many times it answered no.
+function print_feature_skips(io::IO = stdout)
+    isempty(FEATURE_SKIPS) && return nothing
+    counts = Dict{String,Int}()
+    for (_, why) in FEATURE_SKIPS
+        counts[why] = get(counts, why, 0) + 1
+    end
+    println(io, "\nNot run on $(PORMG_DB_FOLDER), for a feature its backend does not have (#1129):")
+    for why in sort!(collect(keys(counts)))
+        println(io, "  $(why) × $(counts[why])")
+    end
+    return nothing
+end
+
 # #37: the async integration suite (`-t auto`, heavy fan-out) saturates a small PostgreSQL pool
 # against a possibly-remote DB. Size the pool to the run's concurrency for this run only
 # (env-overridable) and rebuild so the initial slots are pre-sized instead of grown via the

@@ -800,6 +800,13 @@ end
     @test occursin(r"(FLOOR|CEIL)\(\(LAG|(FLOOR|CEIL)\(\(LEAD", _ccd_render(expr; conn = _CCD_PG))
   end
   @test occursin(r"SELECT\s+\(LAG\(", _ccd_render(Fn.Floor(Fn.Lag("number", default = 1, over = over)); conn = _CCD_PG))
+  # And as a CTE column, which the body records through the same `_known_whole`.
+  q = CCD.Ccd_team.objects
+  body = CCD.Ccd_driver.objects
+  body.values("team", "lf" => Fn.Lag("number", default = 1.5, over = over))
+  q.with("c" => body, join_field = "id" => "team")
+  q.values("x" => Fn.Floor(PormG.CTE("c", "lf")))
+  @test occursin(r"FLOOR\(\(\"R\d+_\d+\"\.\"lf\"\)::numeric\)", _ccd_sql(q; conn = _CCD_PG))
   # Delta review of #1147: a ranking window and a `Case` of integers are a `bigint` on PostgreSQL and an
   # integer on SQLite, though `_known_whole` does not name them, so the body records them whole too.
   # `Floor` over the column then renders it as itself and divides as integers on both engines, and

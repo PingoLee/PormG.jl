@@ -1334,6 +1334,18 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float", kind = "CFloat64()"),
   ("Lag int default float / 2 | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float", kind = "CFloat64()"),
+  ("Cast Case int float to integer | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()"),
+  ("Cast Case int float to integer | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` with a float value means the nearest integer (`1.5` → `2`); SQLite computes the truncate"),
+  ("Cast Case int float to integer | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()"),
+  ("Cast Case int float to integer | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` with a float value means the nearest integer (`1.5` → `2`); SQLite computes the truncate"),
+  ("Cast Case int float to integer | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()"),
+  ("Cast Case int float to integer | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` with a float value means the nearest integer (`1.5` → `2`); SQLite computes the truncate"),
   ("Subquery Max hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
   ("Subquery Max hop date | alone", :sqlite) =>

@@ -466,6 +466,38 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1151: a Case is typed by its branch values: a float branch, cast to an integer, is refused on SQLite
+# An untyped `Case` passed the #1028 check, but its branches are typed: PostgreSQL resolves the `CASE`
+# to the widest of them (`$2::double precision` beside `$3::bigint` is a `float8`), so its cast to an
+# integer rounds `1.5` to `2`, while SQLite's truncates it to `1`. The type walk names that kind
+# (`_case_kind`), and the check reads it for an operand the classifier leaves untyped — a `Coalesce`
+# over such a `Case` too. Expected SQL, PostgreSQL:
+#   (CASE WHEN "Tb"."number" = $1 THEN $2::double precision ELSE $3::bigint END)::integer
+# Built on both: integer branches, text branches, a NULL default, a `Case` with an `output_field` (it
+# decides alone), and the cast to text (representation).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1151: a Case with a float branch, cast to an integer, is refused on SQLite only" begin
+  float_case(; then = 1.5, default = 0) = Fn.Case(Fn.When("number" => 1, then = then), default = default)
+  for (expr, named) in (
+      (Fn.Cast(float_case(), Models.IntegerField()), "`CASE(…)` with a float value"),
+      (Fn.Cast(float_case(then = 1, default = 0.5), Models.IntegerField()), "`CASE(…)` with a float value"),
+      (Fn.Cast(float_case(then = _CF("points")), Models.IntegerField()), "`CASE(…)` with a float value"),
+      (Fn.Cast(float_case(), "bigint"), "`CASE(…)` with a float value"),
+      (Fn.Cast(Fn.Coalesce(float_case(), 0), Models.IntegerField()), "`COALESCE(…)` with a float value"))
+    _ccd_expect(expr; departs = _SL_ONLY, issue = "#1028", named = named)
+  end
+  @test occursin("(CASE WHEN \"Tb\".\"number\" = \$1 THEN \$2::double precision ELSE \$3::bigint END)::integer as \"x\"",
+                 _ccd_render(Fn.Cast(float_case(), Models.IntegerField()); conn = _CCD_PG))
+  for expr in (Fn.Cast(float_case(then = 1), Models.IntegerField()),
+               Fn.Cast(float_case(then = "a", default = "b"), Models.IntegerField()),
+               Fn.Cast(float_case(then = 2, default = nothing), Models.IntegerField()),
+               Fn.Cast(Fn.Case(Fn.When("number" => 1, then = 1.5), default = 0; output_field = Models.IntegerField()), Models.IntegerField()),
+               Fn.Cast(float_case(), "text"))
+    @test _ccd_builds(expr)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Review of #1028: the checks render a literal operand as before
 # A duration literal under a cast renders as the bound text on SQLite, as it did before the check
 # re-routed the operands — not through the millisecond form `_render_interval_operand` gives it.

@@ -861,6 +861,13 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::
     to_integer && _integral_valued(operand, instruc) && continue
     side = _concat_textless_operand(operand, instruc)
     side === nothing && !to_integer && (side = _rendered_kind_textless(get(rendered, i, nothing)))
+    # #1151: an operand the classifier leaves untyped is read through the type walk: a `Case` has the
+    # kind its branch values agree on (`_case_kind`), so a float branch makes it a `float8` on
+    # PostgreSQL, whose cast rounds where SQLite's truncates. Only a float: the walk drops a decimal's
+    # width, and a zero-scale decimal is whole. The whole-number functions passed above.
+    if side === nothing && to_integer && _expression_kind(operand, instruc) isa CFloat64
+      side = (:float, operand isa Union{FObject,WindowFunction} ? "`$(operand.function_name)(…)` with a float value" : "a float value")
+    end
     side === nothing && continue
     to_integer && !(side[1] in _FRACTIONAL_KINDS) && continue
     d = departs(side[1], side[2], to_integer ? :integer : :text, _concat_flag(operand))

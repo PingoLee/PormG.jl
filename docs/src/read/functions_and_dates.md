@@ -885,8 +885,11 @@ What each row covers:
   so on such a row PostgreSQL raises and SQLite answers. Neither is the literal of a `Coalesce`,
   `Greatest` or `Least` with an `output_field`, which is one candidate value among the operands.
 
-An operand PormG cannot type (an untyped `Case`) passes every row, and a `Subquery` is classified by
-the expression it projects (#1124).
+A `Case` is typed by its branch values for a cast to an integer (#1151): one with a float branch
+(`then = 1.5`, a `FloatField` column) is a float, so that cast is refused on SQLite as any float's
+is. The other rows do not read a `Case`'s branches yet: its cast to `numeric(p, s)`, and a `Case`
+with a decimal branch, pass, as an operand PormG cannot type (a JSON key lookup) does. A `Subquery`
+is classified by the expression it projects (#1124).
 
 To get an integer on every engine, say how to round first. `Round(x)`, `Floor(x)` and `Ceil(x)` give
 the same whole number on both engines for every stored value measured (PostgreSQL's `round` is the

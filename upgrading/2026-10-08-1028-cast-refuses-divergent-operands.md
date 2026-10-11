@@ -1,7 +1,7 @@
 ## `Cast` of a boolean to text, or of a fraction to an integer, is refused on SQLite; more `Concat` operands are refused (#1028)
 
 - **Version**: Unreleased
-- **PormG ref**: #1028, amended by #1147 ; `src/querybuilder/projection_types.jl` (`_cast_divergent_operand`, `_concat_textless_operand`), `src/querybuilder/engine_departures.jl` (`_MEANING_DEPARTURES`), `src/querybuilder/select_nodes.jl`, `src/querybuilder/functions.jl`, `src/querybuilder/ctes.jl`
+- **PormG ref**: #1028, amended by #1147 and #1151 ; `src/querybuilder/projection_types.jl` (`_cast_divergent_operand`, `_concat_textless_operand`), `src/querybuilder/engine_departures.jl` (`_MEANING_DEPARTURES`), `src/querybuilder/select_nodes.jl`, `src/querybuilder/functions.jl`, `src/querybuilder/ctes.jl`
 - **Recorded**: 2026-10-08
 - **Severity**: breaking. On SQLite, a `Cast` (or an `output_field` cast) of a boolean to text, or of a fractional number to an integer, raises `QueryBuildError` where it used to render. On every engine, a `Concat` with a timestamp, interval or JSON-document operand does.
 
@@ -23,7 +23,8 @@ Each cast is checked against what it means, and the engine that computes somethi
 - a boolean cast to text means `'true'`/`'false'`. SQLite has no boolean and writes `'1'`, so it
   refuses the cast; PostgreSQL builds it;
 - a fractional number cast to an integer (a float, a decimal with places, a function PostgreSQL
-  computes as `numeric`) means the nearest integer. SQLite's cast truncates, so it refuses the
+  computes as `numeric`, a `Case` with a float branch: `Case(When(…, then = 1.5), default = 0)`, which
+  PostgreSQL resolves to a `float8`, #1151) means the nearest integer. SQLite's cast truncates, so it refuses the
   cast; PostgreSQL builds it. `Round(x)`, `Floor(x)`, `Ceil(x)` and whole numbers (`Mod` of
   integers, `+`/`-`/`*` of whole numbers) have nothing to round and build on both;
 - a float, a decimal, a timestamp, an interval or a JSON document cast to text is the same value

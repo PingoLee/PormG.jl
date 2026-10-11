@@ -157,6 +157,8 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Cast int numeric / 2",    :Result,              m -> _EKM_FN.Cast("grid", "numeric") / 2),
   ("NullIf int float / 2",    :Result,              m -> _EKM_FN.NullIf("grid", 0.5) / 2),
   ("Lag int default float / 2", :Result,            m -> _EKM_FN.Lag("grid", default = 1.5, over = _ekm_over(:Result)) / 2),
+  # #1151: a `Case` with a float branch is a float, so its cast to an integer departs on SQLite
+  ("Cast Case int float to integer", :Result,       m -> _EKM_FN.Cast(_EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1.5)], default = 0), "integer")),
   # ── subqueries ─────────────────────────────────────────────────────────────────────────────────
   ("Subquery Max hop date",   :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Max("raceid__date")))),
   ("Subquery Avg float",      :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Avg("points")))),

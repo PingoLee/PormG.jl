@@ -128,6 +128,21 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Floor int",               :Result,              m -> _EKM_FN.Floor("grid")),
   ("Ceil int",                :Result,              m -> _EKM_FN.Ceil("grid")),
   ("Floor year part",         :Race,                m -> _EKM_FN.Floor(_EKM_FN.Extract("date", "year"))),
+  # #1147 step 2: each refusal against the engine that departs from its meaning, and `Sum` of a
+  # `bigint`, which PostgreSQL widens to `numeric`
+  ("Cast bool to text",       :New_join_position,   m -> _EKM_FN.Cast("boolean_field", "text")),
+  ("Cast float to text",      :Result,              m -> _EKM_FN.Cast("points", "text")),
+  ("Cast decimal to text",    :Constructor_results, m -> _EKM_FN.Cast("points", "text")),
+  ("Cast decimal to integer", :Constructor_results, m -> _EKM_FN.Cast("points", "integer")),
+  ("Cast float to scale 1",   :Result,              m -> _EKM_FN.Cast("points", "numeric(10,1)")),
+  ("Concat float",            :Result,              m -> _EKM_FN.Concat("positiontext", "points")),
+  ("Sum bigint",              :Result,              m -> _EKM_FN.Sum("resultid")),
+  ("Sum bigint / 2",          :Result,              m -> _EKM_FN.Sum("resultid") / 2),
+  ("Cast Sum bigint / 2 int", :Result,              m -> _EKM_FN.Cast(_EKM_FN.Sum("resultid") / 2, "integer")),
+  ("Sum Case int",            :Result,              m -> _EKM_FN.Sum(_EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1)], default = 0))),
+  ("Sum F int + 1",           :Result,              m -> _EKM_FN.Sum(_EKM_Q.F("grid") + 1)),
+  ("F int / int",             :Result,              m -> _EKM_Q.F("grid") / _EKM_Q.F("laps")),
+  ("Floor F int + 1",         :Result,              m -> _EKM_FN.Floor(_EKM_Q.F("grid") + 1)),
   # ── subqueries ─────────────────────────────────────────────────────────────────────────────────
   ("Subquery Max hop date",   :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Max("raceid__date")))),
   ("Subquery Avg float",      :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Avg("points")))),

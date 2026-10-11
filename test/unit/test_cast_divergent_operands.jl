@@ -823,8 +823,11 @@ end
     Fn.Cast(Fn.Sum(Fn.Floor("number")) / 2, Models.IntegerField()),
     Fn.Cast(Fn.Coalesce(team(Fn.Floor("id")), 0) / 2, Models.IntegerField()),
     Fn.Concat("surname", Fn.Floor("number") / 2),
-    # A `Lag` whose `default` is an integer too is one (`lag(int4, int, int8)` is an `int8`).
+    # A `Lag` whose `default` is an integer too is one (`lag(int4, int, int8)` is an `int8`), and a
+    # NULL default is never the value (`lag(int4, int, NULL)` is an `int4`).
     Fn.Cast(Fn.Floor(PormG.QueryBuilder.Lag("number"; default = 0, over = PormG.QueryBuilder.WindowOver(order_by = ["id"]))) / 2,
+            Models.IntegerField()),
+    Fn.Cast(Fn.Floor(PormG.QueryBuilder.Lag("number"; default = missing, over = PormG.QueryBuilder.WindowOver(order_by = ["id"]))) / 2,
             Models.IntegerField()))
   for expr in built, conn in _CCD_ENGINES
     @test _ccd_refusal(expr; conn = conn) === nothing

@@ -88,6 +88,7 @@ _ifc_render(expr; conn) =
   @test occursin(r"FLOOR\(\(LAG\(\"Tb\".\"grid\", \$1::integer, \$2::bigint\) OVER \([^)]*\)\)::numeric\)::bigint as \"x\"",
                  pg(_IFC_FN.Floor(lag(5_000_000_000))))
   @test occursin(r"FLOOR\(\(LAG\(\"Tb\".\"grid\"[^)]*\) OVER \([^)]*\)\)::numeric\) as \"x\"", pg(_IFC_FN.Floor(lag(3.5))))
+  @test occursin(r"FLOOR\(\(LAG\(\"Tb\".\"grid\"[^)]*\) OVER \([^)]*\)\)::numeric\)::integer as \"x\"", pg(_IFC_FN.Floor(lag(missing))))
   @test occursin(r"ABS\(LAG\(\"Tb\".\"grid\"", pg(_IFC_FN.Abs(PormG.QueryBuilder.Lag("grid"; over = PormG.QueryBuilder.WindowOver(order_by = ["resultid"])))))
   # Not an integer to the walk: the cast stays.
   @test occursin("ABS((\"Tb\".\"points\")::numeric) as \"x\"", pg(_IFC_FN.Abs("points")))

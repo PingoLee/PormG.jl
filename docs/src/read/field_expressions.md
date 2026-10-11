@@ -41,6 +41,17 @@ Sum("points") / Count("resultid") # Aggregate ratios
 
 **Supported arithmetic operators:** `+`, `-`, `*`, `/` with numeric or field operands. For **date arithmetic**, `+` and `-` also accept Julia `Dates` durations (`Day`, `Month`, `Year`, …) and the [`Interval`](#The-Interval-helper) helper — see [Date Arithmetic](#Date-Arithmetic).
 
+**Division keeps the type of its operands, on every engine.** Two integers divide as integers: on
+`M.Result`, `F("grid") / 2` is `7` for a grid of 15, as in Django and in both databases. A float or
+a decimal on either side makes the quotient a fraction: `F("points") / 2` (a `FloatField` there)
+and `F("grid") / 2.0` are `7.5`. Over a `DecimalField`, such as `M.Constructor_results`'
+`points`, or over a value that is one of several where one is a fraction (`Coalesce("grid", 0.5)`,
+a `Case` with an integer and a float branch, a window with a fractional `default`), SQLite would
+hold an integer on some rows — it stores a whole decimal (`15.00`) as one — and divide it as an
+integer. So PormG casts the dividend to `REAL` there: `F("points") / 2` on `M.Constructor_results`
+renders `(CAST("Tb"."points" AS REAL) / ?)` on SQLite and is `7.5` on both engines (#1150). A float
+column or a float literal is a `REAL` already, and renders as written.
+
 ---
 
 ## Comparison Operators

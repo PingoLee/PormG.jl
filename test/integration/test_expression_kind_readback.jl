@@ -136,6 +136,22 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Subquery Avg float | subquery", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
   ("Sum decimal | subquery", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
   ("Sum decimal | subquery", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
+  # #1150: a decimal or mixed quotient is its fraction on both engines (SQLite divides it as REAL);
+  # result 1's grid is `1`, constructor result 3835 has `5.5` points.
+  ("Cast int numeric / 2 | alone", :postgres) => (type = "Decimal", value = "0.50", read = nothing),
+  ("Cast int numeric / 2 | alone", :sqlite) => (type = "Float64", value = "0.5", read = nothing),
+  ("Cast int numeric / 2 | cte", :postgres) => (type = "Decimal", value = "0.50", read = nothing),
+  ("Cast int numeric / 2 | cte", :sqlite) => (type = "Float64", value = "0.5", read = nothing),
+  ("Cast int numeric / 2 | subquery", :postgres) => (type = "Decimal", value = "0.50", read = nothing),
+  ("Cast int numeric / 2 | subquery", :sqlite) => (type = "Float64", value = "0.5", read = nothing),
+  ("F decimal / 2 | alone", :postgres) => (type = "Decimal", value = "2.75", read = nothing),
+  ("F decimal / 2 | alone", :sqlite) => (type = "Float64", value = "2.75", read = nothing),
+  ("F decimal / 2 | cte", :postgres) => (type = "Decimal", value = "2.75", read = nothing),
+  ("F decimal / 2 | cte", :sqlite) => (type = "Float64", value = "2.75", read = nothing),
+  ("F decimal / 2 | subquery", :postgres) => (type = "Decimal", value = "2.75", read = nothing),
+  ("F decimal / 2 | subquery", :sqlite) => (type = "Float64", value = "2.75", read = nothing),
+  ("Lag int default float / 2 | cte", :postgres) => (type = "Float64", value = "0.75", read = nothing),
+  ("Lag int default float / 2 | cte", :sqlite) => (type = "Float64", value = "0.75", read = nothing),
 )
 
 # The cells whose value comes back as a DIFFERENT TYPE on the two engines, by the table above. Every
@@ -155,6 +171,10 @@ const _EKR_TYPE_DIVERGENT = Set{String}([
   # read a `Float64` on both, and `Value bool | subquery` left the set with #1122.
   "Abs decimal | subquery", "Avg decimal | subquery", "F decimal * 2 | subquery", "Mod int | subquery",
   "Round decimal | subquery", "Round float | subquery", "Sum decimal | subquery",
+  # #1150: a decimal quotient, the same value on both engines since SQLite divides it as REAL; the
+  # type it reads back as is #1121's.
+  "Cast int numeric / 2 | alone", "Cast int numeric / 2 | cte", "Cast int numeric / 2 | subquery",
+  "F decimal / 2 | alone", "F decimal / 2 | cte", "F decimal / 2 | subquery",
 ])
 
 const _EKR_CELLS = sort!([id for (id, backend) in keys(_EKM_DISAGREEMENTS) if backend === _EKR_ENGINE])

@@ -27,9 +27,9 @@ Each cast is checked against what it means, and the engine that computes somethi
   cast; PostgreSQL builds it. `Round(x)`, `Floor(x)`, `Ceil(x)` and whole numbers (`Mod` of
   integers, `+`/`-`/`*` of whole numbers) have nothing to round and build on both;
 - a float, a decimal, a timestamp, an interval or a JSON document cast to text is the same value
-  written in each engine's own text. It builds on both engines, as in v0.7.0. A quotient over a
-  decimal, or over a value mixing whole numbers and fractions, is the exception: SQLite divides its
-  integer rows as integers, so it refuses that cast (see the #1147 entry).
+  written in each engine's own text. It builds on both engines, as in v0.7.0, a quotient over a
+  decimal or over a value mixing whole numbers and fractions included: SQLite divides it as `REAL`
+  (see the #1150 entry).
 
 `Concat` refuses three more operand types on every engine, because the query does not say which
 text it means (see #1027): a timestamp (a column, `F("start_at") + Day(1)`, a `DateTime` literal,

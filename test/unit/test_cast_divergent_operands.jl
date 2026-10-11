@@ -19,8 +19,6 @@ on both. #1147 step 2 sorts each case by what the expression MEANS, never by the
 | `Cast(<float> 1.555, "numeric(10,2)")`     | `1.56`               | `1.56`               | `1.555`                 | SQLite (#1040) |
 | `Cast(<text> '1.555', "numeric(10,2)")`    | `1.56`               | `1.56`               | `1.555`                 | SQLite (#1040) |
 | `Cast(100, "numeric(3,2)")`                | an overflow          | raises one           | `100`                   | SQLite (#1087) |
-| `<decimal(4,0)> 15 / 2`, cast              | `7.5`                | `7.5`                | `7` (stored INTEGER)    | SQLite (#1087) |
-| `Sum(F("laps_total") << 1) / 2`, cast      | `7`, an integer one  | `7.5` (`sum(bigint)` is `numeric`) | `7`       | PostgreSQL (#1111) |
 
   `Cast(Round / Floor / Ceil(x), Integer)` and `Round(x)` agree on both engines (±0.5, ±1.5, ±2.5,
   every `points` row), so the way out of each refusal builds everywhere.
@@ -38,7 +36,11 @@ on both. #1147 step 2 sorts each case by what the expression MEANS, never by the
 
 - **Normalized** — where PormG can render the meaning on the engine that would depart, it does:
   PostgreSQL widens `sum(bigint)` to `numeric`, so a `Sum` the type walk names a `bigint` renders
-  `SUM(x)::bigint` there, divides as an integer on both engines, and builds everywhere.
+  `SUM(x)::bigint` there, divides as an integer on both engines, and builds everywhere (a shifted or
+  bitwise one too, #1153: `Sum(F("laps_total") << 1) / 2` is `7` on both). SQLite stores a whole
+  decimal as INTEGER, and a value that is one of several as the row's own integer, so a quotient the
+  walk names a decimal or a float divides as REAL there, `(CAST(x AS REAL) / ?)` (#1150):
+  `<decimal(4,0)> 15 / 2` is `7.5` on both, where #1087 refused it on SQLite.
 
 `output_field` on `Coalesce`/`Greatest`/`Least` renders the same cast, so it follows the same rules.
 A CTE column built from `Sum`/`Avg`, and a `Subquery`, are classified by the body's own projection.
@@ -722,14 +724,17 @@ _is_1087(e) = e isa QueryBuildError && occursin("(#1087)", _ccd_msg(e))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #1087: a zero-scale DecimalField reads like an integer column, until it is divided
+# #1087, #1150: a zero-scale DecimalField reads like an integer column; divided, it is a decimal quotient
 # Both engines write a whole-number decimal `14`, so `Concat` and a cast to text or an integer pass.
-# Divided, it means a decimal quotient (`15 / 2` is `7.5`, PostgreSQL's `numeric / int`), and SQLite,
-# which stores the whole values as INTEGER and divides them as integers (`7`), departs: refused on
-# SQLite only, under a cast to an integer, to text or to a scale, and through an aggregate. Under
-# `Concat` the divided decimal is explicit intent, refused on every engine (#1027).
+# Divided, it means a decimal quotient (`15 / 2` is `7.5`, PostgreSQL's `numeric / int`). SQLite stores
+# the whole values as INTEGER and divided them as integers (`7`), which #1087 refused there. Since #1150
+# SQLite casts the dividend to REAL instead and computes the quotient the expression means. Expected
+# SQL: `(CAST("Tb"."grid" AS REAL) / ?)` on SQLite, `("Tb"."grid" / $1::bigint)` on PostgreSQL. The
+# quotient is then a fraction like any other: to text it is representation and builds everywhere; to
+# an integer SQLite truncates what means the nearest one (#1028), and to a scale it keeps every digit
+# (#1040), refused on SQLite only; under `Concat` it is explicit intent, refused everywhere (#1027).
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1087: a zero-scale DecimalField reads like an integer column; divided, SQLite is refused" begin
+@testset "#1087, #1150: a zero-scale DecimalField reads like an integer column; divided, it is a decimal quotient on both engines" begin
   for expr in (Fn.Concat("surname", "grid"), Fn.Cast("grid", Models.CharField()), Fn.Cast("grid", Models.IntegerField()),
                Fn.Cast(Fn.Max("grid"), Models.CharField()), Fn.Cast("grid", "numeric(10,0)")),
       conn in _CCD_ENGINES
@@ -739,20 +744,26 @@ end
   # integer, the nearest-integer meaning SQLite truncates (#1028).
   @test _ccd_builds(Fn.Cast("price", Models.CharField()))
   _ccd_expect(Fn.Cast("price", Models.IntegerField()); departs = _SL_ONLY, issue = "#1028", named = "the DecimalField `price`")
+  # The quotient, on each engine.
+  @test occursin("(CAST(\"Tb\".\"grid\" AS REAL) / ?) as \"x\"", _ccd_render(_CF("grid") / 2; conn = _CCD_SL))
+  @test occursin("(\"Tb\".\"grid\" / \$1::bigint) as \"x\"", _ccd_render(_CF("grid") / 2; conn = _CCD_PG))
+  # To text: built everywhere.
+  for expr in (Fn.Cast(_CF("grid") / _CF("number"), Models.CharField()), Fn.Cast(Fn.Greatest("grid", 1) / 2, Models.CharField()))
+    @test _ccd_builds(expr)
+  end
+  # To an integer: a fraction, refused on SQLite (#1028).
   for expr in (Fn.Cast(_CF("grid") / 2, Models.IntegerField()),
-               Fn.Cast(_CF("grid") / _CF("number"), Models.CharField()),
-               Fn.Cast(_CF("grid") / 2, "numeric(10,1)"),
                Fn.Cast((_CF("grid") + 1) / 2, Models.IntegerField()),
                Fn.Cast(Fn.Sum("grid") / Fn.Count("id"), Models.IntegerField()),
                # `Coalesce` always carries an `output_field` key, `nothing` when none was given.
-               Fn.Cast(Fn.Coalesce("grid", 0) / 2, Models.IntegerField()),
-               Fn.Cast(Fn.Greatest("grid", 1) / 2, Models.CharField()))
-    errs = _ccd_expect(expr; departs = _SL_ONLY, issue = "#1087", named = "DecimalField `grid`")
-    @test occursin("means a decimal quotient", _ccd_msg(errs.sqlite)) && occursin("x / 2.0", _ccd_msg(errs.sqlite))
+               Fn.Cast(Fn.Coalesce("grid", 0) / 2, Models.IntegerField()))
+    _ccd_expect(expr; departs = _SL_ONLY, issue = "#1028", named = "a decimal quotient")
   end
   @test occursin("((\"Tb\".\"grid\" / \$1::bigint))::integer as \"x\"",
                  _ccd_render(Fn.Cast(_CF("grid") / 2, Models.IntegerField()); conn = _CCD_PG))
-  _ccd_refused_everywhere(Fn.Concat("surname", _CF("grid") / 2); issue = "#1027", named = "arithmetic over the DecimalField `grid`")
+  # To a scale: every digit, on SQLite (#1040).
+  _ccd_expect(Fn.Cast(_CF("grid") / 2, "numeric(10,1)"); departs = _SL_ONLY, issue = "#1040", named = "a decimal quotient")
+  _ccd_refused_everywhere(Fn.Concat("surname", _CF("grid") / 2); issue = "#1027", named = "a decimal quotient")
   # `+`, `-`, `*` keep a whole number whole on both engines, and an integer column divides alike.
   for expr in (Fn.Cast(_CF("grid") * 2, Models.IntegerField()), Fn.Cast(_CF("grid") + 1, Models.CharField()),
                Fn.Cast(_CF("number") / 2, Models.IntegerField()))
@@ -775,11 +786,11 @@ end
 #   ((FLOOR((("Tb"."number" + $1::bigint))::numeric)::bigint / $2::bigint))::integer
 #   ((SUM("Tb"."laps_total")::bigint / $1::bigint))::integer
 #
-# What stays is MEANING, refused on the engine that departs only. A `Lag` whose `default` is a float
-# is a `float8` on PostgreSQL (`lag(int4, int, float8)`), so its quotient keeps the fraction, and
-# `Floor`/`Abs` over it keep `(x)::numeric` there; SQLite holds the integer on every other row and
-# divides those as integers: refused on SQLite (#1147). A zero-scale decimal divided, alone or under
-# `Floor`, is the #1087 row: refused on SQLite too.
+# A `Lag` whose `default` is a float is a `float8` on PostgreSQL (`lag(int4, int, float8)`), so its
+# quotient keeps the fraction; SQLite held the integer on every other row and divided those as
+# integers, refused there under #1147. Since #1150 SQLite casts the dividend to REAL, so the quotient
+# is the fraction it means on both engines: to text it builds, to an integer or a scale it is refused
+# on SQLite as any fraction is (#1028, #1040). So is a zero-scale decimal divided, alone or under `Floor`.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1111, #1147: Floor/Ceil/Abs and Sum, divided — typed integers build on both engines, an untyped whole number is refused on PostgreSQL" begin
   team(expr) = (s = CCD.Ccd_team.objects; s.filter("id" => PormG.OuterRef("team")); s.values("t" => expr); PormG.Subquery(s))
@@ -815,20 +826,19 @@ end
                  _ccd_render(Fn.Cast(Fn.Floor(_CF("number") + 1) / 2, Models.IntegerField()); conn = _CCD_SL))
   @test occursin("((SUM(\"Tb\".\"laps_total\")::bigint / \$1::bigint))::integer as \"x\"",
                  _ccd_render(Fn.Cast(Fn.Sum("laps_total") / 2, Models.IntegerField()); conn = _CCD_PG))
-  # SQLite departs: a `Lag` with a float `default` is a float, whose quotient keeps the fraction on
-  # PostgreSQL (`FLOOR((LAG(…))::numeric) / $n::bigint`), while SQLite divides its integer rows as
-  # integers. Under every target the division reaches; `Concat` over it is a number, so it is explicit
-  # intent there, refused on every engine.
-  for (expr, named) in (
-      (Fn.Cast(Fn.Abs(lag(_CF("points"))) / 2, Models.CharField()), "arithmetic over `ABS(…)` over `LAG(…)`"),
-      (Fn.Cast(Fn.Abs(lag(_CF("points"))) / 2, Models.IntegerField()), "arithmetic over `ABS(…)` over `LAG(…)`"),
-      (Fn.Cast(Fn.Floor(lag(3.5)) / 2, Models.CharField()), "arithmetic over `FLOOR(…)` over `LAG(…)`"),
-      (Fn.Cast(Fn.Floor(lag(3.5)) / 2, "numeric(10,1)"), "arithmetic over `FLOOR(…)` over `LAG(…)`"),
-      (Fn.Cast(lag(3.5) / 2, Models.IntegerField()), "arithmetic over `LAG(…)`"))
-    errs = _ccd_expect(expr; departs = _SL_ONLY, issue = "#1147", named = named)
-    msg = _ccd_msg(errs.sqlite)
-    @test occursin("means a quotient with its fraction", msg) && occursin("SQLite computes an integer one", msg)
-    @test occursin("x / 2.0", msg)
+  # #1150: a `Lag` with a float `default` is a float, whose quotient SQLite now divides as REAL
+  # (`CAST(FLOOR(LAG(…)) AS REAL) / ?`). To text it is representation; to an integer or a scale a
+  # fraction, refused on SQLite; under `Concat` a number, refused on every engine.
+  for expr in (Fn.Cast(Fn.Abs(lag(_CF("points"))) / 2, Models.CharField()), Fn.Cast(Fn.Floor(lag(3.5)) / 2, Models.CharField()))
+    @test _ccd_builds(expr)
+  end
+  @test occursin(r"\(CAST\(FLOOR\(LAG\(\"Tb\"\.\"number\", \?, \?\) OVER \([^)]*\)\) AS REAL\) / \?\)",
+                 _ccd_render(Fn.Floor(lag(3.5)) / 2; conn = _CCD_SL))
+  for (expr, issue, named) in (
+      (Fn.Cast(Fn.Abs(lag(_CF("points"))) / 2, Models.IntegerField()), "#1028", "arithmetic over `ABS(…)` over `LAG(…)`"),
+      (Fn.Cast(Fn.Floor(lag(3.5)) / 2, "numeric(10,1)"), "#1040", "arithmetic over `FLOOR(…)` over `LAG(…)`"),
+      (Fn.Cast(lag(3.5) / 2, Models.IntegerField()), "#1028", "arithmetic over `LAG(…)`"))
+    _ccd_expect(expr; departs = _SL_ONLY, issue = issue, named = named)
   end
   _ccd_refused_everywhere(Fn.Concat(Fn.Value("-"), Fn.Floor(lag(3.5)) / 2); issue = "#1027",
                           named = "arithmetic over `FLOOR(…)` over `LAG(…)`")
@@ -837,12 +847,12 @@ end
   # A whole-number default keeps the window an integer: it divides as one on both engines.
   @test _ccd_builds(Fn.Cast(Fn.Floor(lag(0)) / 2, Models.IntegerField()))
   @test _ccd_builds(Fn.Cast(lag(0) / 2, Models.IntegerField()))
-  # A zero-scale DecimalField under `Floor` keeps its decimal quotient (#1087, a step-1 gap).
-  _ccd_expect(Fn.Cast(Fn.Floor("grid") / 2, Models.IntegerField()); departs = _SL_ONLY, issue = "#1087",
-              named = "arithmetic over `FLOOR(…)` over the DecimalField `grid`")
-  # SQLite departs: rounding a decimal quotient SQLite computed as an integer cannot bring the half back.
-  _ccd_expect(Fn.Cast(Fn.Round(_CF("grid") / 2), Models.IntegerField()); departs = _SL_ONLY, issue = "#1087",
-              named = "`ROUND(…)` over arithmetic over the DecimalField `grid`")
+  # A zero-scale DecimalField under `Floor` is a decimal, so its quotient is one (#1150): to an
+  # integer, the #1028 fraction. Rounded to no places it is whole on both engines (`ROUND(7.5)` is `8`
+  # on each), so that cast builds.
+  _ccd_expect(Fn.Cast(Fn.Floor("grid") / 2, Models.IntegerField()); departs = _SL_ONLY, issue = "#1028",
+              named = "a decimal quotient")
+  @test _ccd_builds(Fn.Cast(Fn.Round(_CF("grid") / 2), Models.IntegerField()))
   # Over an operand PormG cannot type, `Floor` is not refused: a float under it is a REAL on SQLite
   # too, and the engines agree. Only a type that is known is answered (review of #1111).
   for expr in (Fn.Cast(Fn.Floor(Fn.Case(Fn.When("active" => true, then = "points"), default = "points")) / 2, Models.IntegerField()),
@@ -1381,69 +1391,84 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A quotient SQLite computes from its integer rows, under a cast to text (review of #1147 step 2)
-# A cast to text of a float or a decimal is representation, and builds everywhere. A QUOTIENT is not:
+# A decimal or mixed quotient is a fraction on both engines; SQLite casts its dividend (#1147 review, #1150)
 # SQLite's NUMERIC affinity stores a whole `DecimalField` value (`15.00`) as an INTEGER, and a value
 # that is one of several (`Coalesce("number", 0.5)`, a `Case` with an integer and a float branch,
-# `Least("number", "points")`, a window with a fractional `default`) is that row's own value there, an
-# integer on the rows the whole one supplies. So `x / 2` is `7` on those rows where PostgreSQL, which
-# resolves the value to a `numeric` or a `float8`, keeps `7.5`: refused on SQLite, built on
-# PostgreSQL (expected SQL below). Dividing by a float builds on both, as the advice says. Before the
-# review fix every shape here built on both engines and split silently.
+# `Least("number", "points")`, a window with a fractional `default`) is that row's own value there,
+# an integer on the rows the whole one supplies. So `x / 2` was `7` on those rows where PostgreSQL,
+# which resolves the value to a `numeric` or a `float8`, keeps `7.5`: the #1147 review refused it on
+# SQLite under a cast, and a bare quotient split silently. #1150: SQLite casts the dividend to REAL
+# (expected SQL below), so the quotient is `7.5` on both engines, and a cast to text of it is
+# representation, built everywhere. A declared decimal over an integer, and whole text cast to
+# `numeric`, are decimals the same way. `NullIf(a, b)` has `a`'s type, and PostgreSQL, which resolves
+# it with `b`, casts it back: `(NULLIF("Tb"."number", $1::double precision))::integer`.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1147 review: a decimal or mixed quotient cast to text is refused on SQLite, built on PostgreSQL" begin
-  for (expr, issue, named) in (
-      (Fn.Cast(_CF("price") / 2, "text"), "#1087", "arithmetic over the DecimalField `price`"),
-      (Fn.Cast(Fn.Sum("price") / Fn.Count("id"), "text"), "#1087", "`SUM(…)` over the DecimalField `price`"),
-      (Fn.Cast(Fn.Max("price") / 2, "text"), "#1087", "`MAX(…)` over the DecimalField `price`"),
-      (Fn.Cast(Fn.Round(_CF("price") / 2, 1), "text"), "#1087", "`ROUND(…)` over arithmetic over the DecimalField `price`"),
-      (Fn.Cast(Fn.Floor("price") / 2, Models.IntegerField()), "#1087", "`FLOOR(…)` over the DecimalField `price`"),
-      (Fn.Cast(Fn.Coalesce("number", 0.5) / 2, "text"), "#1147", "`COALESCE(…)` over a Float64 literal"),
-      (Fn.Cast(Fn.Coalesce("number", "points") / 2, "text"), "#1147", "`COALESCE(…)` over the FloatField `points`"),
-      (Fn.Cast(Fn.Least("number", "points") / 2, "text"), "#1147", "`LEAST(…)` over the FloatField `points`"),
-      (Fn.Cast(Fn.Case([Fn.When("active" => true, then = _CF("number"))], default = 0.5) / 2, "text"), "#1147", "`CASE(…)` over a Float64 literal"),
-      (Fn.Cast(Fn.Floor(Fn.Coalesce("number", 0.5)) / 2, "text"), "#1147", "`FLOOR(…)` over `COALESCE(…)`"))
-    errs = _ccd_expect(expr; departs = _SL_ONLY, issue = issue, named = named)
-    @test occursin("x / 2.0", _ccd_msg(errs.sqlite))
+@testset "#1147 review, #1150: a decimal or mixed quotient is a fraction on both engines; to text it builds" begin
+  for expr in (
+      Fn.Cast(_CF("price") / 2, "text"),
+      Fn.Cast(Fn.Sum("price") / Fn.Count("id"), "text"),
+      Fn.Cast(Fn.Max("price") / 2, "text"),
+      Fn.Cast(Fn.Round(_CF("price") / 2, 1), "text"),
+      Fn.Cast(Fn.Coalesce("number", 0.5) / 2, "text"),
+      Fn.Cast(Fn.Coalesce("number", "points") / 2, "text"),
+      Fn.Cast(Fn.Least("number", "points") / 2, "text"),
+      Fn.Cast(Fn.Case([Fn.When("active" => true, then = _CF("number"))], default = 0.5) / 2, "text"),
+      Fn.Cast(Fn.Floor(Fn.Coalesce("number", 0.5)) / 2, "text"),
+      Fn.Cast(Fn.Cast("number", "numeric") / 2, "text"),
+      Fn.Cast(Fn.Coalesce("number", 0; output_field = "numeric") / 2, "text"),
+      Fn.Cast(Fn.Case([Fn.When("active" => true, then = _CF("number"))], default = 0; output_field = "numeric") / 2, "text"),
+      Fn.Cast(Fn.Cast("surname", "numeric") / 2, "text"),
+      Fn.Cast(Fn.NullIf("number", 0.5) / 2, "text"),
+      Fn.Cast(Fn.NullIf("number", "points") / 2, "text"))
+    @test _ccd_builds(expr)
   end
-  @test occursin("((\"Tb\".\"price\" / \$1::bigint))::text as \"x\"", _ccd_render(Fn.Cast(_CF("price") / 2, "text"); conn = _CCD_PG))
+  sl(expr) = _ccd_render(expr; conn = _CCD_SL)
+  pg(expr) = _ccd_render(expr; conn = _CCD_PG)
+  @test occursin("CAST((CAST(\"Tb\".\"price\" AS REAL) / ?) AS TEXT) as \"x\"", sl(Fn.Cast(_CF("price") / 2, "text")))
+  @test occursin("((\"Tb\".\"price\" / \$1::bigint))::text as \"x\"", pg(Fn.Cast(_CF("price") / 2, "text")))
+  @test occursin("(CAST(COALESCE(\"Tb\".\"number\", ?) AS REAL) / ?) as \"x\"", sl(Fn.Coalesce("number", 0.5) / 2))
   @test occursin("((COALESCE(\"Tb\".\"number\", \$1::double precision) / \$2::bigint))::text as \"x\"",
-                 _ccd_render(Fn.Cast(Fn.Coalesce("number", 0.5) / 2, "text"); conn = _CCD_PG))
-  # Builds on both: a float divisor, the cast alone, a float column divided, and whole values only.
+                 pg(Fn.Cast(Fn.Coalesce("number", 0.5) / 2, "text")))
+  @test occursin("(CAST(CAST(\"Tb\".\"number\" AS NUMERIC) AS REAL) / ?) as \"x\"", sl(Fn.Cast("number", "numeric") / 2))
+  # `NullIf` over an integer and a fraction is the integer: PostgreSQL casts it back, SQLite returns it.
+  @test occursin("((NULLIF(\"Tb\".\"number\", \$1::double precision))::integer / \$2::bigint) as \"x\"", pg(Fn.NullIf("number", 0.5) / 2))
+  @test occursin("(NULLIF(\"Tb\".\"number\", ?) / ?) as \"x\"", sl(Fn.NullIf("number", 0.5) / 2))
+  @test occursin("(NULLIF(\"Tb\".\"number\", \$1::bigint) / \$2::bigint) as \"x\"", pg(Fn.NullIf("number", 0) / 2))
+  # So it is no fraction to the cast and `Concat` rules: an integer quotient, and an integer's text.
+  for expr in (Fn.Cast(Fn.NullIf("number", 0.5) / 2, Models.IntegerField()), Fn.Concat(Fn.Value("-"), Fn.NullIf("number", 0.5)))
+    @test _ccd_builds(expr)
+  end
+  # A float `a` is a float: its nearest integer is the #1028 meaning SQLite truncates.
+  _ccd_expect(Fn.Cast(Fn.NullIf("points", 1), Models.IntegerField()); departs = _SL_ONLY, issue = "#1028",
+              named = "`NULLIF(…)` over the FloatField `points`")
+  # A side that is a REAL on every row already needs no cast: a float literal, a `FloatField` column.
+  @test occursin("(\"Tb\".\"price\" / ?) as \"x\"", sl(_CF("price") / 2.0))
+  @test occursin("(\"Tb\".\"points\" / ?) as \"x\"", sl(_CF("points") / 2))
+  @test occursin("(\"Tb\".\"price\" / \"Tb\".\"points\") as \"x\"", sl(_CF("price") / _CF("points")))
+  # An integer quotient is an integer quotient on both: no cast.
+  @test occursin("(\"Tb\".\"number\" / ?) as \"x\"", sl(_CF("number") / 2))
+  # Built as before: a float divisor, the cast alone, a float column divided, and whole values only.
   for expr in (Fn.Cast(_CF("price") / 2.0, "text"), Fn.Cast(Fn.Coalesce("number", 0.5) / 2.0, "text"),
                Fn.Cast("price", "text"), Fn.Cast(_CF("points") / 2, "text"),
                Fn.Cast(Fn.Coalesce("number", 1) / 2, Models.IntegerField()), Fn.Sum(Fn.Coalesce("number", 0.5)))
     @test _ccd_builds(expr)
   end
+  # A fraction to an integer is still the #1028 meaning SQLite truncates.
+  _ccd_expect(Fn.Cast(Fn.Floor("price") / 2, Models.IntegerField()); departs = _SL_ONLY, issue = "#1028",
+              named = "`FLOOR(…)` over the DecimalField `price`")
+  _ccd_expect(Fn.Cast(Fn.Coalesce("number", 0.5) / 2, Models.IntegerField()); departs = _SL_ONLY, issue = "#1028",
+              named = "`COALESCE(…)` over a Float64 literal")
   # `Sum` over a mixed value is a float on PostgreSQL: no `::bigint`.
   @test !occursin("::bigint as", _ccd_render(Fn.Sum(Fn.Coalesce("number", 0.5)); conn = _CCD_PG))
-  # In `Concat` the quotient is a number: explicit intent on every engine, pointing to a float division.
+  # In `Concat` the quotient is a number: explicit intent on every engine, pointing to a cast to text.
   msgs = _ccd_refused_everywhere(Fn.Concat(Fn.Value("-"), _CF("price") / 2); issue = "#1027")
-  @test all(m -> occursin("Cast(x / 2.0, \"text\")", m), msgs)
-
-  # Delta review. A declared decimal over an integer is still that integer on SQLite (its cast to
-  # NUMERIC leaves an INTEGER as it is), and `NullIf(a, b)` is promoted to `b`'s type on PostgreSQL
-  # (`NULLIF(1, 2.2)` is a `numeric`): both divide as integers on SQLite only.
-  for (expr, issue, named) in (
-      (Fn.Cast(Fn.Cast("number", "numeric") / 2, "text"), "#1087", "a value cast to numeric"),
-      (Fn.Cast(Fn.Coalesce("number", 0; output_field = "numeric") / 2, "text"), "#1087", "a value cast to numeric"),
-      (Fn.Cast(Fn.NullIf("number", 0.5) / 2, "text"), "#1147", "`NULLIF(…)` over a Float64 literal"),
-      (Fn.Cast(Fn.NullIf("number", "points") / 2, "text"), "#1147", "`NULLIF(…)` over the FloatField `points`"),
-      # Second delta review: a declared decimal fails closed — a `Case`'s integer branches, and whole
-      # text, which SQLite's cast to NUMERIC turns into an INTEGER (`'15'` → 15).
-      (Fn.Cast(Fn.Case([Fn.When("active" => true, then = _CF("number"))], default = 0; output_field = "numeric") / 2, "text"),
-       "#1087", "a value cast to numeric"),
-      (Fn.Cast(Fn.Cast("surname", "numeric") / 2, "text"), "#1087", "a value cast to numeric"))
-    _ccd_expect(expr; departs = _SL_ONLY, issue = issue, named = named)
-  end
-  # No split, so no refusal: a float cast to numeric stays a REAL on SQLite; a literal `0` divides to
-  # `0` on every engine; a CTE `Avg` over a decimal is a REAL on SQLite, whatever its field says.
+  @test all(m -> occursin("\"text\")", m), msgs)
+  # A CTE `Avg` over a decimal: a decimal, divided as REAL on SQLite too.
   avg_cte(conn) = (body = CCD.Ccd_driver.objects; body.values("team", "a" => Fn.Avg("price"));
                    q = CCD.Ccd_driver.objects; q.with("c" => body, join_field = "team" => "team");
                    q.values("x" => Fn.Cast(Fn.Max(PormG.CTE("c", "a")) / 2, "text")); _ccd_sql(q; conn = conn))
   for expr in (Fn.Cast(Fn.Cast("points", "numeric") / 2, "text"), Fn.Cast(Fn.Coalesce("points", 0) / 2, "text"),
                Fn.Cast(Fn.Coalesce("points", 0; output_field = "numeric") / 2, "text"),
-               # `NullIf(a, b)` is `a` or NULL: a float `a` stays a float on every engine.
                Fn.Cast(Fn.NullIf("points", 1) / 2, "text"))
     @test _ccd_builds(expr)
   end

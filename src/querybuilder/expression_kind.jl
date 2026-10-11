@@ -75,9 +75,13 @@ _infer_kind(::Any, ::SQLInstruction, ::_KindPolicy) = nothing
 _operation_kind(::FExpression, ::SQLInstruction, ::_ReadKinds) = nothing
 # #1147: `+`, `-`, `*` and `/` over two integers is an integer on both engines — PostgreSQL resolves
 # `int4 + int8` to `int8` and divides two integers as integers, as SQLite does — so the widest of the
-# two is the kind (`_unify_kinds`). An integer literal is a `bigint` there (`$n::bigint`). Anything
-# else stays untyped: a float or a decimal side, whose quotient each engine computes its own way, a
-# date or an interval.
+# two is the kind (`_unify_kinds`). An integer literal is a `bigint` there (`$n::bigint`).
+#
+# #1150: arithmetic over a float or a decimal side is the wider of the two, as PostgreSQL resolves it
+# (`integer < numeric < double precision`), and that is what the expression MEANS: `F("price") / 2`
+# is a decimal quotient. SQLite can compute it otherwise — it stores a whole decimal as INTEGER and
+# divides it as one — so its render casts the dividend (`_division_sql`); the kind is the meaning. A
+# decimal's width is dropped: the operation may change it. A date or an interval stays untyped here.
 #
 # #1153: the bitwise operators resolve their type as arithmetic does (`int4 & int8` is `int8`), and
 # `~` has its operand's. A shift has its LEFT operand's type, whatever it shifts by, and binds an
@@ -92,14 +96,21 @@ function _operation_kind(p::FExpression, instruc::SQLInstruction, policy::_AllKi
     shifted = p.field_name
     return shifted isa Integer && !(shifted isa Bool) ? CInt32() : _integer_side_kind(shifted, instruc, policy)
   end
-  p.operation in ("+", "-", "*", "/", "&", "|", "xor") || return nothing
+  if p.operation in ("&", "|", "xor")
+    left = _integer_side_kind(p.field_name, instruc, policy)
+    right = _integer_side_kind(p.operand, instruc, policy)
+    return left === nothing || right === nothing ? nothing : _unify_kinds(left, right, policy)
+  end
+  p.operation in ("+", "-", "*", "/") || return nothing
   left = _arithmetic_side_kind(p.field_name, instruc, policy)
-  left isa Union{CInt16,CInt32,CInt64} || return nothing
+  _numeric_rank(left) === nothing && return nothing
   right = _arithmetic_side_kind(p.operand, instruc, policy)
-  right isa Union{CInt16,CInt32,CInt64} || return nothing
-  return _unify_kinds(left, right, policy)
+  _numeric_rank(right) === nothing && return nothing
+  kind = _unify_kinds(left, right, policy)
+  return kind isa CDecimal ? CDecimal(nothing, nothing) : kind
 end
 _arithmetic_side_kind(x::Integer, ::SQLInstruction, policy::_AllKinds) = x isa Bool ? nothing : _literal_kind(x, policy)
+_arithmetic_side_kind(x::Union{AbstractFloat,Decimals.Decimal}, ::SQLInstruction, policy::_AllKinds) = _literal_kind(x, policy)
 _arithmetic_side_kind(x, instruc::SQLInstruction, policy::_AllKinds) = _infer_kind(x, instruc, policy)
 _integer_side_kind(x, instruc::SQLInstruction, policy::_AllKinds) =
   (k = _arithmetic_side_kind(x, instruc, policy); k isa Union{CInt16,CInt32,CInt64} ? k : nothing)
@@ -299,7 +310,7 @@ _numeric_rank(::CInt32) = 1
 _numeric_rank(::CInt64) = 2
 _numeric_rank(::CDecimal) = 3
 _numeric_rank(::CFloat64) = 4
-_numeric_rank(::CanonicalType) = nothing
+_numeric_rank(::Any) = nothing
 
 # A computed number's kind on the engine, from its rule and its (first) operand's kind `k` — the
 # engine-dependent results #1034 asks to state once, as data. What `Dialect` renders decides:

@@ -2102,47 +2102,67 @@ end
     @test df[1, :podiums] isa Int64 && df[1, :podiums] == count(<=(3), rows.positionorder)
     @test df[1, :shifted] isa Int64 && df[1, :shifted] == sum(rows.grid .+ 1)
 
-    # A `Lag` over an integer with a fractional `default` is a float (`lag(int4, int, float8)`), so its
-    # quotient keeps the fraction: PostgreSQL builds it, checked against Julia's float division, and
-    # SQLite, which divides its integer rows as integers, refuses it.
-    lagged = () -> (q = M.Result.objects; q.filter("raceid" => 18);
-                    q.values("resultid", "grid", "x" => Lag("grid"; default = 1.5, over = WindowOver(order_by = "resultid")) / 2);
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A decimal or mixed quotient is the same fraction on every engine (#1150)
+# SQLite stores a whole `DecimalField` value (`9.00`) as an INTEGER, and a value that is one of several
+# — a `Lag` over an integer with a fractional `default`, `Coalesce("grid", 0.5)` — is the row's own
+# integer where an integer supplied it, so `x / 2` was `4` there where PostgreSQL computes `4.5`. SQLite
+# now divides such a quotient as REAL (`CAST(x AS REAL) / ?`), so both engines read the fraction,
+# checked against Julia's own division over the same rows: projected, filtered on, and cast to text.
+# `NullIf(<integer>, <fraction>)` has the integer's type on both (PostgreSQL casts its promotion back),
+# so it divides as an integer. A fraction cast to an integer is still the #1028 meaning SQLite truncates.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1150: a decimal or mixed quotient reads the same fraction on every engine" begin
+    # Constructor results with points: a DecimalField whose whole values SQLite stores as INTEGER.
+    q = M.Constructor_results.objects
+    q.filter("points__@gt" => 0)
+    q.values("constructorresultsid", "points", "half" => F("points") / 2, "t" => Cast(F("points") / 2, "text"))
+    q.order_by("constructorresultsid")
+    df = q |> DataFrame
+    @test nrow(df) > 0
+    @test any(p -> isinteger(p) && isodd(Int(p)), df.points)   # a half to keep is exercised
+    @test isempty([r.constructorresultsid for r in eachrow(df) if Float64(r.half) != Float64(r.points) / 2])
+    @test isempty([r.constructorresultsid for r in eachrow(df) if parse(Float64, r.t) != Float64(r.points) / 2])
+    # The row set a filter on the quotient selects: `points / 2 > 4` keeps a `9` (`4.5`) on every engine.
+    q = M.Constructor_results.objects
+    q.filter(F("points") / 2 > 4)
+    q.values("constructorresultsid", "points")
+    filtered = q |> DataFrame
+    q = M.Constructor_results.objects
+    q.filter("points__@gt" => 8)
+    q.values("constructorresultsid", "points")
+    expected = q |> DataFrame
+    @test any(p -> Float64(p) == 9.0, expected.points)
+    @test sort(filtered.constructorresultsid) == sort(expected.constructorresultsid)
+
+    # A `Lag` over an integer with a fractional `default` is a float (`lag(int4, int, float8)`): its
+    # quotient keeps the fraction on both engines.
+    q = M.Result.objects
+    q.filter("raceid" => 18)
+    q.values("resultid", "grid", "x" => Lag("grid"; default = 1.5, over = WindowOver(order_by = "resultid")) / 2,
+             "c" => Coalesce("grid", 0.5) / 2, "n" => NullIf("grid", 0.5) / 2)
+    q.order_by("resultid")
+    df = q |> DataFrame
+    @test any(isodd, df.grid)                  # a half to keep is exercised
+    @test Float64.(df.x) == [i == 1 ? 1.5 / 2 : df.grid[i - 1] / 2 for i in 1:nrow(df)]
+    @test Float64.(df.c) == df.grid ./ 2
+    # `NullIf(grid, 0.5)` is the integer grid: an integer quotient on both engines.
+    @test Int.(df.n) == div.(df.grid, 2)
+
+    # Cast to an integer, the fraction means the nearest integer, which SQLite's cast truncates (#1028).
+    to_int = () -> (q = M.Result.objects; q.filter("raceid" => 18);
+                    q.values("resultid", "grid", "x" => Cast(Coalesce("grid", 0.5) / 2, PormG.Models.IntegerField()));
                     q.order_by("resultid"); q |> DataFrame)
     if PORMG_DB_FOLDER == "db_sl"
-        err = try
-            q = M.Result.objects; q.filter("raceid" => 18)
-            q.values("x" => Cast(Lag("grid"; default = 1.5, over = WindowOver(order_by = "resultid")) / 2, PormG.Models.IntegerField()))
-            q |> DataFrame
-            nothing
-        catch e
-            e
-        end
-        @test err isa PormG.QueryBuildError
-        @test occursin("so PormG refuses it on SQLite (#1147)", sprint(showerror, err))
+        err = try to_int(); nothing catch e; e end
+        @test err isa PormG.QueryBuildError && occursin("so PormG refuses it on SQLite (#1028)", sprint(showerror, err))
     else
-        df = lagged()
-        expected = [i == 1 ? 1.5 / 2 : df.grid[i - 1] / 2 for i in 1:nrow(df)]
-        @test any(i -> isodd(df.grid[i]), 1:nrow(df) - 1)   # a half to keep is exercised
-        @test Float64.(df.x) == expected
+        df = to_int()
+        # `Coalesce(<integer>, 0.5)` is a `float8` there, whose cast rounds a tie to even (`2.5` → `2`).
+        @test Int.(df.x) == round.(Int, df.grid ./ 2, RoundNearest)
     end
-
-    # A decimal quotient (review of #1147 step 2): SQLite stores a whole `DecimalField` value as an
-    # INTEGER and divides it as one (`9 / 2` is `4`), so a cast to text of it is refused there; on
-    # PostgreSQL it keeps the fraction, checked against Julia. Dividing by a float builds on both.
-    half_text(divisor) = () -> (q = M.Constructor_results.objects; q.filter("points__@gt" => 0);
-                                q.values("constructorresultsid", "points", "t" => Cast(F("points") / divisor, "text"));
-                                q.order_by("constructorresultsid"); q |> DataFrame)
-    if PORMG_DB_FOLDER == "db_sl"
-        err = try half_text(2)(); nothing catch e; e end
-        @test err isa PormG.QueryBuildError && occursin("so PormG refuses it on SQLite (#1087)", sprint(showerror, err))
-    else
-        df = half_text(2)()
-        @test any(p -> isodd(Int(p)), df.points)   # a half to keep is exercised
-        @test isempty([r.constructorresultsid for r in eachrow(df) if parse(Float64, r.t) != Float64(r.points) / 2])
-    end
-    df = half_text(2.0)()
-    @test nrow(df) > 0
-    @test isempty([r.constructorresultsid for r in eachrow(df) if parse(Float64, r.t) != Float64(r.points) / 2])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

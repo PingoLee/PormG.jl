@@ -509,7 +509,8 @@ end
 
   cases = (
     ("Lower",    Lower,                     nsub, Any[3, "A"],    ("LOWER((SELECT",            "LOWER((SELECT")),
-    ("Abs",      Abs,                       nsub, Any[3, "A"],    ("ABS((SELECT",              "ABS(((SELECT")),
+    # `Max("qty")` is an integer, so PostgreSQL's `ABS` takes it as it is, no `::numeric` (#1147, #1153).
+    ("Abs",      Abs,                       nsub, Any[3, "A"],    ("ABS((SELECT",              "ABS((SELECT")),
     ("Round",    s -> Round(s, 2),          nsub, Any[3, 2, "A"], ("ROUND((SELECT",            "ROUND(((SELECT")),
     ("Cast",     s -> Cast(s, "integer"),   nsub, Any[3, "A"],    ("CAST((SELECT",             "((SELECT")),
     ("Extract",  s -> Extract(s, "year"),   dsub, Any[3, "A"],    ("strftime('%Y', (SELECT",   "EXTRACT(YEAR FROM (SELECT")),

@@ -143,6 +143,12 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Sum F int + 1",           :Result,              m -> _EKM_FN.Sum(_EKM_Q.F("grid") + 1)),
   ("F int / int",             :Result,              m -> _EKM_Q.F("grid") / _EKM_Q.F("laps")),
   ("Floor F int + 1",         :Result,              m -> _EKM_FN.Floor(_EKM_Q.F("grid") + 1)),
+  # #1153: the bitwise operators and shifts are integers to the walk, and so is a `Subquery` over one
+  ("F int & int",             :Result,              m -> _EKM_Q.F("grid") & 3),
+  ("F int << 1",              :Result,              m -> _EKM_Q.F("grid") << 1),
+  ("Floor F int & 3",         :Result,              m -> _EKM_FN.Floor(_EKM_Q.F("grid") & 3)),
+  ("Sum F bigint << 1",       :Result,              m -> _EKM_FN.Sum(_EKM_Q.F("resultid") << 1)),
+  ("Floor Subquery int",      :Result,              m -> _EKM_FN.Floor(_EKM_Q.Subquery(_ekm_sub(m, :Result, "grid")))),
   # ── subqueries ─────────────────────────────────────────────────────────────────────────────────
   ("Subquery Max hop date",   :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Max("raceid__date")))),
   ("Subquery Avg float",      :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Avg("points")))),

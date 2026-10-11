@@ -606,6 +606,10 @@ end
   # where `Floor(x) / 2` is. Separate from the textless record because the expression alone has one
   # text; only the division splits it.
   subquery_whole_numeric::Union{Nothing,IdDict{SubqueryObject,Tuple{Symbol,String}}} = nothing
+  # #1153 — and its kind under EVERY policy (`_expression_kind` over the inner instruction, in the
+  # same window): `subquery_kinds` is the READ kind, which names no integer or float, so
+  # `Floor(Subquery(<integer>))` was `numeric` on PostgreSQL. Same keying and laziness as above.
+  subquery_all_kinds::Union{Nothing,IdDict{SubqueryObject,CanonicalType}} = nothing
   connection::ConnType = nothing
   # array_defs::SQLTypeArrays = SQLArrays()
   cache::Dict{MemoKey,SQLTypeField} = sizehint!(Dict{MemoKey,SQLTypeField}(), 12)

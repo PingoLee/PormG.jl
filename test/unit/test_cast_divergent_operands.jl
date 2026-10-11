@@ -910,7 +910,7 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A CTE column from Sum of a BIGINT, divided, builds on both engines; one the walk cannot name is refused on PostgreSQL (#1127, #1147)
+# A CTE column from Sum of a BIGINT, divided, builds on both engines (#1127, #1147, #1153)
 # The CTE model types a `SUM` column as an integer, whatever it sums. Under #1127 the body's answer was
 # recorded and `CTE("c", "s") / 2` refused on both engines, since PostgreSQL's `sum(bigint)` is
 # `numeric` and kept the half. #1147 step 2 NORMALIZES it instead: the body renders
@@ -918,10 +918,11 @@ end
 # engines and divides as one — under `Coalesce`, under an outer aggregate, to an integer, a text and a
 # scaled target. So does an outer `Sum` over a `Count`, a `Sum` of an integer or a `Rank` column, which
 # PostgreSQL types `bigint`: `SUM("R1_1"."s")::bigint`. Also `Sum(F("id") / 2)`: `bigint / integer` is
-# a `bigint`. A body `Sum` the walk cannot name — a shift, `F("laps_total") << 1` — is still
-# `sum(bigint)` there: divided, PostgreSQL departs from the integer quotient (#1111), SQLite builds.
+# a `bigint`. #1153: so is a body `Sum` over a shift, `F("laps_total") << 1`, which the walk names a
+# `bigint` now (a shift has its left operand's type), rendered `SUM(("Tb"."laps_total" << $1::integer))::bigint`
+# there; it was a bare `sum(bigint)`, refused once divided on PostgreSQL (#1111).
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1127, #1147: a CTE column from Sum of a BIGINT, divided, builds on both engines; an unnamed one is refused on PostgreSQL" begin
+@testset "#1127, #1147, #1153: a CTE column from Sum of a BIGINT, divided, builds on both engines" begin
   function withcte(outer)
     q = CCD.Ccd_team.objects
     body = CCD.Ccd_driver.objects
@@ -957,9 +958,10 @@ end
   @test occursin("SUM(\"Tb\".\"id\")::bigint as \"s\"", pg) && occursin("SUM(\"R1_1\".\"s\")::bigint as \"x\"", pg)
   sl = _ccd_sql(withcte(Fn.Sum(PormG.CTE("c", "s"))); conn = _CCD_SL)
   @test occursin("SUM(\"Tb\".\"id\") as \"s\"", sl) && occursin("SUM(\"R1_1\".\"s\") as \"x\"", sl)
-  _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111",
-              named = "the CTE column `CTE(\"c\", \"shift\")` (`SUM(…)` over the BigIntegerField `laps_total`)",
-              run = cte(Fn.Cast(Fn.Coalesce(PormG.CTE("c", "shift"), 0) / 2, Models.IntegerField())))
+  shifted = cte(Fn.Cast(Fn.Coalesce(PormG.CTE("c", "shift"), 0) / 2, Models.IntegerField()))
+  @test _ccd_builds(nothing; run = shifted)
+  @test occursin("SUM((\"Tb\".\"laps_total\" << \$1::integer))::bigint as \"shift\"", shifted(_CCD_PG))
+  @test occursin("SUM((\"Tb\".\"laps_total\" << ?)) as \"shift\"", shifted(_CCD_SL))
   # The sibling: a BIGINT divided by a whole number inside the sum is still a BIGINT, and nested too —
   # both named by the walk, so both normalized.
   @test _ccd_builds(Fn.Cast(Fn.Sum(_CF("id") / 2) / 2, Models.IntegerField()))
@@ -975,11 +977,11 @@ end
 # walk names that sum a `bigint` — integer arithmetic, an integer `Case`, `Coalesce`/`Greatest` over an
 # integer, a declared `bigint` — and PostgreSQL renders it `SUM(…)::bigint`, so it divides as an
 # integer on both engines and builds. The same holds for a CTE column (`Lag(Count(…))`, a `Lag` with
-# an integer default). What the walk cannot name — a bitwise operator, a shift — is still a
-# `sum(bigint)` there: divided, it is refused on PostgreSQL only (#1111), naming the literal as the
-# `bigint` it is there, and SQLite builds.
+# an integer default). #1153: so does a bitwise operator and a shift (`int4 & int8` is `int8`, a shift
+# its left operand's type), which the walk did not name: they were a bare `sum(bigint)`, refused once
+# divided on PostgreSQL only (#1111). Expected SQL, PostgreSQL: `SUM(("Tb"."number" & $1::bigint))::bigint`.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1141, #1147: Sum over an integer literal divides as an integer on both engines unless the walk cannot name it" begin
+@testset "#1141, #1147, #1153: Sum over an integer literal divides as an integer on both engines" begin
   literal = "an integer literal (a `bigint` on PostgreSQL)"
   function withcte(outer)
     q = CCD.Ccd_team.objects
@@ -1020,16 +1022,21 @@ end
     @test _ccd_builds(nothing; run = cte(Fn.Cast(Fn.Sum(PormG.CTE("c", col)) / 2, Models.IntegerField())))
   end
   @test _ccd_builds(nothing; run = cte(Fn.Cast(Fn.Coalesce(PormG.CTE("c", "plus"), 0) / 2, Models.IntegerField())))
-  # PostgreSQL departs: the bitwise operators and a shift's left operand, which the walk does not type.
-  for (expr, named) in (
-      (Fn.Cast(Fn.Sum(_CF("number") & 1) / 2, Models.IntegerField()), "`SUM(…)` over $(literal)"),
-      (Fn.Cast(Fn.Sum(xor(_CF("number"), 1)) / 2, Models.IntegerField()), "`SUM(…)` over $(literal)"),
-      (Fn.Cast(Fn.Sum(_CF("laps_total") << 1) / 2, Models.IntegerField()), "`SUM(…)` over the BigIntegerField `laps_total`"),
-      # `coalesce(int4 << int4, int8)` is an `int8` the walk cannot name.
-      (Fn.Cast(Fn.Sum(Fn.Coalesce(1 << _CF("number"), 0)) / 2, Models.IntegerField()), "`SUM(…)` over `COALESCE(…)` over $(literal)"))
-    _ccd_expect(expr; departs = _PG_ONLY, issue = "#1111", named = named)
+  # #1153: the bitwise operators and a shift's left operand are typed by the walk, so these are
+  # normalized too (they were refused on PostgreSQL, the bare `sum(bigint)` keeping the half).
+  for expr in (
+      Fn.Cast(Fn.Sum(_CF("number") & 1) / 2, Models.IntegerField()),
+      Fn.Cast(Fn.Sum(xor(_CF("number"), 1)) / 2, Models.IntegerField()),
+      Fn.Cast(Fn.Sum(_CF("laps_total") << 1) / 2, Models.IntegerField()),
+      # `coalesce(int4 << int4, int8)` is an `int8`.
+      Fn.Cast(Fn.Sum(Fn.Coalesce(1 << _CF("number"), 0)) / 2, Models.IntegerField()))
+    @test _ccd_builds(expr)
   end
-  @test occursin("SUM((\"Tb\".\"number\" & \$1::bigint)) as \"x\"", _ccd_render(Fn.Sum(_CF("number") & 1); conn = _CCD_PG))
+  @test occursin("SUM((\"Tb\".\"number\" & \$1::bigint))::bigint as \"x\"", _ccd_render(Fn.Sum(_CF("number") & 1); conn = _CCD_PG))
+  @test occursin("SUM((\"Tb\".\"number\" # \$1::bigint))::bigint as \"x\"", _ccd_render(Fn.Sum(xor(_CF("number"), 1)); conn = _CCD_PG))
+  @test occursin("SUM(COALESCE((\$1::integer << \"Tb\".\"number\"), \$2::bigint))::bigint as \"x\"",
+                 _ccd_render(Fn.Sum(Fn.Coalesce(1 << _CF("number"), 0)); conn = _CCD_PG))
+  @test occursin("SUM((\"Tb\".\"number\" & ?)) as \"x\"", _ccd_render(Fn.Sum(_CF("number") & 1); conn = _CCD_SL))
   # Unchanged: a `sum(integer)` is a `bigint` and divides as an integer on both, and so does a
   # `bigint` that is not summed (`Max`, `Coalesce`); undivided, a `sum(bigint)` reads the same.
   for expr in (Fn.Cast(Fn.Sum("number") / 2, Models.IntegerField()),
@@ -1074,7 +1081,7 @@ end
 #   SUM(CASE … THEN $2::bigint ELSE $3::bigint END)::bigint   (an integer Case)
 # and bare `SUM(x)` where PostgreSQL's sum is already the meaning: `sum(int4)` is a `bigint`, a
 # float's a `double`, and a `Case` with a float branch is a `float8`. SQLite renders bare everywhere.
-# What the walk cannot name keeps the bare `sum(bigint)` and its #1111 refusal; a `Floor` over a
+# A shifted `bigint` is one too (#1153: `SUM(("Tb"."laps_total" << $1::integer))::bigint`); a `Floor` over a
 # `Mod` is a fraction (`Mod` is `numeric`), whose nearest integer SQLite truncates (#1028).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1147: Sum of a bigint renders ::bigint on PostgreSQL and divides as an integer on both engines" begin
@@ -1095,9 +1102,10 @@ end
   @test _ccd_builds(divided)
   @test occursin("((SUM(\"Tb\".\"laps_total\")::bigint / \$1::bigint))::integer as \"x\"", pg(divided))
   @test occursin("CAST((SUM(\"Tb\".\"laps_total\") / ?) AS INTEGER) as \"x\"", sl(divided))
-  # A shift the walk cannot name: PostgreSQL departs from the integer quotient (#1111), SQLite builds.
+  # #1153: a shift has its left operand's type, so a shifted `bigint` sums to one and is cast back too.
   shifted = Fn.Cast(Fn.Sum(_CF("laps_total") << 1) / 2, Models.IntegerField())
-  _ccd_expect(shifted; departs = _PG_ONLY, issue = "#1111", named = "`SUM(…)` over the BigIntegerField `laps_total`")
+  @test _ccd_builds(shifted)
+  @test occursin("((SUM((\"Tb\".\"laps_total\" << \$1::integer))::bigint / \$2::bigint))::integer as \"x\"", pg(shifted))
   @test occursin("CAST((SUM((\"Tb\".\"laps_total\" << ?)) / ?) AS INTEGER) as \"x\"", sl(shifted))
   # A `Floor` over a `Mod` is a fraction to the classifier: cast to an integer, SQLite departs (#1028).
   floor_mod = Fn.Cast(Fn.Floor(Fn.Mod("number", 3)) / 2, Models.IntegerField())

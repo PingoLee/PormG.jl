@@ -313,29 +313,24 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Concat: an integer quotient PostgreSQL computes as `numeric` is refused there only (#1111, #1147)
+# Concat: an integer quotient is an integer on both engines, a shifted sum included (#1111, #1147, #1153)
 # The one `Concat` operand that is a question of MEANING, not explicit intent: an integer divided is
-# an integer quotient (`15 / 2` is `7`), and the operand's text is that integer's. A `Sum` of a
-# `bigint` the type walk cannot name — a shift, `F("id") << 1` — is PostgreSQL's `sum(bigint)`, a
-# `numeric`, so `/ 2` keeps the half there (`7.5`): PostgreSQL departs and is refused, naming only
-# itself; SQLite divides as integers and builds `SUM(("Tb"."id" << ?)) / ?`. A `Sum` the walk names
-# (`Sum("id")`) renders `SUM("Tb"."id")::bigint` on PostgreSQL, divides as an integer on both, and
-# builds everywhere.
+# an integer quotient (`15 / 2` is `7`), and the operand's text is that integer's. PostgreSQL widens
+# `sum(bigint)` to `numeric`, which kept the half once divided (`7.5`), so #1111 refused it there.
+# A `Sum` the type walk names a `bigint` renders `SUM(x)::bigint` on PostgreSQL (#1147), and since
+# #1153 the walk names a shift too (`F("id") << 1` has its left operand's type), so both divide as
+# integers and build. Expected SQL, PostgreSQL: `(SUM(("Tb"."id" << $2::integer))::bigint / $3::bigint)`.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1111: Concat over an integer quotient PostgreSQL computes as numeric is refused on PostgreSQL only" begin
+@testset "#1111, #1153: Concat over an integer quotient builds on both engines, a shifted sum included" begin
   F = PormG.QueryBuilder.F
-  expr = Fn.Concat(Fn.Value("-"), Fn.Sum(F("id") << 1) / 2)
-  err = _cto_refusal(expr; conn = _CTO_PG)
-  @test err isa QueryBuildError
-  msg = _cto_msg(err)
-  @test occursin("Concat of arithmetic over `SUM(…)` over the IDField `id` means an integer quotient", msg)
-  @test occursin("so PormG refuses it on PostgreSQL (#1111)", msg)
-  @test !occursin("SQLite", msg)
-  @test occursin("SUM((\"Tb\".\"id\" << ?)) / ?", _cto_render(expr; conn = _CTO_SL))
-  # The sum the walk names is normalized on PostgreSQL, so it builds on both engines.
+  shifted = Fn.Concat(Fn.Value("-"), Fn.Sum(F("id") << 1) / 2)
   for conn in (_CTO_PG, _CTO_SL)
+    @test _cto_refusal(shifted; conn = conn) === nothing
+    # The sum the walk named before #1153 is normalized on PostgreSQL the same way.
     @test _cto_refusal(Fn.Concat(Fn.Value("-"), Fn.Sum("id") / 2); conn = conn) === nothing
   end
+  @test occursin("(SUM((\"Tb\".\"id\" << \$2::integer))::bigint / \$3::bigint)", _cto_render(shifted; conn = _CTO_PG))
+  @test occursin("SUM((\"Tb\".\"id\" << ?)) / ?", _cto_render(shifted; conn = _CTO_SL))
   @test occursin("(SUM(\"Tb\".\"id\")::bigint / \$2::bigint)", _cto_render(Fn.Concat(Fn.Value("-"), Fn.Sum("id") / 2); conn = _CTO_PG))
 end
 

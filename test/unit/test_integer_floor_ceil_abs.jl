@@ -103,6 +103,48 @@ _ifc_render(expr; conn) =
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# A bitwise operator, a shift and a Subquery over an integer are integers to the walk (#1153)
+# Both engines compute these as integers, but the walk named none of them, so PostgreSQL kept
+# `FLOOR((x)::numeric)`: divided, it kept the half SQLite drops (`Floor(F("grid") & 3) / 2` read
+# `1.5` against `1`), and nothing refused it. The walk now types `&`, `|`, `xor` as arithmetic
+# (`int4 & int8` is `int8`), `~` as its operand, a shift as its LEFT operand (a literal there binds
+# `::integer`), and a `Subquery` as its inner projection's own kind. Expected SQL, PostgreSQL:
+#   FLOOR((("Tb"."grid" & $1::bigint))::numeric)::bigint
+#   CEIL((("Tb"."grid" << $1::integer))::numeric)::integer
+#   FLOOR(((SELECT "R1"."grid" … LIMIT $1 ))::numeric)::integer
+# SQLite renders as before (`FLOOR(("Tb"."grid" & ?))`).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1153: Floor/Ceil/Abs over a bitwise operator, a shift or an integer Subquery keep the integer on PostgreSQL" begin
+  # One line, so a pinned subquery reads as the text it is.
+  pg(expr) = replace(_ifc_render(expr; conn = _IFC_PG), r"\s+" => " ")
+  sl(expr) = replace(_ifc_render(expr; conn = _IFC_SL), r"\s+" => " ")
+  @test occursin("FLOOR(((\"Tb\".\"grid\" & \$1::bigint))::numeric)::bigint as \"x\"", pg(_IFC_FN.Floor(_IFC_F("grid") & 3)))
+  @test occursin("CEIL(((\"Tb\".\"grid\" | \"Tb\".\"position\"))::numeric)::integer as \"x\"",
+                 pg(_IFC_FN.Ceil(_IFC_F("grid") | _IFC_F("position"))))
+  @test occursin("ABS((\"Tb\".\"grid\" # \$1::bigint)) as \"x\"", pg(_IFC_FN.Abs(xor(_IFC_F("grid"), 1))))
+  @test occursin("FLOOR((~(\"Tb\".\"laps\"))::numeric)::bigint as \"x\"", pg(_IFC_FN.Floor(~_IFC_F("laps"))))
+  # A shift has its left operand's type, whatever it shifts by: an `integer` column stays one, and
+  # a literal on the left binds `::integer`.
+  @test occursin("CEIL(((\"Tb\".\"grid\" << \$1::integer))::numeric)::integer as \"x\"", pg(_IFC_FN.Ceil(_IFC_F("grid") << 1)))
+  @test occursin("FLOOR(((\"Tb\".\"laps\" >> \$1::integer))::numeric)::bigint as \"x\"", pg(_IFC_FN.Floor(_IFC_F("laps") >> 1)))
+  @test occursin("FLOOR(((\$1::integer << \"Tb\".\"grid\"))::numeric)::integer as \"x\"", pg(_IFC_FN.Floor(1 << _IFC_F("grid"))))
+  # Divided, both engines divide an integer.
+  @test occursin("(FLOOR(((\"Tb\".\"grid\" & \$1::bigint))::numeric)::bigint / \$2::bigint) as \"x\"",
+                 pg(_IFC_FN.Floor(_IFC_F("grid") & 3) / 2))
+  @test occursin("(FLOOR((\"Tb\".\"grid\" & ?)) / ?) as \"x\"", sl(_IFC_FN.Floor(_IFC_F("grid") & 3) / 2))
+  # A `Subquery` is its inner projection's own kind, typed while the inner build still resolves it.
+  inner(col) = IFC.Ifc_result.objects.filter("resultid" => PormG.QueryBuilder.OuterRef("resultid")).values(col).limit(1)
+  sub(col) = PormG.QueryBuilder.Subquery(inner(col))
+  @test occursin(r"FLOOR\(\(\(SELECT \"R1\"\.\"grid\" [^)]*\)\)::numeric\)::integer as \"x\"", pg(_IFC_FN.Floor(sub("grid"))))
+  @test occursin(r"ABS\(\(SELECT \"R1\"\.\"laps\" [^)]*\)\) as \"x\"", pg(_IFC_FN.Abs(sub("laps"))))
+  # Not an integer: a float column through a `Subquery` keeps the cast and is not cast back.
+  @test occursin(r"FLOOR\(\(\(SELECT \"R1\"\.\"points\" [^)]*\)\)::numeric\) as \"x\"", pg(_IFC_FN.Floor(sub("points"))))
+  # SQLite is unchanged.
+  @test occursin("FLOOR((\"Tb\".\"grid\" & ?)) as \"x\"", sl(_IFC_FN.Floor(_IFC_F("grid") & 3)))
+  @test occursin(r"FLOOR\(\(SELECT \"R1\"\.\"grid\" [^)]*\)\) as \"x\"", sl(_IFC_FN.Floor(sub("grid"))))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # The cast's original reason stays covered: a literal is bound typed
 # `b0642e96` cast every operand to `numeric` when a bound parameter could reach `abs` untyped, which
 # PostgreSQL cannot resolve (`abs(unknown)` is not unique). An integer literal now binds `$1::bigint`,

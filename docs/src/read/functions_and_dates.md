@@ -495,10 +495,11 @@ Say which text you mean:
 - or **fetch the value and format it in Julia**, where you choose the digits.
 
 `Floor`, `Ceil` and `Abs` over an integer, and `Sum` of integers, are integers on both engines
-(#1147), so `Floor("grid") / 2` and `Sum("resultid") / 2` divide as integers and pass. One integer
-quotient is a question of meaning rather than of text: a `Sum` PormG cannot type as an integer,
-which PostgreSQL computes as `numeric` (a sum of a shift over a BIGINT column,
-`Sum(F("resultid") << 1) / 2`), would keep the half there. It is refused on PostgreSQL only (#1111).
+(#1147), so `Floor("grid") / 2` and `Sum("resultid") / 2` divide as integers and pass. An integer
+here includes a bitwise operator or a shift over integers (`F("grid") & 3`, `F("resultid") << 1`,
+which has its left operand's type) and a `Subquery` projecting one (#1153). One integer quotient is
+a question of meaning rather than of text: a `Sum` PormG cannot type as an integer, which
+PostgreSQL computes as `numeric`, would keep the half there. It is refused on PostgreSQL only (#1111).
 
 The check covers only types PormG can name: an operand it cannot type (an untyped `Case`, an
 extremum over timestamp arithmetic, `Greatest`/`Least` over computed timestamps or intervals)

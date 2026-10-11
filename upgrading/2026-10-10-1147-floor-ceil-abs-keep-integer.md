@@ -3,7 +3,7 @@
 - **Version**: Unreleased
 - **PormG ref**: #1147 ; `src/Dialect.jl` (`ABS`, `FLOOR`, `CEIL`), `src/querybuilder/expression_kind.jl` (`_integer_operand_kind`), `src/querybuilder/select_nodes.jl` (`_render_function_body`)
 - **Recorded**: 2026-10-10
-- **Severity**: behavior change. On PostgreSQL, `Floor(x)`, `Ceil(x)` and `Abs(x)` over an integer `x` read back as an `Int16`/`Int32`/`Int64` instead of a `Decimal`, and a quotient over one (`Floor("grid") / 2`) divides as integers: `3` where it was `3.5`. SQLite is unchanged.
+- **Severity**: behavior change. On PostgreSQL, `Floor(x)`, `Ceil(x)` and `Abs(x)` over an integer `x` read back as an `Int16`/`Int32`/`Int64` instead of a `Decimal`, and a quotient over one (`Floor("grid") / 2`) divides as integers: `3` where it was `3.5`. `Abs` of an integer type's most negative value raises `integer out of range` there. SQLite is unchanged.
 
 ### What changed
 
@@ -29,6 +29,11 @@ fixture (`Result.grid` 1, 5, 7 on the first rows):
 | `Floor("grid")` | `Decimal` 1, 5, 7 | `Int32` 1, 5, 7 | 1, 5, 7 |
 | `Floor("grid") / 2` | `0.5`, `2.5`, `3.5` | `0`, `2`, `3` | `0`, `2`, `3` |
 | `Floor("dob__@year") / 2`, an odd year | `992.5` | `992` | `992` |
+
+One edge raises where it did not: `Abs` of the most negative value of an integer type
+(`-2147483648` in an `IntegerField`) has no positive counterpart in that type, so PostgreSQL raises
+`integer out of range` instead of returning a `numeric`. SQLite answers it, since its integers are
+64-bit (and raises for the most negative 64-bit value, as PostgreSQL does for a `bigint`).
 
 Unchanged: these functions over a float, a decimal, or an expression PormG does not type as an
 integer (`Floor(F("grid") + 1)`, `Abs(Sum("resultid"))`) keep the `::numeric` cast and read a

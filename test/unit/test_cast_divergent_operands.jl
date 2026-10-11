@@ -737,6 +737,13 @@ end
         (Fn.Cast(Fn.Sum(Fn.Floor("id")) / 2, Models.IntegerField()), _is_1028, "`SUM(…)` over `FLOOR(…)` over the IDField `id`"),
         (Fn.Cast(Fn.Floor(Fn.Sum("id")) / 2, Models.IntegerField()), _is_1028, "arithmetic over `FLOOR(…)` over `SUM(…)` over the IDField `id`"),
         (Fn.Cast(Fn.Abs(Fn.Sum("laps_total")) / 2, Models.IntegerField()), _is_1028, "arithmetic over `ABS(…)` over `SUM(…)` over the BigIntegerField `laps_total`"),
+        # Review of #1147: a `Lag` with a non-integer `default` is no integer — PostgreSQL resolves
+        # `lag(int4, int, float8)` to a `float8` — so `Abs`/`Floor` over it keep the cast, and divided
+        # they are refused as before. Without the default in the walk these built and split.
+        (Fn.Cast(Fn.Abs(PormG.QueryBuilder.Lag("number"; default = _CF("points"), over = PormG.QueryBuilder.WindowOver(order_by = ["id"]))) / 2,
+                 Models.CharField()), _is_1028, "arithmetic over `ABS(…)`"),
+        (Fn.Cast(Fn.Floor(PormG.QueryBuilder.Lag("number"; default = 3.5, over = PormG.QueryBuilder.WindowOver(order_by = ["id"]))) / 2,
+                 Models.CharField()), _is_1028, "arithmetic over `FLOOR(…)`"),
         # Review of #1111: rounding the quotient cannot bring the half back — `ROUND(7.5)` is `8` on
         # PostgreSQL and `round(7)` is `7` on SQLite — so the rounding functions are not whole over it,
         # for an integer target, a scaled one, and the #1087 shape alike.
@@ -815,7 +822,10 @@ end
     # `sum(int4)` is a `bigint`, which divides as an integer on both engines.
     Fn.Cast(Fn.Sum(Fn.Floor("number")) / 2, Models.IntegerField()),
     Fn.Cast(Fn.Coalesce(team(Fn.Floor("id")), 0) / 2, Models.IntegerField()),
-    Fn.Concat("surname", Fn.Floor("number") / 2))
+    Fn.Concat("surname", Fn.Floor("number") / 2),
+    # A `Lag` whose `default` is an integer too is one (`lag(int4, int, int8)` is an `int8`).
+    Fn.Cast(Fn.Floor(PormG.QueryBuilder.Lag("number"; default = 0, over = PormG.QueryBuilder.WindowOver(order_by = ["id"]))) / 2,
+            Models.IntegerField()))
   for expr in built, conn in _CCD_ENGINES
     @test _ccd_refusal(expr; conn = conn) === nothing
   end

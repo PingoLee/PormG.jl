@@ -501,8 +501,9 @@ _operand_kind(p, instruc::SQLInstruction) = _infer_kind(p, instruc, _ReadKinds()
 # each operand `::numeric`, and `avg` of an integer is numeric too) while SQLite answers a REAL:
 # `Mod(7, 3)` reads `1` and `1.0`. Measured on SQLite 3.45.1 for #1027. They are the `:numeric`
 # `_result_rule`s; the functions whose value has their operands' type are `_OPERAND_TYPED_RULES`
-# (`functions.jl`, #1034). `FLOOR`/`CEIL`/`ABS` are `numeric` on PostgreSQL but agree with SQLite's
-# integer over an integer operand, so they are `:promoting`, not `:numeric` — until divided, which
+# (`functions.jl`, #1034). `FLOOR`/`CEIL`/`ABS` keep an integer operand's type on both engines (#1147),
+# so they are `:promoting`, not `:numeric`. Over a whole number PormG does not type as an integer they
+# are `numeric` on PostgreSQL, which agrees with SQLite's integer until divided, and that
 # `_whole_numeric_operand` refuses (#1111), as it does `SUM` of a BIGINT column.
 function _concat_textless_operand(p, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing}
   p isa SQLText && return _textless_literal(p.field)

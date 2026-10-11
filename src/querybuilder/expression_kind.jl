@@ -14,9 +14,10 @@
 #   because the table also feeds the comparison binder, #882); a literal only a temporal one
 #   (`literal_canonical_kind`, #721); a computed number none (`Sum`/`Avg` went through a double,
 #   #648); and a boolean is the one the build's formatter already names (`_is_boolean_valued`, #965).
-# - `_AllKinds` — `_expression_kind`: every type PormG can name, on this engine. No reader consumes it
-#   yet: the expression-kind matrix records it beside the others (its `kind` channel), and #1034's
-#   phase 3 moves the readers onto it one at a time, each move a reviewed diff of that fixture.
+# - `_AllKinds` — `_expression_kind`: every type PormG can name, on this engine. The expression-kind
+#   matrix records it beside the others (its `kind` channel), and #1034's phase 3 moves the readers
+#   onto it one at a time, each move a reviewed diff of that fixture. Its first reader is
+#   `_integer_operand_kind` (#1147): the `Abs`/`Floor`/`Ceil` render and the #1111 division check.
 #
 # Both are asked AFTER the render, as every reader here is: resolving a joined path is what fills the
 # field memo `_alias_column_field` reads, and a `Subquery` files its kind when it renders.
@@ -138,7 +139,7 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
   # #1147: a date part both engines compute as an integer (`_integer_transform`) is one, whatever its
   # operand. Its rule stays `:unknown` until phase 3 states it, so the read kind is unchanged.
   _integer_transform(p) && return _integer_transform_kind(instruc.connection)
-  rule === :operand && return _infer_kind(p.column, instruc, policy)
+  rule === :operand && return _with_window_default(p, _infer_kind(p.column, instruc, policy), instruc, policy)
   rule === :first_operand && return _infer_kind(first(p.column), instruc, policy)
   rule === :one_of && return _agreeing_kind(p, instruc, policy)
   rule in (:promoting, :numeric) &&
@@ -147,6 +148,19 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
   return nothing
 end
 _infer_function_kind(::Any, ::SQLInstruction, ::_KindPolicy) = nothing
+
+# A `Lag`/`Lead` `default` is one of the window's values too: PostgreSQL resolves `lag(int4, int,
+# float8)` to a `float8` and `lag(int4, int, int8)` to an `int8` (review of #1147), so the operand's
+# kind and the default's are unified as a `COALESCE`'s are. A string is a bound text literal there,
+# not a path (`_bigint_operand_function`); a default PormG cannot type leaves the value untyped.
+function _with_window_default(p, kind, instruc::SQLInstruction, policy::_AllKinds)
+  (p isa WindowFunction && kind !== nothing) || return kind
+  default = get(p.kwargs, "default", nothing)
+  default === nothing && return kind
+  literal = default isa SQLText ? default.field : default
+  k = literal isa Union{SQLObject,SQLType} ? _infer_kind(literal, instruc, policy) : _literal_kind(literal, policy)
+  return k === nothing ? nothing : _unify_kinds(kind, k, policy)
+end
 
 # The integer an integer date part is on the engine: PostgreSQL renders `EXTRACT(…)::integer` (and
 # `QUARTER`/`QUADRIMESTER`/`WEEK_DAY` as an `integer` too), SQLite computes a 64-bit integer.
@@ -159,8 +173,8 @@ _integer_transform_kind(::Any) = nothing
 
 The integer kind of `p`'s first operand on `instruc`'s engine, or `nothing` when it is not one PormG
 can name. `Abs`/`Floor`/`Ceil` keep it (#1147): `Dialect` renders them over that integer, not over
-`(x)::numeric`, and `_computed_kind` answers the same kind — both read this, so the SQL and the walk
-cannot disagree. Read after the operand renders.
+`(x)::numeric`. Their `_computed_kind` methods answer the same kind from the same walk of the same
+operand, so the SQL and the walk agree by construction. Read after the operand renders.
 """
 function _integer_operand_kind(p::SQLTypeFunction, instruc::SQLInstruction)
   k = _infer_kind(_first_operand(p), instruc, _AllKinds())

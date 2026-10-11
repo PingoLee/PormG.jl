@@ -81,6 +81,14 @@ _ifc_render(expr; conn) =
                  pg(_IFC_FN.Floor("date__@year")))
   # Nested: the inner function keeps the integer, so the outer one is over an integer too.
   @test occursin("FLOOR((ABS(\"Tb\".\"grid\"))::numeric)::integer as \"x\"", pg(_IFC_FN.Floor(_IFC_FN.Abs("grid"))))
+  # A `Lag`'s `default` is one of its values (review of #1147): an integer literal binds as `bigint`,
+  # so the window is an `int8` and the cast back is `::bigint` — `::integer` would overflow on a
+  # default past 2^31 — and a float default makes it no integer at all.
+  lag(default) = PormG.QueryBuilder.Lag("grid"; default = default, over = PormG.QueryBuilder.WindowOver(order_by = ["resultid"]))
+  @test occursin(r"FLOOR\(\(LAG\(\"Tb\".\"grid\", \$1::integer, \$2::bigint\) OVER \([^)]*\)\)::numeric\)::bigint as \"x\"",
+                 pg(_IFC_FN.Floor(lag(5_000_000_000))))
+  @test occursin(r"FLOOR\(\(LAG\(\"Tb\".\"grid\"[^)]*\) OVER \([^)]*\)\)::numeric\) as \"x\"", pg(_IFC_FN.Floor(lag(3.5))))
+  @test occursin(r"ABS\(LAG\(\"Tb\".\"grid\"", pg(_IFC_FN.Abs(PormG.QueryBuilder.Lag("grid"; over = PormG.QueryBuilder.WindowOver(order_by = ["resultid"])))))
   # Not an integer to the walk: the cast stays.
   @test occursin("ABS((\"Tb\".\"points\")::numeric) as \"x\"", pg(_IFC_FN.Abs("points")))
   @test occursin("FLOOR((\"Tb\".\"price\")::numeric) as \"x\"", pg(_IFC_FN.Floor("price")))

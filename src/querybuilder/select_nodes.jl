@@ -681,7 +681,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   end
   # #1147: `Abs`/`Floor`/`Ceil` over an integer keep it, which `Dialect` renders where an engine would
   # not (PostgreSQL's `::numeric`). Read once the operand renders, as the checks above are; the walk's
-  # `_computed_kind` reads the same kind, so the SQL and the type cannot disagree.
+  # `_computed_kind` answers the same kind from the same operand walk, so the SQL and the type agree.
   if v isa FObject && v.function_name in _NUMERIC_WHOLE_FUNCTIONS && !(v.column isa AbstractVector)
     integer_kind = _integer_operand_kind(v, instruc)
     integer_kind === nothing || (resolved_kwargs["integer_kind"] = integer_kind)

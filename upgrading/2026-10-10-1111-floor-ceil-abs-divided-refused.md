@@ -59,11 +59,11 @@ Rounding after the division cannot bring the half back on SQLite. Divide as a fl
 keep the fraction, and then say how to round; or fetch the number and compute in Julia:
 
 ```julia
-# ✗ before — ids 1 and 2 sum to 3: `2` on PostgreSQL (1.5, rounded) and `1` on SQLite
-M.Result.objects.values("half" => Cast(Sum("resultid") / 2, IntegerField()))
+# ✗ before — over results 1 and 2 the sum is 3: `2` on PostgreSQL (1.5, rounded) and `1` on SQLite
+M.Result.objects.filter("resultid__@in" => [1, 2]).values("half" => Cast(Sum("resultid") / 2, IntegerField()))
 
 # ✓ after — a float division has the half on both engines; Round(x) then reads the same integer
-M.Result.objects.values("half" => Cast(Round(Sum("resultid") / 2.0), IntegerField()))
+M.Result.objects.filter("resultid__@in" => [1, 2]).values("half" => Cast(Round(Sum("resultid") / 2.0), IntegerField()))
 
 # ✓ after — the digits you mean: fetch the number and format it in Julia
 total = M.Result.objects.values("total" => Sum("resultid")).list(:dict)[1][:total]

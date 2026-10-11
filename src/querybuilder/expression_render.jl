@@ -413,7 +413,7 @@ _is_bare_column(::Any) = false
 
 # A day count's SQL as a day shift reads it. Only a `BIGINT` count on PostgreSQL changes.
 _day_count_sql(sql::AbstractString, kind::TemporalKind, instruc::SQLInstruction) =
-  kind isa CInt64 && instruc.connection isa PormGPostgres ? "CAST($(sql) AS integer)" : sql
+  kind isa CInt64 && _casts_bigint_day_count(instruc.connection) ? "CAST($(sql) AS integer)" : sql
 
 # #882 — `date ± x` where `x` is none of the kinds a date combines with: a text column, `Sum(...)`,
 # `F("points") * 2`, a float. SQLite stores a date as TEXT, so `+`/`-` there added the date's YEAR to
@@ -422,7 +422,7 @@ _day_count_sql(sql::AbstractString, kind::TemporalKind, instruc::SQLInstruction)
 # PostgreSQL's `date + time` is a timestamp, which SQLite does not render — an intentional divergence,
 # documented beside the integer-column rule.
 function _refuse_untyped_date_operand(operation::AbstractString, instruc::SQLInstruction)
-  instruc.connection isa PormGSQLite || return nothing
+  _stores_date_as_text(instruc.connection) || return nothing
   throw(QueryBuildError("`$(operation)` between a date and a value PormG cannot type is not supported on " *
                         "SQLite, where a date is text and `$(operation)` would use only its year. Add a " *
                         "whole number of days (an IntegerField, F(\"date\") + 7) or a duration " *
@@ -671,7 +671,7 @@ end
 # render, and a function whose operands disagree keeps the SQL it always rendered.
 function _render_interval_operand(node, instruc::SQLInstruction;
                                   _as::Union{Nothing,String}=nothing)::Tuple{String,Union{String,Nothing},Bool}
-  sqlite = instruc.connection isa PormGSQLite
+  sqlite = _interval_as_ms(instruc.connection)
   if node isa FExpression
     raw, kind = _render_expr_typed(node, instruc)
     sql, final_kind = _finalize_render(raw, kind, instruc)
@@ -752,7 +752,7 @@ const _INTERVAL_MS_VARIADIC = ("GREATEST", "LEAST", "COALESCE")
 # conditions before it commits to a render that binds. SQLite only — PostgreSQL orders and compares
 # the `interval` itself.
 function _projected_interval_source(name::AbstractString, instruc::SQLInstruction)::Union{SQLField,Nothing}
-  instruc.connection isa PormGSQLite || return nothing
+  _interval_as_ms(instruc.connection) || return nothing
   get(instruc.projection_kinds, Symbol(name), nothing) isa CInterval || return nothing
   source = _projected_source(memo_key(:base, name), instruc)
   source isa SQLField && _interval_ms_candidate(source.field) || return nothing
@@ -784,7 +784,7 @@ _has_window_function(x::AbstractVector) = any(_has_window_function, x)
 _has_window_function(::Any) = false
 
 function _refuse_window_in_interval(left, right, instruc::SQLInstruction)
-  instruc.connection isa PormGSQLite && (_has_window_function(left) || _has_window_function(right)) || return nothing
+  _interval_as_ms(instruc.connection) && (_has_window_function(left) || _has_window_function(right)) || return nothing
   throw(QueryBuildError("A window function (Lag, Lead, FirstValue, …) cannot be a side of a timestamp " *
                         "difference, or of arithmetic on one, on SQLite: the interval is turned into text in " *
                         "a subquery, where the window sees one row. Project the window value in a CTE first " *
@@ -838,7 +838,7 @@ function _render_operand_typed(operand::Any, field_name::Any, operation::String,
     # A timestamp literal binds the canonical UTC text (`…+00:00`). Against a `timestamp` column (no
     # time zone) it is cast to that type, whose input ignores the offset and keeps the UTC wall time
     # the column itself stores; everything else casts to `timestamptz`, which reads the offset.
-    sql_type = !(instruc.connection isa PormGPostgres) ? nothing :
+    sql_type = !_casts_bind_parameters(instruc.connection) ? nothing :
                kind isa CDate ? "date" :
                left_kind == CDateTime(false) ? "timestamp" : "timestamptz"
     return add_parameter!(instruc, value_formatter(kind, instruc.connection)(operand); sql_type = sql_type), kind
@@ -889,7 +889,7 @@ function _render_interval_shift(date_side::AbstractString, date_kind::Union{CDat
                                 interval_side::AbstractString, interval_node, interval_kind::_RenderKind,
                                 operation::String, date_first::Bool, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   kind = date_kind isa CDate ? CDateTime(false) : date_kind
-  if instruc.connection isa PormGSQLite
+  if _interval_as_ms(instruc.connection)
     ms = _interval_ms_sql(interval_side, interval_node, interval_kind)
     ms === nothing &&
       throw(_sqlite_interval_error("Shifting a date by an interval that is not a timestamp difference or a " *
@@ -932,7 +932,7 @@ end
 function _render_interval_left(v::FExpression, left_side::String, left_kind::_RenderKind,
                                instruc::SQLInstruction)::Tuple{String,_RenderKind}
   op = v.operation
-  sqlite = instruc.connection isa PormGSQLite
+  sqlite = _interval_as_ms(instruc.connection)
   bind_kind = left_kind isa _IntervalMs ? CInterval() : left_kind   # what the binder may see
   expr_right = v.operand isa FExpression || (v.operand isa String && _is_field_path(v.operand, instruc))
 
@@ -1025,7 +1025,7 @@ function _render_interval_right(v::FExpression, left_side::String, left_kind::_R
                                 right_side::String, right_kind::_RenderKind,
                                 instruc::SQLInstruction)::Tuple{String,_RenderKind}
   op = v.operation
-  sqlite = instruc.connection isa PormGSQLite
+  sqlite = _interval_as_ms(instruc.connection)
   if op == "*" && _is_number_side(v.field_name, left_kind, instruc)
     sqlite || return "($(left_side) * $(right_side))", CInterval()
     rms = _interval_ms_sql(right_side, v.operand, right_kind)
@@ -1198,7 +1198,7 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     #     about durations that never says why a `Time` is not one.
     rooted_kind = f === nothing ? nothing : field_canonical_kind(f)
     root_decides = !(field_name isa FExpression && field_name.operation !== nothing) ||
-                   instruc.connection isa PormGPostgres
+                   !_interval_as_ms(instruc.connection)
     decided_kind = left_kind !== nothing ? left_kind : root_decides ? rooted_kind : nothing
     if operand isa Union{Dates.Period,Dates.CompoundPeriod} && !(decided_kind isa CInterval)
       throw(QueryBuildError("A duration (a $(typeof(operand))) compares only against an interval — a DurationField, " *
@@ -1460,7 +1460,7 @@ function _render_expr_typed(v::FExpression, instruc::SQLInstruction)::Tuple{Stri
       right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc;
                                                      left_kind = left_kind)
       # #881: PostgreSQL has no `integer ± interval` and fails when the statement runs.
-      _is_interval_kind(right_kind) && instruc.connection isa PormGSQLite &&
+      _is_interval_kind(right_kind) && _interval_as_ms(instruc.connection) &&
         throw(_sqlite_interval_error("`$(v.operation)` between a number and an interval"))
       if right_kind isa Union{CDate,CDateTime}
         v.operation == "-" &&

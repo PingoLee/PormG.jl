@@ -156,6 +156,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Dialect and Builder Accept Any AbstractString (#602)" include("unit/test_dialect_abstractstring.jl")
     @testset "Backend Capability Table (#1129)" include("unit/test_capability_table.jl")
     @testset "Engine Branches Are Reviewed (#1129)" include("unit/test_engine_branches.jl")
+    @testset "Engine Facts Have No Fallback (#1129)" include("unit/test_engine_facts.jl")
     @testset "Constructor Surface Accepts Any AbstractString (#603)" include("unit/test_constructor_abstractstring.jl")
     @testset "Numeric default= and Integer Widths (#614)" include("unit/test_numeric_default_and_widths.jl")
     @testset "default= Converter Return Contract (#631)" include("unit/test_default_converter_contract.jl")

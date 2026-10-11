@@ -54,7 +54,7 @@ function _render_json_lookup_comparison(v::SQLTypeOper, column::String, instruc:
   v.values isa SQLType && throw(FilterError(
     "Error in filter '$(_filter_path_label(v))': a JSON path lookup compares the extracted value " *
     "against a value, not a column expression"))
-  is_pg = instruc.connection isa PormGPostgres
+  as_text = _json_path_extracts_text(instruc.connection)
   if op == "ISNULL"
     # Render IS NULL directly — the shared ISNULL() rejects any column containing "(", which a
     # legitimate SQLite json_extract(...) expression trips.
@@ -67,10 +67,10 @@ function _render_json_lookup_comparison(v::SQLTypeOper, column::String, instruc:
       _locate_filter_refusal(e, _filter_path_label(v), nothing)
     end
     # PG: bind text (LHS is text). SQLite: bind the native value (LHS keeps its JSON type).
-    ph = add_parameter!(instruc, is_pg ? string(v.values) : v.values)
+    ph = add_parameter!(instruc, as_text ? string(v.values) : v.values)
     return string(column, " ", op, " ", ph)
   elseif op in (">", ">=", "<", "<=")
-    lhs = is_pg ? "($(column))::numeric" : column
+    lhs = as_text ? "($(column))::numeric" : column
     rhs = try
       _json_numeric_rhs(v.values)
     catch e

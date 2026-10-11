@@ -868,12 +868,13 @@ function _declared_type(func::SQLTypeFunction, instruct::SQLInstruction)
   # #929: `uuid`/`inet`/`cidr` became nameable for the alias filter, on PostgreSQL. They stay refused
   # on SQLite, where they were refused before: there each cast renders `CAST(x AS TEXT)`, so typing the
   # column would check — and normalize — its filter values against a type the engine never applied.
-  sqlite = instruct.connection isa PormGSQLite
-  (typed === nothing || (sqlite && _text_cast_on_sqlite(typed))) && throw(QueryBuildError(
+  (typed === nothing || _cast_renders_text(typed, instruct.connection)) || return typed
+  # uuid / inet / cidr are offered only where they type: one that renders as TEXT is refused too.
+  typed_uuid = !_cast_renders_text(_sql_type_field("uuid"), instruct.connection)
+  throw(QueryBuildError(
     "A CTE column cannot be typed from the SQL type \e[4m\e[31m$(declared)\e[0m on " *
     "$(func.function_name)(…). Name a text, integer, bigint, float, numeric, boolean or date type" *
-    "$(sqlite ? "" : ", or uuid / inet / cidr") instead (#812, #823, #929)."))
-  return typed
+    "$(typed_uuid ? ", or uuid / inet / cidr" : "") instead (#812, #823, #929)."))
 end
 
 

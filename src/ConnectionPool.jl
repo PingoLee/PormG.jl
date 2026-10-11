@@ -2855,6 +2855,16 @@ with_sqlite_write_lock(f::Function, pool::PormGSQLite) = Base.lock(f, pool.write
 with_sqlite_write_lock(f::Function, pool::PormGPostgres) = f()
 with_sqlite_write_lock(f::Function, settings::PormGSettings) = with_sqlite_write_lock(f, settings.connections)
 
+# #1129 item 2 — how a write transaction opens, per engine, with no fallback: a new backend gets a
+# `MethodError` rather than SQLite's `BEGIN IMMEDIATE`. SQLite takes the write lock at BEGIN, so a
+# concurrent writer queues instead of deadlocking the single async worker, and defers foreign-key
+# checks to COMMIT (#276) — PostgreSQL's foreign keys are created DEFERRABLE INITIALLY DEFERRED, so
+# it needs no statement after BEGIN.
+_begin_write_sql(::PormGPostgres) = "BEGIN;"
+_begin_write_sql(::PormGSQLite) = "BEGIN IMMEDIATE TRANSACTION;"
+_after_begin_sql(::PormGPostgres) = String[]
+_after_begin_sql(::PormGSQLite) = ["PRAGMA defer_foreign_keys = ON;"]
+
 # Read `PRAGMA foreign_keys` back off a specific connection. Returns the *actual* session state, not
 # what was requested — the distinction matters because SQLite silently ignores `PRAGMA foreign_keys`
 # while a transaction is open (verified: setting OFF inside a BEGIN leaves the read-back at 1, with

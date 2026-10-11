@@ -15,7 +15,7 @@ import PormG: backend_sqlite_version  # SQLite library-version probe (driver bod
 #                                a DecimalField wider than SQLite stores exactly #648).
 #   QueryBuildError            — the caller passed an impossible argument shape (on_conflict_clause).
 import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError, InvalidMigrationError
-import PormG: _supports, _capability_error  # #1129: the backend capability table (Kernel)
+import PormG: _supports, _capability_error, _engine_key  # #1129: the backend capability table (Kernel)
 # #496: the `db_default` vocabulary (Kernel, layer 1). `db_default_sql` below renders from it, and
 # `Migrations._column_default` compiles the declared side through the same function.
 import PormG: PORTABLE_DB_DEFAULTS
@@ -1264,7 +1264,7 @@ function db_default_sql(field, conn::PormGBackend)::Union{String, Nothing}
   spec = getfield(field, :db_default)
   spec === nothing && return nothing
 
-  engine = conn isa PormGPostgres ? :postgres : :sqlite
+  engine = _engine_key(conn)
   sql = if spec isa AbstractString
     String(spec)
   elseif spec isa NamedTuple
@@ -1285,10 +1285,15 @@ function db_default_sql(field, conn::PormGBackend)::Union{String, Nothing}
     return nothing
   end
 
-  # The vocabulary renders bare on both engines; everything else gets SQLite's required parens.
-  conn isa PormGSQLite && !(uppercase(sql) in PORTABLE_DB_DEFAULTS) && return "($sql)"
+  # The vocabulary renders bare on every engine; an expression gets parens where the engine requires them.
+  _parenthesizes_db_default(conn) && !(uppercase(sql) in PORTABLE_DB_DEFAULTS) && return "($sql)"
   return sql
 end
+
+# Whether a `DEFAULT` expression must be wrapped in parentheses: SQLite requires it, PostgreSQL takes
+# the text verbatim. One method per engine and no fallback (#1129 item 2) — a new backend decides.
+_parenthesizes_db_default(::PormGPostgres) = false
+_parenthesizes_db_default(::PormGSQLite) = true
 
 """
     _format_default_sql_value(default_value, conn) -> String

@@ -1486,7 +1486,7 @@ end
 function _declared_type_formatter(type_name::AbstractString, instruc::SQLInstruction)
   field = _sql_type_field(type_name)
   field === nothing && return nothing
-  instruc.connection isa PormGSQLite && _text_cast_on_sqlite(field) && return nothing
+  _cast_renders_text(field, instruc.connection) && return nothing
   return field.formatter
 end
 # The declared types SQLite renders as `CAST(x AS TEXT)` (predicates in value_validation.jl).

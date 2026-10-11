@@ -6,15 +6,15 @@
 # types widen for MySQL (#1130), each such branch is a decision to make — dispatch on the backend,
 # read the capability table (`_supports`), or a refusal — not a default to inherit.
 #
-# This file holds the reviewed count per file. A new branch fails here: prefer dispatch or
+# This file holds the reviewed count per file. A new branch fails here: prefer an engine fact
+# (`src/querybuilder/engine_facts.jl` — one method per engine, no fallback), dispatch, or
 # `_supports(conn, :feature)`, and if a branch is still the right shape, raise the count with a word
 # on why. A count that FALLS fails too, so the list stays exact (lower it in the same change).
 #
-# What the branches decide, by file (the track-B inventory's groups): planner — the SQLite table
-# rebuild and which DDL each engine runs; ConnectionPool/Configuration — transactions, pool and
-# adapter wiring; expression_render/filter_nodes/build_select/select_nodes — interval arithmetic,
-# NULL ordering and dialect spelling; execution_* — RETURNING, upserts, sequences and bulk paths;
-# column_spec/runner/introspection — type equivalence and introspection; deletion — row locks.
+# What the remaining branches decide, by file: planner — the SQLite table rebuild and which DDL each
+# engine runs; ConnectionPool/Configuration — transactions, pool and adapter wiring;
+# column_spec/runner/introspection — type equivalence and introspection (these are #1129's PR B). In
+# `src/querybuilder/` only `if … elseif … else throw` chains and three recorded quirks remain (below).
 #
 # Run: julia --project=test/integration test/unit/test_engine_branches.jl
 # ==============================================================================
@@ -28,27 +28,26 @@ const _EB_PATTERN = r"isa\s+(PormG\.)?PormG(Postgres|SQLite)\b|isa\s+Union\{[^}]
 const _EB_REVIEWED = Dict(
   "src/Configuration.jl" => 6,
   "src/ConnectionPool.jl" => 16,
-  "src/Dialect.jl" => 2,
   "src/migrations/column_spec.jl" => 7,
   "src/migrations/importers.jl" => 1,
   "src/migrations/introspection.jl" => 1,
   "src/migrations/planner.jl" => 29,
   "src/migrations/runner.jl" => 7,
-  "src/querybuilder/build_select.jl" => 2,
-  "src/querybuilder/ctes.jl" => 1,
-  "src/querybuilder/deletion.jl" => 4,
-  "src/querybuilder/execution_bulk.jl" => 14,
-  "src/querybuilder/execution_read.jl" => 4,
-  "src/querybuilder/execution_write.jl" => 14,
-  "src/querybuilder/explain.jl" => 2,
-  "src/querybuilder/expression_kind.jl" => 1,
-  "src/querybuilder/expression_render.jl" => 19,
-  "src/querybuilder/field_resolution.jl" => 2,
-  "src/querybuilder/filter_nodes.jl" => 3,
-  "src/querybuilder/filter_operators.jl" => 1,
+  # #1129 item 2 (PR A): every silent branch in `Dialect.jl` and `src/querybuilder/` now asks an engine
+  # fact (`querybuilder/engine_facts.jl`). What remains here is compliant or a recorded quirk:
+  #   - `if isa PormGPostgres … elseif isa PormGSQLite … else throw(_unsupported_conn(…))` chains,
+  #     which name both engines and refuse any other (execution_bulk, execution_write, many_to_many,
+  #     expression_render — two per chain; execution_bulk 438 and execution_write 1202 are one-line
+  #     `isa Union{…} ||` / `a || b` forms of the same refusal);
+  #   - one-engine quirks whose other arm is the engine-neutral path: execution_write 75 (consume a
+  #     reserved SQLite id), projection_types 16 (SQLite's literal affinity), select_nodes 166 (window
+  #     frames, a gap in PormG on SQLite).
+  "src/querybuilder/execution_bulk.jl" => 7,
+  "src/querybuilder/execution_write.jl" => 11,
+  "src/querybuilder/expression_render.jl" => 8,
   "src/querybuilder/many_to_many.jl" => 2,
-  "src/querybuilder/projection_types.jl" => 2,
-  "src/querybuilder/select_nodes.jl" => 4,
+  "src/querybuilder/projection_types.jl" => 1,
+  "src/querybuilder/select_nodes.jl" => 1,
   "src/tools.jl" => 1,
 )
 
@@ -81,6 +80,47 @@ const _EB_REVIEWED = Dict(
   for key in sort!(collect(union(keys(found), keys(_EB_REVIEWED))))
     got, want = get(found, key, 0), get(_EB_REVIEWED, key, 0)
     got == want || @info "engine branches in $(key): $(got), reviewed $(want)" lines = get(lines, key, String[])
+    @test (key, got) == (key, want)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1129 item 2: no engine branch decides by a two-way choice whose other arm a third backend takes
+# A ternary on the engine type (`conn isa PormGPostgres ? A : B`), or a Bool bound from one
+# (`sqlite = conn isa PormGSQLite`, then read as "not SQLite"), hands any backend that is neither the
+# second arm, silently: SQLite's SQL, PostgreSQL's casts, no refusal. Ask an engine fact instead —
+# `src/querybuilder/engine_facts.jl`, one method per engine and no fallback, so a new backend gets a
+# `MethodError` naming what it must decide. The allowance below is what PR B of #1129 converts
+# (ConnectionPool, migrations); it only ever shrinks, and a new file in it fails here.
+# A line scan, so it is a net, not a proof: a ternary whose `?` starts the next line, or a binding
+# spelled `local x = …` / `x::Bool = …`, slips past, and a `'?'` later on a guard's line is a false
+# positive to reword. A two-way `if … else … end` is the reviewed-count testset's job above.
+# ─────────────────────────────────────────────────────────────────────────────
+const _EB_TERNARY = r"isa\s+(PormG\.)?PormG(Postgres|SQLite)\b[^\n?]*\?|isa\([^,()]+,\s*(PormG\.)?PormG(Postgres|SQLite)\)[^\n?]*\?|^\s*\w+\s*=\s*[\w.]+\s+isa\s+(PormG\.)?PormG(Postgres|SQLite)\s*(#.*)?$"
+const _EB_TERNARY_ALLOWED = Dict(
+  "src/ConnectionPool.jl" => 3,
+  "src/migrations/column_spec.jl" => 2,
+  "src/migrations/introspection.jl" => 1,
+  "src/migrations/planner.jl" => 5,
+  "src/migrations/runner.jl" => 4,
+)
+@testset "#1129: no two-way engine ternary outside the files PR B converts" begin
+  root = pkgdir(PormG)
+  found = Dict{String,Vector{String}}()
+  for top in ("src", "ext"), (dir, _, files) in walkdir(joinpath(root, top)), f in files
+    endswith(f, ".jl") || continue
+    path = joinpath(dir, f)
+    key = replace(relpath(path, root), '\\' => '/')   # '/' on Windows too
+    open(path) do io
+      for (i, l) in enumerate(eachline(io))
+        startswith(lstrip(l), "#") && continue
+        occursin(_EB_TERNARY, l) && push!(get!(found, key, String[]), "$(i): $(strip(l))")
+      end
+    end
+  end
+  for key in sort!(collect(union(keys(found), keys(_EB_TERNARY_ALLOWED))))
+    got, want = length(get(found, key, String[])), get(_EB_TERNARY_ALLOWED, key, 0)
+    got == want || @info "engine ternaries in $(key): $(got), allowed $(want)" lines = get(found, key, String[])
     @test (key, got) == (key, want)
   end
 end

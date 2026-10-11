@@ -28,7 +28,8 @@ subquery now follows its usual rule with that type.
 | `Abs(Subquery(s))` where `s` projects a `DurationField` | `ABS` of the stored text's leading hours | `QueryBuildError`, as `Abs("duration")` (#900) |
 
 Unchanged: a subquery over a computed column (`Avg("points")`), over a text or number column, and
-`Cast(Subquery(s), "date")`, which was already a `Date` on both engines (#878). On SQLite a
+`Cast(Subquery(s), "date")`, a `Date` on both engines (in `0.7.0` a `Subquery` was not a `Cast`
+operand at all, and raised `MethodError`; #878 and #822 made it one in the same release). On SQLite a
 subquery over a `DurationField` still orders and compares as its text, and `Greatest`/`Least` over
 one still choose their result by that text; only the read type changed.
 

@@ -1,8 +1,8 @@
-## A lossy column change is refused, or needs `destructive = true` (#803)
+## A lossy column change is refused, or needs `destructive = true` (#803, #828, #829, #830)
 
 - **Version**: Unreleased
 - **Recorded**: 2026-09-30
-- **PormG ref**: #803; `src/migrations/column_spec.jl` (`LossyAlter`, `LOSSY_ALTER_KINDS`), `src/migrations/runner.jl` (`migrate`, `dry_run`, `DryRunResult`, `MigrationPrecheckError`)
+- **PormG ref**: #803, #828, #829, #830; `src/migrations/column_spec.jl` (`LossyAlter`, `LOSSY_ALTER_KINDS`), `src/migrations/runner.jl` (`migrate`, `dry_run`, `DryRunResult`, `MigrationPrecheckError`)
 - **Severity**: behavior change
 
 ### What changed
@@ -24,16 +24,27 @@ Three plan shapes behave differently from before:
    column change is a table rebuild, which already needed `destructive = true`.
 2. **A change that would fail on existing rows is refused before anything runs**, on both engines —
    a `NULL` under a new `NOT NULL`, a value longer than a new `max_length`, an integer out of range
-   for a narrower field, a negative value under a new `PositiveIntegerField`. `migrate` counts those
-   rows first and raises the new `PormG.Migrations.MigrationPrecheckError`; `destructive = true`
-   does not bypass it. Before, the plan ran, failed on the row inside the transaction with a
-   `DatabaseError`, rolled back, and left a `failed` history row.
-3. **Text → a number, boolean, date, timestamp, UUID or JSON — and boolean ↔ a number — is refused
-   on PostgreSQL** with the same error: it can never run, because PostgreSQL has no automatic cast
-   and the plan carries no `USING`.
+   for a narrower field, a negative value under a new `PositiveIntegerField`. The same goes for a
+   constraint added over rows that violate it (#830): a new `unique = true`, a new primary key
+   (whose `NULL`s count too on PostgreSQL), a new `UniqueConstraint`, a new `CheckConstraint`, and a
+   new or repointed `ForeignKey` whose values have no parent row; and for a new `NOT NULL` column
+   with no default added to a table that has rows (#829). `migrate` counts those rows first and
+   raises the new `PormG.Migrations.MigrationPrecheckError`; `destructive = true` does not bypass
+   it. Before, the plan ran, failed on the row inside the transaction with a `DatabaseError`, rolled
+   back, and left a `failed` history row. On SQLite, a new `NOT NULL` column with no default is now
+   added through the table rebuild, so it succeeds on an empty table, where SQLite used to refuse
+   it.
+3. **Text → a number, boolean, date, timestamp, UUID or JSON — and boolean ↔ a number — gets a
+   `USING` clause on PostgreSQL** (#828), which has no automatic cast for those pairs, so the bare
+   `ALTER COLUMN … TYPE` failed on every table. Text → a parsed type counts the values that do not
+   parse and is refused with the same error when there are any. Number → boolean turns every non-zero
+   value into `true`, so it needs `destructive = true` like the first kind. A live expression default
+   the model does not declare is dropped before such a retype, so that also needs
+   `destructive = true`; declare it as a `db_default` to keep it.
 
 `DryRunResult` also gains a fourth positional field, `lossy_alters`, and `is_destructive(r)` now also
-counts the first kind.
+counts the first kind. `LossyAlter` carries `columns`, `references` and `condition` for the
+constraint findings; its 8-argument positional constructor is kept.
 
 ### How to find the calls to migrate
 

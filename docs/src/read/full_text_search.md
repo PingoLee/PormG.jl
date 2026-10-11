@@ -426,8 +426,9 @@ the same way.
   and from then on they no longer follow the text.
 - A generated column that PormG did not create is left as it is while the model declares a plain
   `SearchVectorField`. Declare `generated_from` and PormG re-creates it as its own.
-- Schema management needs PostgreSQL 13, which covers both generated columns (12) and
-  `DROP EXPRESSION` (13). On SQLite the column is refused, as every `SearchVectorField` is.
+- A plan that adds a generated column needs PostgreSQL 12, and one that removes `generated_from`
+  (`DROP EXPRESSION`) needs 13; `makemigrations` and `migrate` refuse it on an older server with
+  `BackendCapabilityError`. On SQLite the column is refused, as every `SearchVectorField` is.
 
 ## Indexing
 

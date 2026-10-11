@@ -136,6 +136,10 @@ query.filter("result__positionorder" => 1) # Filter for winning constructors
 df = query |> DataFrame
 ```
 
+A path always ends at a column. `values("result")` or `filter("result" => 1)` names the relation
+itself, so it raises an `UnknownFieldError` that says `result` is a reverse relation and asks for a
+column after it, such as `result__resultid`. The same holds for a `ManyToManyField`, at any hop.
+
 ### Naming Reverse Relations
 
 By default, the name used to traverse backwards is the **lowercase name of the source model** (e.g., `result` for `Result`) — as long as that model declares exactly **one** relation to the target.

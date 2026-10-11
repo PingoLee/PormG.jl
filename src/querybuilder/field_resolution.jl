@@ -240,14 +240,59 @@ function _outer_cte_hint(instruct::SQLInstruction, name::AbstractString)::String
   return ""
 end
 
+# #1134 — a path whose LAST segment is a relation: a reverse accessor, a ManyToMany field, or the
+# reverse side of one. It names a model, not a column, so there is nothing to select or compare.
+# Before this it reached `_unknown_field`, which said the name was "not found" while listing it among
+# the reverse accessors — and left a ManyToMany field out altogether, since `field_names` excludes
+# them. The dedicated "is a reverse field" refusals in `_build_row_join` were meant for this, but
+# could never fire: that function only ever receives two or more segments, and its loop only runs
+# while two remain, so a path's last segment arrives at `_solve_field` — no hop, the first hop, or any
+# later one. The one other place a last segment is resolved is a plain `filter(...)` key, which is
+# tried as a projection alias first (`build_filter.jl`), so that branch asks this too.
+#
+# Still an `UnknownFieldError`: the path does not name a column, and a caller's handler for that
+# kind of mistake keeps firing. Only the message changes, to the remedy.
+#
+# Returns `nothing` when `name` is not a relation of `model`; otherwise the exception, which the call
+# site throws (the `_unknown_field` convention). `path` is the full path the caller wrote.
+function _relation_terminal(model::PormGModel, name::AbstractString;
+                            path::AbstractString = name)::Union{Nothing, UnknownFieldError}
+  rel = get(model.related_objects, name, nothing)
+  kind, target = if rel isa Models.ReverseRelation
+    ("reverse relation", rel.model_resolved)
+  elseif rel isa Models.ManyToManyRelation
+    ("reverse ManyToMany accessor", something(rel.related_model_resolved, rel.related_model))
+  elseif haskey(model.fields, name) && Models.is_many_to_many_field(model.fields[name])
+    m2m = Models.has_many_to_many_accessor(model, String(name)) ?
+      Models.get_many_to_many_relation(model, String(name)) : nothing
+    ("ManyToMany field", m2m === nothing ? nothing : something(m2m.related_model_resolved, m2m.related_model))
+  else
+    return nothing
+  end
+  reaches = target isa PormGModel ? " to \e[4m\e[32m$(Models.model_table_name(target))\e[0m" :
+            target isa AbstractString ? " to \e[4m\e[32m$(target)\e[0m" : ""
+  # The example only for a single-column key. Not `Models.get_model_pk_field`, which THROWS on a
+  # model with two primary-key fields — that would turn this refusal into a `ModelDefinitionError`.
+  pks = target isa PormGModel ? [k for (k, f) in target.fields if f.primary_key] : String[]
+  pk = length(pks) == 1 ? only(pks) : nothing
+  example = pk === nothing ? "" : " (e.g. \e[4m\e[32m$(path)__$(pk)\e[0m)"
+  return UnknownFieldError(
+    "the path \e[4m\e[31m$(path)\e[0m ends at \e[4m\e[31m$(name)\e[0m, a $(kind) from " *
+    "\e[4m\e[32m$(Models.model_table_name(model))\e[0m$(reaches), not a column. A relation needs a " *
+    "column after it: \e[4m\e[32m$(path)__<column>\e[0m$(example).")
+end
+
 """
 This function checks if the given `field` is a valid field in the provided `model`. If the field is valid, it returns the field name, potentially modified based on certain conditions.
 """
-function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction)
-  # check if last_column a field from the model    
+function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction; path::AbstractString = field)
+  # check if last_column a field from the model
   if !(field in model.field_names)
     _check_if_field_is_a_operator(field)
     @pormg_debug false
+    # #1134: a relation, not a typo — say so instead of "not found" beside a list that contains it.
+    relation = _relation_terminal(model, field; path = path)
+    relation === nothing || throw(relation)
     throw(_unknown_field(model, field))
   end
   # (instruct.django !== nothing && hasfield(model.fields[field] |> typeof, :to)) && (field = string(field, "_id"))
@@ -257,9 +302,9 @@ function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction
   # rows stay keyed by the declared field name even when the column differs.
   return safe_column_identifier(Models.field_db_column(model.fields[field], field), instruct.connection)
 end
-_solve_field(field::String, _module::Module, model_name::Symbol, instruct::SQLInstruction) = _solve_field(field, getfield(_module, model_name), instruct)
-_solve_field(field::String, _module::Module, model_name::String, instruct::SQLInstruction) = _solve_field(field, _module, Symbol(model_name), instruct)
-_solve_field(field::String, _module::Module, model_name::PormGModel, instruct::SQLInstruction) = _solve_field(field, model_name, instruct)
+_solve_field(field::String, _module::Module, model_name::Symbol, instruct::SQLInstruction; kw...) = _solve_field(field, getfield(_module, model_name), instruct; kw...)
+_solve_field(field::String, _module::Module, model_name::String, instruct::SQLInstruction; kw...) = _solve_field(field, _module, Symbol(model_name), instruct; kw...)
+_solve_field(field::String, _module::Module, model_name::PormGModel, instruct::SQLInstruction; kw...) = _solve_field(field, model_name, instruct; kw...)
 
 
 # `_df_to_dic` used to live here — deleted in #197: it had zero callers and referenced an

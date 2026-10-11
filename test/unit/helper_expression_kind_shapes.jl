@@ -122,6 +122,12 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Abs float",               :Result,              m -> _EKM_FN.Abs("points")),
   ("Abs decimal",             :Constructor_results, m -> _EKM_FN.Abs("points")),
   ("Mod int",                 :Result,              m -> _EKM_FN.Mod("grid", 2)),
+  # #1147: the `:promoting` functions over an integer, whose PostgreSQL cell is the one phase 3 checks
+  ("Abs int",                 :Result,              m -> _EKM_FN.Abs("grid")),
+  ("Abs bigint",              :Result,              m -> _EKM_FN.Abs("resultid")),
+  ("Floor int",               :Result,              m -> _EKM_FN.Floor("grid")),
+  ("Ceil int",                :Result,              m -> _EKM_FN.Ceil("grid")),
+  ("Floor year part",         :Race,                m -> _EKM_FN.Floor(_EKM_FN.Extract("date", "year"))),
   # ── subqueries ─────────────────────────────────────────────────────────────────────────────────
   ("Subquery Max hop date",   :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Max("raceid__date")))),
   ("Subquery Avg float",      :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Avg("points")))),

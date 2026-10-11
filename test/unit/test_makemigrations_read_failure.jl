@@ -39,7 +39,7 @@ fetch(::FailingMockSqlite1018, sql::String; conn = nothing, params = nothing, ig
 
 # An empty catalog: every reader query comes back with no rows.
 struct EmptyMockPg1018 <: PormGPostgres end
-# #1032: the schema reader asks the server version first (the PostgreSQL 13 floor, #1108); answered here
+# #1032: the schema reader asks the server version first (the introspection floor, #1146); answered here
 # and not recorded, so the captured statements are the schema reads alone.
 fetch(::EmptyMockPg1018, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
   occursin("server_version_num", sql) ? DataFrame(v = [160000]) : DataFrame()

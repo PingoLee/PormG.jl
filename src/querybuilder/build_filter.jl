@@ -42,6 +42,12 @@ function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
         # namespaced like everywhere else rather than silently sharing a base-model entry.
         having_key = memo_key(v.column)
         having_cached = memo_projection(instruc, having_key)
+        # #1134: not an alias, and a relation rather than a typo — the message `_solve_field` gives a
+        # relation as a path's last segment. After the alias lookup, so a declared alias still wins.
+        if having_cached === nothing
+          relation = _relation_terminal(instruc.object.model, v.column.field)
+          relation === nothing || throw(relation)
+        end
         having_cached === nothing &&
           # #474: report the aliases the CALLER could have written, never an internal memo key.
           # #1004: read off the declaration, not the memo — a path projection is memoized under its

@@ -1204,7 +1204,7 @@ index_text_marker(expressions::AbstractVector{<:AbstractString}, condition::Unio
 # closing an SQLite column list. It is the only thing between a hand-made index and a planned DROP, so
 # it is bounded on both sides: the look-behind keeps `xpormg:index` from counting, the look-ahead
 # `pormg:indexes` or a longer hash. Written in the subset PostgreSQL's regex engine shares with PCRE
-# (look-behind is PostgreSQL 9.6+; the schema-management floor is 13), because the readers interpolate it into SQL
+# (look-behind is PostgreSQL 9.6+; the introspection floor is 11), because the readers interpolate it into SQL
 # (`_PG_MARKED_INDEX` / `_PG_UNMARKED_INDEX`).
 const INDEX_MARKER_RE = Regex("(?<![0-9A-Za-z_:])" * INDEX_MARKER * "(?::[0-9a-f]{16})?(?![0-9A-Za-z_:])")
 

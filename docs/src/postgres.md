@@ -13,16 +13,20 @@ The deep-dive pages own the full reference and verified examples; this guide poi
 
 ## Server versions
 
-PormG states two PostgreSQL requirements, because the two halves of the library ask the server different things:
+Each operation asks the server for what it uses, so PormG states its PostgreSQL requirements per operation:
 
 | | Needs | Why |
 |---|---|---|
-| **Schema management**: `makemigrations`, `migrate`, `check`, `inspectdb` | **PostgreSQL 13 or newer**, checked up front | They read the catalog, including which columns are generated (12+), and can plan `ALTER COLUMN … DROP EXPRESSION` (13+). An older server is refused with `BackendCapabilityError` before anything runs. |
+| **Reading the schema**: `inspectdb`, `import_models_from_postgres`, `check`, and the read under `makemigrations` and `migrate` | **PostgreSQL 11 or newer**, checked up front | They read the catalog, including which columns each index keys (`indnkeyatts`, 11+). Which columns are generated is read from 12; an older server has no generated column, so every column reads as not generated. A server older than 11 is refused with `BackendCapabilityError` before the schema is read. |
+| **A plan that adds a generated column** (`SearchVectorField(generated_from = …)`) | **PostgreSQL 12 or newer** | `GENERATED ALWAYS AS (…) STORED` is PostgreSQL 12. |
+| **A plan that removes `generated_from`** | **PostgreSQL 13 or newer** | It is `ALTER COLUMN … DROP EXPRESSION`, which is PostgreSQL 13. |
 | **Queries and writes**: `filter`, `list`, `create`, `update`, `bulk_*`, `delete`, … | **No stated floor** | They use ordinary SQL, and none of the catalog columns schema management depends on; the few catalog lookups they make, such as `pg_get_serial_sequence` for a bulk insert, are long-standing. They are tested only against the PostgreSQL version the integration suite runs, so an older server is best effort. |
+
+A plan holding a statement the server cannot run is refused with `BackendCapabilityError` naming the statement: by `makemigrations`, which then writes nothing, and again by `migrate`, before any statement runs, for a plan made against a newer server. Every other plan runs on PostgreSQL 11.
 
 A query feature that needs a newer server than yours fails with PostgreSQL's own error when the query runs. Two opt-in features need PostgreSQL 11: [`GROUPS` window frames](read/window_functions.md) (and `RANGE` offsets and `EXCLUDE`), and [`search_type = "websearch"`](read/full_text_search.md).
 
-A database whose schema is managed by something else can therefore still be read and written by PormG on an older server; running PormG's migrations against it cannot.
+A database whose schema is managed by something else can therefore still be read and written by PormG on an older server, and generating models from it with `inspectdb` needs only PostgreSQL 11.
 
 ## PostgreSQL-only capabilities
 

@@ -40,22 +40,37 @@ struct GenMockPg1032 <: PormG.PormGPostgres end
 const GEN_PG = GenMockPg1032()
 fetch(::GenMockPg1032, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) = DataFrame()
 
-# A server older than the schema-management floor: it answers only the version probe.
-struct GenMockPg11 <: PormG.PormGPostgres end
-fetch(::GenMockPg11, sql::String, args...; kwargs...) =
-  occursin("server_version_num", sql) ? DataFrame(v = [110022]) : error("the schema query must not run on PostgreSQL 11")
-
-# One below the floor: PostgreSQL 12 reads `attgenerated` but has no `DROP EXPRESSION` (#1108).
-struct GenMockPg12 <: PormG.PormGPostgres end
-fetch(::GenMockPg12, sql::String; kwargs...) =
-  occursin("server_version_num", sql) ? DataFrame(v = [120022]) : error("the schema query must not run on PostgreSQL 12")
-fetch(::GenMockPg12, sql::String, params::AbstractVector; kwargs...) = error("the schema query must not run on PostgreSQL 12")
-
-# The floor itself: the probe lets it through, so the schema query is reached — and stops here.
-struct GenMockPg13 <: PormG.PormGPostgres end
-fetch(::GenMockPg13, sql::String; kwargs...) =
-  occursin("server_version_num", sql) ? DataFrame(v = [130000]) : error("schema query reached on PostgreSQL 13")
-fetch(::GenMockPg13, sql::String, params::AbstractVector; kwargs...) = error("schema query reached on PostgreSQL 13")
+# A PostgreSQL server at version `v` (#1146): it answers the version probe and records every other
+# statement. Below 12 it refuses one reading `attgenerated`, as the server does. The schema dump comes
+# back as one table, `doc`, whose `sv` column reports what the statement ASKED: `"s"` when it read
+# `a.attgenerated` (the column is generated), the empty code when it put `''::text` in its place. So
+# what the reader makes of the column depends on the fragment the version chose, not on the mock.
+struct GenMockPgAt1146 <: PormG.PormGPostgres
+  v::Int
+  sql::Vector{String}
+end
+GenMockPgAt1146(v::Int) = GenMockPgAt1146(v, String[])
+fetch(m::GenMockPgAt1146, sql::String; kwargs...) = _gen_answer(m, sql)
+fetch(m::GenMockPgAt1146, sql::String, ::AbstractVector; kwargs...) = _gen_answer(m, sql)
+function _gen_answer(m::GenMockPgAt1146, sql::String)
+  occursin("server_version_num", sql) && return DataFrame(v = [m.v])
+  push!(m.sql, sql)
+  # A reference, not the word: the statement's own SQL comments mention the column.
+  m.v < 120000 && occursin(r"\b[a-z]+\.attgenerated\b", sql) && error("column a.attgenerated does not exist")
+  occursin("json_build_object", sql) && occursin("'generated'", sql) || return DataFrame()
+  gen = occursin("'generated', a.attgenerated::text", sql) ? "s" :
+        occursin("'generated', ''::text", sql) ? "" : error("unrecognised generated fragment")
+  expr = "to_tsvector('simple'::regconfig, COALESCE((title)::text, ''::text))"
+  col(name, type; default = nothing, identity = "", generated = "") = Dict{String, Any}(
+    "name" => name, "type" => type, "notnull" => true, "default" => default, "comment" => nothing,
+    "identity" => identity, "generated" => generated, "unique" => false,
+    "non_negative_check" => false, "byte_limit" => nothing)
+  cols = [col("id", "bigint"; identity = "d"), col("title", "character varying(100)"),
+          col("sv", "tsvector"; default = expr, generated = gen)]
+  return DataFrame(table_schema = ["public"], table_name = ["doc"], columns = [JSON.json(cols)],
+                   primary_keys = [JSON.json(["id"])], foreign_keys = [missing], indexes = [missing])
+end
+_gen_schema_sql(m::GenMockPgAt1146) = only(filter(q -> occursin("'generated'", q), m.sql))
 
 _gen_err(f) = try f(); nothing catch e; e end
 _gen_plain(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
@@ -70,11 +85,11 @@ function _gen_doc(; gen::Bool = true, title = Models.CharField(max_length = 100)
                       sv = sv, indexes = [Models.Index(fields = ("sv",), method = "gin", name = "doc_sv_gin")])
 end
 
-function _gen_plan(live::Vector{LiveTable}, declared; kwargs...)
-  settings = PormG.Configuration.Settings(connections = GEN_PG, change_data = true)
+function _gen_plan(live::Vector{LiveTable}, declared; conn = GEN_PG, kwargs...)
+  settings = PormG.Configuration.Settings(connections = conn, change_data = true)
   schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
     :doc => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => declared, :exist => false))
-  return get_migration_plan(live, schema, GEN_PG, settings; interactive = false, kwargs...)
+  return get_migration_plan(live, schema, conn, settings; interactive = false, kwargs...)
 end
 
 # The live table PormG would read back for `model`, with the generated column's marker vouching for
@@ -438,28 +453,182 @@ _gen_steps(plan) = collect(keys(get(plan, :doc, Dict{String, String}())))
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # The schema-management floor is PostgreSQL 13, asked before the schema query
-  # The schema query reads `attgenerated` (12+) and the planner can produce `DROP EXPRESSION` (13+),
-  # so the floor is 13 (#1108): on 12, `makemigrations` would accept a plan `migrate` then fails on
-  # with a raw syntax error. An older server gets the requirement by name, as BackendCapabilityError,
-  # and the query never runs; 13 itself is let through.
-  # Mutation gate: with the floor back at 120000 the PostgreSQL 12 case reaches the schema query; at
-  # 130001 the PostgreSQL 13 case is refused.
+  # Introspection asks only what it reads: PostgreSQL 11, `attgenerated` from 12 (#1146)
+  # #1108 refused every schema operation below 13, `inspectdb` included, for a statement only `migrate`
+  # runs. The read now needs 11 (`indnkeyatts`); on 11 the statement leaves `attgenerated` out and
+  # every column reads as not generated, which is exact there. Below 11 the requirement is named
+  # before the schema query runs.
+  # Mutation gate: the floor back at 130000 refuses 11 and 12; the fragment made unconditional makes
+  # the 11 mock raise "attgenerated does not exist"; `''::text` in every version reads 12 and 13 wrong.
   # ─────────────────────────────────────────────────────────────────────────────
-  @testset "an older server is refused by name, before the schema query" begin
-    e = _gen_err(() -> Migrations.get_database_schema(GenMockPg11()))
-    @test e isa PormG.BackendCapabilityError
-    msg = _gen_plain(e)
-    @test occursin("needs PostgreSQL 13 or newer", msg) && occursin("server_version_num 110022", msg)
-    @test occursin("Queries and writes are not affected", msg)
+  @testset "introspection runs on PostgreSQL 11, 12 and 13; attgenerated only from 12 (#1146)" begin
+    for v in (110000, 120000, 130000)
+      m = GenMockPgAt1146(v)
+      live = only(Migrations.read_live_schema(m; include_table = ["doc"]))
+      sql = _gen_schema_sql(m)
+      @test occursin("a.attgenerated", sql) == (v >= 120000)
+      # The reader's verdict follows what the server was asked: generated from 12, and below it the
+      # same text read as an expression default, as every column was before #1032.
+      @test (live.columns["sv"].default isa GeneratedExpression) == (v >= 120000)
+      v < 120000 && @test live.columns["sv"].default isa ExpressionDefault
+      # `inspectdb`'s form reads it too.
+      models = with_logger(NullLogger()) do
+        Migrations.convert_schema_to_models(GenMockPgAt1146(v); include_table = ["doc"])
+      end
+      # Below 12 the expression is read as a default, so `inspectdb` writes it as one; from 12 the column
+      # is a generated one PormG did not create (no marker), written as the plain field.
+      sv = only(models).fields["sv"]
+      @test !Models.is_generated_field(sv)
+      @test (sv.db_default !== nothing) == (v < 120000)
+    end
   end
 
-  @testset "PostgreSQL 12 is refused (no DROP EXPRESSION); 13 reaches the schema query (#1108)" begin
-    e = _gen_err(() -> Migrations.get_database_schema(GenMockPg12()))
+  @testset "PostgreSQL 10 is refused by name, before the schema query (#1146)" begin
+    m = GenMockPgAt1146(100022)
+    e = _gen_err(() -> Migrations.get_database_schema(m))
     @test e isa PormG.BackendCapabilityError
-    @test occursin("server_version_num 120022", _gen_plain(e))
-    e13 = _gen_err(() -> Migrations.get_database_schema(GenMockPg13()))
-    @test !(e13 isa PormG.BackendCapabilityError)
-    @test occursin("schema query reached on PostgreSQL 13", _gen_plain(e13))
+    msg = _gen_plain(e)
+    @test occursin("needs PostgreSQL 11 or newer", msg) && occursin("server_version_num 100022", msg)
+    @test occursin("Queries and writes are not affected", msg)
+    @test isempty(m.sql)
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # A plan statement that needs more than introspection is refused per statement (#1146)
+  # `DROP EXPRESSION` (removing `generated_from`, or releasing a generated column) needs PostgreSQL 13,
+  # and a generated column needs 12. The plan renders the same on every version — the planner does not
+  # branch on it — and the gate decides by the probed version. The server is asked only when a
+  # statement needs it, so an ordinary plan costs no query.
+  # Mutation gate: either row of `_PG_STATEMENT_FLOORS` deleted, or its version lowered, lets its
+  # statement through on 12 or 11 below.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "the plan gate: DROP EXPRESSION needs 13, a generated column 12, anything else 11 (#1146)" begin
+    statements(plan) = String[sql for steps in values(plan) for sql in values(steps)]
+    owned = _gen_owned_live(_gen_doc())
+    plain_live = live_table(_gen_doc(gen = false), GEN_PG)
+    cases = [
+      # (what, live side, declared model, the version its plan needs)
+      ("remove generated_from", [owned], _gen_doc(gen = false), 130000),
+      ("release a generated column whose source goes",
+       [owned], Models.Model("doc", id = Models.IDField(), body = Models.TextField(null = true)), 130000),
+      ("create a table with a generated column", LiveTable[], _gen_doc(), 120000),
+      ("make a column generated", [plain_live], _gen_doc(), 120000),
+      ("widen a plain column", [plain_live], _gen_doc(gen = false, title = Models.CharField(max_length = 200)), 110000),
+    ]
+    for (what, live, declared, needs) in cases
+      @testset "$what" begin
+        rendered = [_gen_plan(live, declared; conn = GenMockPgAt1146(v)) for v in (110000, 120000, 130000)]
+        @test !isempty(rendered[1]) && rendered[1] == rendered[2] == rendered[3]
+        all_sql = join(statements(rendered[1]), "\n")
+        @test occursin("DROP EXPRESSION", all_sql) == (needs == 130000)
+        @test occursin("GENERATED ALWAYS AS (", all_sql) == (needs == 120000)
+        for v in (110000, 120000, 130000)
+          m = GenMockPgAt1146(v)
+          e = _gen_err(() -> Migrations._refuse_statements_above_server(m, statements(rendered[1])))
+          if v >= needs
+            @test e === nothing
+          else
+            @test e isa PormG.BackendCapabilityError
+            msg = _gen_plain(e)
+            @test occursin("PostgreSQL $(needs ÷ 10000)+", msg) && occursin("server_version_num $(v)", msg)
+            needs == 130000 && @test occursin(r"ALTER COLUMN \"sv\" DROP EXPRESSION;", msg)
+            # Each requirement names its own way out, and they point in opposite directions.
+            if needs == 130000
+              @test occursin("Keep `generated_from`", msg) && !occursin("without `generated_from`", msg)
+            else
+              @test occursin("without `generated_from`", msg) && !occursin("Keep `generated_from`", msg)
+            end
+            # The statement is shown by the lines that matter — its first, and the one naming the column —
+            # each cut at 120 characters, never as the whole multi-line DDL.
+            shown = [l for l in split(msg, '\n') if startswith(l, "      ")]
+            @test !isempty(shown) && all(l -> occursin("\"sv\"", l) && length(l) <= 6 + 120 + 3 + 120, shown)
+          end
+          # The gate never runs a statement of the plan.
+          @test isempty(m.sql)
+        end
+      end
+    end
+    # No statement to check, no query: GEN_PG answers the version probe with an empty frame, so a
+    # probe here would raise.
+    @test Migrations._refuse_statements_above_server(GEN_PG, ["ALTER TABLE \"doc\" ADD COLUMN \"x\" integer;"]) === nothing
+    # A pending plan can hold hand-written steps, so the patterns take what PostgreSQL takes: `COLUMN`
+    # is optional, the column unquoted, any case and spacing. Each is refused on 12 (or 11).
+    for (stmt, needs) in ("ALTER TABLE drivers ALTER code DROP EXPRESSION;" => 13,
+                          "alter table \"doc\" alter column sv drop  expression if exists;" => 13,
+                          "ALTER TABLE \"doc\" ALTER COLUMN \"a \"\"b\"\"\" DROP EXPRESSION;" => 13,
+                          "ALTER TABLE \"doc\" ALTER COLUMN \"sv\"DROP EXPRESSION;" => 13,
+                          "ALTER TABLE doc ALTER COLUMN café DROP EXPRESSION;" => 13,
+                          "ALTER TABLE doc ADD COLUMN sv tsvector generated always as(to_tsvector('simple', title)) stored;" => 12)
+      e = _gen_err(() -> Migrations._refuse_statements_above_server(GenMockPgAt1146(needs * 10000 - 10000), [stmt]))
+      @test e isa PormG.BackendCapabilityError && occursin("PostgreSQL $(needs)+", _gen_plain(e))
+    end
+    # The excerpt: a clause broken across lines still names its column's line, and a long line is cut.
+    split_clause = "CREATE TABLE \"doc\" (\n  \"id\" BIGINT,\n  \"sv\" tsvector GENERATED ALWAYS\n    AS (to_tsvector('simple', \"title\")) STORED\n);"
+    msg = _gen_plain(_gen_err(() -> Migrations._refuse_statements_above_server(GenMockPgAt1146(110000), [split_clause])))
+    @test occursin("CREATE TABLE \"doc\" ( … \"sv\" tsvector GENERATED ALWAYS", msg)
+    long = "ALTER TABLE \"doc\" ALTER COLUMN \"sv\" DROP EXPRESSION; -- " * "x"^200
+    msg = _gen_plain(_gen_err(() -> Migrations._refuse_statements_above_server(GenMockPgAt1146(120000), [long])))
+    shown = only(l for l in split(msg, '\n') if startswith(l, "      "))
+    @test endswith(shown, "…") && length(strip(shown)) == 120
+    # A plan holding both: each statement under its own bullet, with its own way out, each capitalised.
+    both = ["ALTER TABLE \"doc\" ADD COLUMN \"sv2\" tsvector GENERATED ALWAYS AS (to_tsvector('simple', \"title\")) STORED;",
+            "ALTER TABLE \"doc\" ALTER COLUMN \"sv\" DROP EXPRESSION;"]
+    msg = _gen_plain(_gen_err(() -> Migrations._refuse_statements_above_server(GenMockPgAt1146(110000), both)))
+    @test occursin(r"PostgreSQL 12\+:\n +ALTER TABLE \"doc\" ADD COLUMN \"sv2\"[^\n]*\n +Declare the field without `generated_from`", msg)
+    @test occursin(r"PostgreSQL 13\+:\n +ALTER TABLE \"doc\" ALTER COLUMN \"sv\" DROP EXPRESSION;\n +Keep `generated_from`", msg)
+    # A column named like the keyword does not make a statement one: dropping a DEFAULT is any version.
+    @test Migrations._refuse_statements_above_server(GEN_PG, ["ALTER TABLE \"doc\" ALTER COLUMN \"drop expression\" DROP DEFAULT;"]) === nothing
+    # An identity column is PostgreSQL 10, not a generated column.
+    @test Migrations._refuse_statements_above_server(GEN_PG,
+            ["CREATE TABLE \"doc\" (\"id\" BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY);"]) === nothing
+    # Any other backend has no such statement to refuse.
+    @test Migrations._refuse_statements_above_server(nothing, ["ALTER TABLE \"doc\" ALTER COLUMN \"sv\" DROP EXPRESSION;"]) === nothing
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # The gate's two call sites: makemigrations writes nothing, migrate runs nothing (#1146)
+  # `makemigrations` refuses before the plan is written; `migrate` refuses a pending plan made against a
+  # newer server before the precondition read, the lock or any statement. Mutation gate: delete either
+  # call and its assertions fail (the plan is written; migrate goes on to read the schema).
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "makemigrations and migrate refuse a plan the server cannot run (#1146)" begin
+    dir = mktempdir()
+    try
+      cd(dir) do
+        folder = "db1146"
+        mkpath(folder)
+        models_path = joinpath(dir, folder, "models.jl")
+        write(models_path, "module models\nimport PormG.Models\n" *
+                           "Doc1146 = Models.Model(\n    id = Models.IDField(),\n" *
+                           "    title = Models.CharField(max_length = 100),\n" *
+                           "    sv = Models.SearchVectorField(generated_from = (\"title\",), config = \"simple\")\n)\nend\n")
+        pending = joinpath(folder, "migrations", "pending_migrations.jl")
+        function settings_for(conn)
+          s = PormG.Configuration.Settings(connections = conn, db_def_folder = folder)
+          s.change_db = true
+          return s
+        end
+        plan!(conn) = with_logger(NullLogger()) do
+          Migrations.makemigrations(conn, settings_for(conn); path = models_path, interactive = false)
+        end
+        # On PostgreSQL 11 the CREATE TABLE's generated column is refused, and no plan is written.
+        e = _gen_err(() -> plan!(GenMockPgAt1146(110000)))
+        @test e isa PormG.BackendCapabilityError && occursin("PostgreSQL 12+", _gen_plain(e))
+        @test !isfile(pending)
+        # On 12 the same plan is written…
+        @test plan!(GenMockPgAt1146(120000)) === nothing
+        @test isfile(pending) && occursin("GENERATED ALWAYS AS (", read(pending, String))
+        # …and `migrate` against an 11 server refuses it having asked only the version.
+        m = GenMockPgAt1146(110000)
+        e = _gen_err(() -> with_logger(NullLogger()) do
+          Migrations.migrate(m, settings_for(m); interactive = false)
+        end)
+        @test e isa PormG.BackendCapabilityError && occursin("PostgreSQL 12+", _gen_plain(e))
+        @test isempty(m.sql)
+        @test isfile(pending)
+      end
+    finally
+      rm(dir; recursive = true, force = true)
+    end
   end
 end

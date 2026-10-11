@@ -163,8 +163,8 @@ PormG.Migrations.migrate("db")           # apply
   Deleting the header lines skips the check: do that only with the user's approval, never to get
   past the error.
 - A `failed` row that a later run of the same plan resolved shows under `status("db").superseded`,
-  not `.failed`. Failures do not block the next `migrate`; a plan runs in one transaction, so a
-  failure applied nothing.
+  not `.failed`. Failures do not block the next `migrate`; on PostgreSQL and SQLite a plan runs in
+  one transaction, so a failure applied nothing.
 
 ### Changing data: data steps and `run_once`
 

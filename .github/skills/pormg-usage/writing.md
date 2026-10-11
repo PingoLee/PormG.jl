@@ -34,8 +34,8 @@ row, created = M.Status.objects.update_or_create("statusid" => 900;
                                                  defaults = ["status" => "Confirmed"])
 ```
 
-The lookup pairs become the `ON CONFLICT` target, so a real `UNIQUE`/primary-key constraint must
-back them.
+The lookup pairs become the `ON CONFLICT` target (PostgreSQL; SQLite 3.24 or later), so a real
+`UNIQUE`/primary-key constraint must back them.
 
 ## Update and delete querysets
 

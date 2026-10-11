@@ -1980,8 +1980,10 @@ Each mutates the handler and returns it, so calls can be chained or accumulated 
   `__` path raise `AmbiguousFieldError`, and the handle selects the CTE side (#492)
 - every `join_type` above accepts `"INNER"`, `"LEFT"`, `"RIGHT"` or `"FULL"`; anything else,
   `"CROSS"` included, raises `QueryBuildError` at the call (#474)
-- `.select_for_update(; nowait, skip_locked, no_key, of)` — `SELECT … FOR UPDATE` row lock; `of`
-  limits it to `"self"`, relation paths the query joins, and `cjoin_on` aliases (`FOR UPDATE OF …`)
+- `.select_for_update(; nowait, skip_locked, no_key, of)` — `SELECT … FOR UPDATE` row lock on
+  PostgreSQL (no lock clause on SQLite, where a transaction's `BEGIN IMMEDIATE` holds the write
+  lock); `of` limits it to
+  `"self"`, relation paths the query joins, and `cjoin_on` aliases (`FOR UPDATE OF …`)
 - `.copy()` — deep copy, to branch a chain without disturbing the original
 
 # Terminal methods

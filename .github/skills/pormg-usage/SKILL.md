@@ -42,9 +42,12 @@ task needs.
 8. **SQL functions live in `PormG.Functions`.** `using PormG.Functions: Count, Sum, Rank, …`.
    `Q`, `Qor`, `F`, `Subquery`, `OuterRef`, `Exists`, `CTE`, `Joined`, `Interval` and the bulk
    writers are top-level.
-9. **PostgreSQL and SQLite behave the same, except where a feature is PostgreSQL-only** — that
-   raises `BackendCapabilityError` on SQLite instead of degrading silently. The list is in the
-   [PostgreSQL guide](https://pingolee.github.io/PormG.jl/stable/postgres/).
+9. **Each backend states what it supports.** A feature one backend lacks raises
+   `BackendCapabilityError` there instead of degrading silently, and some guarantees (an atomic
+   `migrate`, foreign keys checked at `COMMIT`, row locks) rest on what the engine provides. Both
+   lists, per backend, are on the
+   [Backend Capabilities](https://pingolee.github.io/PormG.jl/dev/backends/) page; the
+   [PostgreSQL guide](https://pingolee.github.io/PormG.jl/stable/postgres/) has the details.
 
 ## One end-to-end example
 

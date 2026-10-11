@@ -1447,8 +1447,9 @@ Structured result from `status()`. Contains applied migrations, pending files,
 failed migrations, and drift signals about the migration history (see `status`).
 
 A `failed` row whose plan a later run applied — a later `applied` row with the same checksum — is in
-`superseded`, not in `failed` (#739): a plan runs in one transaction, so the failure wrote nothing,
-and the retry that succeeded resolved it. `failed` holds only the failures nothing has resolved.
+`superseded`, not in `failed` (#739): on PostgreSQL and SQLite a plan runs in one transaction, so the
+failure wrote nothing, and the retry that succeeded resolved it. `failed` holds only the failures
+nothing has resolved.
 """
 struct MigrationStatus
   applied::Vector{NamedTuple}    # Migrations recorded as 'applied' in DB
@@ -3182,7 +3183,8 @@ several instances at once — see the [Deploying](@ref deploying-migrations) gui
 5. Execute: skip a plan whose checksum is the latest applied migration (#81); otherwise check the
    schema precondition again — this is the check that decides, since another instance may have
    changed the schema since step 2 — then run the plan and record it in `pormg_migrations`, in one
-   transaction. A refusal writes no `failed` row: no statement was attempted.
+   transaction (PostgreSQL and SQLite have transactional DDL; see the Backend Capabilities page). A
+   refusal writes no `failed` row: no statement was attempted.
 6. Archive: move the plan to `applied_migrations/`.
 
 SQLite has no advisory lock, so steps 4–6 run unlocked there; its #81 check and the deciding

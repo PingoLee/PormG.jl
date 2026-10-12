@@ -525,17 +525,22 @@ end
   # cannot be typed.)
   # (#900 moved it again: a sum of intervals is an interval on both engines, so the case sums a
   # decimal, which went through a double.)
+  # (#1121 moved it a third time: a sum of decimals means a decimal, and records the width-less
+  # computed kind — never the column's `CDecimal(12, 2)`, whose exact parser would dress SQLite's
+  # double up as the declared value. A text-producing function still records nothing.)
   @testset "an untypable projection records no kind" begin
     kinds = _rvc_kinds(q -> q.values("x" => PormG.Functions.Sum("amount"),
                                      "y" => PormG.Functions.ToChar("ts", "YYYY-MM")))
-    @test !haskey(kinds, :x)
+    @test kinds[:x] == PormG.CDecimal(nothing, nothing)
     @test !haskey(kinds, :y)
   end
 
   # #800: an extremum returns one of its operand's own values, so it has the column's kind — on
   # SQLite `MAX(dur)` is the stored text `"00:00:23"`, which the interval parser undoes. A computed
   # aggregate does not: a decimal sum went through a double. Django answers the same question with
-  # `output_field`. (#800 left a sum of intervals untyped too; #900 types it, below.)
+  # `output_field`. (#800 left a sum of intervals untyped too; #900 types it, below.) #1121: a computed
+  # decimal records the width-less kind its call means, read through 15 significant digits — still
+  # never the column's width.
   @testset "Max/Min record their column's kind; a computed aggregate records none (#800)" begin
     F_ = PormG.Functions
     cols = (ts = PormG.CDateTime(true), d = PormG.CDate(), t = PormG.CTime(),
@@ -553,12 +558,17 @@ end
       "c" => F_.Coalesce("d", "ts")))
     @test kinds[:j] == PormG.CDate()
     @test kinds[:b] == PormG.CInterval()
-    for alias in (:n, :a, :c)
+    for alias in (:n, :c)
       @test !haskey(kinds, alias)
     end
-    for fn in (F_.Sum, F_.Avg, F_.Count), col in ("amount", "d")
+    @test kinds[:a] == PormG.CDecimal(nothing, nothing)
+    for fn in (F_.Sum, F_.Avg)
+      @test _rvc_kinds(q -> q.values("s" => fn("amount")))[:s] == PormG.CDecimal(nothing, nothing)
+    end
+    for fn in (F_.Sum, F_.Avg, F_.Count), col in ("d",)
       @test !haskey(_rvc_kinds(q -> q.values("s" => fn(col))), :s)
     end
+    @test !haskey(_rvc_kinds(q -> q.values("s" => F_.Count("amount"))), :s)
     # #900: `Sum`/`Avg` over an interval are an interval, as PostgreSQL's `sum(interval)` and
     # `avg(interval)` are; SQLite computes them over the milliseconds. A count never is.
     for fn in (F_.Sum, F_.Avg)
@@ -738,8 +748,10 @@ end
 
   # #824: a CTE column reads back as the BODY recorded it, never as its inferred field. `a` is
   # `Avg("amount")`, which the CTE model types as the operand's `DecimalField(12, 2)` — the field a
-  # filter on it binds through — yet its value is a computed double, so it must record nothing, here
-  # and under a `Max`. `m` is `Max("amount")`, one of the column's own values, so it keeps the width.
+  # filter on it binds through — yet its value is a computed double, so it must never record that
+  # width, here or under a `Max`. #1121: it records the width-less decimal an average of decimals
+  # means, whose parser rounds SQLite's double to 15 significant digits and claims no exactness. `m` is
+  # `Max("amount")`, one of the column's own values, so it keeps the width.
   @testset "a CTE column reads as its body recorded it; a computed column records none (#824)" begin
     F_ = PormG.Functions
     kinds = _rvc_kinds(q -> begin
@@ -755,8 +767,8 @@ end
       @test kinds[alias] == PormG.CDate()
     end
     @test kinds[:m] == PormG.CDecimal(12, 2)
-    @test !haskey(kinds, :a)
-    @test !haskey(kinds, :ma)
+    @test kinds[:a] == PormG.CDecimal(nothing, nothing)
+    @test kinds[:ma] == PormG.CDecimal(nothing, nothing)
   end
 
   # #979: a column projected after a `When` condition on the same column. The condition renders the
@@ -801,9 +813,10 @@ end
   # #888: a `Subquery(...)` reads back as its one projected column, typed by the inner build exactly
   # as that column would be typed projected on its own. Before, the subquery answered `nothing` on
   # every spelling, so on SQLite a date came back as its stored `String` while PostgreSQL's driver
-  # delivered a `Date`. A computed inner column (`Avg`, `Max` over text) records nothing, as it does
-  # unwrapped; a function over the subquery is typed by its usual rule, now that its operand has a
-  # kind. Recorded the same on both engines — only the parser the kind selects differs.
+  # delivered a `Date`. An inner `Max` over text records nothing, as it does unwrapped, and a computed
+  # inner decimal (`Avg`) records what it does unwrapped: the width-less kind it means (#1121). A
+  # function over the subquery is typed by its usual rule, now that its operand has a kind. Recorded
+  # the same on both engines — only the parser the kind selects differs.
   @testset "a Subquery records its one column's kind, bare or as an operand (#888)" begin
     F_ = PormG.Functions
     sub(e) = (s = RVC.Rvc_row.objects; s.filter("id" => PormG.OuterRef("id")); s.values("t" => e); s)
@@ -826,7 +839,8 @@ end
       @test kinds[:co] == PormG.CDate()          # the agreement rule, with a matching literal
       @test kinds[:nu] == PormG.CDate()          # `NullIf(a, b)` is `a`
       @test kinds[:cd] == PormG.CDate()          # the declared cast still wins (#878)
-      for alias in (:avg, :txt, :cn)             # computed, text, and a disagreeing operand
+      @test kinds[:avg] == PormG.CDecimal(nothing, nothing)   # computed: never the column's width
+      for alias in (:txt, :cn)                   # text, and a disagreeing operand
         @test !haskey(kinds, alias)
       end
     end
@@ -871,17 +885,17 @@ end
   end
 
   # #648: a DecimalField column records its kind, WITH its width, on every projection spelling that
-  # names the column itself — so the SQLite parser runs. An aggregate or arithmetic over it records
-  # nothing and stays as the driver delivered it: that value is computed through a double, so no
-  # width describes it.
+  # names the column itself — so the SQLite parser runs. An aggregate or arithmetic over it never
+  # records that width: the value is computed through a double, so no width describes it. #1121: it
+  # records the width-less decimal it means, whose parser rounds the double to 15 significant digits.
   @testset "a decimal column records its width; an expression over it records nothing (#648)" begin
     kinds = _rvc_kinds(q -> q.values("m" => "amount", "b" => PormG.F("amount"),
                                      "s" => PormG.Functions.Sum("amount"),
                                      "f" => PormG.F("amount") * 2))
     @test kinds[:m] == PormG.CDecimal(12, 2)
     @test kinds[:b] == PormG.CDecimal(12, 2)   # a bare `F` is the column itself
-    @test !haskey(kinds, :s)
-    @test !haskey(kinds, :f)
+    @test kinds[:s] == PormG.CDecimal(nothing, nothing)
+    @test kinds[:f] == PormG.CDecimal(nothing, nothing)
     for build! in (q -> nothing, q -> q.values("*"))
       @test _rvc_kinds(build!)[:amount] == PormG.CDecimal(12, 2)
     end
@@ -889,13 +903,14 @@ end
 
   # #648: the wildcard fills only names NO explicit projection claimed — typed or not. `cost` is a
   # `DecimalField(db_column = "cost_eur")`, so the star returns `cost_eur` and the alias `cost` is
-  # legal. Each alias below records no kind of its own; before, the star then claimed `:cost` as
-  # `CDecimal`, and on SQLite the aliased value — a string, an integer count, a computed double — was
-  # run through the decimal parser, which (unlike the temporal ones) converts a number it is handed.
+  # legal. Before, the star claimed an alias that recorded no kind of its own as `CDecimal(10, 2)`, and
+  # on SQLite the aliased value — a string, an integer count, a computed double — was run through the
+  # decimal parser, which (unlike the temporal ones) converts a number it is handed. A text alias
+  # records nothing; a computed decimal records its own width-less kind (#1121), never the star's.
   @testset "the wildcard never types an alias it did not project (#648)" begin
-    for alias in ("note", PormG.F("amount") * 2)
+    for (alias, own) in (("note", nothing), (PormG.F("amount") * 2, PormG.CDecimal(nothing, nothing)))
       kinds = _rvc_kinds(q -> q.values("*", "cost" => alias))
-      @test !haskey(kinds, :cost)                        # the alias is left as the driver gave it
+      @test get(kinds, :cost, nothing) == own            # the alias's own kind, never the star's
       @test kinds[:cost_eur] == PormG.CDecimal(10, 2)    # the star's own column is still typed
     end
     # With no collision the star still claims both spellings of the renamed field.

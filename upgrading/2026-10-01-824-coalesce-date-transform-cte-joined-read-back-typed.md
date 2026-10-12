@@ -21,7 +21,8 @@ same rule:
 - **A `Joined(...)` reference** to a column, and `Max`/`Min` over one.
 - **A `CTE(...)` column** (`CTE("ev", "col")` or `"ev__col"`), and `Max`/`Min` over one, typed as the
   CTE body projected it. A column the body *selects* (`"date"`, `Max("date")`, `Cast(x, "date")`) is
-  typed. A column the body *computes* (`Avg`, `Sum`, `Count`, arithmetic) is unchanged.
+  typed. A column the body *computes* (`Avg`, `Sum`, `Count`, arithmetic) is unchanged here; a
+  computed number reads back as the type it means since #1121, in the same train.
 
 | Value, on SQLite | before | after |
 |---|---|---|
@@ -32,7 +33,8 @@ same rule:
 | `Joined("b2", "date")`, `Max(Joined(…))` | `String` | `Date` |
 | `CTE("ev", "date")` / `"ev__date"` where the body selects `date`, and `Max` over it | `String` | `Date` |
 
-The engine's value is unchanged for a computed CTE column (`"ev__avg_points"`) and for a
+The engine's value is unchanged for a computed CTE column (`"ev__avg_points"`; read as the
+`Float64` or `Decimal` it means since #1121) and for a
 `Coalesce` whose arguments differ (`Coalesce("date", "name")`, `Coalesce("amount", 0)`).
 
 ### How to find the calls to migrate

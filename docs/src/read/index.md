@@ -80,6 +80,53 @@ driver.save()
 
 For framework integrations that require plain dictionaries, use `.list(:dict)`. For tabular analysis, pipe the query to `DataFrame`.
 
+### The type of a computed number
+
+A number the database computes reads back as the Julia type the call means, and that type is the same
+on every engine. It is the type Django gives the call (its `output_field`):
+
+| projected expression | reads back as |
+|---|---|
+| `Sum`, `Avg`, `Abs`, `Round`, `Floor` or `Ceil` over a `DecimalField`; `Mod`, `Power`, `Sqrt`, `Exp` or `Ln` with a decimal operand; arithmetic with a decimal side | `Decimals.Decimal` |
+| `Avg`, `Mod`, `Power`, `Sqrt`, `Exp` or `Ln` over integers; any of these functions over a `FloatField`; arithmetic with a float side | `Float64` |
+| `Sum` of integers; `Abs`, `Floor` or `Ceil` of an integer; integer arithmetic | an integer |
+
+The engines do not compute these values in the same type, so PormG converts what the driver delivers:
+
+- PostgreSQL computes `Avg` over integers, and every function PormG renders over `(x)::numeric`
+  (`Round`, `Mod`, `Sqrt`, `Abs` of a float, …), as a `numeric`. The driver delivers that as a
+  `Decimal`, and PormG reads it as a `Float64` when the call means a float.
+- SQLite computes the decimal family as a double. PormG reads it as a `Decimal` built from that double
+  to **15 significant digits**, as Django's SQLite backend does. A sum of `0.1` and `0.2` reads as
+  `0.3`, not `0.30000000000000004`.
+
+```julia
+q = M.Result.objects
+q.filter("raceid" => 18)
+q.values("avg_grid" => Avg("grid"))
+q.list(:dict)
+# => [Dict(:avg_grid => 11.5)]     a Float64 on both engines
+
+q = M.Constructor_results.objects
+q.filter("raceid" => 18)
+q.values("total" => Sum("points"), "avg" => Avg("points"))
+q.list(:dict)
+# PostgreSQL => total 39, avg 3.5454545454545455   both Decimals
+# SQLite     => total 39, avg 3.54545454545455     both Decimals
+```
+
+The type is the same on both engines. The last digits can differ, as the `Avg` above shows: PostgreSQL
+computes in exact `numeric` and SQLite in a double. The same holds for a float, so `Sqrt(10)` is
+`3.162277660168379` on PostgreSQL and `3.1622776601683795` on SQLite. That is how each engine spells
+the number, not a different meaning, and PormG leaves it alone.
+
+This applies to the value a projection, a `CTE(...)` column or a `Subquery(...)` reads back, and to a
+value that is one of several operands when one of them is a computed number:
+`Coalesce(Avg("grid"), 0)` reads as a `Float64` on both engines. A `Coalesce`, `Greatest`, `Least`,
+`NullIf` or `Case` over columns and literals only is not a computed number: each row's value is one
+of its operands, and it reads back as the driver delivers it. An integer's width follows the engine
+(an `Int32` or an `Int64`).
+
 ### Serializing rows to JSON
 
 `JSON.json` on a `PormGRow` — or on the `Vector{PormGRow}` that `.list()` returns — emits the row's
@@ -169,12 +216,15 @@ PostgreSQL where more than fifteen digits is the point.
     reference to the column or a `CTE(...)` column whose body projects it, and to the row a write
     hands back (`create()`, `update_or_create`, `get_or_create`).
 
-    Everything else still arrives on SQLite as the number SQLite holds or computed, and renders that
-    way:
-    - a **computed expression** over the column — an aggregate that computes (`Sum("amount")`,
-      `Avg`), arithmetic (`F("amount") * 2`), an SQL function (`Round(...)`, or a `Coalesce(...)`
-      whose arguments differ, such as `Coalesce("amount", 0)`), a `CTE(...)` column the body
-      computes (`"avg_amount" => Avg("amount")`), a subquery;
+    A **computed** decimal also reaches it as a `Decimal` on both engines (#1121): an aggregate
+    that computes (`Sum("amount")`, `Avg`), arithmetic (`F("amount") * 2`), `Round`, `Abs`,
+    `Floor` or `Ceil` over the column, and a `CTE(...)` column or `Subquery(...)` whose body
+    computes one. On SQLite that `Decimal` is built from the double SQLite computed, to fifteen
+    significant digits, so its last digits can differ from PostgreSQL's exact `numeric`. See
+    [The type of a computed number](#The-type-of-a-computed-number).
+
+    Everything else still arrives on SQLite as the number SQLite holds, and renders that way:
+    - a `Coalesce(...)` whose arguments differ, such as `Coalesce("amount", 0)`;
     - a value that does **not fit the declaration**, such as the unrounded double an `F`-arithmetic
       `update(...)` leaves behind on SQLite, where PostgreSQL rounds it to the column's scale;
     - a field declared **wider than fifteen digits**.

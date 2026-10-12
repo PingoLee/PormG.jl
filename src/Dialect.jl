@@ -4,6 +4,7 @@ using DataFrames
 import Tables
 # #648: `_parse_sqlite_decimal` builds a `Decimals.Decimal` through the three-argument constructor.
 import Decimals
+import Printf   # #1121: `_parse_sqlite_computed_decimal` rounds a double to 15 significant digits
 import PormG: PormGSettings, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, PormGModel, PormGField, PormGBackend, PormGPostgres, PormGSQLite, PormGAbstractType
 import PormG: backend_sqlite_version  # SQLite library-version probe (driver body in the weakdep extension)
 # Semantic error taxonomy (#239). Dialect raises three categories:
@@ -407,7 +408,16 @@ function _parse_sqlite_decimal(v::Any, precision::Int, scale::Int)
     end
     # Zero has no sign in `numeric`, and `-0.0` is the one double whose sign is not a digit.
     iszero(c) && return Decimals.Decimal(0, BigInt(0), 0)
-    # Canonical form: no trailing zeros after the point, and never a positive exponent.
+    c, q = _canonical_coefficient(c, q)
+    # Fits the declaration, or it is not the value that was written.
+    -q <= scale || return v
+    ndigits(c) + q <= precision - scale || return v
+    return Decimals.Decimal(neg ? 1 : 0, c, q)
+end
+
+# The canonical form of `c × 10^q` both decimal parsers build: no trailing zeros after the point, and
+# never a positive exponent (Decimals 0.5 prints one as `1E+1`; LibPQ's values have none).
+function _canonical_coefficient(c::BigInt, q::Int)
     while q < 0 && iszero(c % 10)
         c = div(c, 10)
         q += 1
@@ -416,10 +426,82 @@ function _parse_sqlite_decimal(v::Any, precision::Int, scale::Int)
         c *= BigInt(10)^q
         q = 0
     end
-    # Fits the declaration, or it is not the value that was written.
-    -q <= scale || return v
-    ndigits(c) + q <= precision - scale || return v
+    return c, q
+end
+
+# `%.14e`: one digit, the point, fourteen digits — fifteen significant digits, correctly rounded.
+const _FLOAT64_15_DIGITS = r"^(-?)([0-9])\.([0-9]{14})e([-+][0-9]+)$"
+
+"""
+    _parse_sqlite_computed_decimal(v) -> Union{Decimals.Decimal, typeof(v)}
+
+The read half of a computed number that means a decimal, on SQLite (#1121): `Sum`/`Avg`/`Abs`/`Round`
+over a `DecimalField`, decimal arithmetic. SQLite computes it as a REAL, or as an INTEGER when its
+NUMERIC operands were stored whole; PostgreSQL computes a `numeric`, which the driver delivers as a
+`Decimals.Decimal`. This makes SQLite's answer that type too.
+
+- an `Integer` -> the `Decimal` of that integer;
+- a finite `Float64` -> its value to **15 significant digits**, as Django's SQLite converter builds a
+  computed decimal (`Context(prec=15).create_decimal_from_float`). `0.1 + 0.2` reads as `0.3`, the
+  value PostgreSQL's exact arithmetic gives, not `0.30000000000000004`: a double carries 15 decimal
+  digits faithfully, and the digits past them are its binary noise. Trailing zeros are dropped
+  (`11.0` reads as `11`);
+- everything else -> returned **unchanged** (`missing`, a `Bool`, `Inf`/`NaN`, text).
+
+Unlike `_parse_sqlite_decimal`, this claims no exactness: there is no declared width, and the double
+is the value SQLite computed. It is the same number, typed as the call means it.
+"""
+function _parse_sqlite_computed_decimal(v::Any)
+    v isa Bool && return v
+    if v isa Integer
+        neg = v < 0
+        c = abs(BigInt(v))
+        q = 0
+    elseif v isa Float64
+        isfinite(v) || return v
+        m = match(_FLOAT64_15_DIGITS, Printf.@sprintf("%.14e", v))
+        m === nothing && return v
+        neg = m[1] == "-"
+        c = parse(BigInt, m[2] * m[3])
+        q = parse(Int, m[4]) - 14
+    else
+        return v
+    end
+    iszero(c) && return Decimals.Decimal(0, BigInt(0), 0)
+    c, q = _canonical_coefficient(c, q)
     return Decimals.Decimal(neg ? 1 : 0, c, q)
+end
+
+"""
+    _parse_computed_float(v) -> Union{Float64, typeof(v)}
+
+The read half of a computed number that means a float (#1121), on every engine: Django's
+`convert_value` for a `FloatField` (`float(value)`). PostgreSQL computes `Avg` over an integer, and
+every `numeric`-cast function (`ROUND(x::numeric, d)`, `SQRT((x)::numeric)`, …), as a `numeric`, which
+the driver delivers as a `Decimals.Decimal`; SQLite delivers an INTEGER for a whole value in some
+shapes. Both become the `Float64` the call means.
+
+- a `Decimals.Decimal` -> the `Float64` nearest to it, through its text (`Float64(::Decimal)` divides
+  a coefficient that may exceed 2^53, which can land one ulp away). A `numeric` past the double's
+  range (`Exp` of a large power) is `±Inf` or `±0.0`, as Python's `float()` makes it for Django;
+- an `Integer` other than a `Bool` -> `Float64`;
+- everything else -> returned **unchanged** (`missing`, a `Float64`, text).
+
+It is a conversion on purpose, and so lossy where a `numeric` holds more digits than a double: the
+value means a float (#1121).
+"""
+function _parse_computed_float(v::Any)
+    v isa Bool && return v
+    if v isa Decimals.Decimal
+        text = string(v)
+        x = tryparse(Float64, text)
+        x === nothing || return x
+        # Out of the double's range: `tryparse` declines, `BigFloat` rounds it to ±Inf or ±0.0.
+        big = tryparse(BigFloat, text)
+        return big === nothing ? v : Float64(big)
+    end
+    v isa Integer && return Float64(v)
+    return v
 end
 
 

@@ -43,7 +43,9 @@ One edge raises where it did not: `Abs` of the most negative value of an integer
 
 Unchanged: these functions over a float, a decimal, or an expression PormG does not type as an
 integer (`Floor(Mod("grid", 3))`, a CTE column computed by `Avg`) keep the
-`::numeric` cast and read a `Decimal` on PostgreSQL; and every query on SQLite.
+`::numeric` cast on PostgreSQL; and every query on SQLite. What they read back as is #1121's, in the
+same train: the operand's type on both engines, a `Float64` over a float and a `Decimal` over a
+decimal, although PostgreSQL computes a `numeric`.
 
 ### Who this affects
 

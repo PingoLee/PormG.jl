@@ -1252,8 +1252,10 @@ _textless_number(::Any, ::SQLInstruction) = nothing
 # AFTER the render, like every kind lookup here; a node this build did not render — or an inner
 # projection with no kind — answers `nothing`, the fail-open default, and the value stays as the
 # driver delivered it.
+# #1121: a computed number's numeric read kind is the read path's alone (`_without_numeric_read`);
+# the projection reads it through `_numeric_read_kind`.
 _subquery_kind(p::SubqueryObject, instruc::SQLInstruction)::Union{CanonicalType,Nothing} =
-  instruc.subquery_kinds === nothing ? nothing : get(instruc.subquery_kinds, p, nothing)
+  _without_numeric_read(instruc.subquery_kinds === nothing ? nothing : get(instruc.subquery_kinds, p, nothing))
 
 # #929 — the formatter of a subquery's one projected column, asked of the INNER instruction while
 # `query()` still holds it (its `built` callback): the inner memos are what resolve a joined path, and

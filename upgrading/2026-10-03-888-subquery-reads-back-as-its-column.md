@@ -27,7 +27,9 @@ subquery now follows its usual rule with that type.
 | `F("start_at") - Coalesce(Subquery(s), F("start_at"))` over a `DateTimeField` | `QueryBuildError` (#882) | an interval, as `F("start_at") - F("start_at")` (#814) |
 | `Abs(Subquery(s))` where `s` projects a `DurationField` | `ABS` of the stored text's leading hours | `QueryBuildError`, as `Abs("duration")` (#900) |
 
-Unchanged: a subquery over a computed column (`Avg("points")`), over a text or number column, and
+A subquery over a computed number (`Avg("points")`) reads back as the type that number means, a
+`Float64` or a `Decimal` on both engines, since #1121 in the same train. Unchanged: a subquery over a
+text or number column, and
 `Cast(Subquery(s), "date")`, a `Date` on both engines (in `0.7.0` a `Subquery` was not a `Cast`
 operand at all, and raised `MethodError`; #878 and #822 made it one in the same release). On SQLite a
 subquery over a `DurationField` still orders and compares as its text, and `Greatest`/`Least` over

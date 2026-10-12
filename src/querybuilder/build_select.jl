@@ -49,6 +49,8 @@ function _memo_node_read_kind(original, instruc::SQLInstruction)::Union{Canonica
          original isa Union{JoinedReference,CTEReference} ? _operand_kind(original, instruc) : nothing
   kind === nothing && !(original isa AbstractString && occursin("__@", original)) &&
     _expression_formatter(original, instruc) === Models.format_bool_sql && (kind = CBool())
+  # #1121: a CTE column the body computed as a number reads as what it means.
+  kind === nothing && original isa CTEReference && (kind = _numeric_read_kind(original, instruc))
   return kind
 end
 
@@ -251,6 +253,8 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
           # projection says so. The kind is recorded here, never returned by `_render_expr_typed`, whose
           # kind is the comparison binder's `left_kind`.
           kind === nothing && _expression_formatter(original, instruc) === Models.format_bool_sql && (kind = CBool())
+          # #1121: arithmetic reads as the number it means — a `Decimal` or a `Float64` on every engine.
+          kind === nothing && (kind = _numeric_read_kind(original, instruc))
         else
           # #894: `Max`/`Min` over an interval are computed on SQLite milliseconds and leave as the
           # interval text — the second door #881 describes, and typed the way a difference is, on
@@ -296,6 +300,9 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
             # stricter than its formatter's (`_is_boolean_valued`).
             kind === nothing && !(original isa SQLTypeFunction) &&
               _expression_formatter(original, instruc) === Models.format_bool_sql && (kind = CBool())
+            # #1121: a computed number reads as the type it means, whichever engine computed it:
+            # PostgreSQL's `numeric` and SQLite's REAL become the one `Decimal` or `Float64`.
+            kind === nothing && (kind = _numeric_read_kind(original, instruc))
           end
         end
         kind

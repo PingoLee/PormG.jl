@@ -217,7 +217,26 @@ own checks refuse those class names too (`models.E023`, `models.E024`). To keep 
 declare its `through` model by hand:
 - set its `db_table` to Django's join table, which the marker names when the import knows it;
 - give it one `ForeignKey` per end, each naming the column with `db_column = "from__driver_id"`;
-- pin `source_field` / `target_field` to those keys.
+- pin `source_field` / `target_field` to those keys;
+- when the class that declares the `ManyToManyField` ends with `_` or contains `__`, also give the
+  field a `related_name`, for the reason in the next paragraph.
+
+A `ForeignKey` or `OneToOneField` on such a class keeps its column and its relation. Only its
+reverse name changes. With no `related_name`, the reverse accessor PormG derives is the lowercased
+model name (`driver_` for `Driver_`, `pit__stop` for `Pit__stop`), or `<model>_<field>` when the model
+has several relations to one target. A name that ends with `_` or contains `__` can never be a
+lookup-path segment, so `set_models` would refuse it. The importer writes a `related_name` instead and
+says so in a marker. The name is the derived one with `__` collapsed and the trailing `_` removed
+(`driver`, `pit_stop`, `driver_home_id`), with a digit added when the target already uses that name
+(`driver2`). Query the reverse side by that name:
+
+```julia
+# PormG: 'Driver_.circuit_id' is imported with related_name="driver" — the reverse accessor PormG
+#   derives for it on 'Circuit', 'driver_', ends with '_', so it can never be a lookup-path segment
+#   (Django refuses the class name too: models.E023). …
+Driver_ = Models.Model(
+  circuit_id = Models.ForeignKey("Circuit", pk_field="id", on_delete=CASCADE, related_name="driver"))
+```
 
 ## Importing a multi-app project
 
@@ -665,7 +684,7 @@ names the field and the class.
 | `constraints = [UniqueConstraint(fields=…, condition=Q(…), name=…)]`, `UniqueConstraint(Lower('x'), name=…)` | **imported** as `Models.UniqueConstraint(fields = …, name = …, condition = "<SQL>")` / `Models.UniqueConstraint(expressions = (…,), name = …)` | A partial or functional unique constraint, translated exactly as a partial or functional `Index` is; the generated file notes it carries Django's SQL (see the note below the table). |
 | `constraints = [CheckConstraint(…)]` | **converted** when the `Q(...)` is simple; otherwise **reported**, as a stub | The condition becomes SQL over the table's physical columns, double-quoted as Django renders them: `check=Q(laps__gte=0) & Q(grid__lte=F("laps"))` imports as `Models.CheckConstraint(condition = "\"laps\" >= 0 AND \"grid\" <= \"laps\"", name = "…")`. Converted: `exact` and `in` on text, number and boolean fields; `gt`, `gte`, `lt`, `lte` and `range` on number fields, with whole-number values on an integer field (Django runs `int()` on the value, so `laps__gt=1.5` there means `> 1`); `isnull=True/False` and `=None` on any field; `F("field")` against a field of the same kind; a boolean field compared to `True` / `False` is written as Django renders it, `"ativo"` / `NOT "ativo"`; all combined with `&`, `|`, `~` and parentheses. Anything else stays a stub, because a mistranslated condition would accept or refuse the wrong rows without a word: ordering comparisons on text (the collation differs between PostgreSQL and SQLite), dates, times and decimals (SQLite stores them in more than one representation), other lookups (`regex`, `startswith`, …), a string with an escape such as `\x41` or `\u00e9`, traversal through a relation, `F()` arithmetic, and a name with a `%(class)s` placeholder. The stub's marker says why, names `Models.CheckConstraint(condition = "<SQL>", name = "…")` with the constraint's own name, and is followed by the original `Q(...)`; write the condition and add it to `constraints = [...]`. `violation_error_message` / `violation_error_code` are dropped with a marker — they only change Django's Python-side error. |
 | `abstract = True` | **no table** | The class becomes a base: its fields merge into every child. See [Model inheritance](#Model-inheritance). |
-| `proxy = True` | **no table** | A proxy shares its parent's table; emitting one would declare that table twice. |
+| `proxy = True` | **no table** | A proxy shares its parent's table; emitting one would declare that table twice. A relation to the proxy addresses the parent's model, whether the base is written by its own name or through an import alias (`from racing.models import Driver as RacingDriver`). A dotted base (`racing_models.Driver`) is not resolved yet, so a relation to that proxy is imported as a plain column, with a marker. |
 | `managed = False` | **imported** as `managed = false` | A model PormG queries but never migrates — see [Unmanaged models](@ref). Inherited from an abstract base, as in Django. A value other than `True`/`False` (a setting, an expression) is reported and the model stays managed. A managed model's `ForeignKey` into an unmanaged one is imported with `db_constraint = false`, and reported: PormG refuses a constrained key into a table it does not migrate, which may be a view. |
 | `indexes = [Index(fields=['a','b'])]` | **imported** as `indexes = [Models.Index(fields = ("a", "b"))]` | See the acceptance rule below — narrower than Django's. |
 | `indexes = [Index(fields=['a'])]` | **imported** as `a = …(db_index=true)` | A plain one-column index *is* `db_index`, and is the only spelling that round-trips, so nothing is reported. Two exceptions: on the **primary key** it is redundant (already indexed) and skipped, and on a field type with no `db_index` option (`PasswordField`) it is dropped **and** reported. A one-column index with a `-`, a PostgreSQL index class or `opclasses=` is a different index and stays a `Models.Index`. |

@@ -1290,6 +1290,258 @@ class Thing(models.Model):
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#1180): a proxy whose base is an import ALIAS resolves like any other
+#
+# `from racing.models import Driver as RacingDriver` then `class Pilot(RacingDriver)` is the same
+# proxy of `racing.Driver` to Django. The classifier already followed the alias to that class, but
+# the proxy pass looked the base up AS WRITTEN — `RacingDriver` is neither a class name nor an
+# `app.Class` pair — so the proxy never resolved. Every relation to it degraded: the ForeignKey to a
+# plain `BigIntegerField`, the ManyToMany dropped, each with a marker saying `legacy.Pilot` was not in
+# the import. Expected: the same output as the un-aliased base, and a file `set_models` loads.
+#
+# The multi-table-inheritance marker had the same root: it spelled Django's `<parent>_ptr_id` from the
+# written token, so an aliased parent named a `racingdriver_ptr_id` column Django never created.
+# ─────────────────────────────────────────────────────────────────────────────
+struct Import1180MockPostgres <: PormG.PormGPostgres end
+PormG.config["import_1180_mock"] = PormG.Configuration.Settings(
+    connections = Import1180MockPostgres(), change_data = true, db_def_folder = "import_1180_mock")
+
+@testset "a proxy whose base is an import alias resolves to its parent's table (#1180)" begin
+    racing = """
+from django.db import models
+
+class Driver(models.Model):
+    surname = models.CharField(max_length=40)
+
+class Race(models.Model):
+    rivals = models.ManyToManyField('legacy.Pilot')
+    pilot = models.ForeignKey('legacy.Pilot', on_delete=models.CASCADE)
+"""
+    for (label, legacy) in (
+        "plain base" => """
+from django.db import models
+from racing.models import Driver
+
+class Pilot(Driver):
+    class Meta:
+        proxy = True
+""",
+        "aliased base" => """
+from django.db import models
+from racing.models import Driver as RacingDriver
+
+class Pilot(RacingDriver):
+    class Meta:
+        proxy = True
+""",
+        # A proxy of an aliased proxy: the chain is followed through the RESOLVED parent too.
+        "proxy of an aliased proxy" => """
+from django.db import models
+from racing.models import Driver as RacingDriver
+
+class Racer(RacingDriver):
+    class Meta:
+        proxy = True
+
+class Pilot(Racer):
+    class Meta:
+        proxy = True
+""")
+        @testset "$label" begin
+            generated, config_key, db_dir_existed = import_project(["racing" => racing, "legacy" => legacy];
+                                                                   output_file = "django_1180_alias.jl")
+            try
+                @test occursin("pilot_id = Models.ForeignKey(\"Driver\", pk_field=\"id\", on_delete=CASCADE)", generated)
+                @test occursin("rivals = Models.ManyToManyField(\"Driver\", db_table=\"racing_race_rivals\", target_field=\"pilot_id\")", generated)
+                @test !occursin("is not in the imported app set", generated)
+                @test !occursin("BigIntegerField", generated)
+                @test occursin("# PormG: model 'legacy.Pilot' is a Django proxy", generated)
+                sandbox = Module()
+                Core.eval(sandbox, Meta.parse(generated))
+                mod = Core.eval(sandbox, :django_1180_alias)
+                Base.invokelatest(PormG.Models.set_models, mod, "import_1180_mock")
+                race = Core.eval(mod, :Race)
+                @test haskey(race.cache["many_to_many"], "rivals")
+                @test Base.invokelatest(PormG.Models._resolve_target_model,
+                                        race.fields["pilot_id"].to, mod) === Core.eval(mod, :Driver)
+            finally
+                cleanup_project_test!(config_key, db_dir_existed)
+            end
+        end
+    end
+
+    # Multi-table inheritance through the alias: the base is still QUOTED as written, but the column
+    # is Django's `<parent model_name>_ptr_id`, from the class the alias names.
+    legacy_mti = """
+from django.db import models
+from racing.models import Driver as RacingDriver
+
+class Pilot(RacingDriver):
+    licence = models.CharField(max_length=10)
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => racing, "legacy" => legacy_mti];
+                                                           output_file = "django_1180_mti.jl")
+    try
+        @test occursin("inherits the concrete model 'RacingDriver' (Django multi-table inheritance)", generated)
+        @test occursin("Django keys the child table on a 'driver_ptr_id' one-to-one", generated)
+        @test !occursin("racingdriver_ptr_id", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # …and through a proxy parent, which Django follows to the concrete model before naming the
+    # column (`base._meta.concrete_model`): `Pilot(Racer)` with `Racer` a proxy of `Driver` keys on
+    # `driver_ptr_id`, not `racer_ptr_id`.
+    legacy_mti_proxy = """
+from django.db import models
+from racing.models import Driver
+
+class Racer(Driver):
+    class Meta:
+        proxy = True
+
+class Pilot(Racer):
+    licence = models.CharField(max_length=10)
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => racing, "legacy" => legacy_mti_proxy];
+                                                           output_file = "django_1180_mti_proxy.jl")
+    try
+        @test occursin("inherits the concrete model 'Racer' (Django multi-table inheritance)", generated)
+        @test occursin("Django keys the child table on a 'driver_ptr_id' one-to-one", generated)
+        @test !occursin("racer_ptr_id", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # A proxy of a proxy ACROSS apps, listed child-first: `legacy.Pilot` → `mid.Racer` (an aliased
+    # proxy) → `racing.Driver`. The parent is not resolved yet when the child is first visited, so this
+    # is what the outer fixpoint loop exists for.
+    mid = """
+from django.db import models
+from racing.models import Driver as RacingDriver
+
+class Racer(RacingDriver):
+    class Meta:
+        proxy = True
+"""
+    legacy_chain = """
+from django.db import models
+from mid.models import Racer
+
+class Pilot(Racer):
+    class Meta:
+        proxy = True
+"""
+    generated, config_key, db_dir_existed = import_project(["legacy" => legacy_chain, "mid" => mid, "racing" => racing];
+                                                           output_file = "django_1180_chain.jl")
+    try
+        @test occursin("pilot_id = Models.ForeignKey(\"Driver\", pk_field=\"id\", on_delete=CASCADE)", generated)
+        @test !occursin("is not in the imported app set", generated)
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        Base.invokelatest(PormG.Models.set_models, Core.eval(sandbox, :django_1180_chain), "import_1180_mock")
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#1181): an app of proxies does not claim its relations degrade
+#
+# An app that emits no model gets a line at the top of the file (#70). An app whose classes are all
+# proxies got the one written for an app with nothing in it: "declares none the importer recognises.
+# Any relation pointing into it is degraded below", plus a matching `@warn` — while the very next
+# lines showed those relations resolved to the proxy's parent. Expected: the line says the app
+# contributed no TABLE and names where each proxy resolved; no "declares no importable model"
+# warning; and an app with nothing at all keeps the old line and the warning.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an app whose proxies resolve is not reported as degraded (#1181)" begin
+    racing = """
+from django.db import models
+
+class Driver(models.Model):
+    surname = models.CharField(max_length=40)
+
+class Race(models.Model):
+    rivals = models.ManyToManyField('legacy.Pilot')
+    pilot = models.ForeignKey('legacy.Pilot', on_delete=models.CASCADE)
+"""
+    for (label, base_import, base) in (("plain base", "from racing.models import Driver", "Driver"),
+                                       # Composes with #1180: an aliased base resolves too.
+                                       ("aliased base", "from racing.models import Driver as RacingDriver", "RacingDriver"))
+        @testset "$label" begin
+            legacy = """
+from django.db import models
+$(base_import)
+
+class Pilot($(base)):
+    class Meta:
+        proxy = True
+"""
+            config_key, db_dir_existed = project_config!()
+            try
+                # Exactly the proxy's own warning, and no "declares no importable model".
+                generated = @test_logs (:warn, r"proxy model shares its parent's table") min_level=Logging.Warn begin
+                    import_models_from_django(["racing" => racing, "legacy" => legacy]; db = config_key,
+                                              file = "django_1181.jl", force_replace = true)
+                    read(joinpath(config_key, "django_1181.jl"), String)
+                end
+                @test !occursin("contributed no model", generated)
+                @test !occursin("degraded", generated)
+                @test occursin("# PormG: app 'legacy' contributed no table to this file — its proxies " *
+                               "share their parents' tables, and a relation to one resolves to its " *
+                               "parent: 'legacy.Pilot' → 'racing.Driver'.", generated)
+                @test occursin("# PormG: model 'legacy.Pilot' is a Django proxy", generated)
+                @test occursin("pilot_id = Models.ForeignKey(\"Driver\"", generated)
+            finally
+                cleanup_project_test!(config_key, db_dir_existed)
+            end
+        end
+    end
+
+    # A proxy whose parent is NOT in the import sits beside a resolved one: it is not listed as
+    # resolved, and the relation to it carries its own field-level degrade marker.
+    legacy = """
+from django.db import models
+from racing.models import Driver
+from accounts.models import Account
+
+class Pilot(Driver):
+    class Meta:
+        proxy = True
+
+class Member(Account):
+    class Meta:
+        proxy = True
+"""
+    racing_member = racing * "    member = models.ForeignKey('legacy.Member', on_delete=models.CASCADE)\n"
+    generated, config_key, db_dir_existed = import_project(["racing" => racing_member, "legacy" => legacy];
+                                                           output_file = "django_1181_mixed.jl")
+    try
+        @test occursin("a relation to one resolves to its parent: 'legacy.Pilot' → 'racing.Driver'.", generated)
+        @test !occursin("'legacy.Member' →", generated)
+        @test occursin("# PormG: field 'member_id' on 'racing.Race' — ForeignKey target 'legacy.Member' " *
+                       "is not in the imported app set", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # An app with nothing in it keeps the old line, and the warning, now emitted beside it.
+    config_key, db_dir_existed = project_config!()
+    try
+        generated = @test_logs (:warn, r"this app declares no importable model") match_mode=:any begin
+            import_models_from_django(["racing" => racing_member, "legacy" => "from django.db import models\n"];
+                                      db = config_key, file = "django_1181_empty.jl", force_replace = true)
+            read(joinpath(config_key, "django_1181_empty.jl"), String)
+        end
+        @test occursin("# PormG: app 'legacy' contributed no model to this file — its models.py declares " *
+                       "none the importer recognises. Any relation pointing into it is degraded below.", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Django Importer (#346): join columns follow the CLASS, not the primary key's name
 #
 # Django names a join-table column `<lowercased class>_id` — always, whatever the primary key is
@@ -2311,6 +2563,154 @@ end
     rel = Core.eval(mod, :_Driver).cache["many_to_many"]["teammates"]
     @test (rel.through_table, rel.owner_column, rel.related_column) ==
           ("racing__driver_teammates", "from__driver_id", "to__driver_id")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#1174): a key on a class Django refuses gets a loadable related_name
+#
+# A ForeignKey or OneToOneField with no `related_name` registers a reverse accessor derived from the
+# owner's model name. For `Driver_` (models.E023) that is `driver_`, and for `Pit__stop` (E024)
+# `pit__stop` — names `set_models` refuses, because a lookup path can never reach them. The importer
+# emitted the key unchanged, so the whole generated module failed to load over one reverse name.
+# Expected: the column and the forward relation are kept, the key carries an invented loadable
+# `related_name` (the derived name with `__` collapsed and trailing `_` stripped, plus a digit when
+# the target already holds it), a `# PormG:` marker names it, and the file passes `set_models`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a key whose derived reverse accessor cannot load gets a related_name (#1174)" begin
+    head = """
+from django.db import models
+
+class Circuit(models.Model):
+    name = models.CharField(max_length=40)
+
+class Race(models.Model):
+    name = models.CharField(max_length=40)
+
+"""
+    load(generated, mod_name) = begin
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        mod = Core.eval(sandbox, mod_name)
+        Base.invokelatest(PormG.Models.set_models, mod, "import_1140_mock")
+        mod
+    end
+    # (owner source, the emitted field, the marker's accessor and fault, the target, the reverse key)
+    for (label, body, emitted, derived, target, accessor) in (
+        ("ForeignKey on Driver_",
+         "class Driver_(models.Model):\n    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)\n",
+         "circuit_id = Models.ForeignKey(\"Circuit\", pk_field=\"id\", on_delete=CASCADE, related_name=\"driver\")",
+         "'driver_', ends with '_'", :Circuit, "driver"),
+        ("OneToOneField on Driver_",
+         "class Driver_(models.Model):\n    circuit = models.OneToOneField(Circuit, on_delete=models.CASCADE)\n",
+         "circuit_id = Models.OneToOneField(\"Circuit\", unique=true, pk_field=\"id\", on_delete=CASCADE, related_name=\"driver\")",
+         "'driver_', ends with '_'", :Circuit, "driver"),
+        ("ForeignKey on Pit__stop",
+         "class Pit__stop(models.Model):\n    race = models.ForeignKey(Race, on_delete=models.CASCADE)\n",
+         "race_id = Models.ForeignKey(\"Race\", pk_field=\"id\", on_delete=CASCADE, related_name=\"pit_stop\")",
+         "'pit__stop', contains '__'", :Race, "pit_stop"))
+        @testset "$label" begin
+            for prefix in (nothing, "racing")
+                generated, config_key, db_dir_existed = import_one_app(head * body;
+                    output_file = "django_1174.jl", django_prefix = prefix)
+                try
+                    @test occursin(emitted, generated)
+                    @test occursin("is imported with related_name=\"$(accessor)\" — the reverse accessor " *
+                                   "PormG derives for it on", generated)
+                    @test occursin(derived, generated)
+                    @test occursin(occursin("__", body) ? "models.E024" : "models.E023", generated)
+                    mod = load(generated, :django_1174)
+                    @test haskey(Core.eval(mod, target).related_objects, accessor)
+                finally
+                    cleanup_project_test!(config_key, db_dir_existed)
+                end
+            end
+        end
+    end
+
+    # Rows that load today stay untouched: a leading `_` (its table is pinned, so it loads as `driver`
+    # and derives that accessor, #1095), any number of them, and an explicit related_name.
+    for body in ("class _Driver(models.Model):\n    race = models.ForeignKey(Race, on_delete=models.CASCADE)\n",
+                 "class __Driver(models.Model):\n    race = models.ForeignKey(Race, on_delete=models.CASCADE)\n",
+                 "class Driver_(models.Model):\n    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE, related_name='drivers')\n")
+        generated, config_key, db_dir_existed = import_one_app(head * body; output_file = "django_1174_ok.jl")
+        try
+            @test !occursin("is imported with related_name", generated)
+            @test occursin("related_name=\"drivers\"", generated) == occursin("drivers", body)
+            load(generated, :django_1174_ok)
+        finally
+            cleanup_project_test!(config_key, db_dir_existed)
+        end
+    end
+
+    # A group: two keys from Driver_ to one target derive `driver__<field>`, each pinned on its own.
+    generated, config_key, db_dir_existed = import_one_app(head * """
+class Driver_(models.Model):
+    home = models.ForeignKey(Circuit, on_delete=models.CASCADE)
+    away = models.ForeignKey(Circuit, on_delete=models.CASCADE)
+"""; output_file = "django_1174_group.jl")
+    try
+        @test occursin("home_id = Models.ForeignKey(\"Circuit\", pk_field=\"id\", on_delete=CASCADE, related_name=\"driver_home_id\")", generated)
+        @test occursin("away_id = Models.ForeignKey(\"Circuit\", pk_field=\"id\", on_delete=CASCADE, related_name=\"driver_away_id\")", generated)
+        circuit = Core.eval(load(generated, :django_1174_group), :Circuit)
+        @test haskey(circuit.related_objects, "driver_home_id")
+        @test haskey(circuit.related_objects, "driver_away_id")
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # A collision: `Driver` already derives `driver` on Circuit, in whichever order the classes come,
+    # so Driver_'s key takes `driver2`. A field of the target's own name is avoided the same way.
+    for body in ("class Driver(models.Model):\n    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)\n\n" *
+                 "class Driver_(models.Model):\n    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)\n",
+                 "class Driver_(models.Model):\n    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)\n\n" *
+                 "class Driver(models.Model):\n    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)\n")
+        generated, config_key, db_dir_existed = import_one_app(head * body; output_file = "django_1174_clash.jl")
+        try
+            @test occursin("is imported with related_name=\"driver2\"", generated)
+            circuit = Core.eval(load(generated, :django_1174_clash), :Circuit)
+            @test haskey(circuit.related_objects, "driver")
+            @test haskey(circuit.related_objects, "driver2")
+        finally
+            cleanup_project_test!(config_key, db_dir_existed)
+        end
+    end
+    generated, config_key, db_dir_existed = import_one_app("""
+from django.db import models
+
+class Circuit(models.Model):
+    driver = models.CharField(max_length=40)
+
+class Driver_(models.Model):
+    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)
+"""; output_file = "django_1174_field.jl")
+    try
+        @test occursin("related_name=\"driver2\"", generated)
+        load(generated, :django_1174_field)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # `_Driver` holds `driver` on Circuit under the name it LOADS with (the leading `_` is stripped),
+    # so `Driver_` beside it takes `driver2`, with or without an app prefix. Deriving from the built
+    # name gave `_driver`, handed `driver` to `Driver_`, and the file did not load.
+    for prefix in (nothing, "racing")
+        generated, config_key, db_dir_existed = import_one_app(head * """
+class _Driver(models.Model):
+    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)
+
+class Driver_(models.Model):
+    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)
+"""; output_file = "django_1174_leading.jl", django_prefix = prefix)
+        try
+            @test occursin("is imported with related_name=\"driver2\"", generated)
+            @test count("is imported with related_name", generated) == 1
+            circuit = Core.eval(load(generated, :django_1174_leading), :Circuit)
+            @test haskey(circuit.related_objects, "driver")
+            @test haskey(circuit.related_objects, "driver2")
+        finally
+            cleanup_project_test!(config_key, db_dir_existed)
+        end
+    end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

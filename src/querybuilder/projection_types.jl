@@ -972,6 +972,12 @@ end
 # `1.5` and `1` before #1147 step 2. The refusal names the division, not a decimal's text, and advises
 # saying which division is meant (`_MEANING_DEPARTURES`): rounding afterwards cannot bring the half back.
 const _NUMERIC_WHOLE_FUNCTIONS = ("FLOOR", "CEIL", "ABS")
+# #1196 — the functions that keep an integer operand that integer on every engine (`integer_kind`,
+# `_integer_operand_kind`): the three above, and `Round`, whose places add nothing to an integer (a
+# negative precision is refused when the expression is built, #1044). `Round` is not one of the three:
+# over any other operand it is a `numeric` function's value, not its operand's, so it carries no
+# operand's division answer (`_whole_numeric_operand`).
+const _INTEGER_KEEPING_FUNCTIONS = (_NUMERIC_WHOLE_FUNCTIONS..., "ROUND")
 # The division by the engine that departs from the quotient the expression means
 # (`_MEANING_DEPARTURES`): an integer quotient PostgreSQL computes as a `numeric` (a `Floor` over a
 # whole number PormG does not type, a `sum(bigint)` the walk cannot name), a number with a fraction
@@ -1091,8 +1097,8 @@ end
 # (`Case(When(…, then = 1), default = 0)` is a `bigint`, its literals bound so); and a `Lag`/`Lead`
 # operand with its `default` (`lag(int4, int, int8)` is `int8`). In those two a string is a text
 # literal, not a path (`_case_kind`), so it is no `bigint`. `NullIf` is its first operand. `FLOOR`/
-# `CEIL`/`ABS` over an integer keep it (#1147), so they are its own value too: `Sum(Floor("id"))` is a
-# `sum(bigint)`. Not the rest of the `:promoting` rule: `SUM` of a `bigint` is a `numeric`, and so are
+# `CEIL`/`ABS` over an integer keep it (#1147), and so does `ROUND` (#1196), so they are its own value
+# too: `Sum(Floor("id"))` is a `sum(bigint)`. Not the rest of the `:promoting` rule: `SUM` of a `bigint` is a `numeric`, and so are
 # `FLOOR`/`CEIL`/`ABS` over anything else, which the walk types as such. A declared type (`Cast`'s, or an
 # `output_field`) is the cast the SQL renders, so it decides alone: a `bigint` when it names one
 # (`Sum(Cast("grid", BigIntegerField()))` is a `sum(bigint)`), and nothing else.
@@ -1109,7 +1115,7 @@ function _bigint_operand_function(p::Union{FObject,WindowFunction}, of::Function
     operands = Any[get(branch.kwargs, "then", nothing) for branch in operands if branch isa SQLTypeFunction]
     push!(operands, get(p.kwargs, "else", nothing))
     literal_strings = true
-  elseif p.function_name in _NUMERIC_WHOLE_FUNCTIONS && _integer_operand_kind(p, instruc) !== nothing
+  elseif p.function_name in _INTEGER_KEEPING_FUNCTIONS && _integer_operand_kind(p, instruc) !== nothing
     operands = Any[first(operands)]
   elseif rule in (:operand, :first_operand)
     operands = Any[first(operands)]
@@ -1221,6 +1227,8 @@ function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruct
   if name == "ROUND"
     side = _divided_whole_operand(p, instruc)
     side === nothing || return (side[1], "`ROUND(…)` over $(side[2])")
+    # #1196: over an integer it is that integer on both engines (`Dialect.ROUND`), no `numeric`.
+    _integer_operand_kind(p, instruc) === nothing || return nothing
   end
   rule = _result_rule(p)
   rule === :numeric && return (:numeric, "`$(name)(…)`")

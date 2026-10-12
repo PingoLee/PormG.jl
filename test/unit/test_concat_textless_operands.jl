@@ -169,7 +169,7 @@ end
     Fn.Coalesce("number", 0; output_field = Models.FloatField()),
     F("points") * 2,                                   # arithmetic over a float
     Fn.Avg("number"),                                  # numeric on PostgreSQL, REAL on SQLite
-    Fn.Round("number"),
+    Fn.Round("points"),                                # over an integer it is that integer (#1196)
     Fn.Mod("number", 3),
     Fn.Sqrt("number"),
     Fn.Floor("points"),                                # numeric over a float operand
@@ -203,7 +203,7 @@ end
   F = PormG.QueryBuilder.F
   for conn in (_CTO_PG, _CTO_SL)
     msg(expr) = _cto_msg(_cto_refusal(Fn.Concat(Fn.Value("-"), expr); conn = conn))
-    for (expr, named) in ((Fn.Mod("number", 3), "`MOD(…)`"), (Fn.Avg("number"), "`AVG(…)`"), (Fn.Round("number"), "`ROUND(…)`"))
+    for (expr, named) in ((Fn.Mod("number", 3), "`MOD(…)`"), (Fn.Avg("number"), "`AVG(…)`"), (Fn.Round("points"), "`ROUND(…)`"))
       m = msg(expr)
       @test occursin("Concat joins text, and $(named) is not text: say which text you mean (#1027)", m)
       @test occursin("Cast it to text first: Cast(\"<flag>\", \"text\")", m)
@@ -301,6 +301,7 @@ end
     Fn.Cast("price", "text"),                          # explicit text over a decimal
     Fn.Cast(Fn.Round("price"), Models.IntegerField()), # explicit integer, rounded first
     Fn.Floor("number"),                                # integer operand: '7' on both
+    Fn.Round("number"), Fn.Round("number", 2),         # an integer, whatever the places (#1196)
     Fn.Max("number"), Fn.Count("id"), Fn.Length("surname"),
     Fn.Case(Fn.When("active" => true, then = Fn.Value("yes")), default = "no"),  # the documented escape
   ]

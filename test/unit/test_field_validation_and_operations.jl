@@ -2207,7 +2207,7 @@ end
             "lower_name" => QB.Lower(QB.SQLField("forename")),
             "trimmed_name" => QB.Trim(QB.SQLField("forename")),
             "name_len" => QB.Length(QB.SQLField("forename")),
-            "rounded_pts" => QB.Round(QB.SQLField("id"), 2),
+            "rounded_pts" => QB.Round(QB.SQLField("points"), 2),   # #1196: over an integer, no places bind
             "absolute_pts" => QB.Abs(QB.SQLField("points")),
             "floored_pts" => QB.Floor(QB.SQLField("points")),
             "sqrt_pts" => QB.Sqrt(QB.SQLField("points")),

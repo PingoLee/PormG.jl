@@ -660,7 +660,9 @@ decimal (#1121). The floor of an average of `7.5` is `7.0` on both; see
 `Round(x, n)` uses each engine's own `ROUND`, as Django's `Round` does. PostgreSQL renders
 `ROUND(x::numeric, n)`, which rounds the value's exact decimal form. SQLite renders `ROUND(x, n)` over
 the stored double. Either way the result reads back as its operand's type on both engines: a
-`DecimalField` keeps its `Decimal`, and a float is a `Float64` (#1121). The two agree except at a decimal tie
+`DecimalField` keeps its `Decimal`, and a float is a `Float64` (#1121). Over an integer the places add
+nothing, so `Round("grid")` and `Round("grid", 2)` are that integer on both engines, and
+`Round("grid") / 2` divides as integers, as `Floor("grid") / 2` does (#1196). The two engines agree except at a decimal tie
 whose double sits just below it. Measured on PostgreSQL 16.15 and SQLite 3.45.1:
 
 | `Round(v, 2)` | PostgreSQL | SQLite |

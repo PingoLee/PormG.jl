@@ -505,13 +505,18 @@ end
   # both engines — a misbind is silent wrong data, and a fragment check could not see one.
   nsub() = (s = AD.Adm_child.objects; s.filter("parent" => OuterRef("id"), "qty__@gt" => 3); s.values("t" => Max("qty")); s)
   dsub() = (s = AD.Adm_child.objects; s.filter("parent" => OuterRef("id"), "qty__@gt" => 3); s.values("t" => Max("day")); s)
+  # Not an integer, so `Round` renders the engine's own `ROUND` and binds its places (#1196).
+  asub() = (s = AD.Adm_child.objects; s.filter("parent" => OuterRef("id"), "qty__@gt" => 3); s.values("t" => Avg("qty")); s)
   build(f, sub) = (q = AD.Adm_parent.objects; q.filter("sku" => "A"); q.values("id", "x" => f(Subquery(sub()))); q)
 
   cases = (
     ("Lower",    Lower,                     nsub, Any[3, "A"],    ("LOWER((SELECT",            "LOWER((SELECT")),
     # `Max("qty")` is an integer, so PostgreSQL's `ABS` takes it as it is, no `::numeric` (#1147, #1153).
     ("Abs",      Abs,                       nsub, Any[3, "A"],    ("ABS((SELECT",              "ABS((SELECT")),
-    ("Round",    s -> Round(s, 2),          nsub, Any[3, 2, "A"], ("ROUND((SELECT",            "ROUND(((SELECT")),
+    ("Round",    s -> Round(s, 2),          asub, Any[3, 2, "A"], ("ROUND((SELECT",            "ROUND(((SELECT")),
+    # #1196: over an integer `Round` is that integer: SQLite renders the subquery itself, and neither
+    # engine binds the places.
+    ("Round int", s -> Round(s, 2),         nsub, Any[3, "A"],    ("((SELECT",                 "ROUND(((SELECT")),
     ("Cast",     s -> Cast(s, "integer"),   nsub, Any[3, "A"],    ("CAST((SELECT",             "((SELECT")),
     ("Extract",  s -> Extract(s, "year"),   dsub, Any[3, "A"],    ("strftime('%Y', (SELECT",   "EXTRACT(YEAR FROM (SELECT")),
     ("ToChar",   s -> ToChar(s, "YYYY-MM"), dsub, Any[3, "A"],    ("strftime('%Y-%m', (SELECT", "to_char((SELECT")),
@@ -531,6 +536,7 @@ end
   pg(f, sub) = inspect_query(build(f, sub); connection = _ADM_PG)[:sql_text]
   @test occursin(r"\)\)::integer as \"x\"", pg(s -> Cast(s, "integer"), nsub))
   @test occursin(r"\)\)::date as \"x\"", pg(QBA.DATE, dsub))
+  @test occursin(r"\)\)::numeric\)::integer as \"x\"", pg(s -> Round(s, 2), nsub))   # #1196
 
   # Every one-argument constructor shares `_ScalarOperand`, but a signature re-narrowed by hand would
   # only show up here: each must hold the subquery and render it, on both engines.

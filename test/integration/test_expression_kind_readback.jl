@@ -106,37 +106,20 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   # flagged because the CTE model types it the operand's integer field (the CTE field typing, #1034).
   ("Avg int | cte", :postgres) => (type = "Float64", value = "1.0", read = "CFloat64()"),
   ("Avg int | cte", :sqlite) => (type = "Float64", value = "1.0", read = "CFloat64()"),
-  # #1196: `Round` over an integer means that integer, but PostgreSQL computes `ROUND(x::numeric)` and
-  # SQLite a REAL, so the same call reads a `Decimal` on one engine and a `Float64` on the other.
-  ("Round bigint | alone", :postgres) => (type = "Decimal", value = "1", read = nothing),
-  ("Round bigint | alone", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
-  ("Round bigint | subquery", :postgres) => (type = "Decimal", value = "1", read = nothing),
-  ("Round bigint | subquery", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
-  ("Round int / 2 | alone", :postgres) => (type = "Decimal", value = "0.50", read = nothing),
-  ("Round int / 2 | alone", :sqlite) => (type = "Float64", value = "0.5", read = nothing),
-  ("Round int / 2 | subquery", :postgres) => (type = "Decimal", value = "0.50", read = nothing),
-  ("Round int / 2 | subquery", :sqlite) => (type = "Float64", value = "0.5", read = nothing),
-  ("Round int places | alone", :postgres) => (type = "Decimal", value = "1", read = nothing),
-  ("Round int places | alone", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
-  ("Round int places | subquery", :postgres) => (type = "Decimal", value = "1", read = nothing),
-  ("Round int places | subquery", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
-  ("Round int | alone", :postgres) => (type = "Decimal", value = "1", read = nothing),
-  ("Round int | alone", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
-  ("Round int | subquery", :postgres) => (type = "Decimal", value = "1", read = nothing),
-  ("Round int | subquery", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
 )
 
 # The cells whose value comes back as a DIFFERENT TYPE on the two engines, by the table above. Every
-# other disagreeing cell reads back the same type on both, with `==` values. One family is left:
-# `F date - date` records `CInt32`, which no read parser undoes, so each driver's integer width comes
-# through (`Int32` vs `Int64`). The `numeric` family that was here — an aggregate, `Abs`, `Round` or
+# other disagreeing cell reads back the same type on both, with `==` values. One family is left, and it
+# is representation, not meaning (#1196): `F date - date` is an integer on both engines and records
+# `CInt32`, which no read parser undoes, so each driver's integer WIDTH comes through (`Int32` vs
+# `Int64`) — the same value spelled in two widths, as an `IntegerField` column itself reads on each.
+# An integer's width follows the engine, for a column and a computed value alike; the testset after
+# the computed-number one pins it for the integer-valued functions, which the unit matrix does not flag. The `numeric` family that was here — an aggregate, `Abs`, `Round` or
 # arithmetic over a `DecimalField`, `Round`/`Mod` over a float or an integer, `Avg` over an integer,
 # `Sqrt`/`Exp`/`Ln`/`Power` — reads back as the type it means on both engines since #1121, and the
 # testset below the table checks it cell by cell.
 const _EKR_TYPE_DIVERGENT = Set{String}([
   "F date - date | alone", "F date - date | subquery",
-  "Round bigint | alone", "Round bigint | subquery", "Round int / 2 | alone", "Round int / 2 | subquery",
-  "Round int places | alone", "Round int places | subquery", "Round int | alone", "Round int | subquery",
 ])
 
 const _EKR_CELLS = sort!([id for (id, backend) in keys(_EKM_DISAGREEMENTS) if backend === _EKR_ENGINE])
@@ -278,6 +261,44 @@ const _EKR_MEANING = [
         v = only(q.list())[name]
         @test string(nameof(typeof(v))) == type
         @test isapprox(parse(Float64, string(v)), value; rtol = 1e-12)
+      end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A computed integer reads back as an integer, on every engine (#1196)
+# `Round` over an integer means that integer (Django's `output_field` is its operand's), and so do
+# `Abs`/`Floor`/`Ceil` over one (#1147). Projected alone and inside a `Subquery` on result 1 (grid
+# `1`, resultid `1`), each must come back as an integer with the exact value. Before #1196 `Round("grid")`
+# read a `Decimal` on PostgreSQL and a `Float64` on SQLite, and `Round("grid") / 2` was `0.5` on both
+# where the integer it rounds divides to `0`. The width is each engine's own (representation, not
+# meaning): PostgreSQL keeps the column's `integer`/`bigint`, SQLite has one 64-bit integer.
+# ─────────────────────────────────────────────────────────────────────────────
+const _EKR_INTEGER = [
+  # label               value  width on PostgreSQL
+  ("Round int",         1,     "Int32"),
+  ("Round int places",  1,     "Int32"),
+  ("Round bigint",      1,     "Int64"),
+  ("Round int / 2",     0,     "Int64"),
+  ("Abs int",           1,     "Int32"),
+  ("Floor int",         1,     "Int32"),
+  ("Ceil int",          1,     "Int32"),
+]
+@testset "A computed integer reads back as an integer (#1196)" begin
+  for (label, value, pg_width) in _EKR_INTEGER
+    i = findfirst(s -> s[1] == label, EKM_SHAPES)
+    @test i !== nothing
+    i === nothing && continue
+    _, base, build = EKM_SHAPES[i]
+    for ctx in (:alone, :subquery)
+      @testset "$label | $ctx" begin
+        q, name = ekm_query(M, base, build, ctx; prep! = get(EKM_PREP, label, nothing))
+        q.filter(EKM_PK[base] => _EKR_ROW[base])
+        v = only(q.list())[name]
+        @test v isa Integer
+        @test v == value
+        @test string(nameof(typeof(v))) == by_engine(postgres = pg_width, sqlite = "Int64")
       end
     end
   end

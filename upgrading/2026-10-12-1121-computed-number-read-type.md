@@ -38,8 +38,9 @@ number, not a different value.
 
 Unchanged: a column (a `DecimalField` keeps its declared width and exact parser, a `FloatField` reads
 as before), an extremum or window value of a column (`Max("points")`), a `Coalesce`/`Greatest`/`Least`/
-`NullIf`/`Case` over columns and literals only (`Coalesce("grid", "points")`), `Round` over an integer,
-and every integer result. Integer widths still follow the engine.
+`NullIf`/`Case` over columns and literals only (`Coalesce("grid", "points")`), and every integer
+result. Integer widths still follow the engine. `Round` over an integer is an integer result now: its
+own entry in this train covers it (#1196).
 
 ### Who this affects
 

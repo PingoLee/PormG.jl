@@ -17,7 +17,7 @@
 # - `_AllKinds` — `_expression_kind`: every type PormG can name, on this engine. The expression-kind
 #   matrix records it beside the others (its `kind` channel), and #1034's phase 3 moves the readers
 #   onto it one at a time, each move a reviewed diff of that fixture. Its first reader is
-#   `_integer_operand_kind` (#1147): the `Abs`/`Floor`/`Ceil` render and the #1111 division check.
+#   `_integer_operand_kind` (#1147): the `Abs`/`Floor`/`Ceil`/`Round` render and the #1111 division check.
 # - `_MeaningKinds` — what a value MEANS, on every engine (#1121): `_AllKinds` in every arm but a
 #   computed number, which is its function's `_output_kind` (Django's `output_field`) rather than the
 #   type one engine happens to compute it as (`_computed_kind`). `Avg("grid")` is a `numeric` on
@@ -231,8 +231,8 @@ _integer_transform_kind(::Any) = nothing
     _integer_operand_kind(p, instruc) -> Union{CInt16, CInt32, CInt64, Nothing}
 
 The integer kind of `p`'s first operand on `instruc`'s engine, or `nothing` when it is not one PormG
-can name. `Abs`/`Floor`/`Ceil` keep it (#1147): `Dialect` renders them over that integer, not over
-`(x)::numeric`. Their `_computed_kind` methods answer the same kind from the same walk of the same
+can name. `Abs`/`Floor`/`Ceil` keep it (#1147), and so does `Round` (#1196): `Dialect` renders them
+over that integer, not over `(x)::numeric`. Their `_computed_kind` methods answer the same kind from the same walk of the same
 operand, so the SQL and the walk agree by construction. Read after the operand renders.
 """
 function _integer_operand_kind(p::SQLTypeFunction, instruc::SQLInstruction)
@@ -327,9 +327,11 @@ _numeric_rank(::Any) = nothing
 #
 # - PostgreSQL renders every `:numeric` function over `(x)::numeric`, so the value is a `numeric`
 #   whatever the operand; so are `Abs`/`Floor`/`Ceil`, except over an integer, which they keep
-#   (#1147: their methods beside their constructors override this, `_integer_operand_kind`);
+#   (#1147: their methods beside their constructors override this, `_integer_operand_kind`), and so is
+#   `Round` (#1196);
 # - SQLite renders them bare: a `:promoting` function keeps its operand's type (an integer stays one,
-#   #1087) and a `:numeric` one answers a REAL (`Mod(7, 3)` reads `1.0`, #1027).
+#   #1087) and a `:numeric` one answers a REAL (`Mod(7, 3)` reads `1.0`, #1027) — except `Round` over
+#   an integer, which renders the integer itself (#1196).
 #
 # `Sum` and `Avg` render bare on both engines and take each engine's aggregate type, so their methods
 # override these, beside their constructors (`functions.jl`). A width the operation may change is

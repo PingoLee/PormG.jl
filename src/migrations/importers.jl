@@ -1894,6 +1894,101 @@ function _unconstrain_keys_into_unmanaged!(index::_DjangoClassIndex)
   return out
 end
 
+"""
+    _pin_unloadable_reverse_accessors!(index, settings) -> IdDict{Any, Vector{String}}
+
+Give a `related_name` to every foreign key or one-to-one whose DERIVED reverse accessor `set_models`
+would refuse (#1174), and return one `# PormG:` marker per key changed, keyed by the owning model.
+
+With no `related_name`, the accessor is the owner's lowercased model name, or `<model>_<field>` in a
+group of relations to one target (`Models._derived_reverse_accessor`). A class Django itself refuses
+(`Driver_`, models.E023; `Pit__stop`, models.E024) gives a name that ends with `_` or contains `__`,
+which can never be a lookup-path segment. `set_models` raises on it, and that aborted the whole
+generated module for the sake of one relation's reverse name. Only that name cannot be carried over —
+Django's own (`driver_`, `driver__set`) has the same fault — so the column and the forward relation
+are kept and the name is invented: the derived one with `__` runs collapsed and trailing `_`
+stripped (`driver`, `pit_stop`, `driver_home_id`), plus a digit when the target already holds it
+through one of its fields or another relation's accessor.
+
+Runs after every model exists, like `_pin_m2m_join_columns!`: a target's other accessors come from
+models that may be built after it, and a ManyToMany that pass dropped no longer counts. The accessor
+is computed with `set_models`' own helpers and `settings`, the configuration the file is loaded with,
+so the derivation is asked rather than restated.
+"""
+function _pin_unloadable_reverse_accessors!(index::_DjangoClassIndex, settings::PormGSettings)
+  out = IdDict{Any, Vector{String}}()
+  by_binding = Dict{String, _DjangoClass}()
+  for e in index.entries
+    e.model === nothing || (by_binding[e.binding] = e)
+  end
+  # Every relation into each target, with the accessor `set_models` will register for it, counted
+  # per (owner, target) as `Models._collect_relation_targets` counts: keys and many-to-many together.
+  incoming = IdDict{_DjangoClass, Vector{Tuple{_DjangoClass, String, Any, String}}}()
+  prefix = Models._django_app_label(settings)
+  for owner in index.entries
+    owner.model === nothing && continue
+    # The name the model LOADS with, not the one it was built with: `Model_to_str` writes the
+    # positional key, which drops leading `_` when the table is pinned (`_Driver` loads as `driver`,
+    # #1095). Then `Models.get_model_name`'s own step, the `<prefix>_` strip, on that string.
+    # Deriving from `owner.model` gave `_driver`, a name that never registers, so a pin could take
+    # the `driver` that `_Driver` really holds, and a loadable `__Driver` looked unloadable.
+    loaded = _django_positional_key(owner)
+    model_name = Symbol(prefix === nothing ? loaded : lowercase(replace(loaded, "$(prefix)_" => "")))
+    relations = Tuple{String, Any, _DjangoClass}[]
+    for (field_name, field) in owner.model.fields
+      (field isa Models.sRelationalColumn || Models.is_many_to_many_field(field)) || continue
+      target = field.to isa AbstractString ? get(by_binding, field.to, nothing) : nothing
+      (target === nothing || target.model === nothing) && continue
+      push!(relations, (String(field_name), field, target))
+    end
+    for (field_name, field, target) in relations
+      n = count(r -> r[3] === target, relations)
+      accessor = field.related_name === nothing ?
+        Models._derived_reverse_accessor(model_name, field_name, n) : String(field.related_name)
+      push!(get!(incoming, target, Tuple{_DjangoClass, String, Any, String}[]),
+            (owner, field_name, field, accessor))
+    end
+  end
+  for target in index.entries
+    rels = get(incoming, target, nothing)
+    rels === nothing && continue
+    # Keys only. #1140 drops an AUTO ManyToMany on such a class, and one with `through=` does not load
+    # either way: `set_models` derives its owner column from the class name too (`driver__id`). A pin
+    # here would not make that file load.
+    unloadable = [r for r in rels if r[3] isa Models.sRelationalColumn && r[3].related_name === nothing &&
+                                     Models._illegal_accessor_name(r[4])]
+    isempty(unloadable) && continue
+    # One namespace on the target: its fields and every accessor that will register cleanly.
+    taken = Set{String}(String(k) for k in keys(target.model.fields))
+    for r in rels
+      Models._illegal_accessor_name(r[4]) || push!(taken, r[4])
+    end
+    for (owner, field_name, field, accessor) in unloadable
+      stem = rstrip(replace(accessor, r"_{2,}" => "_"), '_')
+      isempty(stem) && (stem = "related")
+      name, k = String(stem), 2
+      while name in taken
+        name = string(stem, k)
+        k += 1
+      end
+      push!(taken, name)
+      field.related_name = name
+      owner_label, target_label = _django_ref_label(owner), _django_ref_label(target)
+      fault = occursin("__", accessor) ? "contains '__'" : "ends with '_'"
+      check = occursin("__", owner.class) ? " (Django refuses the class name too: models.E024)" :
+              (startswith(owner.class, "_") || endswith(owner.class, "_")) ?
+                " (Django refuses the class name too: models.E023)" : ""
+      @warn "import: a derived reverse accessor cannot be a lookup segment; related_name pinned" class=owner_label field=field_name target=target_label related_name=name
+      push!(get!(out, owner.model, String[]),
+            "# PormG: '$(owner_label).$(field_name)' is imported with related_name=\"$(name)\" — the " *
+            "reverse accessor PormG derives for it on '$(target_label)', '$(accessor)', $(fault), so " *
+            "it can never be a lookup-path segment$(check). Django's own reverse name has the same " *
+            "fault; '$(name)' is the one to use from '$(target_label)'.")
+    end
+  end
+  return out
+end
+
 # One target reference → its class entry, or `nothing` after reporting the degrade.
 function _resolve_one_target(raw::AbstractString, owner::_DjangoClass, index::_DjangoClassIndex,
                              strict_relations::Bool, markers::Vector{String},
@@ -2780,6 +2875,9 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
   undeclarable = _pin_m2m_join_columns!(index)
   # …and both ends of every key: a managed model's key into an unmanaged one loses its constraint (#741).
   unconstrained = _unconstrain_keys_into_unmanaged!(index)
+  # …and every key's reverse accessor: a derived name `set_models` refuses gets a loadable one (#1174).
+  # After the ManyToMany pass, because a field it dropped no longer counts in a group.
+  pinned_accessors = _pin_unloadable_reverse_accessors!(index, render_settings)
 
   # Rendered in the order the slots were claimed, which is the order the models were built — so the
   # shared `taken_bindings` / `taken_names` sets see the same sequence they would have seen inline.
@@ -2794,7 +2892,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
     # A custom-class note for a field the pin pass dropped would contradict its drop marker (#1041).
     gone = Set(note for (key, note) in noted_fields if !haskey(model.fields, key))
     markers = vcat(filter(m -> !(m in gone), markers),
-                   get(undeclarable, model, String[]), get(unconstrained, model, String[]))
+                   get(undeclarable, model, String[]), get(unconstrained, model, String[]),
+                   get(pinned_accessors, model, String[]))
     # #1043: the short form — this file is regenerated from `models.py`, never edited by hand, so a
     # binding that is renamed carries its name with it. `inspectdb` keeps the explicit name.
     rendered = Models.Model_to_str(model; taken_bindings=taken_bindings, taken_names=taken_names,

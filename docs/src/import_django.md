@@ -217,7 +217,26 @@ own checks refuse those class names too (`models.E023`, `models.E024`). To keep 
 declare its `through` model by hand:
 - set its `db_table` to Django's join table, which the marker names when the import knows it;
 - give it one `ForeignKey` per end, each naming the column with `db_column = "from__driver_id"`;
-- pin `source_field` / `target_field` to those keys.
+- pin `source_field` / `target_field` to those keys;
+- when the class that declares the `ManyToManyField` ends with `_` or contains `__`, also give the
+  field a `related_name`, for the reason in the next paragraph.
+
+A `ForeignKey` or `OneToOneField` on such a class keeps its column and its relation. Only its
+reverse name changes. With no `related_name`, the reverse accessor PormG derives is the lowercased
+model name (`driver_` for `Driver_`, `pit__stop` for `Pit__stop`), or `<model>_<field>` when the model
+has several relations to one target. A name that ends with `_` or contains `__` can never be a
+lookup-path segment, so `set_models` would refuse it. The importer writes a `related_name` instead and
+says so in a marker. The name is the derived one with `__` collapsed and the trailing `_` removed
+(`driver`, `pit_stop`, `driver_home_id`), with a digit added when the target already uses that name
+(`driver2`). Query the reverse side by that name:
+
+```julia
+# PormG: 'Driver_.circuit_id' is imported with related_name="driver" — the reverse accessor PormG
+#   derives for it on 'Circuit', 'driver_', ends with '_', so it can never be a lookup-path segment
+#   (Django refuses the class name too: models.E023). …
+Driver_ = Models.Model(
+  circuit_id = Models.ForeignKey("Circuit", pk_field="id", on_delete=CASCADE, related_name="driver"))
+```
 
 ## Importing a multi-app project
 

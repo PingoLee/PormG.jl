@@ -2566,6 +2566,154 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#1174): a key on a class Django refuses gets a loadable related_name
+#
+# A ForeignKey or OneToOneField with no `related_name` registers a reverse accessor derived from the
+# owner's model name. For `Driver_` (models.E023) that is `driver_`, and for `Pit__stop` (E024)
+# `pit__stop` — names `set_models` refuses, because a lookup path can never reach them. The importer
+# emitted the key unchanged, so the whole generated module failed to load over one reverse name.
+# Expected: the column and the forward relation are kept, the key carries an invented loadable
+# `related_name` (the derived name with `__` collapsed and trailing `_` stripped, plus a digit when
+# the target already holds it), a `# PormG:` marker names it, and the file passes `set_models`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a key whose derived reverse accessor cannot load gets a related_name (#1174)" begin
+    head = """
+from django.db import models
+
+class Circuit(models.Model):
+    name = models.CharField(max_length=40)
+
+class Race(models.Model):
+    name = models.CharField(max_length=40)
+
+"""
+    load(generated, mod_name) = begin
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        mod = Core.eval(sandbox, mod_name)
+        Base.invokelatest(PormG.Models.set_models, mod, "import_1140_mock")
+        mod
+    end
+    # (owner source, the emitted field, the marker's accessor and fault, the target, the reverse key)
+    for (label, body, emitted, derived, target, accessor) in (
+        ("ForeignKey on Driver_",
+         "class Driver_(models.Model):\n    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)\n",
+         "circuit_id = Models.ForeignKey(\"Circuit\", pk_field=\"id\", on_delete=CASCADE, related_name=\"driver\")",
+         "'driver_', ends with '_'", :Circuit, "driver"),
+        ("OneToOneField on Driver_",
+         "class Driver_(models.Model):\n    circuit = models.OneToOneField(Circuit, on_delete=models.CASCADE)\n",
+         "circuit_id = Models.OneToOneField(\"Circuit\", unique=true, pk_field=\"id\", on_delete=CASCADE, related_name=\"driver\")",
+         "'driver_', ends with '_'", :Circuit, "driver"),
+        ("ForeignKey on Pit__stop",
+         "class Pit__stop(models.Model):\n    race = models.ForeignKey(Race, on_delete=models.CASCADE)\n",
+         "race_id = Models.ForeignKey(\"Race\", pk_field=\"id\", on_delete=CASCADE, related_name=\"pit_stop\")",
+         "'pit__stop', contains '__'", :Race, "pit_stop"))
+        @testset "$label" begin
+            for prefix in (nothing, "racing")
+                generated, config_key, db_dir_existed = import_one_app(head * body;
+                    output_file = "django_1174.jl", django_prefix = prefix)
+                try
+                    @test occursin(emitted, generated)
+                    @test occursin("is imported with related_name=\"$(accessor)\" — the reverse accessor " *
+                                   "PormG derives for it on", generated)
+                    @test occursin(derived, generated)
+                    @test occursin(occursin("__", body) ? "models.E024" : "models.E023", generated)
+                    mod = load(generated, :django_1174)
+                    @test haskey(Core.eval(mod, target).related_objects, accessor)
+                finally
+                    cleanup_project_test!(config_key, db_dir_existed)
+                end
+            end
+        end
+    end
+
+    # Rows that load today stay untouched: a leading `_` (its table is pinned, so it loads as `driver`
+    # and derives that accessor, #1095), any number of them, and an explicit related_name.
+    for body in ("class _Driver(models.Model):\n    race = models.ForeignKey(Race, on_delete=models.CASCADE)\n",
+                 "class __Driver(models.Model):\n    race = models.ForeignKey(Race, on_delete=models.CASCADE)\n",
+                 "class Driver_(models.Model):\n    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE, related_name='drivers')\n")
+        generated, config_key, db_dir_existed = import_one_app(head * body; output_file = "django_1174_ok.jl")
+        try
+            @test !occursin("is imported with related_name", generated)
+            @test occursin("related_name=\"drivers\"", generated) == occursin("drivers", body)
+            load(generated, :django_1174_ok)
+        finally
+            cleanup_project_test!(config_key, db_dir_existed)
+        end
+    end
+
+    # A group: two keys from Driver_ to one target derive `driver__<field>`, each pinned on its own.
+    generated, config_key, db_dir_existed = import_one_app(head * """
+class Driver_(models.Model):
+    home = models.ForeignKey(Circuit, on_delete=models.CASCADE)
+    away = models.ForeignKey(Circuit, on_delete=models.CASCADE)
+"""; output_file = "django_1174_group.jl")
+    try
+        @test occursin("home_id = Models.ForeignKey(\"Circuit\", pk_field=\"id\", on_delete=CASCADE, related_name=\"driver_home_id\")", generated)
+        @test occursin("away_id = Models.ForeignKey(\"Circuit\", pk_field=\"id\", on_delete=CASCADE, related_name=\"driver_away_id\")", generated)
+        circuit = Core.eval(load(generated, :django_1174_group), :Circuit)
+        @test haskey(circuit.related_objects, "driver_home_id")
+        @test haskey(circuit.related_objects, "driver_away_id")
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # A collision: `Driver` already derives `driver` on Circuit, in whichever order the classes come,
+    # so Driver_'s key takes `driver2`. A field of the target's own name is avoided the same way.
+    for body in ("class Driver(models.Model):\n    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)\n\n" *
+                 "class Driver_(models.Model):\n    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)\n",
+                 "class Driver_(models.Model):\n    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)\n\n" *
+                 "class Driver(models.Model):\n    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)\n")
+        generated, config_key, db_dir_existed = import_one_app(head * body; output_file = "django_1174_clash.jl")
+        try
+            @test occursin("is imported with related_name=\"driver2\"", generated)
+            circuit = Core.eval(load(generated, :django_1174_clash), :Circuit)
+            @test haskey(circuit.related_objects, "driver")
+            @test haskey(circuit.related_objects, "driver2")
+        finally
+            cleanup_project_test!(config_key, db_dir_existed)
+        end
+    end
+    generated, config_key, db_dir_existed = import_one_app("""
+from django.db import models
+
+class Circuit(models.Model):
+    driver = models.CharField(max_length=40)
+
+class Driver_(models.Model):
+    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)
+"""; output_file = "django_1174_field.jl")
+    try
+        @test occursin("related_name=\"driver2\"", generated)
+        load(generated, :django_1174_field)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # `_Driver` holds `driver` on Circuit under the name it LOADS with (the leading `_` is stripped),
+    # so `Driver_` beside it takes `driver2`, with or without an app prefix. Deriving from the built
+    # name gave `_driver`, handed `driver` to `Driver_`, and the file did not load.
+    for prefix in (nothing, "racing")
+        generated, config_key, db_dir_existed = import_one_app(head * """
+class _Driver(models.Model):
+    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)
+
+class Driver_(models.Model):
+    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)
+"""; output_file = "django_1174_leading.jl", django_prefix = prefix)
+        try
+            @test occursin("is imported with related_name=\"driver2\"", generated)
+            @test count("is imported with related_name", generated) == 1
+            circuit = Core.eval(load(generated, :django_1174_leading), :Circuit)
+            @test haskey(circuit.related_objects, "driver")
+            @test haskey(circuit.related_objects, "driver2")
+        finally
+            cleanup_project_test!(config_key, db_dir_existed)
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Django Importer (#1172, #1171): a ManyToMany is a self-relation by the NAMED class's name
 #
 # Django names the join columns in `create_many_to_many_intermediary_model` from the `model_name` of

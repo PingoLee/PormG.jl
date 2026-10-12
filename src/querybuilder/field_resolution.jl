@@ -317,7 +317,9 @@ _solve_field(field::String, _module::Module, model_name::PormGModel, instruct::S
 # select
 function _infer_parameter_sql_type(value, instruc::SQLInstruction; fallback::Union{Nothing,String}=nothing)
   _casts_bind_parameters(instruc.connection) || return nothing
-  fallback !== nothing && return fallback
+  # #1175: a zoned literal reaches a declared type (a `Case` `output_field`) through its instant.
+  # Cast straight to `date`, PostgreSQL would read the offset text's wall-clock date instead.
+  fallback !== nothing && return value isa TimeZones.ZonedDateTime ? "timestamptz::$(fallback)" : fallback
   value isa AbstractString && return "text"
   value isa Bool && return "boolean"
   value isa Integer && return "bigint"
@@ -325,6 +327,9 @@ function _infer_parameter_sql_type(value, instruc::SQLInstruction; fallback::Uni
   value isa Dates.Date && return "date"
   value isa Dates.DateTime && return "timestamp"
   value isa Dates.Time && return "time"
+  # #1175: untyped, the offset text was resolved by context — `($1)::date` read the wall-clock date
+  # of the offset written, and a projected `Value(zdt)` read back as text. `timestamptz` is the instant.
+  value isa TimeZones.ZonedDateTime && return "timestamptz"
   value isa Sockets.IPAddr && return "inet"   # #903 — bound as its text by `add_parameter!`
   return nothing
 end

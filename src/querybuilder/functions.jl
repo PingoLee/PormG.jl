@@ -573,7 +573,10 @@ A string, an integer of any width, a float, a `Bool`, a `Date`, `DateTime`, `Zon
 date or time as the text a `DateField`/`DateTimeField`/`TimeField` holds, and an integer as
 `Int64`. A projected `Date`, `DateTime` or `Time` reads back typed: `values("d" => Value(Date(2021, 3, 28)))`
 is a `Date`, and a `DateTime` comes back as a UTC `ZonedDateTime` on SQLite, as a SQLite
-`DateTimeField` column does. A float binds as a double on SQLite, so a `BigFloat` or `Decimal` is
+`DateTimeField` column does. A `ZonedDateTime` is an instant: it binds as `timestamptz` on
+PostgreSQL and as UTC text on SQLite, and reads back as a `ZonedDateTime` on both, so
+`Cast(Value(zdt), "date")` is the date of that instant in UTC, the session time zone, not the
+wall-clock date of the offset it was written in. A float binds as a double on SQLite, so a `BigFloat` or `Decimal` is
 narrowed to `Float64` there. A value SQLite cannot store as itself (a `Symbol`, a `Rational`, an
 integer beyond `Int64`, an arbitrary struct) raises `InvalidValueError` there instead of being bound
 as a serialized Julia object.

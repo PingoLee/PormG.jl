@@ -786,7 +786,7 @@ fts5(…)`, `rtree`) and each of the SHADOW tables its module keeps its data in 
 declares them, so `makemigrations` planned a `DROP TABLE` for every one: the destructive guard
 stopped it, and no migration could run on that database without `destructive = true`, which would
 have destroyed the index. This is the ownership rule, not the ignore list: it applies whatever
-`ignore_table` a caller passes, as the PostgreSQL twin [`_PG_OWNABLE_TABLE_FILTER`](@ref) does.
+`ignore_table` a caller passes, as the PostgreSQL twin [`_pg_ownable_table_filter`](@ref) does.
 
 Two sources, in order of authority:
 
@@ -867,7 +867,7 @@ for `inspectdb`. Filtering is the same on both engines: `include_table` keeps on
 Relations PormG cannot own are never read, whatever the filters say (#730): views and materialized
 views on both engines, SQLite virtual tables and their shadow tables
 ([`_sqlite_user_table_names`](@ref)), PostgreSQL partitions and tables an extension owns
-([`_PG_OWNABLE_TABLE_FILTER`](@ref)). A relation the reader never sees is one `makemigrations` can
+([`_pg_ownable_table_filter`](@ref)). A relation the reader never sees is one `makemigrations` can
 never plan to drop.
 """
 function read_live_schema(db::PormGSQLite; ignore_table::Vector{String} = sqlite_ignore_schema,
@@ -935,14 +935,63 @@ end
 # PostgreSQL Introspection
 # ---
 
+# The catalog columns the schema readers name that are newer than the introspection floor (#1162), with
+# the version each arrived in and what stands in for it on an older server. Each stand-in is EXACT, not
+# an approximation: on a server that predates the column, the feature it describes does not exist, so its
+# "absent" value is the true answer —
+#
+#   * `pg_index.indnkeyatts` (11): the key columns of an index, as against its `INCLUDE` payload. Before
+#     11 there is no `INCLUDE`, so every column is a key column: `indnatts`.
+#   * `pg_attribute.attidentity` (10): `''`, no identity column (a `serial` is a `DEFAULT nextval(…)`,
+#     read as one on every version).
+#   * `pg_class.relispartition` (10): `false`, no declarative partition.
+#   * `pg_attribute.attgenerated` (12, #1146): `''`, no generated column.
+#
+# Everything else the PostgreSQL readers name exists on 9.6, the floor (audited for #1162, by version
+# introduced): `json_agg` / `json_build_object`, `WITH ORDINALITY` and multi-argument `unnest` in FROM
+# (9.4); `array_position` and `pg_policy` (9.5); `to_regclass(text)` and regex look-behind (9.6 —
+# `to_regclass` took `cstring` before it). `LATERAL` (9.3), `indcollation` / `attcollation`,
+# `pg_describe_object` and `pg_depend.deptype = 'e'` (9.1), `indisexclusion` / `conindid` (9.0), and
+# `pg_get_expr`, `pg_get_indexdef`, `pg_get_constraintdef`, `format_type`, `obj_description` /
+# `col_description`, `pg_get_serial_sequence` and `indoption` are older still. `indnullsnotdistinct` (15)
+# is never named: `NULLS NOT DISTINCT` is read from `pg_get_indexdef`. No `pg_sequence` (10) and no
+# `relkind = 'p'` (10) are read.
+#
+# One table and one accessor, `_pg_catalog_col`, rather than a version `if` at each use, so the rule for a
+# column is written once and every query that names it agrees.
+const _PG_CATALOG_COLUMNS = (
+  indnkeyatts    = (since = 110000, absent = alias -> "$(alias).indnatts"),
+  attidentity    = (since = 100000, absent = _ -> "''"),
+  relispartition = (since = 100000, absent = _ -> "false"),
+  attgenerated   = (since = 120000, absent = _ -> "''"),
+)
+
 """
-    _PG_OWNABLE_TABLE_FILTER
+    _pg_catalog_col(server_version, alias, column::Symbol) -> String
+
+The SQL for catalog column `column` of the row aliased `alias` on a server at `server_version`
+(`server_version_num` form): `"\$(alias).\$(column)"` where the column exists, its exact stand-in from
+`_PG_CATALOG_COLUMNS` where it does not (#1162).
+"""
+function _pg_catalog_col(server_version::Integer, alias::AbstractString, column::Symbol)::String
+  row = _PG_CATALOG_COLUMNS[column]
+  return server_version >= row.since ? "$(alias).$(column)" : row.absent(alias)
+end
+
+# A `server_version_num` the way a message says it: `90600` is 9.6, `110000` is 11 (from 10 on, the
+# major version is one number).
+_pg_version_text(v::Integer)::String = v >= 100000 ? string(v ÷ 10000) : "$(v ÷ 10000).$((v ÷ 100) % 100)"
+
+"""
+    _pg_ownable_table_filter(server_version) -> String
 
 The `WHERE` fragment that keeps a `relkind = 'r'` table only when PormG could own it (#730), over
 a `pg_class` row aliased `c`. Every PostgreSQL query that enumerates live tables interpolates THIS
-constant — the schema dump (`get_database_schema`), the composite-index reader
-(`_pg_composite_indexes`) and `status()`'s drift probe — so they cannot disagree about which
-tables exist. It is the twin of [`_sqlite_user_table_names`](@ref).
+fragment — the schema dump (`get_database_schema`), the composite-index and table-check readers
+(`_pg_composite_indexes`, `_pg_table_checks`), `check()`'s invalid-index probe and `status()`'s drift
+probe — so they cannot disagree about which tables exist. It is the twin of
+[`_sqlite_user_table_names`](@ref). A function of the server version since #1162: `relispartition` is
+PostgreSQL 10+, and below it no table is a partition.
 
 `relkind = 'r'` alone admitted two kinds of relation no model can declare, and `makemigrations`
 planned a `DROP TABLE` for each:
@@ -957,8 +1006,8 @@ This is the filter Atlas's PostgreSQL inspector applies for the same reason, and
 `inspectdb` leaves partitions out by default. Views and materialized views need nothing here: they
 are `relkind` `'v'` / `'m'`.
 """
-const _PG_OWNABLE_TABLE_FILTER = """
-      AND NOT c.relispartition
+_pg_ownable_table_filter(server_version::Integer)::String = """
+      AND NOT $(_pg_catalog_col(server_version, "c", :relispartition))
       AND NOT EXISTS (SELECT 1 FROM pg_depend dep
                       WHERE dep.classid = 'pg_class'::regclass AND dep.objid = c.oid
                         AND dep.deptype = 'e')"""
@@ -1188,8 +1237,8 @@ tests above applies to it. A split whose count disagrees with the key columns is
 index carries `pg_get_expr(indpred, indrelid, true)` as its `condition`, whichever way its members
 are read. A UNIQUE one of either kind stays unread: `UniqueConstraint` declares neither.
 
-`indnkeyatts` is PostgreSQL 11+, which the pre-existing `indexes` CTE already requires, so this adds
-no floor of its own. (11 is the introspection floor since #1146; see `get_database_schema`.)
+`indnkeyatts` is PostgreSQL 11+, and is read through `_pg_catalog_col` (#1162): below 11 there is no
+`INCLUDE`, so `indnatts` stands in, every column is a key column and `has_include` is false.
 
 The partition with the `db_index` reader is per INDEX — `indnkeyatts = 1` there, `> 1` here, except
 that since #29 a one-column index that is advanced or carries the `pormg:index` marker is read here
@@ -1197,7 +1246,10 @@ and refused there — so no index reaches both readers. Since #847 that reader a
 read a one-column `DESC`, non-b-tree, `INCLUDE` or `EXCLUDE` index as a `db_index`, so the planner
 proposed dropping an index PormG never made.
 """
-function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing} = "public")::Dict{String, Vector{LiveComposite}}
+function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing} = "public",
+                               server_version::Integer = _pg_server_version(db))::Dict{String, Vector{LiveComposite}}
+  # #1162: `indnkeyatts` is PostgreSQL 11+; below it every index column is a key column.
+  nkey = _pg_catalog_col(server_version, "i", :indnkeyatts)
   # Parameterized rather than interpolated: `schema` is a keyword argument, so it is caller-supplied
   # by contract even though every call site today passes the default.
   schema_clause = schema === nothing ? "" : "AND n.nspname = \$1"
@@ -1209,11 +1261,11 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
            con.contype::text AS contype,
            con.condeferrable AS is_deferrable,
            i.indisvalid AS is_valid,
-           (i.indnatts <> i.indnkeyatts) AS has_include,
+           (i.indnatts <> $(nkey)) AS has_include,
            (SELECT json_agg(x.attname ORDER BY p.ord)::text
               FROM unnest(i.indkey::int2[]) WITH ORDINALITY AS p(attnum, ord)
               JOIN pg_attribute x ON x.attrelid = i.indrelid AND x.attnum = p.attnum
-             WHERE p.ord > i.indnkeyatts) AS include_columns,
+             WHERE p.ord > $(nkey)) AS include_columns,
            (i.indisunique AND pg_get_indexdef(i.indexrelid) LIKE '%NULLS NOT DISTINCT%') AS nulls_not_distinct,
            a.attname AS column_name,
            (i.indoption::int2[])[k.ord - 1] AS opt,
@@ -1236,16 +1288,16 @@ function _pg_composite_indexes(db::PormGPostgres; schema::Union{String, Nothing}
     JOIN pg_class c ON c.oid = i.indrelid
     JOIN pg_namespace n ON n.oid = c.relnamespace
     JOIN LATERAL unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)
-      ON k.ord <= i.indnkeyatts
+      ON k.ord <= $(nkey)
     LEFT JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
     LEFT JOIN pg_opclass oc ON oc.oid = (i.indclass::oid[])[k.ord - 1]
     LEFT JOIN pg_constraint con ON con.conindid = i.indexrelid AND con.conrelid = i.indrelid
                                AND con.contype IN ('u', 'p', 'x')
     WHERE c.relkind = 'r'
-      $(_PG_OWNABLE_TABLE_FILTER)
+      $(_pg_ownable_table_filter(server_version))
       AND NOT i.indisprimary
       AND NOT i.indisexclusion
-      AND (i.indisunique OR i.indnkeyatts > 1 OR am.amname <> 'btree' OR i.indnatts <> i.indnkeyatts
+      AND (i.indisunique OR $(nkey) > 1 OR am.amname <> 'btree' OR i.indnatts <> $(nkey)
            OR (i.indoption::int2[])[0] <> 0
            OR NOT (SELECT x.opcdefault FROM pg_opclass x WHERE x.oid = (i.indclass::oid[])[0])
            OR i.indexprs IS NOT NULL OR i.indpred IS NOT NULL
@@ -1376,7 +1428,7 @@ from the constraint's comment (anywhere in it — a user may have added to the c
 
 A query of its own rather than a CTE in `get_database_schema`'s dump, for `_pg_composite_indexes`'s
 reason: the dump is one row per table with one aggregate per column, and a table's CHECK list is
-neither. The same table filter as that reader (`_PG_OWNABLE_TABLE_FILTER`), and the same `schema`.
+neither. The same table filter as that reader (`_pg_ownable_table_filter`), and the same `schema`.
 
 PormG's own CHECKs are the ones the column readers already claim — a single-column clause matching
 `_PG_NON_NEGATIVE_CHECK_MATCH` or `_PG_BYTE_LENGTH_CHECK_MATCH` with no marker — excluded by a
@@ -1386,7 +1438,8 @@ The condition is `pg_get_constraintdef` without its `CHECK (` … `)`, and witho
 `NOT VALID` or `NO INHERIT` (PormG never writes either; a hand-written CHECK may carry them, and they
 are not part of the condition).
 """
-function _pg_table_checks(db::PormGPostgres; schema::Union{String, Nothing} = "public")::Dict{String, Vector{LiveCheck}}
+function _pg_table_checks(db::PormGPostgres; schema::Union{String, Nothing} = "public",
+                          server_version::Integer = _pg_server_version(db))::Dict{String, Vector{LiveCheck}}
   schema_clause = schema === nothing ? "" : "AND n.nspname = \$1"
   params = schema === nothing ? String[] : String[schema]
   query = """
@@ -1399,7 +1452,7 @@ function _pg_table_checks(db::PormGPostgres; schema::Union{String, Nothing} = "p
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE con.contype = 'c'
       AND c.relkind = 'r'
-      $(_PG_OWNABLE_TABLE_FILTER)
+      $(_pg_ownable_table_filter(server_version))
       $(schema_clause)
       AND NOT EXISTS (
         SELECT 1 FROM pg_attribute a
@@ -1454,12 +1507,14 @@ This function retrieves the database schema and converts it to models. It collec
 function read_live_schema(db::PormGPostgres; ignore_table::Vector{String} = postgres_ignore_table,
                           include_table::Union{Vector{String}, Nothing} = nothing)::Vector{LiveTable}
   ignore_table = unique(vcat(ignore_table, _EXTRA_IGNORE_TABLES[]))
-  schemas = get_database_schema(db)
+  # #1162: the server is asked its version once, and the three statements are each built for it.
+  server_version = _require_pg_introspection_floor(db)
+  schemas = get_database_schema(db; server_version = server_version)
   # #347: composite indexes come from their own schema-wide query — see `_pg_composite_indexes` for
   # why they cannot ride along on the dump above. Keyed by physical table name.
-  composite_by_table = _pg_composite_indexes(db)
+  composite_by_table = _pg_composite_indexes(db; server_version = server_version)
   # #742: the table-level CHECKs, from their own query for the same reason.
-  checks_by_table = _pg_table_checks(db)
+  checks_by_table = _pg_table_checks(db; server_version = server_version)
   out = LiveTable[]
   for schema in eachrow(schemas)
     table_name = String(schema.table_name)
@@ -1503,27 +1558,51 @@ _pg_server_version(db::PormGPostgres)::Int =
 # server whose version the user does not choose (a legacy or third-party database) for a statement only
 # `migrate` would ever run.
 #
-#   * Introspection — the schema read under `makemigrations`, `migrate`, `check` and `inspectdb` —
-#     needs PostgreSQL 11: the `indexes` CTE reads `pg_index.indnkeyatts`. `pg_attribute.attgenerated`
-#     (12, #1032) is asked only where it exists; below 12 the column is read as not generated, which
-#     is exact, since generated columns do not exist there.
+#   * Introspection — `inspectdb`, `import_models_from_postgres`, `check` and `status` — needs
+#     PostgreSQL 9.6 (#1162). Each catalog column newer than that is read only where it exists, and
+#     replaced below its version by the exact "absent" value (`_PG_CATALOG_COLUMNS`); 9.6 is what the
+#     rest of the readers need (`to_regclass(text)`, regex look-behind).
+#   * A plan — `makemigrations`, `migrate`, and `check`'s `:schema_drift`, which builds the plan
+#     `makemigrations` would write — needs PostgreSQL 11 (`_require_pg_plan_floor`). Introspection used
+#     to be refused below 11, so no plan ever ran there, and the DDL the planner writes (identity
+#     columns, PostgreSQL 10; `INCLUDE`, 11) is not checked against an older server.
 #   * A plan statement that needs more is refused by `_refuse_statements_above_server`, at
 #     `makemigrations` and again at `migrate`, before any statement runs.
 #
 # Queries and writes never read these catalog columns, so they state no floor of their own (#1097).
-const _PG_INTROSPECTION_FLOOR = 110000
-const _PG_ATTGENERATED = 120000
+const _PG_INTROSPECTION_FLOOR = 90600
+const _PG_PLAN_FLOOR = 110000
 
 # Asked rather than left to the statement, so an older server gets the requirement by name instead of
-# `column i.indnkeyatts does not exist` out of the middle of a 300-line query. Returns the version, which
-# the schema read needs again for `attgenerated`.
+# PostgreSQL's own error out of the middle of a 300-line query. Returns the version, which each schema
+# read builds its statement for.
 function _require_pg_introspection_floor(db::PormGPostgres)::Int
   v = _pg_server_version(db)
   v >= _PG_INTROSPECTION_FLOOR && return v
   throw(BackendCapabilityError(
-    "PormG's schema introspection (makemigrations, migrate, check, inspectdb) needs PostgreSQL 11 or " *
-    "newer, to read which columns each index keys; this server is $(v ÷ 10000) (server_version_num $(v)). " *
+    "PormG's schema introspection (inspectdb, import_models_from_postgres, check, status) needs " *
+    "PostgreSQL 9.6 or newer; this server is $(_pg_version_text(v)) (server_version_num $(v)). " *
     "Queries and writes are not affected (#1146)."))
+end
+
+"""
+    _require_pg_plan_floor(conn) -> Nothing
+
+Raise `BackendCapabilityError` when `conn` is a PostgreSQL server older than 11, the oldest a
+migration plan is built for (#1162): `makemigrations`, `migrate` (a plan it checks against the live
+schema) and `check`'s `:schema_drift`. Reading the schema needs only 9.6; a plan needs more, because
+the DDL the planner writes is not checked below 11. Every other backend states no plan floor.
+"""
+_require_pg_plan_floor(::Any)::Nothing = nothing
+
+function _require_pg_plan_floor(conn::PormGPostgres)::Nothing
+  v = _pg_server_version(conn)
+  v >= _PG_PLAN_FLOOR && return nothing
+  throw(BackendCapabilityError(
+    "A migration plan (makemigrations, migrate, check(kinds = [:schema_drift])) needs PostgreSQL 11 or " *
+    "newer; this server is $(_pg_version_text(v)) (server_version_num $(v)). Reading the schema " *
+    "(inspectdb, import_models_from_postgres, check, status) needs 9.6, and queries and writes are not " *
+    "affected (#1162)."))
 end
 
 # The plan statements that need a newer server than introspection does, with the version each needs:
@@ -1585,17 +1664,21 @@ function _refuse_statements_above_server(conn::PormGPostgres, statements::Abstra
                 "    $(uppercasefirst(way_out))."
                 for (stmt, (re, need, what, way_out)) in refused), "\n")
   throw(BackendCapabilityError(
-    "This migration plan needs a newer PostgreSQL than this server, which is $(v ÷ 10000) " *
+    "This migration plan needs a newer PostgreSQL than this server, which is $(_pg_version_text(v)) " *
     "(server_version_num $(v)):\n$(lines)\n" *
     _emsg("Every other plan runs on PostgreSQL 11 (#1146).")))
 end
 
 function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} = "public", table::Union{String, Nothing} = nothing,
-                             views::Bool = false)
-  server_version = _require_pg_introspection_floor(db)
-  # #1146: `attgenerated` exists from PostgreSQL 12. Below it there is no generated column to report,
-  # so the field is the empty code every reader takes for "not generated".
-  generated_sql = server_version >= _PG_ATTGENERATED ? "a.attgenerated::text" : "''::text"
+                             views::Bool = false, server_version::Union{Integer, Nothing} = nothing)
+  server_version === nothing && (server_version = _require_pg_introspection_floor(db))
+  # #1146 / #1162: each catalog column newer than the floor is read where it exists, and below its
+  # version is the exact "absent" value (`_PG_CATALOG_COLUMNS`): `attgenerated` (12) and `attidentity`
+  # (10) the empty code every reader takes for "not generated" / "not an identity", `indnkeyatts` (11)
+  # `indnatts`, `relispartition` (10) `false`.
+  generated_sql = _pg_catalog_col(server_version, "a", :attgenerated) * "::text"
+  identity_sql = _pg_catalog_col(server_version, "a", :attidentity) * "::text"
+  nkey = _pg_catalog_col(server_version, "i", :indnkeyatts)
   # #767: by default every relation PormG could own (#730); `views = true` reads views and
   # materialized views instead, for `inspectdb`'s `include_views` only. The extension filter applies
   # to both — an extension can own a view too (`pg_stat_statements`) — and `relispartition` is never
@@ -1607,8 +1690,9 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
   # THIS SAME STATEMENT — so 11 was the effective floor for every introspection and nothing could
   # reach the `else` branch. #455 made `identity` a JSON field read straight from `a.attidentity`,
   # which left the probe with no consumer at all. The version is probed again since #1032, once, above:
-  # the introspection floor (11) is reported by name, and the one version branch in the statement is
-  # `attgenerated` (#1146), which exists from 12 and is replaced by the empty code below it.
+  # the introspection floor (9.6 since #1162) is reported by name, and every catalog column newer than
+  # it — `attgenerated`, `attidentity`, `indnkeyatts`, `relispartition` — goes through
+  # `_pg_catalog_col`, never an `if` here.
   #
   # #455: every aggregate that is TRANSPORTED to the reader is `json_agg(...)::text`, not
   # `array_to_string(array_agg(...), ', ')`. (`unique_constraints` and `non_negative_checks` still
@@ -1786,17 +1870,17 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
         JOIN pg_class c ON c.oid = i.indexrelid
         JOIN pg_am am ON am.oid = c.relam
         JOIN LATERAL unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)
-          ON k.ord <= i.indnkeyatts
+          ON k.ord <= $(nkey)
         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
         JOIN pg_opclass oc ON oc.oid = (i.indclass::oid[])[k.ord - 1]
         WHERE NOT i.indisprimary
           AND NOT i.indisunique
           AND i.indpred IS NULL
-          AND i.indnkeyatts = 1
+          AND $(nkey) = 1
           AND am.amname = 'btree'
           AND NOT i.indisexclusion
           AND i.indisvalid
-          AND i.indnatts = i.indnkeyatts
+          AND i.indnatts = $(nkey)
           AND (i.indoption::int2[])[k.ord - 1] = 0
           AND oc.opcdefault
           AND (i.indcollation::oid[])[k.ord - 1] IN (0, a.attcollation)
@@ -1830,16 +1914,9 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
             -- the trailing digits, read by `_PG_BYTE_LENGTH_CHECK_BOUND`.
             --
             -- `substring(… from …)` rather than `regexp_match`, kept as the equivalent that carries
-            -- no version question at all. The 9.x rationale this comment used to give was already
-            -- false when it was written: the `indexes` CTE above uses `indnkeyatts`, which is
-            -- PostgreSQL 11+, and it sits in THIS SAME STATEMENT — the one every introspection runs.
-            -- So 11 was the effective floor for this query (stated and probed since #1146; `attgenerated`
-            -- is asked only from 12) and `regexp_match` (10+) would have been safe too. #415 leans on the same fact for multi-argument `unnest` in FROM (9.4+).
-            --
-            -- Scope of that claim, deliberately narrow: it is about THIS statement. It used to be
-            -- the reason a `major_version >= 10` gate on an `identity_case` fragment could never
-            -- take its `else` branch; #455 acted on that and removed the gate, the fragment and the
-            -- `version()` probe that fed them, so the floor is now simply stated here.
+            -- no version question at all: `regexp_match` is PostgreSQL 10+, and this statement runs
+            -- from 9.6 since #1162, its newer catalog columns read through `_pg_catalog_col`.
+            -- Multi-argument `unnest` in FROM (#415) is 9.4+.
             --
             -- min() collapses to ONE row per (table, column). This CTE is joined per-column, not
             -- per-table like non_negative_checks above, so without the GROUP BY two matching CHECKs
@@ -1882,7 +1959,7 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
             -- ""/"a"/"d" rather than whatever json_build_object makes of an unknown scalar. This
             -- replaces the version-gated GENE_*_IDENTITY marker fragment (see the note above the
             -- query for why the version probe went with it).
-            'identity', a.attidentity::text,
+            'identity', $(identity_sql),
             -- #1032: "s" for a STORED generated column, "v" for a VIRTUAL one (PostgreSQL 18), ""
             -- otherwise. Its expression is the `default` above: PostgreSQL keeps both in
             -- `pg_attrdef`. `attgenerated` is PostgreSQL 12+; below it the code is "" (#1146), which is
@@ -1918,7 +1995,7 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
     LEFT JOIN non_negative_checks nn ON nn.table_oid = c.oid
     LEFT JOIN byte_length_checks bl ON bl.table_oid = c.oid AND bl.col_name = a.attname
     WHERE $(relkind_clause)
-      $(_PG_OWNABLE_TABLE_FILTER)
+      $(_pg_ownable_table_filter(server_version))
       $(schema_clause)
       $(table_clause)
       AND a.attnum > 0
@@ -2066,6 +2143,8 @@ function get_constraints_index(conn::PormGPostgres, table_name::Symbol, field_na
   # column was as much a reason to re-create the index after a `RENAME COLUMN` as a key column. Since
   # #934 a covering index is the composite pass's (`Models.Index(include = …)`, owned through its
   # marker), so `indnatts = indnkeyatts` takes it out below and `indkey` is only key columns here.
+  # (`indnkeyatts` unguarded, unlike the readers (#1162): this runs only while a plan is built, and a
+  # plan needs PostgreSQL 11 — `_require_pg_plan_floor`.)
   # (#519: this is NOT arming a deletion — PostgreSQL drops an index with the column it covers and
   # never refuses the `DROP COLUMN`, as the docstring above says.)
   # Scoped through `current_schemas(false)` for `get_constraints_fk`'s reason — the DDL this arms is

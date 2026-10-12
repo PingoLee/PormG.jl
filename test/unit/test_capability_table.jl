@@ -124,9 +124,9 @@ end
     "src/querybuilder/select_nodes.jl" => 1,
     # SQLite's parameter collector, reached with no connection at hand (an ArrayField value).
     "src/querybuilder/parameters.jl" => 1,
-    # Server versions (#1146): the introspection floor (PostgreSQL 11) and plan statements above it
-    # (12, 13). Both move into the table with #1163.
-    "src/migrations/introspection.jl" => 2,
+    # Server versions (#1146, #1162): the introspection floor (PostgreSQL 9.6), the plan floor (11) and
+    # plan statements above it (12, 13). All three move into the table with #1163.
+    "src/migrations/introspection.jl" => 3,
     # `import_models_from_sqlite` pointed at a backend that is not the one it reads.
     "src/migrations/importers.jl" => 1,
   )

@@ -455,6 +455,8 @@ inside `migrate`'s write transaction, the caller binds the transaction's connect
 """
 function _schema_precondition_drift(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
                                     recorded::AbstractDict{String, String})
+  # #1162: the plan floor, which the read alone (9.6) no longer implies.
+  _require_pg_plan_floor(connection)
   ignore = _with_connection_ignores(_backend_ignore_tables(connection, settings), settings)
   live = read_live_schema(connection; ignore_table = ignore, include_table = collect(String, keys(recorded)))
   by_name = Dict{String, LiveTable}(t.name => t for t in live)
@@ -894,7 +896,7 @@ function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
 end
 
 # `pg_input_is_valid` arrived in PostgreSQL 16 (`server_version_num` 160000); PormG's
-# introspection floor is 11 (#1146).
+# plan floor is 11 (#1162), so the pre-check, which runs only under `migrate`, sees 11 and newer.
 const _PG_INPUT_IS_VALID = 160000
 
 # PostgreSQL 11–15 has no `pg_input_is_valid`, so the `:text_cast` count falls back to the grammar of
@@ -1387,12 +1389,13 @@ virtual/shadow tables are not user tables PormG could own, so they are not count
 (`information_schema.tables` reports a partition as a `BASE TABLE`.)
 """
 function _get_live_table_names(connection::PormGPostgres)::Vector{String}
+  ownable = _pg_ownable_table_filter(_require_pg_introspection_floor(connection))   # #1162: `relispartition` is 10+
   sql = """
     SELECT c.relname AS table_name
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE c.relkind = 'r' AND n.nspname = 'public'
-      $(_PG_OWNABLE_TABLE_FILTER)
+      $(ownable)
     ORDER BY c.relname;"""
   df = DataFrame(fetch(connection, sql))
   return String[string(r[:table_name]) for r in eachrow(df)]
@@ -2224,7 +2227,8 @@ end
 # because those are the ones PormG can re-emit; an invalid GIN, partial or unique index is just as
 # useless, and just as costly on writes, so it is reported too. Ordered by table, then index name:
 # `_sort_findings` is stable and ties on `(kind, table)` here, so this ORDER BY is the final order.
-function _pg_invalid_indexes(db::PormGPostgres; schema::Union{String, Nothing} = "public")::DataFrame
+function _pg_invalid_indexes(db::PormGPostgres; schema::Union{String, Nothing} = "public",
+                             server_version::Integer = _require_pg_introspection_floor(db))::DataFrame
   schema_clause = schema === nothing ? "" : "AND n.nspname = \$1"
   params = schema === nothing ? String[] : String[schema]
   query = """
@@ -2240,7 +2244,7 @@ function _pg_invalid_indexes(db::PormGPostgres; schema::Union{String, Nothing} =
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE NOT i.indisvalid
       AND c.relkind = 'r'
-      $(_PG_OWNABLE_TABLE_FILTER)
+      $(_pg_ownable_table_filter(server_version))
       $(schema_clause)
     ORDER BY c.relname, ic.relname;
     """
@@ -2427,6 +2431,8 @@ function _schema_drift_findings(connection::Union{PormGPostgres, PormGSQLite}, s
                                 include_table::Union{Vector{String}, Nothing},
                                 models_file)::Vector{SchemaCheckFinding}
   declared = _drift_declared_models(settings, models_file)
+  # #1162: this is the plan `makemigrations` would write, so it needs what a plan needs (PostgreSQL 11).
+  _require_pg_plan_floor(connection)
   live = read_live_schema(connection; ignore_table = ignore_table, include_table = include_table)
   # `fail_closed = false` (#734): a likely rename is drift to REPORT — `_drift_findings` names it "could
   # be a rename" — not a reason for the gate to throw instead of answering.

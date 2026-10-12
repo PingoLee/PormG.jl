@@ -1,9 +1,9 @@
 ## Schema management reads generated columns, and states a PostgreSQL floor per operation (#1032)
 
 - **Version**: Unreleased
-- **PormG ref**: #1032, #1108, #1146 ; `src/migrations/introspection.jl` (`get_database_schema`, `_pg_live_table`, `_refuse_statements_above_server`), `src/column_ir.jl` (`GeneratedExpression`, `_defaults_equal`)
+- **PormG ref**: #1032, #1108, #1146, #1162 ; `src/migrations/introspection.jl` (`get_database_schema`, `_pg_live_table`, `_refuse_statements_above_server`), `src/column_ir.jl` (`GeneratedExpression`, `_defaults_equal`)
 - **Recorded**: 2026-10-09
-- **Severity**: behavior change. A generated column is read as generated, not as an expression default. Reading the schema (`makemigrations`, `migrate`, `check`, `inspectdb`) needs PostgreSQL 11 and refuses an older server by name with `BackendCapabilityError`. A plan that adds a generated column needs 12, and one that removes `generated_from` needs 13; `makemigrations` and `migrate` refuse it on an older server. Queries and writes are unchanged.
+- **Severity**: behavior change. A generated column is read as generated, not as an expression default. Reading the schema (`inspectdb`, `import_models_from_postgres`, `check`) needs PostgreSQL 9.6 (`status` skips its drift check below it), and a migration plan (`makemigrations`, `migrate`, `check(kinds = [:schema_drift])`) needs 11; each refuses an older server by name with `BackendCapabilityError`. A plan that adds a generated column needs 12, and one that removes `generated_from` needs 13; `makemigrations` and `migrate` refuse it on an older server. Queries and writes are unchanged.
 
 ### What changed
 
@@ -11,14 +11,16 @@
 (`GENERATED ALWAYS AS (…) STORED`) that PostgreSQL keeps current. To diff one, the schema reader now
 asks `pg_attribute.attgenerated`, which PostgreSQL 12 added; on PostgreSQL 11 it does not ask, and
 every column reads as not generated, which is exact there. Each operation states what it needs
-(#1146): reading the schema needs PostgreSQL 11 (`pg_index.indnkeyatts`, which the reader already
-used), a plan that adds a generated column needs 12, and one that removes `generated_from` (`ALTER
+(#1146): reading the schema needs PostgreSQL 9.6 (#1162: each catalog column newer than that, such
+as `pg_index.indnkeyatts`, is read only where it exists), a migration plan needs 11, a plan that adds
+a generated column needs 12, and one that removes `generated_from` (`ALTER
 COLUMN … DROP EXPRESSION`) needs 13. For an app that does not use the new keywords, that changes the
 following:
 
 | | before | after |
 |---|---|---|
-| `makemigrations` / `migrate` / `check` / `inspectdb` on PostgreSQL 10 or older | failed with PostgreSQL's own error from the schema query (on 10, `column i.indnkeyatts does not exist`) | `BackendCapabilityError` naming the 11+ requirement, before the schema query runs |
+| `inspectdb` / `import_models_from_postgres` / `check` on PostgreSQL 9.6 or 10 | failed with PostgreSQL's own error from the schema query (on 10, `column i.indnkeyatts does not exist`) | reads the schema; the features those versions lack (`INCLUDE` columns, generated columns, and on 9.6 identity columns and partitions) read as absent |
+| `makemigrations` / `migrate` / `check(kinds = [:schema_drift])` on PostgreSQL 10 or older, or `inspectdb` / `import_models_from_postgres` / `check` on 9.5 or older | failed with PostgreSQL's own error from the schema query | `BackendCapabilityError` naming the requirement (11 for a plan, 9.6 to read the schema), before the schema query runs |
 | `makemigrations` / `migrate` on PostgreSQL 12 with a plan removing `generated_from`, or on 11 with one adding a generated column | — (new keywords) | `BackendCapabilityError` naming the statement and the version it needs; `makemigrations` writes no plan, `migrate` runs no statement |
 | a generated column made by hand, under a plain declaration | read as an expression default; nothing planned | read as generated; still nothing planned (PormG did not create it) |
 | `inspectdb` on a generated column | wrote `db_default = (postgres = "<expression>",)` | writes the plain field and warns, or `generated_from`/`config`/`weights` for a `tsvector` column PormG created |

@@ -1223,7 +1223,7 @@ end
 # `relkind = 'r'` admitted every partition of a partitioned table and every table an extension
 # owns, so `makemigrations` planned a `DROP TABLE` for each — and for an extension member the DROP
 # fails outright ("extension … requires it"). Every enumeration now carries
-# `_PG_OWNABLE_TABLE_FILTER`. The live-table list IS the planner's whole input, so a relation absent
+# `_pg_ownable_table_filter`. The live-table list IS the planner's whole input, so a relation absent
 # from it is one no plan can drop; the unit twin pins that each query carries the filter, this
 # pins that the filter means what it says against a real catalog.
 # Fixtures: a partitioned parent with one partition and a composite index (PostgreSQL clones the

@@ -17,7 +17,8 @@ Each operation asks the server for what it uses, so PormG states its PostgreSQL 
 
 | | Needs | Why |
 |---|---|---|
-| **Reading the schema**: `inspectdb`, `import_models_from_postgres`, `check`, and the read under `makemigrations` and `migrate` | **PostgreSQL 11 or newer**, checked up front | They read the catalog, including which columns each index keys (`indnkeyatts`, 11+). Which columns are generated is read from 12; an older server has no generated column, so every column reads as not generated. A server older than 11 is refused with `BackendCapabilityError` before the schema is read. |
+| **Reading the schema**: `inspectdb`, `import_models_from_postgres`, `check`, `status` | **PostgreSQL 9.6 or newer**, checked up front | They read the catalog. A catalog column newer than 9.6 is read only from the version that has it, and on an older server PormG reads the feature it describes as absent, which is exact there: no `INCLUDE` index columns before 11, no identity column and no partition before 10, no generated column before 12. A server older than 9.6 is refused with `BackendCapabilityError` before the schema is read; `status` does not raise, it reports the migration history and skips its drift check. |
+| **A migration plan**: `makemigrations`, `migrate`, and `check(kinds = [:schema_drift])` | **PostgreSQL 11 or newer**, checked up front | The DDL a plan holds (identity columns, `INCLUDE`) is checked against PostgreSQL 11 and newer only, so a plan is refused below 11 with `BackendCapabilityError` before the schema is read. |
 | **A plan that adds a generated column** (`SearchVectorField(generated_from = …)`) | **PostgreSQL 12 or newer** | `GENERATED ALWAYS AS (…) STORED` is PostgreSQL 12. |
 | **A plan that removes `generated_from`** | **PostgreSQL 13 or newer** | It is `ALTER COLUMN … DROP EXPRESSION`, which is PostgreSQL 13. |
 | **Queries and writes**: `filter`, `list`, `create`, `update`, `bulk_*`, `delete`, … | **No stated floor** | They use ordinary SQL, and none of the catalog columns schema management depends on; the few catalog lookups they make, such as `pg_get_serial_sequence` for a bulk insert, are long-standing. They are tested only against the PostgreSQL version the integration suite runs, so an older server is best effort. |
@@ -26,7 +27,7 @@ A plan holding a statement the server cannot run is refused with `BackendCapabil
 
 A query feature that needs a newer server than yours fails with PostgreSQL's own error when the query runs. Two opt-in features need PostgreSQL 11: [`GROUPS` window frames](read/window_functions.md) (and `RANGE` offsets and `EXCLUDE`), and [`search_type = "websearch"`](read/full_text_search.md).
 
-A database whose schema is managed by something else can therefore still be read and written by PormG on an older server, and generating models from it with `inspectdb` needs only PostgreSQL 11.
+A database whose schema is managed by something else can therefore still be read and written by PormG on an older server, and generating models from it with `inspectdb` or `import_models_from_postgres` needs only PostgreSQL 9.6. The models are generated from what that server has: a `serial` key reads as an `IDField`, since identity columns are PostgreSQL 10.
 
 ## PostgreSQL-only capabilities
 

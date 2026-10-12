@@ -3275,7 +3275,8 @@ archive without re-applying. A missing models file raises `MissingConfigurationE
 `String` form). A failure reading the live schema raises the read's own error and writes no plan
 (#1018); an empty database is not a failure — it reads as no tables, and every model is planned.
 
-On PostgreSQL, reading the schema needs PostgreSQL 11, and a plan holding a statement the server
+On PostgreSQL, a plan needs PostgreSQL 11 (#1162; reading the schema alone, as `inspectdb` does,
+needs 9.6), and a plan holding a statement the server
 cannot run raises `BackendCapabilityError` and writes nothing (#1146): adding a generated column
 (`generated_from`) needs PostgreSQL 12, and removing `generated_from` (`DROP EXPRESSION`) needs 13.
 
@@ -3304,6 +3305,8 @@ ignore = _with_connection_ignores(_backend_ignore_tables(connection, settings), 
 # #1018: a failed read raises, as it does for `migrate`'s precondition and `check()`. It used to be
 # logged and swallowed — `nothing`, the value a successful run returns — under a text match for an
 # "empty database" error nothing raised: an empty database reads as no tables, and plans them all.
+# #1162: a plan needs PostgreSQL 11, though the read alone runs from 9.6; refused before reading.
+_require_pg_plan_floor(connection)
 live_schema = read_live_schema(connection; ignore_table = ignore)
 
 # get module from the path (load + resolve FK targets + default pk_field — #62)

@@ -1245,3 +1245,31 @@ end
   @test nrow(df_modified_copy) == 0
   @test nrow(df_original) == 1
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1168: a pattern lookup on an integer column matches the column's digits, on both engines.
+# PostgreSQL has no `LIKE` for a number, so `"grid__@startswith" => "1"` failed at the server there
+# while SQLite matched the number's text. PostgreSQL now reads `CAST(grid AS text)`, the same digits
+# SQLite reads. The independent answer is the race's grid slots, read as numbers and printed in Julia.
+# A float column is refused before any SQL runs, on both engines: each prints it differently.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1168: a pattern lookup on a number column" begin
+  rows = M.Result.objects.filter("raceid" => 1).values("resultid", "grid").list(:dict)
+  @test length(rows) > 10
+  want = sort([r[:resultid] for r in rows if startswith(string(r[:grid]), "1")])
+  @test !isempty(want)
+  got(q) = sort([r[:resultid] for r in q.list(:dict)])
+  @test got(M.Result.objects.filter("raceid" => 1, "grid__@startswith" => "1").values("resultid")) == want
+  # A non-number fragment is a fragment like any other: it matches no digits, and does not raise.
+  @test isempty(M.Result.objects.filter("raceid" => 1, "grid__@contains" => "x").values("resultid").list(:dict))
+  # An integer `Subquery` alias takes the same read (#1186 types it by its inner projection): each
+  # row's own grid, through a correlated `Max`, matches the same slots. PostgreSQL reads
+  # `CAST((SELECT …) AS text)`, which this runs on the server.
+  own_grid = M.Result.objects.filter("resultid" => OuterRef("resultid")).values("g" => Max("grid"))
+  q = M.Result.objects.filter("raceid" => 1).values("resultid", "s" => Subquery(own_grid))
+  q.filter("s__@startswith" => "1")
+  @test got(q) == want
+  e = try M.Result.objects.filter("fastestlapspeed__@startswith" => "2").values("resultid").list(:dict); nothing catch err; err end
+  @test e isa PormG.FilterError
+  @test occursin("not an integer", sprint(showerror, e))
+end

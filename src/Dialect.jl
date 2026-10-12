@@ -1071,7 +1071,15 @@ function LEAST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite
   return _output_field_cast("MIN($(join(columns, ", ")))", format, conn)
 end
 
-function NULLIF(columns::Vector{Any}, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+# #1150 — `NullIf(a, b)` is `a` or NULL, so it has `a`'s type. PostgreSQL resolves it with `b` for the
+# `=` it is defined by, so over an integer `a` and a fraction `b` (`integer_kind`, set by the build)
+# it is a `numeric` there; PormG casts it back to `a`'s type, which is exact. SQLite returns `a` itself.
+function NULLIF(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
+  sql = "NULLIF($(columns[1]), $(columns[2]))"
+  kind = get(format, "integer_kind", nothing)
+  return kind === nothing ? sql : "($(sql))::$(_pg_integer_type(kind))"
+end
+function NULLIF(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
   return "NULLIF($(columns[1]), $(columns[2]))"
 end
 

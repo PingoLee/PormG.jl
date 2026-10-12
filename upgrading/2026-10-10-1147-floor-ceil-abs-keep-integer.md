@@ -16,8 +16,9 @@ values are all integers, a `Cast` to an integer, an integer date part (`"dob__@y
 `Extract(…, "year")`, `@quarter`, …), a CTE column holding an integer (an integer column, `Count`,
 `Sum` of any integer, `Max`/`Min` of any integer column, a ranking window, a
 `Lag`/`Lead` of an integer with an integer or no default, a `Case` of integers, a cast to an integer),
-`+`, `-`, `*` or `/` over two integers (`F("grid") + 1`, since #1147 step 2), or one of these
-functions over one — PostgreSQL now renders:
+`+`, `-`, `*` or `/` over two integers (`F("grid") + 1`, since #1147 step 2), a bitwise operator
+or a shift over integers (`F("grid") & 3`, `F("grid") << 1`, which has its left operand's type), a
+`Subquery` projecting an integer (#1153), or one of these functions over one — PostgreSQL now renders:
 
 | call | before | after |
 |---|---|---|

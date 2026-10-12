@@ -143,6 +143,22 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Sum F int + 1",           :Result,              m -> _EKM_FN.Sum(_EKM_Q.F("grid") + 1)),
   ("F int / int",             :Result,              m -> _EKM_Q.F("grid") / _EKM_Q.F("laps")),
   ("Floor F int + 1",         :Result,              m -> _EKM_FN.Floor(_EKM_Q.F("grid") + 1)),
+  # #1153: the bitwise operators and shifts are integers to the walk, and so is a `Subquery` over one
+  ("F int & int",             :Result,              m -> _EKM_Q.F("grid") & 3),
+  ("F int << 1",              :Result,              m -> _EKM_Q.F("grid") << 1),
+  ("Floor F int & 3",         :Result,              m -> _EKM_FN.Floor(_EKM_Q.F("grid") & 3)),
+  ("Sum F bigint << 1",       :Result,              m -> _EKM_FN.Sum(_EKM_Q.F("resultid") << 1)),
+  ("Floor Subquery int",      :Result,              m -> _EKM_FN.Floor(_EKM_Q.Subquery(_ekm_sub(m, :Result, "grid")))),
+  # #1150: a quotient over a decimal or a float side is one, and SQLite divides it as REAL
+  ("F decimal / 2",           :Constructor_results, m -> _EKM_Q.F("points") / 2),
+  ("F float / 2",             :Result,              m -> _EKM_Q.F("points") / 2),
+  ("Coalesce int float / 2",  :Result,              m -> _EKM_FN.Coalesce("grid", "points") / 2),
+  ("Case int float / 2",      :Result,              m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1.5)], default = 0) / 2),
+  ("Cast int numeric / 2",    :Result,              m -> _EKM_FN.Cast("grid", "numeric") / 2),
+  ("NullIf int float / 2",    :Result,              m -> _EKM_FN.NullIf("grid", 0.5) / 2),
+  ("Lag int default float / 2", :Result,            m -> _EKM_FN.Lag("grid", default = 1.5, over = _ekm_over(:Result)) / 2),
+  # #1151: a `Case` with a float branch is a float, so its cast to an integer departs on SQLite
+  ("Cast Case int float to integer", :Result,       m -> _EKM_FN.Cast(_EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1.5)], default = 0), "integer")),
   # ── subqueries ─────────────────────────────────────────────────────────────────────────────────
   ("Subquery Max hop date",   :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Max("raceid__date")))),
   ("Subquery Avg float",      :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Avg("points")))),

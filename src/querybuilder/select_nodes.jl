@@ -701,6 +701,17 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     integer_kind = _integer_operand_kind(v, instruc)
     integer_kind === nothing || (resolved_kwargs["integer_kind"] = integer_kind)
   end
+  # #1150: `NullIf(a, b)` is `a` or NULL, so it has `a`'s type — but PostgreSQL resolves it with `b`
+  # for the `=` it is defined by, so `NULLIF(<integer>, 0.5)` is a `numeric` there and keeps the half
+  # once divided, where SQLite returns the integer. PostgreSQL renders it back to `a`'s integer type
+  # (`Dialect.NULLIF`): exact, since the value is `a` itself. The walk's `:first_operand` rule says
+  # the same type, so the SQL and the type agree.
+  if v isa FObject && v.function_name == "NULLIF" && v.column isa AbstractVector && length(v.column) == 2
+    integer_kind = _integer_operand_kind(v, instruc)
+    if integer_kind !== nothing && _expression_kind(v.column[2], instruc) isa Union{CDecimal,CFloat64}
+      resolved_kwargs["integer_kind"] = integer_kind
+    end
+  end
   # #1147 step 2: `Sum` over a `bigint` is an integer — Django's `Sum` of an integer field is one, and
   # SQLite sums one — but PostgreSQL widens `sum(bigint)` to `numeric`, which keeps the half once
   # divided. So PostgreSQL renders it back to the `bigint` (`Dialect.SUM`), read from the same walk

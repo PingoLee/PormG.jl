@@ -1273,3 +1273,36 @@ end
   @test e isa PormG.FilterError
   @test occursin("not an integer", sprint(showerror, e))
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1183: a pattern lookup on a time column matches its `HH:MM:SS` text, on both engines. PostgreSQL has
+# no `LIKE` for a `time`, so `"time__@startswith" => "14:"` failed at the server there while SQLite
+# matched its stored text; PostgreSQL now reads `CAST(time AS text)`. The independent answer is the
+# races' start times, read back as `Time` values and printed in Julia. An integer `Case` alias with no
+# `output_field` reads as its digits the same way (PostgreSQL runs `CAST(CASE … END AS text)`). A
+# timestamp and a duration column are refused before any SQL runs, on both engines: each engine prints
+# them differently.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1183: a pattern lookup on a time column, and the columns it refuses" begin
+  rows = M.Race.objects.filter("time__@isnull" => false).values("raceid", "time").list(:dict)
+  want = sort([r[:raceid] for r in rows if startswith(string(r[:time]), "14:")])
+  @test !isempty(want)
+  @test length(want) < length(rows)
+  got(q) = sort([r[:raceid] for r in q.list(:dict)])
+  @test got(M.Race.objects.filter("time__@startswith" => "14:").values("raceid")) == want
+  want_30 = sort([r[:raceid] for r in rows if occursin(":30", string(r[:time]))])
+  @test got(M.Race.objects.filter("time__@contains" => ":30").values("raceid")) == want_30
+
+  grid_rows = M.Result.objects.filter("raceid" => 1).values("resultid", "grid").list(:dict)
+  want_one = sort([r[:resultid] for r in grid_rows if r[:grid] == 1])
+  q = M.Result.objects.filter("raceid" => 1).
+    values("resultid", "c" => Case([When("grid" => 1, then = 1)], default = 0))
+  q.filter("c__@startswith" => "1")
+  @test sort([r[:resultid] for r in q.list(:dict)]) == want_one
+
+  for (model, path) in ((M.Race, "start_at__@startswith"), (M.Pit_stops, "duration__@contains"))
+    e = try model.objects.filter(path => "2").list(:dict); nothing catch err; err end
+    @test e isa PormG.FilterError
+    @test occursin("#1183", sprint(showerror, e))
+  end
+end

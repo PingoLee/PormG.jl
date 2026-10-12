@@ -34,6 +34,9 @@ A computed value is unchanged: it is not the column, so it still comes back as t
 it. That covers `Sum`, `Avg`, `Count`, arithmetic, `Coalesce`/`Greatest`/`Least`/`NullIf`, and the
 `F("col__@date")` transform. So does a `Max`/`Min` or window value function over a `CTE(...)` or
 `Joined(...)` handle, which stays untyped exactly as the handle does when projected on its own.
+(#1121, in the same train, types a computed NUMBER by what it means: `Sum`, `Avg`, arithmetic, and a
+`Coalesce`/`Greatest`/`Least`/`NullIf` or window value over one read back as a `Float64` or a
+`Decimal` on both engines. `Count`, a transform, and a value over columns only are unchanged.)
 
 ### How to find the calls to migrate
 

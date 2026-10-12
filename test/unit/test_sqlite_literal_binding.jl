@@ -30,7 +30,7 @@ using PormG
 include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 using PormG.Models: Model, IDField, IntegerField, FloatField, DateField
 using PormG.QueryBuilder: inspect_query
-using PormG.Functions: Value, Coalesce, Greatest
+using PormG.Functions: Value, Coalesce, Greatest, Cast, Case, When
 import PormG.ConnectionPool: fetch, SQLiteConnectionPool
 
 const sqlite_bind_value = PormG.sqlite_bind_value
@@ -142,6 +142,42 @@ end
   @test occursin("\$1::date", insp[:sql_text])
   p = slb_params(SLB_PG, q -> (q.filter("points" => Int16(5)); q.values("resultid")))
   @test only(p) isa Int16
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1175: a ZonedDateTime literal is typed on PostgreSQL
+# `Value(zdt)` renders `$1::timestamptz` with the `ZonedDateTime` bound as is, a cast over it renders
+# `($1::timestamptz)::date`, a function operand carries the cast too, and a `Case` `output_field`
+# reaches its type through the instant (`$3::timestamptz::date`). SQLite still renders `?` and binds
+# the UTC text.
+# Why: untyped, PostgreSQL resolved the offset text from context. `($1)::date` read the wall-clock date
+# of the offset written (2021-01-01 for 00:30 at UTC+2) instead of the instant's (2020-12-31), and a
+# projected literal read back as text. `Date`, `DateTime` and `Time` literals were already typed.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1175: a ZonedDateTime literal binds as timestamptz on PostgreSQL" begin
+  zdt = ZonedDateTime(DateTime(2021, 1, 1, 0, 30), FixedTimeZone("UTC+2", 7200))
+  render(model, build) = (q = model.objects; build(q); inspect_query(q))
+
+  insp = render(SLB_PG, q -> q.values("z" => Value(zdt)))
+  @test occursin("\$1::timestamptz as \"z\"", insp[:sql_text])
+  @test only(insp[:parameters]) === zdt
+
+  insp = render(SLB_PG, q -> q.values("c" => Cast(Value(zdt), "date")))
+  @test occursin("(\$1::timestamptz)::date as \"c\"", insp[:sql_text])
+
+  insp = render(SLB_PG, q -> q.values("g" => Greatest("race_date", zdt)))
+  @test occursin("GREATEST(\"Tb\".\"race_date\", \$1::timestamptz)", insp[:sql_text])
+
+  # A declared type is reached through the instant: `$3::timestamptz::date`, not `$3::date`, which
+  # read the offset text's wall-clock date like the untyped bind did.
+  insp = render(SLB_PG, q -> q.values("k" => Case(When("points" => 1, then = Value(Date(2020, 1, 1))),
+                                                  default = zdt, output_field = "date")))
+  @test occursin("ELSE \$3::timestamptz::date END", insp[:sql_text])
+
+  # SQLite: unchanged, the instant's UTC text with no cast.
+  insp = render(SLB_SL, q -> q.values("c" => Cast(Value(zdt), "date")))
+  @test occursin("date(?) as \"c\"", insp[:sql_text])
+  @test insp[:parameters] == Any["2020-12-31T22:30:00.000+00:00"]
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

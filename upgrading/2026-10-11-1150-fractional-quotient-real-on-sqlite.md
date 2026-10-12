@@ -33,6 +33,11 @@ On the F1 fixture (a constructor result of `9.00` points; a grid of `15`):
 | `Coalesce("grid", 0.5) / 2` | `7` | `7.5` | `7.5` |
 | `Lag("grid"; default = 1.5, …) / 2` | `7` | `7.5` | `7.5` |
 
+The quotient also reads back as the same Julia type on both engines (#1121, same train): a `Decimal`
+over a decimal (`F("points") / 2` on `Constructor_results`, `Cast("grid", "numeric") / 2`) and a
+`Float64` over a value that mixes integers and floats (`Coalesce("grid", 0.5) / 2`, the `Lag`
+above). Before #1121, SQLite read the decimal quotient as a `Float64`.
+
 `NullIf(a, b)` is `a` or NULL, so it has `a`'s type. PostgreSQL resolves it with `b` for the `=` it is
 defined by, so `NULLIF(<integer>, 0.5)` was a `numeric`, read as a `Decimal`, and kept the half once
 divided. PormG now renders `(NULLIF(x, $1::double precision))::integer` there: `NullIf("grid", 0.5) / 2`

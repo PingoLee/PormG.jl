@@ -292,7 +292,7 @@ query.values("surname", "last_race" => Subquery(last_race))
 df = query |> DataFrame   # df.last_race holds Dates.Date values on PostgreSQL and SQLite
 ```
 
-A function over the subquery follows its usual rule with that type: `Coalesce(Subquery(last_race), Date(1900, 1, 1))` is a `Date` too, and `NullIf` takes the subquery's type. A computed inner column (`Avg`, `Sum`, `Count`, arithmetic) is not a model column's value, so it comes back as the engine delivers it. Wrap it in `Cast(Subquery(…), "date")` (or the type it holds) to name the type yourself.
+A function over the subquery follows its usual rule with that type: `Coalesce(Subquery(last_race), Date(1900, 1, 1))` is a `Date` too, and `NullIf` takes the subquery's type. A computed inner number over a float or a decimal (`Avg`, `Sum`, `Round`, arithmetic), and an `Avg` over integers, reads back as the type it means, the same on both engines: a `Float64` or a `Decimal` (see [The type of a computed number](index.md#The-type-of-a-computed-number), #1121). Any other computed inner column comes back as the engine delivers it; wrap it in `Cast(Subquery(…), "date")` (or the type it holds) to name the type yourself.
 
 ### A subquery as a filter value
 
@@ -730,9 +730,10 @@ projected in the body raises `QueryBuildError` too; wrap it in `Cast` to name it
 This type is for **binding** a value compared with the column. **Reading** the column back is a
 separate question, and the answer is the body's own. A column the body selects, such as
 `"date"`, `Max("date")` or `Cast(x, "date")`, reads back with the same Julia type the body would give
-it (a `Date` on both engines). A column the body computes, such as `Avg("points")` or `F` arithmetic,
-comes back as the engine delivers it, even though the table above binds it as its operand's
-field (#824). This is the same rule `values(...)` follows outside a CTE.
+it (a `Date` on both engines). A number the body computes, such as `Avg("points")` or `F` arithmetic,
+reads back as the type it means on both engines, a `Float64` or a `Decimal` (#1121), even though the
+table above binds it as its operand's field (#824). This is the same rule `values(...)` follows
+outside a CTE (see [The type of a computed number](index.md#The-type-of-a-computed-number)).
 
 The type you declare can be a text, integer, bigint, float, numeric, boolean or date type, and on
 PostgreSQL also `uuid`, `inet` or `cidr`. SQLite renders those three casts as text, so a CTE column declared as one is refused there. That

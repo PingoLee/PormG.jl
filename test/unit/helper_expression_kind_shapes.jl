@@ -128,6 +128,19 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Floor int",               :Result,              m -> _EKM_FN.Floor("grid")),
   ("Ceil int",                :Result,              m -> _EKM_FN.Ceil("grid")),
   ("Floor year part",         :Race,                m -> _EKM_FN.Floor(_EKM_FN.Extract("date", "year"))),
+  # #1121: the rest of the computed-number family — over a float, a decimal and an integer — whose
+  # type is Django's `output_field`: its operand's for `Floor`/`Ceil`, a float or a decimal for the
+  # `NumericOutputFieldMixin` functions (`Avg`, `Sqrt`, `Exp`, `Ln`, `Power`)
+  ("Avg int",                 :Result,              m -> _EKM_FN.Avg("grid")),
+  ("Floor float",             :Result,              m -> _EKM_FN.Floor("points")),
+  ("Ceil float",              :Result,              m -> _EKM_FN.Ceil("points")),
+  ("Floor decimal",           :Constructor_results, m -> _EKM_FN.Floor("points")),
+  ("Sqrt float",              :Result,              m -> _EKM_FN.Sqrt("points")),
+  ("Sqrt int",                :Result,              m -> _EKM_FN.Sqrt("grid")),
+  ("Exp int",                 :Result,              m -> _EKM_FN.Exp("grid")),
+  ("Ln float",                :Result,              m -> _EKM_FN.Ln("points")),
+  ("Power float",             :Result,              m -> _EKM_FN.Power("points", 2)),
+  ("Power int",               :Result,              m -> _EKM_FN.Power("grid", 2)),
   # #1147 step 2: each refusal against the engine that departs from its meaning, and `Sum` of a
   # `bigint`, which PostgreSQL widens to `numeric`
   ("Cast bool to text",       :New_join_position,   m -> _EKM_FN.Cast("boolean_field", "text")),

@@ -972,8 +972,9 @@ end
 # resolves its own read coercion the same way — off `expression.output_field`, never off the
 # alias's spelling. There is no `connection isa PormGSQLite` test here: the backend dimension
 # belongs to the table, so a third backend becomes table entries rather than a branch. On
-# PostgreSQL every `value_parser` but INTERVAL's answers `nothing` (#581 pins that one type across
-# drivers), so a query projecting no INTERVAL returns `nothing` after one dispatch per projection.
+# PostgreSQL only INTERVAL (#581 pins that one type across drivers), an ARRAY (#28) and a computed
+# number that means a float (#1121) have a parser, so a query projecting none of those returns
+# `nothing` after one dispatch per projection.
 function _projection_parsers(built::SQLObjectHandler, connection)::Union{Nothing,Dict{Symbol,Function}}
   parsers = nothing
   for (name, kind) in built.object.projection_kinds

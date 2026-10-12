@@ -818,8 +818,10 @@ end
 # #28/#903: the kind of column a pattern lookup must read as TEXT, or `nothing` for one it reads as it
 # is. Keyed on the formatter because that is the one piece of evidence a column and a projection alias
 # share: a field carries it, and an alias over one resolves it (`_having_alias_formatter`) — the alias
-# has no field to ask. `kind` is the operand's `_expression_kind`, read only for a number: an integer,
-# a float and a decimal column share `format_number_sql`, and only the kind tells them apart (#1168).
+# has no field to ask. `kind` is the operand's `_expression_kind`, the evidence a formatter does not
+# carry: an integer, a float and a decimal share `format_number_sql` (#1168), a `TimeField` shares
+# `format_text_sql` with a `CharField`, and a `Case`, a `Value` or arithmetic over a date part has no
+# formatter at all (#1183). The formatter decides first where it names a type; the kind decides the rest.
 function _pattern_text_kind(formatter; kind = nothing)::Union{Symbol,Nothing}
   # #28: an array has no one text to match — refused in `_pattern_operand`, never read as text.
   formatter isa Models.ArrayFormatter && return :array
@@ -833,8 +835,7 @@ function _pattern_text_kind(formatter; kind = nothing)::Union{Symbol,Nothing}
   formatter === Models.format_uuid_sql && return :uuid
   # #1086: a date reads as its `YYYY-MM-DD` text — what SQLite stores. PostgreSQL has no `LIKE` for
   # `date`, so `"date__@startswith" => "2009"` was a server error there; Django's backend reads the
-  # same column `::text` (`lookup_cast`). A timestamp is not here on purpose: its text differs per
-  # engine (PostgreSQL prints the session's zone offset), so a fragment would match different rows.
+  # same column `::text` (`lookup_cast`).
   formatter === Models.format_date_sql && return :date
   # #1086 (review): a date part (`@hour`, `@year`, an `Extract`) is an integer, whose text is the same
   # digits on both engines.
@@ -848,15 +849,42 @@ function _pattern_text_kind(formatter; kind = nothing)::Union{Symbol,Nothing}
   if formatter === Models.format_number_sql
     return kind isa Union{CInt16,CInt32,CInt64} ? :integer : :inexact_number
   end
-  return nothing
+  # #1183: the kinds whose text differs per engine, each refused on every engine in `_pattern_operand`.
+  # A timestamp prints in the session's zone on PostgreSQL and is PormG's UTC text on SQLite
+  # (`2009-03-29T06:00:00.000+00:00`); an interval follows `IntervalStyle` on PostgreSQL and is
+  # `26:00:00` on SQLite; a boolean is `true` on PostgreSQL and `1` on SQLite; a binary column holds
+  # bytes, not text, and PostgreSQL has no `ILIKE` or `~` for `bytea`.
+  formatter === Models.format_timezone_sql && return :timestamp
+  formatter === Models.format_duration_sql && return :interval
+  formatter === Models.format_bool_sql && return :boolean
+  formatter === Models.format_binary_sql && return :binary
+  return _pattern_kind_read(kind)
 end
 
-# #1168: the kind of a number operand a pattern lookup reads — a column's field, an alias's expression,
-# or the walk over the operand. A CTE column is asked of the CTE's own record (`_cte_column_kind`, the
-# walk over the body's expression), never of its memo field: that is a surrogate, which
-# `_set_field_from_sql_function` types `IntegerField` for every `Count`/`Sum` and as the operand for
-# an `Avg`, so a CTE's `Avg("grid")` — a numeric — would read as an integer's digits on PostgreSQL.
-function _pattern_number_kind(v::SQLTypeOper, operand_field, alias, instruc::SQLInstruction)
+# #1183: what a pattern lookup does with an operand its formatter does not type. A time reads as text:
+# PostgreSQL prints `HH:MM:SS[.ffffff]` with the fraction's trailing zeros dropped, under every
+# `DateStyle`, which is the text Julia's `string(::Time)` writes on SQLite. Everything else is one of
+# the reads or refusals above, named by its kind; a kind not named here is compared as written.
+_pattern_kind_read(::Any) = nothing
+_pattern_kind_read(::Union{CInt16,CInt32,CInt64}) = :integer
+_pattern_kind_read(::Union{CFloat64,CDecimal}) = :inexact_number
+_pattern_kind_read(::CDate) = :date
+_pattern_kind_read(::CTime) = :time
+_pattern_kind_read(::CDateTime) = :timestamp
+_pattern_kind_read(::CInterval) = :interval
+_pattern_kind_read(::CBool) = :boolean
+_pattern_kind_read(::CBytes) = :binary
+
+# The kinds `_pattern_operand` refuses, so `_get_filter_query` knows when to derive the path label.
+const _PATTERN_REFUSED_KINDS = (:array, :tsvector, :inexact_number, :timestamp, :interval, :boolean, :binary)
+
+# #1168/#1183: the kind of the operand a pattern lookup reads — a column's field, an alias's
+# expression, or the walk over the operand. A CTE column is asked of the CTE's own record
+# (`_cte_column_kind`, the walk over the body's expression), never of its memo field: that is a
+# surrogate, which `_set_field_from_sql_function` types `IntegerField` for every `Count`/`Sum` and as
+# the operand for an `Avg`, so a CTE's `Avg("grid")` — a numeric — would read as an integer's digits
+# on PostgreSQL.
+function _pattern_operand_kind(v::SQLTypeOper, operand_field, alias, instruc::SQLInstruction)
   v.column isa CTEReference && return _expression_kind(v.column, instruc)
   key = v.column isa SQLField ? memo_key(v.column) : nothing
   if key !== nothing && key[1] === :cte
@@ -914,6 +942,33 @@ function _pattern_operand(column::AbstractString, formatter, operator::AbstractS
     "type), whose text differs per database engine. Compare it as a number (`@gte`, `@range`), or " *
     "match the engine's own text explicitly: project values(\"t\" => Cast(<the column or expression>, " *
     "\"text\")) and filter(\"t__@startswith\" => …) (#1168)."))
+  # #1183: the same refusal for the kinds whose text differs per engine. Each names the meaning and the
+  # explicit spelling — compare the value itself, or a part of it — never an engine pair.
+  if kind in (:timestamp, :interval, :boolean, :binary)
+    what, instead = kind === :timestamp ? (
+      "a timestamp, whose text differs per database engine (its time zone, separator and fraction)",
+      "Match a part of it through a transform (`__@date__@startswith`, `__@year`, `__@hour`), or compare " *
+      "it as a timestamp (`@gte`, `@range`)") :
+      kind === :interval ? (
+      "a duration, whose text differs per database engine",
+      "Compare it as a duration (`@gte`, `@range`) with a `Dates.Period` value") :
+      kind === :boolean ? (
+      "a boolean, whose text differs per database engine",
+      "Compare it as a boolean (`=> true`, `=> false`)") : (
+      "a BinaryField, which holds bytes, not text",
+      "Compare it whole (`=`, `@in`)")
+    # A boolean's text cast is itself refused where the engine computes `1`/`0` (#1028), so its explicit
+    # spelling is the text written out; bytes have no text to name.
+    cast = kind === :binary ? "" :
+      kind === :boolean ?
+      ", or write the text you mean: project values(\"t\" => Case([When(<the column> => true, " *
+      "then = Value(\"true\"))], default = \"false\")) and filter(\"t__@startswith\" => …)" :
+      ", or match the engine's own text explicitly: project values(\"t\" => Cast(<the column or " *
+      "expression>, \"text\")) and filter(\"t__@startswith\" => …)"
+    throw(FilterError(
+      "Error in filter '$(label)': a pattern lookup (`@contains`, `@startswith`, `@regex`, …) matches " *
+      "text, and this is $(what). $(instead)$(cast) (#1183)."))
+  end
   return Dialect._pattern_text_operand(instruc.connection, Val(kind), column)
 end
 
@@ -1006,15 +1061,15 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
                       alias !== nothing ? _having_alias_formatter(memo_key(:base, alias), instruc) :
                       v.column isa SQLTypeField && v.column.field isa SQLTypeFunction ? v.column.field.formatter :
                       nothing
-  # #1168: a number's kind, which its formatter does not carry — read only where it decides something.
-  operand_kind = operand_formatter === Models.format_number_sql && v.operator in PATTERN_LOOKUP_OPERATORS ?
-    _pattern_number_kind(v, operand_field, alias, instruc) : nothing
+  # #1168/#1183: the operand's kind, which its formatter may not carry (a number's width, a time, an
+  # alias with no formatter) — read only for a pattern lookup, the one place it decides something.
+  pattern = v.operator in PATTERN_LOOKUP_OPERATORS
+  operand_kind = pattern ? _pattern_operand_kind(v, operand_field, alias, instruc) : nothing
   # The label is derived only for the kinds that refuse here and name a path: an array, a
-  # SearchVectorField (#1021) and a number that is not an integer (#1168). `_filter_path_label` has no
-  # method for every column kind (an `F` transform), so it is not asked for the others.
-  refuses = operand_formatter isa Models.ArrayFormatter || operand_formatter === Models.format_tsvector_sql ||
-            (v.operator in PATTERN_LOOKUP_OPERATORS &&
-             _pattern_text_kind(operand_formatter; kind = operand_kind) === :inexact_number)
+  # SearchVectorField (#1021), a number that is not an integer (#1168), a timestamp, a duration, a
+  # boolean and a binary column (#1183). `_filter_path_label` has no method for every column kind (an
+  # `F` transform), so it is not asked for the others.
+  refuses = pattern && _pattern_text_kind(operand_formatter; kind = operand_kind) in _PATTERN_REFUSED_KINDS
   column = _pattern_operand(column, operand_formatter, v.operator, instruc;
                             label = refuses ? _pattern_refusal_label(v, column) : column,
                             operand_kind = operand_kind)

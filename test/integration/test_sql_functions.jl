@@ -2538,13 +2538,15 @@ end
         end
     end
 
-    # A zoned literal at an offset other than UTC is left out until #1175: PostgreSQL binds a
-    # `ZonedDateTime` untyped, so `::date` reads the wall-clock date of the offset written.
+    # The UTC+2 literal is 2020-12-31 22:30 UTC, so its date is the instant's, not the 2021-01-01 the
+    # offset was written in. PostgreSQL read the wall-clock date until #1175 typed it `timestamptz`.
     @testset "timestamps near midnight, cast to a date" begin
         for (v, want) in (DateTime(2020, 12, 31, 23, 30) => Date(2020, 12, 31),
                           DateTime(2021, 1, 3, 23, 59, 59) => Date(2021, 1, 3),   # Sunday of 2020's week 53
                           DateTime(2021, 1, 4, 0, 0, 1) => Date(2021, 1, 4),     # Monday of 2021's week 1
-                          TimeZones.ZonedDateTime(DateTime(2020, 12, 31, 23, 30), TimeZones.tz"UTC") => Date(2020, 12, 31))
+                          TimeZones.ZonedDateTime(DateTime(2020, 12, 31, 23, 30), TimeZones.tz"UTC") => Date(2020, 12, 31),
+                          TimeZones.ZonedDateTime(DateTime(2021, 1, 1, 0, 30),
+                                                  TimeZones.FixedTimeZone("UTC+2", 7200)) => Date(2020, 12, 31))
             r = one_row("c" => Cast(Value(v), "date"), parts(Cast(Value(v), "date"))...)
             @test asdate(r[:c]) == want
             @test got(r) == iso(want)
@@ -2561,4 +2563,31 @@ end
         @test all(r -> asdate(r[:c]) == utc_date(r[:start_at]), rows)
         @test all(r -> got(r) == iso(utc_date(r[:start_at])), rows)
     end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A projected ZonedDateTime literal reads back as the same instant on both engines
+# `values("z" => Value(zdt))` renders `$1::timestamptz as "z"` on PostgreSQL and `? as "z"` with the
+# UTC text on SQLite, and both read a `ZonedDateTime` equal to `zdt`. Before #1175 PostgreSQL bound it
+# untyped, so the column came back as text. A `Case` whose `output_field` is `date` takes the date of
+# the instant from a zoned `default` (`$3::timestamptz::date`), as `Cast` does.
+# Why: a literal reads back as the type that went in, as a `Date`/`Time` literal does (#721), and the
+# value a caller gets must not depend on the engine.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a projected ZonedDateTime literal reads back as its instant (#1175)" begin
+    for zdt in (TimeZones.ZonedDateTime(DateTime(2021, 1, 1, 0, 30), TimeZones.FixedTimeZone("UTC+2", 7200)),
+                TimeZones.ZonedDateTime(DateTime(2021, 3, 28, 15, 0, 0, 250), TimeZones.tz"UTC"))
+        q = M.Race.objects
+        q.filter("raceid" => 1)
+        q.values("z" => Value(zdt))
+        z = only(q.list())[:z]
+        @test z isa TimeZones.ZonedDateTime
+        @test z == zdt
+    end
+    # A declared type is reached through the instant: `$3::timestamptz::date` on PostgreSQL.
+    zdt = TimeZones.ZonedDateTime(DateTime(2021, 1, 1, 0, 30), TimeZones.FixedTimeZone("UTC+2", 7200))
+    q = M.Race.objects
+    q.filter("raceid" => 1)
+    q.values("k" => Case(When("raceid" => 0, then = Value(Date(2000, 1, 1))), default = zdt, output_field = "date"))
+    @test Date(string(only(q.list())[:k])[1:10]) == Date(2020, 12, 31)
 end

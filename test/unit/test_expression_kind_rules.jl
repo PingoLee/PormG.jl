@@ -88,6 +88,16 @@ end
   end
   @test !isempty(overrides)
   @test setdiff(overrides, built) == Set{String}()
+  # #1121: the same for a meaning override (`_output_kind(::Val{:ROUND}, …)`), which is asked only of a
+  # function whose rule computes a number (`_number_kind`): one stated anywhere else is never reached.
+  meanings = Set{String}()
+  for m in methods(_EKR_QB._output_kind)
+    arg = m.sig.parameters[2]
+    arg isa DataType && arg <: Val && !isempty(arg.parameters) && push!(meanings, String(arg.parameters[1]))
+  end
+  @test "ROUND" in meanings
+  @test setdiff(meanings, built) == Set{String}()
+  @test all(n -> _EKR_QB._result_rule(Val(Symbol(n))) in (:promoting, :numeric), meanings)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

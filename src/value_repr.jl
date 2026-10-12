@@ -310,20 +310,24 @@ end
 # `DateField`, a `TimeField` and a `DurationField` all read back as `String` while PostgreSQL
 # delivered `Date`, `Time` and a `Period`. The bodies live in `Dialect` beside the masks they invert.
 #
-# PostgreSQL needs none but one: the drivers deliver typed values, which is what the one-sided
+# PostgreSQL needs few: the drivers deliver typed values, which is what the one-sided
 # `p3 = (:sqlite,)` marks in `test/unit/helper_value_repr_cases.jl` measured (the last two, on the
-# `@date` transform, were cleared by #824). The exception is
-# INTERVAL (#581), where the value is typed but not the SAME type on every driver — Postgres.jl hands
-# back a bare `Period` for a one-component interval — so its cell normalizes the concrete type.
+# `@date` transform, were cleared by #824). The exceptions normalize a typed value: INTERVAL (#581),
+# where the value is typed but not the SAME type on every driver — Postgres.jl hands back a bare
+# `Period` for a one-component interval — an ARRAY (#28), and a computed number that means a float
+# while PostgreSQL computed a `numeric` (#1121).
 """
     value_parser(kind, backend) -> Union{Function, Nothing}
 
 The function that turns `backend`'s stored text for `kind` back into a Julia value, or `nothing`
 when the backend already delivers a typed value (or the kind is not one this table owns).
 
-Every parser is **fail-open**: handed a value it does not recognise it returns it unchanged, never a
-lossy approximation. So a wrong `kind` degrades to the raw value — exactly what SQLite returned
-before this table existed — and can never produce a wrong typed value.
+Every parser is **fail-open**: handed a value it does not recognise it returns it unchanged. So a
+wrong `kind` degrades to the raw value — exactly what SQLite returned before this table existed. The
+column parsers never approximate. The two computed-number parsers (#1121) convert on purpose, to the
+type the call means: a `Decimal` to a `Float64`, a double to a `Decimal` of 15 significant digits. No
+column records their kinds (a width-less `CDecimal`, a `CFloat64`), so they never run on a stored
+value.
 """
 value_parser(::CanonicalType, ::PormGPostgres) = nothing
 # #581: `Dates.CompoundPeriod` on every engine and driver — a type pin, not a re-decomposition.
@@ -341,13 +345,28 @@ value_parser(::CInterval, ::PormGSQLite) = Dialect._parse_sqlite_interval
 # `_function_projection_kind`.
 value_parser(::CBool,     ::PormGSQLite) = Dialect._parse_sqlite_bool
 # #648: exact only for a column narrow enough that SQLite stored every accepted value exactly — the
-# width `Dialect.field_to_column` refuses to exceed. A wider or width-less kind (a column created
-# outside PormG, or before that refusal) gets NO parser, so its cells arrive raw, as they always have:
-# declining is the fail-open answer, where parsing would dress a rounded double up as an exact value.
+# width `Dialect.field_to_column` refuses to exceed. A wider kind (a column created outside PormG, or
+# before that refusal) gets NO parser, so its cells arrive raw, as they always have: declining is the
+# fail-open answer, where parsing would dress a rounded double up as an exact value.
+#
+# #1121: a WIDTH-LESS decimal is never a column (`max_digits` is an `Int`): it is a computed number
+# that means a decimal — `Sum`/`Avg`/`Abs`/`Round` over a `DecimalField`, decimal arithmetic — which
+# SQLite computes as a REAL or an INTEGER. It reads as a `Decimal`, as PostgreSQL's `numeric` does,
+# through 15 significant digits (`Dialect._parse_sqlite_computed_decimal`, Django's rule). It claims
+# no exactness: the double is what SQLite computed.
 function value_parser(k::CDecimal, ::PormGSQLite)
+  k.precision === nothing && k.scale === nothing && return Dialect._parse_sqlite_computed_decimal
   (k.precision === nothing || k.scale === nothing) && return nothing
   k.precision > Dialect.SQLITE_EXACT_DECIMAL_DIGITS && return nothing
   p, s = k.precision, k.scale
   return v -> Dialect._parse_sqlite_decimal(v, p, s)
 end
+# #1121: a computed number that means a float — `Avg`/`Sqrt`/`Mod` over an integer, any of the
+# `numeric` functions over a float, float arithmetic — reads as a `Float64`, as Django's
+# `convert_value` makes it one by `output_field`. PostgreSQL computes several of them as `numeric`
+# (`ROUND(x::numeric, d)`, `avg(integer)`), which the driver hands back as a `Decimal`; SQLite can
+# hand back an INTEGER where a row's value is whole. No model column records it (`field_canonical_kind`
+# names no float), so this never runs on a stored float.
+value_parser(::CFloat64, ::PormGPostgres) = Dialect._parse_computed_float
+value_parser(::CFloat64, ::PormGSQLite) = Dialect._parse_computed_float
 value_parser(::CanonicalType, ::PormGBackend) = nothing

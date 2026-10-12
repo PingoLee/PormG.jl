@@ -315,12 +315,13 @@ Notes:
   same change; the rebuild carries it. An untouched existing column is left alone.
 
   Projected as the column itself, a `DecimalField` of at most fifteen digits reads back as a
-  `Decimals.Decimal` on both engines. On SQLite everything else keeps the `Int64`/`Float64` SQLite
-  holds or computed: an expression over the column (`Sum`, `F("price") * 2`, a SQL function, a
-  `Joined`/`CTE` reference, a subquery), a row returned by `create()` or `update_or_create`, a value
+  `Decimals.Decimal` on both engines. A number computed over it (`Sum("points")`,
+  `F("points") * 2`, `Round`) reads back as a `Decimal` on both engines too; on SQLite it is built
+  from the double SQLite computed, to fifteen significant digits (#1121). See
+  [The type of a computed number](read/index.md#The-type-of-a-computed-number). On SQLite a value
   that does not fit the declaration (the unrounded result of an `F`-arithmetic `update`, which
-  PostgreSQL rounds to the column's scale), and a field declared wider than fifteen digits. See
-  [Serializing rows to JSON](read/index.md#Serializing-rows-to-JSON).
+  PostgreSQL rounds to the column's scale), and a field declared wider than fifteen digits, keep the
+  `Int64`/`Float64` SQLite holds. See [Serializing rows to JSON](read/index.md#Serializing-rows-to-JSON).
 - **Primary-key allocation** (`allocate_primary_keys`) presents one API over both backends; PostgreSQL reserves ids via the column sequence, SQLite emulates the same reservation. See [Bulk Insert, Copy, and Update](write/bulk.md).
 - **Sequence resync.** After inserting rows with *explicit* primary keys, PostgreSQL's sequence can fall behind, so a later auto-id insert collides — a class of "duplicate key" surprise that doesn't exist on SQLite's `AUTOINCREMENT`. `bulk_insert`/`bulk_copy` resynchronize automatically (and `bulk_insert` retries a duplicate-key error once by resyncing first); row-level writers (`create`/`insert`, `update_or_create`, `get_or_create`) do not — call `resync_sequences(model)` explicitly after one of them writes an explicit primary key. See [Sequence synchronisation](schema_conventions.md#Sequence-synchronisation).
 

@@ -150,12 +150,15 @@ const _VRT_KINDS = [
   # three SQLite parsers arrive with the read-path commit.
   # ───────────────────────────────────────────────────────────────────────────
   @testset "value_parser answers per backend, and never lossily" begin
-    # PostgreSQL delivers typed values — asking for a parser there must yield none for every kind
-    # but INTERVAL, or the read path would re-parse a value the driver already typed.
+    # PostgreSQL delivers typed values — asking for a parser there must yield none for every COLUMN
+    # kind but INTERVAL, or the read path would re-parse a value the driver already typed. (#1121: a
+    # computed number that means a float has one, `CFloat64`, which no column records; it is pinned
+    # in `test_computed_number_read_kind.jl`.)
     for (kind, _, _) in _VRT_KINDS
       kind isa PormG.CInterval && continue
       @test PormG.value_parser(kind, _VRT_PG) === nothing
     end
+    @test !any(k -> k isa PormG.CFloat64, first.(_VRT_KINDS))   # the loop above is about columns
 
     # #581: INTERVAL is the one PostgreSQL cell, because it pins a TYPE the drivers disagree on.
     # Postgres.jl returns a bare `Period` for a one-component interval (and `Millisecond(0)` for a
@@ -197,13 +200,15 @@ const _VRT_KINDS = [
     @test parse_ts(missing) === missing
     @test parse_ts("not a timestamp") == "not a timestamp"
 
-    # #648: a SQLite decimal gets a parser ONLY where SQLite stored every accepted value exactly —
-    # up to the 15 digits `field_to_column` enforces. Wider, or a kind with no width (a spelling PormG
-    # did not write), gets none, so its cells stay raw rather than being dressed up as exact.
+    # #648: a SQLite decimal COLUMN gets the exact parser ONLY where SQLite stored every accepted value
+    # exactly — up to the 15 digits `field_to_column` enforces. Wider gets none, so its cells stay raw
+    # rather than being dressed up as exact. #1121: a kind with no width is never a column (`max_digits`
+    # is an `Int`) but a computed decimal, and it gets the 15-significant-digit parser, which claims no
+    # exactness — never the exact one.
     @test PormG.value_parser(PormG.CDecimal(15, 4), _VRT_SL) !== nothing
     @test PormG.value_parser(PormG.CDecimal(10, 2), _VRT_SL) !== nothing
     @test PormG.value_parser(PormG.CDecimal(16, 2), _VRT_SL) === nothing
-    @test PormG.value_parser(PormG.CDecimal(nothing, nothing), _VRT_SL) === nothing
+    @test PormG.value_parser(PormG.CDecimal(nothing, nothing), _VRT_SL) === PormG.Dialect._parse_sqlite_computed_decimal
     @test PormG.value_parser(PormG.CDecimal(15, 4), _VRT_PG) === nothing
 
     # #953: a boolean `MAX`/`MIN` reads SQLite's stored 0/1 back as a `Bool`; PostgreSQL's driver

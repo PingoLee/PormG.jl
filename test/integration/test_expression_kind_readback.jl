@@ -65,16 +65,6 @@ end
 # An interval reads back `==` on both engines, in different units (PostgreSQL's driver delivers
 # milliseconds, the SQLite parser nanoseconds), so only its printed text differs.
 const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
-  ("Abs decimal | alone", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
-  ("Abs decimal | alone", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
-  ("Avg decimal | alone", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
-  ("Avg decimal | alone", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
-  ("Avg decimal | cte", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
-  ("Avg decimal | cte", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
-  ("Avg float | alone", :postgres) => (type = "Float64", value = "10.0", read = nothing),
-  ("Avg float | alone", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
-  ("Avg float | cte", :postgres) => (type = "Float64", value = "10.0", read = nothing),
-  ("Avg float | cte", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
   ("Avg interval | alone", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
   ("Avg interval | alone", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
   ("Avg interval | cte", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
@@ -91,90 +81,42 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date - date | alone", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
   ("F date - date | subquery", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
   ("F date - date | subquery", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
-  ("F decimal * 2 | alone", :postgres) => (type = "Decimal", value = "11", read = nothing),
-  ("F decimal * 2 | alone", :sqlite) => (type = "Float64", value = "11.0", read = nothing),
-  ("F decimal * 2 | cte", :postgres) => (type = "Decimal", value = "11", read = nothing),
-  ("F decimal * 2 | cte", :sqlite) => (type = "Float64", value = "11.0", read = nothing),
-  ("Mod int | alone", :postgres) => (type = "Decimal", value = "1", read = nothing),
-  ("Mod int | alone", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
-  ("Round decimal | alone", :postgres) => (type = "Decimal", value = "6", read = nothing),
-  ("Round decimal | alone", :sqlite) => (type = "Float64", value = "6.0", read = nothing),
-  ("Round float | alone", :postgres) => (type = "Decimal", value = "10", read = nothing),
-  ("Round float | alone", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
-  ("Sum decimal | alone", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
-  ("Sum decimal | alone", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
-  ("Sum decimal | cte", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
-  ("Sum decimal | cte", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
-  ("Sum float | cte", :postgres) => (type = "Float64", value = "10.0", read = nothing),
-  ("Sum float | cte", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
+  ("F decimal * 2 | cte", :postgres) => (type = "Decimal", value = "11", read = "CDecimal(nothing, nothing)"),
+  ("F decimal * 2 | cte", :sqlite) => (type = "Decimal", value = "11", read = "CDecimal(nothing, nothing)"),
+  ("Sum decimal | cte", :postgres) => (type = "Decimal", value = "5.5", read = "CDecimal(nothing, nothing)"),
+  ("Sum decimal | cte", :sqlite) => (type = "Decimal", value = "5.5", read = "CDecimal(nothing, nothing)"),
+  ("Sum float | cte", :postgres) => (type = "Float64", value = "10.0", read = "CFloat64()"),
+  ("Sum float | cte", :sqlite) => (type = "Float64", value = "10.0", read = "CFloat64()"),
   ("Sum interval | alone", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
   ("Sum interval | alone", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
   ("Sum interval | cte", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
   ("Sum interval | cte", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
   ("Sum interval | subquery", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
   ("Sum interval | subquery", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
-  # #1124: the same shapes inside a `Subquery`, now classified by their projection. The read
-  # kind stays unrecorded (`subquery_kinds` carries only a projection with a parser), so each
-  # driver's own type comes through, as in the `alone` cells.
-  ("Abs decimal | subquery", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
-  ("Abs decimal | subquery", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
-  ("Avg decimal | subquery", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
-  ("Avg decimal | subquery", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
-  ("Avg float | subquery", :postgres) => (type = "Float64", value = "10.0", read = nothing),
-  ("Avg float | subquery", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
-  ("F decimal * 2 | subquery", :postgres) => (type = "Decimal", value = "11", read = nothing),
-  ("F decimal * 2 | subquery", :sqlite) => (type = "Float64", value = "11.0", read = nothing),
-  ("Mod int | subquery", :postgres) => (type = "Decimal", value = "1", read = nothing),
-  ("Mod int | subquery", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
-  ("Round decimal | subquery", :postgres) => (type = "Decimal", value = "6", read = nothing),
-  ("Round decimal | subquery", :sqlite) => (type = "Float64", value = "6.0", read = nothing),
-  ("Round float | subquery", :postgres) => (type = "Decimal", value = "10", read = nothing),
-  ("Round float | subquery", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
-  ("Subquery Avg float | alone", :postgres) => (type = "Float64", value = "10.0", read = nothing),
-  ("Subquery Avg float | alone", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
-  ("Subquery Avg float | subquery", :postgres) => (type = "Float64", value = "10.0", read = nothing),
-  ("Subquery Avg float | subquery", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
-  ("Sum decimal | subquery", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
-  ("Sum decimal | subquery", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
   # #1150: a decimal or mixed quotient is its fraction on both engines (SQLite divides it as REAL);
-  # result 1's grid is `1`, constructor result 3835 has `5.5` points.
-  ("Cast int numeric / 2 | alone", :postgres) => (type = "Decimal", value = "0.50", read = nothing),
-  ("Cast int numeric / 2 | alone", :sqlite) => (type = "Float64", value = "0.5", read = nothing),
-  ("Cast int numeric / 2 | cte", :postgres) => (type = "Decimal", value = "0.50", read = nothing),
-  ("Cast int numeric / 2 | cte", :sqlite) => (type = "Float64", value = "0.5", read = nothing),
-  ("Cast int numeric / 2 | subquery", :postgres) => (type = "Decimal", value = "0.50", read = nothing),
-  ("Cast int numeric / 2 | subquery", :sqlite) => (type = "Float64", value = "0.5", read = nothing),
-  ("F decimal / 2 | alone", :postgres) => (type = "Decimal", value = "2.75", read = nothing),
-  ("F decimal / 2 | alone", :sqlite) => (type = "Float64", value = "2.75", read = nothing),
-  ("F decimal / 2 | cte", :postgres) => (type = "Decimal", value = "2.75", read = nothing),
-  ("F decimal / 2 | cte", :sqlite) => (type = "Float64", value = "2.75", read = nothing),
-  ("F decimal / 2 | subquery", :postgres) => (type = "Decimal", value = "2.75", read = nothing),
-  ("F decimal / 2 | subquery", :sqlite) => (type = "Float64", value = "2.75", read = nothing),
-  ("Lag int default float / 2 | cte", :postgres) => (type = "Float64", value = "0.75", read = nothing),
-  ("Lag int default float / 2 | cte", :sqlite) => (type = "Float64", value = "0.75", read = nothing),
+  # result 1's grid is `1`, constructor result 3835 has `5.5` points. Under a CTE the column is still
+  # flagged — the CTE model types it a float or an integer field — and #1121 reads it as what it means.
+  ("Cast int numeric / 2 | cte", :postgres) => (type = "Decimal", value = "0.50", read = "CDecimal(nothing, nothing)"),
+  ("Cast int numeric / 2 | cte", :sqlite) => (type = "Decimal", value = "0.5", read = "CDecimal(nothing, nothing)"),
+  ("F decimal / 2 | cte", :postgres) => (type = "Decimal", value = "2.75", read = "CDecimal(nothing, nothing)"),
+  ("F decimal / 2 | cte", :sqlite) => (type = "Decimal", value = "2.75", read = "CDecimal(nothing, nothing)"),
+  ("Lag int default float / 2 | cte", :postgres) => (type = "Float64", value = "0.75", read = "CFloat64()"),
+  ("Lag int default float / 2 | cte", :sqlite) => (type = "Float64", value = "0.75", read = "CFloat64()"),
+  # #1121: `Avg` over an integer means a float, and reads as one on both engines. Its CTE column stays
+  # flagged because the CTE model types it the operand's integer field (the CTE field typing, #1034).
+  ("Avg int | cte", :postgres) => (type = "Float64", value = "1.0", read = "CFloat64()"),
+  ("Avg int | cte", :sqlite) => (type = "Float64", value = "1.0", read = "CFloat64()"),
 )
 
 # The cells whose value comes back as a DIFFERENT TYPE on the two engines, by the table above. Every
-# other disagreeing cell reads back the same type on both, with `==` values. Two families:
-# - a number PostgreSQL computes as `numeric` — an aggregate, `Abs`, `Round` or arithmetic over a
-#   `DecimalField` (the shapes #648 left untyped), and `Round`/`Mod` over a float or an integer — comes
-#   back as a `Decimal` there and a `Float64` on SQLite. The textless channel already names each one
-#   (`decimal` / `numeric`); no read kind records it;
-# - `F date - date` records `CInt32`, which no read parser undoes, so each driver's integer width
-#   comes through (`Int32` vs `Int64`).
+# other disagreeing cell reads back the same type on both, with `==` values. One family is left:
+# `F date - date` records `CInt32`, which no read parser undoes, so each driver's integer width comes
+# through (`Int32` vs `Int64`). The `numeric` family that was here — an aggregate, `Abs`, `Round` or
+# arithmetic over a `DecimalField`, `Round`/`Mod` over a float or an integer, `Avg` over an integer,
+# `Sqrt`/`Exp`/`Ln`/`Power` — reads back as the type it means on both engines since #1121, and the
+# testset below the table checks it cell by cell.
 const _EKR_TYPE_DIVERGENT = Set{String}([
-  "Abs decimal | alone", "Avg decimal | alone", "Avg decimal | cte", "F decimal * 2 | alone",
-  "F decimal * 2 | cte", "Mod int | alone", "Round decimal | alone", "Round float | alone",
-  "Sum decimal | alone", "Sum decimal | cte",
   "F date - date | alone", "F date - date | subquery",
-  # #1124: the same `numeric` family inside a `Subquery`. `Avg float` and `Subquery Avg float`
-  # read a `Float64` on both, and `Value bool | subquery` left the set with #1122.
-  "Abs decimal | subquery", "Avg decimal | subquery", "F decimal * 2 | subquery", "Mod int | subquery",
-  "Round decimal | subquery", "Round float | subquery", "Sum decimal | subquery",
-  # #1150: a decimal quotient, the same value on both engines since SQLite divides it as REAL; the
-  # type it reads back as is #1121's.
-  "Cast int numeric / 2 | alone", "Cast int numeric / 2 | cte", "Cast int numeric / 2 | subquery",
-  "F decimal / 2 | alone", "F decimal / 2 | cte", "F decimal / 2 | subquery",
 ])
 
 const _EKR_CELLS = sort!([id for (id, backend) in keys(_EKM_DISAGREEMENTS) if backend === _EKR_ENGINE])
@@ -258,6 +200,65 @@ end
       v = only(q.list())[:c]
       @test v isa Bool
       @test v === b
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A computed number reads back as the type it means, on every engine (#1121)
+# Each shape of the computed-number family, projected alone, under a CTE (where the CTE builds it) and
+# inside a `Subquery`, on its pinned row: the Julia type is Django's `output_field` for the call — a
+# `Decimal` over a `DecimalField`, a `Float64` for `Avg`/`Mod`/`Sqrt`/`Exp`/`Ln`/`Power` over an
+# integer and for every function over a float — and the same on both engines. Before #1121 PostgreSQL
+# read every `numeric`-computed cell as a `Decimal` and SQLite as a `Float64`. Most of these cells are
+# not flagged by the unit matrix (a float column's textless is the float), so this testset, not the
+# read-back table, is what keeps them; the value is compared to 12 significant digits, because the
+# two engines compute `Sqrt`/`Ln` in different arithmetic (`numeric` against a double).
+# ─────────────────────────────────────────────────────────────────────────────
+const _EKR_MEANING = [
+  # label                       type        value      builds under a CTE
+  ("Sum decimal",               "Decimal",  5.5,       true),
+  ("Avg decimal",               "Decimal",  5.5,       true),
+  ("Abs decimal",               "Decimal",  5.5,       false),
+  ("Round decimal",             "Decimal",  6.0,       false),
+  ("Floor decimal",             "Decimal",  5.0,       false),
+  ("F decimal * 2",             "Decimal",  11.0,      true),
+  ("F decimal / 2",             "Decimal",  2.75,      true),
+  ("Cast int numeric / 2",      "Decimal",  0.5,       true),
+  ("Sum float",                 "Float64",  10.0,      true),
+  ("Avg float",                 "Float64",  10.0,      true),
+  ("Avg int",                   "Float64",  1.0,       true),
+  ("Abs float",                 "Float64",  10.0,      false),
+  ("Round float",               "Float64",  10.0,      false),
+  ("Mod int",                   "Float64",  1.0,       false),
+  ("Floor float",               "Float64",  10.0,      false),
+  ("Ceil float",                "Float64",  10.0,      false),
+  ("Sqrt float",                "Float64",  sqrt(10),  false),
+  ("Sqrt int",                  "Float64",  1.0,       false),
+  ("Exp int",                   "Float64",  exp(1),    false),
+  ("Ln float",                  "Float64",  log(10),   false),
+  ("Power float",               "Float64",  100.0,     false),
+  ("Power int",                 "Float64",  1.0,       false),
+  ("F float * 2",               "Float64",  20.0,      true),
+  ("Case int float / 2",        "Float64",  0.75,      true),
+  ("Lag int default float / 2", "Float64",  0.75,      true),
+  ("Max of arithmetic",         "Float64",  20.0,      true),
+  ("Subquery Avg float",        "Float64",  10.0,      false),
+]
+@testset "A computed number reads back as the type it means (#1121)" begin
+  for (label, type, value, in_cte) in _EKR_MEANING
+    i = findfirst(s -> s[1] == label, EKM_SHAPES)
+    @test i !== nothing
+    i === nothing && continue
+    _, base, build = EKM_SHAPES[i]
+    for ctx in (in_cte ? (:alone, :cte, :subquery) : (:alone, :subquery))
+      @testset "$label | $ctx" begin
+        q, name = ekm_query(M, base, build, ctx; prep! = get(EKM_PREP, label, nothing))
+        q.filter(EKM_PK[base] => _EKR_ROW[base])
+        v = only(q.list())[name]
+        @test string(nameof(typeof(v))) == type
+        @test isapprox(parse(Float64, string(v)), value; rtol = 1e-12)
+      end
     end
   end
 end

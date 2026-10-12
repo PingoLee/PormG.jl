@@ -1264,11 +1264,13 @@ The only SQLite limitation is **explicit frame specifications** (`frame=` argume
 The value functions (`Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue`) return one of the
 column's own values, so they read back as the column does on both engines. For example,
 `Lag("date")` gives a `Date` and `Lag("duration")` a `Dates.CompoundPeriod`, where SQLite alone
-would hand back the stored text. A window whose value is computed, such as `Rank()` or
-`Lag(Sum(...))`, comes back as the engine delivers it. A value function over a `Joined(...)` handle
-reads back as the joined column, and over a `CTE(...)` column as the CTE body projected it: typed
-for a column the body selects, as the engine delivers it for one the body computes (#824). Over a
-`Subquery(...)` it reads back as the subquery's one column does (#887, #888).
+would hand back the stored text. A value function over a computed number, such as
+`Lag(Sum("points"))`, reads back as the type that number means, a `Float64` or a `Decimal`, on both
+engines (#1121); a ranking such as `Rank()` comes back as the engine's integer. A value function over
+a `Joined(...)` handle reads back as the joined column, and over a `CTE(...)` column as the CTE body
+projected it: typed for a column the body selects, and for a number the body computes as that
+number's type (#824, #1121). Over a `Subquery(...)` it reads back as the subquery's one column does
+(#887, #888).
 
 ---
 

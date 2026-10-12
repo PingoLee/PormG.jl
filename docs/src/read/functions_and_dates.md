@@ -650,14 +650,17 @@ Over an integer — a column, an integer literal, a count, a ranking window, a `
 integer date part, or a CTE column holding an integer — `Abs`, `Floor` and `Ceil` return an integer
 of the operand's own type on both engines, so `Abs("number")` reads an integer and
 `Floor("grid") / 2` divides as integers (#1147). Over a float or a decimal — a CTE column computed
-by `Avg` included — PostgreSQL computes them as `numeric` (read as a `Decimal`), and SQLite as its
-own number type: the floor of an average of `7.5` is `7` on both.
+by `Avg` included — PostgreSQL computes them as `numeric` and SQLite as its own number type, and the
+value reads back as the operand's type on both engines: a `Float64` over a float, a `Decimal` over a
+decimal (#1121). The floor of an average of `7.5` is `7.0` on both; see
+[The type of a computed number](index.md#The-type-of-a-computed-number).
 
 ### Rounding to decimal places
 
 `Round(x, n)` uses each engine's own `ROUND`, as Django's `Round` does. PostgreSQL renders
-`ROUND(x::numeric, n)`, which rounds the value's exact decimal form, so a `DecimalField` keeps its
-`Decimal`. SQLite renders `ROUND(x, n)` over the stored double. The two agree except at a decimal tie
+`ROUND(x::numeric, n)`, which rounds the value's exact decimal form. SQLite renders `ROUND(x, n)` over
+the stored double. Either way the result reads back as its operand's type on both engines: a
+`DecimalField` keeps its `Decimal`, and a float is a `Float64` (#1121). The two agree except at a decimal tie
 whose double sits just below it. Measured on PostgreSQL 16.15 and SQLite 3.45.1:
 
 | `Round(v, 2)` | PostgreSQL | SQLite |

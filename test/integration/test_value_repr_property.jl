@@ -324,8 +324,11 @@ _vri_lap()  = M.Lap_times.objects.filter("raceid" => 1, "driverid" => 1, "lap" =
     @test got[:y] isa Date && got[:y] == _VRI_RACE_DATE
 
     # The CTE model binds `avg_pts` as the aggregated `DecimalField`, but its value is a computed
-    # average — on SQLite a double, which must not be dressed up as an exact `Decimal` (#648).
-    # `max_pts` is one of the column's own values, so it keeps the column's `Decimal`.
+    # average — on SQLite a double, which never reaches the column's exact parser (#648): read as
+    # that, it would claim the column's width for a rounded value. Since #1121 it reads as the
+    # `Decimal` an average of decimals means, through 15 significant digits rather than the column's
+    # declaration, as PostgreSQL's `numeric` reads. `max_pts` is one of the column's own values, so it
+    # keeps the column's `Decimal`.
     body = M.Constructor_results.objects
     body.filter("raceid" => 1)
     body.values("constructorid", "avg_pts" => Avg("points"), "max_pts" => Max("points"))
@@ -335,6 +338,6 @@ _vri_lap()  = M.Lap_times.objects.filter("raceid" => 1, "driverid" => 1, "lap" =
     q.values("constructorid", "a" => "cr__avg_pts", "m" => "cr__max_pts")
     got = q.list(:dict)[1]
     @test got[:m] isa Decimals.Decimal && got[:m] == 18
-    _VRI_ENGINE === :sqlite && @test got[:a] isa AbstractFloat
+    @test got[:a] isa Decimals.Decimal && got[:a] == 18   # constructor 23 has one row in race 1
   end
 end

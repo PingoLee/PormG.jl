@@ -144,6 +144,10 @@ arithmetic over one) PormG renders `SUM(x)::bigint` there: `Sum("resultid")` rea
 `Sum("resultid") / 2` divides as integers on both engines (#1147). A sum past the `bigint` range
 raises, as it does on SQLite.
 
+A sum of a `DecimalField` reads back as a `Decimal`, and of a `FloatField` as a `Float64`, on both
+engines (#1121): SQLite computes a decimal sum as a double, which PormG reads as the `Decimal` it
+means, to 15 significant digits.
+
 A `Sum` over a `BooleanField` is refused with a `QueryBuildError` (#953): PostgreSQL has no
 `sum(boolean)`, and SQLite would add up the stored 0/1. Count the true rows explicitly —
 `Sum(When("is_active" => true, then = 1, otherwise = 0))`.
@@ -174,6 +178,11 @@ Like [`Count`](@ref) and [`Sum`](@ref) — and unlike [`Max`](@ref)/[`Min`](@ref
 covered by the to-many fan-out guard (#74): a join that multiplies rows would silently
 inflate the mean, so PormG raises instead. Passing `distinct = true` is an explicit opt-in
 and is exempt.
+
+The mean reads back as a `Float64` over integers or floats and as a `Decimal` over a `DecimalField`,
+on both engines (#1121), as Django's `Avg` types it. PostgreSQL computes `avg(integer)` as a
+`numeric`, which PormG reads as the `Float64` it means; SQLite computes a decimal mean as a double,
+which PormG reads as a `Decimal` to 15 significant digits.
 
 An `Avg` over a `BooleanField` is refused with a `QueryBuildError`, as [`Sum`](@ref) is (#953): the
 share of true rows is `Avg(When("is_active" => true, then = 1, otherwise = 0))`.
@@ -1320,7 +1329,8 @@ _result_rule(::Val{:LENGTH}) = CInt32()   # `integer` on PostgreSQL
     Abs(column)
 
 Returns the absolute value of a number. Over an integer it is an integer of the same type on both
-engines; over any other number PostgreSQL computes a `numeric` (#1147).
+engines; over any other number PostgreSQL computes a `numeric` (#1147), and the value reads back as
+the operand's type on both engines: a `Float64` over a float, a `Decimal` over a decimal (#1121).
 """
 function Abs(x::_ScalarOperand)
   return FObject(function_name = "ABS", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
@@ -1341,6 +1351,9 @@ decimal tie whose double sits just below it: `Round(2.675, 2)` is `2.68` on Post
 SQLite. PostgreSQL's is the exact answer; on SQLite, a development engine for PormG, the last digit of
 such a tie can differ (#1061). `Round(x)` (no places) gives the same whole number on both.
 
+The value reads back as its operand's type on both engines (#1121): a `Float64` over a float and a
+`Decimal` over a decimal, although PostgreSQL computes `ROUND(x::numeric, d)` as a `numeric`.
+
 Text is not a number to round: `Round(x, d)` over a text column, a string or a JSON value raises
 `QueryBuildError` when the query is built, because PostgreSQL rejects text that is not a number and
 SQLite reads it as 0. Cast it first: `Round(Cast(x, FloatField()), d)`.
@@ -1358,6 +1371,9 @@ function Round(x::_ScalarOperand, precision::Integer = 0)
   return FObject(function_name = "ROUND", column = _norm_fn_arg(x), aggregate = _any_agg(x), kwargs = Dict{String, Any}("precision" => precision), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:ROUND}) = :numeric
+# #1121: computed as a `numeric` on PostgreSQL and a REAL on SQLite, it MEANS its operand's type, as
+# Django's `Round` (a `Transform`) does: a rounded float is a float, a rounded decimal a decimal.
+_output_kind(::Val{:ROUND}, ::Symbol, ks) = _operand_meaning(first(ks))
 
 """
     NullIf(field1, field2)
@@ -1495,7 +1511,9 @@ _result_rule(::Val{:RPAD}) = CText()
     Floor(column)
 
 Returns the largest integer less than or equal to a number. Over an integer it is that integer, of
-the same type, on both engines; over any other number PostgreSQL computes a `numeric` (#1147).
+the same type, on both engines; over any other number PostgreSQL computes a `numeric` (#1147), and the
+value reads back as the operand's type on both engines: a `Float64` over a float, a `Decimal` over a
+decimal (#1121).
 """
 function Floor(x::_ScalarOperand)
   return FObject(function_name = "FLOOR", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
@@ -1509,7 +1527,9 @@ _computed_kind(::Val{:FLOOR}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGP
     Ceil(column)
 
 Returns the smallest integer greater than or equal to a number. Over an integer it is that integer,
-of the same type, on both engines; over any other number PostgreSQL computes a `numeric` (#1147).
+of the same type, on both engines; over any other number PostgreSQL computes a `numeric` (#1147), and
+the value reads back as the operand's type on both engines: a `Float64` over a float, a `Decimal` over
+a decimal (#1121).
 """
 function Ceil(x::_ScalarOperand)
   return FObject(function_name = "CEIL", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
@@ -1524,6 +1544,9 @@ _computed_kind(::Val{:CEIL}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPo
     Sqrt(column)
 
 Returns the square root of a number.
+
+It reads back as a `Decimal` over a `DecimalField` and as a `Float64` over an integer or a float, on
+both engines (#1121), as Django's `Sqrt` types it. PostgreSQL computes it as a `numeric`.
 """
 function Sqrt(x::_ScalarOperand)
   return FObject(function_name = "SQRT", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
@@ -1534,6 +1557,9 @@ _result_rule(::Val{:SQRT}) = :numeric
     Exp(column)
 
 Returns the exponential value (e^x) of a number.
+
+It reads back as a `Decimal` over a `DecimalField` and as a `Float64` over an integer or a float, on
+both engines (#1121), as Django's `Exp` types it. PostgreSQL computes it as a `numeric`.
 """
 function Exp(x::_ScalarOperand)
   return FObject(function_name = "EXP", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
@@ -1544,6 +1570,9 @@ _result_rule(::Val{:EXP}) = :numeric
     Ln(column)
 
 Returns the natural logarithm of a number.
+
+It reads back as a `Decimal` over a `DecimalField` and as a `Float64` over an integer or a float, on
+both engines (#1121), as Django's `Ln` types it. PostgreSQL computes it as a `numeric`.
 """
 function Ln(x::_ScalarOperand)
   return FObject(function_name = "LN", column = _norm_fn_arg(x), aggregate = _any_agg(x), formatter = Models.format_number_sql)
@@ -1554,6 +1583,9 @@ _result_rule(::Val{:LN}) = :numeric
     Power(base, exponent)
 
 Returns `base` raised to the power of `exponent`.
+
+It reads back as a `Decimal` when an operand is a decimal and as a `Float64` otherwise, on both
+engines (#1121), as Django's `Power` types it: `Power("grid", 2)` is `4.0` for a grid of `2`.
 
 A string argument is a column path. A number, a `Bool`, or a `Date`/`DateTime`/`ZonedDateTime`/`Time`
 is a literal that is bound as a parameter
@@ -1570,6 +1602,9 @@ _result_rule(::Val{:POWER}) = :numeric
     Mod(dividend, divisor)
 
 Returns the remainder (modulo) of a division.
+
+It reads back as a `Decimal` when an operand is a decimal and as a `Float64` otherwise, on both
+engines (#1121), as Django's `Mod` types it: `Mod("grid", 2)` is `1.0` for an odd grid, not `1`.
 
 A string argument is a column path. A number, a `Bool`, or a `Date`/`DateTime`/`ZonedDateTime`/`Time`
 is a literal that is bound as a parameter

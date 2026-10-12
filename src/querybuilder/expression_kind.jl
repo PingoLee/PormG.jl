@@ -1,11 +1,11 @@
-# #1034 — ONE WALK for "what type does this expression have?", asked under one of two policies.
+# #1034 — ONE WALK for "what type does this expression have?", asked under one of three policies.
 #
 # The question used to be answered by a function per consumer, each walking the tree its own way and
 # each forgetting a shape the others typed: read kinds alone took six fixes, one per shape (#564,
 # #800, #824, #888, #965, #979). The walk below is written once — paths and transforms, joined and CTE
 # handles, a `Subquery`, literals, and each function through the rule it states beside its
-# constructor (`_result_rule`, `functions.jl`) — and the two policies differ only where one of them
-# declines to answer ON PURPOSE:
+# constructor (`_result_rule`, `functions.jl`) — and the policies differ only where one of them
+# declines to answer ON PURPOSE, or (`_MeaningKinds`) answers what a computed number means:
 #
 # - `_ReadKinds` — the #564 READ kind: the representation the read path must undo. It is what
 #   `_operand_kind` and `_function_projection_kind` answer, exactly as before this file existed (the
@@ -18,8 +18,13 @@
 #   matrix records it beside the others (its `kind` channel), and #1034's phase 3 moves the readers
 #   onto it one at a time, each move a reviewed diff of that fixture. Its first reader is
 #   `_integer_operand_kind` (#1147): the `Abs`/`Floor`/`Ceil` render and the #1111 division check.
+# - `_MeaningKinds` — what a value MEANS, on every engine (#1121): `_AllKinds` in every arm but a
+#   computed number, which is its function's `_output_kind` (Django's `output_field`) rather than the
+#   type one engine happens to compute it as (`_computed_kind`). `Avg("grid")` is a `numeric` on
+#   PostgreSQL and a REAL on SQLite, and it means a float on both. Its reader is the numeric read view
+#   (`_numeric_read_kind`), which turns either engine's answer into that type.
 #
-# Both are asked AFTER the render, as every reader here is: resolving a joined path is what fills the
+# All three are asked AFTER the render, as every reader here is: resolving a joined path is what fills the
 # field memo `_alias_column_field` reads, and a `Subquery` files its kind when it renders.
 #
 # The read kind types no `F` arithmetic, as `_operand_kind` never has; a comparison is a boolean.
@@ -28,8 +33,11 @@
 # and whether the walk should take that kind from the render — stored with the memo entry, or the
 # #979 reuse path loses it — is a phase-3 decision.
 struct _ReadKinds end
-struct _AllKinds end
-const _KindPolicy = Union{_ReadKinds,_AllKinds}
+# The two policies that name every type: they differ only on a computed number.
+abstract type _EveryKind end
+struct _AllKinds <: _EveryKind end
+struct _MeaningKinds <: _EveryKind end
+const _KindPolicy = Union{_ReadKinds,_EveryKind}
 
 """
     _expression_kind(x, instruc) -> Union{CanonicalType, Nothing}
@@ -64,12 +72,15 @@ _infer_kind(p::CTEReference, instruc::SQLInstruction, policy::_KindPolicy) = _ct
 # #1153: every kind reads the record of the inner expression's own kind, and falls back to the read
 # kind where there is none (a wildcard projection).
 _infer_kind(p::SubqueryObject, instruc::SQLInstruction, ::_ReadKinds) = _subquery_kind(p, instruc)
-function _infer_kind(p::SubqueryObject, instruc::SQLInstruction, ::_AllKinds)
+function _infer_kind(p::SubqueryObject, instruc::SQLInstruction, policy::_EveryKind)
+  # #1121: a computed number's meaning, which the inner build recorded as its read kind.
+  meant = _numeric_meaning_record(p, instruc, policy)
+  meant === nothing || return meant
   recorded = instruc.subquery_all_kinds === nothing ? nothing : get(instruc.subquery_all_kinds, p, nothing)
   return recorded === nothing ? _subquery_kind(p, instruc) : recorded
 end
 # A predicate is a boolean. The read kind leaves it to the formatter bridge (#965), as before.
-_infer_kind(::Union{ExistsObject,SQLTypeQ,SQLTypeQor}, ::SQLInstruction, ::_AllKinds) = CBool()
+_infer_kind(::Union{ExistsObject,SQLTypeQ,SQLTypeQor}, ::SQLInstruction, ::_EveryKind) = CBool()
 _infer_kind(::Any, ::SQLInstruction, ::_KindPolicy) = nothing
 
 _operation_kind(::FExpression, ::SQLInstruction, ::_ReadKinds) = nothing
@@ -88,7 +99,7 @@ _operation_kind(::FExpression, ::SQLInstruction, ::_ReadKinds) = nothing
 # integer literal on either side as `::integer` (`_set_update_query_left`), so `1 << F("n")` is an
 # `integer`. SQLite computes every one of them as a 64-bit integer; the walk keeps PostgreSQL's
 # shape on both engines, as it does for `+`, `-`, `*` and `/`.
-function _operation_kind(p::FExpression, instruc::SQLInstruction, policy::_AllKinds)
+function _operation_kind(p::FExpression, instruc::SQLInstruction, policy::_EveryKind)
   p.operation in _COMPARISON_OPERATIONS && return CBool()
   p.operation == "~" && return _integer_side_kind(p.field_name, instruc, policy)
   if p.operation in ("<<", ">>")
@@ -109,15 +120,15 @@ function _operation_kind(p::FExpression, instruc::SQLInstruction, policy::_AllKi
   kind = _unify_kinds(left, right, policy)
   return kind isa CDecimal ? CDecimal(nothing, nothing) : kind
 end
-_arithmetic_side_kind(x::Integer, ::SQLInstruction, policy::_AllKinds) = x isa Bool ? nothing : _literal_kind(x, policy)
-_arithmetic_side_kind(x::Union{AbstractFloat,Decimals.Decimal}, ::SQLInstruction, policy::_AllKinds) = _literal_kind(x, policy)
-_arithmetic_side_kind(x, instruc::SQLInstruction, policy::_AllKinds) = _infer_kind(x, instruc, policy)
-_integer_side_kind(x, instruc::SQLInstruction, policy::_AllKinds) =
+_arithmetic_side_kind(x::Integer, ::SQLInstruction, policy::_EveryKind) = x isa Bool ? nothing : _literal_kind(x, policy)
+_arithmetic_side_kind(x::Union{AbstractFloat,Decimals.Decimal}, ::SQLInstruction, policy::_EveryKind) = _literal_kind(x, policy)
+_arithmetic_side_kind(x, instruc::SQLInstruction, policy::_EveryKind) = _infer_kind(x, instruc, policy)
+_integer_side_kind(x, instruc::SQLInstruction, policy::_EveryKind) =
   (k = _arithmetic_side_kind(x, instruc, policy); k isa Union{CInt16,CInt32,CInt64} ? k : nothing)
 
 # ── Leaves: a column's field and a literal ───────────────────────────────────────────────────────────
 _column_kind(f, ::_ReadKinds) = field_canonical_kind(f)
-_column_kind(f, ::_AllKinds) = _field_kind(f)
+_column_kind(f, ::_EveryKind) = _field_kind(f)
 
 # Every type a field declares, by its `.type` — the string `Dialect` renders the column from, which is
 # also what `field_canonical_kind` reads, so the two cannot disagree on the kinds that table owns.
@@ -144,12 +155,12 @@ end
 _field_kind(::Any) = nothing
 
 _literal_kind(x, ::_ReadKinds) = literal_canonical_kind(x)
-_literal_kind(::Bool, ::_AllKinds) = CBool()
-_literal_kind(::Integer, ::_AllKinds) = CInt64()
-_literal_kind(::AbstractFloat, ::_AllKinds) = CFloat64()
-_literal_kind(::Decimals.Decimal, ::_AllKinds) = CDecimal(nothing, nothing)   # a bound value has no declared width
-_literal_kind(::AbstractString, ::_AllKinds) = CText()
-_literal_kind(x, ::_AllKinds) = literal_canonical_kind(x)
+_literal_kind(::Bool, ::_EveryKind) = CBool()
+_literal_kind(::Integer, ::_EveryKind) = CInt64()
+_literal_kind(::AbstractFloat, ::_EveryKind) = CFloat64()
+_literal_kind(::Decimals.Decimal, ::_EveryKind) = CDecimal(nothing, nothing)   # a bound value has no declared width
+_literal_kind(::AbstractString, ::_EveryKind) = CText()
+_literal_kind(x, ::_EveryKind) = literal_canonical_kind(x)
 
 # ── Functions, by their `_result_rule` ───────────────────────────────────────────────────────────────
 # The read kind (#800, #822, #824, #852, #953, #965): a declared date, `DATE`, a boolean the formatter
@@ -175,7 +186,7 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
   return _infer_kind(p.column, instruc, policy)
 end
 # Every kind: a declared cast is the type (#852, and `Case`'s `output_field`), then the rule.
-function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction, policy::_AllKinds)
+function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction, policy::_EveryKind)
   rule = _result_rule(p)
   if p isa FObject && rule in (:declared, :one_of)
     declared = _declared_cast(p)
@@ -188,8 +199,7 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
   rule === :operand && return _with_window_default(p, _infer_kind(p.column, instruc, policy), instruc, policy)
   rule === :first_operand && return _infer_kind(first(p.column), instruc, policy)
   rule === :one_of && return _agreeing_kind(p, instruc, policy)
-  rule in (:promoting, :numeric) &&
-    return _computed_kind(Val(Symbol(p.function_name)), rule, _infer_kind(_first_operand(p), instruc, policy), instruc.connection)
+  rule in (:promoting, :numeric) && return _number_kind(p, rule, instruc, policy)
   rule === :declared && p isa FObject && p.function_name == "CASE" && return _case_kind(p, instruc, policy)
   return nothing
 end
@@ -199,7 +209,7 @@ _infer_function_kind(::Any, ::SQLInstruction, ::_KindPolicy) = nothing
 # float8)` to a `float8` and `lag(int4, int, int8)` to an `int8` (review of #1147), so the operand's
 # kind and the default's are unified as a `COALESCE`'s are. A string is a bound text literal there,
 # not a path (`_bigint_operand_function`); any other default PormG cannot type leaves the value untyped.
-function _with_window_default(p, kind, instruc::SQLInstruction, policy::_AllKinds)
+function _with_window_default(p, kind, instruc::SQLInstruction, policy::_EveryKind)
   (p isa WindowFunction && kind !== nothing) || return kind
   default = get(p.kwargs, "default", nothing)
   default === nothing && return kind
@@ -295,7 +305,7 @@ end
 # not per row. Every kind follows PostgreSQL's resolution of a `COALESCE`/`CASE`: integers widen,
 # `integer` < `numeric` < `double precision`, and text is text whatever its length.
 _unify_kinds(a::CanonicalType, b::CanonicalType, ::_ReadKinds) = a == b ? a : nothing
-function _unify_kinds(a::CanonicalType, b::CanonicalType, ::_AllKinds)
+function _unify_kinds(a::CanonicalType, b::CanonicalType, ::_EveryKind)
   a == b && return a
   ra, rb = _numeric_rank(a), _numeric_rank(b)
   if ra !== nothing && rb !== nothing
@@ -329,17 +339,119 @@ _computed_kind(::Val, rule::Symbol, k, ::PormGSQLite) = rule === :numeric ? CFlo
 _computed_kind(::Val, ::Symbol, k, ::Any) = nothing
 # A number SQLite computes over `k` without a cast: an integer is a 64-bit integer, and anything else
 # is not a number this names. Over a `DecimalField` SQLite computes a REAL or an INTEGER from its
-# NUMERIC-affinity storage; it is named a width-less decimal, the type PostgreSQL gives the same call,
-# and no reader parses one (`value_parser` has no width-less `CDecimal` arm, so #648's double never
-# reaches the decimal parser). A reader that adds one must decide this cell first.
+# NUMERIC-affinity storage; it is named a width-less decimal, the type PostgreSQL gives the same call.
+# Its read parser (#1121, `value_parser(::CDecimal, ::PormGSQLite)`) builds that decimal from the
+# double through 15 significant digits, Django's rule — never #648's exact parser, which only a
+# declared width reaches.
 _sqlite_number_kind(::Union{CInt16,CInt32,CInt64}) = CInt64()
 _sqlite_number_kind(::CFloat64) = CFloat64()
 _sqlite_number_kind(::CDecimal) = CDecimal(nothing, nothing)
 _sqlite_number_kind(::Any) = nothing
 
+# A `:promoting`/`:numeric` function's kind: what this engine computes (`_computed_kind`, from the
+# first operand), or what the call means (`_output_kind`, from every operand).
+_number_kind(p::SQLTypeFunction, rule::Symbol, instruc::SQLInstruction, policy::_AllKinds) =
+  _computed_kind(Val(Symbol(p.function_name)), rule, _infer_kind(_first_operand(p), instruc, policy), instruc.connection)
+function _number_kind(p::SQLTypeFunction, rule::Symbol, instruc::SQLInstruction, policy::_MeaningKinds)
+  operands = p.column isa AbstractVector ? p.column : (p.column,)
+  return _output_kind(Val(Symbol(p.function_name)), rule, [_arithmetic_side_kind(o, instruc, policy) for o in operands])
+end
+
+# #1121 — what a computed number MEANS, from its operands' kinds `ks`: Django's `output_field`, the
+# same on every engine. PostgreSQL's `numeric` and SQLite's REAL are two engines computing it; the
+# read path turns either into this (`_numeric_read_kind`).
+#
+# - `:promoting` (`Sum`, `Abs`, `Floor`, `Ceil`) — its operand's type, as a Django `Transform` or `Sum`
+#   is. A decimal's width is dropped: the operation may change it;
+# - `:numeric` (`Avg`, `Mod`, `Power`, `Sqrt`, `Exp`, `Ln`) — Django's `NumericOutputFieldMixin`: a
+#   decimal when an operand is one, otherwise a float, so `Avg("grid")` and `Mod("grid", 2)` are
+#   floats. `Round` keeps its operand's type, beside its constructor (`functions.jl`).
+#
+# An interval stays one (`Sum`/`Avg` of a duration). Any other operand names nothing.
+function _output_kind(::Val, rule::Symbol, ks)
+  rule === :promoting && return _operand_meaning(first(ks))
+  length(ks) == 1 && only(ks) isa CInterval && return only(ks)
+  all(k -> _numeric_rank(k) !== nothing, ks) || return nothing
+  return any(k -> k isa CDecimal, ks) ? CDecimal(nothing, nothing) : CFloat64()
+end
+_operand_meaning(k::Union{CInt16,CInt32,CInt64,CFloat64,CInterval}) = k
+_operand_meaning(::CDecimal) = CDecimal(nothing, nothing)
+_operand_meaning(::Any) = nothing
+
+# ── #1121: the numeric read view ─────────────────────────────────────────────────────────────────────
+# The kinds the read path records for a computed number and no other projection: a float, and a
+# decimal with no width. A column's decimal keeps its width (#648's parser), and an integer or a date
+# is the read kind's own business.
+_numeric_view(k::CFloat64) = k
+_numeric_view(k::CDecimal) = k.precision === nothing && k.scale === nothing ? k : nothing
+_numeric_view(::Any) = nothing
+
+"""
+    _numeric_read_kind(x, instruc) -> Union{CFloat64, CDecimal, Nothing}
+
+The read kind of a projected COMPUTED number (#1121): what it means (`_MeaningKinds`), when that is a
+float or a decimal, or `nothing`. Recorded where the read kind is `nothing` (`get_select_query`), so
+the read path turns PostgreSQL's `numeric` and SQLite's REAL into the one Julia type the call means,
+as Django's `convert_value` turns them by `output_field`. A computed number is arithmetic, a
+`:promoting`/`:numeric` function, a function whose value is one of those (`Max(F("points") * 2)`,
+`Coalesce(Avg("grid"), 0)`, `NullIf`, a `Case` with no `output_field`), or a CTE column or `Subquery`
+whose own build recorded one. A column, a literal, or a `Coalesce`/`Case` over columns is not: each row
+is a value an operand already has, as the driver delivers it. Read after `x` renders.
+"""
+_numeric_read_kind(p::FExpression, instruc::SQLInstruction) =
+  p.operation === nothing ? nothing : _numeric_view(_infer_kind(p, instruc, _MeaningKinds()))
+_numeric_read_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction) =
+  _computes_number(p, instruc) ? _numeric_view(_infer_kind(p, instruc, _MeaningKinds())) : nothing
+_numeric_read_kind(p::Union{CTEReference,SubqueryObject}, instruc::SQLInstruction) = _numeric_read_record(p, instruc)
+_numeric_read_kind(::Any, ::SQLInstruction) = nothing
+
+_computes_number(p::FExpression, ::SQLInstruction) = p.operation !== nothing
+function _computes_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
+  rule = _result_rule(p)
+  rule in (:promoting, :numeric) && return true
+  rule === :operand && return _computes_number(p.column, instruc)
+  # A value that is one of its operands' (review of #1121): `Coalesce(Avg("grid"), 0)` is the average
+  # on the rows that have one, so it is a computed number when one of its values is. A declared
+  # `output_field` is a cast both engines render, and its own business.
+  (p isa FObject && !(get(p.kwargs, "output_field", nothing) isa AbstractString)) || return false
+  rule === :first_operand && return _computes_number(first(p.column), instruc)
+  rule === :one_of && return any(o -> _computes_number(o, instruc), p.column isa AbstractVector ? p.column : (p.column,))
+  if rule === :declared && p.function_name == "CASE"
+    branches = p.column isa AbstractVector ? p.column : (p.column,)
+    values = Any[get(b.kwargs, "then", nothing) for b in branches if b isa SQLTypeFunction]
+    push!(values, get(p.kwargs, "else", nothing))
+    return any(v -> _computes_number(v, instruc), values)
+  end
+  return false
+end
+_computes_number(p::Union{CTEReference,SubqueryObject}, instruc::SQLInstruction) = _numeric_read_record(p, instruc) !== nothing
+_computes_number(::Any, ::SQLInstruction) = false
+
+# The numeric read kind a CTE body or a `Subquery`'s inner build recorded for its column: the meaning
+# the outer query reads it as, and the one `_MeaningKinds` composes over it (`Abs(Subquery(…))`,
+# `Max(CTE(…)) * 2`). A body value that is not a computed number has no such record, and the walk falls
+# back to its `_AllKinds` record: what the engine computes, which is the column's own type for a column
+# and differs per engine only for a number this view leaves out (`Round` over an integer).
+function _numeric_read_record(ref::CTEReference, instruc::SQLInstruction)
+  occursin("__", ref.path) && return nothing
+  cte = get(instruc.object.ctes, ref.name, nothing)
+  body = cte === nothing ? nothing : get(cte, "query", nothing)
+  body isa SQLObjectHandler || return nothing
+  return _numeric_view(get(body.object.projection_kinds, Symbol(ref.path), nothing))
+end
+_numeric_read_record(p::SubqueryObject, instruc::SQLInstruction) =
+  _numeric_view(instruc.subquery_kinds === nothing ? nothing : get(instruc.subquery_kinds, p, nothing))
+_numeric_meaning_record(x, instruc::SQLInstruction, ::_MeaningKinds) = _numeric_read_record(x, instruc)
+_numeric_meaning_record(x, ::SQLInstruction, ::Union{_ReadKinds,_AllKinds}) = nothing
+
+# #882: the comparison binder and `_is_number_side` read a CTE column's or a `Subquery`'s recorded
+# kind through `_operand_kind`, and name no float there (a float side is not a number side to them).
+# A numeric read kind is the READ path's, so that view does not see it.
+_without_numeric_read(k) = _numeric_view(k) === nothing ? k : nothing
+
 # A `Case` with no `output_field`: its value is a branch's, so it has the kind its `then` values and
 # its default agree on. A branch value that is a string is a literal, not a path (`_boolean_case`).
-function _case_kind(p::FObject, instruc::SQLInstruction, policy::_AllKinds)
+function _case_kind(p::FObject, instruc::SQLInstruction, policy::_EveryKind)
   values = Any[]
   for branch in (p.column isa AbstractVector ? p.column : (p.column,))
     (branch isa SQLTypeFunction && branch.function_name == "WHEN") || return nothing
@@ -377,16 +489,18 @@ function _cte_column_kind(ref::CTEReference, instruc::SQLInstruction, policy::_K
     column_field = _alias_column_field(ref, instruc)
     return column_field === nothing ? nothing : _column_kind(column_field, policy)
   end
+  meant = _numeric_meaning_record(ref, instruc, policy)
+  meant === nothing || return meant
   cte = get(instruc.object.ctes, ref.name, nothing)
   cte === nothing && return nothing
   kind = _cte_expression_kind(cte, ref.path, policy)
   kind === nothing || return kind
   body = get(cte, "query", nothing)
   body isa SQLObjectHandler || return nothing
-  return get(body.object.projection_kinds, Symbol(ref.path), nothing)
+  return _without_numeric_read(get(body.object.projection_kinds, Symbol(ref.path), nothing))
 end
 _cte_expression_kind(::AbstractDict, ::String, ::_ReadKinds) = nothing
-function _cte_expression_kind(cte::AbstractDict, path::String, ::_AllKinds)
+function _cte_expression_kind(cte::AbstractDict, path::String, ::_EveryKind)
   kinds = get(cte, "kinds", nothing)
   return kinds isa AbstractDict ? get(kinds, path, nothing) : nothing
 end

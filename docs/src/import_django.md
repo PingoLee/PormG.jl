@@ -221,7 +221,23 @@ declare its `through` model by hand:
 - when the class that declares the `ManyToManyField` ends with `_` or contains `__`, also give the
   field a `related_name`, for the reason in the next paragraph.
 
-A `ForeignKey` or `OneToOneField` on such a class keeps its column and its relation. Only its
+A `ManyToManyField` that already declares `through=` on such a class is imported, not dropped. PormG
+would name its key from the class name too (`driver__id`), so the importer pins `source_field` /
+`target_field` to the through model's key to each end and gives the field a `related_name`, as the
+next paragraph describes. When the through model has several keys to one end and no
+`through_fields`, the field is dropped with a marker: name the two keys with `through_fields` in
+`models.py`.
+
+Django's `through_fields = ("team", "driver")` is read on every `ManyToManyField` that declares
+`through=`. It becomes
+`source_field = "team_id", target_field = "driver_id"`: the through model's keys, which the importer
+spells `<field>_id` for a `ForeignKey`. A pin that names no foreign key to its end on the through
+model drops the field with a marker, because `set_models` would refuse it. Without `through=` there
+are no through keys to name, so `through_fields` is dropped with a marker, as Django refuses it too
+(`fields.E337`).
+
+A `ForeignKey`, `OneToOneField` or `through=` `ManyToManyField` on such a class keeps its column and
+its relation. Only its
 reverse name changes. With no `related_name`, the reverse accessor PormG derives is the lowercased
 model name (`driver_` for `Driver_`, `pit__stop` for `Pit__stop`), or `<model>_<field>` when the model
 has several relations to one target. A name that ends with `_` or contains `__` can never be a

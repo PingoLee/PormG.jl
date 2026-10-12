@@ -1522,7 +1522,10 @@ end
 # dividend to REAL. Not where a side is a REAL on every row already — a float literal, which binds
 # as one, or a `FloatField` column, whose REAL affinity stores every value as one — so `F("points") / 2`
 # and `x / 2.0` render as they always have. Read after both sides render, as every walk is.
-_division_sql(::Any, ::FExpression, left::AbstractString, right::AbstractString, ::SQLInstruction) =
+# An engine fact (#1129): one method per engine and no fallback, because `/` is the very operator
+# engines disagree on (MySQL's over two integers is a decimal, `5 / 2` = `2.5000`), so a third
+# backend gets a `MethodError` here rather than PostgreSQL's text.
+_division_sql(::PormGPostgres, ::FExpression, left::AbstractString, right::AbstractString, ::SQLInstruction) =
   "($(left) / $(right))"
 function _division_sql(::PormGSQLite, v::FExpression, left::AbstractString, right::AbstractString, instruc::SQLInstruction)
   fractional(x) = _arithmetic_side_kind(x, instruc, _AllKinds()) isa Union{CDecimal,CFloat64}

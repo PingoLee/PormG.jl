@@ -38,6 +38,11 @@ The integer's width is each engine's own, as an integer column's is: an `Integer
 `Int32` on PostgreSQL and every integer as an `Int64` on SQLite. That is the same value in two widths,
 not a different one.
 
+Three refusals no longer apply to `Round` over an integer, because it is no longer a `numeric`
+function's value there: a `Concat` operand (#1027), a pattern lookup on its alias (`@contains`,
+`@startswith`, …, #1168), and a `Cast` to a scaled `numeric` (#1040). Each now builds, as it does over the
+integer column itself.
+
 Unchanged: `Round` over a float or a decimal (#1121: a `Float64` and a `Decimal` on both engines), and
 over an expression PormG does not type as an integer.
 

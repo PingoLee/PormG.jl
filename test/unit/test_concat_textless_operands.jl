@@ -169,7 +169,7 @@ end
     Fn.Coalesce("number", 0; output_field = Models.FloatField()),
     F("points") * 2,                                   # arithmetic over a float
     Fn.Avg("number"),                                  # numeric on PostgreSQL, REAL on SQLite
-    Fn.Round("points"),                                # over an integer it is that integer (#1196)
+    Fn.Round("points"),                                # a float: over an integer it is that integer (#1196)
     Fn.Mod("number", 3),
     Fn.Sqrt("number"),
     Fn.Floor("points"),                                # numeric over a float operand

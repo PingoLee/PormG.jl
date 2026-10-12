@@ -1187,8 +1187,9 @@ end
 # its own, one arm per shape, and it named fewer than the walk did: `Length`, the ranking windows, an
 # integer `Case` and `Coalesce(x, NULL)` were whole to the walk and not to it, so a `Floor` over them
 # still split once divided (until #1147 normalized the render from the walk), and the arms it had that
-# the walk does not — `Mod`, `Round(x)`, a CTE column by its synthetic field — named values that are a
-# `numeric` on PostgreSQL and a REAL on SQLite, whole in value but no integer in type. A literal is
+# the walk does not — `Mod`, `Round(x)` over a non-integer, a CTE column by its synthetic field — named
+# values that are a `numeric` on PostgreSQL and a REAL on SQLite, whole in value but no integer in type
+# (`Round` over an integer is that integer since #1196, and the walk names it). A literal is
 # asked as an arithmetic side (`_arithmetic_side_kind`): a bare `Integer` is a `bigint` literal.
 _known_whole(p, instruc::SQLInstruction)::Bool =
   _arithmetic_side_kind(p isa SQLField ? p.field : p, instruc, _AllKinds()) isa Union{CInt16,CInt32,CInt64}

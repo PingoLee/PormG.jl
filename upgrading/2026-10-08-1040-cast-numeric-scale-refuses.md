@@ -23,7 +23,7 @@ unrounded ones on SQLite. Measured on PostgreSQL 16.15 and SQLite 3.45.1:
 A cast to `numeric(p, s)` means the value rounded to `s` places. SQLite keeps every digit, so it
 refuses (#1147), when the query is built, a cast to `numeric(p, s)`, `decimal(p, s)`,
 `dec(p, s)` or `numeric(p)` of a float, a float literal with more than `s` places (#1050 narrowed this from every non-whole literal), a function PostgreSQL computes as
-`numeric` (`Avg`, `Round(x, d)` with `d` above `s`, …), a decimal with more places than `s` or of unknown scale, text,
+`numeric` (`Avg`, `Round(x, d)` with `d` above `s` over a non-integer `x`, …), a decimal with more places than `s` or of unknown scale, text,
 or a JSON value (a whole document or a key lookup).
 
 Also refused (#1087): a `Cast` to `numeric(p, s)` of a literal that does not fit it. Rounded to `s`

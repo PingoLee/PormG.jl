@@ -28,7 +28,7 @@ refused exactly where its projection would be:
 | `Subquery` projecting | `Concat` | `Cast` to text | `Cast` to an integer | `Cast` to `numeric(p, s)` |
 |---|---|---|---|---|
 | a `FloatField`, a `DecimalField` with places, `Max`/`Min`/`Sum`/`Coalesce` of one | refused (#1027) | builds | refused on SQLite (#1028) | refused on SQLite (#1040) |
-| `Avg`, `Round`, `Mod`, … (a `numeric` function) | refused (#1027) | builds | refused on SQLite (#1028) | refused on SQLite (#1040) |
+| `Avg`, `Round` (not over an integer, #1196), `Mod`, … (a `numeric` function) | refused (#1027) | builds | refused on SQLite (#1028) | refused on SQLite (#1040) |
 | a `BooleanField` or a `Bool` literal | refused (#1027) | refused on SQLite (#1028) | builds | — |
 | a text or integer column, `Count`, `Cast(Round(x), IntegerField())` | builds | builds | builds | builds |
 

@@ -17,7 +17,7 @@ an integer or a REAL):
 | `BooleanField` `true` | `t` | `1` |
 | `FloatField` `25.0` | `25` | `25.0` |
 | `DecimalField(decimal_places = 2)` `1.50` / `3` | `1.50` / `3.00` | `1.5` / `3` |
-| `Mod(7, 3)`, `Avg(…)`, `Round(…)` | `numeric` (`1`) | a REAL (`1.0`) |
+| `Mod(7, 3)`, `Avg(…)`, `Round(…)` over a float or a decimal | `numeric` (`1`) | a REAL (`1.0`) |
 
 The query does not say which of these it means, so `Concat` now refuses such an operand on every
 engine and asks for the explicit spelling, as Django asks for an `output_field` over mixed types
@@ -30,7 +30,8 @@ value:
   column does (#1087);
 - an expression of one of those types, when the query is built: a comparison, a `Cast` or
   `output_field` naming a float or decimal type, arithmetic or an extremum over a float, or
-  `Avg`/`Round`/`Mod`/`Sqrt`/`Exp`/`Ln`/`Power`.
+  `Avg`/`Round`/`Mod`/`Sqrt`/`Exp`/`Ln`/`Power`. `Round` over an integer is that integer and passes
+  (#1196).
 
 Text, integer and date operands are unchanged, and so are the `@yyyy_q` / `@yyyy_quad` labels.
 

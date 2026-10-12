@@ -68,6 +68,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "Schema Drift Gate (#738)"     begin include("test_schema_drift_check.jl") end
     @testset "Having (Aggregates)"          begin include("test_having.jl")             end
     @testset "Field Validation DB Tests"    begin include("test_field_validation_db_roundtrip.jl") end
+    @testset "requires(:feature) (#1129)"   begin include("test_requires_feature.jl")   end
     @testset "Network Address Fields (#28)" begin include("test_network_address_fields.jl") end
     @testset "Array Field (#28)"            begin include("test_array_field.jl")         end
     @testset "JSON/JSONB Lookups (#27)"      begin include("test_json_fields.jl")         end
@@ -79,6 +80,8 @@ include("common_bulk_scratch_setup.jl")
     # ── Phase 4: Internals & Security ────────────────────────────────
     @testset "Internals & Security"         begin include("test_internals.jl")          end
 
+    # What this backend did not run, and why: each `requires(:feature)` that answered no (#1129).
+    print_feature_skips()
 end
 
 PormG.Configuration.__cleanup__()

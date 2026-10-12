@@ -9,7 +9,8 @@
 # Four categories decide what a divergence is (the 2026-10-10 decision on #1147):
 # - MEANING: a different value or row set. One row here per (target, operand kind): the engine that
 #   departs refuses, or PormG normalizes it on that engine and it needs no row (`Sum` of a `bigint`,
-#   `Floor`/`Ceil`/`Abs` over an integer: #1147, `_sums_bigint`, `_integer_operand_kind`).
+#   `Floor`/`Ceil`/`Abs` over an integer: #1147, `_sums_bigint`, `_integer_operand_kind`; a decimal or
+#   float quotient, which SQLite divides as REAL: #1150, `_division_sql`).
 # - REPRESENTATION: the same value written differently (the text of a float, a decimal, a timestamp,
 #   an interval, a JSON document): no row, so a cast to text builds everywhere.
 # - EXPLICIT INTENT: the query does not say what it means — a `Concat` over a number, a boolean or a
@@ -56,20 +57,6 @@ const _MEANING_DEPARTURES = (
    meaning = _ -> "an integer quotient (`15 / 2` is `7`)",
    computes = _ -> "a `numeric` one (`7.5`)",
    fix = (_, _) -> "Say which division you mean: cast the dividend to an integer first, \e[32mCast(x, BigIntegerField()) / 2\e[0m, which divides as integers on every engine, or divide by a float, \e[32mx / 2.0\e[0m, to keep the fraction."),
-  # #1087: a `DecimalField` (any scale), or a declared decimal over an integer, divided is a decimal
-  # quotient. SQLite stores a whole decimal value as INTEGER and divides it as an integer.
-  (targets = (:text, :integer, :scale), kinds = (:decimal_whole_division,), engine = PormGSQLite, issue = "#1087",
-   meaning = _ -> "a decimal quotient (`15 / 2` is `7.5`)",
-   computes = _ -> "an integer one (`7`), since it stores a whole decimal as an integer",
-   fix = (_, _) -> "Divide by a float to keep the fraction on every engine (\e[32mx / 2.0\e[0m), or fetch the number and divide it in Julia."),
-  # #1147 step 2: a value that is one of several, some whole and some fractional (`Coalesce("grid",
-  # 0.5)`, a `Case` with an integer and a float branch, a `Lag`/`Lead` with a fractional `default`) is
-  # a float or a `numeric` to PostgreSQL, so its quotient keeps the fraction; SQLite returns each
-  # row's own value, an integer on the rows the whole one supplies, and divides those as integers.
-  (targets = (:text, :integer, :scale), kinds = (:mixed_whole_division,), engine = PormGSQLite, issue = "#1147",
-   meaning = _ -> "a quotient with its fraction (`15 / 2` is `7.5`), since one of its values has a fraction",
-   computes = _ -> "an integer one (`7`) on every row that holds an integer",
-   fix = (_, _) -> "Divide by a float to keep the fraction on every engine (\e[32mx / 2.0\e[0m), or make every value a whole number."),
 )
 
 """

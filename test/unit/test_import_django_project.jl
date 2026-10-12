@@ -2314,6 +2314,122 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#1172, #1171): a ManyToMany is a self-relation by the NAMED class's name
+#
+# Django names the join columns in `create_many_to_many_intermediary_model` from the `model_name` of
+# the model the field NAMES and the owner's, and prefixes them `from_` / `to_` only when the two are
+# equal. A proxy keeps its own `model_name`; the app label never enters. The importer decided it by
+# the RESOLVED entry instead (`target === owner`, after a proxy resolved to its parent), so:
+#
+#   - `Driver.rivals → DriverProxy` got `from_driver_id` / `to_driver_id`, where Django created
+#     `driver_id` / `driverproxy_id`. The file loaded, and every query through `rivals` named
+#     columns that do not exist.
+#   - `racing.Driver.reserves → imports.Driver` got `driver_id` / `driver_id`, where Django created
+#     `from_driver_id` / `to_driver_id`, and `set_models` refused the file.
+#
+# Expected: Django's pins on both shapes, and each file passes `set_models`. A true self-relation,
+# `'self'` or the owner's own class name, keeps `from_driver_id` / `to_driver_id`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a ManyToMany is a self-relation by the named class's name, as in Django (#1172, #1171)" begin
+    # A proxy of the owner: two plain columns, the target's named for the proxy.
+    generated, config_key, db_dir_existed = import_one_app("""
+from django.db import models
+
+class Driver(models.Model):
+    surname = models.CharField(max_length=40)
+    rivals = models.ManyToManyField('DriverProxy')
+    teammates = models.ManyToManyField('self')
+    mentors = models.ManyToManyField('Driver')
+
+class DriverProxy(Driver):
+    class Meta:
+        proxy = True
+"""; output_file = "django_1172_proxy.jl", django_prefix = "racing")
+    try
+        @test occursin("rivals = Models.ManyToManyField(\"Driver\", db_table=\"racing_driver_rivals\", " *
+                       "source_field=\"driver_id\", target_field=\"driverproxy_id\")", generated)
+        # The true self-relations, by `'self'` and by the owner's own name, are unchanged.
+        @test occursin("teammates = Models.ManyToManyField(\"Driver\", db_table=\"racing_driver_teammates\", " *
+                       "source_field=\"from_driver_id\", target_field=\"to_driver_id\")", generated)
+        @test occursin("mentors = Models.ManyToManyField(\"Driver\", db_table=\"racing_driver_mentors\", " *
+                       "source_field=\"from_driver_id\", target_field=\"to_driver_id\")", generated)
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        mod = Core.eval(sandbox, :django_1172_proxy)
+        Base.invokelatest(PormG.Models.set_models, mod, "import_1140_mock")
+        rel = Core.eval(mod, :Driver).cache["many_to_many"]["rivals"]
+        @test (rel.through_table, rel.owner_column, rel.related_column) ==
+              ("racing_driver_rivals", "driver_id", "driverproxy_id")
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # A different model with the owner's class name, in another app: Django's from_/to_ pair.
+    racing = """
+from django.db import models
+
+class Driver(models.Model):
+    surname = models.CharField(max_length=40)
+    reserves = models.ManyToManyField('imports.Driver')
+"""
+    imports = """
+from django.db import models
+
+class Driver(models.Model):
+    code = models.CharField(max_length=3)
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => racing, "imports" => imports];
+                                                           output_file = "django_1172_cross_app.jl")
+    try
+        @test occursin(r"reserves = Models\.ManyToManyField\(\"Imports_driver\", db_table=\"racing_driver_reserves\", source_field=\"from_driver_id\", target_field=\"to_driver_id\"\)", generated)
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        mod = Core.eval(sandbox, :django_1172_cross_app)
+        Base.invokelatest(PormG.Models.set_models, mod, "import_1140_mock")
+        rel = Core.eval(mod, :Racing_driver).cache["many_to_many"]["reserves"]
+        @test (rel.through_table, rel.owner_column, rel.related_column) ==
+              ("racing_driver_reserves", "from_driver_id", "to_driver_id")
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # A PROXY with the owner's class name, of a different model in another app: the name decides, so
+    # this is a self-relation in Django although the table it reads is `legacy_constructor`.
+    legacy = """
+from django.db import models
+
+class Constructor(models.Model):
+    name = models.CharField(max_length=40)
+
+class Driver(Constructor):
+    class Meta:
+        proxy = True
+"""
+    racing = """
+from django.db import models
+
+class Driver(models.Model):
+    surname = models.CharField(max_length=40)
+    rivals = models.ManyToManyField('legacy.Driver')
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => racing, "legacy" => legacy];
+                                                           output_file = "django_1172_proxy_cross_app.jl")
+    try
+        @test occursin("rivals = Models.ManyToManyField(\"Constructor\", db_table=\"racing_driver_rivals\", " *
+                       "source_field=\"from_driver_id\", target_field=\"to_driver_id\")", generated)
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        mod = Core.eval(sandbox, :django_1172_proxy_cross_app)
+        Base.invokelatest(PormG.Models.set_models, mod, "import_1140_mock")
+        rel = Core.eval(mod, :Driver).cache["many_to_many"]["rivals"]
+        @test (rel.through_table, rel.owner_column, rel.related_column) ==
+              ("racing_driver_rivals", "from_driver_id", "to_driver_id")
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Django Importer (#1095): a digit suffix never takes another class's own name
 #
 # The backstop searched for a free suffix only among names already CLAIMED. With `Internal`,

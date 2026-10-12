@@ -159,4 +159,16 @@ expression that reflects the specific scenario you are investigating:
   for all user-facing examples. Generic `User`/`Post` examples are not
   accepted in this codebase.
 - Use `show_query=:sql` to capture generated SQL in tests for assertion.
+- An integration test of an optional feature (a row of the [backend capability
+  table](backends.md)) asks `requires(:feature)` from `test/integration/common_setup.jl`,
+  never which engine it runs on. It returns `true` when this run's backend has the
+  feature. Otherwise it records the skip with its reason, and the test asserts the
+  `BackendCapabilityError` instead:
+  ```julia
+  if requires(:arrays)
+      # … the feature, against the live database …
+  else
+      @test_throws PormG.BackendCapabilityError …
+  end
+  ```
 - Avoid leaving `@pormg_debug true` in committed code — always reset to `false`.

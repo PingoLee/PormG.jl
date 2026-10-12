@@ -52,8 +52,8 @@ the query's alias (`Tb_1`). The result reports what the plan states; PormG does 
 
 - **No rows where you expected some:** check the case of every field path — lookups are
   case-sensitive, and a mistyped path raises `UnknownFieldError`, but a wrong *value* case simply
-  matches nothing. Use `__@iexact` for a whole value, or `__@icontains`/`__@istartswith` for part of
-  one, when case should not matter.
+  matches nothing (text comparison is case-sensitive on PostgreSQL and SQLite). Use `__@iexact` for
+  a whole value, or `__@icontains`/`__@istartswith` for part of one, when case should not matter.
 - **`QueryBuildError` naming the fan-out guard (PingoLee/PormG.jl#74):** an aggregate over a to-many join would be
   silently inflated, so PormG refuses it. Aggregate the related table's own column, pass
   `distinct = true`, or use one correlated `Subquery` per relation ([`advanced.md`](advanced.md)).

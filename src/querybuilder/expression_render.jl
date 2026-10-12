@@ -1499,6 +1499,7 @@ function _render_expr_typed(v::FExpression, instruc::SQLInstruction)::Tuple{Stri
         # `F("points") * 2`). Every typed left was handled above, so this left is not a count.
         v.operation in ("+", "-") && right_kind isa Union{CDate,CDateTime} &&
           _refuse_untyped_date_operand(v.operation, instruc)
+        v.operation == "/" && return _division_sql(instruc.connection, v, left_side, right_side, instruc), nothing
         return "($(left_side) $(v.operation) $(right_side))", nothing
       end
     end
@@ -1507,6 +1508,36 @@ function _render_expr_typed(v::FExpression, instruc::SQLInstruction)::Tuple{Stri
     # one the wrapper renders come from the same value rather than from two resolvers that agree.
     right_side = _set_update_query_operand(v.operand, v.field_name, v.operation, instruc; left_kind = left_kind)
 
+    v.operation == "/" && return _division_sql(instruc.connection, v, left_side, right_side, instruc), nothing
     return "($(left_side) $(v.operation) $(right_side))", nothing
   end
 end
+
+# #1150 — a numeric quotient, as the expression means it. A side the type walk names a decimal or a
+# float makes the quotient one (`F("price") / 2` is `7.5`, `Coalesce("grid", 0.5) / 2` too), and
+# PostgreSQL computes it so. SQLite does not, on every row: it stores a whole `DecimalField` value as
+# an INTEGER (NUMERIC affinity), and a value that is one of several (`Coalesce`, `Case`, `Greatest`,
+# a window's `default`) is the row's own integer where an integer supplied it, so `15 / 2` there is
+# `7`. SQLite is the engine that departs, and it NORMALIZES rather than refuse (#1147): it casts the
+# dividend to REAL. Not where a side is a REAL on every row already — a float literal, which binds
+# as one, or a `FloatField` column, whose REAL affinity stores every value as one — so `F("points") / 2`
+# and `x / 2.0` render as they always have. Read after both sides render, as every walk is.
+# An engine fact (#1129): one method per engine and no fallback, because `/` is the very operator
+# engines disagree on (MySQL's over two integers is a decimal, `5 / 2` = `2.5000`), so a third
+# backend gets a `MethodError` here rather than PostgreSQL's text.
+_division_sql(::PormGPostgres, ::FExpression, left::AbstractString, right::AbstractString, ::SQLInstruction) =
+  "($(left) / $(right))"
+function _division_sql(::PormGSQLite, v::FExpression, left::AbstractString, right::AbstractString, instruc::SQLInstruction)
+  fractional(x) = _arithmetic_side_kind(x, instruc, _AllKinds()) isa Union{CDecimal,CFloat64}
+  (fractional(v.field_name) || fractional(v.operand)) || return "($(left) / $(right))"
+  (_real_on_every_row(v.field_name, instruc) || _real_on_every_row(v.operand, instruc)) && return "($(left) / $(right))"
+  return "(CAST($(left) AS REAL) / $(right))"
+end
+_real_on_every_row(x::AbstractFloat, ::SQLInstruction) = true
+_real_on_every_row(x::SQLText, ::SQLInstruction) = x.field isa AbstractFloat
+_real_on_every_row(x::SQLField, instruc::SQLInstruction) = _real_on_every_row(x.field, instruc)
+_real_on_every_row(x::FExpression, instruc::SQLInstruction) =
+  x.operation === nothing && x.field_name isa AbstractString && _real_on_every_row(x.field_name, instruc)
+_real_on_every_row(x::Union{AbstractString,JoinedReference}, instruc::SQLInstruction) =
+  !(x isa AbstractString && occursin("__@", x)) && _alias_column_field(x, instruc) isa Models.sFloatField
+_real_on_every_row(::Any, ::SQLInstruction) = false

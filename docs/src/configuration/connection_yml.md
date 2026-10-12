@@ -18,7 +18,7 @@ Or you can manually create the `connection.yml` file and populate it using the s
 
 ## Adapters & Environments
 
-Each top-level block (`dev`, `prod`, `test`, …) describes one environment, and PormG loads whichever one is active. The active environment is chosen by the `env=` argument to `load(...)`, the `PORMG_ENV` variable, or an optional top-level `default_env:` key — see [Multi-environment Routing](#Multi-environment-Routing) below. The primary supported adapters are `PostgreSQL` and `SQLite`.
+Each top-level block (`dev`, `prod`, `test`, …) describes one environment, and PormG loads whichever one is active. The active environment is chosen by the `env=` argument to `load(...)`, the `PORMG_ENV` variable, or an optional top-level `default_env:` key — see [Multi-environment Routing](#Multi-environment-Routing) below. The supported adapters are `PostgreSQL` and `SQLite`; any other is refused when the file is loaded. MySQL is planned ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)).
 
 ### Using PostgreSQL
 

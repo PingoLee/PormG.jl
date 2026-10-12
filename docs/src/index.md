@@ -9,13 +9,13 @@
 | Feature | Description |
 | :--- | :--- |
 | **Django-Style Query Builder** | Familiar syntax using `filter`, `values`, `order_by`, and chainable methods. Join traversal with `__` notation. |
-| **Async-First Execution** | Non-blocking I/O via `LibPQ.async_execute`. Synchronous helpers are thin wrappers — the event loop is never blocked. |
-| **Cross-Database Support** | PostgreSQL (LibPQ.jl) and SQLite (SQLite.jl) with automatic connection pooling and dialect adaptation. |
+| **Async-First Execution** | On PostgreSQL, non-blocking I/O via `LibPQ.async_execute`; on SQLite, one process-wide worker runs every statement in turn, and the calling task yields while it waits. Synchronous helpers are thin wrappers — the event loop is never blocked. |
+| **Cross-Database Support** | PostgreSQL (LibPQ.jl) for production and SQLite (SQLite.jl) for development and tests, with automatic connection pooling and dialect adaptation; MySQL is planned. What differs per backend is in [Backend Capabilities](backends.md). |
 | **Multi-Database & Multi-Tenancy** | Switch databases at runtime with `.db("tenant_id")`. Lazy connection resolution via resolver functions. |
 | **F-Expressions & Aggregations** | Column arithmetic, field-to-field comparisons, `Count`, `Sum`, `Avg`, `Max`, `Min` with automatic `GROUP BY` / `HAVING`. |
 | **Migrations** | State-based schema reconciliation with `makemigrations` / `migrate`, destructive-operation guards, and a history table. |
 | **Transactions** | `run_in_transaction` with async context propagation, savepoint support, and automatic rollback on error. |
-| **Advisory Locks** | Distributed coordination via `with_advisory_lock` for safe concurrent processes. |
+| **Advisory Locks** | Distributed coordination via `with_advisory_lock` for safe concurrent processes (PostgreSQL; on SQLite the body runs unlocked, with a warning). |
 
 ---
 

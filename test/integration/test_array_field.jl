@@ -1,9 +1,9 @@
 # ==============================================================================
 # ARRAY FIELD — Live-Database Integration Test (#28)
 #
-# `ArrayField(base)` is a one-dimensional PostgreSQL array of the base field's values. It is
-# PostgreSQL only: SQLite has no array type, and PormG refuses one there rather than emulate it — on
-# SQLite this file asserts exactly that refusal and nothing else.
+# `ArrayField(base)` is a one-dimensional PostgreSQL array of the base field's values, the `:arrays`
+# row of the capability table. A backend without it (SQLite has no array type) refuses one rather
+# than emulate it: there this file asserts exactly that refusal, records the skip, and nothing else.
 #
 # What only a live server can say:
 #   * the literal PormG prints is what PostgreSQL's `array_in` reads — quoting, escaping and NULLs
@@ -88,7 +88,6 @@ _af28_utc(y, mo, d, h, mi, s, ms = 0) = TimeZones.ZonedDateTime(DateTime(y, mo, 
 
 @testset "ArrayField, live ($(PORMG_DB_FOLDER)) (#28)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    is_pg = pool isa PormG.PormGPostgres
     drop() = try; PormG.ConnectionPool.fetch(pool, Dialect.drop_table(pool, AF28_TABLE)); catch; end
 
     model = _af28_model()
@@ -98,11 +97,11 @@ _af28_utc(y, mo, d, h, mi, s, ms = 0) = TimeZones.ZonedDateTime(DateTime(y, mo, 
     live() = read_live_schema(pool; include_table = [AF28_TABLE])
 
     # ─────────────────────────────────────────────────────────────────────
-    # SQLite: the column is refused, and nothing is created
+    # A backend without arrays: the column is refused, and nothing is created
     # The planner refuses at `makemigrations`, before a plan exists — not part-way through a migration.
     # ─────────────────────────────────────────────────────────────────────
-    if !is_pg
-        @testset "SQLite refuses the column" begin
+    if !requires(:arrays)
+        @testset "a backend without arrays refuses the column" begin
             drop()
             err = _af28_err(() -> get_migration_plan(LiveTable[], schema, pool, _af28_settings(); interactive = false))
             @test err isa PormG.BackendCapabilityError

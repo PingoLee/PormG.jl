@@ -22,10 +22,11 @@
 # Both are asked AFTER the render, as every reader here is: resolving a joined path is what fills the
 # field memo `_alias_column_field` reads, and a `Subquery` files its kind when it renders.
 #
-# Neither types `F` arithmetic: the render does (`_render_expr_typed`, which holds an interval as
-# milliseconds on SQLite while it computes), and whether the walk should take that kind from the render
-# — stored with the memo entry, or the #979 reuse path loses it — is a phase-3 decision. Until then an
-# arithmetic node answers `nothing` here, as `_operand_kind` always has; a comparison is a boolean.
+# The read kind types no `F` arithmetic, as `_operand_kind` never has; a comparison is a boolean.
+# Every kind types the numeric operators (`_operation_kind`). TEMPORAL arithmetic is still typed by the
+# render (`_render_expr_typed`, which holds an interval as milliseconds on SQLite while it computes),
+# and whether the walk should take that kind from the render — stored with the memo entry, or the
+# #979 reuse path loses it — is a phase-3 decision.
 struct _ReadKinds end
 struct _AllKinds end
 const _KindPolicy = Union{_ReadKinds,_AllKinds}
@@ -60,8 +61,13 @@ function _infer_kind(p::JoinedReference, instruc::SQLInstruction, policy::_KindP
 end
 _infer_kind(p::CTEReference, instruc::SQLInstruction, policy::_KindPolicy) = _cte_column_kind(p, instruc, policy)
 # #888: a `Subquery(...)` is its one projected column, as its own build typed it (`_subquery_kind`).
-# That record is a READ kind under either policy until phase 3 records the inner build's full kind.
-_infer_kind(p::SubqueryObject, instruc::SQLInstruction, ::_KindPolicy) = _subquery_kind(p, instruc)
+# #1153: every kind reads the record of the inner expression's own kind, and falls back to the read
+# kind where there is none (a wildcard projection).
+_infer_kind(p::SubqueryObject, instruc::SQLInstruction, ::_ReadKinds) = _subquery_kind(p, instruc)
+function _infer_kind(p::SubqueryObject, instruc::SQLInstruction, ::_AllKinds)
+  recorded = instruc.subquery_all_kinds === nothing ? nothing : get(instruc.subquery_all_kinds, p, nothing)
+  return recorded === nothing ? _subquery_kind(p, instruc) : recorded
+end
 # A predicate is a boolean. The read kind leaves it to the formatter bridge (#965), as before.
 _infer_kind(::Union{ExistsObject,SQLTypeQ,SQLTypeQor}, ::SQLInstruction, ::_AllKinds) = CBool()
 _infer_kind(::Any, ::SQLInstruction, ::_KindPolicy) = nothing
@@ -69,20 +75,45 @@ _infer_kind(::Any, ::SQLInstruction, ::_KindPolicy) = nothing
 _operation_kind(::FExpression, ::SQLInstruction, ::_ReadKinds) = nothing
 # #1147: `+`, `-`, `*` and `/` over two integers is an integer on both engines — PostgreSQL resolves
 # `int4 + int8` to `int8` and divides two integers as integers, as SQLite does — so the widest of the
-# two is the kind (`_unify_kinds`). An integer literal is a `bigint` there (`$n::bigint`). Anything
-# else stays untyped: a float or a decimal side, whose quotient each engine computes its own way, a
-# date or an interval, and the bitwise operators and shifts, which bind their literals otherwise.
+# two is the kind (`_unify_kinds`). An integer literal is a `bigint` there (`$n::bigint`).
+#
+# #1150: arithmetic over a float or a decimal side is the wider of the two, as PostgreSQL resolves it
+# (`integer < numeric < double precision`), and that is what the expression MEANS: `F("price") / 2`
+# is a decimal quotient. SQLite can compute it otherwise — it stores a whole decimal as INTEGER and
+# divides it as one — so its render casts the dividend (`_division_sql`); the kind is the meaning. A
+# decimal's width is dropped: the operation may change it. A date or an interval stays untyped here.
+#
+# #1153: the bitwise operators resolve their type as arithmetic does (`int4 & int8` is `int8`), and
+# `~` has its operand's. A shift has its LEFT operand's type, whatever it shifts by, and binds an
+# integer literal on either side as `::integer` (`_set_update_query_left`), so `1 << F("n")` is an
+# `integer`. SQLite computes every one of them as a 64-bit integer; the walk keeps PostgreSQL's
+# shape on both engines, as it does for `+`, `-`, `*` and `/`.
 function _operation_kind(p::FExpression, instruc::SQLInstruction, policy::_AllKinds)
   p.operation in _COMPARISON_OPERATIONS && return CBool()
+  p.operation == "~" && return _integer_side_kind(p.field_name, instruc, policy)
+  if p.operation in ("<<", ">>")
+    _integer_side_kind(p.operand, instruc, policy) === nothing && return nothing
+    shifted = p.field_name
+    return shifted isa Integer && !(shifted isa Bool) ? CInt32() : _integer_side_kind(shifted, instruc, policy)
+  end
+  if p.operation in ("&", "|", "xor")
+    left = _integer_side_kind(p.field_name, instruc, policy)
+    right = _integer_side_kind(p.operand, instruc, policy)
+    return left === nothing || right === nothing ? nothing : _unify_kinds(left, right, policy)
+  end
   p.operation in ("+", "-", "*", "/") || return nothing
   left = _arithmetic_side_kind(p.field_name, instruc, policy)
-  left isa Union{CInt16,CInt32,CInt64} || return nothing
+  _numeric_rank(left) === nothing && return nothing
   right = _arithmetic_side_kind(p.operand, instruc, policy)
-  right isa Union{CInt16,CInt32,CInt64} || return nothing
-  return _unify_kinds(left, right, policy)
+  _numeric_rank(right) === nothing && return nothing
+  kind = _unify_kinds(left, right, policy)
+  return kind isa CDecimal ? CDecimal(nothing, nothing) : kind
 end
 _arithmetic_side_kind(x::Integer, ::SQLInstruction, policy::_AllKinds) = x isa Bool ? nothing : _literal_kind(x, policy)
+_arithmetic_side_kind(x::Union{AbstractFloat,Decimals.Decimal}, ::SQLInstruction, policy::_AllKinds) = _literal_kind(x, policy)
 _arithmetic_side_kind(x, instruc::SQLInstruction, policy::_AllKinds) = _infer_kind(x, instruc, policy)
+_integer_side_kind(x, instruc::SQLInstruction, policy::_AllKinds) =
+  (k = _arithmetic_side_kind(x, instruc, policy); k isa Union{CInt16,CInt32,CInt64} ? k : nothing)
 
 # ── Leaves: a column's field and a literal ───────────────────────────────────────────────────────────
 _column_kind(f, ::_ReadKinds) = field_canonical_kind(f)
@@ -279,7 +310,7 @@ _numeric_rank(::CInt32) = 1
 _numeric_rank(::CInt64) = 2
 _numeric_rank(::CDecimal) = 3
 _numeric_rank(::CFloat64) = 4
-_numeric_rank(::CanonicalType) = nothing
+_numeric_rank(::Any) = nothing
 
 # A computed number's kind on the engine, from its rule and its (first) operand's kind `k` — the
 # engine-dependent results #1034 asks to state once, as data. What `Dialect` renders decides:
@@ -358,4 +389,21 @@ _cte_expression_kind(::AbstractDict, ::String, ::_ReadKinds) = nothing
 function _cte_expression_kind(cte::AbstractDict, path::String, ::_AllKinds)
   kinds = get(cte, "kinds", nothing)
   return kinds isa AbstractDict ? get(kinds, path, nothing) : nothing
+end
+
+# #1153 — a `Subquery`'s one projected expression, typed by the walk over the INNER instruction while
+# `query()` still holds it (its `built` callback), as `_subquery_projection_textless` classifies it:
+# the inner memos are what resolve a joined path. Asked of the expression, not through
+# `projection_kinds`, so the #979 memo-reuse path cannot lose it. Filed under the caller's node.
+function _subquery_projection_kind(handler::SQLObjectHandler, inner::SQLInstruction)
+  vals = handler.object.values
+  length(vals) == 1 || return nothing
+  v = only(vals)
+  return _expression_kind(v isa SQLText ? v : v.field, inner)
+end
+function _record_subquery_all_kind!(instruc::SQLInstruction, p::SubqueryObject, kind)
+  kind isa CanonicalType || return nothing
+  instruc.subquery_all_kinds === nothing && (instruc.subquery_all_kinds = IdDict{SubqueryObject,CanonicalType}())
+  instruc.subquery_all_kinds[p] = kind
+  return nothing
 end

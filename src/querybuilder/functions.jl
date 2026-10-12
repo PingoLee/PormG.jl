@@ -853,10 +853,6 @@ _concat_text_fix(kind::Symbol, flag::AbstractString) =
     "Write it: \e[32mCase(When(\"$(flag)\" => true, then = Value(\"yes\")), default = \"no\")\e[0m." :
   kind === :timestamp ?
     "Name the format, \e[32mToChar(\"$(flag)\", \"YYYY-MM-DD HH:MI:SS\")\e[0m, or cast it to text first: \e[32mCast(\"$(flag)\", \"text\")\e[0m." :
-  # A quotient one engine computes without its fraction (`_DIVISION_KINDS`): a cast to text alone would
-  # be refused there, so the advice says which division first.
-  kind in (:decimal_whole_division, :mixed_whole_division) ?
-    "Divide by a float, then cast it to text: \e[32mCast(x / 2.0, \"text\")\e[0m, or fetch the value and format it in Julia." :
     "Cast it to text first: \e[32mCast(\"$(flag)\", \"text\")\e[0m, or fetch the value and format it in Julia."
 
 # #1061 — `Round(x, d)` over text (`_scale_divergent_operand`'s `:text` kind: a text column or

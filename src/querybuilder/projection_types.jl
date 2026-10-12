@@ -831,7 +831,8 @@ _text_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "a text 
 #   (`_scale_divergent_operand`) means the value rounded to `s`; SQLite keeps every digit;
 # - `:precision` (#1087): a literal `Cast` operand too large for `p` (`_precision_overflow_operand`)
 #   overflows; SQLite stores it as it is;
-# - a division one engine computes with a fraction (`_DIVISION_KINDS`) departs under every target.
+# - an integer quotient PostgreSQL computes with a fraction (`_DIVISION_KINDS`) departs there under
+#   every target it lists.
 #
 # The OPERAND is classified, not the node: the node's own declared type is what makes it a text or an
 # integer, which `_textless_number` reads as an acceptable `Concat` operand once this has passed it.
@@ -872,6 +873,13 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::
     to_integer && _integral_valued(operand, instruc) && continue
     side = _concat_textless_operand(operand, instruc)
     side === nothing && !to_integer && (side = _rendered_kind_textless(get(rendered, i, nothing)))
+    # #1151: an operand the classifier leaves untyped is read through the type walk: a `Case` has the
+    # kind its branch values agree on (`_case_kind`), so a float branch makes it a `float8` on
+    # PostgreSQL, whose cast rounds where SQLite's truncates. Only a float: the walk drops a decimal's
+    # width, and a zero-scale decimal is whole. The whole-number functions passed above.
+    if side === nothing && to_integer && _expression_kind(operand, instruc) isa CFloat64
+      side = (:float, operand isa Union{FObject,WindowFunction} ? "`$(operand.function_name)(…)` with a float value" : "a float value")
+    end
     side === nothing && continue
     to_integer && !(side[1] in _FRACTIONAL_KINDS) && continue
     d = departs(side[1], side[2], to_integer ? :integer : :text, _concat_flag(operand))
@@ -919,47 +927,43 @@ _textless_number(p::SQLField, instruc::SQLInstruction) = _textless_number(p.fiel
 function _textless_number(p::FExpression, instruc::SQLInstruction)
   p.operation === nothing && return _textless_number(p.field_name, instruc)
   side = something(_textless_number(p.field_name, instruc), _textless_number(p.operand, instruc), Some(nothing))
-  # #1087 / #1111: a whole number that PostgreSQL types `numeric` reads like an integer column until
-  # it is divided. SQLite divides its integer as an integer (`15 / 2` is `7`), where PostgreSQL's
-  # `numeric / int` is `7.5`. So under `/` it is refused again, as the division it is.
-  if p.operation == "/"
+  if p.operation == "/" && side === nothing
+    # #1111: a whole number that PostgreSQL types `numeric` reads like an integer column until it is
+    # divided: PostgreSQL's `numeric / int` is `7.5` where SQLite divides its integer as an integer.
     # A float on the other side (`x / 2.0`, `x / Avg(…)`) makes SQLite divide as floats too, and
     # PostgreSQL's `numeric / float8` is a float: no engine drops the fraction.
-    # A side that is itself a division case (`Coalesce("grid", 0.5)`) is no float to SQLite on every row.
     left, right = _whole_numeric_operand(p.field_name, instruc), _whole_numeric_operand(p.operand, instruc)
     real(x, side) = side === nothing && (k = _concat_textless_operand(x, instruc); k !== nothing && k[1] in (:float, :numeric))
-    division = left !== nothing && !real(p.operand, right) ? left :
-               right !== nothing && !real(p.field_name, left) ? right : nothing
-    # #1147 step 2: a decimal, or a value mixing whole numbers with fractions, reads as a decimal or a
-    # float to the text rules, but once divided what departs is SQLite's integer rows, divided as
-    # integers (review of #1147 step 2): that division decides. A `:numeric` function's own kind still
-    # comes first otherwise — `Floor(Mod(x, 3)) / 2` is a REAL on SQLite, no integer division.
-    if division !== nothing && (side === nothing || division[1] in (:decimal_whole_division, :mixed_whole_division))
-      side = division
+    side = left !== nothing && !real(p.operand, right) ? left :
+           right !== nothing && !real(p.field_name, left) ? right : nothing
+    # #1150: a quotient the walk names a decimal or a float is one on every engine — SQLite casts its
+    # dividend to REAL (`_division_sql`) — so it reads as the number it is: a zero-scale decimal, a
+    # whole one to every other rule, has a fraction once divided.
+    if side === nothing
+      kind = _operation_kind(p, instruc, _AllKinds())
+      kind isa CDecimal && return (:decimal, "a decimal quotient")
+      kind isa CFloat64 && return (:float, "a float quotient")
     end
   end
   return side === nothing ? nothing : (side[1], "arithmetic over $(side[2])")
 end
-# #1087 / #1111 — an operand that is a whole number on both engines but whose quotient one engine
-# computes otherwise: its `(kind, what)`, a `_DIVISION_KINDS` kind naming the engine that departs.
+# #1111 — an operand that is a whole number on both engines but whose quotient PostgreSQL computes
+# as a `numeric`: its `(kind, what)`, the `:numeric_whole_division` kind of `_MEANING_DEPARTURES`.
 # Read only under `/` (above): under `+`, `-`, `*` and in a bare cast the whole number is the same on
-# both. Three sources, and the functions whose value has an operand's type carry it, as arithmetic
-# does (`Max(Abs("n")) / 2`, `Sum("grid") / Count("id")`, `(Floor("n") + 1) / 2`):
-# - a `DecimalField` column of any scale (#1087, #1147 step 2): a decimal, whose quotient keeps the
-#   half, but SQLite stores its whole values as INTEGER and divides them as integers
-#   (`:decimal_whole_division`); and a value mixing whole numbers with fractions, which SQLite answers
-#   row by row (`_mixed_whole_values`, `:mixed_whole_division`);
-# - `FLOOR`, `CEIL`, `ABS` (#1111) over a whole number PormG does not type as an integer (`Floor(F("n")
-#   + 1)` before #1147 step 2 typed integer arithmetic): `Dialect` renders
-#   `FLOOR((x)::numeric)` on PostgreSQL, an integer quotient it computes as `numeric`
-#   (`:numeric_whole_division`). Over an integer they keep it on both engines (#1147, `_integer_operand_kind`),
-#   so `Floor("grid") / 2` divides as an integer on both. `ROUND(x)` renders `::numeric` too, but it is
-#   `:numeric` through its `:numeric` `_result_rule` whatever the operator, so it never reaches this;
-# - `SUM` of a BIGINT the type walk cannot name (#1111, #1141): PostgreSQL's `sum(bigint)` is
+# both. The functions whose value has an operand's type carry it, as arithmetic does
+# (`Max(Abs("n")) / 2`, `(Floor("n") + 1) / 2`). (A decimal quotient, and a value mixing whole numbers
+# with fractions, was SQLite's departure until #1150: SQLite now divides them as REAL, `_division_sql`.)
+# - `FLOOR`, `CEIL`, `ABS` (#1111) over a whole number: over an integer they keep it on both engines
+#   (#1147, `_integer_operand_kind`), so `Floor("grid") / 2` divides as an integer on both. Over a
+#   whole number the walk does not name an integer, they rendered `FLOOR((x)::numeric)`, a quotient
+#   PostgreSQL kept the half of; since #1157 a whole number IS one the walk names an integer
+#   (`_known_whole`), so that case is gone, and the function only carries its operand's answer;
+# - `SUM` of a BIGINT the type walk cannot type at all (#1111, #1141): PostgreSQL's `sum(bigint)` is
 #   `numeric`. Every `bigint` the walk names — a BIGINT column, an integer literal (bound
-#   `$n::bigint`), an integer `Case` or `Coalesce`, integer arithmetic — renders `SUM(x)::bigint` there
-#   since #1147 step 2 (`_sums_bigint`), an integer on both engines; what remains is a bitwise operator
-#   or a shift over one (`_bigint_column`), `:numeric_whole_division`.
+#   `$n::bigint`), an integer `Case` or `Coalesce`, integer, bitwise or shifted arithmetic — renders
+#   `SUM(x)::bigint` there since #1147 step 2 (`_sums_bigint`), an integer on both engines, and a sum
+#   the walk names otherwise (`Sum(F("id") + F("points"))`, a `float8`) is no integer quotient (#1157).
+#   What remains is a `bigint` inside an operand the walk cannot type, `:numeric_whole_division`.
 # A CTE column built from any of these answers as it did in the body (#1127), and so does a
 # `Subquery` projecting one (#1124): each is a record the inner build kept, not its typed field.
 # Measured on PostgreSQL 16 and SQLite 3.45 through the F1 fixture: `Floor("grid") / 2` over grid
@@ -967,39 +971,16 @@ end
 # `1.5` and `1` before #1147 step 2. The refusal names the division, not a decimal's text, and advises
 # saying which division is meant (`_MEANING_DEPARTURES`): rounding afterwards cannot bring the half back.
 const _NUMERIC_WHOLE_FUNCTIONS = ("FLOOR", "CEIL", "ABS")
-# #1147 step 2: the two divisions, by the engine that departs from the quotient the expression means
-# (`_MEANING_DEPARTURES`). `:numeric_whole_division` is an integer quotient PostgreSQL computes as a
-# `numeric` (a `Floor` over a whole number PormG does not type, a `sum(bigint)` the walk cannot name);
-# `:decimal_whole_division` is a decimal quotient SQLite computes as an integer (a `DecimalField`,
-# whose whole values it stores as INTEGER, or a declared decimal over an integer, which its cast leaves
-# an INTEGER); `:mixed_whole_division` is the quotient of a value that is one of several, whole and
-# fractional (`Coalesce("grid", 0.5)`, a `Case`, `NullIf`, a window's `default`: `_mixed_whole_values`),
-# a float or a `numeric` PostgreSQL divides as one while SQLite divides its integer rows as integers.
-# All three are numbers with a fraction on one engine.
-const _DIVISION_KINDS = (:numeric_whole_division, :decimal_whole_division, :mixed_whole_division)
+# The division by the engine that departs from the quotient the expression means
+# (`_MEANING_DEPARTURES`): an integer quotient PostgreSQL computes as a `numeric` (a `Floor` over a
+# whole number PormG does not type, a `sum(bigint)` the walk cannot name), a number with a fraction
+# there only.
+const _DIVISION_KINDS = (:numeric_whole_division,)
 const _FRACTIONAL_KINDS = (:float, :decimal, :numeric, _DIVISION_KINDS...)
-_whole_numeric_operand(p::Union{String,JoinedReference}, instruc::SQLInstruction) = _whole_decimal_column(p, instruc)
-# Every `DecimalField`, whatever its scale: SQLite's NUMERIC affinity stores a whole value (`15.00`) as
-# an INTEGER, so `F("price") / 2` divides it as `15 / 2` there, where the decimal quotient is `7.5`
-# (review of #1147 step 2). A zero-scale one holds nothing else.
-function _whole_decimal_column(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction)
-  field = _alias_column_field(p, instruc)
-  field isa Models.sDecimalField || return nothing
-  return (:decimal_whole_division, "the DecimalField `$(_concat_operand_label(p))`")
-end
 # #1127 — a CTE column answers as its body's expression did, recorded while the body built
 # (`_build_cte_custom_model`): its field cannot say it, since a `Sum` column is typed as an integer
-# whatever it sums. A column with no record — a plain path, a body not built in this pass — is read
-# by its field. A path that hops on through the column ends at a real model field.
-function _whole_numeric_operand(p::CTEReference, instruc::SQLInstruction)
-  side = _cte_division_record(p, "whole_numeric", instruc)
-  side === nothing || return side
-  # A computed column the body classed as a `numeric` function or a float (`Avg("price")`, a cast of
-  # a float) is that number on SQLite too, a REAL: its field, typed after the operand, is no decimal
-  # storage to read (delta review of #1147 step 2).
-  _cte_record_kind(p, instruc) in (:numeric, :float) && return nothing
-  return _whole_decimal_column(p, instruc)
-end
+# whatever it sums. A column with no record — a plain path, a body not built in this pass — has none.
+_whole_numeric_operand(p::CTEReference, instruc::SQLInstruction) = _cte_division_record(p, "whole_numeric", instruc)
 # One of the two division records `_build_cte_custom_model` keeps per computed column, as a
 # `(kind, what)` naming the column, or `nothing`: no record, or a path past the column.
 function _cte_division_record(p::CTEReference, key::String, instruc::SQLInstruction)
@@ -1015,108 +996,36 @@ _whole_numeric_operand(p::FExpression, instruc::SQLInstruction) =
             p.operation === nothing ? nothing : _whole_numeric_operand(p.operand, instruc), Some(nothing))
 function _whole_numeric_operand(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   name = p.function_name
-  # `Coalesce`/`Greatest`/`Least` always carry the key (`nothing` when none was given): read its value.
+  # A declared type is the cast the SQL renders, so it decides alone. (A declared decimal over an
+  # integer, divided, was SQLite's departure until #1150: its kind is a decimal, which SQLite now
+  # divides as REAL, `_division_sql`.) `Coalesce`/`Greatest`/`Least` always carry the key.
   declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
-  if declared isa AbstractString && !isempty(declared)
-    # #1147 step 2 (delta review): a declared decimal is not a decimal on SQLite. Its cast to NUMERIC
-    # leaves an INTEGER an INTEGER and turns whole text (`'15'`) into one, so `Cast("grid", "numeric")
-    # / 2` divides as integers there, where PostgreSQL's `numeric` keeps the half. Fail closed: the
-    # quotient departs on SQLite unless every value is a float there (a REAL stays a REAL) or a literal
-    # `0` (`0 / n` is `0` everywhere). A `Case`'s values are its branches.
-    (_numeric_cast_size(declared) !== nothing || _sql_type_field(declared) isa Models.sDecimalField) || return nothing
-    values = if p isa FObject && name == "CASE"
-      Any[[get(b.kwargs, "then", nothing) for b in (p.column isa AbstractVector ? p.column : (p.column,)) if b isa SQLTypeFunction];
-          get(p.kwargs, "else", nothing)]
-    else
-      Any[(p.column isa AbstractVector ? p.column : (p.column,))...]
-    end
-    for v in values
-      x = v isa SQLText ? v.field : v
-      (x === nothing || _is_null_literal(x)) && continue
-      x isa Integer && !(x isa Bool) && iszero(x) && continue
-      side = _concat_textless_operand(v, instruc)
-      side !== nothing && side[1] in (:float, :numeric) && _whole_numeric_operand(v, instruc) === nothing && continue
-      return (:decimal_whole_division, "a value cast to $(declared)")
-    end
-    return nothing
-  end
+  declared isa AbstractString && !isempty(declared) && return nothing
   if name in _NUMERIC_WHOLE_FUNCTIONS
     # Over a whole number BY TYPE only. An operand PormG cannot type (an untyped `Case`, a JSON key
     # lookup) is let through, not guessed at: a float under `FLOOR` is a REAL on SQLite, which
     # divides as one, so the engines agree there and the integer answer would be a false refusal.
     operand = p.column isa AbstractVector ? first(p.column) : p.column
     # #1147: over an integer the function is that integer on both engines, so it is `numeric` on
-    # PostgreSQL only when its operand is (`Floor(Sum(F("id") << 1))`). Asked first, because the
-    # operand's integer kind is the one fact that differs per engine here, and its answer is the same
-    # on both. Also ahead of the whole-number test: the function keeps its operand's division, a
-    # `DecimalField`'s (no integer by field) or a mixed value's (`Coalesce("grid", 0.5)`)
-    # (#1147 step 2), and over a value with a fraction SQLite's integer rows still divide as integers.
+    # PostgreSQL only when its operand is. Asked first, because the operand's integer kind is the one
+    # fact that differs per engine here, and its answer is the same on both.
     side = _whole_numeric_operand(operand, instruc)
-    side === nothing || return (side[1], "`$(name)(…)` over $(side[2])")
-    _known_whole(operand, instruc) || return nothing
-    # A whole number the render still casts to `numeric` on PostgreSQL.
-    return _integer_operand_kind(p, instruc) === nothing ? (:numeric_whole_division, "`$(name)(…)`") : nothing
+    return side === nothing ? nothing : (side[1], "`$(name)(…)` over $(side[2])")
   end
-  # #1147 step 2: a function whose value is one of several values, some whole and some fractional —
-  # `Coalesce("grid", 0.5)`, `Least("grid", "points")`, a `Case` with an integer and a float branch, a
-  # `Lag`/`Lead` with a fractional `default` — is a float or a `numeric` on PostgreSQL, which resolves
-  # them to one type, so its quotient keeps the fraction there. SQLite returns each row's own value,
-  # an integer on the rows the whole one supplies, and divides those as integers.
-  mixed = _mixed_whole_values(p, instruc)
-  mixed === nothing || return (:mixed_whole_division, "`$(name)(…)` over $(mixed)")
+  # (A value that is one of several, some whole and some fractional — `Coalesce("grid", 0.5)`, a `Case`
+  # with an integer and a float branch, a window's fractional `default` — was SQLite's departure until
+  # #1150: the walk names it a float, which SQLite now divides as REAL, `_division_sql`.)
   _result_rule(p) in _OPERAND_TYPED_RULES || return nothing
   for operand in (p.column isa AbstractVector ? p.column : (p.column,))
     # #1147 step 2: a `Sum` the walk names a `bigint` renders `::bigint` on PostgreSQL
-    # (`_sums_bigint`), an integer on both engines. What it cannot name — a bitwise operator, a shift
-    # — is still `sum(bigint)` there, a `numeric`.
-    side = name == "SUM" && !_sums_bigint(p, instruc) ? _bigint_column(operand, instruc) : nothing
+    # (`_sums_bigint`), an integer on both engines. #1157: one the walk names another kind is that
+    # kind's sum (a `float8`, a `numeric`), no integer quotient; only one it cannot type at all is
+    # still `sum(bigint)` there, a `numeric`.
+    side = name == "SUM" && !_sums_bigint(p, instruc) && _infer_kind(operand, instruc, _AllKinds()) === nothing ?
+           _bigint_column(operand, instruc) : nothing
     side === nothing || (side = (:numeric_whole_division, side[2]))
     side === nothing && (side = _whole_numeric_operand(operand, instruc))
     side === nothing || return (side[1], "`$(name)(…)` over $(side[2])")
-  end
-  return nothing
-end
-# The values a function's result is one of (a `Case`'s branches, a window's operand and `default`, the
-# operands of a `:one_of` function), and whether they mix a whole number with a fraction: a label for
-# the fraction, or `nothing`. A string among them is a text literal (`Case`, a window default) or a
-# path (`Coalesce("grid", "points")`), read as such.
-function _mixed_whole_values(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
-  values = Any[]
-  literal_strings = true
-  if p isa FObject && p.function_name == "CASE"
-    get(p.kwargs, "output_field", nothing) isa AbstractString && return nothing
-    for branch in (p.column isa AbstractVector ? p.column : (p.column,))
-      branch isa SQLTypeFunction && push!(values, get(branch.kwargs, "then", nothing))
-    end
-    push!(values, get(p.kwargs, "else", nothing))
-  elseif p isa WindowFunction && _result_rule(p) in _OPERAND_TYPED_RULES
-    # The operand is a path; a string `default` is a text literal, never a number.
-    default = get(p.kwargs, "default", nothing)
-    (default isa SQLText ? default.field : default) isa AbstractString && return nothing
-    push!(values, p.column isa AbstractVector ? first(p.column) : p.column, default)
-    literal_strings = false
-  elseif p isa FObject && (_result_rule(p) === :one_of || p.function_name == "NULLIF")
-    # `NullIf(a, b)` is `a`, but PostgreSQL promotes it to `b`'s type for the `=` it is defined by
-    # (`NULLIF(1, 2.2)` is a `numeric`), so a fractional `b` makes an integer `a` a fraction there.
-    get(p.kwargs, "output_field", nothing) isa AbstractString && return nothing
-    append!(values, p.column isa AbstractVector ? p.column : (p.column,))
-    literal_strings = false
-  else
-    return nothing
-  end
-  literal(v) = v isa SQLText ? v.field : v
-  filter!(v -> !(v === nothing || _is_null_literal(literal(v)) ||
-                 (literal_strings && literal(v) isa AbstractString)), values)
-  length(values) > 1 || return nothing
-  # A literal `0` is the one whole number every division keeps whole (`0 / n` is `0` on both
-  # engines), so `Coalesce("points", 0)` is no mix (delta review of #1147 step 2).
-  zero(v) = (x = literal(v); x isa Integer && !(x isa Bool) && iszero(x))
-  # `NullIf(a, b)` returns `a` or NULL: it mixes only when `a` is the whole one (second delta review).
-  whole_candidates = p isa FObject && p.function_name == "NULLIF" ? values[1:1] : values
-  any(v -> !zero(v) && _known_whole(v, instruc), whole_candidates) || return nothing
-  for v in values
-    side = _concat_textless_operand(v, instruc)
-    side !== nothing && side[1] in (:float, :decimal, :numeric) && return side[2]
   end
   return nothing
 end
@@ -1183,7 +1092,7 @@ end
 # literal, not a path (`_case_kind`), so it is no `bigint`. `NullIf` is its first operand. `FLOOR`/
 # `CEIL`/`ABS` over an integer keep it (#1147), so they are its own value too: `Sum(Floor("id"))` is a
 # `sum(bigint)`. Not the rest of the `:promoting` rule: `SUM` of a `bigint` is a `numeric`, and so are
-# `FLOOR`/`CEIL`/`ABS` over anything else, which `_whole_numeric_operand` answers. A declared type (`Cast`'s, or an
+# `FLOOR`/`CEIL`/`ABS` over anything else, which the walk types as such. A declared type (`Cast`'s, or an
 # `output_field`) is the cast the SQL renders, so it decides alone: a `bigint` when it names one
 # (`Sum(Cast("grid", BigIntegerField()))` is a `sum(bigint)`), and nothing else.
 function _bigint_operand_function(p::Union{FObject,WindowFunction}, of::Function, instruc::SQLInstruction)
@@ -1221,10 +1130,13 @@ function _bigint_operand_function(p::Union{FObject,WindowFunction}, of::Function
 end
 # #1141 — a value PostgreSQL types wider than `bigint`, so a `Case`/`Coalesce` holding it is not one:
 # a float or decimal (`_textless_number` names them, a `numeric` function included), or a whole number
-# PostgreSQL types `numeric` (`_whole_numeric_operand`: `Floor(x)`, a `DecimalField`, a mixed value).
+# PostgreSQL types `numeric` (`_whole_numeric_operand`: a `bigint` sum the walk cannot type); a
+# decimal or a float by the walk (#1150) is wider too.
 function _numeric_valued(v, instruc::SQLInstruction)::Bool
   side = _textless_number(v, instruc)
   side !== nothing && side[1] in (:float, :decimal, :numeric) && return true
+  # #1150: a decimal of any scale (a zero-scale `DecimalField`, a declared `numeric`) is wider too.
+  v isa Union{SQLObject,SQLType,AbstractString} && _expression_kind(v, instruc) isa Union{CDecimal,CFloat64} && return true
   return _whole_numeric_operand(v, instruc) !== nothing
 end
 # A side of an integer division that keeps it integer division: a whole number by type, or itself a
@@ -1263,52 +1175,16 @@ function _divided_whole_operand(p::Union{FObject,WindowFunction}, instruc::SQLIn
   side = _concat_textless_operand(operand, instruc)
   return side !== nothing && side[1] in _DIVISION_KINDS ? side : nothing
 end
-# An operand that is a whole number on both engines BY TYPE: an integer column (the BIGINT ones
-# included), an integer literal, `COUNT`, a cast to an integer, or a whole-keeping function (`Floor`,
-# `Ceil`, `Abs`, `Round(x)`, `Mod`, an extremum, `Coalesce`, a window value) or `+`/`-`/`*` of such,
-# and an integer-valued date part (`_integer_transform`), as a function or a `"dob__@year"` path. A
-# text or date transform (`"dob__@yyyy_mm"`, `"dob__@date"`), a JSON key lookup, a text column and
-# an untyped `Case` are not known.
-const _INTEGER_FIELDS = Union{Models.sIntegerField,Models.sBigIntegerField,Models.sPositiveIntegerField,
-                              Models.sPositiveSmallIntegerField,Models.sIDField,Models.sForeignKey,
-                              Models.sOneToOneField}
-function _known_whole(p, instruc::SQLInstruction)::Bool
-  p isa SQLField && return _known_whole(p.field, instruc)
-  p isa SQLText && return p.field isa Integer && !(p.field isa Bool)
-  p isa Integer && return !(p isa Bool)
-  if p isa Union{String,CTEReference,JoinedReference}
-    # #1135: a transformed path is the transform's result, not the column — through the one ladder
-    # (#562), as `_infer_kind(::String)` reads it.
-    p isa String && occursin("__@", p) && return _known_whole(_check_function(p), instruc)
-    return _alias_column_field(p, instruc) isa _INTEGER_FIELDS
-  end
-  if p isa FExpression
-    p.operation === nothing && return _known_whole(p.field_name, instruc)
-    return p.operation in ("+", "-", "*") && _known_whole(p.field_name, instruc) && _known_whole(p.operand, instruc)
-  end
-  if p isa Union{FObject,WindowFunction}
-    name = p.function_name
-    name == "COUNT" && return true
-    _integer_transform(p) && return true
-    declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
-    declared isa AbstractString && !isempty(declared) &&
-      return _sql_type_field(declared) isa Union{Models.sIntegerField,Models.sBigIntegerField}
-    whole = name in _NUMERIC_WHOLE_FUNCTIONS || name == "MOD" || _result_rule(p) in _OPERAND_TYPED_RULES ||
-            (name == "ROUND" && get(p.kwargs, "precision", 0) == 0)
-    whole || return false
-    # #1147 step 2: a `Lag`/`Lead` answers its `default` where the offset row is missing, so the
-    # default is one of its values (`lag(int4, int, float8)` is a `float8`). A string there is a text
-    # literal, never a path.
-    if p isa WindowFunction
-      default = get(p.kwargs, "default", nothing)
-      literal = default isa SQLText ? default.field : default
-      literal isa AbstractString && return false
-      (literal === nothing || _is_null_literal(literal) || _known_whole(default, instruc)) || return false
-    end
-    return all(x -> _known_whole(x, instruc), p.column isa AbstractVector ? p.column : (p.column,))
-  end
-  return false
-end
+# #1157 — an operand that is a whole number on both engines BY TYPE: the one the type walk names an
+# integer (`_infer_kind` under every policy, `expression_kind.jl`). It was a hand-built classifier of
+# its own, one arm per shape, and it named fewer than the walk did: `Length`, the ranking windows, an
+# integer `Case` and `Coalesce(x, NULL)` were whole to the walk and not to it, so a `Floor` over them
+# still split once divided (until #1147 normalized the render from the walk), and the arms it had that
+# the walk does not — `Mod`, `Round(x)`, a CTE column by its synthetic field — named values that are a
+# `numeric` on PostgreSQL and a REAL on SQLite, whole in value but no integer in type. A literal is
+# asked as an arithmetic side (`_arithmetic_side_kind`): a bare `Integer` is a `bigint` literal.
+_known_whole(p, instruc::SQLInstruction)::Bool =
+  _arithmetic_side_kind(p isa SQLField ? p.field : p, instruc, _AllKinds()) isa Union{CInt16,CInt32,CInt64}
 # #1135 — a date part both engines compute as an integer, whatever its operand's type: `Dialect`
 # renders `EXTRACT(… FROM x)::integer` (`trunc(…)::integer` for `SECOND`) on PostgreSQL and
 # `CAST(strftime(…) AS INTEGER)` or integer arithmetic on SQLite, and `QUARTER`, `QUADRIMESTER` and
@@ -1351,7 +1227,9 @@ function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruct
   # The whole classifier, not only the number half: `Lag("active")` is the boolean's own value, and
   # `_expression_formatter` does not type a window value function. A `Lag`/`Lead` `default` is one of
   # its values too (#1147 step 2, `_known_whole`): `Lag("number"; default = 3.5)` is a float.
-  operands = Any[(p.column isa AbstractVector ? p.column : (p.column,))...]
+  # `NullIf(a, b)` is `a` (its `:first_operand` rule): PostgreSQL's promotion to `b`'s type is cast
+  # back to `a`'s (#1150, `Dialect.NULLIF`), so `NullIf("number", 0.5)` is the integer on both engines.
+  operands = rule === :first_operand ? Any[_first_operand(p)] : Any[(p.column isa AbstractVector ? p.column : (p.column,))...]
   if p isa WindowFunction
     default = get(p.kwargs, "default", nothing)
     literal = default isa SQLText ? default.field : default

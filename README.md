@@ -8,7 +8,7 @@
 **PormG.jl** is a Django-inspired ORM for Julia with async-first execution, designed for
 high-concurrency web frameworks like [Genie.jl](https://genieframework.com/). It provides an
 expressive query builder, automatic migrations, and cross-database support for PostgreSQL and
-SQLite.
+SQLite (MySQL is planned).
 
 ## 📚 Documentation
 
@@ -17,19 +17,21 @@ Full documentation, tutorials, and API reference:
 
 ## Key Features
 
-- **Async-first** — non-blocking I/O via `LibPQ.async_execute`; synchronous helpers are thin wrappers that never block the event loop
+- **Async-first** — on PostgreSQL, non-blocking I/O via `LibPQ.async_execute`; on SQLite, one process-wide worker runs every statement in turn, and the calling task yields while it waits. Synchronous helpers are thin wrappers that never block the event loop
 - **Django-style filter syntax** — `__` for join traversal, `__@gt` / `__@in` / `__@contains` for operators
 - **F-expressions** — column arithmetic and field-to-field comparisons: `F("points") > F("grid")`
 - **Aggregation & annotation** — `Count`, `Sum`, `Avg`, `Max`, `Min` with `GROUP BY` / `HAVING` handled automatically
 - **Migrations** — state-based schema reconciliation with `makemigrations` / `migrate`, destructive-operation guards, and a history table
 - **Multi-database & multi-tenancy** — switch connections at runtime with `.db("tenant_id")`
-- **Advisory locks** — distributed coordination via `with_advisory_lock`
+- **Advisory locks** — distributed coordination via `with_advisory_lock` (PostgreSQL; on SQLite the body runs unlocked, with a warning — see [Backend Capabilities](https://pingolee.github.io/PormG.jl/dev/backends/))
 - **Transactions** — `run_in_transaction` with savepoint support and async context propagation
 
 ---
 
 ## Requirements
 
+- A supported backend: **PostgreSQL** (production) and **SQLite** (development and tests); MySQL is planned for the first registered release ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)). What each backend supports, and the guarantees that rest on the engine, are in [Backend Capabilities](https://pingolee.github.io/PormG.jl/dev/backends/)
+- SQLite **3.24** or newer for `ON CONFLICT` (`bulk_insert(on_conflict = …)`, `update_or_create`, `get_or_create`; not checked up front, so an older library raises SQLite's own error) and **3.25** for window functions (checked against the library PormG loads)
 - Julia **1.12** or newer — the 1.12 floor is deliberate: the hot-reload model-loading machinery (`@import_models` / `set_models`) relies on Julia 1.12 world-age semantics, so the 1.10 LTS is not targeted ([#211](https://github.com/PingoLee/PormG.jl/issues/211))
 - PostgreSQL **11** or newer to read the schema — `inspectdb`, `check`, and the read under `makemigrations` and `migrate`; an older server is refused up front with `BackendCapabilityError`. A migration plan asks for what its statements need: adding a generated column (`generated_from`) needs PostgreSQL 12, and removing `generated_from` (`ALTER COLUMN … DROP EXPRESSION`) needs 13. `makemigrations` and `migrate` refuse such a plan on an older server, naming the statement, before any statement runs ([#1032](https://github.com/PingoLee/PormG.jl/issues/1032), [#1146](https://github.com/PingoLee/PormG.jl/issues/1146))
 - PostgreSQL: **no stated floor for queries and writes** — `filter`, `list`, `create`, `update`, `bulk_*` and `delete` use ordinary SQL, not the catalog columns schema management reads, so a server older than 11 whose schema is managed elsewhere can still be read and written. That is best effort: they are tested only against the PostgreSQL version the integration suite runs. A feature that needs a newer server fails with PostgreSQL's own error when the query runs; `GROUPS` window frames and `search_type = "websearch"` need PostgreSQL 11 ([#1097](https://github.com/PingoLee/PormG.jl/issues/1097); see [Server versions](https://pingolee.github.io/PormG.jl/dev/postgres/#Server-versions))

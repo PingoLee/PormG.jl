@@ -1680,15 +1680,27 @@ function _resolve_relation_targets!(fields_dict::Dict{Symbol, Any},
     # The join COLUMNS are not decided here: they depend on the TARGET model's primary key, and the
     # target may not be built yet. See `_pin_m2m_join_columns!`, which runs once every model exists.
     #
-    # ONE exception, settled here because the information dies with `ref`: a ManyToManyField pointing
-    # at a PROXY. `.to` becomes the concrete parent's binding — that is the table the relation reads
-    # — but Django names the join column from the model the field NAMES
-    # (`create_many_to_many_intermediary_model` uses `to_model._meta.model_name`), so it is
-    # `baseproxy_id`, not `base_id`. Deriving it downstream from `target.class` would emit a column
-    # Django never created, and quietly: before proxies resolved at all this M2M was DROPPED with a
-    # marker, so getting it wrong here trades a loud failure for a silent one.
-    if is_m2m && field.through === nothing && via_proxy !== nothing && field.target_field === nothing
-      field.target_field = string(lowercase(String(via_proxy)), "_id")
+    # TWO exceptions, settled here because they read the class the field NAMES, and that dies with
+    # `ref`. Django names the join columns from `to_model._meta.model_name` and the owner's
+    # (`create_many_to_many_intermediary_model`), and a proxy keeps its own `model_name`:
+    #
+    # - A SELF-relation is decided by those two NAMES, not by the resolved entry: equal names get
+    #   `from_<class>_id` / `to_<class>_id`, whatever the app. So a ManyToMany to a proxy of its own
+    #   model is NOT one (#1171), and one to a same-named model in another app IS one (#1172).
+    #   Neither pin depends on a primary key — Django hardcodes `_id` — so nothing is left for later.
+    # - A ManyToManyField pointing at a PROXY. `.to` becomes the concrete parent's binding — that is
+    #   the table the relation reads — but the column is `baseproxy_id`, not `base_id`. Deriving it
+    #   downstream from `target.class` would emit a column Django never created, and quietly: before
+    #   proxies resolved at all this M2M was DROPPED with a marker, so getting it wrong here trades a
+    #   loud failure for a silent one.
+    if is_m2m && field.through === nothing
+      named = via_proxy === nothing ? target.class : String(via_proxy)
+      if lowercase(named) == lowercase(owner.class)
+        field.source_field = string("from_", lowercase(owner.class), "_id")
+        field.target_field = string("to_", lowercase(owner.class), "_id")
+      elseif via_proxy !== nothing && field.target_field === nothing
+        field.target_field = string(lowercase(named), "_id")
+      end
     end
   end
   return nothing
@@ -1720,14 +1732,18 @@ A self-referential M2M is the one case where Django does not use `<class>_id` at
 cannot carry the same column twice, so it names the ends `from_<class>_id` / `to_<class>_id`. That
 case was unreachable before #346 — `ManyToManyField("self")` died at `set_models` — so resolving
 `"self"` without this would have traded a loud failure for a join table with one column doing two
-jobs.
+jobs. Django decides it by NAME — the class the field names against the owner's, app label ignored —
+so it is pinned in `_resolve_relation_targets!`, the last place that still knows the named class
+(#1171, #1172). Deciding it here, by `target === owner`, gave a ManyToMany to a proxy of its own
+model the `from_` / `to_` pair, and one to a same-named model in another app two `driver_id`s.
 
 The same defect for hand-written models was #364, now fixed in `_relation_from_many_to_many`, which
 derives `from_<model>_<pk>` / `to_<model>_<pk>` for a self-relation. This pin is therefore no longer
 load-bearing for an `id`-keyed model — the two derivations agree byte for byte — but it is still
 required for any other primary key, because Django hardcodes `_id` where PormG carries the pk field
-name. Pinning both ends here also routes the field down the explicit branch, which is what keeps the
-importer's output independent of PormG's own derivation.
+name. Pinning both ends also routes the field down the explicit branch, which is what keeps the
+importer's output independent of PormG's own derivation — and PormG's keys on the model, where
+Django's keys on the name.
 
 A field whose Django column cannot be a PormG field name is **dropped**, and the returned
 `# PormG:` markers (keyed by the owning model) say so (#1140). On the auto path a join column is a
@@ -1780,17 +1796,17 @@ function _pin_m2m_join_columns!(index::_DjangoClassIndex)
       target_pk = pk_name(target)
       # An unreadable primary key means "do not know", not "not `id`" — pinning on a guess would
       # write a column name into the artifact with nothing behind it.
+      # A Django self-relation arrives with both ends pinned (`_resolve_relation_targets!`), so
+      # `target === owner` here is the owner's table reached through a proxy of it: two plain
+      # columns in Django, the target's already pinned to the proxy. PormG would derive this
+      # `source_field` the same; it is pinned so the line states both of Django's columns.
       if field.source_field === nothing && owner_pk !== nothing &&
-         (_django_positional_key(owner) != lowercase(owner.class) || owner_pk != "id")
+         (_django_positional_key(owner) != lowercase(owner.class) || owner_pk != "id" || target === owner)
         field.source_field = string(lowercase(owner.class), "_id")
       end
       if field.target_field === nothing && target_pk !== nothing &&
          (_django_positional_key(target) != lowercase(target.class) || target_pk != "id")
         field.target_field = string(lowercase(target.class), "_id")
-      end
-      if target === owner
-        field.source_field = string("from_", lowercase(owner.class), "_id")
-        field.target_field = string("to_", lowercase(owner.class), "_id")
       end
       # #1140: each end's Django column — the pin when one is set, `<class>_id` otherwise, which is
       # also what PormG derives whenever no pin was needed. On the auto path that string is a FIELD

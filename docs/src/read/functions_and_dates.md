@@ -485,20 +485,21 @@ Say which text you mean:
   | a whole JSON document | `{"a": [1, 2]}` | `{"a":[1,2]}` |
 
   It is the same value written two ways, so PormG builds it on every engine and leaves the
-  spelling to each. A boolean is the exception: SQLite has no boolean and writes `1`, so a
-  boolean's cast to text is refused there. So is a quotient over a decimal (`F("price") / 2`),
-  which SQLite divides as integers on its whole values: divide by a float, `F("price") / 2.0`
-  (see the `Cast` section below);
+  spelling to each, a quotient over a decimal (`F("price") / 2`) included: it is `7.5` on both
+  engines (#1150). A boolean is the exception: SQLite has no boolean and writes `1`, so a
+  boolean's cast to text is refused there;
 - **for a boolean**, name its two texts with a `Case`;
 - **for a timestamp**, name the format with `ToChar`: `ToChar("start_at", "YYYY-MM-DD HH:MI:SS")`
   gives `2009-03-29 06:00:00` on both engines;
 - or **fetch the value and format it in Julia**, where you choose the digits.
 
 `Floor`, `Ceil` and `Abs` over an integer, and `Sum` of integers, are integers on both engines
-(#1147), so `Floor("grid") / 2` and `Sum("resultid") / 2` divide as integers and pass. One integer
-quotient is a question of meaning rather than of text: a `Sum` PormG cannot type as an integer,
-which PostgreSQL computes as `numeric` (a sum of a shift over a BIGINT column,
-`Sum(F("resultid") << 1) / 2`), would keep the half there. It is refused on PostgreSQL only (#1111).
+(#1147), so `Floor("grid") / 2` and `Sum("resultid") / 2` divide as integers and pass. An integer
+here includes a bitwise operator or a shift over integers (`F("grid") & 3`, `F("resultid") << 1`,
+which has its left operand's type) and a `Subquery` projecting one (#1153). One integer quotient is
+a question of meaning rather than of text: a `Sum` over an operand PormG cannot type that holds a
+`bigint`, which PostgreSQL computes as `numeric`, would keep the half there. It is refused on
+PostgreSQL only (#1111). A sum PormG types as a float or a decimal is that kind's quotient (#1157).
 
 The check covers only types PormG can name: an operand it cannot type (an untyped `Case`, an
 extremum over timestamp arithmetic, `Greatest`/`Least` over computed timestamps or intervals)
@@ -855,15 +856,14 @@ other builds the query as written. Measured on PostgreSQL 16 and SQLite 3.45:
 | to an integer, of a float, a decimal with places or a `numeric` function | the nearest integer (`1.5` → `2`) | builds | **refused**: its cast truncates (`1`) |
 | to `numeric(p, s)`, of an operand with more than `s` places | the value rounded to `s` places (`1.555` → `1.56`) | builds | **refused**: it keeps every digit |
 | to `numeric(p, s)`, of a literal it cannot hold (`Cast(Value(100), "numeric(3,2)")`) | an overflow | builds, and raises when the query runs | **refused**: it stores `100` |
-| any of these, of a `DecimalField` divided (`F("price") / 2`, `Sum("price") / Count("id")`), or of an integer cast to `numeric` and divided (`Cast("grid", "numeric") / 2`) | a decimal quotient (`15 / 2` is `7.5`) | builds | **refused**: it stores a whole decimal as an integer and divides it as one (`7`) |
-| any of these, of a quotient over a value mixing whole numbers and fractions (`Coalesce("grid", 0.5) / 2`, `NullIf("grid", 0.5) / 2`, a `Case` with an integer and a float branch, `Lag("grid"; default = 1.5) / 2`; a literal `0` is no mix, since `0 / n` is `0` everywhere) | a quotient with its fraction | builds | **refused**: it divides the rows holding an integer as integers |
-| any of these, of a `Sum` PormG cannot type as an integer, divided (`Sum(F("resultid") << 1) / 2`) | an integer quotient (`7`) | **refused**: it computes `numeric` (`7.5`) | builds |
+| any of these, of a `Sum` over an operand PormG cannot type that holds a `bigint`, divided | an integer quotient (`7`) | **refused**: it computes `numeric` (`7.5`) | builds |
 
 The text of a float, a decimal, a timestamp or a document is the same value written two ways, so it
-is documented, not refused: the `Concat` section above lists each engine's text. A quotient is not
-always one value, though: over a decimal, or over a value mixing whole numbers and fractions, SQLite
-divides its integer rows as integers, which the last rows above refuse there. Divide by a float
-(`F("price") / 2.0`) and the cast builds on both. A cast refused only
+is documented, not refused: the `Concat` section above lists each engine's text. A quotient is the
+number it means on both engines: over a decimal, or over a value that is one of several where one is
+a fraction, SQLite would divide its integer rows as integers, so PormG casts the dividend to `REAL`
+there (#1150, see [Field Expressions](field_expressions.md#Core-Syntax)). `Cast(F("price") / 2, "text")` therefore builds on both,
+and `Cast(F("price") / 2, IntegerField())` is the fraction-to-integer row above. A cast refused only
 on SQLite cannot run on the development engine, so its test belongs on PostgreSQL. That is the
 intended trade: the engine that cannot give the meaning says so, rather than answering differently.
 
@@ -886,8 +886,11 @@ What each row covers:
   so on such a row PostgreSQL raises and SQLite answers. Neither is the literal of a `Coalesce`,
   `Greatest` or `Least` with an `output_field`, which is one candidate value among the operands.
 
-An operand PormG cannot type (an untyped `Case`) passes every row, and a `Subquery` is classified by
-the expression it projects (#1124).
+A `Case` is typed by its branch values for a cast to an integer (#1151): one with a float branch
+(`then = 1.5`, a `FloatField` column) is a float, so that cast is refused on SQLite as any float's
+is. The other rows do not read a `Case`'s branches yet: its cast to `numeric(p, s)`, and a `Case`
+with a decimal branch, pass, as an operand PormG cannot type (a JSON key lookup) does. A `Subquery`
+is classified by the expression it projects (#1124).
 
 To get an integer on every engine, say how to round first. `Round(x)`, `Floor(x)` and `Ceil(x)` give
 the same whole number on both engines for every stored value measured (PostgreSQL's `round` is the

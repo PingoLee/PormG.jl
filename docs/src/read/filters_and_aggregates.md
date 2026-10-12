@@ -41,6 +41,11 @@ These work in both `filter()` and `values()`.
 | `@regex` | `~ pattern` | POSIX regular expression, case-sensitive (PostgreSQL only) | `"surname__@regex" => "^Ver"` |
 | `@iregex` | `~* pattern` | POSIX regular expression, case-insensitive (PostgreSQL only) | `"surname__@iregex" => "^ver"` |
 
+Exact match, `@contains`, `@startswith` and `@endswith` compare case-sensitively on PostgreSQL and
+SQLite. PostgreSQL's default collation is deterministic. On SQLite, `=` uses the default `BINARY`
+collation, and `LIKE` is case-sensitive because PormG sets `PRAGMA case_sensitive_like = ON` on every
+connection ([Backend Capabilities](../backends.md#Guarantees-that-rest-on-an-engine-feature)).
+
 Three field types have lookups of their own, beyond this table: a `JSONField` (see
 [JSON / JSONB Lookups and Operators](#JSON-/-JSONB-Lookups-and-Operators) below), an `ArrayField`
 (see [Array Lookups](#Array-Lookups-(PostgreSQL-only)) below), and the network address fields

@@ -3,7 +3,7 @@
 - **Version**: Unreleased
 - **PormG ref**: #1147 ; `src/Dialect.jl` (`SUM`), `src/querybuilder/expression_kind.jl` (`_sums_bigint`, `_operation_kind`), `src/querybuilder/engine_departures.jl` (`_MEANING_DEPARTURES`), `src/querybuilder/projection_types.jl` (`_cast_divergent_operand`, `_whole_numeric_operand`), `src/querybuilder/select_nodes.jl`, `src/querybuilder/functions.jl`
 - **Recorded**: 2026-10-11
-- **Severity**: behavior change. On PostgreSQL a `Sum` over a `bigint` reads an `Int64` where it read a `Decimal`, a quotient over it truncates, and a sum past the `bigint` range raises. Refusals added earlier in this release now fire on one engine only, and some no longer fire at all (see the table). A few shapes that built in v0.7.0 and answered differently per engine now raise `QueryBuildError` on SQLite: a `DecimalField` divided under `Floor`/`Ceil`/`Abs`, and a value mixing whole numbers and fractions (`Coalesce("grid", 0.5)`, a window with a fractional `default`), divided, then cast to an integer or a scale.
+- **Severity**: behavior change. On PostgreSQL a `Sum` over a `bigint` reads an `Int64` where it read a `Decimal`, a quotient over it truncates, and a sum past the `bigint` range raises. Refusals added earlier in this release now fire on one engine only, and some no longer fire at all (see the table). A few shapes that built in v0.7.0 and answered differently per engine now raise `QueryBuildError` on SQLite: a quotient over a `DecimalField` or over a value mixing whole numbers and fractions (`Coalesce("grid", 0.5)`, a window with a fractional `default`), cast to an integer or a scale. It is a fraction on both engines since #1150 (see that entry), and SQLite's cast truncates it or keeps every digit.
 
 ### What changed
 
@@ -11,7 +11,8 @@
 integer, and SQLite sums integers as integers. PostgreSQL sums a `smallint` or an `integer` to a
 `bigint`, but widens the sum of a `bigint` to `numeric`. The operand is a `bigint` for an `IDField`,
 a `BigIntegerField`, a `ForeignKey` or `OneToOneField`, an integer literal (PormG binds it as
-`$n::bigint`), a `Case` or `Coalesce` of those, and integer arithmetic over one. PormG now renders
+`$n::bigint`), a `Case` or `Coalesce` of those, and integer arithmetic over one, a bitwise operator
+or a shift included (a shift has its left operand's type: `Sum(F("resultid") << 1)`). PormG now renders
 `SUM(x)::bigint` there. Measured through the F1 fixture on PostgreSQL 16:
 
 | expression | before, PostgreSQL | after, PostgreSQL | SQLite (unchanged) |
@@ -40,10 +41,10 @@ answers exactly. Each is now checked against what the expression means:
 | `Cast(<fraction>, IntegerField())` | refused on SQLite only (it truncates); builds on PostgreSQL (rounds) |
 | `Cast(x, "numeric(p, s)")` with more than `s` places | refused on SQLite only (it keeps every digit) |
 | `Cast(<literal>, "numeric(p, s)")` too large for `p` | refused on SQLite only; PostgreSQL builds and raises when the query runs |
-| a `DecimalField` divided (`F("price") / 2`, `Sum("price") / Count("id")`), or an integer cast to `numeric` and divided, then cast — to text too — directly or under `Floor`/`Ceil`/`Abs` | refused on SQLite only (it stores a whole decimal as an integer and divides it as one); concatenated, refused on every engine as a decimal |
-| a value mixing whole numbers and fractions (`Coalesce("grid", 0.5)`, `Least("grid", "points")`, `NullIf("grid", 0.5)`, a `Case` with an integer and a float branch, a `Lag`/`Lead` with a fractional `default`), divided, then cast — to text too | refused on SQLite only: PostgreSQL resolves the value to a float or a `numeric`, and SQLite divides the rows holding an integer as integers; concatenated, refused on every engine as a float |
+| a `DecimalField` divided (`F("price") / 2`, `Sum("price") / Count("id")`), an integer cast to `numeric` and divided, or a value mixing whole numbers and fractions divided (`Coalesce("grid", 0.5) / 2`, a `Case` with an integer and a float branch, a `Lag`/`Lead` with a fractional `default`), then cast | a fraction on both engines, which SQLite now divides as `REAL` (#1150): to text it **builds on every engine**; to an integer or a scale it is refused on SQLite only, as any fraction is; concatenated, refused on every engine as a number |
 | `Sum` of a `bigint`, divided, cast or concatenated, a CTE column of one included | **builds on every engine** (the `::bigint` above) |
-| a `Sum` PormG cannot type as an integer (over a bitwise operator or a shift: `Sum(F("resultid") << 1)`), divided | refused on PostgreSQL only |
+| a `Sum` over a bitwise operator or a shift (`Sum(F("resultid") << 1)`), divided | **builds on every engine** (the `::bigint` above, #1153) |
+| a `Sum` over an operand PormG cannot type that holds a `bigint`, divided | refused on PostgreSQL only (a sum PormG types as a float or a decimal is that quotient, #1157) |
 | `Round(<text>, d)` | refused on every engine (unchanged) |
 
 Refusal messages name the meaning and the engine at hand, never a pair: ``Cast(…, "integer") of the
@@ -51,7 +52,8 @@ FloatField `points` means the nearest integer (`1.5` → `2`); SQLite computes t
 (`1`), so PormG refuses it on SQLite (#1028).``
 
 The entries for #1111, #1127, #1135 and #1141 are removed from this release: everything they
-refused now builds on both engines and agrees, except the bitwise sum in the table. The entries for
+refused now builds on both engines and agrees, except the `Sum` over an operand PormG cannot type in
+the table. The entries for
 #1027, #1028, #1040 and #1124 are amended to the table above.
 
 ### Who this affects

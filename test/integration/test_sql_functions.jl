@@ -2102,47 +2102,67 @@ end
     @test df[1, :podiums] isa Int64 && df[1, :podiums] == count(<=(3), rows.positionorder)
     @test df[1, :shifted] isa Int64 && df[1, :shifted] == sum(rows.grid .+ 1)
 
-    # A `Lag` over an integer with a fractional `default` is a float (`lag(int4, int, float8)`), so its
-    # quotient keeps the fraction: PostgreSQL builds it, checked against Julia's float division, and
-    # SQLite, which divides its integer rows as integers, refuses it.
-    lagged = () -> (q = M.Result.objects; q.filter("raceid" => 18);
-                    q.values("resultid", "grid", "x" => Lag("grid"; default = 1.5, over = WindowOver(order_by = "resultid")) / 2);
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A decimal or mixed quotient is the same fraction on every engine (#1150)
+# SQLite stores a whole `DecimalField` value (`9.00`) as an INTEGER, and a value that is one of several
+# — a `Lag` over an integer with a fractional `default`, `Coalesce("grid", 0.5)` — is the row's own
+# integer where an integer supplied it, so `x / 2` was `4` there where PostgreSQL computes `4.5`. SQLite
+# now divides such a quotient as REAL (`CAST(x AS REAL) / ?`), so both engines read the fraction,
+# checked against Julia's own division over the same rows: projected, filtered on, and cast to text.
+# `NullIf(<integer>, <fraction>)` has the integer's type on both (PostgreSQL casts its promotion back),
+# so it divides as an integer. A fraction cast to an integer is still the #1028 meaning SQLite truncates.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1150: a decimal or mixed quotient reads the same fraction on every engine" begin
+    # Constructor results with points: a DecimalField whose whole values SQLite stores as INTEGER.
+    q = M.Constructor_results.objects
+    q.filter("points__@gt" => 0)
+    q.values("constructorresultsid", "points", "half" => F("points") / 2, "t" => Cast(F("points") / 2, "text"))
+    q.order_by("constructorresultsid")
+    df = q |> DataFrame
+    @test nrow(df) > 0
+    @test any(p -> isinteger(p) && isodd(Int(p)), df.points)   # a half to keep is exercised
+    @test isempty([r.constructorresultsid for r in eachrow(df) if Float64(r.half) != Float64(r.points) / 2])
+    @test isempty([r.constructorresultsid for r in eachrow(df) if parse(Float64, r.t) != Float64(r.points) / 2])
+    # The row set a filter on the quotient selects: `points / 2 > 4` keeps a `9` (`4.5`) on every engine.
+    q = M.Constructor_results.objects
+    q.filter(F("points") / 2 > 4)
+    q.values("constructorresultsid", "points")
+    filtered = q |> DataFrame
+    q = M.Constructor_results.objects
+    q.filter("points__@gt" => 8)
+    q.values("constructorresultsid", "points")
+    expected = q |> DataFrame
+    @test any(p -> Float64(p) == 9.0, expected.points)
+    @test sort(filtered.constructorresultsid) == sort(expected.constructorresultsid)
+
+    # A `Lag` over an integer with a fractional `default` is a float (`lag(int4, int, float8)`): its
+    # quotient keeps the fraction on both engines.
+    q = M.Result.objects
+    q.filter("raceid" => 18)
+    q.values("resultid", "grid", "x" => Lag("grid"; default = 1.5, over = WindowOver(order_by = "resultid")) / 2,
+             "c" => Coalesce("grid", 0.5) / 2, "n" => NullIf("grid", 0.5) / 2)
+    q.order_by("resultid")
+    df = q |> DataFrame
+    @test any(isodd, df.grid)                  # a half to keep is exercised
+    @test Float64.(df.x) == [i == 1 ? 1.5 / 2 : df.grid[i - 1] / 2 for i in 1:nrow(df)]
+    @test Float64.(df.c) == df.grid ./ 2
+    # `NullIf(grid, 0.5)` is the integer grid: an integer quotient on both engines.
+    @test Int.(df.n) == div.(df.grid, 2)
+
+    # Cast to an integer, the fraction means the nearest integer, which SQLite's cast truncates (#1028).
+    to_int = () -> (q = M.Result.objects; q.filter("raceid" => 18);
+                    q.values("resultid", "grid", "x" => Cast(Coalesce("grid", 0.5) / 2, PormG.Models.IntegerField()));
                     q.order_by("resultid"); q |> DataFrame)
     if PORMG_DB_FOLDER == "db_sl"
-        err = try
-            q = M.Result.objects; q.filter("raceid" => 18)
-            q.values("x" => Cast(Lag("grid"; default = 1.5, over = WindowOver(order_by = "resultid")) / 2, PormG.Models.IntegerField()))
-            q |> DataFrame
-            nothing
-        catch e
-            e
-        end
-        @test err isa PormG.QueryBuildError
-        @test occursin("so PormG refuses it on SQLite (#1147)", sprint(showerror, err))
+        err = try to_int(); nothing catch e; e end
+        @test err isa PormG.QueryBuildError && occursin("so PormG refuses it on SQLite (#1028)", sprint(showerror, err))
     else
-        df = lagged()
-        expected = [i == 1 ? 1.5 / 2 : df.grid[i - 1] / 2 for i in 1:nrow(df)]
-        @test any(i -> isodd(df.grid[i]), 1:nrow(df) - 1)   # a half to keep is exercised
-        @test Float64.(df.x) == expected
+        df = to_int()
+        # `Coalesce(<integer>, 0.5)` is a `float8` there, whose cast rounds a tie to even (`2.5` → `2`).
+        @test Int.(df.x) == round.(Int, df.grid ./ 2, RoundNearest)
     end
-
-    # A decimal quotient (review of #1147 step 2): SQLite stores a whole `DecimalField` value as an
-    # INTEGER and divides it as one (`9 / 2` is `4`), so a cast to text of it is refused there; on
-    # PostgreSQL it keeps the fraction, checked against Julia. Dividing by a float builds on both.
-    half_text(divisor) = () -> (q = M.Constructor_results.objects; q.filter("points__@gt" => 0);
-                                q.values("constructorresultsid", "points", "t" => Cast(F("points") / divisor, "text"));
-                                q.order_by("constructorresultsid"); q |> DataFrame)
-    if PORMG_DB_FOLDER == "db_sl"
-        err = try half_text(2)(); nothing catch e; e end
-        @test err isa PormG.QueryBuildError && occursin("so PormG refuses it on SQLite (#1087)", sprint(showerror, err))
-    else
-        df = half_text(2)()
-        @test any(p -> isodd(Int(p)), df.points)   # a half to keep is exercised
-        @test isempty([r.constructorresultsid for r in eachrow(df) if parse(Float64, r.t) != Float64(r.points) / 2])
-    end
-    df = half_text(2.0)()
-    @test nrow(df) > 0
-    @test isempty([r.constructorresultsid for r in eachrow(df) if parse(Float64, r.t) != Float64(r.points) / 2])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2349,6 +2369,15 @@ end
         order_by("raceid").limit(10).list(:dict)
     @test length(races) == 10
     @test all(r -> r[:y] isa Integer && r[:y] == div(r[:year], 2), races)
+    # #1157: `Length` and a ranking window are integers to the type walk, so a `Floor` over them divides
+    # as an integer on both engines too (checked against Julia over the same rows).
+    drivers = M.Driver.objects.values("driverid", "surname", "h" => Floor(Length("surname")) / 2,
+                                      "r" => Floor(Rank(over = WindowOver(order_by = "driverid"))) / 2).
+        order_by("driverid").limit(20).list(:dict)
+    @test length(drivers) == 20
+    @test any(d -> isodd(length(d[:surname])), drivers)   # a half to drop is exercised
+    @test all(d -> d[:h] isa Integer && d[:h] == div(length(d[:surname]), 2), drivers)
+    @test all(((i, d),) -> d[:r] isa Integer && d[:r] == div(i, 2), enumerate(drivers))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2446,4 +2475,90 @@ end
     end
     total = only(M.Result.objects.filter("raceid" => 18).values("x" => Sum(Floor(case()))).list(:dict))[:x]
     @test Float64(total) == sum(r -> r[:grid] > 10 ? 7 : 3, rows)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite's ISO-week parts and its date cast give PostgreSQL's values, across year boundaries
+# `@week` / `@iso_year` / `@iso_week_day` (`Extract(x, "WEEK" | "ISOYEAR" | "ISODOW")`) render
+# `EXTRACT(WEEK FROM x)::integer` on PostgreSQL, and on SQLite arithmetic over the Thursday of x's
+# Monday-started week, `date(x, '-3 days', 'weekday 4')` (#636). `Cast(x, "date")` renders `x::date`
+# on PostgreSQL and `date(x)` on SQLite (#822).
+# Why: dates are a core type, and both SQLite spellings render the same value with SQLite's own date
+# functions (Django's SQLite backend casts to a date with `date()` too). That is rendering, not an
+# emulated feature, so neither raises `BackendCapabilityError`, on the condition that the values
+# are the same. The year boundary is where an ISO week leaves the calendar: Dec 29 – Jan 3 can
+# belong to either year, and a year can have a week 53. So every day from Dec 25 to Jan 7 of
+# 2014/15 … 2027/28 is checked. That covers every weekday Jan 1 falls on, and the 53-week years 2015,
+# 2020 and 2026. The expected values come from Julia's calendar (`Dates.week`, the year of the
+# week's Thursday, `Dates.dayofweek`), plus literal pins, so db_2 and db_sl must give the same
+# numbers. Timestamps are read in UTC, the session time zone PormG opens both drivers with.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "ISO-week parts and the date cast: the same values on both engines, across year boundaries" begin
+    iso(d::Date) = (week(d), year(d + Day(4 - dayofweek(d))), dayofweek(d))
+    parts(x) = ("w" => Extract(x, "WEEK"), "y" => Extract(x, "ISOYEAR"), "d" => Extract(x, "ISODOW"))
+    got(r) = (Int(r[:w]), Int(r[:y]), Int(r[:d]))
+    asdate(v) = Date(string(v)[1:10])
+    utc_date(z) = Date(DateTime(TimeZones.astimezone(z, TimeZones.tz"UTC")))
+    function one_row(pairs...)
+        q = M.Race.objects
+        q.filter("raceid" => 1)
+        q.values(pairs...)
+        return only(q.list())
+    end
+    edge(d::Date) = (month(d) == 12 && day(d) >= 29) || (month(d) == 1 && day(d) <= 3)
+
+    @testset "a date column: every driver's birth date" begin
+        q = M.Driver.objects
+        q.values("dob", "w" => "dob__@week", "y" => "dob__@iso_year", "d" => "dob__@iso_week_day",
+                 "c" => Cast("dob", "date"))
+        rows = q.list()
+        @test length(rows) > 800
+        @test all(r -> got(r) == iso(asdate(r[:dob])), rows)
+        @test all(r -> asdate(r[:c]) == asdate(r[:dob]), rows)
+        # Not vacuous: some drivers were born in the Dec 29 – Jan 3 window.
+        @test count(r -> edge(asdate(r[:dob])), rows) >= 10
+    end
+
+    @testset "date literals from Dec 25 to Jan 7, 2014/15 … 2027/28" begin
+        for y in 2014:2027, d in Date(y, 12, 25):Day(1):Date(y + 1, 1, 7)
+            r = one_row("c" => Cast(Value(d), "date"), parts(Cast(Value(d), "date"))...)
+            @test asdate(r[:c]) == d
+            @test got(r) == iso(d)
+        end
+    end
+
+    @testset "literal pins at the boundary" begin
+        for (d, want) in (Date(2014, 12, 29) => (1, 2015, 1),    # a Monday: week 1 of the next year
+                          Date(2016, 1, 3)   => (53, 2015, 7),   # a Sunday: week 53 of the year before
+                          Date(2019, 12, 30) => (1, 2020, 1),
+                          Date(2021, 1, 1)   => (53, 2020, 5),
+                          Date(2022, 1, 2)   => (52, 2021, 7),   # 2021 has no week 53
+                          Date(2027, 1, 1)   => (53, 2026, 5))
+            @test got(one_row(parts(Cast(Value(d), "date"))...)) == want
+        end
+    end
+
+    # A zoned literal at an offset other than UTC is left out until #1175: PostgreSQL binds a
+    # `ZonedDateTime` untyped, so `::date` reads the wall-clock date of the offset written.
+    @testset "timestamps near midnight, cast to a date" begin
+        for (v, want) in (DateTime(2020, 12, 31, 23, 30) => Date(2020, 12, 31),
+                          DateTime(2021, 1, 3, 23, 59, 59) => Date(2021, 1, 3),   # Sunday of 2020's week 53
+                          DateTime(2021, 1, 4, 0, 0, 1) => Date(2021, 1, 4),     # Monday of 2021's week 1
+                          TimeZones.ZonedDateTime(DateTime(2020, 12, 31, 23, 30), TimeZones.tz"UTC") => Date(2020, 12, 31))
+            r = one_row("c" => Cast(Value(v), "date"), parts(Cast(Value(v), "date"))...)
+            @test asdate(r[:c]) == want
+            @test got(r) == iso(want)
+        end
+    end
+
+    @testset "a timestamp column: every race's start" begin
+        q = M.Race.objects
+        q.filter("start_at__@isnull" => false)
+        q.values("start_at", "c" => Cast("start_at", "date"),
+                 "w" => "start_at__@week", "y" => "start_at__@iso_year", "d" => "start_at__@iso_week_day")
+        rows = q.list()
+        @test length(rows) > 300
+        @test all(r -> asdate(r[:c]) == utc_date(r[:start_at]), rows)
+        @test all(r -> got(r) == iso(utc_date(r[:start_at])), rows)
+    end
 end

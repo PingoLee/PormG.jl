@@ -152,6 +152,43 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F decimal / 2 | subquery", :sqlite) => (type = "Float64", value = "2.75", read = nothing),
   ("Lag int default float / 2 | cte", :postgres) => (type = "Float64", value = "0.75", read = nothing),
   ("Lag int default float / 2 | cte", :sqlite) => (type = "Float64", value = "0.75", read = nothing),
+  # #1121: the rest of the computed-number family — `Avg` over an integer, `Floor` over a decimal, and
+  # `Sqrt`/`Exp`/`Ln`/`Power`, which PostgreSQL computes as `numeric` over any operand. Result 1's
+  # grid is `1` and its points `10.0`; constructor result 3835 has `5.5` points.
+  ("Avg int | alone", :postgres) => (type = "Decimal", value = "1.00", read = nothing),
+  ("Avg int | alone", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
+  ("Avg int | cte", :postgres) => (type = "Decimal", value = "1.00", read = nothing),
+  ("Avg int | cte", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
+  ("Avg int | subquery", :postgres) => (type = "Decimal", value = "1.00", read = nothing),
+  ("Avg int | subquery", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
+  ("Exp int | alone", :postgres) => (type = "Decimal", value = "2.7182818284590452", read = nothing),
+  ("Exp int | alone", :sqlite) => (type = "Float64", value = "2.718281828459045", read = nothing),
+  ("Exp int | subquery", :postgres) => (type = "Decimal", value = "2.7182818284590452", read = nothing),
+  ("Exp int | subquery", :sqlite) => (type = "Float64", value = "2.718281828459045", read = nothing),
+  ("Floor decimal | alone", :postgres) => (type = "Decimal", value = "5", read = nothing),
+  ("Floor decimal | alone", :sqlite) => (type = "Float64", value = "5.0", read = nothing),
+  ("Floor decimal | subquery", :postgres) => (type = "Decimal", value = "5", read = nothing),
+  ("Floor decimal | subquery", :sqlite) => (type = "Float64", value = "5.0", read = nothing),
+  ("Ln float | alone", :postgres) => (type = "Decimal", value = "2.3025850929940457", read = nothing),
+  ("Ln float | alone", :sqlite) => (type = "Float64", value = "2.302585092994046", read = nothing),
+  ("Ln float | subquery", :postgres) => (type = "Decimal", value = "2.3025850929940457", read = nothing),
+  ("Ln float | subquery", :sqlite) => (type = "Float64", value = "2.302585092994046", read = nothing),
+  ("Power float | alone", :postgres) => (type = "Decimal", value = "100", read = nothing),
+  ("Power float | alone", :sqlite) => (type = "Float64", value = "100.0", read = nothing),
+  ("Power float | subquery", :postgres) => (type = "Decimal", value = "100", read = nothing),
+  ("Power float | subquery", :sqlite) => (type = "Float64", value = "100.0", read = nothing),
+  ("Power int | alone", :postgres) => (type = "Decimal", value = "1", read = nothing),
+  ("Power int | alone", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
+  ("Power int | subquery", :postgres) => (type = "Decimal", value = "1", read = nothing),
+  ("Power int | subquery", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
+  ("Sqrt float | alone", :postgres) => (type = "Decimal", value = "3.162277660168379", read = nothing),
+  ("Sqrt float | alone", :sqlite) => (type = "Float64", value = "3.1622776601683795", read = nothing),
+  ("Sqrt float | subquery", :postgres) => (type = "Decimal", value = "3.162277660168379", read = nothing),
+  ("Sqrt float | subquery", :sqlite) => (type = "Float64", value = "3.1622776601683795", read = nothing),
+  ("Sqrt int | alone", :postgres) => (type = "Decimal", value = "1", read = nothing),
+  ("Sqrt int | alone", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
+  ("Sqrt int | subquery", :postgres) => (type = "Decimal", value = "1", read = nothing),
+  ("Sqrt int | subquery", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
 )
 
 # The cells whose value comes back as a DIFFERENT TYPE on the two engines, by the table above. Every
@@ -175,6 +212,11 @@ const _EKR_TYPE_DIVERGENT = Set{String}([
   # type it reads back as is #1121's.
   "Cast int numeric / 2 | alone", "Cast int numeric / 2 | cte", "Cast int numeric / 2 | subquery",
   "F decimal / 2 | alone", "F decimal / 2 | cte", "F decimal / 2 | subquery",
+  # #1121: the rest of the `numeric` family.
+  "Avg int | alone", "Avg int | cte", "Avg int | subquery", "Exp int | alone", "Exp int | subquery",
+  "Floor decimal | alone", "Floor decimal | subquery", "Ln float | alone", "Ln float | subquery",
+  "Power float | alone", "Power float | subquery", "Power int | alone", "Power int | subquery",
+  "Sqrt float | alone", "Sqrt float | subquery", "Sqrt int | alone", "Sqrt int | subquery",
 ])
 
 const _EKR_CELLS = sort!([id for (id, backend) in keys(_EKM_DISAGREEMENTS) if backend === _EKR_ENGINE])

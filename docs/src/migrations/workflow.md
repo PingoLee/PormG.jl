@@ -284,7 +284,10 @@ println(s)
 ```
 This reports the state of the migration **history**: applied migrations, failed migrations, whether a
 pending plan exists, and warnings about the history itself, such as a missing `pormg_migrations`
-table or migrations recorded over a database with no tables. A failed attempt that a later run
+table or migrations recorded over a database with no tables. When `status()` cannot read the
+live tables for that last check, it does not throw: it adds a `Drift detection failed` warning
+naming the error type rather than reporting nothing, since a check that could not look is not a
+clean one. A failed attempt that a later run
 resolved by applying the same plan is listed under `superseded`, not `failed`, and raises no
 warning: on PostgreSQL and SQLite a plan runs in one transaction, so the failure wrote nothing ([what that rests on](../backends.md#Guarantees-that-rest-on-an-engine-feature)). `data_steps` lists the
 [`run_once`](advanced.md#Data-Migrations) steps already applied. It is read-only, and it does not

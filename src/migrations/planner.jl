@@ -3306,7 +3306,7 @@ ignore = _with_connection_ignores(_backend_ignore_tables(connection, settings), 
 # logged and swallowed — `nothing`, the value a successful run returns — under a text match for an
 # "empty database" error nothing raised: an empty database reads as no tables, and plans them all.
 # #1162: a plan needs PostgreSQL 11, though the read alone runs from 9.6; refused before reading.
-_require_pg_plan_floor(connection)
+_require_plan_floor(connection)
 live_schema = read_live_schema(connection; ignore_table = ignore)
 
 # get module from the path (load + resolve FK targets + default pk_field — #62)

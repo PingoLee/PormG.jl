@@ -456,7 +456,7 @@ inside `migrate`'s write transaction, the caller binds the transaction's connect
 function _schema_precondition_drift(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSettings,
                                     recorded::AbstractDict{String, String})
   # #1162: the plan floor, which the read alone (9.6) no longer implies.
-  _require_pg_plan_floor(connection)
+  _require_plan_floor(connection)
   ignore = _with_connection_ignores(_backend_ignore_tables(connection, settings), settings)
   live = read_live_schema(connection; ignore_table = ignore, include_table = collect(String, keys(recorded)))
   by_name = Dict{String, LiveTable}(t.name => t for t in live)
@@ -856,7 +856,7 @@ function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
             "AND NOT EXISTS (SELECT 1 FROM $(q(parent)) AS pormg_parent " *
             "WHERE pormg_parent.$(q(key)) = pormg_child.$col)", Any[])
   elseif f.kind === :text_cast
-    pred, params = something(server_version, _PG_INPUT_IS_VALID) >= _PG_INPUT_IS_VALID ?
+    pred, params = _has_input_validity(conn, server_version) ?
       ("pg_input_is_valid(CAST($col AS text), $(ph(1))) IS FALSE", Any[f.new_type]) :
       _text_cast_fallback(col, parse_canonical_type(f.new_type, conn))
     return ("SELECT COUNT(*) AS n FROM \"$table\" WHERE $col IS NOT NULL AND $pred", params)
@@ -895,9 +895,11 @@ function _precheck_sql(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
   return ("SELECT COUNT(*) AS n FROM \"$table\" WHERE $pred", params)
 end
 
-# `pg_input_is_valid` arrived in PostgreSQL 16 (`server_version_num` 160000); PormG's
-# plan floor is 11 (#1162), so the pre-check, which runs only under `migrate`, sees 11 and newer.
-const _PG_INPUT_IS_VALID = 160000
+# `pg_input_is_valid` arrived in PostgreSQL 16: the capability table's `:input_validity` row (#1163).
+# PormG's plan floor is 11 (#1162), so the pre-check, which runs only under `migrate`, sees 11 and newer.
+# No version (`server_version = nothing`, a caller that did not ask) reads as the native function.
+_has_input_validity(conn, server_version::Union{Integer, Nothing})::Bool =
+  server_version === nothing || _feature_at(typeof(conn), :input_validity, server_version)
 
 # PostgreSQL 11–15 has no `pg_input_is_valid`, so the `:text_cast` count falls back to the grammar of
 # the target type's input function, as an anchored regex over the text (#828). Exact for an integer
@@ -1087,7 +1089,7 @@ function _precheck_one(conn::Union{PormGPostgres, PormGSQLite}, f::LossyAlter;
   q === nothing && return f
   counted = fetch(conn, q[1], q[2]) |> DataFrame
   n = nrow(counted) == 0 ? 0 : Int(something(counted[1, :n], 0))
-  if n > 0 && f.kind === :text_cast && server_version !== nothing && server_version < _PG_INPUT_IS_VALID &&
+  if n > 0 && f.kind === :text_cast && !_has_input_validity(conn, server_version) &&
      parse_canonical_type(f.new_type, conn) isa Union{CDate, CDateTime, CJSON}
     @warn("This PostgreSQL server is older than 16, so it cannot check which values would parse as the new type; every non-NULL value is counted as failing. Convert the column on PostgreSQL 16+, or with a hand-written step.",
           finding = _lossy_alter_summary(f))
@@ -2432,7 +2434,7 @@ function _schema_drift_findings(connection::Union{PormGPostgres, PormGSQLite}, s
                                 models_file)::Vector{SchemaCheckFinding}
   declared = _drift_declared_models(settings, models_file)
   # #1162: this is the plan `makemigrations` would write, so it needs what a plan needs (PostgreSQL 11).
-  _require_pg_plan_floor(connection)
+  _require_plan_floor(connection)
   live = read_live_schema(connection; ignore_table = ignore_table, include_table = include_table)
   # `fail_closed = false` (#734): a likely rename is drift to REPORT — `_drift_findings` names it "could
   # be a rename" — not a reason for the gate to throw instead of answering.

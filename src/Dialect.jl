@@ -6,7 +6,6 @@ import Tables
 import Decimals
 import Printf   # #1121: `_parse_sqlite_computed_decimal` rounds a double to 15 significant digits
 import PormG: PormGSettings, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, PormGModel, PormGField, PormGBackend, PormGPostgres, PormGSQLite, PormGAbstractType
-import PormG: backend_sqlite_version  # SQLite library-version probe (driver body in the weakdep extension)
 # Semantic error taxonomy (#239). Dialect raises three categories:
 #   InvalidValueError          — a rendered value has the wrong Julia type ("must be a String"),
 #                                or SQL grammar PormG writes itself is outside what it parses
@@ -17,6 +16,7 @@ import PormG: backend_sqlite_version  # SQLite library-version probe (driver bod
 #   QueryBuildError            — the caller passed an impossible argument shape (on_conflict_clause).
 import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError, InvalidMigrationError
 import PormG: _supports, _capability_error, _engine_key  # #1129: the backend capability table (Kernel)
+import PormG: _require_feature  # #1163: a version row (window functions on SQLite)
 # #496: the `db_default` vocabulary (Kernel, layer 1). `db_default_sql` below renders from it, and
 # `Migrations._column_default` compiles the declared side through the same function.
 import PormG: PORTABLE_DB_DEFAULTS
@@ -599,18 +599,9 @@ function MIN(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "MIN($(column))"
 end
 
-const SQLITE_WINDOW_MIN_VERSION = 3025000
-
-function _assert_sqlite_window_support(conn::PormGSQLite)
-  version_number = backend_sqlite_version(conn)
-  if version_number < SQLITE_WINDOW_MIN_VERSION
-    # Reconstruct M.mm.pp from the packed version integer (e.g. 3039000 -> "3.39.0").
-    major, rem = divrem(version_number, 1_000_000)
-    minor, patch = divrem(rem, 1_000)
-    throw(BackendCapabilityError("SQLite window functions require SQLite >= 3.25.0; current SQLite library is $major.$minor.$patch."))
-  end
-  return nothing
-end
+# SQLite has window functions from 3.25.0: a version row of the capability table (#1163), checked
+# against the library PormG loads, and refused below it with the version the table states.
+_assert_sqlite_window_support(conn::PormGSQLite)::Nothing = _require_feature(conn, :window_functions, "A window function")
 
 function _window_no_column(function_name::String, over_sql::String)
   return "$(function_name)() OVER ($(over_sql))"

@@ -13,7 +13,7 @@ The deep-dive pages own the full reference and verified examples; this guide poi
 
 ## Server versions
 
-Each operation asks the server for what it uses, so PormG states its PostgreSQL requirements per operation:
+Each operation asks the server for what it uses, so PormG states its PostgreSQL requirements per operation. The versions are rows of the [capability table](backends.md); this table says what each operation does with them:
 
 | | Needs | Why |
 |---|---|---|

@@ -1256,7 +1256,7 @@ All window functions work on SQLite **3.25.0 and later** (released 2018-09-15). 
 ```julia
 # SQLite version check happens automatically — you do not need to call it yourself.
 # If the library is too old, you will see:
-# BackendCapabilityError: SQLite window functions require SQLite >= 3.25.0; current SQLite library is 3.24.0.
+# BackendCapabilityError: A window function needs SQLite 3.25.0 or newer, for window functions (`OVER (…)`); the SQLite library PormG loads is 3.24.0.
 ```
 
 The only SQLite limitation is **explicit frame specifications** (`frame=` argument). These are PostgreSQL-only for now.

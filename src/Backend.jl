@@ -101,6 +101,10 @@ for fn in (:backend_connect, :backend_renew_connection, :backend_is_alive,
   end
 end
 
+# #1163: the version the capability table's SQLite rows are read against (window functions from 3.25,
+# …) is the library's. PostgreSQL's method asks the server, so it lives with its probe in `Migrations`.
+Kernel._server_version(pool::PormGSQLite)::Int = backend_sqlite_version(pool)
+
 """
     backend_classify_error(pool, e) -> Symbol
 

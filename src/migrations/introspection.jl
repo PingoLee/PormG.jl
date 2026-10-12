@@ -769,9 +769,6 @@ function _backend_ignore_tables(conn, settings::PormGSettings)::Vector{String}
   return [entry for entry in builtin if !(entry in removed)]
 end
 
-# `pragma_table_list`, the catalog that labels a table `virtual` / `shadow`, is SQLite 3.37.0+.
-const _SQLITE_TABLE_LIST_MIN_VERSION = 3_037_000
-
 """
     _sqlite_user_table_names(db::PormGSQLite; sqlite_version) -> Vector{String}
 
@@ -822,7 +819,9 @@ function _sqlite_user_table_names(db::PormGSQLite;
   catalog = fetch(db, "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';") |> DataFrame
   names = String[String(r.name) for r in eachrow(catalog)]
   kind = Dict{String, String}()          # name ⇒ "virtual" / "shadow" / "table"; absent ⇒ "table"
-  if sqlite_version >= _SQLITE_TABLE_LIST_MIN_VERSION
+  # `pragma_table_list`, the catalog that labels a table `virtual` / `shadow`, is SQLite 3.37.0+: the
+  # capability table's `:table_list` row (#1163).
+  if _feature_at(typeof(db), :table_list, sqlite_version)
     for r in eachrow(fetch(db, "SELECT name, type FROM pragma_table_list WHERE schema = 'main';") |> DataFrame)
       kind[String(r.name)] = String(r.type)
     end
@@ -958,12 +957,13 @@ end
 # `relkind = 'p'` (10) are read.
 #
 # One table and one accessor, `_pg_catalog_col`, rather than a version `if` at each use, so the rule for a
-# column is written once and every query that names it agrees.
+# column is written once and every query that names it agrees. Each column is keyed by the feature it
+# describes, whose capability-table row (#1163) holds the version it arrived in.
 const _PG_CATALOG_COLUMNS = (
-  indnkeyatts    = (since = 110000, absent = alias -> "$(alias).indnatts"),
-  attidentity    = (since = 100000, absent = _ -> "''"),
-  relispartition = (since = 100000, absent = _ -> "false"),
-  attgenerated   = (since = 120000, absent = _ -> "''"),
+  indnkeyatts    = (feature = :include_columns,        absent = alias -> "$(alias).indnatts"),
+  attidentity    = (feature = :identity_columns,       absent = _ -> "''"),
+  relispartition = (feature = :declarative_partitions, absent = _ -> "false"),
+  attgenerated   = (feature = :generated_columns,      absent = _ -> "''"),
 )
 
 """
@@ -971,16 +971,13 @@ const _PG_CATALOG_COLUMNS = (
 
 The SQL for catalog column `column` of the row aliased `alias` on a server at `server_version`
 (`server_version_num` form): `"\$(alias).\$(column)"` where the column exists, its exact stand-in from
-`_PG_CATALOG_COLUMNS` where it does not (#1162).
+`_PG_CATALOG_COLUMNS` where it does not (#1162). Whether it exists is the capability table's answer
+for the feature the column describes (#1163).
 """
 function _pg_catalog_col(server_version::Integer, alias::AbstractString, column::Symbol)::String
   row = _PG_CATALOG_COLUMNS[column]
-  return server_version >= row.since ? "$(alias).$(column)" : row.absent(alias)
+  return _feature_at(PormGPostgres, row.feature, server_version) ? "$(alias).$(column)" : row.absent(alias)
 end
-
-# A `server_version_num` the way a message says it: `90600` is 9.6, `110000` is 11 (from 10 on, the
-# major version is one number).
-_pg_version_text(v::Integer)::String = v >= 100000 ? string(v ÷ 10000) : "$(v ÷ 10000).$((v ÷ 100) % 100)"
 
 """
     _pg_ownable_table_filter(server_version) -> String
@@ -1548,83 +1545,89 @@ function read_live_views(db::PormGPostgres; ignore_table::Vector{String} = postg
 end
 
 # The server's version, as `server_version_num` (`130004` for 13.4). Every version question schema
-# management asks goes through here: the introspection floor below, the plan-statement gate after it,
-# and the lossy-ALTER pre-check (`runner.jl`, `_PG_INPUT_IS_VALID`).
+# management asks goes through here: the introspection floor below, the plan floor and the
+# plan-statement gate after it, and the lossy-ALTER pre-check (`runner.jl`). It is also PostgreSQL's
+# `_server_version`, which the capability table's version rows are read against (#1163).
 _pg_server_version(db::PormGPostgres)::Int =
   Int(DataFrame(fetch(db, "SELECT current_setting('server_version_num')::integer AS v"))[1, :v])
+_server_version(db::PormGPostgres)::Int = _pg_server_version(db)
 
 # Each schema operation asks for what IT needs (#1146), not one floor for the whole block. #1108 had set
 # one, PostgreSQL 13, because the planner can produce `DROP EXPRESSION`; that refused `inspectdb` on a
 # server whose version the user does not choose (a legacy or third-party database) for a statement only
-# `migrate` would ever run.
+# `migrate` would ever run. Every version below is a row of the capability table (#1163):
 #
-#   * Introspection — `inspectdb`, `import_models_from_postgres`, `check` and `status` — needs
-#     PostgreSQL 9.6 (#1162). Each catalog column newer than that is read only where it exists, and
-#     replaced below its version by the exact "absent" value (`_PG_CATALOG_COLUMNS`); 9.6 is what the
-#     rest of the readers need (`to_regclass(text)`, regex look-behind).
+#   * Introspection — `inspectdb`, `import_models_from_postgres`, `check` and `status` — needs the
+#     `:schema_introspection` row, PostgreSQL 9.6 (#1162). Each catalog column newer than that is read
+#     only where it exists, and replaced below its version by the exact "absent" value
+#     (`_PG_CATALOG_COLUMNS`); 9.6 is what the rest of the readers need (`to_regclass(text)`, regex
+#     look-behind).
 #   * A plan — `makemigrations`, `migrate`, and `check`'s `:schema_drift`, which builds the plan
-#     `makemigrations` would write — needs PostgreSQL 11 (`_require_pg_plan_floor`). Introspection used
-#     to be refused below 11, so no plan ever ran there, and the DDL the planner writes (identity
-#     columns, PostgreSQL 10; `INCLUDE`, 11) is not checked against an older server.
+#     `makemigrations` would write — needs the `:migration_plans` row, PostgreSQL 11
+#     (`_require_plan_floor`). Introspection used to be refused below 11, so no plan ever ran there, and
+#     the DDL the planner writes (identity columns, PostgreSQL 10; `INCLUDE`, 11) is not checked
+#     against an older server.
 #   * A plan statement that needs more is refused by `_refuse_statements_above_server`, at
 #     `makemigrations` and again at `migrate`, before any statement runs.
 #
 # Queries and writes never read these catalog columns, so they state no floor of their own (#1097).
-const _PG_INTROSPECTION_FLOOR = 90600
-const _PG_PLAN_FLOOR = 110000
 
 # Asked rather than left to the statement, so an older server gets the requirement by name instead of
 # PostgreSQL's own error out of the middle of a 300-line query. Returns the version, which each schema
 # read builds its statement for.
 function _require_pg_introspection_floor(db::PormGPostgres)::Int
   v = _pg_server_version(db)
-  v >= _PG_INTROSPECTION_FLOOR && return v
-  throw(BackendCapabilityError(
-    "PormG's schema introspection (inspectdb, import_models_from_postgres, check, status) needs " *
-    "PostgreSQL 9.6 or newer; this server is $(_pg_version_text(v)) (server_version_num $(v)). " *
-    "Queries and writes are not affected (#1146)."))
+  _require_feature(db, :schema_introspection,
+                   "PormG's schema introspection (inspectdb, import_models_from_postgres, check, status)";
+                   why = "Queries and writes are not affected (#1146).", server_version = v)
+  return v
 end
 
 """
-    _require_pg_plan_floor(conn) -> Nothing
+    _require_plan_floor(conn) -> Nothing
 
-Raise `BackendCapabilityError` when `conn` is a PostgreSQL server older than 11, the oldest a
-migration plan is built for (#1162): `makemigrations`, `migrate` (a plan it checks against the live
-schema) and `check`'s `:schema_drift`. Reading the schema needs only 9.6; a plan needs more, because
-the DDL the planner writes is not checked below 11. Every other backend states no plan floor.
+Raise `BackendCapabilityError` when `conn` is older than the oldest server a migration plan is built
+for, the capability table's `:migration_plans` row (#1162, #1163; PostgreSQL 11): `makemigrations`,
+`migrate` (a plan it checks against the live schema) and `check`'s `:schema_drift`. Reading the schema
+needs less (PostgreSQL 9.6); a plan needs more, because the DDL the planner writes is not checked
+below 11. A backend whose row has no version (SQLite) is never asked its version.
 """
-_require_pg_plan_floor(::Any)::Nothing = nothing
-
-function _require_pg_plan_floor(conn::PormGPostgres)::Nothing
-  v = _pg_server_version(conn)
-  v >= _PG_PLAN_FLOOR && return nothing
-  throw(BackendCapabilityError(
-    "A migration plan (makemigrations, migrate, check(kinds = [:schema_drift])) needs PostgreSQL 11 or " *
-    "newer; this server is $(_pg_version_text(v)) (server_version_num $(v)). Reading the schema " *
-    "(inspectdb, import_models_from_postgres, check, status) needs 9.6, and queries and writes are not " *
-    "affected (#1162)."))
+function _require_plan_floor(conn::PormGBackend)::Nothing
+  _require_feature(conn, :migration_plans, "A migration plan (makemigrations, migrate, check(kinds = [:schema_drift]))";
+                   why = _plan_floor_why(conn))
+end
+# The rest of the refusal: what the backend still does below a plan's floor, read from the table.
+function _plan_floor_why(conn::PormGBackend)::Union{String, Nothing}
+  T = typeof(conn)
+  read_since = _feature_since(T, Val(:schema_introspection))
+  read_since === nothing && return nothing
+  return "Reading the schema (inspectdb, import_models_from_postgres, check, status) needs " *
+         "$(_version_text(T, read_since)), and queries and writes are not affected (#1162)."
 end
 
-# The plan statements that need a newer server than introspection does, with the version each needs:
+# The plan statements that need a newer server than a plan does, each keyed by its capability-table
+# row (#1163), which holds the version:
 #
-#   * `GENERATED ALWAYS AS (…) STORED` — a generated column, PostgreSQL 12 (#1032). `GENERATED … AS
+#   * `GENERATED ALWAYS AS (…) STORED` — `:generated_columns`, PostgreSQL 12 (#1032). `GENERATED … AS
 #     IDENTITY` (10) does not match: the pattern requires the opening parenthesis;
 #   * `ALTER COLUMN "<col>" DROP EXPRESSION` — removing `generated_from`, or releasing a generated column
-#     whose source the plan changes (`planner.jl`, `_release_generated_first!`), PostgreSQL 13 (#1108).
+#     whose source the plan changes (`planner.jl`, `_release_generated_first!`): `:drop_expression`,
+#     PostgreSQL 13 (#1108).
 #
 # Read off the statement text, as `detect_destructive_actions` reads a plan: the same test applies to a
 # plan `makemigrations` just built and to a pending file `migrate` reads, hand-written steps included.
 # So the patterns take what PostgreSQL takes, not only what PormG renders: any case and spacing, a
 # quoted name with no space after it, an unquoted one (any non-blank run), and `ALTER <col>` without
 # the optional `COLUMN`. A false positive (the text inside a string literal) can only refuse a plan on
-# an older server. Each row carries its own way out, since the two point in opposite directions.
+# an older server. Each row carries its own way out, since the two point in opposite directions; it is
+# given the version the row needs, as the message says it.
 const _PG_STATEMENT_FLOORS = (
-  (r"\bGENERATED\s+ALWAYS\s+AS\s*\("i, 120000, "a generated column (GENERATED ALWAYS AS (…) STORED)",
-   "declare the field without `generated_from` (an ordinary column), or upgrade the server to 12"),
-  (r"\bALTER\s+(?:COLUMN\s+)?(?:\"(?:[^\"]|\"\")*\"\s*|[^\s\"(),;]+\s+)DROP\s+EXPRESSION\b"i, 130000,
-   "removing a column's generation expression (ALTER COLUMN … DROP EXPRESSION)",
-   "keep `generated_from` on the field, or upgrade the server to 13; a generated column removed " *
-   "together with a column it reads can be removed in a migration of its own first"),
+  (pattern = r"\bGENERATED\s+ALWAYS\s+AS\s*\("i, feature = :generated_columns,
+   way_out = need -> "declare the field without `generated_from` (an ordinary column), or upgrade the server to $(need)"),
+  (pattern = r"\bALTER\s+(?:COLUMN\s+)?(?:\"(?:[^\"]|\"\")*\"\s*|[^\s\"(),;]+\s+)DROP\s+EXPRESSION\b"i,
+   feature = :drop_expression,
+   way_out = need -> "keep `generated_from` on the field, or upgrade the server to $(need); a generated column " *
+                     "removed together with a column it reads can be removed in a migration of its own first"),
 )
 
 # The part of a refused statement the error shows: its first line (the table) and, when the match
@@ -1654,19 +1657,25 @@ more than introspection does, so a plan without one costs no query.
 _refuse_statements_above_server(::Any, ::AbstractVector{<:AbstractString})::Nothing = nothing
 
 function _refuse_statements_above_server(conn::PormGPostgres, statements::AbstractVector{<:AbstractString})::Nothing
-  needed = [(stmt, row) for stmt in statements for row in _PG_STATEMENT_FLOORS if occursin(row[1], stmt)]
+  needed = [(stmt, row) for stmt in statements for row in _PG_STATEMENT_FLOORS if occursin(row.pattern, stmt)]
   isempty(needed) && return nothing
   v = _pg_server_version(conn)
-  refused = [(stmt, row) for (stmt, row) in needed if v < row[2]]
+  refused = [(stmt, row) for (stmt, row) in needed if !_supports(conn, row.feature; server_version = v)]
   isempty(refused) && return nothing
+  # The feature's name and the version it needs are the capability table's (#1163).
+  T = typeof(conn)
+  needs(feature) = _version_text(T, something(_feature_since(T, Val(feature))))
   # Each statement with its own way out: a plan can hold both, and they point in opposite directions.
-  lines = join(("  - $(what), PostgreSQL $(need ÷ 10000)+:\n      $(_refused_statement_excerpt(stmt, re))\n" *
-                "    $(uppercasefirst(way_out))."
-                for (stmt, (re, need, what, way_out)) in refused), "\n")
+  lines = join(("  - $(_feature_description(row.feature)), PostgreSQL $(needs(row.feature))+:\n" *
+                "      $(_refused_statement_excerpt(stmt, row.pattern))\n" *
+                "    $(uppercasefirst(row.way_out(needs(row.feature))))."
+                for (stmt, row) in refused), "\n")
+  # One construction, not `_capability_error`: the refusal lists every statement the plan holds that the
+  # server cannot run, each with its own way out, where the funnel names one feature.
   throw(BackendCapabilityError(
-    "This migration plan needs a newer PostgreSQL than this server, which is $(_pg_version_text(v)) " *
+    "This migration plan needs a newer PostgreSQL than this server, which is $(_version_text(T, v)) " *
     "(server_version_num $(v)):\n$(lines)\n" *
-    _emsg("Every other plan runs on PostgreSQL 11 (#1146).")))
+    _emsg("Every other plan runs on PostgreSQL $(needs(:migration_plans)) (#1146).")))
 end
 
 function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} = "public", table::Union{String, Nothing} = nothing,
@@ -2144,7 +2153,7 @@ function get_constraints_index(conn::PormGPostgres, table_name::Symbol, field_na
   # #934 a covering index is the composite pass's (`Models.Index(include = …)`, owned through its
   # marker), so `indnatts = indnkeyatts` takes it out below and `indkey` is only key columns here.
   # (`indnkeyatts` unguarded, unlike the readers (#1162): this runs only while a plan is built, and a
-  # plan needs PostgreSQL 11 — `_require_pg_plan_floor`.)
+  # plan needs PostgreSQL 11 — `_require_plan_floor`.)
   # (#519: this is NOT arming a deletion — PostgreSQL drops an index with the column it covers and
   # never refuses the `DROP COLUMN`, as the docstring above says.)
   # Scoped through `current_schemas(false)` for `get_constraints_fk`'s reason — the DDL this arms is

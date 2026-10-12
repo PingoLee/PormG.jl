@@ -9,6 +9,15 @@ which SQLite does not support (supported on PostgreSQL).
 
 The table below is the list PormG checks. A unit test fails when this page and the code disagree.
 
+Some features exist from a server version on. Their cell says which, as `from 13` (PostgreSQL's `server_version_num` major version) or `from 3.25.0` (the SQLite library PormG loads). PormG asks the server its version where it needs the answer. Where a feature is refused, an older server gets `BackendCapabilityError` naming both versions:
+
+```text
+A window function needs SQLite 3.25.0 or newer, for window functions (`OVER (…)`); the SQLite
+library PormG loads is 3.24.0.
+```
+
+Where PormG reads the schema, an older server is not refused: the feature reads as absent, which is exact there, because a server without the feature has none of it.
+
 | Feature | Used by | PostgreSQL | SQLite |
 |---|---|---|---|
 | `jsonb_operators` | `@jcontains`, `@has_key`, `@has_any_keys`, `@has_keys` | yes | no |
@@ -21,6 +30,17 @@ The table below is the list PormG checks. A unit test fails when this page and t
 | `explain_options` | `explain(analyze = true)`, `buffers`, `verbose` | yes | no |
 | `copy` | `bulk_copy` | yes | no |
 | `advisory_locks` | `with_advisory_lock(…; on_missing_lock = :error)` | yes | no |
+| `window_functions` | `RowNumber`, `Rank`, `DenseRank`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` (refused below the version) | yes | from 3.25.0 |
+| `nulls_order` | `order_by` NULL placement; below the version SQLite sorts on an `(expr IS NULL)` key instead | yes | from 3.30.0 |
+| `table_list` | reading the schema leaves out virtual and shadow tables; below the version SQLite recognizes them from their DDL and names | no | from 3.37.0 |
+| `schema_introspection` | `inspectdb`, `import_models_from_postgres`, `check` (refused below the version); `status` skips its drift check below it | from 9.6 | yes |
+| `migration_plans` | `makemigrations`, `migrate`, `check(kinds = [:schema_drift])` (refused below the version) | from 11 | yes |
+| `identity_columns` | reading the schema: an identity key; below the version, no column is one | from 10 | no |
+| `declarative_partitions` | reading the schema leaves partitions out; below the version there are none | from 10 | no |
+| `include_columns` | reading the schema: an index's `INCLUDE` columns; below the version every index column is a key column | from 11 | no |
+| `generated_columns` | a plan adding `SearchVectorField(generated_from = …)` (refused below the version); reading the schema: below the version, no column is generated | from 12 | no |
+| `drop_expression` | a plan removing `generated_from` (refused below the version) | from 13 | no |
+| `input_validity` | `migrate`'s count of the rows a column retype would reject; below the version it matches the new type's input grammar instead | from 16 | no |
 
 `with_advisory_lock` on SQLite without `on_missing_lock = :error` runs the body with no lock, and warns unless you pass `on_missing_lock = :ignore` ([Advisory Locks](advisory_lock.md)).
 
@@ -49,7 +69,8 @@ A backend whose operator computes something else gets a different rendering, not
 
 ## What the capability table leaves out
 
-- **A version.** Window functions need an SQLite library of 3.25 or later, checked against the one PormG loads ([Window Functions](read/window_functions.md)). `ON CONFLICT` (`bulk_insert(on_conflict = …)`, `update_or_create`, `get_or_create`) needs SQLite 3.24, which is not checked: an older library raises SQLite's own error. PormG's schema introspection (`inspectdb`, `import_models_from_postgres`, `check`, `status`) needs a PostgreSQL server of 9.6 or later, a migration plan (`makemigrations`, `migrate`) 11, and a plan statement may need more: a generated column needs 12, removing a column's generation expression 13. Each is checked against the server you connect to ([PostgreSQL Guide](postgres.md)).
+- **A version PormG does not check.** `ON CONFLICT` (`bulk_insert(on_conflict = …)`, `update_or_create`, `get_or_create`) needs SQLite 3.24, and an older library raises SQLite's own error. A query feature newer than your PostgreSQL server fails with PostgreSQL's own error ([PostgreSQL Guide](postgres.md#Server-versions)).
+- **A number that depends on a version.** SQLite accepts 999 bind parameters per statement before 3.32 and 32766 from it. PormG sizes `bulk_insert` and `bulk_update` batches to the library it loads, so this is a limit, not a feature.
 - **A feature one backend supports only in part.** For example, `ToChar` formats or `Extract` parts that SQLite cannot spell, or a cast to a time type. Each raises `BackendCapabilityError` where it is used, and its page says which forms work.
 - **A gap in PormG, not in an engine.** SQLite has explicit window frames, but PormG does not render `WindowOver(frame = …)` there yet, and raises `BackendCapabilityError` saying so ([Window Functions](read/window_functions.md)).
 - **A difference in what a query returns.** When two backends would compute different values or rows for the same query, PormG refuses it on the backend that departs, or documents the difference. That is not a missing feature ([Functions and Dates](read/functions_and_dates.md)).

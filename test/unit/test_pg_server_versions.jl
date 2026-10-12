@@ -13,7 +13,7 @@ feature it describes does not exist there either (`_PG_CATALOG_COLUMNS`):
 | `pg_class.relispartition` | 10 | `false`: no declarative partition |
 | `pg_attribute.attgenerated` | 12 | `''`: no generated column (#1146) |
 
-A migration plan still needs 11 (`_require_pg_plan_floor`): the read alone was lowered, not what the
+A migration plan still needs 11 (`_require_plan_floor`): the read alone was lowered, not what the
 planner writes. Pinned with mock servers that refuse a statement naming a column their version lacks,
 as a real one does. No database.
 
@@ -67,6 +67,9 @@ function _pg1162_answer(m::PgAt1162, sql::String)
 end
 
 _pg1162_err(f) = try f(); nothing catch e; e end
+# A SQLite connection that fails if its library version is asked.
+struct SlNoVersion1162 <: PormG.PormGSQLite end
+PormG.backend_sqlite_version(::SlNoVersion1162) = error("the version was asked")
 _pg1162_plain(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
 
 # Every PostgreSQL statement schema introspection builds, on one server.
@@ -90,8 +93,9 @@ const PG1162_VERSIONS = (90600, 100000, 110000, 120000, 130000)
   # table list and check()'s invalid-index probe — runs on each mock server; one naming a column the
   # server lacks raises, as PostgreSQL does. At and above a column's version the statement names it
   # (`i.indnkeyatts`, `a.attidentity`, `c.relispartition`, `a.attgenerated`); below it, the stand-in.
-  # Mutation gate: lower any `since` in `_PG_CATALOG_COLUMNS` and that column reaches an older mock,
-  # which raises; raise one and the "names it from its version" assertion fails.
+  # Mutation gate: lower the capability-table version of any column's feature (`_feature_since`, #1163)
+  # and that column reaches an older mock, which raises; raise one and the "names it from its version"
+  # assertion fails.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "every reader builds on 9.6, 10, 11, 12 and 13; a column appears from its version" begin
     for v in PG1162_VERSIONS
@@ -152,7 +156,7 @@ const PG1162_VERSIONS = (90600, 100000, 110000, 120000, 130000)
   # Below 9.6 the requirement is named before any schema statement runs (the server version reads as
   # "9.5"). A plan — makemigrations, migrate's precondition read, check's :schema_drift — needs 11, as
   # it did before #1162 lowered the read: the DDL the planner writes (identity columns, INCLUDE) is not
-  # checked below 11. Mutation gate: delete any of the three `_require_pg_plan_floor` calls and its
+  # checked below 11. Mutation gate: delete any of the three `_require_plan_floor` calls and its
   # case reads the schema on 10 instead of refusing.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "9.5 is refused by name, before the schema query" begin
@@ -163,21 +167,22 @@ const PG1162_VERSIONS = (90600, 100000, 110000, 120000, 130000)
     @test occursin("needs PostgreSQL 9.6 or newer", msg) && occursin("this server is 9.5 (server_version_num 90524)", msg)
     @test occursin("Queries and writes are not affected", msg)
     @test isempty(m.sql)
-    @test Migrations._pg_version_text(90600) == "9.6" && Migrations._pg_version_text(100022) == "10" &&
-          Migrations._pg_version_text(130004) == "13"
+    @test PormG._version_text(PormG.PormGPostgres, 90600) == "9.6" && PormG._version_text(PormG.PormGPostgres, 100022) == "10" &&
+          PormG._version_text(PormG.PormGPostgres, 130004) == "13"
   end
 
   @testset "a plan needs PostgreSQL 11: makemigrations, migrate's read and check's :schema_drift" begin
     for v in (90600, 100000)
-      e = _pg1162_err(() -> Migrations._require_pg_plan_floor(PgAt1162(v)))
+      e = _pg1162_err(() -> Migrations._require_plan_floor(PgAt1162(v)))
       @test e isa PormG.BackendCapabilityError
       msg = _pg1162_plain(e)
       @test occursin("needs PostgreSQL 11 or newer", msg) &&
-            occursin("this server is $(Migrations._pg_version_text(v)) (server_version_num $v)", msg)
+            occursin("this server is $(PormG._version_text(PormG.PormGPostgres, v)) (server_version_num $v)", msg)
       @test occursin("needs 9.6", msg)
     end
-    @test Migrations._require_pg_plan_floor(PgAt1162(110000)) === nothing
-    @test Migrations._require_pg_plan_floor(nothing) === nothing   # every other backend
+    @test Migrations._require_plan_floor(PgAt1162(110000)) === nothing
+    # SQLite's `:migration_plans` row has no version, so it is never asked one.
+    @test Migrations._require_plan_floor(SlNoVersion1162()) === nothing
 
     dir = mktempdir()
     try

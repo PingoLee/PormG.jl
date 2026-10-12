@@ -8,20 +8,26 @@
 # backends that DO support it — read from this table, so the sentence stays true when a backend is
 # added. The prior art is Django's `DatabaseFeatures` (`supports_*` flags per backend).
 #
+# #1163: a row can also say FROM WHICH SERVER VERSION a backend has the feature (`_feature_since`):
+# window functions on SQLite from 3.25, a generated column on PostgreSQL from 12, and so on. Every
+# server-version question PormG asks reads one of these rows, whether its answer is a refusal (the
+# introspection floor, a plan statement the server cannot run) or an exact fallback (a catalog column
+# read as absent on a server that predates it, the `pg_input_is_valid` pre-check). The version is the
+# server's own number — `server_version_num` on PostgreSQL (`130004` for 13.4), the packed library
+# version on SQLite (`3045000` for 3.45.0) — and `_server_version(conn)` asks it.
+#
 # Layer 1 (Kernel): the table names only the abstract backend types and `BackendCapabilityError`.
 # A backend's rows are methods on its ABSTRACT type here, never in a driver extension — the
 # `Backend.jl` ownership rule. The rows are documented in `docs/src/backends.md`, and
 # `test/unit/test_capability_table.jl` fails when the page and the table disagree.
 #
-# Not in the table, deliberately: a feature that depends on a SERVER VERSION (window functions on
-# SQLite < 3.25; on PostgreSQL, the introspection floor, 9.6 (#1162), a plan, 11, and plan statements above it, 12 and 13
-# (#1146) — probed at run time in `Dialect` and `Migrations`, and moved into the table by #1163), a
-# feature supported only in part (`ToChar` formats, `Extract` parts, casts SQLite spells
-# differently), a difference in MEANING (a decimal SQLite stores as a double), and a gap in PormG
-# rather than in an engine (explicit window frames, which SQLite has and PormG does not render there
-# yet).
+# Not in the table, deliberately: a feature supported only in part (`ToChar` formats, `Extract`
+# parts, casts SQLite spells differently), a difference in MEANING (a decimal SQLite stores as a
+# double), a gap in PormG rather than in an engine (explicit window frames, which SQLite has and
+# PormG does not render there yet), and a QUANTITY that depends on a version (SQLite's bind-parameter
+# limit, 999 before 3.32 and 32766 from it: a number, not a yes or no).
 
-# feature => what it is, in words a refusal can say after "needs".
+# feature => what it is, in words a refusal can say after "needs" (or "for", on a version gap).
 const _BACKEND_FEATURES = (
   :jsonb_operators   => "JSONB containment and key operators (`@>`, `?`, `?|`, `?&`)",
   :arrays            => "array types (`ArrayField`, `integer[]`)",
@@ -33,6 +39,18 @@ const _BACKEND_FEATURES = (
   :explain_options   => "an `EXPLAIN` option beyond the plain plan (`ANALYZE`, `BUFFERS`, `VERBOSE`)",
   :copy              => "`COPY` bulk loading",
   :advisory_locks    => "advisory locks",
+  # #1163: the rows below depend on the server version on at least one backend.
+  :window_functions       => "window functions (`OVER (…)`)",
+  :nulls_order            => "`NULLS FIRST` / `NULLS LAST` in `ORDER BY`",
+  :table_list             => "a catalog that labels virtual and shadow tables (`pragma_table_list`)",
+  :schema_introspection   => "reading the schema from the system catalog",
+  :migration_plans        => "the DDL a migration plan holds (identity columns, `INCLUDE` index columns)",
+  :identity_columns       => "identity columns (`GENERATED … AS IDENTITY`)",
+  :declarative_partitions => "declarative partitioning (`PARTITION BY`)",
+  :include_columns        => "non-key index columns (`INCLUDE`)",
+  :generated_columns      => "generated columns (`GENERATED ALWAYS AS (…) STORED`)",
+  :drop_expression        => "removing a column's generation expression (`ALTER COLUMN … DROP EXPRESSION`)",
+  :input_validity         => "testing a value against a type's input function (`pg_input_is_valid`)",
 )
 const _FEATURE_NAMES = Tuple(first.(_BACKEND_FEATURES))
 
@@ -47,18 +65,81 @@ end
 # starts with none and gains each one deliberately.
 _has_feature(::Type{<:PormGBackend}, ::Val) = false
 for f in _FEATURE_NAMES
+  f === :table_list && continue   # SQLite's own catalog; PostgreSQL has no virtual tables to label
   @eval _has_feature(::Type{<:PormGPostgres}, ::Val{$(QuoteNode(f))}) = true
+end
+for f in (:window_functions, :nulls_order, :table_list, :schema_introspection, :migration_plans)
+  @eval _has_feature(::Type{<:PormGSQLite}, ::Val{$(QuoteNode(f))}) = true
+end
+
+# The version rows (#1163): the oldest server that has the feature, on a backend that has it at all.
+# `nothing` — the fallback — is "every version PormG runs on". A version here is what the backend
+# itself added, not a choice of PormG's, except for the two floors, which are what PormG checks:
+# introspection reads only catalog columns 9.6 has (or reads a newer one only where it exists, through
+# the rows below it), and a plan's DDL is checked against 11 and newer.
+_feature_since(::Type{<:PormGBackend}, ::Val)::Union{Int, Nothing} = nothing
+_feature_since(::Type{<:PormGSQLite}, ::Val{:window_functions}) = 3_025_000        # SQLite 3.25.0
+_feature_since(::Type{<:PormGSQLite}, ::Val{:nulls_order}) = 3_030_000             # 3.30.0 (#75)
+_feature_since(::Type{<:PormGSQLite}, ::Val{:table_list}) = 3_037_000              # 3.37.0 (#730)
+_feature_since(::Type{<:PormGPostgres}, ::Val{:schema_introspection}) = 90_600     # 9.6 (#1162)
+_feature_since(::Type{<:PormGPostgres}, ::Val{:migration_plans}) = 110_000         # 11 (#1162)
+_feature_since(::Type{<:PormGPostgres}, ::Val{:identity_columns}) = 100_000        # 10
+_feature_since(::Type{<:PormGPostgres}, ::Val{:declarative_partitions}) = 100_000  # 10
+_feature_since(::Type{<:PormGPostgres}, ::Val{:include_columns}) = 110_000         # 11
+_feature_since(::Type{<:PormGPostgres}, ::Val{:generated_columns}) = 120_000       # 12 (#1032)
+_feature_since(::Type{<:PormGPostgres}, ::Val{:drop_expression}) = 130_000         # 13 (#1108)
+_feature_since(::Type{<:PormGPostgres}, ::Val{:input_validity}) = 160_000          # 16 (#828)
+
+"""
+    _server_version(conn) -> Int
+
+The server version `conn` runs, in its backend's own number: `server_version_num` on PostgreSQL, the
+packed library version on SQLite. Asked by `_supports` for a version row. A backend's method lives
+where it can ask: SQLite's beside `backend_sqlite_version` (`Backend.jl`), PostgreSQL's beside the
+schema readers (`Migrations`), which ask it most. Not cached: a pool outlives a server upgrade, and a
+stale version would read a newer server's schema with an older one's stand-ins. A caller with several
+questions asks once and passes `server_version`.
+"""
+function _server_version end
+
+# A server version as a message says it. PostgreSQL: one number from 10 on (`110000` is 11), two below
+# (`90600` is 9.6). SQLite: the three-part library version (`3025000` is 3.25.0).
+_version_text(::Type{<:PormGPostgres}, v::Integer)::String =
+  v >= 100_000 ? string(v ÷ 10_000) : "$(v ÷ 10_000).$((v ÷ 100) % 100)"
+_version_text(::Type{<:PormGSQLite}, v::Integer)::String = "$(v ÷ 1_000_000).$((v ÷ 1_000) % 1_000).$(v % 1_000)"
+# What this server is, in a refusal: the backend's name for the thing that has a version, and the raw
+# number where the backend has one users look up.
+_version_at_hand(T::Type{<:PormGPostgres}, v::Integer)::String =
+  "this server is $(_version_text(T, v)) (server_version_num $(v))"
+_version_at_hand(T::Type{<:PormGSQLite}, v::Integer)::String =
+  "the SQLite library PormG loads is $(_version_text(T, v))"
+
+"""
+    _feature_at(T, feature, server_version) -> Bool
+
+Whether backend type `T` has `feature` at `server_version`: the table's answer for a known version,
+with no connection to ask. `_supports` is this with the version asked of the connection.
+"""
+function _feature_at(T::Type{<:PormGBackend}, feature::Symbol, server_version::Integer)::Bool
+  feature in _FEATURE_NAMES || throw(InvalidValueError("unknown backend feature `$(feature)`"))
+  _has_feature(T, Val(feature)) || return false
+  since = _feature_since(T, Val(feature))
+  return since === nothing || server_version >= since
 end
 
 """
-    _supports(conn, feature::Symbol) -> Bool
+    _supports(conn, feature::Symbol; server_version = nothing) -> Bool
 
-Whether the backend `conn` has `feature`, one of the rows of `_BACKEND_FEATURES`. An unknown feature
-name is a programming error and throws.
+Whether the backend `conn` has `feature`, one of the rows of `_BACKEND_FEATURES`. For a version row,
+the server is asked its version (`_server_version`) unless `server_version` gives it. An unknown
+feature name is a programming error and throws.
 """
-function _supports(conn::PormGBackend, feature::Symbol)::Bool
+function _supports(conn::PormGBackend, feature::Symbol; server_version::Union{Integer, Nothing} = nothing)::Bool
   feature in _FEATURE_NAMES || throw(InvalidValueError("unknown backend feature `$(feature)`"))
-  return _has_feature(typeof(conn), Val(feature))
+  T = typeof(conn)
+  _has_feature(T, Val(feature)) || return false
+  _feature_since(T, Val(feature)) === nothing && return true
+  return _feature_at(T, feature, (server_version === nothing ? _server_version(conn) : server_version))
 end
 
 # The engines PormG ships, by the name a message uses. A backend added later adds its row here and
@@ -78,21 +159,34 @@ _engine_key(::PormGSQLite) = :sqlite
 _supporting_backends(feature::Symbol) = [name for (name, T) in _BACKENDS if _has_feature(T, Val(feature))]
 
 """
-    _capability_error(conn, feature, what; why = nothing) -> BackendCapabilityError
+    _capability_error(conn, feature, what; why = nothing, server_version = nothing) -> BackendCapabilityError
 
 The refusal for `what` (the call or declaration, as the user wrote it) on a backend without
-`feature`: it names the feature, the backend at hand, and the backends that have it. `why` adds the
-backend-specific reason, when there is one worth saying. RETURNS the exception; the call site throws
-it (the funnel convention).
+`feature`: it names the feature, the backend at hand, and the backends that have it. On a backend
+that has the feature from a version its server is older than (#1163), it names that version and the
+server's instead — `server_version` is the one already asked, or the server is asked here. `why` adds
+the backend-specific reason, when there is one worth saying. RETURNS the exception; the call site
+throws it (the funnel convention).
 """
 function _capability_error(conn, feature::Symbol, what::AbstractString;
-                           why::Union{AbstractString,Nothing} = nothing)::BackendCapabilityError
+                           why::Union{AbstractString,Nothing} = nothing,
+                           server_version::Union{Integer,Nothing} = nothing)::BackendCapabilityError
   backend = _backend_name(conn)
-  # Reached on a backend that HAS the feature: a call shape no renderer there takes, not a missing
-  # feature — saying the backend lacks what the table says it has would be false.
-  conn isa PormGBackend && _has_feature(typeof(conn), Val(feature)) &&
+  if conn isa PormGBackend && _has_feature(typeof(conn), Val(feature))
+    T = typeof(conn)
+    since = _feature_since(T, Val(feature))
+    v = since === nothing ? nothing : (server_version === nothing ? _server_version(conn) : server_version)
+    if v !== nothing && v < since
+      msg = "$(what) needs $(backend) $(_version_text(T, since)) or newer, for $(_feature_description(feature)); " *
+            "$(_version_at_hand(T, v))."
+      why === nothing || (msg *= " " * why)
+      return BackendCapabilityError(msg)
+    end
+    # Reached on a backend that HAS the feature: a call shape no renderer there takes, not a missing
+    # feature — saying the backend lacks what the table says it has would be false.
     return BackendCapabilityError("$(what) was called with arguments no $(backend) renderer takes; " *
                                   "$(backend) has $(_feature_description(feature)).")
+  end
   others = _supporting_backends(feature)
   msg = "$(what) needs $(_feature_description(feature)), which $(backend) does not support"
   msg *= isempty(others) ? "." : " (supported on $(join(others, ", ")))."
@@ -100,6 +194,17 @@ function _capability_error(conn, feature::Symbol, what::AbstractString;
   return BackendCapabilityError(msg)
 end
 
-"""`_require_feature(conn, feature, what; why)` — throws `_capability_error(...)` unless `conn` has `feature`."""
-_require_feature(conn::PormGBackend, feature::Symbol, what::AbstractString; why = nothing)::Nothing =
-  _supports(conn, feature) ? nothing : throw(_capability_error(conn, feature, what; why = why))
+"""
+    _require_feature(conn, feature, what; why, server_version) -> Nothing
+
+Throws `_capability_error(...)` unless `conn` has `feature` — at its server's version, for a version row.
+"""
+function _require_feature(conn::PormGBackend, feature::Symbol, what::AbstractString;
+                          why = nothing, server_version::Union{Integer,Nothing} = nothing)::Nothing
+  v = server_version
+  if v === nothing && _has_feature(typeof(conn), Val(feature)) && _feature_since(typeof(conn), Val(feature)) !== nothing
+    v = _server_version(conn)   # asked once, for the check and the message
+  end
+  _supports(conn, feature; server_version = v) ? nothing :
+    throw(_capability_error(conn, feature, what; why = why, server_version = v))
+end

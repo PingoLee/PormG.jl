@@ -820,6 +820,10 @@ The module-level `from … import …` bindings of one `models.py`.
 `from core.models import TimeStampedModel as TSM` records
 `"TSM" => ("core.models", "TimeStampedModel")`. `stars` holds the module paths of
 `from … import *`, which binds names no parser can enumerate without reading that module.
+`modules` maps a dotted name a plain `import` binds to the module it names (#1197):
+`import racing.models` records `"racing.models" => "racing.models"`, and `import racing.models as rm`
+records `"rm" => "racing.models"`. It is what a base written as a module path (`rm.Driver`,
+`racing.models.Driver`) is resolved through.
 
 Read for ONE purpose: deciding whether a base name this app does not define may resolve against
 another app's class (#370). A name the module never imported is not in scope in Python either, so
@@ -829,32 +833,50 @@ app's class is concrete, that edge is read as multi-table inheritance and costs 
 struct _PyImports
   names::Dict{String, Tuple{String, String}}
   stars::Vector{String}
+  modules::Dict{String, String}
 end
 
 # `from <module> import <rest>`. The module may carry leading dots (a relative import) or be
 # nothing but dots (`from . import models`), which is why it is `[.\w]+` and not a dotted name.
 const _FROM_IMPORT_RE = r"^from\s+([.\w]+)\s+import\s+(.+)$"
+# `import <module>[ as <name>][, …]`. Absolute only: Python has no relative plain import.
+const _PLAIN_IMPORT_RE = r"^import\s+(.+)$"
+const _DOTTED_NAME_RE = r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$"
 
 """
     _py_imports(stmts) -> _PyImports
 
-The module-level `from … import …` bindings of a parsed `models.py`.
+The module-level `from … import …` and `import …` bindings of a parsed `models.py`.
 
 Only `indent == 0` statements count: an import inside `if TYPE_CHECKING:` or a `try/except
 ImportError` is not an unconditional module-level binding, and a base arriving that way is reported
 as unresolved rather than guessed at.
 
-Plain `import x.y [as z]` is deliberately NOT recorded. It binds a MODULE, so the base it enables is
-written dotted (`class Foo(x.y.Base)`) — and a dotted token has never matched the bare-name class
-index (`_class_bases` keeps the token verbatim), so honouring it here would resolve nothing.
-Supporting it means teaching base resolution about dotted tokens first; until then leaving it out is
-neither a regression nor a gap this function could close on its own.
+A plain `import x.y [as z]` binds a MODULE, so the base it enables is written dotted
+(`class Foo(x.y.Base)`, `class Foo(z.Base)`). It is recorded in `modules` under the name the base
+list spells it with, which `_resolve_dotted` reads (#1197). Without an alias that name is the whole
+path: `import racing.models` binds `racing`, and `racing.models` is reachable through it because the
+statement imported that submodule. A deeper or shallower path is not recorded, because nothing here
+knows what a package's `__init__.py` imports.
 """
 function _py_imports(stmts::Vector{PyStmt})::_PyImports
   names = Dict{String, Tuple{String, String}}()
   stars = String[]
+  modules = Dict{String, String}()
   for s in stmts
     s.indent == 0 || continue
+    pm = match(_PLAIN_IMPORT_RE, s.text)
+    if pm !== nothing
+      for item in split(String(pm.captures[1]), ',')
+        parts = split(strip(item), r"\s+as\s+")
+        path = String(strip(parts[1]))
+        occursin(_DOTTED_NAME_RE, path) || continue
+        local_name = length(parts) > 1 ? String(strip(parts[end])) : path
+        Base.isidentifier(local_name) || local_name == path || continue
+        modules[local_name] = path                    # last binding wins, as for `names`
+      end
+      continue
+    end
     m = match(_FROM_IMPORT_RE, s.text)
     m === nothing && continue
     mod = String(m.captures[1])
@@ -884,7 +906,7 @@ function _py_imports(stmts::Vector{PyStmt})::_PyImports
       names[local_name] = (mod, origin)
     end
   end
-  return _PyImports(names, stars)
+  return _PyImports(names, stars, modules)
 end
 
 # A compound statement whose block runs conditionally or repeatedly. A name bound inside one is not
@@ -3516,10 +3538,59 @@ The app's OWN classes win — Django's rule for an unqualified reference, and th
 documents. Everything else has to be imported: a name this `models.py` never bound is not in scope
 in Python, so resolving it against another app would invent an inheritance edge the project does not
 have (#370).
+
+A dotted token (`racing_models.Driver`, `racing.models.Driver`) names a class through a MODULE and
+goes to [`_resolve_dotted`](@ref) (#1197).
 """
-_resolve_base(scopes::Vector{_AppScope}, from_idx::Int, token::AbstractString) =
-  haskey(scopes[from_idx].own, token) ? (from_idx, scopes[from_idx].own[token]) :
-    _resolve_imported(scopes, from_idx, String(token), Set{Tuple{Int, String}}())
+function _resolve_base(scopes::Vector{_AppScope}, from_idx::Int, token::AbstractString)
+  haskey(scopes[from_idx].own, token) && return (from_idx, scopes[from_idx].own[token])
+  occursin('.', token) && return _resolve_dotted(scopes, from_idx, token)
+  return _resolve_imported(scopes, from_idx, String(token), Set{Tuple{Int, String}}())
+end
+
+"""
+    _resolve_dotted(scopes, from_idx, token) -> Union{Tuple{Int, PyClass}, Nothing}
+
+The class a base written as `<module>.<Class>` names, as seen from app `from_idx` (#1197). Django and
+Python treat `class Pilot(racing_models.Driver)` after `from racing import models as racing_models`,
+and `class Pilot(racing.models.Driver)` after `import racing.models`, as the same class as
+`class Pilot(Driver)` after `from racing.models import Driver`. Resolving only the last spelling
+dropped a proxy's relations, merged no fields from a dotted abstract base, and imported a dotted
+concrete base's child as a table of its own.
+
+The prefix must be a module this `models.py` bound: through a plain `import` (`_PyImports.modules`),
+or through `from <package> import <module>` (`names`, whose origin is then the module). The module
+must then be an imported app's models module, by the same rule a `from` import follows
+(`_app_for_module`), so `forms.Form` and `serializers.Serializer` stay unresolved and are still read
+as helpers. A `from` import binds a module only when what it imports is `models`; any other prefix is
+a class (`Driver.Inner`, a nested class, never a model) or a name nothing here defines, and resolves
+to nothing.
+"""
+function _resolve_dotted(scopes::Vector{_AppScope}, from_idx::Int,
+                         token::AbstractString)::Union{Tuple{Int, PyClass}, Nothing}
+  t = replace(String(token), r"\s*\.\s*" => ".")
+  k = findlast('.', t)
+  prefix, cls = t[1:prevind(t, k)], t[nextind(t, k):end]
+  (isempty(prefix) || isempty(cls)) && return nothing
+  imp = scopes[from_idx].imports
+  mod = get(imp.modules, prefix, nothing)
+  if mod === nothing
+    occursin('.', prefix) && return nothing
+    entry = get(imp.names, prefix, nothing)
+    entry === nothing && return nothing
+    (from_mod, origin) = entry
+    # Only `from <package> import models [as x]` binds a models MODULE. Any other origin is a class
+    # or a name the import cannot see (`from racing.models import Driver` then `Driver.Inner`), and
+    # appending it to the path would let `_app_for_module` match the `racing.models` in front of it.
+    origin == "models" || return nothing
+    mod = endswith(from_mod, ".") ? string(from_mod, origin) : string(from_mod, ".", origin)
+  end
+  a = _app_for_module(scopes, mod)
+  a === nothing && return nothing
+  haskey(scopes[a].own, cls) && return (a, scopes[a].own[cls])
+  # A re-export façade: the models module imported the class from another app.
+  return _resolve_imported(scopes, a, String(cls), Set{Tuple{Int, String}}())
+end
 
 # `seen` is keyed by (app, NAME), not by app. The token changes across a re-export hop — an app
 # reached for `Foo` may still have to be asked about `Bar` — so an app-keyed set makes a second,
@@ -3827,9 +3898,10 @@ function _classify_class!(st::_ClassifyState, app::Int, cls::PyClass)::_ClassInf
   #
   # Restricted to BARE base names, using the same discriminator `_declares_fields` uses one screen
   # down: a namespace is the one piece of information already in the source. `forms.Form` and
-  # `serializers.Serializer` are dotted, so they name a module this file never had and a dotted token
-  # could not have resolved anyway — those are helpers, definitively, and marking them would be pure
-  # noise on every `models.py` that also holds a ModelForm. A BARE `CustomUser` is the ambiguous one:
+  # `serializers.Serializer` are dotted, so they name a module, and a dotted token still UNRESOLVED
+  # here names one outside the import (one inside it resolved, #1197) — those are helpers,
+  # definitively, and marking them would be pure noise on every `models.py` that also holds a
+  # ModelForm. A BARE `CustomUser` is the ambiguous one:
   # it is exactly what an `import` would have bound, which is what makes it worth a line.
   #
   # Deliberately NOT narrowed further by "the name was imported from a module naming no app". That

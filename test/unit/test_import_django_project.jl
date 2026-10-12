@@ -1446,6 +1446,201 @@ class Pilot(Racer):
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#1197): a base written as a MODULE PATH resolves like a bare one
+#
+# `class Pilot(racing_models.Driver)` after `from racing import models as racing_models`, and
+# `class Pilot(racing.models.Driver)` after `import racing.models`, are the same class to Django as
+# `class Pilot(Driver)` after `from racing.models import Driver`. Base resolution matched names only,
+# so a dotted base never resolved:
+#   - a dotted PROXY's relations degraded: the ForeignKey to a `BigIntegerField`, the ManyToMany
+#     dropped, each under a marker saying the target was not in the import;
+#   - a dotted ABSTRACT base merged none of its fields into the child;
+#   - a dotted CONCRETE base was not seen as multi-table inheritance, so the child was imported as a
+#     table of its own, with only its own fields and an `id` key Django never created.
+# Expected: all three read exactly as the bare spelling does. A dotted base naming a module that is
+# no imported app (`forms.Form`) stays a silent helper; a class's nested class is never a model.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a base written as a module path resolves to the class it names (#1197)" begin
+    racing = """
+from django.db import models
+
+class Driver(models.Model):
+    surname = models.CharField(max_length=40)
+
+class Race(models.Model):
+    rivals = models.ManyToManyField('legacy.Pilot')
+    pilot = models.ForeignKey('legacy.Pilot', on_delete=models.CASCADE)
+"""
+    for (label, legacy) in (
+        "from-imported module alias" => """
+from django.db import models
+from racing import models as racing_models
+
+class Pilot(racing_models.Driver):
+    class Meta:
+        proxy = True
+""",
+        "plain import of the models module" => """
+from django.db import models
+import racing.models
+
+class Pilot(racing.models.Driver):
+    class Meta:
+        proxy = True
+""",
+        "plain import with an alias" => """
+from django.db import models
+import racing.models as rm
+
+class Pilot(rm.Driver):
+    class Meta:
+        proxy = True
+""")
+        @testset "proxy, $label" begin
+            generated, config_key, db_dir_existed = import_project(["racing" => racing, "legacy" => legacy];
+                                                                   output_file = "django_1197_proxy.jl")
+            try
+                @test occursin("pilot_id = Models.ForeignKey(\"Driver\", pk_field=\"id\", on_delete=CASCADE)", generated)
+                @test occursin("rivals = Models.ManyToManyField(\"Driver\", db_table=\"racing_race_rivals\", target_field=\"pilot_id\")", generated)
+                @test !occursin("is not in the imported app set", generated)
+                @test !occursin("BigIntegerField", generated)
+                sandbox = Module()
+                Core.eval(sandbox, Meta.parse(generated))
+                mod = Core.eval(sandbox, :django_1197_proxy)
+                Base.invokelatest(PormG.Models.set_models, mod, "import_1180_mock")
+                race = Core.eval(mod, :Race)
+                @test haskey(race.cache["many_to_many"], "rivals")
+                @test Base.invokelatest(PormG.Models._resolve_target_model,
+                                        race.fields["pilot_id"].to, mod) === Core.eval(mod, :Driver)
+            finally
+                cleanup_project_test!(config_key, db_dir_existed)
+            end
+        end
+    end
+
+    # A dotted ABSTRACT base merges its fields, as `from core.models import TimeStampedModel` does.
+    core = """
+from django.db import models
+
+class TimeStampedModel(models.Model):
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        abstract = True
+"""
+    downstream = """
+from django.db import models
+from core import models as core_models
+
+class ImportBatch(core_models.TimeStampedModel):
+    note = models.CharField(max_length=40)
+"""
+    generated, config_key, db_dir_existed = import_project(["core" => core, "imports" => downstream];
+                                                           output_file = "django_1197_abstract.jl")
+    try
+        @test occursin("created_at = Models.DateTimeField(auto_now_add=true)", generated)
+        @test occursin("\nImportBatch = Models.Model(db_table = \"imports_importbatch\"", generated)
+        @test !occursin("core_models.TimeStampedModel", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # A dotted CONCRETE base is multi-table inheritance, refused with Django's `<parent>_ptr_id`,
+    # instead of a child table holding only its own fields.
+    legacy_mti = """
+from django.db import models
+import racing.models
+
+class Pilot(racing.models.Driver):
+    licence = models.CharField(max_length=10)
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => racing, "legacy" => legacy_mti];
+                                                           output_file = "django_1197_mti.jl")
+    try
+        @test occursin("inherits the concrete model 'racing.models.Driver' (Django multi-table inheritance)", generated)
+        @test occursin("Django keys the child table on a 'driver_ptr_id' one-to-one", generated)
+        @test !occursin("\nPilot = Models.Model", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # Through a re-export façade: `reports.models` imported `Driver` from `racing`, and `legacy` names
+    # it as `reports_models.Driver`. The dotted path reaches `reports`, which follows its own import.
+    reports = """
+from django.db import models
+from racing.models import Driver
+"""
+    legacy_facade = """
+from django.db import models
+from reports import models as reports_models
+
+class Pilot(reports_models.Driver):
+    class Meta:
+        proxy = True
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => racing, "reports" => reports, "legacy" => legacy_facade];
+                                                           output_file = "django_1197_facade.jl")
+    try
+        @test occursin("pilot_id = Models.ForeignKey(\"Driver\", pk_field=\"id\", on_delete=CASCADE)", generated)
+        @test !occursin("is not in the imported app set", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # A dotted base naming a module that is no imported app stays a helper, and silent.
+    helpers = """
+from django import forms
+from django.db import models
+
+class PilotForm(forms.Form):
+    surname = forms.CharField(max_length=40)
+
+class Pilot(models.Model):
+    licence = models.CharField(max_length=10)
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => racing, "legacy" => helpers];
+                                                           output_file = "django_1197_helpers.jl")
+    try
+        @test !occursin("PilotForm", generated)
+        @test !occursin("Django multi-table inheritance", generated)
+        @test occursin("\nPilot = Models.Model(db_table = \"legacy_pilot\"", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # A prefix bound by `from racing.models import <name>` is a class or an unknown name, never a
+    # module. `racing` declares a concrete `Status`, so reading `Driver.Status` (a nested class) or
+    # `Missing.Status` (a name `racing` does not define) as `racing.models.Status` would refuse the
+    # child as multi-table inheritance of a class it does not inherit.
+    racing_status = racing * """
+
+class Status(models.Model):
+    label = models.CharField(max_length=20)
+"""
+    for (label, imported, base) in (("nested class", "Driver", "Driver.Status"),
+                                    ("unknown name", "Missing", "Missing.Status"))
+        @testset "$label" begin
+            legacy = """
+from django.db import models
+from racing.models import $(imported)
+
+class Pilot($(base)):
+    licence = models.CharField(max_length=10)
+"""
+            generated, config_key, db_dir_existed = import_project(["racing" => racing_status, "legacy" => legacy];
+                                                                   output_file = "django_1197_prefix.jl")
+            try
+                @test !occursin("Django multi-table inheritance", generated)
+                @test !occursin("status_ptr_id", generated)
+                @test occursin("\nPilot = Models.Model(db_table = \"legacy_pilot\"", generated)
+            finally
+                cleanup_project_test!(config_key, db_dir_existed)
+            end
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Django Importer (#1181): an app of proxies does not claim its relations degrade
 #
 # An app that emits no model gets a line at the top of the file (#70). An app whose classes are all

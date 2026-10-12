@@ -3338,6 +3338,11 @@ _pattern_text_operand(::PormGPostgres, ::Val{:date}, column::AbstractString)::St
 # an integer as that text already.
 _pattern_text_operand(::PormGPostgres, ::Val{:integer}, column::AbstractString)::String =
   "CAST($(column) AS text)"
+# #1183: a `time`, as `HH:MM:SS[.ffffff]` with the fraction's trailing zeros dropped — what Julia's
+# `string(::Time)` writes on SQLite. A cast rather than `to_char`: `to_char`'s `.US` always prints six
+# digits, while the cast trims them, and a `time`'s text does not follow `DateStyle`.
+_pattern_text_operand(::PormGPostgres, ::Val{:time}, column::AbstractString)::String =
+  "CAST($(column) AS text)"
 # SQLite reads the column as written: it has no network column (#28), and its UUID column is already
 # that text (#902). SQLite only, so a kind added without a PostgreSQL method raises a `MethodError`
 # there rather than rendering a `LIKE` the server rejects.

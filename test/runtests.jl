@@ -92,6 +92,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Cast / output_field Type Names (#696)" include("unit/test_cast_type_validation.jl")
     @testset "Transform Ladder Parity (#562)" include("unit/test_transform_ladder_parity.jl")
     @testset "Pattern Lookup on a Number Column (#1168)" include("unit/test_pattern_number_column.jl")
+    @testset "Pattern Lookup on a Temporal, Boolean or Binary Column (#1183)" include("unit/test_pattern_temporal_column.jl")
     @testset "Concat Operands With No Single Text (#1027)" include("unit/test_concat_textless_operands.jl")
     @testset "Divergent Casts And Concat Operands (#1028)" include("unit/test_cast_divergent_operands.jl")
     @testset "Abs/Floor/Ceil Over an Integer Keep It (#1147)" include("unit/test_integer_floor_ceil_abs.jl")

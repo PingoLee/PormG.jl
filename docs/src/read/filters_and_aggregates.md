@@ -184,7 +184,10 @@ as its `YYYY-MM-DD` text on both backends, and a date part (`@year`, `@hour`, an
 digits: `"date__@year__@startswith" => "200"` selects the 2000s. An integer column, a relation's
 key included, is matched as its digits too: `"grid__@startswith" => "1"` selects grid slots 1 and
 10–19 on both backends. So is an integer alias, CTE column or `Subquery` (a `Count`, a
-`Max("grid")`).
+`Max("grid")`), an integer `Case` alias with no `output_field`, a `Value(1)` alias and arithmetic over a
+date part (`F("date__@year") + 1`). A time column is matched as its `HH:MM:SS` text, with a
+fraction only when the time has one: `"time__@startswith" => "14:"` selects the races that start
+at 14:00 to 14:59 on both backends.
 
 A float or decimal column raises a `FilterError` on both backends, because each engine prints it
 differently: `2.0` is `2` on PostgreSQL and `2.0` on SQLite, so one fragment would select different
@@ -192,9 +195,19 @@ rows. So does an alias, a CTE column or a `Subquery` whose value is not an integ
 `Sum` over a decimal), and a number whose type PormG cannot name, whose text it cannot vouch
 for. Compare it as a number (`"fastestlapspeed__@gte" => 200`), or match the engine's own
 text explicitly through a cast: `values("t" => Cast("fastestlapspeed", "text"));
-filter("t__@startswith" => "2")`. A timestamp column is still compared as written: SQLite matches
-its stored text, and PostgreSQL, which has no `LIKE` for a timestamp, raises. So is a `Case` alias
-with no `output_field`, a `Value` alias and arithmetic over a date part, whatever number they hold.
+filter("t__@startswith" => "2")`. A `Case` alias with a float `default`, and a `Value(2.5)` alias,
+raise the same way.
+
+A timestamp, duration, boolean or binary column raises a `FilterError` on both backends, and so
+does an alias PormG types as one (a `Max("start_at")`, a `Value(true)`). Their text differs per engine: a
+timestamp prints in the session's time zone on PostgreSQL and as PormG's UTC text on SQLite, a
+duration follows PostgreSQL's `IntervalStyle`, and a boolean is `true` on PostgreSQL and `1` on
+SQLite. A binary column holds bytes, not text. Match a part of a timestamp through a transform
+(`"start_at__@date__@startswith" => "2009-03"`, `"start_at__@year" => 2009`), or compare the value
+itself: `"start_at__@gte" => DateTime(2009)`, a duration with `@gte` and a `Dates.Period`, a
+boolean with `=> true`. The engine's own text of a timestamp or a duration is matched through a
+cast, as for a float; a boolean's text cast is itself refused on SQLite, so write the text you mean
+with a `Case`.
 
 ### Case-Sensitive (`@contains`)
 

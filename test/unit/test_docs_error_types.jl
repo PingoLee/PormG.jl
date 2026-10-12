@@ -269,6 +269,15 @@ const DOCERR_RESULT1168_PG, DOCERR_RESULT1168_SL = map(("docerr_pg", "docerr_sl"
     m.connect_key = key; m._module = Main; m
 end
 
+# #1183 — a timestamp, a duration, a boolean and a binary column, and a float `Value` alias: a pattern
+# lookup on any of them is refused on both engines, because each engine prints it differently.
+const DOCERR_RACE1183_PG, DOCERR_RACE1183_SL = map(("docerr_pg", "docerr_sl")) do key
+    m = Model("docerr_race1183_$key", raceid = IDField(), start_at = DateTimeField(null = true),
+              duration = PormG.Models.DurationField(null = true), sprint = PormG.Models.BooleanField(default = false),
+              snapshot = PormG.Models.BinaryField(null = true))
+    m.connect_key = key; m._module = Main; m
+end
+
 # (docs claim this test pins, expected type, the call that must raise it).
 # Keep the doc reference exact — it is how a maintainer finds the sentence to update when a type
 # legitimately changes.
@@ -3200,6 +3209,38 @@ const DOCERR_CASES = [
         "read/filters_and_aggregates.md — a pattern lookup on a decimal column raises FilterError on PostgreSQL (#1168)",
         FilterError,
         () -> DOCERR_RESULT1168_PG.objects.filter("points__@contains" => "2").list(show_query = :dict),
+    ),
+    # #1183 — String Matching: a pattern lookup on a timestamp, duration, boolean or binary column, or on
+    # an alias over one, raises on both backends; so does a float `Value` alias.
+    (
+        "read/filters_and_aggregates.md — a pattern lookup on a timestamp column raises FilterError on SQLite (#1183)",
+        FilterError,
+        () -> DOCERR_RACE1183_SL.objects.filter("start_at__@startswith" => "2009").list(show_query = :dict),
+    ),
+    (
+        "read/filters_and_aggregates.md — a pattern lookup on a duration column raises FilterError on SQLite (#1183)",
+        FilterError,
+        () -> DOCERR_RACE1183_SL.objects.filter("duration__@contains" => "22").list(show_query = :dict),
+    ),
+    (
+        "read/filters_and_aggregates.md — a pattern lookup on a boolean column raises FilterError on PostgreSQL (#1183)",
+        FilterError,
+        () -> DOCERR_RACE1183_PG.objects.filter("sprint__@contains" => "t").list(show_query = :dict),
+    ),
+    (
+        "read/filters_and_aggregates.md — a pattern lookup on a binary column raises FilterError on SQLite (#1183)",
+        FilterError,
+        () -> DOCERR_RACE1183_SL.objects.filter("snapshot__@contains" => "ab").list(show_query = :dict),
+    ),
+    (
+        "read/filters_and_aggregates.md — a pattern lookup on a Max(timestamp) alias raises FilterError on PostgreSQL (#1183)",
+        FilterError,
+        () -> DOCERR_RACE1183_PG.objects.values("raceid", "m" => Max("start_at")).filter("m__@startswith" => "2009").list(show_query = :dict),
+    ),
+    (
+        "read/filters_and_aggregates.md — a pattern lookup on a Value(2.5) alias raises FilterError on SQLite (#1183)",
+        FilterError,
+        () -> DOCERR_RACE1183_SL.objects.values("raceid", "v" => PormG.Functions.Value(2.5)).filter("v__@startswith" => "2").list(show_query = :dict),
     ),
 ]
 

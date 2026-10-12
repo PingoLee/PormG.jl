@@ -19,13 +19,8 @@ no pormg_migrations history.
 """
 function reset_database!(settings::PormG.PormGSettings)
   conn_pool = settings.connections
-  if conn_pool isa PormG.PormGSQLite
-    _reset_sqlite!(conn_pool)
-  elseif conn_pool isa PormG.PormGPostgres
-    _reset_postgres!(conn_pool)
-  else
-    error("Unsupported adapter for reset_database!: $(typeof(conn_pool))")
-  end
+  # Engine mechanics: each engine's own reset, and an error naming any engine without one (#1179).
+  by_engine(conn_pool; sqlite = _reset_sqlite!, postgres = _reset_postgres!)(conn_pool)
   nothing
 end
 

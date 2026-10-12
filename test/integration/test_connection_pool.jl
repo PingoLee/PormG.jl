@@ -32,8 +32,9 @@ using Test
         # (1) Real concurrency + no premature release: N connections held SIMULTANEOUSLY.
         # Guarded to PostgreSQL — SQLite serializes work through a shared async worker/queue, so N
         # concurrent fetches may not check out N distinct slots there (the check would fail spuriously
-        # with no leak). The baseline invariant (2) below still runs on both backends.
-        if pool isa PormG.PormGPostgres
+        # with no leak). The baseline invariant (2) below still runs on both backends. Engine
+        # mechanics, a row per engine (#1179): whether concurrent fetches hold distinct slots.
+        if by_engine(postgres = true, sqlite = false)
             @test count(!, pool.available) >= N
         end
     finally
@@ -55,10 +56,11 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "direct-handoff wait under contention (#124)" begin
     cfg = PormG.config[PORMG_DB_FOLDER].connections
-    pool = cfg isa PormG.PormGPostgres ?
+    # A dedicated pool of the fixture's own kind: a row per engine (#1179).
+    pool = by_engine(
         # the fixture pool's driver too (#788), or a run through Postgres.jl would test LibPQ here
-        PormG.ConnectionPool.PostgresConnectionPool(cfg.connection_string; pool_size = 2, driver = PormG.postgres_driver(cfg)) :
-        PormG.ConnectionPool.SQLiteConnectionPool(cfg.connection_string; pool_size = 2)
+        postgres = () -> PormG.ConnectionPool.PostgresConnectionPool(cfg.connection_string; pool_size = 2, driver = PormG.postgres_driver(cfg)),
+        sqlite = () -> PormG.ConnectionPool.SQLiteConnectionPool(cfg.connection_string; pool_size = 2))()
     try
         N = 40                                  # ≫ ceiling (20) → guaranteed parking + handoff
         ok = fill(false, N)
@@ -100,8 +102,8 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # Guarded OUTSIDE the testset rather than with a passing dummy assertion inside it: SQLite has no
 # server to restart, and its `backend_is_alive` already round-trips, so there is nothing here to
-# assert on that engine.
-if PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
+# assert on that engine. Engine mechanics, recorded as a skip there (#1179).
+if only_on(:postgres, "a server-terminated backend needs a database server (SQLite has none)")
     @testset "pool detects a backend the server killed (#442)" begin
         cfg = PormG.config[PORMG_DB_FOLDER].connections
         pool = PormG.ConnectionPool.PostgresConnectionPool(cfg.connection_string; pool_size = 1, driver = PormG.postgres_driver(cfg))
@@ -161,7 +163,7 @@ end
 # Both build through `_build_connection_pool!` from a copy of the fixture's own connection block,
 # so the shared fixture pool is never touched.
 # ─────────────────────────────────────────────────────────────────────────────
-if PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
+if only_on(:postgres, "DSN quoting is libpq's connection string (SQLite connects to a file path)")
     # A settings object built from the fixture's target, with the credential fields overridden.
     function _settings_650(overrides::Dict{String,Any})
         src = PormG.config[PORMG_DB_FOLDER].db_config_settings

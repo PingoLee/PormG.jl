@@ -34,7 +34,7 @@ end
 include(joinpath(@__DIR__, "..", "unit", "helper_value_repr_cases.jl"))
 import Decimals   # #824: the `Decimal` a CTE's `Max` column reads back as
 
-const _VRI_ENGINE = PORMG_DB_FOLDER == "db_sl" ? :sqlite : :postgres
+const _VRI_ENGINE = engine_key()   # no fallback: a backend added later has no row to borrow (#1179)
 
 # Race 1 as the seed loader writes it: `start_at = DateTime(Date("2009-03-29"), Time("06:00:00"))`.
 const _VRI_RACE_START = DateTime(2009, 3, 29, 6, 0, 0)
@@ -302,9 +302,12 @@ _vri_lap()  = M.Lap_times.objects.filter("raceid" => 1, "driverid" => 1, "lap" =
     for k in (:c, :g, :n, :p, :f)
       @test row[k] isa Date && row[k] == _VRI_RACE_DATE
     end
-    # A DATE beside a TIMESTAMP names no single representation: SQLite's own text.
+    # A DATE beside a TIMESTAMP names no single representation, so it reads back as each engine
+    # delivers it: PostgreSQL resolves the common type (`start_at` is a TIMESTAMPTZ, so a
+    # `ZonedDateTime`), SQLite hands back its own text. Representation, keyed per engine with no
+    # `else` (#1179).
     mixed = _vri_race().values("x" => Coalesce("fp1_date", "start_at")).list(:dict)[1][:x]
-    _VRI_ENGINE === :sqlite && @test mixed isa AbstractString
+    @test mixed isa by_engine(postgres = TimeZones.ZonedDateTime, sqlite = AbstractString)
 
     q = M.Race.objects
     q.filter("raceid" => 2)

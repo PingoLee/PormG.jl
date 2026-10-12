@@ -59,7 +59,9 @@ _na28_model() = Models.Model(NA28_TABLE;
 # uses for a scratch table.
 function _na28_apply!(pool, plan)
     ordered, _ = _order_statements([plan[k] for k in keys(plan)])
-    if pool isa PormG.PormGPostgres
+    # Engine mechanics, a row per engine (#1179): an ordinary transaction on PostgreSQL, SQLite's
+    # write lock and BEGIN IMMEDIATE.
+    if by_engine(pool; postgres = true, sqlite = false)
         _, conn = _na28_tx(pool, "BEGIN;")
         try
             _execute_statements_pg(pool, ordered; conn = conn)

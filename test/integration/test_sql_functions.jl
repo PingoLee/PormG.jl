@@ -306,9 +306,8 @@ end
 
     insp = q |> inspect_query
     # @info insp[:sql_text]
-    if insp[:dialect] == :sqlite
-        @test insp[:parameters] == Any[5, "Top 5", 6, 10, "6-10", "Other", 15]
-    end
+    # Parameter order is PormG's, the same on every engine (#1179: this ran on SQLite only).
+    @test insp[:parameters] == Any[5, "Top 5", 6, 10, "6-10", "Other", 15]
     
     @test df[1, :category] == "Top 5"
     @test df[6, :category] == "6-10"
@@ -1843,12 +1842,13 @@ end
         @test r[:dy] == day(utc)
     end
 
-    # PostgreSQL only: the session really is UTC, and overriding it is what moves the answer — the
+    # PostgreSQL only (engine mechanics, #1179: a session time zone is the server's setting; SQLite
+    # has none): the session really is UTC, and overriding it is what moves the answer — the
     # divergence the docs warn about. `SET LOCAL` in a transaction pins every statement to the one
     # connection the zone was set on and resets at COMMIT, so nothing leaks back into the pool
     # (the #114 pattern in `test_bulk_copy.jl`).
     settings = PormG.config[PORMG_DB_FOLDER]
-    if settings.connections isa PormG.PormGPostgres
+    if only_on(:postgres, "the session TimeZone setting is PostgreSQL's")
         session_zone() = (PormG.ConnectionPool.fetch(settings,
             "SELECT current_setting('TimeZone') AS tz;") |> DataFrame)[1, :tz]
         @test session_zone() == "UTC"
@@ -1965,7 +1965,7 @@ end
 # explicit intent, refused on every engine.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1028: a cast SQLite computes differently is refused there and builds on PostgreSQL" begin
-    engine = PORMG_DB_FOLDER == "db_sl" ? :sqlite : :postgres
+    engine = engine_key()   # `departs[engine]` has no fallback: a backend added later states its row (#1179)
     departs = (sqlite = true, postgres = false)   # this test's own oracle, per engine
     refusal(f) = try f(); nothing catch e; e end
     is_1028(e) = e isa PormG.QueryBuildError && occursin("#1028", sprint(showerror, e))
@@ -2034,7 +2034,7 @@ end
 # escapes (an unscaled `numeric`, a whole number before a scaled cast) build on every engine.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1040: a cast to numeric(p, s) is refused on SQLite and rounds on PostgreSQL" begin
-    engine = PORMG_DB_FOLDER == "db_sl" ? :sqlite : :postgres
+    engine = engine_key()   # `departs[engine]` has no fallback: a backend added later states its row (#1179)
     departs = (sqlite = true, postgres = false)
     refusal(f) = try f(); nothing catch e; e end
     is_1040(e) = e isa PormG.QueryBuildError && occursin("#1040", sprint(showerror, e))
@@ -2155,7 +2155,7 @@ end
     to_int = () -> (q = M.Result.objects; q.filter("raceid" => 18);
                     q.values("resultid", "grid", "x" => Cast(Coalesce("grid", 0.5) / 2, PormG.Models.IntegerField()));
                     q.order_by("resultid"); q |> DataFrame)
-    if PORMG_DB_FOLDER == "db_sl"
+    if by_engine(sqlite = true, postgres = false)   # this engine departs from the meaning: it refuses
         err = try to_int(); nothing catch e; e end
         @test err isa PormG.QueryBuildError && occursin("so PormG refuses it on SQLite (#1028)", sprint(showerror, err))
     else
@@ -2187,7 +2187,7 @@ end
     end
     # One with more places means the value rounded to the scale (#1147): SQLite, which keeps every
     # digit, refuses it, and PostgreSQL builds it.
-    if PORMG_DB_FOLDER == "db_sl"
+    if by_engine(sqlite = true, postgres = false)   # this engine departs from the meaning: it refuses
         @test err isa PormG.QueryBuildError && occursin("a Float64 literal with 3 decimal places", sprint(showerror, err))
     else
         @test err === nothing
@@ -2417,7 +2417,7 @@ end
     @test Float64(total) == sum(r -> floor(Float64(r[:raw])), rows)
     # A fraction cast to an integer means the nearest one (#1147): PostgreSQL rounds `3.5` to `4`, and
     # SQLite, whose cast truncates it to `3`, refuses it.
-    if PORMG_DB_FOLDER == "db_sl"
+    if by_engine(sqlite = true, postgres = false)   # this engine departs from the meaning: it refuses
         @test_throws PormG.QueryBuildError over_avg("x" => Cast(Floor(a) / 2, Models.IntegerField()))
     else
         for r in over_avg("x" => Cast(Floor(a) / 2, Models.IntegerField()))

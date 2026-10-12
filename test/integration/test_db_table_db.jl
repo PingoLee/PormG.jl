@@ -27,7 +27,9 @@ end
 # case-sensitivity assertions below are meaningful only on PostgreSQL.
 # ─────────────────────────────────────────────────────────────────────────────
 
-const DBT_IS_PG = PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
+# Whether two spellings of a table name are two tables: an engine fact, stated per engine so a
+# backend added later states its own rather than inheriting one (#1179).
+const DBT_CASE_SENSITIVE = by_engine(postgres = true, sqlite = false)
 
 @testset "db_table: the physical table is created under the db_table name" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
@@ -46,10 +48,9 @@ const DBT_IS_PG = PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostg
     # The LOGICAL name must not exist as a second, folded table. On PostgreSQL these are genuinely
     # distinct identifiers, so a stray unquoted-DDL path would have created `db_table_scratch`
     # alongside `Db_Table_Scratch` — exactly the "one declaration, two tables" split #300 describes.
-    # Skipped on SQLite, where the two names address the same table by definition.
-    if DBT_IS_PG
-        @test isempty(column_names(pool, "db_table_scratch"))
-    end
+    # On SQLite the two names address the same table by definition, so there the logical name finds
+    # the mixed-case table's columns: asserted on both engines rather than skipped on one.
+    @test isempty(column_names(pool, "db_table_scratch")) == DBT_CASE_SENSITIVE
 end
 
 @testset "db_table: CRUD round-trips against the mixed-case table" begin

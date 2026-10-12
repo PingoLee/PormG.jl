@@ -46,9 +46,9 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
-if adapter_name == "SQLite"
-    @info "Skipping the PostgreSQL lossy-ALTER tests on SQLite (its half is test/unit/test_lossy_alters.jl)"
-else
+# Engine mechanics (#1179): PostgreSQL's in-place `ALTER … USING` path; SQLite rebuilds the table
+# instead, and its half is test/unit/test_lossy_alters.jl. Recorded as a skip elsewhere.
+if only_on(:postgres, "the lossy-ALTER path is PostgreSQL's in-place ALTER (SQLite's half: test/unit/test_lossy_alters.jl)")
 
 import OrderedCollections: OrderedDict
 
@@ -619,4 +619,4 @@ end
     end
 end
 
-end # adapter_name
+end # only_on(:postgres)

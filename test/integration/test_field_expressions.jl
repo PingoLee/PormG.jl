@@ -535,8 +535,6 @@ end
 # as a `CompoundPeriod` on both engines (#814).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Subtracting two dates (#801)" begin
-  is_sqlite = PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGSQLite
-
   @testset "a whole-day shift minus its own date is the shift" begin
     # The issue's repro, verbatim: race 1 (2009-03-29), shifted 30 days, minus itself.
     query = M.Race.objects

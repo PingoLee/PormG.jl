@@ -107,6 +107,101 @@ function print_feature_skips(io::IO = stdout)
     return nothing
 end
 
+# ── Per-engine expectations (#1179): `engine_key`, `by_engine`, `only_on` ───────────────────────
+# Where a test does differ by engine, it says so for each engine by name and never through an
+# `else`: `x isa PormGPostgres ? A : B` hands a backend added later (#1130) whatever `B` is, without
+# anyone deciding it. The three helpers are built on `PormG.Kernel._engine_key`, which has one method
+# per engine and no fallback, so a new backend stops at the first one with an error that asks for its
+# row. `test/unit/test_engine_branches.jl` counts the by-name branches left in this directory.
+#
+#   by_engine(postgres = "driver_pkey", sqlite = "INTEGER PRIMARY KEY")   # the engine's own text
+#   only_on(:postgres, "reads the PostgreSQL catalog") && @testset … end   # one engine's mechanics
+#
+# `by_engine` is for REPRESENTATION (an engine's own text: plan output, an error's fields, a
+# placeholder) and for ENGINE MECHANICS facts (how a test drives DDL or a transaction). It is not for
+# MEANING: a value is checked against an oracle on every engine, never keyed by engine. A feature is
+# `requires(:feature)`, above. `only_on` is for a testset that exercises one engine's own machinery
+# (its catalog, its server sessions, its table rebuild); it records the skip like `requires` does.
+
+# Every engine key PormG ships. A backend added later adds its key here when it adds `_engine_key`;
+# until then `engine_key` throws a `MethodError` for it, which is the point.
+const ENGINE_KEYS = (:postgres, :sqlite)
+
+"""`engine_key(conn = <this run's pool>)` — this run's engine as a key (`:postgres`, `:sqlite`)."""
+engine_key(conn = PormG.config[PORMG_DB_FOLDER].connections)::Symbol = PormG.Kernel._engine_key(conn)
+
+function _check_engine_keys(ks)
+    bad = setdiff(collect(ks), collect(ENGINE_KEYS))
+    isempty(bad) || error("unknown engine key(s) $(bad); the engines are $(collect(ENGINE_KEYS))")
+    return nothing
+end
+
+"""
+    by_engine([conn]; postgres = …, sqlite = …)
+
+The value given for this run's engine. An engine with no row is an error naming it, never another
+engine's value: a backend added later gets a failure that asks for its row. An unknown key (a typo)
+is an error on every engine.
+"""
+function by_engine(conn; rows...)
+    _check_engine_keys(keys(rows))
+    key = engine_key(conn)
+    haskey(rows, key) && return rows[key]
+    error("no expectation for engine :$(key) (rows given: $(collect(keys(rows)))) — a test that " *
+          "differs by engine needs a row for each engine it runs on; add one rather than borrow " *
+          "another engine's (#1179)")
+end
+by_engine(; rows...) = by_engine(PormG.config[PORMG_DB_FOLDER].connections; rows...)
+
+# The testsets `only_on` did not run here, with their reasons; `print_engine_skips` lists them.
+const ENGINE_SKIPS = String[]
+
+"""
+    only_on(engine::Symbol, why; conn = <this run's pool>) -> Bool
+
+`true` when this run's engine is `engine`. Otherwise records the skip with `why` — a `Broken`
+result in the enclosing testset and an entry in `ENGINE_SKIPS` — and returns `false`. For a testset
+that drives one engine's own machinery; a feature is `requires(:feature)`.
+"""
+function only_on(engine::Symbol, why::AbstractString;
+                 conn = PormG.config[PORMG_DB_FOLDER].connections)::Bool
+    _check_engine_keys((engine,))
+    engine_key(conn) === engine && return true
+    reason = "skipped on $(PormG.Kernel._backend_name(conn)): $(why) (only on :$(engine))"
+    Test.record(Test.get_testset(), Test.Broken(:skipped, reason))
+    reason in ENGINE_SKIPS || println(reason)
+    push!(ENGINE_SKIPS, reason)
+    return false
+end
+
+function print_engine_skips(io::IO = stdout)
+    isempty(ENGINE_SKIPS) && return nothing
+    println(io, "\nNot run on $(PORMG_DB_FOLDER), pinned to another engine (#1179):")
+    for why in sort!(unique(ENGINE_SKIPS))
+        println(io, "  $(why) × $(count(==(why), ENGINE_SKIPS))")
+    end
+    return nothing
+end
+
+# ENGINE MECHANICS shared by several files, each one engine fact:
+# - `split_statements(sql)`: the migration runner's statement splitter for this engine;
+# - `placeholder(i)`: the bind marker for parameter `i` (`$i` / `?`);
+# - `marker_count(sql)`: how many parameters a statement binds, by its markers;
+# - `binds_column_arrays()`: whether a bulk write binds one array per column (PostgreSQL's
+#   `unnest`, one uncapped statement) rather than one parameter per cell in capped chunks. Stated
+#   here, not read from `QueryBuilder._bulk_binds_column_arrays`: a test that asked the code under
+#   test which shape to expect would pass whatever the code did.
+split_statements(sql::AbstractString; conn = PormG.config[PORMG_DB_FOLDER].connections) =
+    by_engine(conn; postgres = PormG.Migrations._split_pg_statements,
+                    sqlite = PormG.Migrations._split_sqlite_statements)(sql)
+placeholder(i::Integer; conn = PormG.config[PORMG_DB_FOLDER].connections)::String =
+    by_engine(conn; postgres = "\$$(i)", sqlite = "?")
+binds_column_arrays(; conn = PormG.config[PORMG_DB_FOLDER].connections)::Bool =
+    by_engine(conn; postgres = true, sqlite = false)
+marker_count(sql::AbstractString; conn = PormG.config[PORMG_DB_FOLDER].connections)::Int =
+    by_engine(conn; postgres = length(unique(m.match for m in eachmatch(r"\$\d+", sql))),
+                    sqlite = count(==('?'), sql))
+
 # #37: the async integration suite (`-t auto`, heavy fan-out) saturates a small PostgreSQL pool
 # against a possibly-remote DB. Size the pool to the run's concurrency for this run only
 # (env-overridable) and rebuild so the initial slots are pre-sized instead of grown via the
@@ -114,8 +209,9 @@ end
 # equivalent of bumping the pool in the test environment. Keep PORMG_TEST_POOL_SIZE modest:
 # with the ×10 ceiling a value of 20 means a max of 200 connections — far above the suite's real
 # peak (~20-30) but a high value could exhaust the PostgreSQL server's max_connections.
+# Engine mechanics (#1179): only a server pool is sized; SQLite serializes through one writer.
 let s = PormG.config[PORMG_DB_FOLDER]
-    if s.connections isa PormG.PormGPostgres
+    if by_engine(postgres = true, sqlite = false)
         pool_n = parse(Int, get(ENV, "PORMG_TEST_POOL_SIZE", "20"))
         if pool_n != s.connections.pool_size
             s.db_config_settings["pool_size"] = pool_n
@@ -176,8 +272,11 @@ function release_suite_lock!()
   return nothing
 end
 
+# Engine mechanics (#1179): the lock below is PostgreSQL's own SQL, so a backend added later decides
+# its row here rather than inheriting either answer — not `requires(:advisory_locks)`, which would
+# hand it PostgreSQL's `pg_try_advisory_lock` the day it declares advisory locks.
 if get(ENV, "PORMG_TEST_LOCK", "1") ∉ ("0", "false", "off") &&
-   PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
+   by_engine(postgres = true, sqlite = false)
   let s = PormG.config[PORMG_DB_FOLDER]
     dbname = string(s.db_config_settings["database"])
     wait_s = parse(Float64, get(ENV, "PORMG_TEST_LOCK_WAIT", "900"))
@@ -251,10 +350,14 @@ end
 
 # Load the models and expose the alias `M`
 # Using the new @import_models macro which handles registration automatically
+# Each test database folder ships its own models file; `@import_models` takes a literal path, so
+# this names each folder (a folder, not an engine) and refuses any other (#1179).
 if PORMG_DB_FOLDER == "db_sl"
     PormG.@import_models "db_sl/models.jl" models
-else
+elseif PORMG_DB_FOLDER == "db_2"
     PormG.@import_models "db_2/models.jl" models
+else
+    error("no models file for PORMG_DB=$(PORMG_DB_FOLDER); add its folder here")
 end
 import .models as M
 

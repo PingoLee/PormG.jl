@@ -36,16 +36,18 @@ end
   # 3. Verify array binding for IN clauses
   # Postgres stores as a single parameter (Postgres ANY).
   # SQLite expands to multiple positional parameters (?).
+  # How the list is bound is each engine's own statement shape: a per-engine row, with no `else` a
+  # backend added later would inherit (#1179).
   query = M.Result.objects
   query.filter("positionorder__@in" => [1, 2])
   instruc = PormG.QueryBuilder.build(query.object)
   
-  if adapter_name == "PostgreSQL"
+  if by_engine(postgres = true, sqlite = false)   # binds an IN list as one array parameter
     @test length(instruc.parameters.parameters) == 1
     @test isa(instruc.parameters.parameters[1], AbstractVector)
     @test instruc.parameters.parameters[1] == [1, 2]
-  else # SQLite, etc.
-    # In SQLite/MySQL, IN clause expands to (?, ?)
+  else
+    # IN clause expands to (?, ?)
     params = PormG.QueryBuilder.get_final_parameters(instruc.parameters)
     @test length(params) >= 2
     @test 1 in params
@@ -468,7 +470,7 @@ end
     # …and the DSN it shows went through the redaction rule, evidenced by the mask being present.
     # (PostgreSQL's DSN carries a password; SQLite's connection string is a file path, so the mask
     # is only asserted where the source string actually had something to mask.)
-    if pool isa PormG.PormGPostgres && occursin("password", pool.connection_string)
+    if occursin("password=", pool.connection_string)
       masked = occursin("password=****", card)
       @test masked
     end

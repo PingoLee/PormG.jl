@@ -645,14 +645,15 @@ end
             # "row unchanged" assertion below holds in every one of those cases too, because the
             # statement never ran. Asserting on the message is what makes this test fail when the
             # CHECK stops reaching the DDL.
+            # The raw statement and how a byte string is bound are each engine's own: a row per
+            # engine, with no `else` a backend added later inherits (#1179).
+            raw_update = by_engine(
+                postgres = () -> PormG.fetch(pool, "UPDATE field_validation_scratch SET bounded_blob = \$1 WHERE slug = \$2",
+                                             ["\\x010203040506070809", scratch_slug]),
+                sqlite = () -> PormG.fetch(pool, "UPDATE field_validation_scratch SET bounded_blob = ? WHERE slug = ?",
+                                           [oversize, scratch_slug]))
             raw_err = try
-                if pool isa PormG.PormGPostgres
-                    PormG.fetch(pool, "UPDATE field_validation_scratch SET bounded_blob = \$1 WHERE slug = \$2",
-                                ["\\x010203040506070809", scratch_slug])
-                else
-                    PormG.fetch(pool, "UPDATE field_validation_scratch SET bounded_blob = ? WHERE slug = ?",
-                                [oversize, scratch_slug])
-                end
+                raw_update()
                 nothing
             catch e
                 e

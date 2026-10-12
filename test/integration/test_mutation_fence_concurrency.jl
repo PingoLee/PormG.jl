@@ -38,11 +38,11 @@ end
 # a top-level `return` inside `if` leaves only that one expression — `include` evaluates the file
 # expression by expression, so an early `return true` would skip nothing after it.
 #
-# By connection type, not by the `adapter:` string — db_sl's spelling of that is not "SQLite".
+# By engine (`only_on`, which records the skip), not by the `adapter:` string (#1179): engine
+# mechanics, since the race needs concurrent writers and row locks.
 # T2's statement blocks its OS thread inside the driver while it waits on the lock, so T1 (which must
 # commit) and the probe need another thread. With one thread the race deadlocks instead of failing.
-const _MF_RUNS = if !(PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres)
-    @info "Skipping the mutation-fence race tests on SQLite: writers are serialized, so the #765 race cannot occur"
+const _MF_RUNS = if !only_on(:postgres, "writers are serialized, so the #765 mutation-fence race cannot occur")
     false
 elseif Threads.nthreads() < 2
     @warn "Skipping the mutation-fence race tests: they need at least 2 threads (run db_2 with -t auto)"
@@ -342,9 +342,10 @@ end
 # cannot vouch for: a two-hop root (result → race → circuit) that cascades, and a null test across a
 # LEFT JOIN. The rows written must be exactly the ones a lock-free delete writes. PostgreSQL only
 # (SQLite takes no lock), but no second thread is needed, so it is gated apart from the race.
-const _MF_IS_PG = PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
+# Engine mechanics, recorded as a skip elsewhere (#1179).
+const _MF_LOCKS_ROWS = only_on(:postgres, "the #771 related-row locks are PostgreSQL's FOR UPDATE (SQLite takes no lock)")
 
-_MF_IS_PG && @testset "joined-root locks execute on PostgreSQL (#771)" begin
+_MF_LOCKS_ROWS && @testset "joined-root locks execute on PostgreSQL (#771)" begin
     try
         _mf_cleanup!()
         _mf_seed_chain!()

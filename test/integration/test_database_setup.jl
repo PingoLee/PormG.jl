@@ -2,7 +2,7 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
-_bulk_update_fixture_id_type(pool) = pool isa PormG.PormGPostgres ? "SERIAL" : "INTEGER"
+_bulk_update_fixture_id_type(pool) = by_engine(pool; postgres = "SERIAL", sqlite = "INTEGER")   # a row per engine (#1179)
 
 function _ensure_bulk_update_fixture_schema!()
   pool = PormG.config[PORMG_DB_FOLDER].connections

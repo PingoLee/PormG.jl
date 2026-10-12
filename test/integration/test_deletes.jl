@@ -48,8 +48,8 @@ end
 """Strip ANSI escape sequences from a string for plain-text comparison."""
 _strip_ansi(text::AbstractString) = replace(String(text), r"\e\[[0-9;]*m" => "")
 
-"""Return the appropriate SQL type for an explicit-ID primary key column."""
-_scratch_id_type(pool) = pool isa PormG.PormGPostgres ? "SERIAL" : "INTEGER"
+"""Return the appropriate SQL type for an explicit-ID primary key column (a row per engine, #1179)."""
+_scratch_id_type(pool) = by_engine(pool; postgres = "SERIAL", sqlite = "INTEGER")
 
 # ── Schema helpers: delete_protect_scratch ──────────────────────────────────
 
@@ -719,14 +719,9 @@ end
             # #452's invariant, on the statement that used to violate it. Asserted here rather than
             # only in unit coverage because this is the plan a live database is asked to execute.
             # Per-backend marker syntax, as helper_marker_alignment.jl does it: a repeated `$1` is
-            # legal on PostgreSQL, so compare DISTINCT indices there and occurrences on SQLite.
-            _mp_sql    = deletion_step[:sql_text]
-            _mp_nparam = length(deletion_step[:parameters])
-            if PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
-                @test length(Set(m.match for m in eachmatch(r"\$\d+", _mp_sql))) == _mp_nparam
-            else
-                @test count(==('?'), _mp_sql) == _mp_nparam
-            end
+            # legal on PostgreSQL, so `marker_count` (common_setup.jl, a row per engine) compares
+            # DISTINCT indices there and occurrences on SQLite.
+            @test marker_count(deletion_step[:sql_text]) == length(deletion_step[:parameters])
 
             delete_q = M.Result.objects
             delete_q.filter("resultid" => scratch_result_id)
@@ -874,12 +869,7 @@ end
             @test occursin("\"owner\" IN", update_step[:sql_text])
             @test occursin("\"backup\" IN", update_step[:sql_text])
             # #452's invariant on a statement shape that did not exist before this fix.
-            if PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
-                @test length(Set(m.match for m in eachmatch(r"\$\d+", update_step[:sql_text]))) ==
-                      length(update_step[:parameters])
-            else
-                @test count(==('?'), update_step[:sql_text]) == length(update_step[:parameters])
-            end
+            @test marker_count(update_step[:sql_text]) == length(update_step[:parameters])
 
             delete_q = MultipathSetNullM.Mp_root_scratch.objects
             delete_q.filter("id" => root_id)

@@ -56,7 +56,9 @@ _rt615_live(pool) = read_live_schema(pool; include_table = collect(String, value
 # row and the file archive, which would leave traces of a scratch migration behind.
 function _rt615_apply!(pool, plan)
     ordered, _ = _order_statements([plan[k] for k in keys(plan)])
-    if pool isa PormG.PormGPostgres
+    # Engine mechanics, a row per engine (#1179): an ordinary transaction on PostgreSQL, SQLite's
+    # write lock with foreign keys suspended on its own handle.
+    if by_engine(pool; postgres = true, sqlite = false)
         _, conn = _rt615_tx(pool, "BEGIN;")
         try
             _execute_statements_pg(pool, ordered; conn = conn)
@@ -99,7 +101,9 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Table rename, applied ($(PORMG_DB_FOLDER)) (#615)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    is_pg = pool isa PormG.PormGPostgres
+    # Where the UNIQUE constraint's name lives: the catalog, under the old table, on PostgreSQL; SQLite
+    # rebuilds the table instead. Representation of the plan, a row per engine (#1179).
+    names_constraint_in_catalog = by_engine(postgres = true, sqlite = false)
     # Every value below is a constant this file chose, so the SQL carries literals and no parameters.
     q(sql) = PormG.ConnectionPool.fetch(pool, sql) |> DataFrame
     # A write returns no columns, which `DataFrame` cannot build on SQLite — so writes skip it.
@@ -152,7 +156,7 @@ end
         # The child plans nothing (#678): both engines carry its constraint across the rename, which
         # the dangling-insert check and the converged re-diff below then confirm on the real engine.
         @test !haskey(plan, Symbol(RT615.child))
-        if is_pg
+        if names_constraint_in_catalog
             # The UNIQUE constraint's name exists only in the catalog, under the old table.
             @test occursin("DROP CONSTRAINT", plan[new_key]["Alter field: code"])
         end

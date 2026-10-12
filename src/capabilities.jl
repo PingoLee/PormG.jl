@@ -71,7 +71,7 @@ end
 # The engine as a key — the `NamedTuple` key a pinned `db_default` is spelled under. One method per
 # engine and NO fallback (#1129 item 2): a new backend gets a `MethodError` here rather than SQLite's
 # key, which `db_default_sql`'s `conn isa PormGPostgres ? :postgres : :sqlite` handed it silently.
-# Not a capability — an engine FACT, kept here because Dialect uses it and Migrations will (#1129).
+# Not a capability — an engine FACT, kept here because Dialect and Migrations both use it.
 _engine_key(::PormGPostgres) = :postgres
 _engine_key(::PormGSQLite) = :sqlite
 # The engines that have `feature`, by name — what a refusal offers instead.

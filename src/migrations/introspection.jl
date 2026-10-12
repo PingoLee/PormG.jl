@@ -758,8 +758,7 @@ The two-argument form is what every entry point holding `settings` starts from â
 `check` (as the list its `ignore_table=` replaces), the importers, and the planner's refusal (#805),
 which also takes the one-argument form to name the list in its message.
 """
-_backend_ignore_tables(conn)::Vector{String} =
-  conn isa PormGSQLite ? sqlite_ignore_schema : postgres_ignore_table
+_backend_ignore_tables(conn)::Vector{String} = _builtin_ignore_tables(conn)
 
 function _backend_ignore_tables(conn, settings::PormGSettings)::Vector{String}
   builtin = _backend_ignore_tables(conn)

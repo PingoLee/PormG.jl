@@ -73,10 +73,10 @@ end
 # #82: wrap a SQLite table-rebuild block so it re-creates the table's existing secondary indexes (the
 # rebuild's DROP TABLE drops them) and gates on `PRAGMA foreign_key_check(<table>)`. The CREATE INDEX DDL
 # is taken verbatim from sqlite_master, so names / uniqueness / partial clauses are preserved exactly.
-# No-op for PostgreSQL (real ALTER COLUMN, no rebuild) or an empty block. The check is SCOPED to the
-# rebuilt table (not the whole DB) so an unrelated pre-existing orphan elsewhere can't fail this
-# migration; the rename preserves the table name + PKs, so children of this table stay valid and need no
-# check.
+# SQLite only (typed so: an engine that alters in place has no rebuild to wrap); a no-op for an empty
+# block. The check is SCOPED to the rebuilt table (not the whole DB) so an unrelated pre-existing
+# orphan elsewhere can't fail this migration; the rename preserves the table name + PKs, so children
+# of this table stay valid and need no check.
 #
 # `catalog_table` (#615) is the name the index snapshot asks `sqlite_master` for, which differs from
 # `table_name` only for a table being RENAMED in the same migration: the rename runs first, so the
@@ -87,13 +87,13 @@ end
 # triggers that would fail the rebuild's RENAME are dropped first, and they and the table's own
 # triggers are re-created after the indexes, before the foreign-key gate. Its only caller is
 # `_finalize_sqlite_rebuilds!`, which works both lists out once the whole plan is known.
-function _sqlite_rebuild_preserving_indexes(conn, table_name::String, rebuild_sql::AbstractString;
+function _sqlite_rebuild_preserving_indexes(conn::PormGSQLite, table_name::String, rebuild_sql::AbstractString;
                                             surviving_columns::Union{Nothing,Set{String}} = nothing,
                                             column_renames::Dict{String,String} = Dict{String,String}(),
                                             catalog_table::String = table_name,
                                             before::Vector{String} = String[],
                                             after::Vector{String} = String[])::String
-  (!(conn isa PormGSQLite) || isempty(rebuild_sql)) && return String(rebuild_sql)
+  isempty(rebuild_sql) && return String(rebuild_sql)
   # #116: when the rebuild removes columns (FK-field deletion), pass the rebuilt table's columns so an
   # index on a just-dropped column isn't re-created ("no such column"). `nothing` (the default) preserves
   # every live index, i.e. the pre-#116 behavior for pure alterations where no column disappears.
@@ -144,7 +144,7 @@ function _finalize_sqlite_rebuilds!(conn, migration_plan::OrderedDict{Symbol, Or
                                     live::Vector{LiveTable} = LiveTable[],
                                     table_renames::Dict{String, String} = Dict{String, String}(),
                                     dropped_tables::Set{String} = Set{String}())::Nothing
-  conn isa PormGSQLite || return nothing
+  _rebuilds_table(conn) || return nothing
   rebuilt = Symbol[t for (t, steps) in migration_plan if haskey(steps, "Alter table: $t")]
   isempty(rebuilt) && return nothing
   for t in rebuilt
@@ -287,7 +287,7 @@ function _drop_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLit
   # `catalog_table` is the same rule for the TABLE (#615): on a table rename the lookup asks for the
   # old name, while the DROP names `model_name` — it executes after the rename.
   if _fk_constraint_action(new_spec, old_spec) in (:drop, :repoint)
-    if conn isa PormGSQLite
+    if _rebuilds_table(conn)
       # SQLite has no `ALTER TABLE DROP CONSTRAINT`; an FK can only be removed by rebuilding the
       # table. On the field-alteration path this is a no-op ON PURPOSE: `_alter_table_fields`
       # already emits a full table rebuild (Dialect.alter_field wrapped by
@@ -379,13 +379,13 @@ function _add_fk_constraint_in_alteration(conn::Union{PormGPostgres, PormGSQLite
   # The guard is about a DROP that was expected and did not happen; on SQLite none is ever expected.
   #
   # Only `:repoint` needs this. An `:add` by definition had no constraint to drop.
-  if conn isa PormGPostgres && action === :repoint &&
+  if !_rebuilds_table(conn) && action === :repoint &&
      !(haskey(migration_plan, model_name) && haskey(migration_plan[model_name], "Remove foreign key: $drop_key_column"))
     @warn "Foreign key on $(model_name).$(field_name) changed, but its live constraint could not be found; skipping the re-point rather than adding a duplicate" action
     return nothing
   end
   if action in (:add, :repoint)
-    if conn isa PormGSQLite
+    if _rebuilds_table(conn)
        # `:repoint` is a SILENT no-op here, exactly as it is in `_drop_fk_constraint_in_alteration`:
        # `_alter_table_fields` already emits a full rebuild from the desired model, and that rebuild
        # re-renders the whole `FOREIGN KEY … REFERENCES … ON DELETE` clause — so the key IS
@@ -465,7 +465,7 @@ function _add_constrains(conn::Union{PormGPostgres, PormGSQLite}, migration_plan
   # `FieldError` here because of the early return above it. One predicate, no reliance on the order
   # of two guards.
   if field isa Models.sRelationalColumn && field.db_constraint
-    if conn isa PormGPostgres
+    if !_rebuilds_table(conn)
       constraint_name = name * "_fk" |> lowercase
       # Local FK column and referenced parent column both honor db_column (#50).
       resolved_pk = Models.fk_target_column(field)
@@ -524,11 +524,8 @@ function _catalog_index_name(::PormGPostgres, name::String)::String
   return String(take!(out))
 end
 
-# The key a model-level index name is unique under, as the catalog will store it: PostgreSQL's
-# 63-byte truncation, and SQLite's case-insensitive identifiers (PormG quotes every name, so
-# PostgreSQL compares exactly). Every name comparison in the composite path goes through here.
-_composite_name_key(conn::Union{PormGPostgres, PormGSQLite}, name::String)::String =
-  conn isa PormGSQLite ? lowercase(_catalog_index_name(conn, name)) : _catalog_index_name(conn, name)
+# The key a model-level index name is unique under is `_composite_name_key` (engine_facts.jl). Every
+# name comparison in the composite path goes through it.
 
 """
     _claim_composite_target!(conn, targets, name, table; auto = false) -> Nothing
@@ -786,7 +783,7 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
   # SQLite: the rebuild decision comes first (see the docstring).
   rebuild_key = "Alter table: $model_name"
   rebuilding = false
-  if conn isa PormGSQLite
+  if _rebuilds_table(conn)
     if any(j -> !taken[j] && live[j][1].constraint, eachindex(live)) &&
        !(haskey(migration_plan, model_name) && haskey(migration_plan[model_name], rebuild_key))
       _configure_order_dict_migration_plan(migration_plan, model_name, rebuild_key,
@@ -823,16 +820,16 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
     if rebuilding && lc.constraint
       push!(creates, d)                              # the rebuild takes it; put it back as an index
     elseif d.explicit && !d.auto && !samename(lc.name, d.name) &&
-           !(conn isa PormGSQLite && lc.constraint)  # an autoindex has no name of its own to change
+           !(_rebuilds_table(conn) && lc.constraint)  # an autoindex has no name of its own to change
       push!(renames, (lc, d))
     end
     # #29: a hand-made advanced index the declaration matches becomes PormG's (see the docstring).
-    conn isa PormGPostgres && !composite_is_owned(lc) && push!(adopts, (lc, d))
+    _adopts_indexes(conn) && !composite_is_owned(lc) && push!(adopts, (lc, d))
   end
   unowned = Dict{String, LiveComposite}()
   for (j, (lc, _)) in enumerate(live)
     taken[j] && continue
-    conn isa PormGSQLite && lc.constraint && continue   # removed by the rebuild registered above
+    _rebuilds_table(conn) && lc.constraint && continue   # removed by the rebuild registered above
     if composite_is_owned(lc)
       push!(drops, lc)
     else
@@ -872,7 +869,7 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
 
   dropped = Set{String}()
   drop!(lc::LiveComposite) = begin
-    sql = conn isa PormGPostgres && lc.constraint ? Dialect.drop_unique_constraint(conn, table, lc.name) :
+    sql = !_rebuilds_table(conn) && lc.constraint ? Dialect.drop_unique_constraint(conn, table, lc.name) :
                                                     Dialect.drop_index(conn, lc.name)
     _configure_order_dict_migration_plan(migration_plan, model_name, "Remove composite index: $(lc.name)", sql)
     push!(dropped, lc.name)
@@ -889,7 +886,7 @@ function _plan_composite_actions!(conn::Union{PormGPostgres, PormGSQLite},
                             marker = something(composite_marker(d), INDEX_MARKER)))
   end
   for (lc, d) in renames
-    if conn isa PormGPostgres
+    if _can_rename_index(conn)
       _claim_composite_target!(conn, targets, d.name, table)
       _configure_order_dict_migration_plan(migration_plan, model_name, "Rename composite index: $(lc.name)",
         lc.constraint ? Dialect.rename_constraint(conn, table, lc.name, d.name) :
@@ -1056,7 +1053,7 @@ function _plan_check_drops!(conn::Union{PormGPostgres, PormGSQLite},
                             migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
                             model_name::Symbol, model::PormGModel, plan::_CheckPlan)::Nothing
   _check_plan_isempty(plan) && return nothing
-  if conn isa PormGSQLite
+  if _rebuilds_table(conn)
     key = "Alter table: $model_name"
     (haskey(migration_plan, model_name) && haskey(migration_plan[model_name], key)) ||
       _configure_order_dict_migration_plan(migration_plan, model_name, key, Dialect.rebuild_table(conn, model))
@@ -1076,7 +1073,7 @@ function _plan_check_adds!(conn::Union{PormGPostgres, PormGSQLite},
                            migration_plan::OrderedDict{Symbol, OrderedDict{String, String}},
                            model_name::Symbol, model::PormGModel, plan::_CheckPlan;
                            catalog_table::Union{Symbol, Nothing} = model_name)::Nothing
-  conn isa PormGPostgres || return nothing
+  _rebuilds_table(conn) && return nothing
   table = string(model_name)
   for (old, c) in plan.renames
     _refuse_check_name_clash(conn, model, table, catalog_table, c.name)
@@ -1362,11 +1359,11 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
     # SQLite requires a full table recreation to drop the temporary default.
     # Use the same stable "Alter table:" key so multiple datetime fields being
     # added at once don't produce duplicate recreation statements.
-    alter_key = conn isa PormGSQLite ? "Alter table: $model_name" : "Alter field: $field_name"
+    alter_key = _rebuilds_table(conn) ? "Alter table: $model_name" : "Alter field: $field_name"
     # Delete existing recreation entry so re-insertion moves it to the END of
     # the OrderedDict — after ALL ADD COLUMNs.  Without this, the recreation
     # keeps its original position and later ADD COLUMNs hit "duplicate column".
-    if conn isa PormGSQLite && haskey(migration_plan, model_name) && haskey(migration_plan[model_name], alter_key)
+    if _rebuilds_table(conn) && haskey(migration_plan, model_name) && haskey(migration_plan[model_name], alter_key)
       delete!(migration_plan[model_name], alter_key)
     end
     # #82: this add-NOT-NULL-with-default path also rebuilds the table on SQLite, so it must preserve the
@@ -1415,7 +1412,7 @@ function _add_new_field(conn::Union{PormGPostgres, PormGSQLite}, migration_plan:
                                live_default, temp_spec.reference,
                                temp_spec.checks, temp_spec.identity, temp_spec.raw),
                     [:default])))
-  elseif conn isa PormGSQLite
+  elseif _rebuilds_table(conn)
     # The other half of the same invariant, and the reason the block above was not enough. The
     # rebuild's `CREATE TABLE` is rendered from the DESIRED model, so it already declares every new
     # column, and its `INSERT … SELECT` reads every model column from the OLD table — which means
@@ -1550,7 +1547,7 @@ function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
     # For SQLite every field alteration requires a full table recreation. Use a single stable key
     # ("Alter table: <model>") so repeated calls for the same table overwrite each other, producing
     # exactly one recreation statement instead of one per changed field.
-    alter_key = conn isa PormGSQLite ? "Alter table: $model_name" : "Alter field: $field_name"
+    alter_key = _rebuilds_table(conn) ? "Alter table: $model_name" : "Alter field: $field_name"
     # …but on SQLite the rebuild's POSITION matters as much as its content, and a rename is what
     # makes that bite. The rebuild is rendered from the DESIRED model and its `INSERT … SELECT`
     # copies by the NEW column names, so it can only execute after every RENAME on this table — and
@@ -1575,7 +1572,7 @@ function _plan_column_change!(conn::Union{PormGPostgres, PormGSQLite},
     # BEFORE it — but not one answered after it (a pure rename registers nothing), and each
     # registration also snapshotted the catalog for nothing. Since #729 the producers register the
     # bare rebuild and `_finalize_sqlite_rebuilds!` renders the block once, with the complete map.
-    if conn isa PormGSQLite && haskey(migration_plan, model_name) &&
+    if _rebuilds_table(conn) && haskey(migration_plan, model_name) &&
        haskey(migration_plan[model_name], alter_key)
       delete!(migration_plan[model_name], alter_key)
     end
@@ -1768,7 +1765,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
   # every statement names `model_name`.
   catalog_table = Symbol(live.name)
   # For the rebuild pass at the end of the plan — the map object itself, which is still filling.
-  conn isa PormGSQLite && (sqlite_rebuild_context[model_name] = (catalog_table, sqlite_rename_map))
+  _rebuilds_table(conn) && (sqlite_rebuild_context[model_name] = (catalog_table, sqlite_rename_map))
 
   # #1032: generated columns that are re-created rather than altered — dropped FIRST, and read as gone
   # by everything below. See `_generated_recreates`.
@@ -1941,7 +1938,7 @@ function _alter_table_fields(conn::Union{PormGPostgres, PormGSQLite}, migration_
       # plan must not count: the column would end up with no index at all (#161). A partial, an
       # expression-member or a marked index never answers (#934): it is not a plain index on `col`,
       # so a declared one over the column used to leave `db_index = true` with no index of its own.
-      probe = conn isa PormGSQLite ? get_constraints_index(conn, catalog_table, col) : nothing
+      probe = _rebuilds_table(conn) ? get_constraints_index(conn, catalog_table, col) : nothing
       if probe === nothing || probe in dropped_composites
         index_name = "$(hashed)_idx"
         # `model_name`, not `live.name`: this is DDL, and it runs after a table rename (#615).
@@ -2238,7 +2235,7 @@ function _resolve_table_fields(
   # makes it fail loudly instead of silently degrading the table to rowid. Removing the only primary key is
   # therefore rejected on SQLite but allowed on PostgreSQL — a deliberate, backend-capability-driven
   # difference (see the #151 Phase 4g test, which gates this case to SQLite).
-  if conn isa PormGSQLite && !isempty(colect_deletion)
+  if _rebuilds_table(conn) && !isempty(colect_deletion)
     desired_has_pk = any(f -> hasfield(typeof(f), :primary_key) && f.primary_key, values(current_model.fields))
     if !desired_has_pk
       for fsym in colect_deletion
@@ -2255,7 +2252,7 @@ function _resolve_table_fields(
   # field, so it already drops this table's remaining deletions. Running the per-column deletion handling
   # below as well would emit `DROP COLUMN "<other>"` for a column the rebuild already removed ("no such
   # column"), so defer to the rebuild when it is present (SQLite only; PostgreSQL uses plain DROP COLUMN).
-  sqlite_rename_rebuild = conn isa PormGSQLite && haskey(migration_plan, model_name) &&
+  sqlite_rename_rebuild = _rebuilds_table(conn) && haskey(migration_plan, model_name) &&
     haskey(migration_plan[model_name], "Alter table: $model_name")
   if !isempty(colect_deletion) && !sqlite_rename_rebuild
     # #116/#151: SQLite refuses `ALTER TABLE DROP COLUMN` for an FK-with-constraint, a UNIQUE, or a PRIMARY
@@ -2289,7 +2286,7 @@ function _resolve_table_fields(
     # that used to be a metadata-only `DROP COLUMN`; the end state is identical either way, and an
     # end state that the database accepts beats a cheaper one it refuses.
     rebuild_delete_idx = nothing
-    if conn isa PormGSQLite
+    if _rebuilds_table(conn)
       rebuild_delete_idx = findfirst(colect_deletion) do fsym
         fname = string(fsym)
         spec = live.columns[model_fields_map[fname]]
@@ -2780,7 +2777,7 @@ function _refuse_managed_models_on_ignored_tables(current_schema::Dict{Symbol, D
                                                   conn, settings::PormGSettings)::Nothing
   # #818: the default this connection reads with — the built-in list less its `unignore_defaults:`.
   default_list = _backend_ignore_tables(conn, settings)
-  default_name = _backend_ignore_tables(conn) === sqlite_ignore_schema ? "sqlite_ignore_schema" : "postgres_ignore_table"
+  default_name = _builtin_ignore_tables_name(conn)
   # Most specific first, which is the order each line names its matches in.
   sources = (
     (:connection, Configuration._configured_ignore_tables(settings),

@@ -6,6 +6,7 @@ import Logging
 # first-argument types (PormGPostgres/PormGSQLite/PormGSettings), so this is not type piracy.
 import Base: fetch
 import PormG: PormGSettings, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGSQLiteParam, AbstractPormGParam, config, PormGModel, DEFAULT_POOL_TIMEOUT
+import PormG: _backend_name  # #1129: an engine's name for a message, falling back to its type's name
 import PormG: @pormg_debug
 # #721: `PormG.sqlite_bind_value` (`value_repr.jl`) is included AFTER this module, so it is named
 # qualified inside a function body and resolved at call time — `Generator.jl`'s spelling.
@@ -201,7 +202,7 @@ function _run_before_connect!(pool::Union{PormGPostgres, PormGSQLite})
     # PoolConnectError, not ErrorException: a hook refusing the connection is a connect-time
     # failure like any other, and `catch PoolError` must cover it (audit finding). The hook is the
     # documented downstream-extension seam (Nitro), so this is consumer-reachable.
-    throw(PoolConnectError(pool isa PormGPostgres ? "PostgreSQL" : "SQLite",
+    throw(PoolConnectError(_backend_name(pool),
                            "before_connect hook aborted the connection", key, 1, 0.0))
   end
   return nothing
@@ -312,7 +313,7 @@ of its text. Build the error in the `catch`, let the block end, then throw:
 function _as_database_error(pool, e; fields = nothing)
   root = _unwrap_async_exception(e)
   root isa PormGError && return root
-  adapter = pool isa PormGPostgres ? "PostgreSQL" : "SQLite"
+  adapter = _backend_name(pool)
   kind = backend_classify_error(pool, root)
   # The reason as data (#987). The error renders from these fields alone, so the driver's text —
   # DETAIL, HINT, the `LINE n:` excerpt — stays in `cause`. Never let an extension's reader replace
@@ -985,7 +986,7 @@ function _close_pool_slots!(pool::Union{PormGPostgres, PormGSQLite}; drain_secon
   in_use > 0 && @warn("close_pool!: closed connections that were still checked out; " *
                       "in-flight queries on them will fail",
                       in_use, drain_seconds,
-                      adapter = pool isa PormGPostgres ? "PostgreSQL" : "SQLite")
+                      adapter = _backend_name(pool))
   return nothing
 end
 
@@ -2432,11 +2433,7 @@ function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
     # Use transaction context connection - don't acquire a new one
     conn = tx_conn
     err = try
-      task = if connection isa PormGPostgres
-        backend_execute_async(connection, conn, sql, params)
-      else
-        sqlite_execute_async(connection, conn, sql, params)
-      end
+      task = _execute_async(connection, conn, sql, params)
       # Return a special FetchTask that won't release the connection
       return FetchTask(task, connection, conn, true)  # true = in_transaction
     catch e
@@ -2447,19 +2444,10 @@ function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
   else
     # Normal path: acquire connection from pool
     if conn === nothing
-      if connection isa PormGSQLite
-        sqlite_mode = _sqlite_is_read_query(sql) ? :read : :write
-        conn = acquire_connection(connection; mode=sqlite_mode)
-      else
-        conn = acquire_connection(connection)
-      end
+      conn = _acquire_for_statement(connection, sql)
     end
     err = try
-      task = if connection isa PormGPostgres
-        backend_execute_async(connection, conn, sql, params)
-      else
-        sqlite_execute_async(connection, conn, sql, params)
-      end
+      task = _execute_async(connection, conn, sql, params)
       return FetchTask(task, connection, conn, false; borrowed = borrowed)  # false = not in transaction
     catch e
       # If EXEC fails immediately, release the connection — only one this call acquired (#970)
@@ -2650,19 +2638,11 @@ function with_transaction_async(pool::Union{PormGPostgres, PormGSQLite}, sql::St
   _refuse_nul(sql, params)   # #951, before the acquire for the same reason
   conn_acquired = false
   if conn === nothing
-    if pool isa PormGSQLite
-      conn = acquire_connection(pool; mode=:write)
-    else
-      conn = acquire_connection(pool)
-    end
+    conn = _acquire_in_mode(pool, :write)
     conn_acquired = true
   end
   err = try
-    task = if pool isa PormGPostgres
-      backend_execute_async(pool, conn, sql, params)
-    else
-      sqlite_execute_async(pool, conn, sql, params)
-    end
+    task = _execute_async(pool, conn, sql, params)
     # Don't wrap in FetchTask since we don't want auto-release
     return task, conn
   catch e
@@ -2732,11 +2712,7 @@ function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
   # on — that case must fall through to the ordinary release.
   local task = nothing
   if conn === nothing
-    if pool isa PormGSQLite
-      conn = acquire_connection(pool; mode=:write)
-    else
-      conn = acquire_connection(pool)
-    end
+    conn = _acquire_in_mode(pool, :write)
     conn_acquired = true
   end
 
@@ -2747,11 +2723,7 @@ function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
     params isa ManualParams && (params = _normalize_manual_params(params, pool))
     _refuse_nul(sql, params)   # #951 — inside the `try` for the same #846 reason
     # Use async execution but await immediately
-    task = if pool isa PormGPostgres
-      backend_execute_async(pool, conn, sql, params)
-    else
-      sqlite_execute_async(pool, conn, sql, params)
-    end
+    task = _execute_async(pool, conn, sql, params)
     result = Base.fetch(task)
     return result, conn
   catch e
@@ -2864,6 +2836,18 @@ _begin_write_sql(::PormGPostgres) = "BEGIN;"
 _begin_write_sql(::PormGSQLite) = "BEGIN IMMEDIATE TRANSACTION;"
 _after_begin_sql(::PormGPostgres) = String[]
 _after_begin_sql(::PormGSQLite) = ["PRAGMA defer_foreign_keys = ON;"]
+
+# #1129 item 2 — which driver path a statement executes through, and how a connection is leased for
+# it, per engine and with no fallback. SQLite's pool keeps separate read and write slots
+# (`_slot_fits_mode`), so a lease says which it needs; PostgreSQL's slots are all alike.
+_execute_async(pool::PormGPostgres, conn, sql, params) = backend_execute_async(pool, conn, sql, params)
+_execute_async(pool::PormGSQLite, conn, sql, params) = sqlite_execute_async(pool, conn, String(sql), params)
+_acquire_in_mode(pool::PormGPostgres, ::Symbol; kwargs...) = acquire_connection(pool; kwargs...)
+_acquire_in_mode(pool::PormGSQLite, mode::Symbol; kwargs...) = acquire_connection(pool; mode = mode, kwargs...)
+# The lease for one statement: on SQLite a read takes a read slot, anything else the write slot.
+_acquire_for_statement(pool::PormGPostgres, ::AbstractString) = acquire_connection(pool)
+_acquire_for_statement(pool::PormGSQLite, sql::AbstractString) =
+  acquire_connection(pool; mode = _sqlite_is_read_query(String(sql)) ? :read : :write)
 
 # Read `PRAGMA foreign_keys` back off a specific connection. Returns the *actual* session state, not
 # what was requested — the distinction matters because SQLite silently ignores `PRAGMA foreign_keys`
@@ -3145,11 +3129,7 @@ function _nested_savepoint(f::Function, settings::PormGSettings)
 end
 
 function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGSQLite})
-  conn = if pool isa PormGSQLite
-    acquire_connection(pool; mode=:write)
-  else
-    acquire_connection(pool)
-  end
+  conn = _acquire_in_mode(pool, :write)
   tx_started = false
   local rollback_error = nothing
   # The BEGIN's driver handle, and whether its await was ABANDONED by a cancellation (#322). Hoisted
@@ -3162,29 +3142,24 @@ function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGS
     # Begin transaction. `_await_tx_statement`, not a bare `Base.fetch`: these statements bypass
     # `fetch`, so they are the only driver contact in this function that no seam covers. The
     # function-wide `catch` below must NOT wrap — it also sees `f()`, the caller's own code (#268).
-    if pool isa PormGPostgres
-        begin_task = backend_execute_async(pool, conn, "BEGIN;", nothing)
-        _await_tx_statement(pool, begin_task)
-    else
-        # Use BEGIN IMMEDIATE for SQLite to prevent deadlocks and ensure
-        # write lock is acquired early for multi-threaded scenarios.
-      begin_task = sqlite_execute_async(pool, conn, "BEGIN IMMEDIATE TRANSACTION;", nothing)
-      _await_tx_statement(pool, begin_task)
-      # The transaction is open from here on, so mark it BEFORE anything else can throw — otherwise
-      # a failure below skips the ROLLBACK in the catch and releases a connection with an open
-      # transaction back to the pool, which the acquire liveness probe cannot detect (#71).
-      tx_started = true
-      # #276: match PostgreSQL's timing, not just its strictness. `Dialect.add_foreign_key` creates
-      # every PG foreign key DEFERRABLE INITIALLY DEFERRED, so PG checks at COMMIT and a transaction
-      # may be transiently inconsistent — insert a child, then its parent, and it commits. SQLite's
-      # `foreign_keys` pragma checks per statement, so turning it on alone would make that same
-      # block raise on SQLite only: a NEW divergence, in the direction #276 exists to remove.
-      # `defer_foreign_keys` is per-transaction and resets itself at COMMIT and ROLLBACK, so it
-      # needs no renewal — unlike `foreign_keys`, which is why migrations suspend rather than defer.
-      task = sqlite_execute_async(pool, conn, "PRAGMA defer_foreign_keys = ON;", nothing)
+    # SQLite's `BEGIN IMMEDIATE` takes the write lock early, to prevent deadlocks between threads.
+    begin_task = _execute_async(pool, conn, _begin_write_sql(pool), nothing)
+    _await_tx_statement(pool, begin_task)
+    # The transaction is open from here on, so mark it BEFORE anything else can throw — otherwise
+    # a failure below skips the ROLLBACK in the catch and releases a connection with an open
+    # transaction back to the pool, which the acquire liveness probe cannot detect (#71).
+    tx_started = true
+    # #276: match PostgreSQL's timing, not just its strictness. `Dialect.add_foreign_key` creates
+    # every PG foreign key DEFERRABLE INITIALLY DEFERRED, so PG checks at COMMIT and a transaction
+    # may be transiently inconsistent — insert a child, then its parent, and it commits. SQLite's
+    # `foreign_keys` pragma checks per statement, so turning it on alone would make that same
+    # block raise on SQLite only: a NEW divergence, in the direction #276 exists to remove.
+    # `defer_foreign_keys` is per-transaction and resets itself at COMMIT and ROLLBACK, so it
+    # needs no renewal — unlike `foreign_keys`, which is why migrations suspend rather than defer.
+    for after_sql in _after_begin_sql(pool)
+      task = _execute_async(pool, conn, after_sql, nothing)
       _await_tx_statement(pool, task)
     end
-    tx_started = true
 
     # Execute the function within transaction context
     result = with_tx_context(pool, conn) do
@@ -3192,13 +3167,8 @@ function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGS
     end
 
     # Commit on success
-    if pool isa PormGPostgres
-        task = backend_execute_async(pool, conn, "COMMIT;", nothing)
-        _await_tx_statement(pool, task)
-    else
-      task = sqlite_execute_async(pool, conn, "COMMIT;", nothing)
-      _await_tx_statement(pool, task)
-    end
+    task = _execute_async(pool, conn, "COMMIT;", nothing)
+    _await_tx_statement(pool, task)
 
     return result
   catch e
@@ -3240,13 +3210,8 @@ function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGS
     # Rollback on error if transaction actually started
     if tx_started
       try
-        if pool isa PormGPostgres
-            task = backend_execute_async(pool, conn, "ROLLBACK;", nothing)
-            _await_tx_statement(pool, task)
-        else
-          task = sqlite_execute_async(pool, conn, "ROLLBACK;", nothing)
-          _await_tx_statement(pool, task)
-        end
+        task = _execute_async(pool, conn, "ROLLBACK;", nothing)
+        _await_tx_statement(pool, task)
       catch rb
         # Capture the rollback error so the finally can decide release-vs-renew (a benign
         # SQLite "no transaction is active" is clean → released; anything else may leave the

@@ -30,7 +30,7 @@ import PormG: PormGError, MigrationError, InvalidMigrationError, ModelDefinition
 # importers.jl reports a wrong-backend connection with the precise type rather than folding it
 # into MigrationError — an unknown key already fails earlier as InvalidConfigurationError.
 import PormG: BackendCapabilityError
-import PormG: _supports, _capability_error  # #1129: the backend capability table (Kernel)
+import PormG: _supports, _capability_error, _engine_key  # #1129: the backend capability table (Kernel)
 # #749: a managed model on a table the connection's `ignore_tables:` hides contradicts the config.
 import PormG: InvalidConfigurationError
 # #472: introspection catches this NARROWLY to drop a column default it cannot represent
@@ -107,6 +107,8 @@ import PormG.Generator: generate_models_from_db, generate_migration_plan
 # Include submodules logic
 # column_spec.jl first: it defines the canonical column IR the planner's field diff runs on (#507),
 # and it depends only on Models/Dialect, both of which PormG has already included by this point.
+# #1129 item 2: what each engine decides, one method per engine and no fallback
+include("migrations/engine_facts.jl")
 include("migrations/column_spec.jl")
 include("migrations/introspection.jl")
 include("migrations/importers.jl")

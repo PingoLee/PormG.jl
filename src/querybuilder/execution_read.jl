@@ -858,16 +858,12 @@ function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias
     return length(result) > 0
   catch e
     @pormg_debug false
-    # Log for observability, then rethrow unconditionally.
-    # Silently returning false would mask connection failures, SQL errors, and
-    # permission errors as "does not exist", which is incorrect and dangerous.
-    # The only legitimate false return is from `length(result) > 0` above.
-    # Names the fluent method the caller typed, not the `_exists` helper behind it — the same
-    # reason the helpers are `_`-prefixed at all (#281): an internal spelling in a log line sends
-    # the reader looking for something that appears nowhere in their code. Structured logging form
-    # (`@error "Msg" exception=e key=value`); `(e, catch_backtrace())` rather than a bare `e` because only the tuple form logs a
-    # backtrace, matching the sibling catch in object_manager.jl.
-    @error "Error in exists()" model=oq.object.model.name exception=(e, catch_backtrace())
+    # Rethrow unconditionally. Silently returning false would mask connection failures, SQL errors
+    # and permission errors as "does not exist", which is incorrect and dangerous; the only
+    # legitimate false return is from `length(result) > 0` above.
+    # #1107: and do not log first. The caller gets the exception, and logging it is the
+    # application's call — as for `count()` and `list()`. The `@error` this replaced printed a
+    # backtrace ahead of every build-time refusal, even under `show_query = :sql`.
     rethrow(e)
   end
 end

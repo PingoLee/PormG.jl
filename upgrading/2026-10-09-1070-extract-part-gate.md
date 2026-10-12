@@ -1,9 +1,9 @@
 ## `Extract` is checked like the `__@` transforms, and an exact filter on a date part is range-checked (#1070)
 
 - **Version**: Unreleased
-- **PormG ref**: #1070, #1088, #1086, #1168 ; `src/querybuilder/functions.jl` (`_EXTRACT_PART_ROWS`, `Extract`), `src/querybuilder/select_nodes.jl` (`_check_temporal_operand`), `src/Models.jl` (`format_month_sql`, `format_day_sql`, `format_dow_sql`, `format_doy_sql`, `unranged_formatter`), `src/querybuilder/filter_nodes.jl` (`_format_filter_value`, `_pattern_text_kind`, `_pattern_operand`, `_pattern_number_kind`), `src/querybuilder/projection_types.jl` (`_having_alias_kind`)
+- **PormG ref**: #1070, #1088, #1086, #1168, #1183 ; `src/querybuilder/functions.jl` (`_EXTRACT_PART_ROWS`, `Extract`), `src/querybuilder/select_nodes.jl` (`_check_temporal_operand`), `src/Models.jl` (`format_month_sql`, `format_day_sql`, `format_dow_sql`, `format_doy_sql`, `unranged_formatter`), `src/querybuilder/filter_nodes.jl` (`_format_filter_value`, `_pattern_text_kind`, `_pattern_operand`, `_pattern_operand_kind`), `src/querybuilder/projection_types.jl` (`_having_alias_kind`)
 - **Recorded**: 2026-10-09
-- **Severity**: behavior. A pattern lookup on a number column (#1086, #1168) now matches an integer column's digits on both engines, and a float or decimal column raises `FilterError` on both, where SQLite ran it before. That relaxes one released refusal: a non-number fragment on an integer column (`"grid__@contains" => "x"`), a `FilterError` before, is now a fragment like any other and matches no row. An `Extract` part over a column it cannot read now raises `QueryBuildError` when the query is built, on both engines. An `=` or `@in` filter value outside a date part's range now raises `InvalidValueError` where it used to match nothing. Every other lookup binds it as a bound. That relaxes the released `@quarter`/`@quadrimester` check, which refused such a value under every operator.
+- **Severity**: behavior. A pattern lookup on a number column (#1086, #1168) now matches an integer column's digits on both engines, and a float or decimal column raises `FilterError` on both, where SQLite ran it before; an integer or float `Case` alias with no `output_field`, `Value` alias or arithmetic over a date part follows the same rule (#1183). That relaxes one released refusal: a non-number fragment on an integer column (`"grid__@contains" => "x"`), a `FilterError` before, is now a fragment like any other and matches no row. An `Extract` part over a column it cannot read now raises `QueryBuildError` when the query is built, on both engines. An `=` or `@in` filter value outside a date part's range now raises `InvalidValueError` where it used to match nothing. Every other lookup binds it as a bound. That relaxes the released `@quarter`/`@quadrimester` check, which refused such a value under every operator.
 
 ### What changed
 
@@ -45,7 +45,8 @@ checked against the same table, with the same message, and get the same range:
 | `filter(F("start_at__@hour") == true)`, `filter(F("start_at__@hour") > 1.5)` | bound `1` / `"1.5"` | `InvalidValueError` (`kind = :type` / `:format`) (#1083) |
 | `filter("date__@startswith" => "2009")` on a `DateField` (#1086) | `FilterError` (not a date) | matches: PostgreSQL reads `to_char(date, 'YYYY-MM-DD')`, SQLite the stored text |
 | `filter("grid__@contains" => "x")`, `filter("grid__@startswith" => "1")` — a pattern lookup on an integer column, a relation's key included, or on an integer alias, CTE column or `Subquery` (`Count`, `Max("grid")`) (#1086, #1168) | `FilterError` for a non-number fragment on a column (a `Subquery` bound it as given); a digit fragment ran on SQLite and failed at PostgreSQL's server, which has no `LIKE` for a number | bound as text and matched against the column's digits on both engines: PostgreSQL reads `CAST(grid AS text)`, SQLite the number's text |
-| `filter("fastestlapspeed__@startswith" => "2")` — a pattern lookup (`@iexact` and `@regex` included) on a `FloatField` or `DecimalField` column, on an alias, a CTE column or a `Subquery` whose expression is not an integer (`Avg`, a decimal `Sum`, `Cast(…, "float8")`, arithmetic over a float or a decimal), or on a number PormG cannot type (#1168) | a digit fragment ran on SQLite and failed at PostgreSQL's server | `FilterError` on both engines: each prints the number differently (`2.0` is `2` on PostgreSQL and `2.0` on SQLite), so one fragment would select different rows. Compare it as a number, or filter a `Cast(…, "text")` alias |
+| `filter("c__@startswith" => "1")` over `values("c" => Case([When("grid" => 1, then = 1)], default = 0))`, a `Value(1)` alias, or `F("date__@year") + 1` (#1183) | a digit fragment ran on SQLite and failed at PostgreSQL's server | matched against the digits on both engines: PostgreSQL reads `CAST(… AS text)`, SQLite the number's text |
+| `filter("fastestlapspeed__@startswith" => "2")` — a pattern lookup (`@iexact` and `@regex` included) on a `FloatField` or `DecimalField` column, on an alias, a CTE column or a `Subquery` whose expression is not an integer (`Avg`, a decimal `Sum`, `Cast(…, "float8")`, arithmetic over a float or a decimal), or on a number PormG cannot type (#1168); a `Case` alias with a float `default` or a `Value(2.5)` alias (#1183) | a digit fragment ran on SQLite and failed at PostgreSQL's server | `FilterError` on both engines: each prints the number differently (`2.0` is `2` on PostgreSQL and `2.0` on SQLite), so one fragment would select different rows. Compare it as a number, or filter a `Cast(…, "text")` alias |
 | `filter(F("start_at__@hour") > 25)` | no row | no row, unchanged: an ordering's value is a bound, not refused |
 
 A refusal names the part rather than the spelling: "The `hour` part reads a time of day, …", and a
@@ -58,10 +59,6 @@ key it holds, by #1068 in the same train: see that entry. `ToChar` is checked
 only for the `"YYYY-MM"` mask `@yyyy_mm` uses. Arithmetic over a part is an ordinary number, and
 so is a `Coalesce`/`Greatest`/`Least`/`NullIf` over one: `Extract("start_at", "HOUR") + 1` has no
 range. A comparison written with `F` or `Extract` takes the part's rule too (#1083).
-
-Unchanged too: a pattern lookup on a `Case` alias with no `output_field`, a `Value` alias, or
-arithmetic over a date part is still compared as written, as before #1168: SQLite matches its text
-and PostgreSQL fails at the server (#1183).
 
 The range applies to `=` and `@in` only (#1088). There an out-of-range value can only be a typo,
 while for `<`, `<=`, `>`, `>=`, `@range`, `@ne` and `@nin` it is a bound:
@@ -79,7 +76,7 @@ now `kind = :format`.
   makes SQLite agree.
 - Code that filters a date part with `=` or `@in` and a value outside its range, which matched no row before.
 - Code that relied on a `@quarter`/`@quadrimester` comparison raising for an out-of-range bound, or that matched `kind == :range` for a fractional period value.
-- Code that runs a pattern lookup (`@contains`, `@startswith`, `@endswith`, `@iexact`, `@regex` and their variants) on a `FloatField` or `DecimalField` column, or on a projection alias, CTE column or `Subquery` over a non-integer number, which SQLite answered over the number's text (#1168).
+- Code that runs a pattern lookup (`@contains`, `@startswith`, `@endswith`, `@iexact`, `@regex` and their variants) on a `FloatField` or `DecimalField` column, or on a projection alias, CTE column or `Subquery` over a non-integer number (a float `Case` default, a `Value(2.5)`, and a `When` condition on such a CTE column inside `values()` included, #1183), which SQLite answered over the number's text (#1168).
 - Code that relied on a non-number pattern fragment on an integer column (`"grid__@contains" => "x"`) raising `FilterError`: it now matches no row (#1086).
 
 ### How to find the calls to migrate
@@ -92,8 +89,8 @@ grep -rnE '__@[a-z_]*(contains|startswith|endswith|iexact|regex)"\)?\s*=>' --inc
 
 For an `Extract`, check the part against the column's field type in the table above. For a
 pattern lookup, check whether the column is a `FloatField` or a `DecimalField`, or whether the
-alias, CTE column or `Subquery` projects an `Avg`, a `Sum` over one, a non-integer `Cast` or
-arithmetic over one. For a
+alias, CTE column or `Subquery` projects an `Avg`, a `Sum` over one, a non-integer `Cast`,
+arithmetic over one, or a `Case`/`Value` whose value is a float. For a
 `@month` or `@day` filter, check whether the value can come from outside the range (user input, a
 computed value). Running the query is the definitive check: the refusal names the part, the column
 and its type, and cites #1070.

@@ -312,12 +312,13 @@ end
 
 # #1168: the alias's `_expression_kind`, the evidence `_having_alias_formatter` cannot give — an integer,
 # a float and a decimal all resolve to `format_number_sql`. Same two sources, in the same order: the
-# column an alias projects, then the projected expression.
+# column an alias projects, then the projected expression. #1183: a `Value(x)` alias is its literal's
+# kind, as the walk types it anywhere else — `Value(1)` an integer, `Value(2.5)` a float.
 function _having_alias_kind(alias::MemoKey, instruc::SQLInstruction)
   memoized = memo_field(instruc, alias)
   memoized === nothing || return _field_kind(memoized)
   source = _projected_source(alias, instruc)
-  (source === nothing || source isa SQLTypeText) && return nothing
+  source === nothing && return nothing
   return _expression_kind(source, instruc)
 end
 
@@ -1443,9 +1444,9 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   field = _pattern_operand(string(_alias_lhs(having_key, having_cached, instruc)),
                            alias_formatter, v.operator, instruc;
                            label = having_key[2],
-                           # #1168: a number alias's kind, only where it decides the read.
-                           operand_kind = alias_formatter === Models.format_number_sql &&
-                                          v.operator in PATTERN_LOOKUP_OPERATORS ?
+                           # #1168/#1183: the alias's kind — a number's width, a time, a type
+                           # with no formatter — only where it decides the read.
+                           operand_kind = v.operator in PATTERN_LOOKUP_OPERATORS ?
                                           _having_alias_kind(having_key, instruc) : nothing)
   # #618: `contains=` / `operator=` are what run `_apply_like_wildcards` (and with it
   # `escape_like_pattern`) inside `add_parameter!`. Without them a pattern lookup on an alias

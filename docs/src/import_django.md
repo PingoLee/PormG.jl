@@ -409,6 +409,12 @@ Three things to read off that output, and a fourth that shows up only when somet
   PormG's own derivation is `<logical model>_<field>`, which addresses a table Django never created.
   A `db_table=` written on the field is left alone, and a field with `through=` is skipped entirely —
   Django ignores `db_table` there, because the join table *is* the through model's table.
+  Its join **columns** follow Django's rule too, and are pinned as `source_field` / `target_field`
+  wherever PormG would spell them differently. A self-relation (`from_driver_id` / `to_driver_id`)
+  is decided by **name**: the class the field names against the owner's class, ignoring the app label.
+  So `"self"`, `"Driver"` on `Driver` and `"imports.Driver"` on `racing.Driver` are self-relations,
+  while `ManyToManyField("DriverProxy")` on `Driver` is not, because a proxy keeps its own name. Its
+  columns are `driver_id` / `driverproxy_id`.
 - **Anything the importer reports names the class `'dash.DimIbge'`**, not `'DimIbge'` — a
   `django_prefix` *is* the Django app label, so there is a label to qualify with. See
   [Meta Options](#Meta-Options).

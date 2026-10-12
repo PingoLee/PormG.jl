@@ -196,20 +196,49 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A number PormG cannot type is refused too: it cannot say which text the engine would match. A
-# `Subquery` alias is one today — the walk gives a subquery its READ kind, which names no integer —
-# so even an integer subquery is refused, on both engines (SQLite used to match its text). This pins
-# the untyped half of the rule: a mutant reading an untyped number as an integer turns it into a cast.
+# A `Subquery` alias is typed by its inner projection (#1186, `subquery_all_kinds`), so it follows the
+# column rule: an integer one (`Max("grid")`, a `Count`, a key) reads as its digits — PostgreSQL
+# `CAST((SELECT …) AS text) LIKE`, SQLite the subquery itself — and a float, a decimal or an `Avg`
+# is refused on both engines. Before #1168 PostgreSQL got a bare `(SELECT …) LIKE`, a server error.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1168: a number PormG cannot type is refused" begin
+@testset "#1168: a Subquery alias reads or refuses by its inner projection's kind" begin
+  sub(agg) = Subquery(PNC.Pnc_result.objects.filter("resultid" => OuterRef("resultid")).values("m" => agg))
   for (backend, conn) in _PNC_BACKENDS
     @testset "$backend" begin
-      e = _pnc_refusal(q -> (q.values("resultid", "s" => Subquery(PNC.Pnc_result.objects.
-                               filter("resultid" => OuterRef("resultid")).values("grid")));
-                             q.filter("s__@startswith" => "1")), conn)
-      @test e isa PormG.FilterError
-      @test occursin("cannot type", sprint(showerror, e))
+      for agg in (Max("grid"), Count("resultid"), Max("driverid"))
+        f = q -> (q.values("resultid", "s" => sub(agg)); q.filter("s__@startswith" => "1"))
+        sql = _pnc_sql(f, conn)
+        if conn isa PormG.PormGPostgres
+          @test occursin(r"WHERE CAST\(\(SELECT\s.*\) AS text\) LIKE \$\d+ ESCAPE"s, sql)
+        else
+          @test occursin(r"\) LIKE \? ESCAPE"s, sql)
+          @test !occursin("AS text", sql)
+        end
+        @test last(_pnc_params(f, conn)) == "1%"
+      end
+      for agg in (Avg("grid"), Max("fastestlapspeed"), Max("points"))
+        e = _pnc_refusal(q -> (q.values("resultid", "s" => sub(agg)); q.filter("s__@startswith" => "1")), conn)
+        @test e isa PormG.FilterError
+        @test occursin("not an integer", sprint(showerror, e))
+      end
     end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A number PormG cannot type is refused too: it cannot say which text the engine would match. #1186
+# typed the untyped `Subquery` this file used to reach, so the rule is pinned at the classifier as
+# well as end to end (the CTE `__`-prefix case below, whose readings disagree): a mutant reading
+# `kind === nothing` as an integer would turn an untyped number into a cast no engine vouches for.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1168: a number PormG cannot type is refused" begin
+  QB = PormG.QueryBuilder
+  number = PormG.Models.format_number_sql
+  @test QB._pattern_text_kind(number; kind = nothing) === :inexact_number
+  @test QB._pattern_text_kind(number; kind = QB.CFloat64()) === :inexact_number
+  @test QB._pattern_text_kind(number; kind = QB.CDecimal(nothing, nothing)) === :inexact_number
+  for k in (QB.CInt16(), QB.CInt32(), QB.CInt64())
+    @test QB._pattern_text_kind(number; kind = k) === :integer
   end
 end
 

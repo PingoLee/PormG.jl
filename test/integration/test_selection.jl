@@ -1262,6 +1262,13 @@ end
   @test got(M.Result.objects.filter("raceid" => 1, "grid__@startswith" => "1").values("resultid")) == want
   # A non-number fragment is a fragment like any other: it matches no digits, and does not raise.
   @test isempty(M.Result.objects.filter("raceid" => 1, "grid__@contains" => "x").values("resultid").list(:dict))
+  # An integer `Subquery` alias takes the same read (#1186 types it by its inner projection): each
+  # row's own grid, through a correlated `Max`, matches the same slots. PostgreSQL reads
+  # `CAST((SELECT …) AS text)`, which this runs on the server.
+  own_grid = M.Result.objects.filter("resultid" => OuterRef("resultid")).values("g" => Max("grid"))
+  q = M.Result.objects.filter("raceid" => 1).values("resultid", "s" => Subquery(own_grid))
+  q.filter("s__@startswith" => "1")
+  @test got(q) == want
   e = try M.Result.objects.filter("fastestlapspeed__@startswith" => "2").values("resultid").list(:dict); nothing catch err; err end
   @test e isa PormG.FilterError
   @test occursin("not an integer", sprint(showerror, e))

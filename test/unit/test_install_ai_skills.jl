@@ -211,25 +211,121 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# install_ai_skills: writes nothing outside its own directory (#253)
-# The installer must stay read-only everywhere but `.github/skills/pormg-usage/`: consuming apps
-# keep hand-curated skills tables in AGENTS.md, and an auto-appended pointer would fight them.
-# Snapshot every other file's bytes before and after, and require them identical.
+# install_ai_skills: writes nothing outside its own directory and its Claude Code stub (#253, #1132)
+# The installer must stay read-only everywhere but `.github/skills/pormg-usage/` and, since #1132,
+# the one stub file `.claude/skills/pormg-usage/SKILL.md`: consuming apps keep hand-curated skills
+# tables in AGENTS.md, and an auto-appended pointer would fight them. Snapshot every other file's
+# bytes before and after, and require them identical.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "install_ai_skills is read-only outside its skill directory (#253)" begin
+@testset "install_ai_skills is read-only outside its skill directory and stub (#253, #1132)" begin
     mktempdir() do dir
         write(joinpath(dir, "AGENTS.md"), "# Agents\n")
         write(joinpath(dir, "CLAUDE.md"), "@AGENTS.md\n")
         mkpath(joinpath(dir, ".github", "instructions"))
         write(joinpath(dir, ".github", "instructions", "x.md"), "rules\n")
+        # A Claude Code skill of the project's own, beside where the stub goes: not touched.
+        mkpath(joinpath(dir, ".claude", "skills", "team-skill"))
+        write(joinpath(dir, ".claude", "skills", "team-skill", "SKILL.md"), "ours\n")
 
         skill_dir = joinpath(dir, ".github", "skills", "pormg-usage")
+        stub_path = joinpath(dir, ".claude", "skills", "pormg-usage", "SKILL.md")
         snapshot() = Dict(joinpath(root, f) => read(joinpath(root, f))
                           for (root, _, fs) in walkdir(dir) for f in fs
-                          if !startswith(joinpath(root, f), skill_dir))
+                          if !startswith(joinpath(root, f), skill_dir) && joinpath(root, f) != stub_path)
         before = snapshot()
         PormG.install_ai_skills(dir; io = devnull)
         @test snapshot() == before
-        @test length(before) == 3                    # the snapshot actually covered the files
+        @test length(before) == 4                    # the snapshot actually covered the files
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# install_ai_skills: writes the Claude Code discovery stub (#1132)
+# Claude Code registers a skill only from `.claude/skills/<name>/SKILL.md`. With the bundle alone,
+# `/pormg-usage` was an unknown skill in a consuming project and the session went on without the
+# ruleset. Expected: the stub exists, its front-matter is the bundle's byte-for-byte (discovery reads
+# `name`/`description` from it), its body names the bundle's SKILL.md by a link that resolves, it
+# stays under `test_skill_stubs.jl`'s ceiling, and the return value and the report both name it.
+# ─────────────────────────────────────────────────────────────────────────────
+# The front-matter block as it is on disk, delimiters included; `nothing` when there is none.
+function _ai1132_frontmatter(path::AbstractString)
+    m = match(r"\A---\r?\n.*?\r?\n---\r?\n"s, read(path, String))
+    return m === nothing ? nothing : m.match
+end
+
+@testset "install_ai_skills writes a Claude Code discovery stub (#1132)" begin
+    src_skill = joinpath(pkgdir(PormG), ".github", "skills", "pormg-usage", "SKILL.md")
+    mktempdir() do dir
+        buf = IOBuffer()
+        r = PormG.install_ai_skills(dir; io = buf)
+        out = String(take!(buf))
+        stub = joinpath(dir, ".claude", "skills", "pormg-usage", "SKILL.md")
+
+        @test r.stub == stub
+        @test isfile(stub)
+        @test occursin(stub, out)
+        fm = _ai1132_frontmatter(stub)
+        @test fm !== nothing && fm == _ai1132_frontmatter(src_skill)
+        @test occursin("\nname: pormg-usage\n", fm)
+        body = read(stub, String)
+        # The pointer, by a relative link that resolves from the stub's directory to the bundle.
+        m = match(r"\]\(([^)]+)\)", body)
+        @test m !== nothing && endswith(m.captures[1], ".github/skills/pormg-usage/SKILL.md")
+        @test m !== nothing && isfile(normpath(joinpath(dirname(stub), m.captures[1])))
+        # A pointer, not a second copy: the ceiling `test_skill_stubs.jl` holds this repo's stub to.
+        @test filesize(stub) <= 2_048
+        # The bundle's `written` list is still the bundle's file names only.
+        @test !any(f -> occursin(".claude", f), r.written)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# install_ai_skills: a rerun refreshes the stub; a link in its place is left alone (#1132)
+# Re-running is the update mechanism for the stub as for the bundle, so an edited stub is
+# overwritten. A link at the stub's path is not written through: a project that linked
+# `.claude/skills/pormg-usage` to the bundle directory would otherwise get the bundle's own
+# SKILL.md replaced by the stub. Expected: `stub === nothing`, a warning, the bundle intact.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "install_ai_skills refreshes the stub and never writes through a link (#1132)" begin
+    mktempdir() do dir
+        r = PormG.install_ai_skills(dir; io = devnull)
+        fresh = read(r.stub, String)
+        write(r.stub, "edited by hand\n")
+        r2 = PormG.install_ai_skills(dir; io = devnull)
+        @test r2.stub == r.stub
+        @test read(r2.stub, String) == fresh
+    end
+
+    # Every step of the stub's path, each a layout that resolves it to the bundle's own SKILL.md
+    # (review: a check on the last two steps only let `.claude/skills -> ../.github/skills` through).
+    # `(link at, link target relative to its directory, directory?)`; the file link targets the
+    # bundle's SKILL.md, which the install has written by the time the stub is.
+    src_skill = joinpath(pkgdir(PormG), ".github", "skills", "pormg-usage", "SKILL.md")
+    layouts = ((joinpath(".claude", "skills", "pormg-usage"), joinpath("..", "..", ".github", "skills", "pormg-usage"), true),
+               (joinpath(".claude", "skills"), joinpath("..", ".github", "skills"), true),
+               (".claude", ".github", true),
+               (joinpath(".claude", "skills", "pormg-usage", "SKILL.md"),
+                joinpath("..", "..", "..", ".github", "skills", "pormg-usage", "SKILL.md"), false))
+    for (at, target, isdir_target) in layouts
+        mktempdir() do dir
+            bundle = joinpath(dir, ".github", "skills", "pormg-usage")
+            mkpath(bundle)
+            mkpath(dirname(joinpath(dir, at)))
+            linked = try
+                symlink(target, joinpath(dir, at); dir_target = isdir_target)
+                true
+            catch
+                false
+            end
+            if linked
+                r = @test_logs (:warn, r"Left the Claude Code skill entry in place") match_mode = :any begin
+                    PormG.install_ai_skills(dir; io = devnull)
+                end
+                @test r.stub === nothing
+                @test read(joinpath(bundle, "SKILL.md"), String) == read(src_skill, String)
+            else
+                @test_skip "symlink creation is not permitted on this platform/user"
+            end
+        end
     end
 end

@@ -91,7 +91,7 @@ end
 
 """
     install_ai_skills(target_dir::String = pwd(); io::IO = stdout)
-        -> (; installed_dir, written, stale, referenced_in)
+        -> (; installed_dir, written, stale, referenced_in, stub)
 
 Copy PormG's `pormg-usage` skill bundle into `<target_dir>/.github/skills/pormg-usage/`, the
 file set an AI coding assistant (GitHub Copilot, Claude, Cursor, …) reads to learn the PormG API.
@@ -101,9 +101,16 @@ PormG version your project resolves, so run it again after each PormG bump.
 The bundle is flat — `SKILL.md`, a router, plus the topic files it links to — and the whole
 directory is copied so none of its relative links dangle after install.
 
-It writes **only** inside that directory, and reports what it found rather than acting on it:
+Claude Code registers a skill only from `.claude/skills/<name>/SKILL.md`, so it also writes
+`<target_dir>/.claude/skills/pormg-usage/SKILL.md`: a discovery stub holding the bundle's
+front-matter and a pointer to the bundle's `SKILL.md`, rewritten on every run. When any step of
+that path is a link (`.claude`, `.claude/skills`, the skill directory or the file), it writes no stub.
 
-- `written` — the files it copied, by name.
+It writes **only** those two places, and reports what it found rather than acting on it:
+
+- `written` — the files it copied into the bundle directory, by name.
+- `stub` — the path of the Claude Code stub, or `nothing` when it was not written (a link is
+  on its path, or the write failed; both are logged as a warning).
 - `stale` — files already in the target directory that this PormG version does not ship. Usually
   a topic file an older PormG installed and a later one renamed; possibly a file you added
   yourself. They are **left in place** — delete them if they came from PormG, because an assistant
@@ -151,12 +158,14 @@ function install_ai_skills(target_dir::String = pwd(); io::IO = stdout)
             cp(joinpath(skill_src_dir, f), joinpath(target_skill_dir, f); force=true)
         end
 
+        stub = _write_claude_stub(target_dir, joinpath(skill_src_dir, "SKILL.md"))
         referenced_in = _skill_references(target_dir)
 
         # Report what happened, not what the assistant now "knows" (#253): the copy wires
         # nothing up on its own, so an unreferenced bundle is worth saying out loud.
         println(io, _emsg(io, "\e[32mPormG AI skill installed → $target_skill_dir\e[0m"))
         println(io, "  wrote: ", join(files, ", "))
+        stub === nothing || println(io, "  Claude Code discovery stub → ", stub)
         if !isempty(stale)
             println(io, _emsg(io, "  \e[33mnot shipped by this PormG version (left in place):\e[0m ",) *
                 join(stale, ", "))
@@ -170,12 +179,57 @@ function install_ai_skills(target_dir::String = pwd(); io::IO = stdout)
             println(io, "  referenced from: ", join(referenced_in, ", "))
         end
 
-        return (; installed_dir = target_skill_dir, written = files, stale, referenced_in)
+        return (; installed_dir = target_skill_dir, written = files, stale, referenced_in, stub)
     catch e
         @error "Failed to install AI skills" exception=e
         return nothing
     end
 end
+
+# #1132 — the Claude Code discovery stub. Claude Code registers a skill only from
+# `.claude/skills/<name>/SKILL.md`, so after the copy alone `/pormg-usage` was an unknown skill there
+# and the session carried on without the ruleset. The stub has the shape of this repository's own
+# `.claude/skills/pormg-usage/SKILL.md` (`test/unit/test_skill_stubs.jl` says why a stub rather than a
+# link or a copy): the bundle's front-matter byte-for-byte, which discovery reads, and a body that only
+# points at the bundle. A link anywhere on its path is left alone: it may resolve to the bundle's own
+# `SKILL.md`, which writing through it would replace. A failure here is a warning, not a failed
+# install — the bundle is already written. Returns the path written, or `nothing`.
+function _write_claude_stub(target_dir::String, skill_md::String)::Union{String, Nothing}
+    stub_dir  = joinpath(target_dir, ".claude", "skills", "pormg-usage")
+    stub_path = joinpath(stub_dir, "SKILL.md")
+    # Every step of the path, not only the last: a tree shared between tools
+    # (`.claude/skills -> ../.github/skills`, or `.claude -> .github`) resolves the stub's path to the
+    # bundle's own SKILL.md, and Claude Code already finds the skill there.
+    for p in (joinpath(target_dir, ".claude"), joinpath(target_dir, ".claude", "skills"), stub_dir, stub_path)
+        if islink(p)
+            @warn "Left the Claude Code skill entry in place: a link is on its path" path = p
+            return nothing
+        end
+    end
+    try
+        m = match(r"\A---\r?\n.*?\r?\n---\r?\n"s, read(skill_md, String))
+        if m === nothing
+            @warn "PormG skill blueprint has no front-matter; no Claude Code stub written" source = skill_md
+            return nothing
+        end
+        mkpath(stub_dir)
+        write(stub_path, m.match * _CLAUDE_STUB_BODY)
+        return stub_path
+    catch e
+        @warn "Could not write the Claude Code skill stub" path = stub_path exception = e
+        return nothing
+    end
+end
+
+const _CLAUDE_STUB_BODY = """
+
+# PormG.jl — AI Usage Guide
+
+**Read [`.github/skills/pormg-usage/SKILL.md`](../../../.github/skills/pormg-usage/SKILL.md) now, and follow it.**
+That file is the skill. This one is a discovery stub and carries none of its rules: Claude Code
+registers a skill only under `.claude/skills/`. `PormG.install_ai_skills()` writes both files and
+rewrites both on every run, so edit neither by hand.
+"""
 
 # The line `install_ai_skills` suggests when no instruction file mentions the bundle yet.
 const _SKILL_POINTER_LINE =

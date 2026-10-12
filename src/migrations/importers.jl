@@ -1458,42 +1458,40 @@ function _build_class_index(apps::Vector{_DjangoApp},
   # proxy (legal Django) lands on the concrete model at the bottom rather than on an intermediate
   # that emits nothing either; the loop is bounded by the number of proxies, so a malformed cycle
   # stops instead of spinning.
+  #
+  # The parent is found through the class `_classify_class!` RESOLVED the base to (`mti_parent_ref`),
+  # keyed exactly as `by_ref` is, never by matching the base as written against Django references
+  # (#1180). The written token is whatever the models.py spelled: `RacingDriver` after an `import …
+  # as`, `racing_models.Driver` or `racing.models.Driver` through a module. None of those is a class
+  # name or an `app.Class` pair, so the proxy never resolved and every relation to it degraded with a
+  # marker saying the target was not in the import, which was false. Resolving through the pair also
+  # removes the guess the old lookup had to make for a bare name two apps declare: the classifier
+  # already followed this module's own imports to one of them.
   by_proxy = Dict{Tuple{String, String}, _DjangoClass}()
-  pending = Tuple{String, String, Union{Nothing, String}, String}[]   # (app_key, class_lower, parent, app)
+  # Keyed on `graph.self`, not on the position in `apps`, for the reason the enum copy loop in
+  # `_import_django_apps` states: the two agree today and nothing here enforces it.
+  scope_app_key = Dict(app.graph.self => _django_app_key(app.label) for app in apps)
+  pending = Tuple{Tuple{String, String}, Tuple{String, String}}[]   # (proxy key, parent key)
   for app in apps
     for cls in app.graph.classes
       ci = app.graph.info[cls.name]
-      ci.proxy || continue
-      push!(pending, (_django_app_key(app.label), lowercase(cls.name), ci.mti_parent,
-                      app.label === nothing ? "" : app.label))
+      (ci.proxy && ci.mti_parent_ref !== nothing) || continue
+      (scope, parent_class) = ci.mti_parent_ref
+      haskey(scope_app_key, scope) || continue
+      push!(pending, ((_django_app_key(app.label), lowercase(cls.name)),
+                      (scope_app_key[scope], lowercase(parent_class))))
     end
   end
   for _ in 1:(length(pending) + 1)
     progressed = false
-    for (app_key, class_lower, parent, app_label) in pending
-      haskey(by_proxy, (app_key, class_lower)) && continue
-      parent === nothing && continue
-      home = isempty(app_label) ? nothing : app_label
-      # `role` for the same reason `auth_user_model` and `binding_overrides` pass one: an ambiguous
-      # proxy/MTI parent is named in a `class Meta`/base list, not in a relation, and telling the
-      # reader to qualify a "relation target" sends them looking at fields that have nothing to do
-      # with it.
-      target = _lookup_class_ref(parent, home, by_ref, by_class; role = "proxy or inherited parent")
-      if target === nothing
-        # The parent is itself a proxy: take whatever it already resolved to. Searched in the
-        # PARENT's app as well as this one — keying only on the child's app meant a proxy whose
-        # parent proxy lives in another app never resolved, which also made the outer loop dead code
-        # (within one app, Python's define-before-use ordering already resolves any chain in a single
-        # inner pass). Same app first, then anywhere, matching `_lookup_class_ref`'s own precedence.
-        target = get(by_proxy, (app_key, lowercase(parent)), nothing)
-        if target === nothing
-          for ((_, cls), resolved) in by_proxy
-            cls == lowercase(parent) && (target = resolved; break)
-          end
-        end
-      end
+    for (proxy_key, parent_key) in pending
+      haskey(by_proxy, proxy_key) && continue
+      # The parent is concrete, or is itself a proxy that has already resolved — a proxy of a proxy,
+      # possibly across apps, which is what the outer loop iterates for.
+      target = get(by_ref, parent_key, nothing)
+      target === nothing && (target = get(by_proxy, parent_key, nothing))
       target === nothing && continue
-      by_proxy[(app_key, class_lower)] = target
+      by_proxy[proxy_key] = target
       progressed = true
     end
     progressed || break
@@ -2107,6 +2105,10 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
   # every app's bindings. What keeps a binding from leaking is not which graph holds it — it is
   # `_lookup_enum` consulting only `scopes[1]`, the app the statement was written in.
 
+  # A resolved base's scope index → its app key, for the multi-table-inheritance marker below. Keyed on
+  # `graph.self` for the reason the loop above states.
+  scope_app_key = Dict(a.graph.self => _django_app_key(a.label) for a in apps)
+
   for app in apps
     graph = app.graph
     # An app that contributes no table gets a line in the ARTIFACT, not just a console warning
@@ -2188,9 +2190,16 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
         continue
       elseif ci.kind === :mti
         @warn "import: Django multi-table inheritance has no PormG equivalent; model not imported" class=class_label parent=ci.mti_parent
+        # The base is quoted as written; the column is Django's `<parent model_name>_ptr_id`, which
+        # comes from the class the base RESOLVED to, so an alias (`Driver as RacingDriver`) does not
+        # name a `racingdriver_ptr_id` Django never created (#1180). A proxy parent is followed to its
+        # concrete model first, as Django's `ModelBase` does (`base._meta.concrete_model`).
+        (pscope, pclass) = ci.mti_parent_ref
+        concrete = get(index.by_proxy, (get(scope_app_key, pscope, ""), lowercase(pclass)), nothing)
+        ptr_class = concrete === nothing ? pclass : concrete.class
         push!(Instructions, "# PormG: model '$(class_label)' inherits the concrete model " *
                             "'$(ci.mti_parent)' (Django multi-table inheritance) — not imported. " *
-                            "Django keys the child table on a '$(lowercase(String(ci.mti_parent)))_ptr_id' " *
+                            "Django keys the child table on a '$(lowercase(ptr_class))_ptr_id' " *
                             "one-to-one to the parent, which PormG cannot express.")
         continue
       end
@@ -3160,6 +3169,12 @@ unresolvable and which declares no column of its own, so nothing distinguishes i
 `class Foo(SomeMixin)`. It is recorded at the point the decision is made rather than recomputed by
 the reporter, because rederiving it there means two predicates that have to agree — and the reporter
 would have to guess whether `:not_a_model` came from a blacklisted base, a `Meta.model`, or this.
+
+`mti_parent` is the concrete base AS WRITTEN — `"Driver"`, `"RacingDriver"`, `"racing_models.Driver"`
+— which is what a marker quotes. `mti_parent_ref` is the class it resolved to, as `(scope index,
+class name)`, which is what anything that has to FIND the parent reads (#1180). Matching the written
+token as a Django reference worked only for a bare name: an import alias or a dotted base named
+nothing, so a proxy written that way never resolved and every relation to it degraded.
 """
 struct _ClassInfo
   kind::Symbol
@@ -3167,6 +3182,7 @@ struct _ClassInfo
   parents::Vector{String}              # in-file ABSTRACT bases whose fields this class inherits
   unresolved::Vector{String}           # bases nothing in scope defines
   mti_parent::Union{String, Nothing}
+  mti_parent_ref::Union{Tuple{Int, String}, Nothing}
   meta::Dict{String, String}
   is_auth_user::Bool
   proxy::Bool
@@ -3585,7 +3601,8 @@ function _classify_class!(st::_ClassifyState, app::Int, cls::PyClass)::_ClassInf
   # An inheritance CYCLE is malformed Python. Refuse the class rather than recurse forever; not
   # memoized, because the in-progress outer call owns the entry for this name.
   if key in st.visiting
-    return _ClassInfo(:not_a_model, bases, String[], String[], nothing, meta, is_auth, proxy, false)
+    return _ClassInfo(:not_a_model, bases, String[], String[], nothing, nothing, meta, is_auth, proxy,
+                      false)
   end
 
   is_root = is_auth || any(b -> b in _MODEL_ROOT_BASES, bases)
@@ -3603,6 +3620,7 @@ function _classify_class!(st::_ClassifyState, app::Int, cls::PyClass)::_ClassInf
   parents = String[]
   unresolved = String[]
   mti_parent::Union{String, Nothing} = nothing
+  mti_parent_ref::Union{Tuple{Int, String}, Nothing} = nothing
   poisoned = false
 
   # Bases are resolved even when one of them is blacklisted, because a blacklisted base no longer
@@ -3636,7 +3654,10 @@ function _classify_class!(st::_ClassifyState, app::Int, cls::PyClass)::_ClassInf
           # Inheriting anything that becomes a table IS multi-table inheritance. A `:mti` parent
           # is already refused above us, and refusing here too keeps the chain from emitting a
           # child whose parent never existed.
-          mti_parent === nothing && (mti_parent = b)
+          if mti_parent === nothing
+            mti_parent = b
+            mti_parent_ref = (bapp, bcls.name)
+          end
         else  # :not_a_model — a Manager/QuerySet/helper base makes this one a helper too
           poisoned = true
         end
@@ -3711,7 +3732,8 @@ function _classify_class!(st::_ClassifyState, app::Int, cls::PyClass)::_ClassInf
                   all(b -> !occursin('.', b), unresolved) &&
                   !any(b -> _is_field_class_base(st.scopes, app, b), unresolved)
 
-  ci = _ClassInfo(kind, bases, parents, unresolved, mti_parent, meta, is_auth, proxy, ancestry_lost)
+  ci = _ClassInfo(kind, bases, parents, unresolved, mti_parent, mti_parent_ref, meta, is_auth, proxy,
+                  ancestry_lost)
   st.info[key] = ci
   return ci
 end

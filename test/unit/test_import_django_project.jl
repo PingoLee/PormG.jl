@@ -1290,6 +1290,162 @@ class Thing(models.Model):
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#1180): a proxy whose base is an import ALIAS resolves like any other
+#
+# `from racing.models import Driver as RacingDriver` then `class Pilot(RacingDriver)` is the same
+# proxy of `racing.Driver` to Django. The classifier already followed the alias to that class, but
+# the proxy pass looked the base up AS WRITTEN — `RacingDriver` is neither a class name nor an
+# `app.Class` pair — so the proxy never resolved. Every relation to it degraded: the ForeignKey to a
+# plain `BigIntegerField`, the ManyToMany dropped, each with a marker saying `legacy.Pilot` was not in
+# the import. Expected: the same output as the un-aliased base, and a file `set_models` loads.
+#
+# The multi-table-inheritance marker had the same root: it spelled Django's `<parent>_ptr_id` from the
+# written token, so an aliased parent named a `racingdriver_ptr_id` column Django never created.
+# ─────────────────────────────────────────────────────────────────────────────
+struct Import1180MockPostgres <: PormG.PormGPostgres end
+PormG.config["import_1180_mock"] = PormG.Configuration.Settings(
+    connections = Import1180MockPostgres(), change_data = true, db_def_folder = "import_1180_mock")
+
+@testset "a proxy whose base is an import alias resolves to its parent's table (#1180)" begin
+    racing = """
+from django.db import models
+
+class Driver(models.Model):
+    surname = models.CharField(max_length=40)
+
+class Race(models.Model):
+    rivals = models.ManyToManyField('legacy.Pilot')
+    pilot = models.ForeignKey('legacy.Pilot', on_delete=models.CASCADE)
+"""
+    for (label, legacy) in (
+        "plain base" => """
+from django.db import models
+from racing.models import Driver
+
+class Pilot(Driver):
+    class Meta:
+        proxy = True
+""",
+        "aliased base" => """
+from django.db import models
+from racing.models import Driver as RacingDriver
+
+class Pilot(RacingDriver):
+    class Meta:
+        proxy = True
+""",
+        # A proxy of an aliased proxy: the chain is followed through the RESOLVED parent too.
+        "proxy of an aliased proxy" => """
+from django.db import models
+from racing.models import Driver as RacingDriver
+
+class Racer(RacingDriver):
+    class Meta:
+        proxy = True
+
+class Pilot(Racer):
+    class Meta:
+        proxy = True
+""")
+        @testset "$label" begin
+            generated, config_key, db_dir_existed = import_project(["racing" => racing, "legacy" => legacy];
+                                                                   output_file = "django_1180_alias.jl")
+            try
+                @test occursin("pilot_id = Models.ForeignKey(\"Driver\", pk_field=\"id\", on_delete=CASCADE)", generated)
+                @test occursin("rivals = Models.ManyToManyField(\"Driver\", db_table=\"racing_race_rivals\", target_field=\"pilot_id\")", generated)
+                @test !occursin("is not in the imported app set", generated)
+                @test !occursin("BigIntegerField", generated)
+                @test occursin("# PormG: model 'legacy.Pilot' is a Django proxy", generated)
+                sandbox = Module()
+                Core.eval(sandbox, Meta.parse(generated))
+                mod = Core.eval(sandbox, :django_1180_alias)
+                Base.invokelatest(PormG.Models.set_models, mod, "import_1180_mock")
+                race = Core.eval(mod, :Race)
+                @test haskey(race.cache["many_to_many"], "rivals")
+                @test Base.invokelatest(PormG.Models._resolve_target_model,
+                                        race.fields["pilot_id"].to, mod) === Core.eval(mod, :Driver)
+            finally
+                cleanup_project_test!(config_key, db_dir_existed)
+            end
+        end
+    end
+
+    # Multi-table inheritance through the alias: the base is still QUOTED as written, but the column
+    # is Django's `<parent model_name>_ptr_id`, from the class the alias names.
+    legacy_mti = """
+from django.db import models
+from racing.models import Driver as RacingDriver
+
+class Pilot(RacingDriver):
+    licence = models.CharField(max_length=10)
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => racing, "legacy" => legacy_mti];
+                                                           output_file = "django_1180_mti.jl")
+    try
+        @test occursin("inherits the concrete model 'RacingDriver' (Django multi-table inheritance)", generated)
+        @test occursin("Django keys the child table on a 'driver_ptr_id' one-to-one", generated)
+        @test !occursin("racingdriver_ptr_id", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # …and through a proxy parent, which Django follows to the concrete model before naming the
+    # column (`base._meta.concrete_model`): `Pilot(Racer)` with `Racer` a proxy of `Driver` keys on
+    # `driver_ptr_id`, not `racer_ptr_id`.
+    legacy_mti_proxy = """
+from django.db import models
+from racing.models import Driver
+
+class Racer(Driver):
+    class Meta:
+        proxy = True
+
+class Pilot(Racer):
+    licence = models.CharField(max_length=10)
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => racing, "legacy" => legacy_mti_proxy];
+                                                           output_file = "django_1180_mti_proxy.jl")
+    try
+        @test occursin("inherits the concrete model 'Racer' (Django multi-table inheritance)", generated)
+        @test occursin("Django keys the child table on a 'driver_ptr_id' one-to-one", generated)
+        @test !occursin("racer_ptr_id", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # A proxy of a proxy ACROSS apps, listed child-first: `legacy.Pilot` → `mid.Racer` (an aliased
+    # proxy) → `racing.Driver`. The parent is not resolved yet when the child is first visited, so this
+    # is what the outer fixpoint loop exists for.
+    mid = """
+from django.db import models
+from racing.models import Driver as RacingDriver
+
+class Racer(RacingDriver):
+    class Meta:
+        proxy = True
+"""
+    legacy_chain = """
+from django.db import models
+from mid.models import Racer
+
+class Pilot(Racer):
+    class Meta:
+        proxy = True
+"""
+    generated, config_key, db_dir_existed = import_project(["legacy" => legacy_chain, "mid" => mid, "racing" => racing];
+                                                           output_file = "django_1180_chain.jl")
+    try
+        @test occursin("pilot_id = Models.ForeignKey(\"Driver\", pk_field=\"id\", on_delete=CASCADE)", generated)
+        @test !occursin("is not in the imported app set", generated)
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        Base.invokelatest(PormG.Models.set_models, Core.eval(sandbox, :django_1180_chain), "import_1180_mock")
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Django Importer (#346): join columns follow the CLASS, not the primary key's name
 #
 # Django names a join-table column `<lowercased class>_id` — always, whatever the primary key is

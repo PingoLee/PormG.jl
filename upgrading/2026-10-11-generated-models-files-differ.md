@@ -1,7 +1,7 @@
-## Regenerated models files differ: `import_models_from_django`, `inspectdb` and `convertSQLToModel` emit what they used to skip or get wrong (#1095, #1041, #948, #1043, #943, #768, #28, #29, #934, #1021, #837, #1172, #1171)
+## Regenerated models files differ: `import_models_from_django`, `inspectdb` and `convertSQLToModel` emit what they used to skip or get wrong (#1095, #1041, #948, #1043, #943, #768, #28, #29, #934, #1021, #837, #1172, #1171, #1180)
 
 - **Version**: Unreleased
-- **PormG ref**: #1095, #1041, #948, #1043, #943, #768, #28, #29, #934, #1021, #837, #1172, #1171 ; `src/migrations/importers.jl`, `src/migrations/introspection.jl`, `src/migrations/column_spec.jl`, `src/Models.jl` (`Model_to_str`)
+- **PormG ref**: #1095, #1041, #948, #1043, #943, #768, #28, #29, #934, #1021, #837, #1172, #1171, #1180 ; `src/migrations/importers.jl`, `src/migrations/introspection.jl`, `src/migrations/column_spec.jl`, `src/Models.jl` (`Model_to_str`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. The functions that write a models file now write a different file
   for the same Django project or the same live schema. Nothing changes until the file is
@@ -20,6 +20,7 @@ fixes or new readings; none removes a declaration the old output had, except whe
 | Django: an auto ManyToMany at a class whose name starts with `_`, labelled or not (#1095) | join column addressed as `foo_id` | pinned to Django's `_foo_id` |
 | Django: `rivals = ManyToManyField("DriverProxy")` on `Driver`, a proxy of the owner (#1171, #1172) | `source_field="from_driver_id", target_field="to_driver_id"` — columns Django never created; the file loads and every query through `rivals` fails at the server | `source_field="driver_id", target_field="driverproxy_id"`, Django's columns |
 | Django: `reserves = ManyToManyField("imports.Driver")` on `racing.Driver`, another app's class with the owner's name (#1172) | `source_field="driver_id", target_field="driver_id"` — `set_models` raises `ModelDefinitionError` | `source_field="from_driver_id", target_field="to_driver_id"`, Django's columns |
+| Django: `class Pilot(RacingDriver)` with `Meta.proxy = True`, after `from racing.models import Driver as RacingDriver` (#1180) | every relation to `Pilot` degraded: `pilot_id = Models.BigIntegerField(db_index=true)`, a `ManyToManyField` to it dropped, each with a marker saying the target is not in the import | `pilot_id = Models.ForeignKey("Driver", …)`, `Models.ManyToManyField("Driver", …, target_field="pilot_id")`, as for an un-aliased base. The multi-table-inheritance marker names Django's `driver_ptr_id` for an aliased parent (was `racingdriver_ptr_id`) and for a proxy parent `Racer` of `Driver` (was `racer_ptr_id`). A dotted base (`racing_models.Driver`) still degrades |
 | `binding_overrides = Dict("Foo" => "_Bar")` beside a `class Bar` (#1095) | `Bar` silently renamed `bar2` | raises the documented override-collision error |
 | Django: a field whose class subclasses a Django field (`class LapTimeField(models.IntegerField)`) (#1041) | left out, with a marker saying the next `makemigrations` would drop the column | imported as its Django base (`Models.IntegerField(…)`), with a `# PormG:` note naming the class. A chain that overrides `db_type` and its kin keeps the old marker |
 | Django: an option written as a module constant (`max_length = REF_LEN`) (#948) | the whole import aborted with `FieldValidationError` | the constant's literal value is used when the same `models.py` binds it to a literal above the field |

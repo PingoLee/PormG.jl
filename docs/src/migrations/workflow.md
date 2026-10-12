@@ -286,7 +286,7 @@ This reports the state of the migration **history**: applied migrations, failed 
 pending plan exists, and warnings about the history itself, such as a missing `pormg_migrations`
 table or migrations recorded over a database with no tables. A failed attempt that a later run
 resolved by applying the same plan is listed under `superseded`, not `failed`, and raises no
-warning: a plan runs in one transaction, so the failure wrote nothing. `data_steps` lists the
+warning: on PostgreSQL and SQLite a plan runs in one transaction, so the failure wrote nothing ([what that rests on](../backends.md#Guarantees-that-rest-on-an-engine-feature)). `data_steps` lists the
 [`run_once`](advanced.md#Data-Migrations) steps already applied. It is read-only, and it does not
 compare the live schema with your models. For that, use `check("db"; kinds = [:schema_drift])` (see
 [Checking the Database Against the Models](#Checking-the-Database-Against-the-Models)).

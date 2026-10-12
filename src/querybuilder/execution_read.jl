@@ -35,8 +35,7 @@ function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing
     return params_list
   elseif mode === :dict || mode === :inspection
     # Rich metadata format used by inspect_query() or advanced debugging
-    dialect = connection isa PormGPostgres ? :postgresql : :sqlite
-    bucketing = connection isa PormGPostgres ? :numbered : :positional
+    dialect, bucketing = _inspection_dialect(connection)
     
     bucket_breakdown = Dict{Symbol, Vector{Any}}()
     if parameters isa PormGSQLiteParam
@@ -394,7 +393,7 @@ function query(q::SQLObjectHandler;
       # exempt — there the lock renders "" (pure no-op), so DISTINCT does not raise (#26). An `of`
       # target that does not resolve raises on both engines (#169): that is a bug in the call, not
       # a lock the engine lacks.
-      if q.object.distinct && instruction.connection isa PormGPostgres
+      if q.object.distinct && _locks_rows(instruction.connection)
         throw(QueryBuildError("select_for_update() cannot be combined with distinct() — a locking read must return concrete rows."))
       end
       of_aliases = isempty(fu.of) ? String[] : _lock_target_aliases(instruction, fu.of)
@@ -440,7 +439,7 @@ function query(q::SQLObjectHandler;
   # database does not hold this lock. Inside one, `build`'s `ensure_transaction_scope` already
   # refuses a read routed to a pool with no transaction (#838), so what reaches here unguarded is
   # a read with no transaction open anywhere.
-  if q.object.for_update !== nothing && instruction.connection isa PormGPostgres &&
+  if q.object.for_update !== nothing && _locks_rows(instruction.connection) &&
      transaction_connection_for(instruction.connection) === nothing
     throw(QueryBuildError("select_for_update() must run inside a transaction (run_in_transaction/atomic) on PostgreSQL; otherwise the row lock is released immediately at autocommit."))
   end

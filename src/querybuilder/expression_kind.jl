@@ -254,7 +254,7 @@ function _declared_kind(type_name::AbstractString, conn)::Union{CanonicalType,No
   size === nothing || return CDecimal(size...)
   field = _sql_type_field(type_name)
   field === nothing && return nothing
-  conn isa PormGSQLite && _text_cast_on_sqlite(field) && return CText()
+  _cast_renders_text(field, conn) && return CText()
   field isa Models.sDecimalField && return CDecimal(nothing, nothing)
   lowercase(strip(first(split(type_name, '(')))) in ("smallint", "int2") && return CInt16()
   if field isa Models.sCharField

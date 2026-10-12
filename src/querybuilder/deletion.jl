@@ -306,7 +306,7 @@ function delete(objct::SQLObjectHandler;
     #
     # #771: right after the root's own lock, the tables its filter JOINs are locked `FOR SHARE`, so a
     # root filter across a relation cannot change mid-cascade either. See `lock_related_objects`.
-    if connection isa PormGPostgres
+    if _locks_cascade_parents(connection)
       for lock_model in _models_to_lock(collector)
         res = lock_objects(connection, lock_model, collector.objects[lock_model], show_query, conn)
         push!(results, res)
@@ -353,12 +353,8 @@ function delete(objct::SQLObjectHandler;
     run_deletions(tx_conn)
   else
     # Start transaction (backend specific SQL)
-    begin_sql = if connection isa PormGPostgres
-        "BEGIN;"
-    else
-        # Use BEGIN IMMEDIATE for SQLite to prevent deadlocks
-        "BEGIN IMMEDIATE TRANSACTION;"
-    end
+    # BEGIN IMMEDIATE on SQLite, to prevent deadlocks.
+    begin_sql = _begin_write_sql(connection)
     # Serialize SQLite writers around the whole BEGIN..COMMIT, matching
     # run_in_transaction, so a concurrent delete/create never races on
     # `BEGIN IMMEDIATE` (which would deadlock the single async worker). No-op on
@@ -378,8 +374,9 @@ function delete(objct::SQLObjectHandler;
         # nothing on failure (conn_acquired = false), so a throw in that gap would skip the terminal
         # finally entirely and strand this connection out of the pool holding an open
         # BEGIN IMMEDIATE — i.e. the database write lock. The #139/#71 class.
-        connection isa PormGSQLite &&
-          with_transaction(settings, "PRAGMA defer_foreign_keys = ON;", conn=conn)
+        for sql in _after_begin_sql(connection)
+          with_transaction(settings, sql, conn=conn)
+        end
         with_tx_context(settings.connections, conn) do
           run_deletions(conn)
         end
@@ -789,12 +786,15 @@ end
 #     ever fired, the enclosing transaction would roll the statement back, which is the outcome we
 #     want; but do not read it as guarding the write.
 # ─────────────────────────────────────────────────────────────────────────────
-function _affected_row_count(connection::Union{PormGPostgres, PormGSQLite}, result, conn)::Int
-  conn === nothing && error(_emsg("PormG internal error: _affected_row_count needs the statement's connection — this should not happen; please report it."))
-  connection isa PormGPostgres && return backend_num_affected_rows(connection, result)
+_affected_row_count(connection::PormGPostgres, result, conn)::Int =
+  (_require_statement_conn(conn); backend_num_affected_rows(connection, result))
+function _affected_row_count(connection::PormGSQLite, result, conn)::Int
+  _require_statement_conn(conn)
   changes, _ = with_transaction(connection, "SELECT changes();", conn=conn)
   return Int((changes |> DataFrames.DataFrame)[1, 1])
 end
+_require_statement_conn(conn) = conn === nothing &&
+  error(_emsg("PormG internal error: _affected_row_count needs the statement's connection — this should not happen; please report it."))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # One row predicate per cascade path, ORed (#452, #765)

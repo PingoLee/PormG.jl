@@ -257,7 +257,7 @@ end
 # with one argument is the AGGREGATE, and its `coalesce` needs two), so only a hand-built node gets
 # here with one, and the guard keeps it from a `coalesce` SQLite would reject.
 function _null_skipping_operands(v::SQLTypeFunction, instruc::SQLInstruction)
-  (instruc.connection isa PormGSQLite && v.function_name in ("GREATEST", "LEAST") &&
+  (!_greatest_skips_nulls(instruc.connection) && v.function_name in ("GREATEST", "LEAST") &&
    v.column isa AbstractVector && length(v.column) >= 2) || return v.column
   cols = collect(Any, v.column)
   return Any[FObject(function_name = "COALESCE", column = circshift(cols, 1 - k),
@@ -559,7 +559,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   interval_ms = interval = false
   operand_kinds = Any[]   # #1028: per operand, the rendered kind, set by the `Concat` / declared-cast arm below
   fanout_column = nothing   # the operand as the #74 guard reads it: its column, not the parse of it
-  if v isa FObject && v.function_name == "ABS" && instruc.connection isa PormGSQLite && !(v.column isa AbstractVector)
+  if v isa FObject && v.function_name == "ABS" && _interval_as_ms(instruc.connection) && !(v.column isa AbstractVector)
     resolved_column, ms, operand_interval = _render_interval_operand(v.column, instruc; _as = _as)
     # #900: PostgreSQL has no `abs(interval)`, so the statement fails there when it runs. SQLite
     # computed the absolute value of the text's leading hours, silently. Refused, as `d * d` is (#881).
@@ -567,7 +567,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
       "`Abs` of an interval is not supported: PostgreSQL has no abs(interval), and SQLite stores an " *
       "interval as text. For the magnitude of an interval d, write Greatest(d, d * -1)."))
   elseif v isa FObject && _interval_ms_candidate(v)
-    sqlite = instruc.connection isa PormGSQLite
+    sqlite = _interval_as_ms(instruc.connection)
     if v.column isa AbstractVector
       operands = _null_skipping_operands(v, instruc)
       forms = [_render_interval_operand(x, instruc; _as = _as) for x in operands]

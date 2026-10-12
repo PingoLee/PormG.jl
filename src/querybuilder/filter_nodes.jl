@@ -572,7 +572,7 @@ function _render_membership(column::AbstractString, operator::AbstractString, pl
   end
   if isa(placeholders, String)
     # One placeholder for the whole list: PostgreSQL bound it as a single array parameter.
-    if instruc.connection isa PormGPostgres
+    if _binds_list_as_array(instruc.connection)
       return string(column, " ", operator == "IN" ? "= ANY" : "<> ALL", "(", placeholders, ")")
     else
       return string(column, " ", operator, " (", placeholders, ")")
@@ -763,7 +763,7 @@ end
 # A value that is not a duration keeps the text path, so the formatter raises what it always raised.
 const _INTERVAL_ORDERING_LOOKUPS = (">", ">=", "<", "<=", "BETWEEN", "NOT BETWEEN")
 function _is_sqlite_duration_column(v::SQLTypeOper, instruc::SQLInstruction)::Bool
-  (instruc.connection isa PormGSQLite && v.operator in _INTERVAL_ORDERING_LOOKUPS) || return false
+  (_interval_as_ms(instruc.connection) && v.operator in _INTERVAL_ORDERING_LOOKUPS) || return false
   (v.column isa SQLField && v.column.field isa String && _is_bare_column(v.column.field)) || return false
   field = get(instruc.object.model.fields, v.column.field, nothing)
   if field === nothing
@@ -785,7 +785,7 @@ end
 # text it would have printed — so the comparison is the text one it always was, with each side bound
 # once. `nothing` for every other filter, which renders as before.
 function _sqlite_interval_alias_comparison(v::SQLTypeOper, instruc::SQLInstruction)
-  instruc.connection isa PormGSQLite || return nothing
+  _interval_as_ms(instruc.connection) || return nothing
   (v.values isa Union{FExpression,FObject} && v.operator in _INTERVAL_MS_PREDICATES) || return nothing
   # An ALIAS only: a model column projected under its own name (`values("lap")`) is a column, and
   # `_alias_filter_key` refuses model fields and every `__` path. A column's comparison stays in the

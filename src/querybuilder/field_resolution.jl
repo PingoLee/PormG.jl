@@ -316,7 +316,7 @@ _solve_field(field::String, _module::Module, model_name::PormGModel, instruct::S
 
 # select
 function _infer_parameter_sql_type(value, instruc::SQLInstruction; fallback::Union{Nothing,String}=nothing)
-  instruc.connection isa PormGPostgres || return nothing
+  _casts_bind_parameters(instruc.connection) || return nothing
   fallback !== nothing && return fallback
   value isa AbstractString && return "text"
   value isa Bool && return "boolean"
@@ -340,7 +340,7 @@ function _deferred_kwarg_sql_type(v::SQLTypeFunction, key::String, resolved_kwar
   if output_field isa AbstractString && !isempty(output_field)
     # #696: `output_field` becomes the bind cast `$n::<type>` here — a fourth place the type string
     # reaches the SQL text. The dialect helper validates it and gives the engine's spelling.
-    instruc.connection isa PormGPostgres || return nothing
+    _casts_bind_parameters(instruc.connection) || return nothing
     return _infer_parameter_sql_type(value, instruc;
       fallback=Dialect.cast_type_sql(output_field, instruc.connection; context="output_field"))
   end

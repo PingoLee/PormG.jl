@@ -1213,10 +1213,6 @@ function _effective_chunk_size(requested::Integer, per_row::Integer, fixed::Inte
   return requested < 1 ? max_rows : min(requested, max_rows)
 end
 
-# Backend label used only in the error text above.
-_backend_label(::PormGPostgres) = "PostgreSQL"
-_backend_label(::PormGSQLite) = "SQLite"
-
 # Rows one bulk statement carries (#84, #672). SQLite binds one parameter per cell, so the chunk is
 # capped by its bind-parameter limit. PostgreSQL binds one array per column — `ncols` parameters
 # whatever the row count — so `chunk_size` is used as given, except a non-positive one: that keeps
@@ -1224,8 +1220,8 @@ _backend_label(::PormGSQLite) = "SQLite"
 # arrays grow without bound. `fixed` is the per-statement filter prefix (bulk_update; 0 for insert).
 function _bulk_chunk_rows(conn::Union{PormGPostgres, PormGSQLite}, requested::Integer, ncols::Integer,
                           fixed::Integer, op::Symbol)::Int
-  per_row = conn isa PormGPostgres && requested >= 1 ? 0 : ncols
-  return _effective_chunk_size(requested, per_row, fixed, _backend_parameter_limit(conn), op, _backend_label(conn))
+  per_row = _bulk_binds_column_arrays(conn) && requested >= 1 ? 0 : ncols
+  return _effective_chunk_size(requested, per_row, fixed, _backend_parameter_limit(conn), op, _backend_name(conn))
 end
 
 # What an executed bulk terminal returns (#670): the rows the statements affected, summed across
@@ -1606,7 +1602,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   allocate_pk = show_query === :execute ? allocate_pk : nothing
   do_nothing = _on_conflict !== nothing && _on_conflict.action === :nothing
   returning_sql = nothing
-  if _returning !== nothing && connection isa PormGPostgres
+  if _returning !== nothing && _insert_returns_rows(connection)
     returned_fields = unique(vcat(returning_key, _returning))
     returning_sql = "RETURNING " * join([safe_column_identifier(Models.model_column(model, field), connection)
       for field in returned_fields], ", ")
@@ -1614,7 +1610,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
   # A pre-allocated id is written explicitly, which a `generated_always` identity rejects unless the
   # INSERT says OVERRIDING SYSTEM VALUE. Safe here: the ids came from that identity's own sequence.
   # Only for pre-allocated ids — a pk the caller supplied still meets the column's refusal.
-  overriding = allocate_pk !== nothing && connection isa PormGPostgres &&
+  overriding = allocate_pk !== nothing && _overrides_generated_identity(connection) &&
     hasproperty(model.fields[allocate_pk], :generated_always) &&
     getfield(model.fields[allocate_pk], :generated_always)
 
@@ -1640,7 +1636,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
 
   # PostgreSQL collects each chunk as one array per field and binds them at flush (#672); SQLite
   # binds each cell as it goes and collects `(?, ?, …)` row tuples.
-  pg_arrays = connection isa PormGPostgres
+  pg_arrays = _bulk_binds_column_arrays(connection)
   casts = pg_arrays ? [_pg_bulk_param_type(model.fields[field], connection) for field in fields_df] : String[]
   # #28: an array column's source is text, cast back to its array type in the SELECT list.
   source_casts = pg_arrays ? [_pg_bulk_source_cast(model.fields[field], connection) for field in fields_df] : String[]
@@ -1663,8 +1659,7 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
     # (never a caller vector). No sequence resync follows: the ids came from the sequence itself,
     # so it is already past them.
     if allocate_pk !== nothing
-      ids = connection isa PormGPostgres ? _allocate_pg_ids(model, connection, allocate_pk, total_rows) :
-        _allocate_sqlite_ids(model, connection, allocate_pk, total_rows, settings)
+      ids = _allocate_ids(model, connection, allocate_pk, total_rows, settings)
       copyto!(df[!, mapping[allocate_pk]], ids)
     end
     # The key's cells, for matching. Only an executed call matches: a dry run allocated nothing, so
@@ -1712,14 +1707,14 @@ function bulk_insert(objct::SQLObjectHandler, df_o::DataFrames.DataFrame;
           resync_retry = allocate_pk === nothing)
         res = if _returning === nothing || show_query !== :execute
           run_chunk()
-        elseif connection isa PormGPostgres
+        elseif _insert_returns_rows(connection)
           # `RETURNING` reports what the chunk wrote, named by db column; renamed to fields here.
           returned = _pg_bulk_returned!(run_chunk(), model, unique(vcat(returning_key, _returning)), connection)
           _bulk_returning_fill!(returned_rows, _returning, returned, returning_key, key_metas, key_sources,
             chunk_range, do_nothing)
           DataFrames.nrow(returned)
         else
-          # SQLite: no RETURNING (see the #671 block above `_normalize_bulk_returning`). Under DO
+          # No RETURNING (SQLite; see the #671 block above `_normalize_bulk_returning`). Under DO
           # NOTHING, first note which keys the table already held, so a read-back row with one of
           # them is not reported as written by this call. Every read runs on the pinned transaction
           # connection, so nothing can land between them and the INSERT.
@@ -2487,7 +2482,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
       quoted_source_field = quote_identifier(field, connection)
       # The one exception (#28): an array column's `source` column is the text of its literal, so it
       # is cast back to the column's array type here — see `_pg_bulk_source_cast`.
-      source_cast = connection isa PormGPostgres ? _pg_bulk_source_cast(model.fields[field], connection) : ""
+      source_cast = _bulk_binds_column_arrays(connection) ? _pg_bulk_source_cast(model.fields[field], connection) : ""
       push!(safe_set_parts, "$quoted_field = source.$quoted_source_field$source_cast")
     end
   end
@@ -2513,7 +2508,7 @@ function _bulk_update(objct::SQLObjectHandler, df_o::DataFrames.DataFrame,
 
   # PostgreSQL collects each chunk as one array per joined column and binds them at flush (#672);
   # SQLite binds each cell as it goes and collects `(?, ?, …)` row tuples for its VALUES CTE.
-  pg_arrays = connection isa PormGPostgres
+  pg_arrays = _bulk_binds_column_arrays(connection)
   casts = pg_arrays ? [_pg_bulk_param_type(model.fields[field], connection) for field in joined_columns] : String[]
   new_columns() = [Any[] for _ in joined_columns]
 
@@ -2645,7 +2640,7 @@ function _bulk_update(model::PormGModel,
     FROM $(source_sql) AS source ($(join(quoted_fields, ",")))
     WHERE $(join(safe_where_conditions, " AND \n   "))
     """
-  else # SQLite
+  elseif connection isa PormGSQLite
     # SQLite 3.33+ supports UPDATE FROM. We use a CTE to define the source clearly.
     sql = """
     WITH source($(join(quoted_fields, ", "))) AS (
@@ -2656,6 +2651,8 @@ function _bulk_update(model::PormGModel,
     FROM source
     WHERE $(join(replace.(safe_where_conditions, "\"Tb\"." => "$safe_table_name."), " AND "))
     """
+  else
+    throw(_unsupported_conn("bulk_update()", connection))
   end
 
   if show_query !== :execute

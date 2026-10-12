@@ -338,9 +338,6 @@ function _nulls_placement(orientation::AbstractString, nulls::Union{Symbol,Nothi
   return uppercase(strip(String(orientation))) == "DESC" ? :first : :last
 end
 
-_emulates_nulls_order(conn) =
-  conn isa PormGSQLite && backend_sqlite_version(conn) < SQLITE_NULLS_ORDER_MIN_VERSION
-
 # Render one ORDER BY term with explicit NULL placement, portable across backends (#75).
 #
 # #894: `null_flag`, when given, is a SEPARATE render of the same node as `expr`, for a SQLite interval
@@ -433,7 +430,7 @@ end
 # #894 — an ORDER BY term that is a bare `DurationField` column path, on SQLite. Typed after the term
 # has been rendered, so the memo the kind lookup reads is populated.
 _orders_as_sqlite_interval(term::SQLField, instruc::SQLInstruction) =
-  instruc.connection isa PormGSQLite && term.field isa String && _is_bare_column(term.field) &&
+  _interval_as_ms(instruc.connection) && term.field isa String && _is_bare_column(term.field) &&
   _operand_kind(term.field, instruc) isa CInterval
 _orders_as_sqlite_interval(::Any, ::SQLInstruction) = false
 

@@ -83,16 +83,15 @@ end
 
 # The EXPLAIN statement for `sql`. Every option is a fixed keyword chosen by a `Bool` — nothing the
 # caller passes is ever spliced into the SQL.
-function _explain_sql(connection::Union{PormGPostgres, PormGSQLite}, sql::AbstractString;
-                      analyze::Bool, buffers::Bool, verbose::Bool)
-  if connection isa PormGSQLite
-    if analyze || buffers || verbose
-      requested = join([name for (name, on) in (("analyze", analyze), ("buffers", buffers), ("verbose", verbose)) if on], ", ")
-      throw(_capability_error(connection, :explain_options, "explain($(requested) = true)";
-                               why = "Call explain() without them for the plan this backend gives."))
-    end
-    return "EXPLAIN QUERY PLAN " * sql
+function _explain_sql(connection::PormGSQLite, sql::AbstractString; analyze::Bool, buffers::Bool, verbose::Bool)
+  if analyze || buffers || verbose
+    requested = join([name for (name, on) in (("analyze", analyze), ("buffers", buffers), ("verbose", verbose)) if on], ", ")
+    throw(_capability_error(connection, :explain_options, "explain($(requested) = true)";
+                             why = "Call explain() without them for the plan this backend gives."))
   end
+  return "EXPLAIN QUERY PLAN " * sql
+end
+function _explain_sql(connection::PormGPostgres, sql::AbstractString; analyze::Bool, buffers::Bool, verbose::Bool)
   options = ["FORMAT JSON"]
   analyze && push!(options, "ANALYZE")
   buffers && push!(options, "BUFFERS")
@@ -160,11 +159,7 @@ function explain_query(q::SQLObjectHandler; analyze::Bool = false, buffers::Bool
   # where it points, not on the model's default pool. `fetch` still reuses an open transaction's
   # connection on that pool.
   rows = fetch(conn, explain_sql, q.object.parameters) |> Tables.rowtable
-  facts = if conn isa PormGPostgres
-    _explain_facts_postgres(Base.first(values(Base.first(rows))))
-  else
-    _explain_facts_sqlite(rows)
-  end
+  facts = _explain_facts(conn, rows)
   result = _show_query_result(:inspection, sql, conn, q.object.model.name, :select; parameters = q.object.parameters)
   merge!(result, facts)
   result[:explain_sql] = explain_sql
@@ -172,3 +167,7 @@ function explain_query(q::SQLObjectHandler; analyze::Bool = false, buffers::Bool
   return result
 end
 explain_query(; kwargs...) = (objct) -> explain_query(objct; kwargs...)
+
+# The plan's facts, read from the rows each engine's EXPLAIN returns.
+_explain_facts(::PormGPostgres, rows) = _explain_facts_postgres(Base.first(values(Base.first(rows))))
+_explain_facts(::PormGSQLite, rows) = _explain_facts_sqlite(rows)

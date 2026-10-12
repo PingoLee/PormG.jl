@@ -1,0 +1,105 @@
+# ==============================================================================
+# Engine facts dispatch, with no fallback (#1129 item 2, ahead of #1130)
+#
+# A branch that decided for two engines at once (`conn isa PormGPostgres ? A : B`) became a call to an
+# ENGINE FACT: one method per engine, none for `PormGBackend` or `Any`. A third backend then gets a
+# `MethodError` naming the fact it must decide, instead of silently taking another engine's arm. This
+# file holds that contract for every fact, wherever it lives: `src/querybuilder/engine_facts.jl` is
+# read from the source, so a fact added there is checked without being listed here; the facts that
+# live beside the code they serve (Kernel, `Dialect`, `ConnectionPool`, `explain`, deletion) are listed.
+#
+# Run: julia --project=test/integration test/unit/test_engine_facts.jl
+# ==============================================================================
+
+using Test
+using PormG
+
+const _EF_QB = PormG.QueryBuilder
+struct _EfPg <: PormG.PormGPostgres end
+struct _EfSl <: PormG.PormGSQLite end
+struct _EfOther <: PormG.PormGBackend end   # a backend that has decided nothing yet, as #1130 starts
+
+# Every top-level `name(…) =` / `function name(` in the facts file: the registry is the file itself.
+function _ef_file_facts()
+  path = joinpath(pkgdir(PormG), "src", "querybuilder", "engine_facts.jl")
+  names = Symbol[]
+  open(path) do io
+    for l in eachline(io)
+      m = match(r"^(?:function\s+)?(_[A-Za-z0-9_]+)\(", l)
+      m === nothing || push!(names, Symbol(m.captures[1]))
+    end
+  end
+  return unique(names)
+end
+
+const _EF_FACTS = vcat(
+  [(_EF_QB, n) for n in _ef_file_facts()],
+  [(PormG.Kernel, :_engine_key),                    # the engine's NamedTuple key / report label
+   (PormG.Dialect, :_parenthesizes_db_default),     # a DEFAULT expression needs parens
+   (PormG.ConnectionPool, :_begin_write_sql),       # how a write transaction opens
+   (PormG.ConnectionPool, :_after_begin_sql),       # what runs right after it
+   (_EF_QB, :_explain_sql),                         # the EXPLAIN statement
+   (_EF_QB, :_explain_facts),                       # the facts read from its rows
+   (_EF_QB, :_affected_row_count)],                 # the rows a DELETE / bulk UPDATE matched
+)
+
+# The engine a method parameter names: `:postgres`, `:sqlite`, or `nothing` for a non-engine one.
+_ef_engine(T) = T isa Type && T <: PormG.PormGPostgres ? :postgres :
+                T isa Type && T <: PormG.PormGSQLite ? :sqlite : nothing
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Engine facts: the registry read from the facts file is not empty and names real functions
+# Guards the guard: if the file's definitions stopped matching the scan (a rename to a different
+# spelling, a moved file), every check below would pass vacuously over an empty list.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1129: the engine-fact registry is read from src/querybuilder/engine_facts.jl" begin
+  file_facts = _ef_file_facts()
+  @test length(file_facts) >= 15
+  @test :_interval_as_ms in file_facts && :_insert_returns_rows in file_facts
+  for (mod, name) in _EF_FACTS
+    @test isdefined(mod, name)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Engine facts: one method per engine, and no method a third backend could fall into
+# Every method of every fact names PostgreSQL or SQLite in its signature, and together they cover
+# both. A method on `PormGBackend`, `Any` or an untyped argument would be a default — exactly the
+# silent arm the facts replaced — so its absence is the point.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1129: every engine fact has a PostgreSQL and a SQLite method and no fallback" begin
+  for (mod, name) in _EF_FACTS
+    f = getfield(mod, name)
+    covered = Set{Symbol}()
+    for m in methods(f)
+      params = Base.unwrap_unionall(m.sig).parameters[2:end]
+      engines = filter(!isnothing, map(_ef_engine, params))
+      # This method is engine-specific (it names one), so it is not a fallback.
+      @test (name, m.line, !isempty(engines)) == (name, m.line, true)
+      union!(covered, engines)
+    end
+    @test (name, sort!(collect(covered))) == (name, [:postgres, :sqlite])
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Engine facts: a third backend gets a MethodError at each fact
+# Each method's signature with its engine parameter swapped for a backend that subtypes neither
+# engine must have no method to call, so #1130's first call into a fact fails loudly at that fact.
+# One fact is also CALLED, to show the failure is a MethodError and not something caught upstream.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1129: a backend that is neither PostgreSQL nor SQLite has no method at any engine fact" begin
+  for (mod, name) in _EF_FACTS
+    f = getfield(mod, name)
+    for m in methods(f)
+      params = collect(Base.unwrap_unionall(m.sig).parameters[2:end])
+      swapped = Any[_ef_engine(T) === nothing ? T : _EfOther for T in params]
+      @test (name, hasmethod(f, Tuple{swapped...})) == (name, false)
+    end
+  end
+  @test_throws MethodError _EF_QB._interval_as_ms(_EfOther())
+  @test_throws MethodError PormG.Kernel._engine_key(_EfOther())
+  # Sanity on the two engines: the facts answer, and answer differently where they should.
+  @test _EF_QB._interval_as_ms(_EfSl()) && !_EF_QB._interval_as_ms(_EfPg())
+  @test PormG.Kernel._engine_key(_EfPg()) === :postgres && PormG.Kernel._engine_key(_EfSl()) === :sqlite
+end

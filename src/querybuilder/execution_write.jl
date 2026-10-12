@@ -143,7 +143,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
   # What executes, so inspection shows it (#48): PostgreSQL appends `RETURNING *`, SQLite runs the
   # plain INSERT and reads the row back out-of-band (see below). `_update_or_create` already showed
   # its RETURNING; this terminal showed SQL it never sent.
-  exec_sql = connection isa PormGPostgres ? sql * " RETURNING *;" : sql
+  exec_sql = _insert_returns_rows(connection) ? sql * " RETURNING *;" : sql
   if show_query !== :execute
     return _show_query_result(show_query, exec_sql, connection, model.name, :insert;
                             parameters=parameters)
@@ -414,7 +414,7 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
     parameters = get_parameter(connection)
     insert_sql = build_insert(parameters)
     # #48: PostgreSQL sends it with `RETURNING *` (below), so that is what inspection shows.
-    shown_sql = connection isa PormGPostgres ? insert_sql * " RETURNING *;" : insert_sql
+    shown_sql = _insert_returns_rows(connection) ? insert_sql * " RETURNING *;" : insert_sql
     return _show_query_result(show_query, shown_sql, connection, model.name, :insert; parameters = parameters)
   end
 
@@ -468,7 +468,7 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
 
   # SQLite: serialize get + insert + read-back so `created` is correct and the create race-guard
   # holds. PostgreSQL's ON CONFLICT is atomic on its own; running inside an ambient tx is fine.
-  if connection isa PormGSQLite
+  if _serializes_get_or_create(connection)
     return transaction_connection_for(settings) !== nothing ? do_goc() : run_in_transaction(do_goc, settings)
   end
   return do_goc()

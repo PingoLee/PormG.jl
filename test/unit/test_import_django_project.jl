@@ -1446,6 +1446,102 @@ class Pilot(Racer):
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#1181): an app of proxies does not claim its relations degrade
+#
+# An app that emits no model gets a line at the top of the file (#70). An app whose classes are all
+# proxies got the one written for an app with nothing in it: "declares none the importer recognises.
+# Any relation pointing into it is degraded below", plus a matching `@warn` — while the very next
+# lines showed those relations resolved to the proxy's parent. Expected: the line says the app
+# contributed no TABLE and names where each proxy resolved; no "declares no importable model"
+# warning; and an app with nothing at all keeps the old line and the warning.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "an app whose proxies resolve is not reported as degraded (#1181)" begin
+    racing = """
+from django.db import models
+
+class Driver(models.Model):
+    surname = models.CharField(max_length=40)
+
+class Race(models.Model):
+    rivals = models.ManyToManyField('legacy.Pilot')
+    pilot = models.ForeignKey('legacy.Pilot', on_delete=models.CASCADE)
+"""
+    for (label, base_import, base) in (("plain base", "from racing.models import Driver", "Driver"),
+                                       # Composes with #1180: an aliased base resolves too.
+                                       ("aliased base", "from racing.models import Driver as RacingDriver", "RacingDriver"))
+        @testset "$label" begin
+            legacy = """
+from django.db import models
+$(base_import)
+
+class Pilot($(base)):
+    class Meta:
+        proxy = True
+"""
+            config_key, db_dir_existed = project_config!()
+            try
+                # Exactly the proxy's own warning, and no "declares no importable model".
+                generated = @test_logs (:warn, r"proxy model shares its parent's table") min_level=Logging.Warn begin
+                    import_models_from_django(["racing" => racing, "legacy" => legacy]; db = config_key,
+                                              file = "django_1181.jl", force_replace = true)
+                    read(joinpath(config_key, "django_1181.jl"), String)
+                end
+                @test !occursin("contributed no model", generated)
+                @test !occursin("degraded", generated)
+                @test occursin("# PormG: app 'legacy' contributed no table to this file — its proxies " *
+                               "share their parents' tables, and a relation to one resolves to its " *
+                               "parent: 'legacy.Pilot' → 'racing.Driver'.", generated)
+                @test occursin("# PormG: model 'legacy.Pilot' is a Django proxy", generated)
+                @test occursin("pilot_id = Models.ForeignKey(\"Driver\"", generated)
+            finally
+                cleanup_project_test!(config_key, db_dir_existed)
+            end
+        end
+    end
+
+    # A proxy whose parent is NOT in the import sits beside a resolved one: it is not listed as
+    # resolved, and the relation to it carries its own field-level degrade marker.
+    legacy = """
+from django.db import models
+from racing.models import Driver
+from accounts.models import Account
+
+class Pilot(Driver):
+    class Meta:
+        proxy = True
+
+class Member(Account):
+    class Meta:
+        proxy = True
+"""
+    racing_member = racing * "    member = models.ForeignKey('legacy.Member', on_delete=models.CASCADE)\n"
+    generated, config_key, db_dir_existed = import_project(["racing" => racing_member, "legacy" => legacy];
+                                                           output_file = "django_1181_mixed.jl")
+    try
+        @test occursin("a relation to one resolves to its parent: 'legacy.Pilot' → 'racing.Driver'.", generated)
+        @test !occursin("'legacy.Member' →", generated)
+        @test occursin("# PormG: field 'member_id' on 'racing.Race' — ForeignKey target 'legacy.Member' " *
+                       "is not in the imported app set", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # An app with nothing in it keeps the old line, and the warning, now emitted beside it.
+    config_key, db_dir_existed = project_config!()
+    try
+        generated = @test_logs (:warn, r"this app declares no importable model") match_mode=:any begin
+            import_models_from_django(["racing" => racing_member, "legacy" => "from django.db import models\n"];
+                                      db = config_key, file = "django_1181_empty.jl", force_replace = true)
+            read(joinpath(config_key, "django_1181_empty.jl"), String)
+        end
+        @test occursin("# PormG: app 'legacy' contributed no model to this file — its models.py declares " *
+                       "none the importer recognises. Any relation pointing into it is degraded below.", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Django Importer (#346): join columns follow the CLASS, not the primary key's name
 #
 # Django names a join-table column `<lowercased class>_id` — always, whatever the primary key is

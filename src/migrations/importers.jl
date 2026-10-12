@@ -2114,10 +2114,30 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
     # An app that contributes no table gets a line in the ARTIFACT, not just a console warning
     # (#70): whoever opens this file in six months and wonders where `access`' models went needs to
     # see it here. Only when the app was named — a single-app import has nothing to say this about.
+    #
+    # A proxy emits no table, but a relation to it is NOT degraded: it resolves to the proxy's
+    # concrete parent (`index.by_proxy`), and the file shows it resolved a few lines below. So an app
+    # whose proxies resolved says that instead of "nothing recognised, relations degraded" (#1181),
+    # naming where each proxy landed. Any other relation into such an app (a proxy whose parent is not
+    # in the import, say) still carries its own degrade marker at the field. The console warning
+    # follows the same rule, and lives here rather than in the caller because only the index can tell.
     if app.label !== nothing && !any(c -> _is_emitted(graph.info[c.name]), graph.classes)
-      push!(Instructions, "# PormG: app '$(app.label)' contributed no model to this file — its " *
-                          "models.py declares none the importer recognises. Any relation pointing " *
-                          "into it is degraded below.")
+      app_key = _django_app_key(app.label)
+      # `unique!`: a class name declared twice is reported once, below, and listed once here.
+      resolved = unique!([(c.name, index.by_proxy[(app_key, lowercase(c.name))]) for c in graph.classes
+                          if graph.info[c.name].proxy && haskey(index.by_proxy, (app_key, lowercase(c.name)))])
+      if isempty(resolved)
+        @warn "import: this app declares no importable model" app=app.label
+        push!(Instructions, "# PormG: app '$(app.label)' contributed no model to this file — its " *
+                            "models.py declares none the importer recognises. Any relation pointing " *
+                            "into it is degraded below.")
+      else
+        push!(Instructions, "# PormG: app '$(app.label)' contributed no table to this file — its " *
+                            "proxies share their parents' tables, and a relation to one resolves to " *
+                            "its parent: " *
+                            join(("'$(_django_class_label(app.label, n))' → '$(_django_ref_label(p))'"
+                                  for (n, p) in resolved), ", ") * ".")
+      end
     end
     # A class name defined twice at module level is pathological Python, but it used to emit TWO
     # `X = Models.Model(...)` assignments into one module: the file loads, the second silently wins,
@@ -3065,13 +3085,11 @@ function import_models_from_django(
                       for (i, sc) in enumerate(staged)]
 
   # An app that contributes no table is legal (a Django app can declare no models) but it is never
-  # what you meant when the other apps reference it, so it is reported per app rather than only in
-  # the all-empty case below.
+  # what you meant when the other apps reference it. It is reported per app by `_import_django_apps`,
+  # beside its `# PormG:` marker, because whether its relations degrade depends on the class index
+  # (an app of proxies resolves, #1181). Only the all-empty case is decided here.
   empty_apps = [app.label for app in parsed
                 if !any(c -> _is_emitted(app.graph.info[c.name]), app.graph.classes)]
-  for label in empty_apps
-    @warn "import: this app declares no importable model" app=label
-  end
 
   if length(empty_apps) == length(parsed)
     @warn("None of the given files contains valid model.py content")

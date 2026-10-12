@@ -1,9 +1,9 @@
 # ==============================================================================
 # NETWORK ADDRESS FIELDS — Live-Database Integration Test (#28)
 #
-# `GenericIPAddressField` is PostgreSQL `inet` and `CIDRField` is `cidr`. Both are PostgreSQL only:
-# SQLite has no column for either, and PormG refuses one there rather than emulate it — on SQLite this
-# file asserts exactly that refusal and nothing else.
+# `GenericIPAddressField` is PostgreSQL `inet` and `CIDRField` is `cidr`, the `:network_types` row of
+# the capability table. A backend without it (SQLite has no column for either) refuses one rather
+# than emulate it: there this file asserts exactly that refusal, records the skip, and nothing else.
 #
 # PormG writes every value as THE TEXT POSTGRESQL PRINTS for it, which is what lets a declared
 # `default=` match the one the catalog stores. The unit layer pins the normalizer against a golden
@@ -94,7 +94,6 @@ _na28_err(f) = try f(); nothing catch e; e end
 
 @testset "Network address fields, live ($(PORMG_DB_FOLDER)) (#28)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
-    is_pg = pool isa PormG.PormGPostgres
     drop() = try; PormG.ConnectionPool.fetch(pool, Dialect.drop_table(pool, NA28_TABLE)); catch; end
 
     model = _na28_model()
@@ -104,13 +103,13 @@ _na28_err(f) = try f(); nothing catch e; e end
     live() = read_live_schema(pool; include_table = [NA28_TABLE])
 
     # ─────────────────────────────────────────────────────────────────────
-    # SQLite: the column is refused, and nothing is created
+    # A backend without network types: the column is refused, and nothing is created
     # The planner renders DDL at `makemigrations`, so the refusal arrives before a plan exists — not
     # part-way through a migration. The other fields of the model are not created either: the table
     # is one statement.
     # ─────────────────────────────────────────────────────────────────────
-    if !is_pg
-        @testset "SQLite refuses the column" begin
+    if !requires(:network_types)
+        @testset "a backend without network types refuses the column" begin
             drop()
             err = _na28_err(() -> get_migration_plan(LiveTable[], schema, pool, _na28_settings(); interactive = false))
             @test err isa PormG.BackendCapabilityError

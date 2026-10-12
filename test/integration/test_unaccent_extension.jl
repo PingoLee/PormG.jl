@@ -4,17 +4,15 @@
 #
 # On PostgreSQL this exercises the real DDL path that PormG.migrate() invokes
 # (Configuration._install_configured_extensions!): the `unaccent` extension plus the
-# IMMUTABLE `public.immutable_unaccent(text)` helper that backs the lookup. On SQLite
-# the lookup is intentionally unsupported and must raise a clear error.
+# IMMUTABLE `public.immutable_unaccent(text)` helper that backs the lookup. On a backend
+# without `:unaccent` in the capability table (SQLite) the lookup is unsupported and must raise
+# a clear error; `requires` records the skip.
 
 if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
-const _UNACCENT_ADAPTER = haskey(PormG.config, PORMG_DB_FOLDER) ?
-    PormG.config[PORMG_DB_FOLDER].db_config_settings["adapter"] : "Unknown"
-
-if _UNACCENT_ADAPTER == "PostgreSQL"
+if requires(:unaccent)
     _settings = PormG.Configuration.get_settings(PORMG_DB_FOLDER)
 
     # ─────────────────────────────────────────────────────────────────────────────
@@ -113,20 +111,17 @@ if _UNACCENT_ADAPTER == "PostgreSQL"
         @test "Häkkinen" in df.surname    # matched via ASCII "hakkinen"
     end
 
-elseif _UNACCENT_ADAPTER == "SQLite"
+else
     # ─────────────────────────────────────────────────────────────────────────────
-    # iunaccent_contains is unsupported on SQLite and must fail loudly
-    # The lookup requires the PostgreSQL unaccent extension; on SQLite the dialect raises a
-    # clear BackendCapabilityError (#239) rather than silently producing wrong SQL.
+    # iunaccent_contains is refused on a backend without unaccent, loudly
+    # The lookup needs the PostgreSQL unaccent extension; a backend without it raises a clear
+    # BackendCapabilityError (#239) rather than silently producing wrong SQL.
     # ─────────────────────────────────────────────────────────────────────────────
-    @testset "iunaccent_contains rejected on SQLite" begin
+    @testset "iunaccent_contains refused on a backend without unaccent" begin
         conn = PormG.config[PORMG_DB_FOLDER].connections
         @test_throws PormG.BackendCapabilityError PormG.Dialect.iunaccent_contains(conn, "surname", "raikkonen")
         @test_throws PormG.BackendCapabilityError PormG.Dialect.iunaccent_exact(conn, "surname", "raikkonen")
     end
-
-else
-    @warn "Skipping unaccent extension tests for unknown adapter" adapter = _UNACCENT_ADAPTER
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

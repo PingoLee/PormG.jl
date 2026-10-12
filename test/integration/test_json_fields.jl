@@ -16,8 +16,8 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
-# Active backend: the JSON containment operators are PostgreSQL-only.
-_json_backend_is_pg() = PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
+# The JSON containment and key operators are the `:jsonb_operators` row of the capability table:
+# each use below asks `requires(:jsonb_operators)`, never which engine this is.
 
 @testset "JSON/JSONB lookups and operators (#27)" begin
     slug = "json27-scratch-seed"
@@ -121,7 +121,9 @@ _json_backend_is_pg() = PormG.config[PORMG_DB_FOLDER].connections isa PormG.Porm
             nul_text = raw"""{"driver":"hamilton\u0000box"}"""
             @test_throws PormG.InvalidValueError (q = base(); q.filter("payload" => nul_text); q.list())
             @test_throws PormG.InvalidValueError M.Field_validation_scratch.objects.get_or_create("payload" => nul_text)
-            if _json_backend_is_pg()
+            # Asked of the table directly: the operator's refusal on a backend without it is asserted
+            # in the containment testset below, so this is no skip to record.
+            if PormG.Kernel._supports(PormG.config[PORMG_DB_FOLDER].connections, :jsonb_operators)
                 # Refused at `filter()` itself: the document is serialized when the filter is parsed.
                 q = base()
                 @test_throws PormG.InvalidValueError q.filter("payload__@jcontains" => nul)
@@ -133,9 +135,9 @@ _json_backend_is_pg() = PormG.config[PORMG_DB_FOLDER].connections isa PormG.Porm
             @test q.count() == 1
         end
 
-        # ── JSON containment operators (PostgreSQL only) ─────────────────────
-        if _json_backend_is_pg()
-            @testset "containment operators (PostgreSQL)" begin
+        # ── JSON containment and key operators (`:jsonb_operators`) ──────────
+        if requires(:jsonb_operators)
+            @testset "containment and key operators" begin
                 q = base(); q.filter("payload__@has_key" => "driver")
                 @test q.count() == 1
                 q = base(); q.filter("payload__@has_key" => "nope")
@@ -157,7 +159,7 @@ _json_backend_is_pg() = PormG.config[PORMG_DB_FOLDER].connections isa PormG.Porm
                 @test q.count() == 0
             end
         else
-            @testset "containment operators throw on SQLite" begin
+            @testset "a backend without JSONB operators refuses them" begin
                 q = base(); q.filter("payload__@has_key" => "driver")
                 @test_throws PormG.BackendCapabilityError q.count()
             end

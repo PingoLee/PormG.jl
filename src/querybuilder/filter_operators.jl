@@ -514,6 +514,12 @@ function _year_bucket_bounds(value; ranged::Bool = true)::Union{Nothing,Tuple{Da
     throw(InvalidValueError("A __@year filter requires a year, not a Bool", :type))
   elseif value isa Integer
     value
+  elseif value isa Decimals.Decimal
+    # Ahead of the `Real` arm (#1120): Base's `isinteger` calls a `Decimal` fraction such as
+    # `2024.0000000000000000000000001` whole, and `Int(::Decimal)` raises for a whole `2024.0`.
+    n = Models._decimal_integer(value)
+    n === nothing && throw(InvalidValueError("The value is not a whole year for a __@year filter", :format))
+    n
   elseif value isa Real
     isinteger(value) || throw(InvalidValueError("The value is not a whole year for a __@year filter", :format))
     value

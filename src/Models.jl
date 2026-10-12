@@ -4107,6 +4107,7 @@ function _format_period_sql(value, lo::Int, hi::Int, label::String; ranged::Bool
   # its `%.17g` text is `"3"` for `3.0` but `"1.0000000000000000e+30"` for `1e30`.
   s = string(formatted)
   n = formatted isa Integer ? formatted :
+      value isa Decimals.Decimal ? _decimal_integer(value) :   # ahead of the float arm (#1120)
       value isa AbstractFloat ? (isfinite(value) && isinteger(value) ? BigInt(value) : nothing) :
       something(tryparse(Int, s), tryparse(BigInt, s), Some(nothing))
   n === nothing &&
@@ -4118,6 +4119,24 @@ function _format_period_sql(value, lo::Int, hi::Int, label::String; ranged::Bool
   typemin(Int) <= n <= typemax(Int) ||
     throw(InvalidValueError("The value is out of range for the $(label) part: it does not fit a 64-bit integer", :range))
   return Int(n)
+end
+
+# #1120 — the whole number a `Decimals.Decimal` holds, or `nothing` for a fraction, read from its
+# coefficient and exponent. Neither float path works for one: a `Decimal` is an `AbstractFloat` with
+# no `isinteger` of its own, so Base's answers `true` for `Decimal(0, 1, -30)` (1e-30), and `BigInt`
+# or `Int` of a whole one parses its text, which raises for `3.0`. Trailing zeros are stripped one
+# digit at a time, so a large negative exponent costs no more than the coefficient's length; a large
+# positive one is capped at `10^20` rather than built, which is past `Int` and every part's range, the
+# only thing a caller compares it with. Also read by `QueryBuilder._year_bucket_bounds`.
+function _decimal_integer(x::Decimals.Decimal)::Union{BigInt, Nothing}
+  c, q = BigInt(x.c), x.q
+  iszero(c) && return big(0)
+  while q < 0 && iszero(c % 10)
+    c, q = c ÷ 10, q + 1
+  end
+  q < 0 && return nothing
+  n = c * big(10)^min(q, 20)
+  return isone(x.s) ? -n : n
 end
 
 format_quarter_sql(value; ranged::Bool = true) = _format_period_sql(value, 1, 4, "quarter"; ranged = ranged)

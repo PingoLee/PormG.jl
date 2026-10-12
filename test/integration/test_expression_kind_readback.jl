@@ -106,6 +106,24 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   # flagged because the CTE model types it the operand's integer field (the CTE field typing, #1034).
   ("Avg int | cte", :postgres) => (type = "Float64", value = "1.0", read = "CFloat64()"),
   ("Avg int | cte", :sqlite) => (type = "Float64", value = "1.0", read = "CFloat64()"),
+  # #1196: `Round` over an integer means that integer, but PostgreSQL computes `ROUND(x::numeric)` and
+  # SQLite a REAL, so the same call reads a `Decimal` on one engine and a `Float64` on the other.
+  ("Round bigint | alone", :postgres) => (type = "Decimal", value = "1", read = nothing),
+  ("Round bigint | alone", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
+  ("Round bigint | subquery", :postgres) => (type = "Decimal", value = "1", read = nothing),
+  ("Round bigint | subquery", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
+  ("Round int / 2 | alone", :postgres) => (type = "Decimal", value = "0.50", read = nothing),
+  ("Round int / 2 | alone", :sqlite) => (type = "Float64", value = "0.5", read = nothing),
+  ("Round int / 2 | subquery", :postgres) => (type = "Decimal", value = "0.50", read = nothing),
+  ("Round int / 2 | subquery", :sqlite) => (type = "Float64", value = "0.5", read = nothing),
+  ("Round int places | alone", :postgres) => (type = "Decimal", value = "1", read = nothing),
+  ("Round int places | alone", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
+  ("Round int places | subquery", :postgres) => (type = "Decimal", value = "1", read = nothing),
+  ("Round int places | subquery", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
+  ("Round int | alone", :postgres) => (type = "Decimal", value = "1", read = nothing),
+  ("Round int | alone", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
+  ("Round int | subquery", :postgres) => (type = "Decimal", value = "1", read = nothing),
+  ("Round int | subquery", :sqlite) => (type = "Float64", value = "1.0", read = nothing),
 )
 
 # The cells whose value comes back as a DIFFERENT TYPE on the two engines, by the table above. Every
@@ -117,6 +135,8 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
 # testset below the table checks it cell by cell.
 const _EKR_TYPE_DIVERGENT = Set{String}([
   "F date - date | alone", "F date - date | subquery",
+  "Round bigint | alone", "Round bigint | subquery", "Round int / 2 | alone", "Round int / 2 | subquery",
+  "Round int places | alone", "Round int places | subquery", "Round int | alone", "Round int | subquery",
 ])
 
 const _EKR_CELLS = sort!([id for (id, backend) in keys(_EKM_DISAGREEMENTS) if backend === _EKR_ENGINE])

@@ -127,6 +127,11 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Abs bigint",              :Result,              m -> _EKM_FN.Abs("resultid")),
   ("Floor int",               :Result,              m -> _EKM_FN.Floor("grid")),
   ("Ceil int",                :Result,              m -> _EKM_FN.Ceil("grid")),
+  # #1196: `Round` over an integer means that integer (its operand's type, as for a float or a decimal)
+  ("Round int",               :Result,              m -> _EKM_FN.Round("grid")),
+  ("Round int places",        :Result,              m -> _EKM_FN.Round("grid", 1)),
+  ("Round bigint",            :Result,              m -> _EKM_FN.Round("resultid")),
+  ("Round int / 2",           :Result,              m -> _EKM_FN.Round("grid") / 2),
   ("Floor year part",         :Race,                m -> _EKM_FN.Floor(_EKM_FN.Extract("date", "year"))),
   # #1121: the rest of the computed-number family — over a float, a decimal and an integer — whose
   # type is Django's `output_field`: its operand's for `Floor`/`Ceil`, a float or a decimal for the

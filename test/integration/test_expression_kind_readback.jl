@@ -29,7 +29,7 @@ end
 include(joinpath(@__DIR__, "..", "unit", "helper_expression_kind_shapes.jl"))
 include(joinpath(@__DIR__, "..", "unit", "fixtures", "expression_kind_matrix_expected.jl"))
 
-const _EKR_ENGINE = PORMG_DB_FOLDER == "db_sl" ? :sqlite : :postgres
+const _EKR_ENGINE = engine_key()   # no fallback: a backend added later has no row to borrow (#1179)
 
 # The row each base model is read on. A constructor result with FRACTIONAL points (`5.5`): SQLite
 # hands back an integral NUMERIC as an `Int64`, so a row holding `14` would report the value's storage

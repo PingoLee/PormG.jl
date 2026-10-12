@@ -100,7 +100,9 @@ end
         insp = q |> inspect_query
         @info insp[:sql_text]
 
-        if insp[:dialect] == :sqlite
+        # Engine mechanics (#1179): positional (`?`) parameters are collected per clause, so the
+        # HAVING value has its own bucket; numbered (`$n`) parameters are not bucketed at all.
+        if by_engine(postgres = false, sqlite = true)   # bucketed by clause
             @test first(insp[:parameter_buckets][:having]) isa Number
             @test first(insp[:parameter_buckets][:having]) == 10.0
         end

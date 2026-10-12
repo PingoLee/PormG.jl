@@ -2,6 +2,7 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
+import TimeZones
 import TimeZones: ZonedDateTime
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -313,34 +314,36 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PormGRow: SQLite DateTime normalisation
-# Verifies that row and dict list formats share the same SQLite datetime parsing
-# path; JSON remains a serialized string as expected for API payloads.
+# PormGRow: DateTime read-back is the same in every list format
+# Verifies that row and dict list formats share the same datetime parsing path (on SQLite, the one
+# that turns stored TEXT back into a DateTime); JSON remains a serialized string as expected for API
+# payloads. Run on every engine: the assertions are engine-neutral, and the PostgreSQL arm used to be
+# a bare `@test true` (#1179).
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "PormGRow SQLite DateTime normalisation" begin
-    if PORMG_DB_FOLDER == "db_sl"
-        label = "row_get_datetime_$(uuid4())"
+@testset "PormGRow DateTime read-back across list formats" begin
+    label = "row_get_datetime_$(uuid4())"
+    M.Django_contract_scratch.objects.filter("label" => label).delete()
+
+    try
+        M.Django_contract_scratch.objects.create(
+            "label" => label,
+            "event_time" => DateTime(2026, 5, 13, 12, 1, 2),
+            "event_date" => Date(2026, 5, 13),
+            "price" => "12.34",
+        )
+
+        row = M.Django_contract_scratch.objects.filter("label" => label).values("label", "event_time").first()
+        dict_row = M.Django_contract_scratch.objects.filter("label" => label).values("label", "event_time").list(:dict)[1]
+        json_row = M.Django_contract_scratch.objects.filter("label" => label).values("label", "event_time").list(:json)
+
+        @test row.event_time isa Union{DateTime,ZonedDateTime}
+        @test dict_row[:event_time] isa Union{DateTime,ZonedDateTime}
+        # The same value through both formats, and the instant that was written.
+        @test typeof(row.event_time) == typeof(dict_row[:event_time]) && row.event_time == dict_row[:event_time]
+        utc(v) = v isa ZonedDateTime ? DateTime(TimeZones.astimezone(v, TimeZones.tz"UTC")) : v
+        @test utc(row.event_time) == DateTime(2026, 5, 13, 12, 1, 2)
+        @test JSON.parse(json_row)[1]["event_time"] isa String
+    finally
         M.Django_contract_scratch.objects.filter("label" => label).delete()
-
-        try
-            M.Django_contract_scratch.objects.create(
-                "label" => label,
-                "event_time" => DateTime(2026, 5, 13, 12, 1, 2),
-                "event_date" => Date(2026, 5, 13),
-                "price" => "12.34",
-            )
-
-            row = M.Django_contract_scratch.objects.filter("label" => label).values("label", "event_time").first()
-            dict_row = M.Django_contract_scratch.objects.filter("label" => label).values("label", "event_time").list(:dict)[1]
-            json_row = M.Django_contract_scratch.objects.filter("label" => label).values("label", "event_time").list(:json)
-
-            @test row.event_time isa Union{DateTime,ZonedDateTime}
-            @test dict_row[:event_time] isa Union{DateTime,ZonedDateTime}
-            @test JSON.parse(json_row)[1]["event_time"] isa String
-        finally
-            M.Django_contract_scratch.objects.filter("label" => label).delete()
-        end
-    else
-        @test true
     end
 end

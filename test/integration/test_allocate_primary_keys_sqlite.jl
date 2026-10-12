@@ -9,6 +9,8 @@ end
 using Test
 using DataFrames
 
+# Engine mechanics, kept (#1179): SQLite's id reservation. This file is not in runtests.jl, so a run
+# against another folder is a usage error to refuse, not a testset to skip.
 PORMG_DB_FOLDER == "db_sl" || throw(ArgumentError(
     "test_allocate_primary_keys_sqlite.jl must be run with PORMG_DB=db_sl"
 ))

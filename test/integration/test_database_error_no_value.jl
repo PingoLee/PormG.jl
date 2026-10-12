@@ -24,8 +24,11 @@ end
 using Logging
 
 const ERR987_POOL = PormG.config[PORMG_DB_FOLDER].connections
-const ERR987_IS_PG = ERR987_POOL isa PormG.PormGPostgres
-const ERR987_ON_PGJL = ERR987_IS_PG && PormG.postgres_driver(ERR987_POOL) === :postgres
+# A row per engine (#1179), never an `else` a backend added later inherits:
+# - the driver this run goes through (the LibPQ-only checks below key on it — a driver, not an engine);
+# - whether the driver reports the server's SQLSTATE, structured fields and DETAIL (representation).
+const ERR987_DRIVER = by_engine(postgres = () -> PormG.postgres_driver(ERR987_POOL), sqlite = () -> :sqlite)()
+const ERR987_STRUCTURED = by_engine(postgres = true, sqlite = false)
 const ERR987_SECRET = "s3cr3t987"
 
 err987_raised(f) = try f(); nothing catch e e end
@@ -42,7 +45,7 @@ end
 # restored, to keep the marker out of the suite's output.
 function err987_capture(f)
     logger = Test.TestLogger(min_level = Logging.Debug)
-    memento = ERR987_IS_PG && !ERR987_ON_PGJL
+    memento = ERR987_DRIVER === :libpq
     level = memento ? LibPQ.Memento.getlevel(LibPQ.LOGGER) : nothing
     memento && LibPQ.Memento.setlevel!(LibPQ.LOGGER, "critical")
     raised = try
@@ -83,7 +86,7 @@ err987_renderings(e) = [PormG.error_message(e), sprint(showerror, e), string(e),
         # The reason, as data — what each driver can report. Both PostgreSQL drivers name the
         # constraint and the table: Postgres.jl keeps the fields on its exception, and the LibPQ
         # extension reads them off the failed result before LibPQ closes it (#1000).
-        if ERR987_IS_PG
+        if ERR987_STRUCTURED
             @test e.sqlstate == "23505"
             @test e.message !== nothing   # the server's primary message, in whatever locale it speaks
             @test e.constraint !== nothing && occursin("slug", e.constraint)
@@ -96,7 +99,7 @@ err987_renderings(e) = [PormG.error_message(e), sprint(showerror, e), string(e),
 
         # The driver's full text is still one hop away — on PostgreSQL, DETAIL and value included.
         @test e.cause !== nothing
-        ERR987_IS_PG && @test occursin(ERR987_SECRET, sprint(showerror, e.cause))
+        ERR987_STRUCTURED && @test occursin(ERR987_SECRET, sprint(showerror, e.cause))
     finally
         err987_clear!()
     end
@@ -106,9 +109,10 @@ end
 # A class-22 error: the server's PRIMARY message is the value, so it is not carried at all
 # PostgreSQL builds `invalid input syntax for type uuid: "<value>"` from the input itself. The
 # SQLSTATE survives; the message does not. Raw SQL, because PormG refuses a malformed UUIDField
-# value before sending (#971) — the server-side refusal is what this pins. SQLite has no uuid type.
+# value before sending (#971) — the server-side refusal is what this pins. SQLite has no uuid type
+# (engine mechanics: there is no value-bearing input-syntax error to provoke there, #1179).
 # ─────────────────────────────────────────────────────────────────────────────
-if ERR987_IS_PG
+if only_on(:postgres, "a class-22 input-syntax error needs a server-side uuid type (SQLite has none)")
     @testset "#987: an input-syntax error's text carries no value on $(PORMG_DB_FOLDER)" begin
         e, logged = err987_capture(() -> fetch(ERR987_POOL, "SELECT \$1::uuid AS token", [ERR987_SECRET]))
 
@@ -129,9 +133,17 @@ end
 # `bulk_copy` streams through COPY FROM STDIN, a separate driver path from `fetch`. A duplicate slug
 # must name the constraint and table, and a row missing a NOT NULL column must name the table and
 # the column — the server, not PormG, refuses both, since COPY carries no per-field validation. The
-# duplicate's DETAIL quotes the marker, so the error's text is checked for it too.
+# duplicate's DETAIL quotes the marker, so the error's text is checked for it too. COPY is a
+# capability-table row: a backend without it refuses `bulk_copy` instead (#1179).
 # ─────────────────────────────────────────────────────────────────────────────
-if ERR987_IS_PG
+if !requires(:copy)
+    @testset "#1000: bulk_copy is refused where the backend has no COPY on $(PORMG_DB_FOLDER)" begin
+        df = DataFrames.DataFrame(uuid_token = [string(UUIDs.uuid4())],
+                                  canonical_url = ["https://www.formula1.com/en/drivers/alain-prost"],
+                                  slug = ["err987-copy-refused"])
+        @test_throws PormG.BackendCapabilityError bulk_copy(M.Field_validation_scratch, df)
+    end
+else
     @testset "#1000: a bulk_copy constraint violation names its constraint, table and column on $(PORMG_DB_FOLDER)" begin
         err987_clear!()
         slug = "err987-copy-$(ERR987_SECRET)"
@@ -181,7 +193,7 @@ end
 # still be refused, as LibPQ did, rather than reported as a copy of zero rows. And a statement libpq
 # returned no result for at all must still raise, as it did before.
 # ─────────────────────────────────────────────────────────────────────────────
-if ERR987_IS_PG && !ERR987_ON_PGJL
+if ERR987_DRIVER === :libpq
     @testset "#1000: a failed LibPQ handle re-raises; a non-COPY statement and a missing result are refused on $(PORMG_DB_FOLDER)" begin
         CP = PormG.ConnectionPool
         conn = CP.acquire_connection(ERR987_POOL)

@@ -35,9 +35,9 @@ end
                        "    name = Models.CharField(null = true)\n)\nend\n")
     drift() = PormG.Migrations.check(conn, settings; kinds = [:schema_drift],
                                      models_file = models_path, include_table = [table])
-    # One statement per call on either engine, as `migrate` sends a plan (#841).
-    run_sql(sql) = for part in (conn isa PormG.PormGSQLite ? PormG.Migrations._split_sqlite_statements(sql) :
-                                PormG.Migrations._split_pg_statements(sql))
+    # One statement per call on either engine, as `migrate` sends a plan (#841); `split_statements`
+    # is the engine's own splitter, a row per engine (#1179).
+    run_sql(sql) = for part in split_statements(sql; conn = conn)
         PormG.ConnectionPool.fetch(conn, part)
     end
 

@@ -308,11 +308,21 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Window Functions: explicit frames change LastValue semantics on PostgreSQL
-# The documented frame trap is backend-specific, so this executable regression
-# runs only where explicit frames are supported and skips cleanly on SQLite.
+# The documented frame trap is backend-specific, so this executable regression runs where PormG
+# renders explicit frames. Where it does not (SQLite: `src/querybuilder/select_nodes.jl` refuses, a
+# gap in PormG rather than in SQLite, so not a capability-table row), the refusal is asserted
+# instead of skipped with an `@info`. A per-engine fact, not an `else`: a backend added later
+# states its row (#1179).
 # ─────────────────────────────────────────────────────────────────────────────
-if adapter_name == "SQLite"
-    @info "Skipping PostgreSQL-only LastValue frame integration test on SQLite"
+if !by_engine(postgres = true, sqlite = false)   # PormG renders an explicit window frame here
+    @testset "an explicit window frame is refused where PormG does not render one" begin
+        query = M.Result.objects
+        query.filter("raceid" => 841)
+        query.values("last_full" => LastValue("points", over = WindowOver(order_by = ["positionorder"],
+            frame = "ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING")))
+        err = try query.list(); nothing catch e; e end
+        @test err isa PormG.BackendCapabilityError && occursin("window frames", err.msg)
+    end
 else
     @testset "Window LastValue full-frame semantics match the PostgreSQL example" begin
         spec_default = WindowOver(

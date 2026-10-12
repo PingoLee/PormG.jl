@@ -20,7 +20,6 @@ if !isdefined(Main, :PormG)
 end
 
 const NUL951_POOL = PormG.config[PORMG_DB_FOLDER].connections
-const NUL951_IS_PG = NUL951_POOL isa PormG.PormGPostgres
 const NUL951_VALUE = "Senna\0hidden"   # the text after the NUL must never appear in a message
 
 nul951_refusal(f) = try f(); nothing catch e e end
@@ -51,12 +50,12 @@ end
     @test nul951_is_refusal(nul951_refusal(() -> M.Driver.objects.filter("surname__@in" => ["Prost", NUL951_VALUE]).count()))
     @test nul951_is_refusal(nul951_refusal(() -> M.Driver.objects.filter("surname__@icontains" => NUL951_VALUE).exists()))
 
-    # Raw SQL with the backend's own placeholder, and the statement text itself.
-    placeholder = NUL951_IS_PG ? "\$1::text" : "?"
-    @test nul951_is_refusal(nul951_refusal(() -> fetch(NUL951_POOL, "SELECT $placeholder AS t", [NUL951_VALUE])))
+    # Raw SQL with the backend's own placeholder (a row per engine, #1179), and the statement text itself.
+    marker = by_engine(postgres = "\$1::text", sqlite = "?")
+    @test nul951_is_refusal(nul951_refusal(() -> fetch(NUL951_POOL, "SELECT $marker AS t", [NUL951_VALUE])))
     @test nul951_is_refusal(nul951_refusal(() -> fetch(NUL951_POOL, "SELECT '$NUL951_VALUE' AS t")))
     # The same raw query with a clean value still runs, so the refusal is about the NUL alone.
-    @test (fetch(NUL951_POOL, "SELECT $placeholder AS t", ["Senna"]) |> DataFrame).t[1] == "Senna"
+    @test (fetch(NUL951_POOL, "SELECT $marker AS t", ["Senna"]) |> DataFrame).t[1] == "Senna"
 
     # The advisory-lock key: on LibPQ it used to lock on "nul951" — another key's lock.
     ran = Ref(false)
@@ -92,11 +91,15 @@ end
         e = nul951_refusal(() -> bulk_update(M.Bulk_copy_fidelity_scratch.objects,
                                              DataFrame(id = [clean_id, clean_id2], name = ["nul951 changed", bad])))
         @test nul951_is_refusal(e) && occursin("row 2", e.msg)
-        if NUL951_IS_PG
+        if requires(:copy)
             # COPY never passes `fetch`: it is refused at the same format step as every other write.
             e = @test_logs (:error,) match_mode = :any nul951_refusal(() ->
                 bulk_copy(M.Bulk_copy_fidelity_scratch.objects, DataFrame(name = ["nul951 copy", bad])))
             @test nul951_is_refusal(e) && occursin("row 2", e.msg)
+        else
+            # A backend without COPY refuses `bulk_copy` for that, before it reads a row (#1179).
+            @test_throws PormG.BackendCapabilityError bulk_copy(M.Bulk_copy_fidelity_scratch.objects,
+                                                                DataFrame(name = ["nul951 copy", bad]))
         end
 
         # Nothing but the clean rows was stored, and neither was changed — not even row 1 of the

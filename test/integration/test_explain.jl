@@ -10,9 +10,9 @@ import PormG.QueryBuilder: OuterRef, Subquery
 import PormG.Functions: Count
 
 # The plan TEXT each engine prints (an index's name, a scan's relation or alias, its estimates) is
-# representation, so it is a per-engine expectation. Whether an option such as ANALYZE exists is a
-# feature, asked of the capability table with `requires(:explain_options)`.
-const EXPLAIN_IS_PG = PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGPostgres
+# representation, so it is a per-engine expectation (`by_engine`, with no `else` a backend added
+# later could inherit, #1179). Whether an option such as ANALYZE exists is a feature, asked of the
+# capability table with `requires(:explain_options)`.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # explain(): the plan the database really chooses (#48)
@@ -26,15 +26,17 @@ const EXPLAIN_IS_PG = PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGP
     @test by_pk[:operation] === :select
     @test by_pk[:analyze] === false
     # PostgreSQL names the primary-key index; SQLite reports the rowid lookup.
-    @test by_pk[:indexes_used] == (EXPLAIN_IS_PG ? ["driver_pkey"] : ["INTEGER PRIMARY KEY"])
+    @test by_pk[:indexes_used] == by_engine(postgres = ["driver_pkey"], sqlite = ["INTEGER PRIMARY KEY"])
     @test isempty(by_pk[:seq_scans])
 
     # Every result row: nothing to search by, so the table is scanned.
     everything = M.Result.objects.explain()
-    @test everything[:seq_scans] == (EXPLAIN_IS_PG ? ["result"] : ["Tb"])
+    @test everything[:seq_scans] == by_engine(postgres = ["result"], sqlite = ["Tb"])
     @test isempty(everything[:indexes_used])
 
-    if EXPLAIN_IS_PG
+    # Whether the plan carries estimates is the engine's plan format: PostgreSQL's root node has a
+    # cost and a row estimate, SQLite's EXPLAIN QUERY PLAN has neither.
+    if by_engine(postgres = true, sqlite = false)
         # Estimates come from the root plan node: a cost and a row estimate near the table's size.
         @test everything[:total_cost] isa Float64 && everything[:total_cost] > 0
         @test everything[:estimated_rows] > 1000
@@ -96,7 +98,7 @@ end
         q = M.Driver.objects.filter("driverid" => 102).values("surname")
         analyze ? q.select_for_update().explain(analyze = true) : q.explain()
     end
-    @test plan[:indexes_used] == (EXPLAIN_IS_PG ? ["driver_pkey"] : ["INTEGER PRIMARY KEY"])
+    @test plan[:indexes_used] == by_engine(postgres = ["driver_pkey"], sqlite = ["INTEGER PRIMARY KEY"])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

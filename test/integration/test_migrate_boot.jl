@@ -27,9 +27,9 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
-if adapter_name == "SQLite"
-    @info "Skipping migrate-boot lock tests on SQLite (its race is covered by test/unit/test_migrate_outcome.jl)"
-else
+# Engine mechanics (#1179): the boot race is driven through PostgreSQL's own server sessions and
+# advisory lock; SQLite's half is test/unit/test_migrate_outcome.jl. Recorded as a skip elsewhere.
+if only_on(:postgres, "the migrate-boot race drives PostgreSQL server sessions (SQLite's half: test/unit/test_migrate_outcome.jl)")
 
 import OrderedCollections: OrderedDict
 
@@ -357,4 +357,4 @@ end
     end
 end
 
-end # adapter_name != "SQLite"
+end # only_on(:postgres)

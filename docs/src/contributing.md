@@ -171,4 +171,15 @@ expression that reflects the specific scenario you are investigating:
       @test_throws PormG.BackendCapabilityError …
   end
   ```
+- Where a test differs by engine for any other reason, it names each engine and
+  never falls through an `else`, because a backend added later would inherit that
+  `else` without a decision. An engine's own text (a plan, an error's fields, a
+  placeholder) or how the test drives the engine is written as
+  `by_engine(postgres = …, sqlite = …)`. It raises an error for an engine with no
+  row. A testset that exercises one engine's own machinery (its catalog, its server
+  sessions) is guarded with `only_on(:postgres, "why")`, which records the skip like
+  `requires` does. A value is never keyed by engine: it is checked against an oracle
+  on every engine. `test/unit/test_engine_branches.jl` counts the by-name branches
+  (`isa PormGPostgres`, `PORMG_DB_FOLDER == …`) left in `test/integration/`, so a
+  new one fails until it is reviewed.
 - Avoid leaving `@pormg_debug true` in committed code — always reset to `false`.

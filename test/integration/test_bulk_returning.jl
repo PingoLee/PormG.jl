@@ -121,10 +121,11 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A PormG-minted UUID pk (PostgreSQL only — the fixture has no SQLite counterpart, see db_sl/models.jl).
+# A PormG-minted UUID pk (PostgreSQL only: db_sl/models.jl deliberately declares no
+# `Bulk_uuid_pk_scratch`, and its comment says why). Recorded as a skip elsewhere (#1179).
 # The pk is filled before the INSERT, so it is the key as it stands; nothing is allocated.
 # ─────────────────────────────────────────────────────────────────────────────
-if PORMG_DB_FOLDER != "db_sl"
+if only_on(:postgres, "db_sl/models.jl declares no UUID-pk scratch table (see its comment)")
     @testset "returning=: UUID auto_add pk (#671)" begin
         labels = ["br671-uuid-$(i)" for i in 1:3]
         purge() = (q = M.Bulk_uuid_pk_scratch.objects; q.filter("label__@in" => labels); q.exists() && q.delete())

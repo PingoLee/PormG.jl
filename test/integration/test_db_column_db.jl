@@ -252,10 +252,11 @@ end
     end
 end
 
-# bulk_copy is PostgreSQL-only (SQLite falls back to bulk_insert elsewhere).
-@testset "db_column: bulk_copy targets the db_column (PostgreSQL)" begin
-    pool = PormG.config[PORMG_DB_FOLDER].connections
-    if pool isa PormG.PormGPostgres
+# bulk_copy needs COPY, a capability-table row (#1129): where the backend has it, the copy targets
+# the db_column; where it does not, bulk_copy refuses with BackendCapabilityError (#1179: the
+# else arm used to be a bare `@test true`).
+@testset "db_column: bulk_copy targets the db_column where the backend has COPY" begin
+    if requires(:copy)
         M.Db_column_child_scratch.objects.delete(allow_delete_all=true)
         M.Db_column_scratch.objects.delete(allow_delete_all=true)
         try
@@ -269,7 +270,8 @@ end
             M.Db_column_scratch.objects.delete(allow_delete_all=true)
         end
     else
-        @test true  # SQLite: bulk_copy unsupported; covered by bulk_insert above.
+        @test_throws PormG.BackendCapabilityError bulk_copy(M.Db_column_scratch.objects,
+                                                            DataFrame(sku = ["C1"], name = ["cn1"]))
     end
 end
 

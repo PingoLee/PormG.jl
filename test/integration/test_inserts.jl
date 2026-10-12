@@ -206,8 +206,9 @@ end
 # PostgreSQL only: SQLite's AUTOINCREMENT moves past an explicit id on its own, so it never drifts.
 # The drift rests on #358: were create() to resync again, the first INSERT would land and this would
 # pass without the retry. Forcing the retry condition false made it fail with the 23505 (#1001).
+# Engine mechanics, recorded as a skip elsewhere (#1179).
 # ─────────────────────────────────────────────────────────────────────────────
-if PORMG_DB_FOLDER != "db_sl"
+if only_on(:postgres, "a sequence drifting behind an explicit id is PostgreSQL's (SQLite's AUTOINCREMENT moves past it)")
     @testset "bulk_insert resyncs a drifted sequence and retries (#1001)" begin
         labels = ["seq-drift-1001-seed", "seq-drift-1001-explicit", "seq-drift-1001-bulk"]
         cleanup() = (q = M.Django_contract_scratch.objects.filter("label__@in" => labels);
@@ -516,7 +517,7 @@ end
         @test length(rows_b) == 2
         @test Set(r[:id] for r in rows_b) == Set(df_filled.id)
 
-        if PORMG_DB_FOLDER == "db_sl"
+        if only_on(:sqlite, "transaction-scoped id reservation reads sqlite_sequence (PostgreSQL uses nextval)")
             first_reserved, second_reserved, created_row = PormG.run_in_transaction(PORMG_DB_FOLDER) do
                 first_reserved = allocate_primary_keys(
                     M.Django_contract_scratch.objects,
@@ -580,9 +581,10 @@ end
 # same MAX and hand out overlapping ranges. These checks deliberately call it OUTSIDE
 # run_in_transaction: the fix makes the bare call self-protecting by auto-wrapping in
 # run_in_transaction (same idiom as bulk_insert/bulk_copy/bulk_update). SQLite-only —
-# PostgreSQL uses an atomic nextval() and never took this path.
+# PostgreSQL uses an atomic nextval() and never took this path. Engine mechanics, recorded as a
+# skip elsewhere (#1179).
 # ─────────────────────────────────────────────────────────────────────────────
-if PORMG_DB_FOLDER == "db_sl"
+if only_on(:sqlite, "allocate_primary_keys' read-then-write on sqlite_sequence is SQLite's (PostgreSQL uses nextval)")
     @testset "allocate_primary_keys self-protects outside a transaction (#88)" begin
         # Reservation only: no rows are inserted, so there is nothing to clean up — the calls
         # just bump sqlite_sequence (harmless gaps, like a rolled-back PostgreSQL nextval()).
@@ -797,7 +799,7 @@ end
         # value. This is the one check that actually fails if the constant is wrong.
         # SQLite: the shipped SQLite.jl is ≥3.32.0, so the default is 32766 (a regression
         # to 999 on an ancient build would fail here, which is the correct signal).
-        @test limit == (PORMG_DB_FOLDER == "db_sl" ? 32766 : 65535)
+        @test limit == by_engine(sqlite = 32766, postgres = 65535)   # each engine's own ceiling (#1179)
 
         ncols = 8                              # all payload columns, incl. the explicit id
         nrows = fld(limit, ncols) + 1          # one row past a single capped chunk
@@ -830,12 +832,12 @@ end
                 M.Bulk_update_payload_scratch.objects, insert_df,
                 columns = columns, chunk_size = nrows, show_query = :sql,
             )
-            if PORMG_DB_FOLDER == "db_sl"
-                @test res isa Vector       # pre-fix returns one un-split SQL String → gate
-                @test length(res) == 2     # effective rows + 1 → two capped chunks
-            else
+            if binds_column_arrays()
                 @test res isa String       # uncapped: the whole frame in one statement
                 @test occursin("unnest(", res)
+            else
+                @test res isa Vector       # pre-fix returns one un-split SQL String → gate
+                @test length(res) == 2     # effective rows + 1 → two capped chunks
             end
 
             # (2) End-to-end correctness: the full set is written, not a subset — across the

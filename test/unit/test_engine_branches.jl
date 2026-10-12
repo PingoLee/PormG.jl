@@ -16,6 +16,9 @@
 # path — each listed with its reason beside the counts below. Engine facts live in
 # `src/querybuilder/engine_facts.jl` and `src/migrations/engine_facts.jl`.
 #
+# The last testset holds the same count for test/integration/ (#1179), where a branch is a test
+# expectation a third backend would inherit rather than a code path.
+#
 # Run: julia --project=test/integration test/unit/test_engine_branches.jl
 # ==============================================================================
 
@@ -125,4 +128,69 @@ const _EB_TERNARY = r"isa\s+(PormG\.)?PormG(Postgres|SQLite)\b[^\n?]*\?|isa\([^,
   @test occursin(_EB_TERNARY, "  sqlite = instruc.connection isa PormGSQLite  # why")
   @test occursin(_EB_TERNARY, "  y = isa(conn, PormGSQLite) ? a : b")
   @test !occursin(_EB_TERNARY, "  conn isa PormGSQLite && foo()")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1179: engine branches in test/integration/ match the reviewed counts
+# A test that branches on the engine by name gives a backend added later (#1130) one engine's DDL,
+# text or expectation through its `else`, without anyone deciding it — the same risk as in src/, on
+# the test side. Each such branch is classified (#1147's four categories) and becomes:
+#   - a feature: `requires(:feature)`, with the refusal asserted in its `else` (common_setup.jl);
+#   - representation or engine mechanics: `by_engine(postgres = …, sqlite = …)`, which has no
+#     fallback, or `only_on(:engine, why)` for a testset that drives one engine's own machinery;
+#   - meaning: no engine branch on the value; the engine that departs refuses, stated as data.
+# What is left is counted here per file, with the reason. `PORMG_DB_FOLDER ==`, `adapter_name ==`
+# and an inspected query's `[:dialect] ==` count like an `isa`, and so does comparing `engine_key()`
+# to a symbol, which would only respell `is_pg ?`. A line scan, so it counts lines, not decisions: a flag bound once and
+# read sixty times is one hit, so the deferred files' counts are their bindings, not their reads.
+# ─────────────────────────────────────────────────────────────────────────────
+const _EB_INTEGRATION_PATTERN = Regex(_EB_PATTERN.pattern *
+  raw"|PORMG_DB_FOLDER\s*[!=]=|adapter_name\s*[!=]=|\[:dialect\]\s*[!=]=|engine_key\([^)]*\)\s*(===?|!==?)\s*:")
+
+const _EB_INTEGRATION_REVIEWED = Dict(
+  # Each test database folder ships its own models file and `@import_models` takes a literal path,
+  # so the loader names each folder (a folder, not an engine) and errors on any other.
+  "test/integration/common_setup.jl" => 2,
+  # Not in runtests.jl: a run against another folder is a usage error it refuses, not a skip.
+  "test/integration/test_allocate_primary_keys_sqlite.jl" => 1,
+  # Deferred from #1179 to a follow-up: fixture DDL written per engine, introspected type names and
+  # catalog text, PostgreSQL-catalog testsets, the statement splitter and importer entry point.
+  # Converted with the helpers above, these counts fall to zero.
+  "test/integration/test_importers_introspection.jl" => 18,
+  "test/integration/test_migration_bootstrap.jl" => 24,
+)
+
+@testset "#1179: engine branches in test/integration/ match the reviewed counts" begin
+  dir = joinpath(pkgdir(PormG), "test", "integration")
+  found = Dict{String,Int}()
+  lines = Dict{String,Vector{String}}()
+  for f in readdir(dir)
+    endswith(f, ".jl") || continue
+    hits = String[]
+    open(joinpath(dir, f)) do io
+      for (i, l) in enumerate(eachline(io))
+        startswith(lstrip(l), "#") && continue
+        for _ in eachmatch(_EB_INTEGRATION_PATTERN, l)
+          push!(hits, "$(i): $(strip(l))")
+        end
+      end
+    end
+    isempty(hits) && continue
+    key = "test/integration/$(f)"
+    found[key] = length(hits)
+    lines[key] = hits
+  end
+  for key in sort!(collect(union(keys(found), keys(_EB_INTEGRATION_REVIEWED))))
+    got, want = get(found, key, 0), get(_EB_INTEGRATION_REVIEWED, key, 0)
+    got == want || @info "engine branches in $(key): $(got), reviewed $(want)" lines = get(lines, key, String[])
+    @test (key, got) == (key, want)
+  end
+  # The scan sees each spelling it is for — or a clean directory proves nothing.
+  for l in ("if pool isa PormG.PormGPostgres", "if PORMG_DB_FOLDER == \"db_sl\"",
+            "if adapter_name != \"SQLite\"", "x = engine_key() === :postgres ? a : b",
+            "engine_key(conn) == :sqlite && f()", "if insp[:dialect] == :sqlite")
+    @test occursin(_EB_INTEGRATION_PATTERN, l)
+  end
+  @test !occursin(_EB_INTEGRATION_PATTERN, "if by_engine(postgres = true, sqlite = false)")
+  @test !occursin(_EB_INTEGRATION_PATTERN, "if only_on(:postgres, \"why\")")
 end

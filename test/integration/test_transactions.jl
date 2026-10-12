@@ -6,6 +6,13 @@ end
 
 settings = PormG.config[PORMG_DB_FOLDER]
 
+# Engine mechanics, a row per engine (#1179) — never an `else` a backend added later inherits:
+# - whether a second connection can write while a transaction holds the writer (SQLite has one);
+# - whether a locked read renders and takes row locks (SQLite's `select_for_update` is a documented
+#   no-op, docs/src/api.md).
+const TX_CONCURRENT_WRITERS = by_engine(postgres = true, sqlite = false)
+const TX_LOCKS_ROWS = by_engine(postgres = true, sqlite = false)
+
 @info "Starting Transactions testset"
 @testset "Transactions and Context Propagation" begin
   # cleanup
@@ -35,7 +42,7 @@ settings = PormG.config[PORMG_DB_FOLDER]
 
   @testset "Nested with_tx_context shares connection" begin
     # Start a manual transaction and get connection
-    begin_sql = adapter_name == "PostgreSQL" ? "BEGIN;" : "BEGIN IMMEDIATE TRANSACTION;"
+    begin_sql = by_engine(postgres = "BEGIN;", sqlite = "BEGIN IMMEDIATE TRANSACTION;")
     result, conn = with_transaction(settings, begin_sql)
     try
       with_tx_context(settings.connections, conn) do
@@ -126,7 +133,7 @@ settings = PormG.config[PORMG_DB_FOLDER]
     t = Task(() -> begin
       # When this task runs it will see whatever ScopedValue was active at creation time
       child_saw_tx[] = get_tx_connection() !== nothing
-      if adapter_name == "SQLite"
+      if !TX_CONCURRENT_WRITERS
         # SQLite transactions use BEGIN IMMEDIATE in run_in_transaction, which acquires
         # the writer lock. A write from another connection can block/fail due to lock,
         # so use a read-only operation here to validate context propagation semantics.
@@ -156,7 +163,7 @@ settings = PormG.config[PORMG_DB_FOLDER]
     # For PostgreSQL, the write is outside tx and remains visible after rollback.
     # For SQLite, this test uses a read-only task to avoid lock contention by design.
     q = M.Just_a_test_deletion.objects
-    @test q.count() == (adapter_name == "SQLite" ? 0 : 1)
+    @test q.count() == (TX_CONCURRENT_WRITERS ? 1 : 0)
 
     M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end
@@ -267,7 +274,7 @@ settings = PormG.config[PORMG_DB_FOLDER]
     
     # Reduce worker count for SQLite to avoid excessive "database is locked" errors 
     # under heavy concurrent writes which SQLite serializes.
-    worker_count = min(Base.Threads.nthreads() > 0 ? Base.Threads.nthreads() : 4, adapter_name == "SQLite" ? 4 : 16)
+    worker_count = min(Base.Threads.nthreads() > 0 ? Base.Threads.nthreads() : 4, TX_CONCURRENT_WRITERS ? 16 : 4)
     
     iterations_per_worker = 100
     inserted = Atomic{Int}(0)
@@ -479,7 +486,7 @@ settings = PormG.config[PORMG_DB_FOLDER]
   # PG-only: SQLite has no server-side session to terminate.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "Failed rollback renews the pooled connection (#71)" begin
-    if adapter_name == "PostgreSQL"
+    if only_on(:postgres, "pg_terminate_backend needs a server-side session (SQLite has none)")
       M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
       pool = settings.connections
 
@@ -520,8 +527,6 @@ settings = PormG.config[PORMG_DB_FOLDER]
       @test q.count() == 1
 
       M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
-    else
-      @test_skip "PG-only: pg_terminate_backend has no SQLite equivalent"
     end
   end
 
@@ -583,7 +588,7 @@ settings = PormG.config[PORMG_DB_FOLDER]
     M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
     M.Just_a_test_deletion.objects.create("name" => "lockme", "test_result" => nothing)
 
-    if adapter_name == "PostgreSQL"
+    if TX_LOCKS_ROWS
       # A locked read inside a transaction renders FOR UPDATE and returns the row.
       rows = PormG.atomic(PORMG_DB_FOLDER) do
         q = M.Just_a_test_deletion.objects.filter("name" => "lockme")
@@ -642,7 +647,7 @@ settings = PormG.config[PORMG_DB_FOLDER]
       values("resultid").
       select_for_update(; kw...)
 
-    if adapter_name == "PostgreSQL"
+    if TX_LOCKS_ROWS
       # Run `probe` in a SECOND transaction while `read` holds its lock in the first, and report
       # whether the probe found its rows locked. The probe task is created OUTSIDE the first block:
       # a task spawned inside it would join that transaction and its connection (see "Tasks that
@@ -843,7 +848,10 @@ end
     catch e
       e
     end
-    if PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGSQLite
+    # Engine mechanics (#1179): on SQLite PormG runs the exit check itself (`PRAGMA
+    # foreign_key_check`); on PostgreSQL the COMMIT is the check. A row per engine.
+    checks_itself = by_engine(sqlite = true, postgres = false)
+    if checks_itself
       @test err isa PormG.UnsafeMutationError
       # The exit check is whole-database: pin the count, so an orphan some other test left behind
       # cannot pass this assertion in place of ours.
@@ -855,7 +863,7 @@ end
 
     # PostgreSQL has no way to skip the check: `check_on_exit = false` is accepted and changes
     # nothing, because COMMIT is the check. (On SQLite it would commit the orphan — not run here.)
-    if !(PormG.config[PORMG_DB_FOLDER].connections isa PormG.PormGSQLite)
+    if !checks_itself
       err = try
         PormG.without_foreign_keys(PORMG_DB_FOLDER; check_on_exit = false) do
           M.Just_a_nested_roll_back.objects.create(

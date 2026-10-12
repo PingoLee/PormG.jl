@@ -80,8 +80,10 @@ include("common_bulk_scratch_setup.jl")
     # ── Phase 4: Internals & Security ────────────────────────────────
     @testset "Internals & Security"         begin include("test_internals.jl")          end
 
-    # What this backend did not run, and why: each `requires(:feature)` that answered no (#1129).
+    # What this backend did not run, and why: each `requires(:feature)` that answered no (#1129),
+    # and each `only_on(:engine, why)` testset pinned to another engine (#1179).
     print_feature_skips()
+    print_engine_skips()
 end
 
 PormG.Configuration.__cleanup__()

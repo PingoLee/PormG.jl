@@ -1231,12 +1231,12 @@ end
                 show_query = :sql,
             )
 
-            if PORMG_DB_FOLDER == "db_sl"
-                @test res isa Vector       # pre-fix returns one un-split SQL String → gate
-                @test length(res) == 2     # effective rows + 1 → two capped chunks
-            else
+            if binds_column_arrays()
                 @test res isa String       # PostgreSQL (#672): uncapped, one statement
                 @test occursin("unnest(", res)
+            else
+                @test res isa Vector       # pre-fix returns one un-split SQL String → gate
+                @test length(res) == 2     # effective rows + 1 → two capped chunks
             end
         end
 
@@ -1946,12 +1946,12 @@ end
         @test params_result isa Vector
         # Parameters must include the label values and the id values: one per cell on SQLite,
         # one array per column on PostgreSQL (#672) — the labels, then the match-key ids.
-        if PORMG_DB_FOLDER == "db_sl"
-            @test length(params_result) >= length(rows)
-        else
+        if binds_column_arrays()
             @test length(params_result) == 2
             @test params_result[1] == ["insp-$(i)-dry" for i in 1:3]
             @test params_result[2] == [r[:id] for r in rows]
+        else
+            @test length(params_result) >= length(rows)
         end
 
         # ── :none mode — build the statement, return nothing, execute nothing ─

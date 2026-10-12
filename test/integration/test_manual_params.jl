@@ -20,8 +20,9 @@ pool     = settings.connections
 
 # Backend-native placeholder: PostgreSQL numbers them ($1,$2…), SQLite is positional (?).
 # PormG does no translation (#218) — the caller writes the dialect's own marker. This helper
-# is the entire "portability" surface of these tests.
-ph(i) = pool isa PormG.PormGPostgres ? "\$$(i)" : "?"
+# is the entire "portability" surface of these tests: `placeholder` (common_setup.jl) has a row per
+# engine and no `else` a backend added later could inherit (#1179).
+ph(i) = placeholder(i)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # A — fetch parity vs ORM (single param)
@@ -92,16 +93,17 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "NULL binds from missing and nothing" begin
     # Alias is `is_null`, not `isnull` — SQLite reserves ISNULL as a postfix operator keyword.
-    sql = pool isa PormG.PormGPostgres ?
-        "SELECT ($(ph(1))::text IS NULL) AS is_null" :
-        "SELECT ($(ph(1)) IS NULL) AS is_null"
+    # The cast an untyped NULL parameter needs, and how a raw boolean reads back, are each engine's
+    # own (engine mechanics and representation): a row per engine (#1179).
+    marker = by_engine(postgres = "$(ph(1))::text", sqlite = ph(1))
+    sql = "SELECT ($(marker) IS NULL) AS is_null"
 
     for nullish in (missing, nothing)
         got = DataFrame(fetch(settings, sql; params = [nullish]))[1, :is_null]
-        @test got in (true, 1)    # PG returns Bool, SQLite returns Int 1
+        @test got === by_engine(postgres = true, sqlite = 1)    # PG returns Bool, SQLite returns Int 1
     end
     ctrl = DataFrame(fetch(settings, sql; params = ["x"]))[1, :is_null]
-    @test ctrl in (false, 0)      # control: a non-null value is not NULL
+    @test ctrl === by_engine(postgres = false, sqlite = 0)      # control: a non-null value is not NULL
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -578,7 +578,7 @@ const PG161_ROWS = Ref(DataFrame())
 const PG161_SQL = Ref("")
 # #1162: the reader asks the server version, to build its statement for it; answered and not recorded.
 fetch(::CompositeMockPg161, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
-  occursin("server_version_num", sql) ? DataFrame(v = [160000]) : (PG161_SQL[] = sql; PG161_ROWS[])
+  sql == PormG.Migrations._PG_SERVER_VERSION_SQL ? DataFrame(v = [160000]) : (PG161_SQL[] = sql; PG161_ROWS[])
 
 @testset "PostgreSQL: the composite reader reads three unique shapes and refuses four (#161)" begin
   rows = NamedTuple[]
@@ -990,7 +990,7 @@ const PG730_SQL = String[]
 # #1032: the schema reader asks the server version first (the introspection floor, #1146); answered here
 # and not recorded, so the captured statements are the schema reads alone.
 fetch(::OwnershipMockPg730, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
-  occursin("server_version_num", sql) ? DataFrame(v = [160000]) :
+  sql == PormG.Migrations._PG_SERVER_VERSION_SQL ? DataFrame(v = [160000]) :
   (push!(PG730_SQL, sql); DataFrame())
 
 @testset "PostgreSQL: every live-table enumeration carries the ownership filter (#730)" begin
@@ -1024,7 +1024,7 @@ const PG847_SQL = String[]
 # #1032: the schema reader asks the server version first (the introspection floor, #1146); answered here
 # and not recorded, so the captured statements are the schema reads alone.
 fetch(::IndexCteMockPg847, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
-  occursin("server_version_num", sql) ? DataFrame(v = [160000]) :
+  sql == PormG.Migrations._PG_SERVER_VERSION_SQL ? DataFrame(v = [160000]) :
   (push!(PG847_SQL, sql); DataFrame())
 
 @testset "PostgreSQL: the one-column index reader refuses what PormG cannot re-emit (#847)" begin
@@ -1080,7 +1080,7 @@ const PG731_CALLS = Tuple{String, Any}[]
 # #1032: the schema reader asks the server version first (the introspection floor, #1146); answered here
 # and not recorded, so the captured statements are the schema reads alone.
 fetch(::NonNegSqlMockPg731, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
-  occursin("server_version_num", sql) ? DataFrame(v = [160000]) :
+  sql == PormG.Migrations._PG_SERVER_VERSION_SQL ? DataFrame(v = [160000]) :
   (push!(PG731_CALLS, (sql, params)); DataFrame())
 
 @testset "PostgreSQL: PormG's >= 0 CHECK is matched by its exact clause, in the reader and the dropper (#731)" begin
@@ -1214,7 +1214,7 @@ const PG747_CALLS = Tuple{String, Any}[]
 # #1032: the schema reader asks the server version first (the introspection floor, #1146); answered here
 # and not recorded, so the captured statements are the schema reads alone.
 fetch(::ByteLenSqlMockPg747, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
-  occursin("server_version_num", sql) ? DataFrame(v = [160000]) :
+  sql == PormG.Migrations._PG_SERVER_VERSION_SQL ? DataFrame(v = [160000]) :
   (push!(PG747_CALLS, (sql, params)); DataFrame())
 
 @testset "PostgreSQL: PormG's octet_length CHECK is matched by its exact clause, in the reader and the dropper (#747)" begin

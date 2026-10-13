@@ -52,7 +52,7 @@ end
 # Keyword-only, like the stub above: `ConnectionPool.fetch` forwards a positional `params` here.
 # #1162: a schema reader asks the server version, to build its statement for it; answered and not recorded.
 fetch(c::CheckCapturePg742, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
-  occursin("server_version_num", sql) ? DataFrame(v = [160000]) : (push!(c.sqls, sql); c.answer)
+  sql == PormG.Migrations._PG_SERVER_VERSION_SQL ? DataFrame(v = [160000]) : (push!(c.sqls, sql); c.answer)
 
 function _ck_schema(models::PormGModel...)
   schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}()

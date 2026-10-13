@@ -53,7 +53,7 @@ GenMockPgAt1146(v::Int) = GenMockPgAt1146(v, String[])
 fetch(m::GenMockPgAt1146, sql::String; kwargs...) = _gen_answer(m, sql)
 fetch(m::GenMockPgAt1146, sql::String, ::AbstractVector; kwargs...) = _gen_answer(m, sql)
 function _gen_answer(m::GenMockPgAt1146, sql::String)
-  occursin("server_version_num", sql) && return DataFrame(v = [m.v])
+  sql == PormG.Migrations._PG_SERVER_VERSION_SQL && return DataFrame(v = [m.v])
   push!(m.sql, sql)
   # A reference, not the word: the statement's own SQL comments mention the column.
   m.v < 120000 && occursin(r"\b[a-z]+\.attgenerated\b", sql) && error("column a.attgenerated does not exist")

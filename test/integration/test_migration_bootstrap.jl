@@ -72,12 +72,12 @@ end
 @testset "Format-version backfill ($(PORMG_DB_FOLDER))" begin
   settings = PormG.config[PORMG_DB_FOLDER]
   conn = settings.connections
-  is_pg = conn isa PormG.PormGPostgres
 
-  # Recreate pormg_migrations WITHOUT format_version, mimicking an older release's schema.
+  # Recreate pormg_migrations WITHOUT format_version, mimicking an older release's schema. The DDL is
+  # each engine's own (engine mechanics, #1179).
   PormG.ConnectionPool.fetch(conn, "DROP TABLE IF EXISTS pormg_migrations;")
-  legacy_ddl = is_pg ?
-    """CREATE TABLE pormg_migrations (
+  legacy_ddl = by_engine(
+    postgres = """CREATE TABLE pormg_migrations (
       "id" SERIAL PRIMARY KEY,
       "version" VARCHAR(17) NOT NULL UNIQUE,
       "name" VARCHAR(255) NOT NULL,
@@ -86,8 +86,8 @@ end
       "applied_at" TIMESTAMP NOT NULL DEFAULT NOW(),
       "status" VARCHAR(20) NOT NULL DEFAULT 'applied',
       "is_destructive" BOOLEAN NOT NULL DEFAULT FALSE
-    );""" :
-    """CREATE TABLE pormg_migrations (
+    );""",
+    sqlite = """CREATE TABLE pormg_migrations (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "version" VARCHAR(17) NOT NULL UNIQUE,
       "name" VARCHAR(255) NOT NULL,
@@ -96,7 +96,7 @@ end
       "applied_at" DATETIME NOT NULL DEFAULT (datetime('now')),
       "status" VARCHAR(20) NOT NULL DEFAULT 'applied',
       "is_destructive" BOOLEAN NOT NULL DEFAULT 0
-    );"""
+    );""")
   PormG.ConnectionPool.fetch(conn, legacy_ddl)
 
   # A legacy applied record, written before the column existed.
@@ -104,15 +104,9 @@ end
     """INSERT INTO pormg_migrations ("version", "name", "checksum", "status")
        VALUES ('20250101000000000', 'legacy_init', 'deadbeef', 'applied');""")
 
-  # Backend-neutral "does format_version exist?" probe via the system catalog (returns 0/1 rows; no
-  # reliance on a SELECT raising). Avoids the SQLite-only `column_names` helper, whose `using SQLite`
-  # import only loads later in Phase C.
-  format_version_present() = begin
-    sql = is_pg ?
-      "SELECT 1 FROM information_schema.columns WHERE table_name = 'pormg_migrations' AND column_name = 'format_version';" :
-      "SELECT 1 FROM pragma_table_info('pormg_migrations') WHERE name = 'format_version';"
-    nrow(DataFrame(PormG.ConnectionPool.fetch(conn, sql))) > 0
-  end
+  # "Does format_version exist?", read from the catalog through `column_names`, which has one method
+  # per engine (common_migration_setup.jl) — no reliance on a SELECT raising.
+  format_version_present() = "format_version" in column_names(conn, "pormg_migrations")
 
   # The column is absent before the upgrade.
   @test format_version_present() == false
@@ -136,12 +130,11 @@ end
     """SELECT "format_version" FROM pormg_migrations WHERE "version" = '20250101000001000';"""))
   @test fresh[1, :format_version] == Migrations.MIGRATION_FORMAT_VERSION
 
-  # #570 (SQLite only — the PostgreSQL column is a real `timestamp`): the legacy table above still
-  # carries the `datetime('now')` default, exactly as a pre-#570 database does. The legacy row was
-  # written by that default BEFORE `init_migrations`, so it must have been repaired into the
-  # canonical text; the row recorded AFTER must be canonical although the stale default is still
-  # in force, because the INSERT now writes `applied_at` explicitly.
-  if !is_pg
+  # #570: the legacy table above still carries the `datetime('now')` default, exactly as a pre-#570
+  # database does. The legacy row was written by that default BEFORE `init_migrations`, so it must
+  # have been repaired into the canonical text; the row recorded AFTER must be canonical although the
+  # stale default is still in force, because the INSERT now writes `applied_at` explicitly.
+  if only_on(:sqlite, "#570 repairs `applied_at` stored as TEXT (PostgreSQL's column is a timestamp)")
     canonical = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+00:00$"
     stamps = DataFrame(PormG.ConnectionPool.fetch(conn,
       """SELECT "version", "applied_at" FROM pormg_migrations
@@ -204,8 +197,8 @@ end
 # common_setup.jl), so the qualified `SQLite.*` calls in the column-introspection helpers
 # resolve to that binding for the SQLite adapter path.
 
-# Determine the temp DB folder based on the adapter
-edge_db_name = adapter_name == "SQLite" ? "db_test_migration" : "db_test_migration_pg"
+# The temp DB folder, one per engine: SQLite's is created here, PostgreSQL's ships a committed fixture.
+edge_db_name = by_engine(sqlite = "db_test_migration", postgres = "db_test_migration_pg")
 const edge_db_reuses_selected_db = Ref(false)
 const edge_db_fixture_generated = Ref(false)
 
@@ -229,68 +222,100 @@ function write_edge_models(content::String)
   end
 end
 
-@testset "Migration Engine Edge Cases ($(adapter_name) temp DB)" begin
-  # ── Setup: create/reset the isolated temp database ──────────────────
-  if adapter_name == "SQLite"
-    # SQLite: create a fresh disposable folder
-    try; PormG.Configuration.close_pool!(joinpath(@__DIR__, edge_db_name)); catch; end
-    try; ispath(joinpath(@__DIR__, edge_db_name)) && rm(joinpath(@__DIR__, edge_db_name), recursive=true); catch; end
+# Provisioning and teardown of the temp DB are engine mechanics (#1179): one function per engine,
+# chosen with `by_engine`, so a backend added later states its own instead of inheriting one.
+function provision_sqlite_edge_db!()
+  # SQLite: create a fresh disposable folder
+  try; PormG.Configuration.close_pool!(joinpath(@__DIR__, edge_db_name)); catch; end
+  try; ispath(joinpath(@__DIR__, edge_db_name)) && rm(joinpath(@__DIR__, edge_db_name), recursive=true); catch; end
 
-    PormG.Generator.create_db_folder_and_yml(path=joinpath(@__DIR__, edge_db_name), adapter="SQLite")
+  PormG.Generator.create_db_folder_and_yml(path=joinpath(@__DIR__, edge_db_name), adapter="SQLite")
 
-    yml_path = joinpath(@__DIR__, edge_db_name, "connection.yml")
-    yml_content = read(yml_path, String)
-    yml_content = replace(yml_content, "database: database.sqlite" => "database: migration_test.sqlite")
-    open(yml_path, "w") do f; write(f, yml_content); end
+  yml_path = joinpath(@__DIR__, edge_db_name, "connection.yml")
+  yml_content = read(yml_path, String)
+  yml_content = replace(yml_content, "database: database.sqlite" => "database: migration_test.sqlite")
+  open(yml_path, "w") do f; write(f, yml_content); end
+  return nothing
+end
+
+function provision_postgres_edge_db!()
+  # PostgreSQL: load the committed credential-free fixture (issue #36) and hydrate
+  # host/username/password IN-MEMORY from the selected DB — the tracked connection.yml is
+  # never rewritten. ensure_postgres_test_config! only regenerates a blank fixture if the
+  # committed file was deleted.
+  selected_settings = PormG.Configuration.get_settings(PORMG_DB_FOLDER)
+  edge_db_fixture_generated[] = ensure_postgres_test_config!(joinpath(@__DIR__, edge_db_name))
+
+  PormG.Configuration.load(joinpath(@__DIR__, edge_db_name))
+  pg_edge_settings = PormG.Configuration.get_settings(joinpath(@__DIR__, edge_db_name))
+  hydrate_postgres_settings!(pg_edge_settings, selected_settings, joinpath(@__DIR__, edge_db_name))
+
+  # Detect whether the edge-case database resolves to the SAME PostgreSQL database as the
+  # selected integration environment. With the committed fixture (distinct `database`) this is
+  # false; it can only be true in the degraded case where the fixture was removed and
+  # regenerated blank, in which case the final reactivation block rebuilds the selected schema.
+  edge_db_reuses_selected_db[] = postgres_connection_identity(selected_settings) == postgres_connection_identity(pg_edge_settings)
+  # #36 acceptance: with the committed fixture the edge DB MUST resolve to a database distinct
+  # from the selected one. Guards runtime isolation — if hydration ever overwrote `database`,
+  # this fails (a silent @warn + fallback would otherwise keep the suite green). Skipped only in
+  # the degraded case where the committed fixture was deleted and regenerated blank.
+  !edge_db_fixture_generated[] && @test !edge_db_reuses_selected_db[]
+  if edge_db_reuses_selected_db[]
+    @warn "db_test_migration_pg/connection.yml resolves to the same PostgreSQL database as the selected integration DB; the final bootstrap step will rebuild $(PORMG_DB_FOLDER) as a fallback." db=PORMG_DB_FOLDER edge_db=edge_db_name
   else
-    # PostgreSQL: load the committed credential-free fixture (issue #36) and hydrate
-    # host/username/password IN-MEMORY from the selected DB — the tracked connection.yml is
-    # never rewritten. ensure_postgres_test_config! only regenerates a blank fixture if the
-    # committed file was deleted.
-    selected_settings = PormG.Configuration.get_settings(PORMG_DB_FOLDER)
-    edge_db_fixture_generated[] = ensure_postgres_test_config!(joinpath(@__DIR__, edge_db_name))
+    # Auto-create the dedicated disposable DB if absent (Django/Rails/Prisma style), so there is
+    # no manual pre-create step; the connecting role just needs CREATEDB. The name is read from
+    # the loaded fixture (not hardcoded) so it always matches what the edge pool connects to.
+    ensure_postgres_database!(pg_edge_settings, string(pg_edge_settings.db_config_settings["database"]))
+  end
 
-    PormG.Configuration.load(joinpath(@__DIR__, edge_db_name))
-    pg_edge_settings = PormG.Configuration.get_settings(joinpath(@__DIR__, edge_db_name))
-    hydrate_postgres_settings!(pg_edge_settings, selected_settings, joinpath(@__DIR__, edge_db_name))
+  # Reset the public schema to start clean.
+  _reset_postgres!(pg_edge_settings.connections)
+  PormG.Configuration.close_pool!(joinpath(@__DIR__, edge_db_name))
+  delete!(PormG.config, joinpath(@__DIR__, edge_db_name))
 
-    # Detect whether the edge-case database resolves to the SAME PostgreSQL database as the
-    # selected integration environment. With the committed fixture (distinct `database`) this is
-    # false; it can only be true in the degraded case where the fixture was removed and
-    # regenerated blank, in which case the final reactivation block rebuilds the selected schema.
-    edge_db_reuses_selected_db[] = postgres_connection_identity(selected_settings) == postgres_connection_identity(pg_edge_settings)
-    # #36 acceptance: with the committed fixture the edge DB MUST resolve to a database distinct
-    # from the selected one. Guards runtime isolation — if hydration ever overwrote `database`,
-    # this fails (a silent @warn + fallback would otherwise keep the suite green). Skipped only in
-    # the degraded case where the committed fixture was deleted and regenerated blank.
-    !edge_db_fixture_generated[] && @test !edge_db_reuses_selected_db[]
-    if edge_db_reuses_selected_db[]
-      @warn "db_test_migration_pg/connection.yml resolves to the same PostgreSQL database as the selected integration DB; the final bootstrap step will rebuild $(PORMG_DB_FOLDER) as a fallback." db=PORMG_DB_FOLDER edge_db=edge_db_name
-    else
-      # Auto-create the dedicated disposable DB if absent (Django/Rails/Prisma style), so there is
-      # no manual pre-create step; the connecting role just needs CREATEDB. The name is read from
-      # the loaded fixture (not hardcoded) so it always matches what the edge pool connects to.
-      ensure_postgres_database!(pg_edge_settings, string(pg_edge_settings.db_config_settings["database"]))
-    end
+  # Clean up any leftover migration artifacts
+  mig_dir = joinpath(@__DIR__, edge_db_name, "migrations")
+  ispath(mig_dir) && rm(mig_dir, recursive=true)
+  return nothing
+end
 
-    # Reset the public schema to start clean.
-    _reset_postgres!(pg_edge_settings.connections)
-    PormG.Configuration.close_pool!(joinpath(@__DIR__, edge_db_name))
-    delete!(PormG.config, joinpath(@__DIR__, edge_db_name))
+function teardown_sqlite_edge_db!(edge_settings)
+  # SQLite: remove the entire disposable folder
+  ispath(joinpath(@__DIR__, edge_db_name)) && rm(joinpath(@__DIR__, edge_db_name), recursive=true)
+  return nothing
+end
 
-    # Clean up any leftover migration artifacts
+function teardown_postgres_edge_db!(edge_settings)
+  # Best-effort drop of the disposable DB (the edge pool was just closed above). Guarded: never
+  # drop when the edge DB resolved to the shared selected DB (degraded regenerated-fixture case).
+  if !edge_db_reuses_selected_db[]
+    drop_postgres_database!(edge_settings, string(edge_settings.db_config_settings["database"]))
+  end
+  if edge_db_fixture_generated[]
+    # Remove the entire temporary fixture if this test had to create it.
+    ispath(joinpath(@__DIR__, edge_db_name)) && rm(joinpath(@__DIR__, edge_db_name), recursive=true)
+  else
+    # PostgreSQL: remove only generated artifacts, keep the committed fixture.
     mig_dir = joinpath(@__DIR__, edge_db_name, "migrations")
     ispath(mig_dir) && rm(mig_dir, recursive=true)
+    models_path = joinpath(@__DIR__, edge_db_name, "models.jl")
+    isfile(models_path) && rm(models_path)
   end
+  return nothing
+end
+
+@testset "Migration Engine Edge Cases ($(adapter_name) temp DB)" begin
+  # ── Setup: create/reset the isolated temp database ──────────────────
+  by_engine(sqlite = provision_sqlite_edge_db!, postgres = provision_postgres_edge_db!)()
 
   PormG.Configuration.load(joinpath(@__DIR__, edge_db_name))
   edge_settings = PormG.Configuration.get_settings(joinpath(@__DIR__, edge_db_name))
-  if adapter_name != "SQLite"
-    # This reload re-read the credential-free fixture, so re-hydrate in-memory (PG only). The
-    # edge-case tests below reuse this pool and never reload the fixture, so one hydrate suffices.
-    hydrate_postgres_settings!(edge_settings,
-      PormG.Configuration.get_settings(PORMG_DB_FOLDER), joinpath(@__DIR__, edge_db_name))
-  end
+  # This reload re-read the fixture. PostgreSQL's is credential-free, so re-hydrate it in memory; the
+  # edge-case tests below reuse this pool and never reload the fixture, so one hydrate suffices.
+  by_engine(sqlite = s -> nothing,
+            postgres = s -> hydrate_postgres_settings!(s,
+              PormG.Configuration.get_settings(PORMG_DB_FOLDER), joinpath(@__DIR__, edge_db_name)))(edge_settings)
   pool = edge_settings.connections
 
   # ── Phase 1: Initial table creation ───────────────────────────────
@@ -663,17 +688,15 @@ end
     @test foreign_key_count(pool, "renamefkchild") == 0   # #150: FK actually dropped (was silently kept on SQLite)
     # The field's secondary index survived the rebuild (count preserved, not lost to the DROP TABLE)…
     @test length(index_names(pool, "renamefkchild")) == length(idx_before)
-    # …and on SQLite it now references the RENAMED column — direct proof the `column_renames` rewrite ran
-    # (a naïve rebuild would have re-created it against old_parent_id and aborted "no such column").
-    if adapter_name == "SQLite"
-      idxcols = String[]
-      for idx in index_names(pool, "renamefkchild")
-        info = PormG.ConnectionPool.fetch(pool, """PRAGMA index_info("$(idx)");""") |> DataFrame
-        append!(idxcols, string.(info.name))
-      end
-      @test "new_parent_id" in idxcols
-      @test !("old_parent_id" in idxcols)
+    # …and it now references the RENAMED column. On SQLite that is direct proof the `column_renames`
+    # rewrite ran (a naïve rebuild would have re-created it against old_parent_id and aborted "no such
+    # column"); an engine that renames in place carries the index over with the column.
+    idxcols = String[]
+    for idx in index_names(pool, "renamefkchild")
+      append!(idxcols, index_columns(pool, idx))
     end
+    @test "new_parent_id" in idxcols
+    @test !("old_parent_id" in idxcols)
 
     # Data fidelity: the child row survived with its (renamed) FK value intact.
     surviving = PormG.ConnectionPool.fetch(pool,
@@ -784,8 +807,26 @@ end
   # `ALTER TABLE DROP COLUMN`, which SQLite refuses (its `sqlite_autoindex_…` can't be pre-dropped). #151
   # widens the SQLite rebuild trigger to UNIQUE/PK columns too. Carries the prior phases' tables forward so
   # adding the test tables is a pure table-ADD. Runs on BOTH backends for the UNIQUE case (PostgreSQL takes
-  # the plain DROP COLUMN path — it drops a unique column natively; SQLite takes the rebuild). The PK
-  # loud-fail case is SQLite-only (PostgreSQL drops a PK column natively, no guard needed).
+  # the plain DROP COLUMN path — it drops a unique column natively; SQLite takes the rebuild). So does
+  # the PK case, each engine with its own outcome:
+  #
+  # #151 as data: whether dropping the PK column of a table leaves it PK-less (`:applies`) or is
+  # refused at makemigrations (`:refuses`). The `PkGuardChild` Phase 4g leaves behind is what the
+  # 4h-4k phases carry forward, so they read it from the same row.
+  pk_drop = by_engine(postgres = :applies, sqlite = :refuses)
+  pkguard_with_pk = """
+    PkGuardChild = Models.Model(
+        pk_code = Models.CharField(primary_key=true, null=false),
+        payload = Models.CharField(null=true)
+    )
+    """
+  pkguard_without_pk = """
+    PkGuardChild = Models.Model(
+        payload = Models.CharField(null=true)
+    )
+    """
+  pkguard_left = Dict(:refuses => pkguard_with_pk, :applies => pkguard_without_pk)[pk_drop]
+
   @testset "Phase 4g: Delete Unique/PK Non-FK Column (#151)" begin
     base5 = """
     MigrationTest = Models.Model(
@@ -866,42 +907,37 @@ end
     # surviving `id` column keeps its own UNIQUE auto-index, so "no auto-index at all" would be wrong.)
     PormG.ConnectionPool.fetch(pool, """DELETE FROM "uniquedelchild" WHERE "id" = 960;""")
 
-    # ── PK loud-fail (SQLite only) ──
-    # Deleting a PK column that would leave the table with NO primary key must fail loudly at
-    # makemigrations rather than emit a raw DROP COLUMN. (PormG permits PK-less models, so this is
-    # reachable.) PostgreSQL drops a PK column natively, so this guard is SQLite-specific.
-    if adapter_name == "SQLite"
-      uniquedelchild_now = """
+    # ── PK column drop that leaves NO primary key ──
+    # PormG permits PK-less models, so this is reachable. What each engine owes is stated as data
+    # (`pk_drop`, above): SQLite's table rebuild needs a key, so makemigrations must fail loudly
+    # rather than emit a raw DROP COLUMN; PostgreSQL drops a PK column in place.
+    uniquedelchild_now = """
     UniqueDelChild = Models.Model(
         id = Models.IDField(),
         keeper = Models.CharField(null=true)
     )
     """
-      write_edge_models(base5 * uniquedelchild_now * """
-    PkGuardChild = Models.Model(
-        pk_code = Models.CharField(primary_key=true, null=false),
-        payload = Models.CharField(null=true)
-    )
-    """)
-      makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-      migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
-      @assert "pk_code" in column_names(pool, "pkguardchild") "Phase 4g requires the PK column to exist"
+    write_edge_models(base5 * uniquedelchild_now * pkguard_with_pk)
+    makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+    migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+    @assert "pk_code" in column_names(pool, "pkguardchild") "Phase 4g requires the PK column to exist"
 
-      # Desired: drop pk_code, leaving `payload` only → NO primary key. makemigrations must throw.
-      write_edge_models(base5 * uniquedelchild_now * """
-    PkGuardChild = Models.Model(
-        payload = Models.CharField(null=true)
-    )
-    """)
-      pk_err = try
-        makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
-        nothing
-      catch e; e; end
+    # Desired: drop pk_code, leaving `payload` only → NO primary key.
+    write_edge_models(base5 * uniquedelchild_now * pkguard_without_pk)
+    pk_err = try
+      makemigrations(joinpath(@__DIR__, edge_db_name), interactive=false)
+      pk_drop === :applies && migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
+      nothing
+    catch e; e; end
+    if pk_drop === :refuses
       @test pk_err !== nothing
       # Assert the SPECIFIC guard message, so an unrelated error can't masquerade as a pass.
       @test occursin("no primary key", lowercase(string(pk_err)))
       # The live schema is untouched — the failed makemigrations wrote/applied nothing.
       @test "pk_code" in column_names(pool, "pkguardchild")
+    elseif pk_drop === :applies
+      @test pk_err === nothing
+      @test column_names(pool, "pkguardchild") == ["payload"]
     end
   end
 
@@ -948,14 +984,9 @@ end
         keeper = Models.CharField(null=true)
     )
     """
-    # `PkGuardChild` exists only on SQLite — Phase 4g's PK loud-fail branch is SQLite-only, and its
-    # final (throwing) makemigrations applied nothing, so the table is still there with `pk_code`.
-    carried *= adapter_name == "SQLite" ? """
-    PkGuardChild = Models.Model(
-        pk_code = Models.CharField(primary_key=true, null=false),
-        payload = Models.CharField(null=true)
-    )
-    """ : ""
+    # `PkGuardChild` as Phase 4g left it: with `pk_code` where the drop was refused, without it where
+    # it applied (`pk_drop`).
+    carried *= pkguard_left
 
     repoint_models(parent, on_delete) = carried * """
     RepointParentA = Models.Model(
@@ -1001,9 +1032,7 @@ end
     # PostgreSQL expresses this as DROP + ADD CONSTRAINT; SQLite as a whole-table rebuild. Assert the
     # shape each backend actually owes, so a plan that reverted to "nothing at all" cannot pass.
     @test occursin("REFERENCES \"repointparentb\"", pending)
-    if adapter_name != "SQLite"
-      @test occursin("DROP CONSTRAINT", pending)
-    end
+    @test occursin(by_engine(postgres = "DROP CONSTRAINT", sqlite = "Alter table: repointchild"), pending)
 
     # `destructive=true` is REQUIRED on PostgreSQL and is the documented cost of a re-point: the plan
     # carries `DROP CONSTRAINT`, which `_DESTRUCTIVE_PATTERNS` classifies as destructive.
@@ -1144,14 +1173,8 @@ end
         note = Models.CharField(null=true)
     )
     """
-    # `PkGuardChild` exists only on SQLite — see Phase 4h's note; 4g's throwing makemigrations
-    # applied nothing, so the table is still there.
-    carried *= adapter_name == "SQLite" ? """
-    PkGuardChild = Models.Model(
-        pk_code = Models.CharField(primary_key=true, null=false),
-        payload = Models.CharField(null=true)
-    )
-    """ : ""
+    # `PkGuardChild` as Phase 4g left it — see Phase 4h's note.
+    carried *= pkguard_left
 
     # A plain, NON-UNIQUE foreign key with a long column name. That was originally a dodge: when this
     # phase was written, `_drop_index` fired unconditionally on the rename path and would drop a
@@ -1211,16 +1234,14 @@ end
     # RENAME COLUMN and an ADD CONSTRAINT for the same column.
     @test occursin("RENAME COLUMN", pending)
     @test !occursin("FOREIGN KEY (\"new_ref_id\")", pending)
-    if adapter_name == "SQLite"
-      # And SQLite took the CHEAP path, not a whole-table rebuild — the phase must not pass by
-      # quietly rebuilding, since a rebuild renders exactly one clause and satisfies the count too.
-      # Asserted on the PLAN KEY the rebuild is emitted under, not on the `<table>_new` staging
-      # name: `"dupfkchild_new"` is a SUBSTRING of this very migration's new index
-      # (`dupfkchild_new_ref_id_<hash>_idx`), so the obvious spelling is a false positive that
-      # fails on a correct plan. Measured, not theorised.
-      @test !occursin("Alter table: dupfkchild", pending)
-      @test !occursin("CREATE TABLE \"dupfkchild_new\"", pending)
-    end
+    # And the CHEAP path, not a whole-table rebuild, on every engine — SQLite's is the one that could
+    # rebuild — so the phase must not pass by quietly rebuilding, since a rebuild renders exactly one
+    # clause and satisfies the count too. Asserted on the PLAN KEY the rebuild is emitted under, not
+    # on the `<table>_new` staging name: `"dupfkchild_new"` is a SUBSTRING of this very migration's
+    # new index (`dupfkchild_new_ref_id_<hash>_idx`), so the obvious spelling is a false positive
+    # that fails on a correct plan. Measured, not theorised.
+    @test !occursin("Alter table: dupfkchild", pending)
+    @test !occursin("CREATE TABLE \"dupfkchild_new\"", pending)
 
     # Destructive because the rename plan carries DROP INDEX — `ForeignKey` defaults db_index=true.
     migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
@@ -1283,8 +1304,9 @@ end
   # never mentions it again.
   #
   # BOTH backends run every assertion here — this is not a PostgreSQL phase with a SQLite control.
-  # The two engines failed differently and both have to be shown fixed, so the only branch below is
-  # the SQLite-only `sqlite_autoindex` plan check.
+  # The two engines failed differently and both have to be shown fixed, so there is no engine branch
+  # below: the `sqlite_autoindex` plan check names SQLite's own index and holds by construction
+  # elsewhere.
   #
   # Uniqueness is verified BEHAVIORALLY, by a duplicate INSERT that must raise — the Phase 4g
   # technique. Introspection cannot confirm uniqueness on SQLite, and a plan-shape assertion cannot
@@ -1346,14 +1368,8 @@ end
         note = Models.CharField(null=true)
     )
     """
-    # `PkGuardChild` exists only on SQLite — see Phase 4h's note; 4g's throwing makemigrations
-    # applied nothing, so the table is still there.
-    carried4j *= adapter_name == "SQLite" ? """
-    PkGuardChild = Models.Model(
-        pk_code = Models.CharField(primary_key=true, null=false),
-        payload = Models.CharField(null=true)
-    )
-    """ : ""
+    # `PkGuardChild` as Phase 4g left it — see Phase 4h's note.
+    carried4j *= pkguard_left
 
     # A UNIQUE column and nothing else — no `db_index`, so the ONLY index covering it is the one
     # backing the constraint. That is the shape the bug needed: with `db_index=true` as well, the
@@ -1403,10 +1419,9 @@ end
     # acted on — not on `DROP INDEX` in the DDL, which the co-carried tables can legitimately emit.
     @test occursin("RENAME COLUMN", pending)
     @test !occursin("Remove index on old_code", pending)
-    if adapter_name == "SQLite"
-      # The exact statement that used to abort the migration: SQLite refuses to drop an auto-index.
-      @test !occursin("sqlite_autoindex", pending)
-    end
+    # The exact statement that used to abort the migration on SQLite, which refuses to drop an
+    # auto-index. The name is SQLite's own, so on every other engine this holds by construction.
+    @test !occursin("sqlite_autoindex", pending)
 
     # Must NOT raise. Pre-fix on SQLite this is where the migration died with "index associated with
     # UNIQUE or PRIMARY KEY constraint cannot be dropped" and rolled everything back.
@@ -1514,12 +1529,7 @@ end
         note = Models.CharField(null=true)
     )
     """
-    carried4k *= adapter_name == "SQLite" ? """
-    PkGuardChild = Models.Model(
-        pk_code = Models.CharField(primary_key=true, null=false),
-        payload = Models.CharField(null=true)
-    )
-    """ : ""
+    carried4k *= pkguard_left
 
     # ── Baseline: parent and child exist, and the child has NO key ──
     write_edge_models(carried4k * """
@@ -1562,12 +1572,9 @@ end
     @test !occursin("BEGIN TRANSACTION", pending)
     # The plan shape differs by backend and that difference is the point: SQLite declares the key
     # WITH the column, PostgreSQL as a separate named constraint.
-    if adapter_name == "SQLite"
-      @test occursin("ADD COLUMN", pending)
-      @test occursin("REFERENCES \"freshfkparent\"(\"id\")", pending)
-    else
-      @test occursin("ADD CONSTRAINT", pending)
-      @test occursin("FOREIGN KEY", pending)
+    for fragment in by_engine(postgres = ["ADD CONSTRAINT", "FOREIGN KEY"],
+                              sqlite = ["ADD COLUMN", "REFERENCES \"freshfkparent\"(\"id\")"])
+      @test occursin(fragment, pending)
     end
 
     migrate(joinpath(@__DIR__, edge_db_name), interactive=false, destructive=true)
@@ -1593,7 +1600,7 @@ end
     # The constraint is ENFORCED, not merely catalogued: an orphan child must be refused. SQLite
     # only enforces foreign keys when `PRAGMA foreign_keys` is on, which is why this is asserted
     # rather than assumed — and if it is off, the INSERT succeeds and this test says so.
-    if adapter_name == "SQLite"
+    if only_on(:sqlite, "foreign-key enforcement is a per-connection PRAGMA")
       fk_on = PormG.ConnectionPool.fetch(pool, "PRAGMA foreign_keys;") |> DataFrame
       @test nrow(fk_on) == 1 && fk_on[1, 1] == 1
     end
@@ -1881,15 +1888,15 @@ end
 
     result = Migrations.dry_run(pool, edge_settings)
 
-    if adapter_name == "SQLite"
-      # Count statements that look like SQLite table recreations for "migrationtest".
-      # Each recreation starts with DROP TABLE IF EXISTS "migrationtest_new".
-      recreation_count = count(
-        s -> occursin("DROP TABLE IF EXISTS", uppercase(s)) && occursin("MIGRATIONTEST_NEW", uppercase(s)),
-        result.statements
-      )
-      # Before the fix this was 2 (one per added temporal field). Must be exactly 1.
-      @test recreation_count == 1
+    # Count statements that look like table recreations for "migrationtest". Each recreation starts
+    # with DROP TABLE IF EXISTS "migrationtest_new". SQLite rebuilds the table once — before the fix
+    # this was 2 (one per added temporal field); PostgreSQL adds the columns in place.
+    recreation_count = count(
+      s -> occursin("DROP TABLE IF EXISTS", uppercase(s)) && occursin("MIGRATIONTEST_NEW", uppercase(s)),
+      result.statements
+    )
+    @test recreation_count == by_engine(postgres = 0, sqlite = 1)
+    if only_on(:sqlite, "the table rebuild's DROP TABLE is what makes the plan destructive")
       @test Migrations.is_destructive(result) == true
       # Count only MigrationTest-related destructive statements; other tables
       # (e.g. TypesTable) may also be recreated due to schema drift.
@@ -2176,11 +2183,11 @@ end
 
     result = Migrations.dry_run(pool, edge_settings)
 
-    # ── SQL-text assertion (both adapters) ──────────────────────────────
+    # ── SQL-text assertion (the table rebuild) ──────────────────────────
     # The INSERT statement in the recreation block must reference "last_seen".
     # Before the fix it was generated by reading the live-DB columns at planning
     # time and would only list columns that existed before the ADD COLUMN ran.
-    if adapter_name == "SQLite"
+    if only_on(:sqlite, "the table rebuild's INSERT … SELECT")
       insert_stmts = filter(
         s -> occursin("INSERT INTO", uppercase(s)) && occursin("MIGRATIONTEST_NEW", uppercase(s)),
         result.statements
@@ -2717,10 +2724,11 @@ end
   # `Rtidx325` is the negative fixture: a declared-but-unindexed column and a composite
   # UniqueConstraint whose members must NOT be marked `db_index`.
   @testset "Phase 19: Type/Length/Index Round-trip + No Churn (#325)" begin
-    # #28: PostgreSQL's network types, declared with a non-canonical default — `inet`'s catalog stores
-    # the printed form, so (c) below is what proves the field normalizes it. PostgreSQL only: SQLite
-    # has no column for them, and declaring one there would refuse the whole table.
-    _rt325_network = pool isa PormG.PormGPostgres ?
+    # #28: network types, declared with a non-canonical default — `inet`'s catalog stores the printed
+    # form, so (c) below is what proves the field normalizes it. A feature (`:network_types`): a
+    # backend without it refuses the whole table, which `test_network_address_fields.jl` asserts.
+    has_net = requires(:network_types; conn = pool)
+    _rt325_network = has_net ?
       "client_ip = Models.GenericIPAddressField(null=true, default=\"2001:DB8::1\"),\n        " *
       "subnet = Models.CIDRField(null=true)," : ""
     write_edge_models("""
@@ -2787,7 +2795,7 @@ end
     @test !hasfield(typeof(live.fields["body"]), :max_length)
     # #28: `inet`/`cidr` read back as their own fields — not the warned `TextField` they were — and
     # the declared default comes back in its normalized text, which is what keeps (c) below quiet.
-    if pool isa PormG.PormGPostgres
+    if has_net
       @test live.fields["client_ip"] isa Models.sGenericIPAddressField
       @test live.fields["subnet"] isa Models.sCIDRField
       @test live.fields["client_ip"].default == "2001:db8::1"
@@ -2966,7 +2974,7 @@ end
   # `GENERATED … AS IDENTITY` at all. Its identity is `PRIMARY KEY AUTOINCREMENT`, which the column
   # IR models as a separate `ColumnIdentity` slot and which no `ALTER` can change — so
   # `generated_always` compiles to the same spec on both sides there and correctly plans nothing.
-  if adapter_name != "SQLite"
+  if only_on(:postgres, "reads the identity flavour from pg_attribute.attidentity")
     @testset "Phase 21: Identity Flavour BY DEFAULT <-> ALWAYS (#523)" begin
       pending_path_523 = joinpath(@__DIR__, edge_db_name, "migrations", "pending_migrations.jl")
 
@@ -3203,26 +3211,7 @@ end
   # ── Cleanup ─────────────────────────────────────────────────────────
   PormG.Configuration.close_pool!(joinpath(@__DIR__, edge_db_name))
   delete!(PormG.config, joinpath(@__DIR__, edge_db_name))
-  if adapter_name == "SQLite"
-    # SQLite: remove the entire disposable folder
-    ispath(joinpath(@__DIR__, edge_db_name)) && rm(joinpath(@__DIR__, edge_db_name), recursive=true)
-  else
-    # Best-effort drop of the disposable DB (the edge pool was just closed above). Guarded: never
-    # drop when the edge DB resolved to the shared selected DB (degraded regenerated-fixture case).
-    if !edge_db_reuses_selected_db[]
-      drop_postgres_database!(edge_settings, string(edge_settings.db_config_settings["database"]))
-    end
-    if edge_db_fixture_generated[]
-      # Remove the entire temporary fixture if this test had to create it.
-      ispath(joinpath(@__DIR__, edge_db_name)) && rm(joinpath(@__DIR__, edge_db_name), recursive=true)
-    else
-      # PostgreSQL: remove only generated artifacts, keep the committed fixture.
-      mig_dir = joinpath(@__DIR__, edge_db_name, "migrations")
-      ispath(mig_dir) && rm(mig_dir, recursive=true)
-      models_path = joinpath(@__DIR__, edge_db_name, "models.jl")
-      isfile(models_path) && rm(models_path)
-    end
-  end
+  by_engine(sqlite = teardown_sqlite_edge_db!, postgres = teardown_postgres_edge_db!)(edge_settings)
 end  # @testset "Migration Engine Edge Cases"
 
 # ─── Final Reactivation: Selected Integration DB ────────────────────────────
@@ -3259,7 +3248,7 @@ end
 # Why: before the fix the rebuild silently dropped every secondary index (lost uniqueness / slow
 #      queries surfacing much later) — issue #82. PostgreSQL uses real ALTER COLUMN (no rebuild), so
 #      this regression is SQLite-specific.
-if adapter_name == "SQLite"
+if only_on(:sqlite, "SQLite's table rebuild (#82)")
   @testset "SQLite rebuild preserves indexes + FK gate (#82)" begin
     db82 = "db_test_migration_82"
     db82_path = joinpath(@__DIR__, db82)
@@ -3419,7 +3408,7 @@ end
 # Why: before the fix the newly-added index was silently lost — no error (issue #152). PostgreSQL uses real
 #      ALTER COLUMN (no rebuild), so this is SQLite-specific. Sibling of #82 (which covered PRE-EXISTING
 #      indexes surviving a rebuild; this covers an index BORN in the rebuilding migration).
-if adapter_name == "SQLite"
+if only_on(:sqlite, "SQLite's table rebuild (#152)")
   @testset "SQLite rebuild keeps a newly-added index (#152)" begin
     db152 = "db_test_migration_152"
     db152_path = joinpath(@__DIR__, db152)
@@ -3504,7 +3493,7 @@ end
 #        BEGIN (SQLite's own documented step 1 of the ALTER procedure). Without that suspension this
 #        testset fails by finding zero child rows.
 #        Note #82 rebuilds the CHILD; this one rebuilds the PARENT, which is what fires the cascade.
-if adapter_name == "SQLite"
+if only_on(:sqlite, "SQLite's table rebuild (#276)")
   @testset "SQLite rebuild of a parent does not cascade-delete children (#276)" begin
     db276 = "db_test_migration_276"
     db276_path = joinpath(@__DIR__, db276)

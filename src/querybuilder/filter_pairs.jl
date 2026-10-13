@@ -724,14 +724,19 @@ function _check_filter(x::Pair)
     key = String(x.first)
     check = String.(split(key, "__@"))
     normalized_value = _normalize_filter_pair(x.second)
-    try
+    located = try
       # @pormg_debug
       return _get_pair_to_oper(check => normalized_value)
     catch e
       @pormg_debug false
-      @error "Error in filter processing '$(key)'" exception = (e, catch_backtrace())
-      rethrow(e)
+      # #1204: the key travels in the error, not in an `@error` record printed ahead of it.
+      l = _in_pair(e, "the pair \"$(key)\" => …")
+      l === nothing && rethrow()
+      l
     end
+    # Thrown after the `catch`, not inside it: a throw inside it keeps the original as its cause, and
+    # Julia prints that cause too, so the refusal would still be reported twice.
+    throw(located)
   else
     throw(FilterError("Error in filter: '$(x.first) => ...' must use a String key, got $(typeof(x.first))"))
   end

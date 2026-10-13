@@ -155,16 +155,20 @@ function _values!(q::SQLObject, values)
       isa(v.first, String) || (v = String(v.first) => v.second)
       _refuse_path_alias(v.first)   # #757
       if isa(v.second, Union{SQLTypeFunction,SQLTypeF})
-        try
+        located = try
           push!(q.values, SQLField(_check_function(v.second), v.first))
+          nothing
         catch e
           # #92: this used to swallow the error and continue — the column silently vanished from
-          # the result while values() returned normally. Log the failing alias for context (the
-          # underlying error may not name it), then propagate: an invalid projection must surface
-          # at values() time, consistent with the fail-loud branches below.
-          @error "Invalid values pair" alias = v.first exception = (e, catch_backtrace())
-          rethrow()
+          # the result while values() returned normally. An invalid projection must surface at
+          # values() time, consistent with the fail-loud branches below. The underlying error may
+          # not name the alias, so it is appended to the error (#1204) rather than logged ahead of it.
+          l = _in_pair(e, "the values() pair \"$(v.first)\" => …")
+          l === nothing && rethrow()
+          l
         end
+        # After the `catch`, so Julia does not print the original again as this error's cause.
+        located === nothing || throw(located)
       elseif isa(v.second, Union{SubqueryObject,ExistsObject})
         # #92: project a scalar subquery / EXISTS as an aliased column, e.g.
         # "total" => Subquery(inner)  or  "has_x" => Exists(inner). The alias goes in _as; the

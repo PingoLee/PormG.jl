@@ -60,3 +60,19 @@ function _unsupported_compare_operand(op::AbstractString, operand)
     "$(accepted) — a column reference (\e[4m\e[32mF(...)\e[0m, \e[4m\e[32mCTE(...)\e[0m, " *
     "\e[4m\e[32mJoined(...)\e[0m), or a scalar \e[4m\e[32mSubquery(...)\e[0m." * hint)
 end
+
+# #1204 — the pair a build-time refusal came from. `_check_filter` and the `values()` function arm used
+# to `@error` the key or alias with a backtrace and then rethrow, so every deliberate refusal printed
+# twice, and the log was the only place the key appeared: a refusal raised deep in the build
+# ("operator @gt is not valid with a vector value") does not name it. The #1107 decision drops the
+# log; this keeps what it carried by appending the pair to the error, as the same type, so a `catch
+# FilterError` and a `startswith` on the message still hold.
+#
+# Only for a `msg`-only `PormGError`. An `InvalidValueError` carries its location as data and is
+# located by its own funnels (#971); anything else is a bug, kept as it was, backtrace included.
+# `nothing` tells the call site to `rethrow()`.
+function _in_pair(e, pair::AbstractString)
+  e isa PormGError && fieldnames(typeof(e)) == (:msg,) || return nothing
+  # `e.msg` is a PormG refusal already held to #971; `pair` is the key or alias the caller wrote.
+  return typeof(e)(string(e.msg, " — in ", pair))   # refusal-value-ok: no bound value, see above
+end

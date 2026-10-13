@@ -210,7 +210,7 @@ const IV_PG_SQL = String[]
 # #1032: the schema reader asks the server version first (the introspection floor, #1146); answered here
 # and not recorded, so the captured statements are the schema reads alone.
 fetch(::ViewsCaptureMockPg767, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
-  occursin("server_version_num", sql) ? DataFrame(v = [160000]) :
+  sql == PormG.Migrations._PG_SERVER_VERSION_SQL ? DataFrame(v = [160000]) :
   (push!(IV_PG_SQL, sql); DataFrame())
 
 @testset "read_live_views is separate from read_live_schema, which still never sees a view (#730, #767)" begin

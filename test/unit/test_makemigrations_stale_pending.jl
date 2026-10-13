@@ -31,7 +31,7 @@ struct StalePendingMockPg727 <: PormGPostgres end
 # #1032: the schema reader asks the server version first (the introspection floor, #1146); answered here
 # and not recorded, so the captured statements are the schema reads alone.
 fetch(::StalePendingMockPg727, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
-  occursin("server_version_num", sql) ? DataFrame(v = [160000]) : DataFrame()
+  sql == PormG.Migrations._PG_SERVER_VERSION_SQL ? DataFrame(v = [160000]) : DataFrame()
 
 # The models file `makemigrations` reads: one F1 table, with or without the column under test.
 function _sp727_write_models(path::AbstractString; with_nickname::Bool)

@@ -47,7 +47,7 @@ const PG1162_SINCE = (indnkeyatts = 110000, attidentity = 100000, relispartition
 _names_column(sql, col) = occursin(Regex("\\b[a-z]+\\.$(col)\\b"), sql)
 
 function _pg1162_answer(m::PgAt1162, sql::String)
-  occursin("server_version_num", sql) && (m.probes[] += 1; return DataFrame(v = [m.v]))
+  sql == PormG.Migrations._PG_SERVER_VERSION_SQL && (m.probes[] += 1; return DataFrame(v = [m.v]))
   push!(m.sql, sql)
   for (col, since) in pairs(PG1162_SINCE)
     m.v < since && _names_column(sql, col) && error("column $(col) does not exist")

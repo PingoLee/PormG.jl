@@ -411,7 +411,7 @@ const PG871_SQL = Ref("")
 const PG871_PARAMS = Ref{Any}(nothing)
 # #1162: the reader asks the server version, to build its statement for it; answered and not recorded.
 fetch(::InvalidIdxMockPg871, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
-  occursin("server_version_num", sql) ? DataFrame(v = [160000]) :
+  sql == PormG.Migrations._PG_SERVER_VERSION_SQL ? DataFrame(v = [160000]) :
   (PG871_SQL[] = sql; PG871_PARAMS[] = params; PG871_ROWS[])
 
 @testset "check(kinds = [:invalid_index]) reports invalid PostgreSQL indexes (#871)" begin

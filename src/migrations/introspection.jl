@@ -1547,9 +1547,11 @@ end
 # The server's version, as `server_version_num` (`130004` for 13.4). Every version question schema
 # management asks goes through here: the introspection floor below, the plan floor and the
 # plan-statement gate after it, and the lossy-ALTER pre-check (`runner.jl`). It is also PostgreSQL's
-# `_server_version`, which the capability table's version rows are read against (#1163).
+# `_server_version`, which the capability table's version rows are read against (#1163). The statement
+# is a constant so a mock connection keys on it exactly, as it does on `Dialect`'s history reads (#1211).
+const _PG_SERVER_VERSION_SQL = "SELECT current_setting('server_version_num')::integer AS v"
 _pg_server_version(db::PormGPostgres)::Int =
-  Int(DataFrame(fetch(db, "SELECT current_setting('server_version_num')::integer AS v"))[1, :v])
+  Int(DataFrame(fetch(db, _PG_SERVER_VERSION_SQL))[1, :v])
 _server_version(db::PormGPostgres)::Int = _pg_server_version(db)
 
 # Each schema operation asks for what IT needs (#1146), not one floor for the whole block. #1108 had set

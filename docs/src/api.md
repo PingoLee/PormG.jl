@@ -415,7 +415,7 @@ df = M.Result.objects.values(
 | Function | Description |
 | :--- | :--- |
 | `Abs("field")` | Absolute value |
-| `Round("field", precision)` | Round to `precision` places with each engine's own `ROUND`; a decimal tie can differ in its last digit on SQLite (#1061). Text and a negative precision raise |
+| `Round("field", precision)` | Round to `precision` places with each engine's own `ROUND`; a decimal tie can differ in its last digit on SQLite (#1061); over an integer it is that integer (#1196). Text and a negative precision raise |
 | `Floor("field")` | Floor |
 | `Ceil("field")` | Ceiling |
 | `Sqrt("field")` | Square root |

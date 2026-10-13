@@ -466,7 +466,8 @@ refusal covers:
 - a `true`, `1.5`, `Decimal`, `DateTime` or `Period` literal;
 - an expression of one of those types: a comparison or `Q(...)` condition, arithmetic, an extremum
   or window value, a `Cast` to a float or a decimal, `Sum` of a duration, and the functions
-  PostgreSQL computes as `numeric` (`Avg`, `Round`, `Mod`, `Sqrt`, `Exp`, `Ln`, `Power`).
+  PostgreSQL computes as `numeric` (`Avg`, `Round`, `Mod`, `Sqrt`, `Exp`, `Ln`, `Power`). `Round` over
+  an integer is that integer (#1196), so it passes.
 
 A literal is refused when the `Concat` is built, and a column when the query is. A date, a time and
 a uuid pass. So does a `DecimalField` with `decimal_places = 0`: it holds whole numbers, as an
@@ -660,7 +661,9 @@ decimal (#1121). The floor of an average of `7.5` is `7.0` on both; see
 `Round(x, n)` uses each engine's own `ROUND`, as Django's `Round` does. PostgreSQL renders
 `ROUND(x::numeric, n)`, which rounds the value's exact decimal form. SQLite renders `ROUND(x, n)` over
 the stored double. Either way the result reads back as its operand's type on both engines: a
-`DecimalField` keeps its `Decimal`, and a float is a `Float64` (#1121). The two agree except at a decimal tie
+`DecimalField` keeps its `Decimal`, and a float is a `Float64` (#1121). Over an integer the places add
+nothing, so `Round("grid")` and `Round("grid", 2)` are that integer on both engines, and
+`Round("grid") / 2` divides as integers, as `Floor("grid") / 2` does (#1196). The two engines agree except at a decimal tie
 whose double sits just below it. Measured on PostgreSQL 16.15 and SQLite 3.45.1:
 
 | `Round(v, 2)` | PostgreSQL | SQLite |
@@ -880,7 +883,7 @@ What each row covers:
 - **a scale**: `numeric(p, s)`, `decimal(p, s)`, `dec(p, s)`, and `numeric(p)`, whose scale is 0
   (#1040, #1078). An operand with more than `s` places is a float column, a float literal with more
   than `s` places (`Value(1.5)` at scale 2 passes, #1050), a function PostgreSQL computes as
-  `numeric` (`Round(x, d)` with `d` above `s` included), a decimal with more places than `s` or of
+  `numeric` (`Round(x, d)` with `d` above `s` included, over a non-integer `x`), a decimal with more places than `s` or of
   unknown scale, and text, which PostgreSQL parses and rounds. A JSON value counts as text. An
   integer, a whole number, a `DecimalField` with at most `s` places and a function whose value is one
   of them (`Max`, `Min`, `Abs`, `Coalesce`, `Greatest`, `Least`, `NullIf`) pass;

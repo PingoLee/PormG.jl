@@ -89,7 +89,7 @@ on every engine. It is the type Django gives the call (its `output_field`):
 |---|---|
 | `Sum`, `Avg`, `Abs`, `Round`, `Floor` or `Ceil` over a `DecimalField`; `Mod`, `Power`, `Sqrt`, `Exp` or `Ln` with a decimal operand; arithmetic with a decimal side | `Decimals.Decimal` |
 | `Avg`, `Mod`, `Power`, `Sqrt`, `Exp` or `Ln` over integers; any of these functions over a `FloatField`; arithmetic with a float side | `Float64` |
-| `Sum` of integers; `Abs`, `Floor` or `Ceil` of an integer; integer arithmetic | an integer |
+| `Sum` of integers; `Abs`, `Round`, `Floor` or `Ceil` of an integer; integer arithmetic | an integer |
 
 The engines do not compute these values in the same type, so PormG converts what the driver delivers:
 
@@ -124,8 +124,13 @@ This applies to the value a projection, a `CTE(...)` column or a `Subquery(...)`
 value that is one of several operands when one of them is a computed number:
 `Coalesce(Avg("grid"), 0)` reads as a `Float64` on both engines. A `Coalesce`, `Greatest`, `Least`,
 `NullIf` or `Case` over columns and literals only is not a computed number: each row's value is one
-of its operands, and it reads back as the driver delivers it. An integer's width follows the engine
-(an `Int32` or an `Int64`).
+of its operands, and it reads back as the driver delivers it.
+
+An integer's width follows the engine, for a column and a computed value alike: PostgreSQL keeps the
+column's own type (an `IntegerField` reads as an `Int32`, a `BigIntegerField` or a `Count` as an
+`Int64`), and SQLite has one 64-bit integer, so every integer reads as an `Int64` there. That is the
+same value in two widths, not a different meaning, so PormG leaves it alone. Compare integers by value
+(`==`), or convert with `Int(x)` where one Julia type is needed.
 
 ### Serializing rows to JSON
 

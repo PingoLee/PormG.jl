@@ -1783,10 +1783,11 @@ end
 end
 
 @testset "Alignment Verification - Round(precision) Parameterization" begin
-    # Round(col, precision) should parameterize the precision argument 
-    # instead of interpolating it as a raw integer literal.
+    # Round(col, precision) should parameterize the precision argument
+    # instead of interpolating it as a raw integer literal. Over a float: over an
+    # integer the places add nothing and bind nothing (#1196), asserted below.
 
-    q = M.Result.objects.values("resultid", "rounded_pts" => Round("grid", 2))
+    q = M.Result.objects.values("resultid", "rounded_pts" => Round("points", 2))
     insp = q |> inspect_query
 
     # Precision should be parameterized in the :select bucket
@@ -1794,6 +1795,12 @@ end
     @test 2 in insp[:parameter_buckets][:select]
     @test contains(insp[:sql_text], "ROUND")
     @test contains(insp[:sql_text], "?")
+
+    # #1196: over an integer `Round` is that integer, so no precision is bound at all.
+    qi = M.Result.objects.values("resultid", "rounded_grid" => Round("grid", 2))
+    inspi = qi |> inspect_query
+    @test isempty(inspi[:parameters])
+    @test isempty(inspi[:parameter_buckets][:select])
 end
 
 @testset "Saturation Test - Recursive Subquery Ordering" begin

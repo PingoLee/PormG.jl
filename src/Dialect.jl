@@ -1173,7 +1173,8 @@ end
 # engines. Any other operand is cast to `numeric` (since `b0642e96`), where `abs`/`floor`/`ceil` are
 # exact. PostgreSQL has `abs(int2|int4|int8)`; it has no `floor`/`ceil` over an integer, and resolves
 # a bare `FLOOR(int)` to `double precision`, so those two round through `numeric` and cast the result
-# back to the operand's type — exact for every `bigint`, where a `double` is not.
+# back to the operand's type — exact for every `bigint`, where a `double` is not. `ROUND` does the same
+# (#1196, below).
 _pg_integer_type(::CInt16) = "smallint"
 _pg_integer_type(::CInt32) = "integer"
 _pg_integer_type(::CInt64) = "bigint"
@@ -1185,7 +1186,15 @@ function ABS(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "ABS($(column))"
 end
 
+# #1196 — over an integer (`integer_kind`, set by the build, which then binds no places: they add
+# nothing to an integer, and a negative precision is refused when the expression is built) `Round` is
+# that integer, as Django's `Round` (a `Transform`) is its operand's type. PostgreSQL rounds through
+# `numeric`, exact for every `bigint`, and casts back to the operand's type, as `FLOOR`/`CEIL` do.
+# SQLite renders the integer itself: its `ROUND` goes through a double, so
+# `CAST(ROUND(9007199254740993) AS INTEGER)` is `9007199254740992`.
 function ROUND(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+  kind = get(format, "integer_kind", nothing)
+  kind === nothing || return "ROUND(($(column))::numeric)::$(_pg_integer_type(kind))"
   precision = get(format, "precision", 0)
   # When parameterized, precision is a "?" placeholder string — always include it.
   # When it's the default (0), omit the precision argument.
@@ -1197,6 +1206,7 @@ function ROUND(column::String, format::Dict{String,Any}, conn::PormGPostgres)
 end
 
 function ROUND(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+  get(format, "integer_kind", nothing) === nothing || return "($(column))"
   precision = get(format, "precision", 0)
   if precision isa AbstractString || precision != 0
     return "ROUND($(column), $(precision))"

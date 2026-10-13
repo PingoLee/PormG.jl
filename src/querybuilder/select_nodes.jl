@@ -697,9 +697,17 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # #1147: `Abs`/`Floor`/`Ceil` over an integer keep it, which `Dialect` renders where an engine would
   # not (PostgreSQL's `::numeric`). Read once the operand renders, as the checks above are; the walk's
   # `_computed_kind` answers the same kind from the same operand walk, so the SQL and the type agree.
-  if v isa FObject && v.function_name in _NUMERIC_WHOLE_FUNCTIONS && !(v.column isa AbstractVector)
+  # #1196: so does `Round`, whose places add nothing to an integer: they are not bound, since the
+  # engine that renders the integer itself (SQLite, `Dialect.ROUND`) has no slot for them.
+  if v isa FObject && v.function_name in _INTEGER_KEEPING_FUNCTIONS && !(v.column isa AbstractVector)
     integer_kind = _integer_operand_kind(v, instruc)
-    integer_kind === nothing || (resolved_kwargs["integer_kind"] = integer_kind)
+    if integer_kind !== nothing
+      resolved_kwargs["integer_kind"] = integer_kind
+      if v.function_name == "ROUND"
+        delete!(deferred_kwargs, "precision")
+        resolved_kwargs["precision"] = 0
+      end
+    end
   end
   # #1150: `NullIf(a, b)` is `a` or NULL, so it has `a`'s type — but PostgreSQL resolves it with `b`
   # for the `=` it is defined by, so `NULLIF(<integer>, 0.5)` is a `numeric` there and keeps the half

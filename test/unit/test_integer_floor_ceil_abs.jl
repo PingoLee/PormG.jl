@@ -13,6 +13,9 @@ renders `ABS(x)` — its own `abs(int2|int4|int8)` — and `FLOOR((x)::numeric):
 operand's own type: it has no `floor(integer)`, and a bare `FLOOR(int)` resolves to `double precision`,
 which is inexact past 2^53. Every other operand keeps the cast. SQLite renders as before.
 
+#1196 adds `Round` over an integer, which is that integer on both engines: PostgreSQL renders
+`ROUND((x)::numeric)::<type>` and SQLite the integer itself, binding no places (the last testsets).
+
 Everything renders through mock connections — no live database, no fixture.
 
 julia --project=test/integration test/unit/test_integer_floor_ceil_abs.jl
@@ -262,4 +265,87 @@ _ifc_cte_col(name) = PormG.CTE("c", name)
   @test err isa PormG.QueryBuildError
   msg = replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
   @test occursin("(#1028)", msg) && occursin("refuses it on SQLite", msg) && !occursin("PostgreSQL", msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1196: `Round` over an integer is that integer, on both engines
+# `Round` means its operand's type (Django's `Round` is a `Transform`), and its places add nothing to an
+# integer (a negative precision is refused when the expression is built, #1044). Before #1196 it
+# rendered `ROUND((x)::numeric, d)` on PostgreSQL, read back as a `Decimal`, and `ROUND(x, d)` on
+# SQLite, a REAL read back as a `Float64`. Expected SQL now:
+#   PostgreSQL  ROUND(("Tb"."grid")::numeric)::integer    (the operand's own type: ::smallint, ::bigint)
+#   SQLite      ("Tb"."grid")                             (its `ROUND` goes through a double, inexact past 2^53)
+# with no precision bound on either: the SQLite form has no slot for it, so binding it would misalign
+# every later parameter. A float or decimal operand renders exactly as before.
+# ─────────────────────────────────────────────────────────────────────────────
+_ifc_inspect(expr; conn) =
+  inspect_query((q = IFC.Ifc_result.objects; q.values("x" => expr); q); connection = conn)
+
+@testset "#1196: Round over an integer renders that integer, binding no places" begin
+  pg(expr) = _ifc_render(expr; conn = _IFC_PG)
+  sl(expr) = _ifc_render(expr; conn = _IFC_SL)
+  @test occursin("ROUND((\"Tb\".\"grid\")::numeric)::integer as \"x\"", pg(_IFC_FN.Round("grid")))
+  @test occursin("ROUND((\"Tb\".\"laps\")::numeric)::bigint as \"x\"", pg(_IFC_FN.Round("laps")))
+  @test occursin("ROUND((\"Tb\".\"resultid\")::numeric)::bigint as \"x\"", pg(_IFC_FN.Round("resultid")))
+  @test occursin("ROUND((\"Tb\".\"position\")::numeric)::smallint as \"x\"", pg(_IFC_FN.Round("position")))
+  @test occursin(r"SELECT\s+\(\"Tb\"\.\"grid\"\) as \"x\"", sl(_IFC_FN.Round("grid")))
+  @test occursin(r"SELECT\s+\(\"Tb\"\.\"laps\"\) as \"x\"", sl(_IFC_FN.Round("laps")))
+  @test !occursin("ROUND", sl(_IFC_FN.Round("laps")))
+  # Places over an integer: the same SQL, and no parameter at all on either engine.
+  for conn in (_IFC_PG, _IFC_SL)
+    with_places = _ifc_inspect(_IFC_FN.Round("grid", 2); conn = conn)
+    @test with_places[:sql_text] == _ifc_inspect(_IFC_FN.Round("grid"); conn = conn)[:sql_text]
+    @test isempty(with_places[:parameters])
+  end
+  # An integer literal is one too: it keeps its own bound value, and the places are not bound.
+  @test occursin("ROUND((\$1::bigint)::numeric)::bigint as \"x\"", pg(_IFC_FN.Round(_IFC_FN.Value(7), 3)))
+  @test _ifc_inspect(_IFC_FN.Round(_IFC_FN.Value(7), 3); conn = _IFC_SL)[:parameters] == Any[7]
+  # Not an integer to the walk: the places bind and the engine's own `ROUND` renders, as before.
+  @test occursin("ROUND((\"Tb\".\"points\")::numeric, \$1::integer) as \"x\"", pg(_IFC_FN.Round("points", 2)))
+  @test occursin("ROUND(\"Tb\".\"points\", ?) as \"x\"", sl(_IFC_FN.Round("points", 2)))
+  @test occursin("ROUND((\"Tb\".\"price\")::numeric, \$1::integer) as \"x\"", pg(_IFC_FN.Round("price", 1)))
+  @test occursin("ROUND(\"Tb\".\"price\", ?) as \"x\"", sl(_IFC_FN.Round("price", 1)))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1196: divided, a rounded integer divides as an integer on both engines
+# `Round("grid") / 2` over grid 1 read `0.5` on both engines before #1196 (a `numeric` and a REAL);
+# the integer it rounds divides to `0`, as `Floor("grid") / 2` has since #1147. Expected SQL:
+#   PostgreSQL  (ROUND(("Tb"."grid")::numeric)::integer / $1::bigint)    parameters [2]
+#   SQLite      (("Tb"."grid") / ?)                                      parameters [2]
+# The places bind nothing, so the divisor is the only parameter. A sum of a rounded `bigint` is a
+# `sum(bigint)`, which PostgreSQL widens to `numeric`, so it renders back to the `bigint` (#1147 step 2).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1196: Round over an integer, divided, is integer division on both engines" begin
+  for places in (0, 2)
+    pg = _ifc_inspect(_IFC_FN.Round("grid", places) / 2; conn = _IFC_PG)
+    sl = _ifc_inspect(_IFC_FN.Round("grid", places) / 2; conn = _IFC_SL)
+    @test occursin("(ROUND((\"Tb\".\"grid\")::numeric)::integer / \$1::bigint) as \"x\"", pg[:sql_text])
+    @test occursin("((\"Tb\".\"grid\") / ?) as \"x\"", sl[:sql_text])
+    @test pg[:parameters] == Any[2]
+    @test sl[:parameters] == Any[2]
+  end
+  @test occursin("(SUM(ROUND((\"Tb\".\"laps\")::numeric)::bigint)::bigint / \$1::bigint) as \"x\"",
+                 _ifc_render(_IFC_FN.Sum(_IFC_FN.Round("laps")) / 2; conn = _IFC_PG))
+  @test occursin("(SUM((\"Tb\".\"laps\")) / ?) as \"x\"", _ifc_render(_IFC_FN.Sum(_IFC_FN.Round("laps")) / 2; conn = _IFC_SL))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1196: the walk's kind for Round is the rendered type, on both engines
+# Over an integer, `_computed_kind(:ROUND)` answers the operand's integer kind on PostgreSQL and
+# SQLite's one 64-bit integer there, the types `Dialect.ROUND` renders; over anything else the generic
+# `:numeric` answer stands (a width-less `numeric` on PostgreSQL, a REAL on SQLite). The meaning
+# (`_output_kind`) is the operand's on both, so the computed kind and the meaning now agree.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1196: Round's computed kind over an integer is that integer" begin
+  QB = PormG.QueryBuilder
+  ck(k, conn) = QB._computed_kind(Val(:ROUND), QB._result_rule(Val(:ROUND)), k, conn)
+  for k in (PormG.CInt16(), PormG.CInt32(), PormG.CInt64())
+    @test ck(k, _IFC_PG) == k
+    @test ck(k, _IFC_SL) == PormG.CInt64()
+  end
+  for k in (PormG.CFloat64(), PormG.CDecimal(10, 2), nothing)
+    @test ck(k, _IFC_PG) == PormG.CDecimal(nothing, nothing)
+    @test ck(k, _IFC_SL) == PormG.CFloat64()
+  end
 end

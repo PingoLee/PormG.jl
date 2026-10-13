@@ -1352,7 +1352,10 @@ SQLite. PostgreSQL's is the exact answer; on SQLite, a development engine for Po
 such a tie can differ (#1061). `Round(x)` (no places) gives the same whole number on both.
 
 The value reads back as its operand's type on both engines (#1121): a `Float64` over a float and a
-`Decimal` over a decimal, although PostgreSQL computes `ROUND(x::numeric, d)` as a `numeric`.
+`Decimal` over a decimal, although PostgreSQL computes `ROUND(x::numeric, d)` as a `numeric`. Over an
+integer it is that integer, whatever the places (#1196): PostgreSQL renders `ROUND(x::numeric)` cast
+back to the operand's type and SQLite the integer itself, so it reads back as an integer (its width
+follows the engine, as an integer column's does) and `Round("grid") / 2` divides as integers.
 
 Text is not a number to round: `Round(x, d)` over a text column, a string or a JSON value raises
 `QueryBuildError` when the query is built, because PostgreSQL rejects text that is not a number and
@@ -1374,6 +1377,9 @@ _result_rule(::Val{:ROUND}) = :numeric
 # #1121: computed as a `numeric` on PostgreSQL and a REAL on SQLite, it MEANS its operand's type, as
 # Django's `Round` (a `Transform`) does: a rounded float is a float, a rounded decimal a decimal.
 _output_kind(::Val{:ROUND}, ::Symbol, ks) = _operand_meaning(first(ks))
+# #1196: over an integer `Dialect.ROUND` renders that integer on both engines (`integer_kind`).
+_computed_kind(::Val{:ROUND}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
+_computed_kind(::Val{:ROUND}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGSQLite) = _sqlite_number_kind(k)
 
 """
     NullIf(field1, field2)

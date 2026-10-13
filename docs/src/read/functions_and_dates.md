@@ -467,7 +467,10 @@ refusal covers:
 - an expression of one of those types: a comparison or `Q(...)` condition, arithmetic, an extremum
   or window value, a `Cast` to a float or a decimal, `Sum` of a duration, and the functions
   PostgreSQL computes as `numeric` (`Avg`, `Round`, `Mod`, `Sqrt`, `Exp`, `Ln`, `Power`). `Round` over
-  an integer is that integer (#1196), so it passes.
+  an integer is that integer (#1196), so it passes;
+- a `Case` with no `output_field` that has one such branch: its value is a branch's on each row, so
+  `Case(When("grid" => 1, then = 1.5), default = 0)` is a float (#1187). A `Case` whose branches are
+  all text, integers or dates passes, and so does one with `output_field = "text"`.
 
 A literal is refused when the `Concat` is built, and a column when the query is. A date, a time and
 a uuid pass. So does a `DecimalField` with `decimal_places = 0`: it holds whole numbers, as an
@@ -502,9 +505,9 @@ a question of meaning rather than of text: a `Sum` over an operand PormG cannot 
 `bigint`, which PostgreSQL computes as `numeric`, would keep the half there. It is refused on
 PostgreSQL only (#1111). A sum PormG types as a float or a decimal is that kind's quotient (#1157).
 
-The check covers only types PormG can name: an operand it cannot type (an untyped `Case`, an
-extremum over timestamp arithmetic, `Greatest`/`Least` over computed timestamps or intervals)
-passes. A JSON key lookup (`"payload__driver"`) passes too: PormG cannot know which type a key
+The check covers only types PormG can name: an operand it cannot type (an extremum over timestamp
+arithmetic, `Greatest`/`Least` over computed timestamps or intervals, a `Case` whose branches are
+such values) passes. A JSON key lookup (`"payload__driver"`) passes too: PormG cannot know which type a key
 holds. A `Subquery` is classified by the one expression it projects (#1124): one over a float
 column or an `Avg` is refused as the float or the `Avg` is, and one over a text or integer column,
 or over `Cast(Round(x), IntegerField())`, passes. A CTE column is classified by its body's own
@@ -797,6 +800,56 @@ A single argument is refused (see the start of this section). On SQLite, `MAX(x)
 one argument are the *aggregates*, so a one-argument `Greatest` used to collapse the result to one
 row.
 
+### Mixed date, time and text operands
+
+`Coalesce`, `Greatest`, `Least`, `NullIf`, a `Case` with no `output_field`, and a `Lag`/`Lead` with a
+`default` all return one of their operands' own values. Their operands must therefore be of one
+temporal type. A date, a timestamp without a time zone, a timestamp with one, a time and an
+interval are five different types here, and text is a sixth. Two different types, or a temporal type
+beside text, are refused with `QueryBuildError` when the query is built, on every engine (#1200):
+
+```julia
+using Dates, TimeZones
+using PormG.Functions: Coalesce
+
+zdt = ZonedDateTime(DateTime(2021, 1, 1, 0, 30), tz"UTC")
+
+# ✗ a date and a timestamp with time zone: refused
+M.Race.objects.values("first_day" => Coalesce("fp1_date", zdt))
+
+# ✓ convert the literal in Julia…
+M.Race.objects.values("first_day" => Coalesce("fp1_date", Date(zdt)))
+# ✓ …or say the type with `output_field`
+M.Race.objects.values("first_day" => Coalesce("fp1_date", zdt; output_field = "date"))
+```
+
+The query does not say which type it means, and each engine would pick its own. With a `DateField`
+beside a zoned literal, PostgreSQL resolves a `timestamptz` and returns a `ZonedDateTime` on every
+row, while SQLite returns each row's own text: a date on one row, a UTC timestamp on another. A text
+column beside a timestamp fails at the PostgreSQL server and builds on SQLite. Django refuses the same
+expressions for the same reason (`Expression contains mixed types … You must set output_field`).
+
+The ways to say the type:
+
+- **convert the literal in Julia**: `Date(zdt)`, `DateTime(zdt, UTC)`, or
+  `ZonedDateTime(dt, tz"UTC")` for a `DateTime` beside a `DateTimeField`. A `DateTimeField` is a
+  timestamp *with* a time zone unless declared `type = "TIMESTAMP"`, so a plain `DateTime` beside one
+  is refused;
+- **an `output_field`** on `Coalesce`, `Greatest`, `Least` or `Case`, for a date beside a timestamp.
+  It casts the function's result, so the operands inside must still have a common type, which a
+  date and a timestamp do on PostgreSQL. `"date"` works on both engines; a timestamp type cannot be
+  cast on SQLite (`BackendCapabilityError`, see `output_field` below). `NullIf`, `Lag` and `Lead` take
+  no `output_field`: cast one operand instead;
+- **beside text, cast the other operand to text**: `Coalesce("name", Cast(Value(zdt), "text"))`. Each
+  engine writes the timestamp's text its own way (see the `Concat` section). An `output_field` does
+  not help here: PostgreSQL has no common type for text and a timestamp inside the function;
+- a time, an interval and a date among themselves have no common type at all: make them one, in
+  Julia or by casting each to text.
+
+An operand whose type PormG cannot name (timestamp arithmetic, a JSON key lookup) is not checked. A
+number beside another number is not this rule's concern: `Coalesce("grid", 0.5)` is a float on both
+engines.
+
 ### `Cast` — Type Conversion
 
 ```julia
@@ -886,17 +939,24 @@ What each row covers:
   `numeric` (`Round(x, d)` with `d` above `s` included, over a non-integer `x`), a decimal with more places than `s` or of
   unknown scale, and text, which PostgreSQL parses and rounds. A JSON value counts as text. An
   integer, a whole number, a `DecimalField` with at most `s` places and a function whose value is one
-  of them (`Max`, `Min`, `Abs`, `Coalesce`, `Greatest`, `Least`, `NullIf`) pass;
+  of them (`Max`, `Min`, `Abs`, `Coalesce`, `Greatest`, `Least`, `NullIf`) pass. So does a `Case`
+  with no `output_field` whose every branch passes (#1187): `then = 1.5` at scale 2 passes, a
+  `FloatField` branch at scale 0 does not;
 - **an overflow**: only a literal is checked, because only a literal is certain to overflow (#1087).
   A column or a computed value overflows on the rows that hold a large value and not on the others,
   so on such a row PostgreSQL raises and SQLite answers. Neither is the literal of a `Coalesce`,
   `Greatest` or `Least` with an `output_field`, which is one candidate value among the operands.
 
-A `Case` is typed by its branch values for a cast to an integer (#1151): one with a float branch
-(`then = 1.5`, a `FloatField` column) is a float, so that cast is refused on SQLite as any float's
-is. The other rows do not read a `Case`'s branches yet: its cast to `numeric(p, s)`, and a `Case`
-with a decimal branch, pass, as an operand PormG cannot type (a JSON key lookup) does. A `Subquery`
-is classified by the expression it projects (#1124).
+A `Case` with no `output_field` is read branch by branch, each `then` and its default as an operand
+of its own, since its value on a row is one of them (#1151, #1187):
+- **to an integer**, a float branch (`then = 1.5`, a `FloatField` column) or a `DecimalField` branch
+  with places is a fraction, so the cast is refused on SQLite; a `DecimalField` with
+  `decimal_places = 0` is whole and passes;
+- **to `numeric(p, s)`**, each branch is held to the scale: a `FloatField` branch at `numeric(10,0)`
+  is refused on SQLite, a `1.5` branch at `numeric(10,2)` passes on both (#1050).
+
+A `Case` with an `output_field` is that type, whatever its branches. An operand PormG cannot type (a
+JSON key lookup) passes every row. A `Subquery` is classified by the expression it projects (#1124).
 
 To get an integer on every engine, say how to round first. `Round(x)`, `Floor(x)` and `Ceil(x)` give
 the same whole number on both engines for every stored value measured (PostgreSQL's `round` is the
@@ -951,9 +1011,11 @@ M.Result.objects.values("resultid", "slot" => Greatest("grid", 1; output_field =
 The rule above applies to these casts too: `Coalesce`, `Greatest` and `Least` with an `output_field`
 of text, an integer or a scaled `numeric(p, s)` refuse the same operands `Cast` does.
 `Greatest("points", 0; output_field = "integer")` is refused, and `Greatest(Floor("points"), 0;
-output_field = "integer")` passes. `Case` is not checked, because its value is one of its branches,
-which PormG does not type. That includes `Case(…; output_field = "numeric(10,1)")`, which PostgreSQL
-rounds and SQLite does not: round the branches yourself, or leave the scale off.
+output_field = "integer")` passes. A `Case`'s own `output_field` is not checked: its value is one of
+its branches, cast as it is taken, and the branches are not held to it. That includes
+`Case(…; output_field = "numeric(10,1)")`, which PostgreSQL rounds and SQLite does not: round the
+branches yourself, or leave the scale off. (A `Case` with no `output_field` that is the operand of a
+cast is read branch by branch, #1187.)
 
 `Concat` renders no cast on either engine, because its result is always text. Its `output_field`
 must therefore be a text type (`CharField()`, `TextField()`, `"text"`, `"varchar(20)"`). Any other

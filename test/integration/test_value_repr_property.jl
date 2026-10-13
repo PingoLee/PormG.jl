@@ -302,12 +302,13 @@ _vri_lap()  = M.Lap_times.objects.filter("raceid" => 1, "driverid" => 1, "lap" =
     for k in (:c, :g, :n, :p, :f)
       @test row[k] isa Date && row[k] == _VRI_RACE_DATE
     end
-    # A DATE beside a TIMESTAMP names no single representation, so it reads back as each engine
-    # delivers it: PostgreSQL resolves the common type (`start_at` is a TIMESTAMPTZ, so a
-    # `ZonedDateTime`), SQLite hands back its own text. Representation, keyed per engine with no
-    # `else` (#1179).
-    mixed = _vri_race().values("x" => Coalesce("fp1_date", "start_at")).list(:dict)[1][:x]
-    @test mixed isa by_engine(postgres = TimeZones.ZonedDateTime, sqlite = AbstractString)
+    # A DATE beside a TIMESTAMP named no single type: PostgreSQL resolved the common one (`start_at` is
+    # a TIMESTAMPTZ, so a `ZonedDateTime`), SQLite handed back its own text (#1179 recorded the split).
+    # The query does not say which type it means, so since #1200 it is refused when it is built, on
+    # every engine; `output_field` says it.
+    @test_throws PormG.QueryBuildError _vri_race().values("x" => Coalesce("fp1_date", "start_at")).list(:dict)
+    said = _vri_race().values("x" => Coalesce("fp1_date", "start_at"; output_field = "date")).list(:dict)[1][:x]
+    @test said isa Date && said == _VRI_RACE_DATE
 
     q = M.Race.objects
     q.filter("raceid" => 2)

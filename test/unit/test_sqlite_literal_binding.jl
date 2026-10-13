@@ -165,7 +165,9 @@ end
   insp = render(SLB_PG, q -> q.values("c" => Cast(Value(zdt), "date")))
   @test occursin("(\$1::timestamptz)::date as \"c\"", insp[:sql_text])
 
-  insp = render(SLB_PG, q -> q.values("g" => Greatest("race_date", zdt)))
+  # A function operand carries the cast too. #1200 refuses a date beside a zoned literal without an
+  # `output_field` (it does not say which type the value has), so the operand is shown under one.
+  insp = render(SLB_PG, q -> q.values("g" => Greatest("race_date", zdt; output_field = "date")))
   @test occursin("GREATEST(\"Tb\".\"race_date\", \$1::timestamptz)", insp[:sql_text])
 
   # A declared type is reached through the instant: `$3::timestamptz::date`, not `$3::date`, which

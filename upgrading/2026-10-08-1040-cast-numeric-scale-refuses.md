@@ -1,7 +1,7 @@
 ## `Cast` to a scaled `numeric(p, s)` is refused on SQLite when it would keep digits the scale rounds away (#1040)
 
 - **Version**: Unreleased
-- **PormG ref**: #1040, #1087, amended by #1147 ; `src/querybuilder/projection_types.jl` (`_numeric_cast_scale`, `_scale_divergent_operand`, `_precision_overflow_operand`, `_cast_divergent_operand`), `src/querybuilder/engine_departures.jl` (`_MEANING_DEPARTURES`)
+- **PormG ref**: #1040, #1087, amended by #1147 and #1187 ; `src/querybuilder/projection_types.jl` (`_numeric_cast_scale`, `_scale_divergent_operand`, `_precision_overflow_operand`, `_cast_divergent_operand`), `src/querybuilder/engine_departures.jl` (`_MEANING_DEPARTURES`)
 - **Recorded**: 2026-10-08
 - **Severity**: breaking, on SQLite. A `Cast` to `numeric(p, s)` (or an `output_field` of one on `Coalesce`/`Greatest`/`Least`) over an operand with more than `s` fractional digits raises `QueryBuildError` there where it used to render, and so does a `Cast` of a literal too large for `p` (#1087). PostgreSQL builds both, as in v0.7.0.
 
@@ -39,8 +39,13 @@ places (and `Max`/`Min`/`Abs`/`Coalesce` of one), a `Decimal` literal with at mo
 significant digits. PostgreSQL converts a float to `numeric` at 15 of them, so a 16th digit differs
 and PostgreSQL is the less exact side; that is documented rather than refused (#1087).
 
+A `Case` with no `output_field` is read branch by branch (#1187): its value on a row is one of its
+`then`s or its default, so each is held to the scale as an operand of its own.
+`Cast(Case(When(…, then = F("points")), default = 0), "numeric(10,0)")` over a `FloatField` is
+refused on SQLite; `then = 1.5` at `numeric(10,2)` has nothing to round and builds.
+
 Not checked, as for #1028: `Case(…; output_field = "numeric(p,s)")`, whose value is a branch, and an
-operand PormG cannot type (an untyped `Case`; a `Subquery` is classified by its projection since
+operand PormG cannot type (a JSON key lookup; a `Subquery` is classified by its projection since
 #1124). PostgreSQL still rounds those. Nor is
 the overflow of a column or a computed value, which depends on the row: PostgreSQL raises on a row
 too large for `p` and SQLite answers it. The literal of a `Coalesce`, `Greatest` or `Least` with an

@@ -554,8 +554,9 @@ end
       "n" => F_.Max("note"),                   # a kind the table does not own
       "a" => F_.Max(PormG.F("amount") * 2),    # arithmetic inside: computed, not the column
       # Multi-operand, operands disagreeing. (Until #824 this was `Coalesce("d", "d")`, pinned untyped
-      # while multi-operand functions were out of scope; #824 types the agreeing case on purpose.)
-      "c" => F_.Coalesce("d", "ts")))
+      # while multi-operand functions were out of scope; #824 types the agreeing case on purpose. It
+      # was `Coalesce("d", "ts")` until #1200 refused a date beside a timestamp.)
+      "c" => F_.Coalesce("amount", 0)))
     @test kinds[:j] == PormG.CDate()
     @test kinds[:b] == PormG.CInterval()
     for alias in (:n, :c)
@@ -684,7 +685,8 @@ end
   # `output_field` render no cast (a declared `date` is #852's, tested above) — so they are typed only
   # when every operand names the same kind. A NULL literal is
   # never the value and is skipped; a date literal binds as the column's own text (#721), so it agrees
-  # with a DATE column. `NullIf(a, b)` returns `a` or NULL, so it is `a`'s kind whatever `b` is.
+  # with a DATE column. `NullIf(a, b)` returns `a` or NULL, so it is `a`'s kind. (A `b` of another
+  # temporal type, `NullIf("d", "ts")`, is refused since #1200: the comparison does not say its type.)
   @testset "Coalesce/Greatest/Least record the kind their operands agree on (#824)" begin
     F_ = PormG.Functions
     for conn in (_RVC_SL, _RVC_PG)
@@ -695,7 +697,7 @@ end
         "g"  => F_.Greatest("ts", "ts"),
         "l"  => F_.Least("amount", "amount"),
         "j"  => F_.Coalesce("team__founded", "d"),
-        "n"  => F_.NullIf("d", "ts")); connection = conn)
+        "n"  => F_.NullIf("d", Date(2031, 1, 1))); connection = conn)
       for alias in (:c, :cl, :cn, :j, :n)
         @test kinds[alias] == PormG.CDate()
       end
@@ -709,28 +711,37 @@ end
     @test kinds[:mc] == PormG.CDate()
   end
 
-  # …and record nothing on any doubt, which leaves the value exactly as the driver delivered it. A text
-  # operand beside a date (the issue's own example) would run text through the date parser; two kinds
-  # that differ — a DATE and a TIMESTAMP column, or a decimal and a number literal — name no single
-  # representation; only NULLs name none at all. A declared `output_field` that is not the kind the
-  # operands agree on cannot change their text on SQLite, so it records nothing either.
+  # …and record nothing on any doubt, which leaves the value exactly as the driver delivered it. Two
+  # kinds that differ — two decimals of different widths, or a decimal and a number literal — name no
+  # single representation; only NULLs name none at all. A declared `output_field` that is not the kind
+  # the operands agree on cannot change their text on SQLite, so it records nothing either. (A text
+  # operand beside a date — the issue's own example — and two temporal types are refused before any
+  # kind is recorded since #1200: the testset below.)
   @testset "a disagreeing or untypable operand records no kind (#824)" begin
     F_ = PormG.Functions
     kinds = _rvc_kinds(q -> q.values(
-      "a" => F_.Coalesce("note", Date(2031, 1, 1)),
-      "b" => F_.Coalesce("d", "ts"),
       "c" => F_.Coalesce("amount", 0),
       "e" => F_.Coalesce(F_.Value(nothing), F_.Value(nothing)),
       "f" => F_.Coalesce("d", "d"; output_field = "text"),
       "g" => F_.Greatest("d", PormG.F("d") + 1),
-      "h" => F_.NullIf("note", "d"),
       # Agreement is exact equality: two DecimalFields of different widths name two representations
-      # (SQLite's parser checks the value against the width), and so do the TIMESTAMPTZ column `ts`
-      # and a naive `DateTime` literal (`CDateTime(true)` vs `CDateTime(false)`).
-      "w" => F_.Coalesce("amount", "cost"),
-      "z" => F_.Coalesce("ts", DateTime(2031, 1, 1))))
-    for alias in (:a, :b, :c, :e, :f, :g, :h, :w, :z)
+      # (SQLite's parser checks the value against the width).
+      "w" => F_.Coalesce("amount", "cost")))
+    for alias in (:c, :e, :f, :g, :w)
       @test !haskey(kinds, alias)
+    end
+  end
+
+  # #1200: the temporal disagreements above recorded no kind, and the value came back as each engine
+  # delivered it — a timestamp on PostgreSQL, each row's own text on SQLite. They are refused when the
+  # query is built now, on every engine (`test_temporal_mix_refusal.jl` holds the rule): text beside a
+  # date, a date beside a timestamp, and a TIMESTAMPTZ column beside a naive `DateTime` literal.
+  @testset "a temporal disagreement is refused before any kind is recorded (#1200)" begin
+    F_ = PormG.Functions
+    for conn in (_RVC_SL, _RVC_PG), expr in (F_.Coalesce("note", Date(2031, 1, 1)), F_.Coalesce("d", "ts"),
+                                             F_.NullIf("note", "d"), F_.NullIf("d", "ts"),
+                                             F_.Coalesce("ts", DateTime(2031, 1, 1)))
+      @test_throws PormG.QueryBuildError _rvc_kinds(q -> q.values("x" => expr); connection = conn)
     end
   end
 
@@ -830,7 +841,9 @@ end
         "txt" => PormG.Subquery(sub(F_.Max("note"))),
         "co"  => F_.Coalesce(PormG.Subquery(sub(F_.Max("d"))), Date(1900, 1, 1)),
         "nu"  => F_.NullIf(PormG.Subquery(sub(F_.Max("d"))), "d"),
-        "cn"  => F_.Coalesce(PormG.Subquery(sub(F_.Max("d"))), "note"),
+        # A disagreeing operand: a decimal beside an integer literal. (A date beside text was the
+        # example until #1200, which refuses it.)
+        "cn"  => F_.Coalesce(PormG.Subquery(sub(F_.Max("amount"))), 0),
         "cd"  => F_.Cast(PormG.Subquery(sub(F_.Max("amount"))), "date")); connection = conn)
       @test kinds[:d] == PormG.CDate()
       @test kinds[:ts] == PormG.CDateTime(true)

@@ -254,8 +254,8 @@ end
 # output_field: Coalesce, Greatest and Least apply the same cast, so the same rules
 # Each renders `(…)::type` / `CAST(… AS type)` for its `output_field` (#852). The message names the
 # function as written. A fraction to an integer and a boolean to text are refused on SQLite only
-# (meaning, #1028); a decimal to text builds on both (representation). `Case` is fail-open: its value
-# is a branch, which the rule does not type.
+# (meaning, #1028); a decimal to text builds on both (representation). A `Case` is not one of the
+# three: its value is a branch, so without an `output_field` its branch values are read (#1151, #1187).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1028: an output_field cast follows the same rules" begin
   for (expr, fname) in ((Fn.Coalesce("points", 0; output_field = "integer"), "Coalesce(…; output_field = \"integer\")"),
@@ -470,8 +470,8 @@ end
 # An untyped `Case` passed the #1028 check, but its branches are typed: PostgreSQL resolves the `CASE`
 # to the widest of them (`$2::double precision` beside `$3::bigint` is a `float8`), so its cast to an
 # integer rounds `1.5` to `2`, while SQLite's truncates it to `1`. The type walk names that kind
-# (`_case_kind`), and the check reads it for an operand the classifier leaves untyped — a `Coalesce`
-# over such a `Case` too. Expected SQL, PostgreSQL:
+# (`_case_kind`); since #1187 the classifier reads the branches itself (`_case_textless_branch`) and
+# names the branch — a `Coalesce` over such a `Case` too. Expected SQL, PostgreSQL:
 #   (CASE WHEN "Tb"."number" = $1 THEN $2::double precision ELSE $3::bigint END)::integer
 # Built on both: integer branches, text branches, a NULL default, a `Case` with an `output_field` (it
 # decides alone), and the cast to text (representation).
@@ -479,11 +479,11 @@ end
 @testset "#1151: a Case with a float branch, cast to an integer, is refused on SQLite only" begin
   float_case(; then = 1.5, default = 0) = Fn.Case(Fn.When("number" => 1, then = then), default = default)
   for (expr, named) in (
-      (Fn.Cast(float_case(), Models.IntegerField()), "`CASE(…)` with a float value"),
-      (Fn.Cast(float_case(then = 1, default = 0.5), Models.IntegerField()), "`CASE(…)` with a float value"),
-      (Fn.Cast(float_case(then = _CF("points")), Models.IntegerField()), "`CASE(…)` with a float value"),
-      (Fn.Cast(float_case(), "bigint"), "`CASE(…)` with a float value"),
-      (Fn.Cast(Fn.Coalesce(float_case(), 0), Models.IntegerField()), "`COALESCE(…)` with a float value"))
+      (Fn.Cast(float_case(), Models.IntegerField()), "`CASE(…)` over a Float64 literal"),
+      (Fn.Cast(float_case(then = 1, default = 0.5), Models.IntegerField()), "`CASE(…)` over a Float64 literal"),
+      (Fn.Cast(float_case(then = _CF("points")), Models.IntegerField()), "`CASE(…)` over the FloatField `points`"),
+      (Fn.Cast(float_case(), "bigint"), "`CASE(…)` over a Float64 literal"),
+      (Fn.Cast(Fn.Coalesce(float_case(), 0), Models.IntegerField()), "`COALESCE(…)` over `CASE(…)` over a Float64 literal"))
     _ccd_expect(expr; departs = _SL_ONLY, issue = "#1028", named = named)
   end
   @test occursin("(CASE WHEN \"Tb\".\"number\" = \$1 THEN \$2::double precision ELSE \$3::bigint END)::integer as \"x\"",
@@ -493,6 +493,41 @@ end
                Fn.Cast(float_case(then = 2, default = nothing), Models.IntegerField()),
                Fn.Cast(Fn.Case(Fn.When("number" => 1, then = 1.5), default = 0; output_field = Models.IntegerField()), Models.IntegerField()),
                Fn.Cast(float_case(), "text"))
+    @test _ccd_builds(expr)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1187: the scale and decimal rules read a Case branch by branch too
+# A `Case` with no `output_field` is one of its branch values on each row, so it has more than `s`
+# places when one branch has. A `FloatField` branch cast to `numeric(10,0)` is rounded by PostgreSQL
+# (`1.5` → `2`) and kept by SQLite (`1.5`): refused on SQLite (#1040). A `1.5` literal branch at
+# `numeric(10,2)` has nothing to round (#1050) and builds on both. A `DecimalField` branch keeps its
+# own places, which the type walk drops: two places cast to an integer is refused on SQLite (#1028),
+# a zero-scale column (`grid`, `DecimalField(4, 0)`) is whole and builds. Expected SQL:
+#   PostgreSQL  (CASE WHEN "Tb"."number" = $1 THEN $2::double precision ELSE $3::bigint END)::numeric(10,2)
+#   SQLite      CAST(CASE WHEN "Tb"."number" = ? THEN ? ELSE ? END AS NUMERIC(10,2))
+# Why: both rules let any untyped `Case` through, so the same value read two ways on the two engines.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1187: a Case's branches decide the scale and decimal rules" begin
+  case(then; default = 0) = Fn.Case(Fn.When("number" => 1, then = then), default = default)
+  for (expr, issue, named) in (
+      (Fn.Cast(case(_CF("points")), "numeric(10,0)"), "#1040", "`CASE(…)` over the FloatField `points`"),
+      (Fn.Cast(case(1.555), "numeric(10,2)"), "#1040", "`CASE(…)` over a Float64 literal with 3 decimal places"),
+      (Fn.Cast(case(1; default = _CF("price")), "numeric(10,1)"), "#1040", "`CASE(…)` over the DecimalField `price` (2 decimal places)"),
+      (Fn.Cast(case(_CF("price")), Models.IntegerField()), "#1028", "`CASE(…)` over the DecimalField `price`"),
+      (Fn.Cast(case(Decimal(0, 15, -1)), "integer"), "#1028", "`CASE(…)` over a Decimal literal"))
+    _ccd_expect(expr; departs = _SL_ONLY, issue = issue, named = named)
+  end
+  @test occursin("(CASE WHEN \"Tb\".\"number\" = \$1 THEN \$2::double precision ELSE \$3::bigint END)::numeric(10,2) as \"x\"",
+                 _ccd_render(Fn.Cast(case(1.5), "numeric(10,2)"); conn = _CCD_PG))
+  @test occursin("CAST(CASE WHEN \"Tb\".\"number\" = ? THEN ? ELSE ? END AS NUMERIC(10,2)) as \"x\"",
+                 _ccd_render(Fn.Cast(case(1.5), "numeric(10,2)"); conn = _CCD_SL))
+  for expr in (Fn.Cast(case(1.5), "numeric(10,2)"),                      # #1050: no place to round
+               Fn.Cast(case(_CF("price")), "numeric(10,2)"),             # two places at scale 2
+               Fn.Cast(case(_CF("grid")), Models.IntegerField()),        # a zero-scale decimal is whole
+               Fn.Cast(case(_CF("grid")), "numeric(10,0)"),
+               Fn.Cast(case(1; default = nothing), "numeric(10,0)"))     # an integer and a NULL
     @test _ccd_builds(expr)
   end
 end
@@ -1144,8 +1179,8 @@ end
   @test _ccd_builds(nothing; run = cte(Fn.Cast(Fn.Max(PormG.CTE("c", "lagc")) / 2, Models.IntegerField())))
   @test _ccd_builds(nothing; run = cte(Fn.Cast(Fn.Sum(PormG.CTE("c", "prev_int")) / 2, Models.IntegerField())))
   # The widest value wins: a float branch makes the `Case` a `float8`, so it is never named as the
-  # `bigint` its integer branch alone would be. (An untyped `Case` is otherwise let through, the
-  # #1111 fail-open; this asserts only that the `bigint` rule does not answer for it.)
+  # `bigint` its integer branch alone would be. (Its float branch is a float to the classifier since
+  # #1187; this asserts only that the `bigint` rule does not answer for it.)
   for conn in _CCD_ENGINES
     err = _ccd_refusal(Fn.Cast(Fn.Sum(Fn.Case(Fn.When("number__@gt" => 3, then = 1.5), default = 0)) / 2, Models.IntegerField()); conn = conn)
     @test err === nothing || !occursin(literal, _ccd_msg(err))

@@ -1,10 +1,11 @@
 ## PostgreSQL: a `ZonedDateTime` literal binds typed `::timestamptz` (#1175)
 
 - **Version**: Unreleased
-- **PormG ref**: #1175 ; `src/querybuilder/field_resolution.jl` (`_infer_parameter_sql_type`)
+- **PormG ref**: #1175, amended by #1200 ; `src/querybuilder/field_resolution.jl` (`_infer_parameter_sql_type`)
 - **Recorded**: 2026-10-12
-- **Severity**: behavior change, PostgreSQL only. Calls return a different value or type, and an
-  expression that mixed a zoned literal with text now fails PostgreSQL's type check.
+- **Severity**: behavior change, PostgreSQL only. Calls return a different value or type. An
+  expression that mixes a zoned literal with a date, a naive timestamp or text is refused when it is
+  built, on every engine (#1200, its own entry).
 
 ### What changed
 
@@ -30,18 +31,20 @@ With `zdt = ZonedDateTime(DateTime(2021, 1, 1, 0, 30), FixedTimeZone("UTC+2", 72
 | `Extract(Cast(Value(zdt), "date"), "ISODOW")` | `5` | `4` |
 | `Case(…, default = zdt, output_field = "date")` | `2021-01-01` | `2020-12-31` |
 | `Cast(Value(zdt), "text")` | `"2021-01-01T00:30:00+02:00"` | `"2020-12-31 22:30:00+00"` |
-| `Coalesce("fp1_date", zdt)`, a `DateField` and a zoned literal; `Greatest`, `Least` and a `Lag`/`Lead` `default` likewise | a `Date`: the column's, or the literal cut to its wall-clock date (`2021-01-01`) | a `ZonedDateTime` on **every** row: the column's date at midnight UTC, or the literal's instant |
-| `NullIf("date", zdt)` | compares the column to the literal's wall-clock date | compares it to the instant |
-| `Case(When(…, then = Value(zdt)), default = Value(DateTime(…)))` | a `DateTime`, the zoned branch read without its offset (`2021-01-01T00:30`) | a `ZonedDateTime` (`2020-12-31T22:30Z`) |
-| `Coalesce("name", zdt)`, a text column and a zoned literal | ran, typed as text | PostgreSQL refuses it: `COALESCE types character varying and timestamp with time zone cannot be matched` |
+| `Coalesce("fp1_date", zdt)`, a `DateField` and a zoned literal; `Greatest`, `Least` and a `Lag`/`Lead` `default` likewise | a `Date`: the column's, or the literal cut to its wall-clock date (`2021-01-01`) | `QueryBuildError` when built, on every engine (#1200): say the type, `Coalesce("fp1_date", Date(zdt))` |
+| `NullIf("date", zdt)` | compares the column to the literal's wall-clock date | `QueryBuildError` (#1200): `NullIf("date", Date(zdt))` |
+| `Case(When(…, then = Value(zdt)), default = Value(DateTime(…)))` | a `DateTime`, the zoned branch read without its offset (`2021-01-01T00:30`) | `QueryBuildError` (#1200): a zoned and a naive timestamp |
+| `Coalesce("name", zdt)`, a text column and a zoned literal | ran, typed as text | `QueryBuildError` (#1200): text beside a timestamp |
 
-The same holds where such an expression is a filter or a written value. For example,
-`filter("date" => Coalesce("fp1_date", zdt))` compares against the instant, and
-`update("fp1_date" => Coalesce("fp1_date", zdt))` stores the instant's UTC date.
+The same holds where such an expression is a filter or a written value. A zoned literal whose
+operands agree, `filter("start_at__@gte" => Coalesce("start_at", zdt))` for example, compares
+against the instant. Where the zoned literal sits beside a date, as in
+`filter("date" => Coalesce("fp1_date", zdt))`, the expression is refused (#1200). Say the type:
+`Coalesce("fp1_date", Date(zdt))` takes the instant's UTC date.
 
-On PostgreSQL 12 and older, a `lag`/`lead` default must have the column's own type. On those
-servers, `Lag("fp1_date"; default = zdt)` now fails as a function that does not exist: pass
-`Date(zdt)` there.
+A `Lag`/`Lead` `default` of another temporal type than its column, `Lag("fp1_date"; default = zdt)`,
+is refused the same way (#1200). Pass `Date(zdt)`, which PostgreSQL 12 and older also need: their
+`lag`/`lead` default must have the column's own type.
 
 A bare `ZonedDateTime` as a filter value or a written value is unchanged: `filter("start_at__@gte" => zdt)`,
 `F("start_at") >= zdt`, or a field set to `zdt`. These still bind the canonical UTC text, typed by

@@ -288,6 +288,37 @@ end
 # rest at the cast). Each renders on both engines, and the SQLite form is the #1006 COALESCE
 # shape, so the check added no SQL.
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# #1187: a Case is classified by its branch values (explicit intent, every engine)
+# A `Case` with no `output_field` is one of its branches on each row, so it is a float, a decimal or a
+# timestamp to `Concat` when a branch is: `then = 1.5` is a `float8` on PostgreSQL and a REAL on
+# SQLite, written `1.5` and `1.5` but `25` and `25.0` for a whole one. Each is refused on both engines,
+# naming the `Case` and its branch, no engine. Integer, text and date branches, a NULL default, and a
+# `Case` with `output_field = "text"` (the cast is the explicit spelling) build. Expected SQL: none.
+# Why: the untyped `Case` was let through, so the same row concatenated two texts on the two engines.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1187: a Case operand is classified by its branch values" begin
+  case(then; default = 0, kw...) = Fn.Case(Fn.When("number" => 1, then = then), default = default; kw...)
+  for (expr, kind, named) in (
+      (case(1.5), :float, "`CASE(…)` over a Float64 literal"),
+      (case(1; default = 2.5), :float, "`CASE(…)` over a Float64 literal"),
+      (case(F("points")), :float, "`CASE(…)` over the FloatField `points`"),
+      (case(F("price")), :decimal, "`CASE(…)` over the DecimalField `price`"),
+      (case(Fn.Value(DateTime(2024, 1, 5)); default = nothing), :timestamp, "`CASE(…)` over a DateTime literal")),
+      conn in (_CTO_PG, _CTO_SL)
+    err = _cto_refusal(Fn.Concat(Fn.Value("-"), expr); conn = conn)
+    @test err isa QueryBuildError
+    msg = _cto_msg(err)
+    @test occursin("Concat joins text, and $(named) is not text", msg)
+    @test occursin(kind === :timestamp ? "(#1028)" : "(#1027)", msg)
+    @test _cto_names_no_engine(msg)
+  end
+  for expr in (case(2), case("a"; default = "b"), case(F("born"); default = nothing), case(1; default = nothing),
+               case(1.5; output_field = "text")), conn in (_CTO_PG, _CTO_SL)
+    @test _cto_refusal(Fn.Concat(Fn.Value("-"), expr); conn = conn) === nothing
+  end
+end
+
 @testset "#1027: integer, text, date and explicit-text operands pass" begin
   F = PormG.QueryBuilder.F
   allowed = [

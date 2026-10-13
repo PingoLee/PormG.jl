@@ -621,14 +621,21 @@ end
     @test q.object.projection_kinds[:g] == PormG.CInterval()
   end
 
-  # No millisecond form for every operand: the SQL rendered before #900.
+  # No millisecond form for every operand: the SQL rendered before #900. An interval beside text does
+  # not say which type the value has, so since #1200 it is spelled with its `output_field` (bare, it is
+  # refused on every engine — asserted last).
   q = _IOM.Io_lap.objects
-  q.values("id", "g" => _IO_FN.Greatest("lap", "circuit"))
-  @test occursin("MAX(COALESCE(\"Tb\".\"lap\", \"Tb\".\"circuit\"), COALESCE(\"Tb\".\"circuit\", \"Tb\".\"lap\")) as \"g\"", _io_sql(q))
+  q.values("id", "g" => _IO_FN.Greatest("lap", "circuit"; output_field = "text"))
+  @test occursin("MAX(COALESCE(\"Tb\".\"lap\", \"Tb\".\"circuit\"), COALESCE(\"Tb\".\"circuit\", \"Tb\".\"lap\"))", _io_sql(q))
   q = _IOM.Io_lap.objects
-  q.values("id", "c" => _IO_FN.Coalesce("lap", QB.Value("00:00:00")))
-  @test occursin("COALESCE(\"Tb\".\"lap\", ?) as \"c\"", _io_sql(q))
+  q.values("id", "c" => _IO_FN.Coalesce("lap", QB.Value("00:00:00"); output_field = "text"))
+  @test occursin("COALESCE(\"Tb\".\"lap\", ?)", _io_sql(q))
   @test _io_params(q) == Any["00:00:00"]
+  for expr in (_IO_FN.Greatest("lap", "circuit"), _IO_FN.Coalesce("lap", QB.Value("00:00:00")))
+    q = _IOM.Io_lap.objects
+    q.values("id", "x" => expr)
+    @test_throws PormG.QueryBuildError _io_sql(q)
+  end
 
   # PostgreSQL: unchanged.
   q_pg = _IOM.Io_lap.objects
@@ -855,12 +862,14 @@ end
   @test occursin("COALESCE(\"Tb\".\"lap\", ?) as \"c\"", _io_sql(q))
   @test _io_params(q) == Any["00:00:00.0000015"]
 
-  # Beside a text column the function keeps the text, and the literal prints as its formatted
-  # milliseconds — the value it bound as text before (the oracle below runs it).
+  # Beside a text column the value is text. Bare, that printed the literal as its formatted
+  # milliseconds; since #1200 a duration beside text is refused unless `output_field` says the type,
+  # and the declared text cast binds the literal as its text — the same `01:00:00` (the oracle below
+  # runs it).
   q = _IOM.Io_lap.objects
-  q.values("id", "c" => _IO_FN.Coalesce("circuit", QB.Value(Dates.Hour(1))))
-  @test occursin("COALESCE(\"Tb\".\"circuit\", $(_io_text("?"))) as \"c\"", _io_sql(q))
-  @test _io_params(q) == Any[3_600_000]
+  q.values("id", "c" => _IO_FN.Coalesce("circuit", QB.Value(Dates.Hour(1)); output_field = "text"))
+  @test occursin("CAST(COALESCE(\"Tb\".\"circuit\", ?) AS TEXT) as \"c\"", _io_sql(q))
+  @test _io_params(q) == Any["01:00:00"]
 
   # PostgreSQL: unchanged, the literal bound as itself.
   q_pg = _IOM.Io_lap.objects
@@ -936,7 +945,7 @@ end
     @test col(_IOM.Io_lap, :c, q -> (zero_lap(q); q.filter("id" => 6))) == ["00:00:00"]
     @test col(_IOM.Io_lap, :id, q -> (zero_lap(q); q.filter("c__@gt" => Dates.Hour(99)))) == [2]
     # Beside a text column the literal prints the text it bound before: row 6 has no circuit.
-    @test col(_IOM.Io_lap, :c, q -> (q.values("id", "c" => _IO_FN.Coalesce("circuit", QB.Value(Dates.Minute(90))));
+    @test col(_IOM.Io_lap, :c, q -> (q.values("id", "c" => _IO_FN.Coalesce("circuit", QB.Value(Dates.Minute(90)); output_field = "text"));
                                      q.order_by("id"))) == ["a", "b", "a", "b", "c", "01:30:00"]
   finally
     close(db)

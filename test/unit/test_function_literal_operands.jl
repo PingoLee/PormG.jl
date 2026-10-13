@@ -141,7 +141,8 @@ end
   cases = (("an Int16", () -> Power("points", Int16(2)), Int16(2), 2),
            ("a UInt8", () -> Mod("points", 0x02), 0x02, 2),
            ("a Date", () -> Least("race_date", Date(2020, 1, 1)), Date(2020, 1, 1), "2020-01-01"),
-           ("a DateTime", () -> Greatest("race_date", DateTime(2020)), DateTime(2020),
+           # #1200: a date beside a timestamp says its type with an `output_field`.
+           ("a DateTime", () -> Greatest("race_date", DateTime(2020); output_field = "date"), DateTime(2020),
             "2020-01-01T00:00:00.000+00:00"))
   for (backend, Model_) in _LIT_OP_MODELS, (label, build, pg_value, sl_value) in cases
     @testset "$backend — $label" begin

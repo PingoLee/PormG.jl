@@ -13,6 +13,7 @@
 # ==============================================================================
 
 using Dates
+using TimeZones
 
 # The primary key of each base model, which the CTE and Subquery contexts correlate on.
 const EKM_PK = Dict(:Result => "resultid", :Race => "raceid", :Constructor_results => "constructorresultsid",
@@ -33,6 +34,8 @@ end
 
 const _EKM_FN = PormG.Functions
 const _EKM_Q = PormG.QueryBuilder
+# #1200: a zoned literal, 2021-01-01 00:30 at UTC+2 (2020-12-31 22:30 UTC).
+const _EKM_ZDT = ZonedDateTime(DateTime(2021, 1, 1, 0, 30), FixedTimeZone("UTC+2", 7200))
 
 const EKM_SHAPES = Tuple{String,Symbol,Function}[
   # ── column paths: one per stored kind, on the base model and across a foreign key ──────────────
@@ -177,6 +180,27 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Lag int default float / 2", :Result,            m -> _EKM_FN.Lag("grid", default = 1.5, over = _ekm_over(:Result)) / 2),
   # #1151: a `Case` with a float branch is a float, so its cast to an integer departs on SQLite
   ("Cast Case int float to integer", :Result,       m -> _EKM_FN.Cast(_EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1.5)], default = 0), "integer")),
+  # #1187: the other rules read a `Case` branch by branch too — a scale, a decimal branch, `Concat`
+  ("Cast Case float col to scale 0", :Result,       m -> _EKM_FN.Cast(_EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_Q.F("points"))], default = 0), "numeric(10,0)")),
+  ("Cast Case float literal to scale 2", :Result,   m -> _EKM_FN.Cast(_EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1.5)], default = 0), "numeric(10,2)")),
+  ("Cast Case decimal to integer", :Constructor_results, m -> _EKM_FN.Cast(_EKM_FN.Case([_EKM_FN.When("status" => "x", then = _EKM_Q.F("points"))], default = 0), "integer")),
+  ("Concat Case float",       :Result,              m -> _EKM_FN.Concat("positiontext", _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1.5)], default = 0))),
+  # #1200: operands of different temporal types, or a temporal and a text one, with no `output_field`
+  ("Coalesce date zoned literal", :Race,            m -> _EKM_FN.Coalesce("date", _EKM_ZDT)),
+  ("Greatest date zoned literal", :Race,            m -> _EKM_FN.Greatest("date", _EKM_ZDT)),
+  ("Least date zoned literal", :Race,               m -> _EKM_FN.Least("date", _EKM_ZDT)),
+  ("NullIf date zoned literal", :Race,              m -> _EKM_FN.NullIf("date", _EKM_ZDT)),
+  ("Case date branch zoned default", :Race,         m -> _EKM_FN.Case([_EKM_FN.When("year" => 0, then = _EKM_Q.F("date"))], default = _EKM_ZDT)),
+  ("Case zoned naive literals", :Race,              m -> _EKM_FN.Case([_EKM_FN.When("year" => 0, then = _EKM_FN.Value(_EKM_ZDT))], default = _EKM_FN.Value(DateTime(2021, 1, 1)))),
+  ("Lag date default zoned",  :Race,                m -> _EKM_FN.Lag("date", default = _EKM_ZDT, over = _ekm_over(:Race))),
+  ("Coalesce date zoned column", :Race,             m -> _EKM_FN.Coalesce("date", "start_at")),
+  ("Coalesce zoned naive literal", :Race,           m -> _EKM_FN.Coalesce("start_at", DateTime(2021, 1, 1))),
+  ("Coalesce text zoned literal", :Result,          m -> _EKM_FN.Coalesce("positiontext", _EKM_ZDT)),
+  ("Coalesce time interval",  :Result,              m -> _EKM_FN.Coalesce("raceid__time", "fastestlaptime")),
+  # … and the spellings that say which type is meant, which build
+  ("Coalesce date Date(zoned)", :Race,              m -> _EKM_FN.Coalesce("date", Date(_EKM_ZDT))),
+  ("Coalesce zoned zoned",    :Race,                m -> _EKM_FN.Coalesce("start_at", _EKM_ZDT)),
+  ("Coalesce date zoned output date", :Race,        m -> _EKM_FN.Coalesce("date", _EKM_ZDT; output_field = "date")),
   # ── subqueries ─────────────────────────────────────────────────────────────────────────────────
   ("Subquery Max hop date",   :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Max("raceid__date")))),
   ("Subquery Avg float",      :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Avg("points")))),

@@ -107,7 +107,7 @@ Each entry carries a grep for the old call pattern and a concrete `before → af
 refresh this bundle so it matches the new version:
 
 ```julia
-PormG.install_ai_skills()   # overwrites .github/skills/pormg-usage/, reports stale files
+PormG.install_ai_skills()   # overwrites .github/skills/pormg-usage/ and its .claude/skills/ stub, reports stale files
 ```
 
 ## Anti-patterns

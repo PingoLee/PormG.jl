@@ -32,6 +32,7 @@ julia --project=test/integration test/unit/test_transform_ladder_parity.jl
 
 using Test
 using Dates
+using Decimals
 using PormG
 using PormG.Models
 using PormG.QueryBuilder: inspect_query
@@ -1274,6 +1275,49 @@ end
       # `F("…__@year")` takes the year's rule through the #1083 comparison arm.
       e = try _tlp_sql((q = TLP.Tlp_row.objects; q.values("id"); q.filter(F("ts__@year") == 99999); q); conn = conn); nothing catch e; e end
       @test e isa PormG.InvalidValueError && e.kind === :range
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1120: a `Decimal` date-part value is whole or a fraction by its digits, not by Base's float path.
+# A `Decimal` is an `AbstractFloat` with no `isinteger` of its own, and Base's says a fraction with
+# enough places (`1e-30`, `3.0000000000000000000001`) is whole; the converters behind it parse the
+# text, so the transform path raised a raw `ArgumentError: invalid BigInt` and the `DateField`
+# `@year` rewrite blamed the range. A whole `Decimal` written with a point (`3.0`, `2024.0`) raised
+# the same raw error. Expected now: a fraction is `:format` on both paths, as `3.5` already was; a
+# whole `Decimal` binds exactly what the `Int` spelling binds.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1120: a Decimal date-part value is checked by its digits" begin
+  build(path, v) = (q = TLP.Tlp_row.objects; q.values("id"); q.filter(path => v); q)
+  refusal(path, v, conn) = try _tlp_sql(build(path, v); conn = conn); nothing catch e; e end
+  tiny  = Decimal(0, 1, -30)                                          # 1e-30
+  three = Decimal(0, big(30000000000000000000001), -22)               # 3.0000000000000000000001
+  year  = Decimal(0, big(20240000000000000000000000001), -25)         # 2024.0000000000000000000000001
+  for (backend, conn) in _TLP_BACKENDS
+    @testset "$backend" begin
+      # The issue's table: a fraction is `:format`, through the transform (`ts`, a DateTimeField)
+      # and through the `@year` rewrite on a DateField (`seen`), under `=` and a comparison.
+      for (path, v) in (("ts__@month", three), ("ts__@hour", tiny), ("ts__@month__@lt", three),
+                        ("ts__@year", year), ("seen__@year", year), ("seen__@year__@gte", year),
+                        ("ts__@month", Decimal(0, 1, -1_000_000_000)))
+        e = refusal(path, v, conn)
+        @test e isa PormG.InvalidValueError && e.kind === :format
+      end
+      # A whole `Decimal`, with or without a point, binds what the `Int` spelling binds.
+      for (path, d, n) in (("ts__@month", Decimal(0, 30, -1), 3), ("ts__@month", Decimal(0, 3, 0), 3),
+                           ("ts__@hour", Decimal(0, 0, -5), 0), ("ts__@year", Decimal(0, 20240, -1), 2024),
+                           ("seen__@year", Decimal(0, 20240, -1), 2024),
+                           ("seen__@year__@gte", Decimal(0, 2024000, -3), 2024))
+        @test _tlp_params(build(path, d); conn = conn) == _tlp_params(build(path, n); conn = conn)
+      end
+      # A whole value outside the part is `:range`, as its integer is — including a huge exponent,
+      # which is compared, not built.
+      for (path, d) in (("ts__@month", Decimal(1, 30, -1)), ("ts__@month", Decimal(0, 3, 1)),
+                        ("ts__@month", Decimal(0, 1, 1_000_000_000)), ("seen__@year", Decimal(0, 1, 1_000_000_000)))
+        e = refusal(path, d, conn)
+        @test e isa PormG.InvalidValueError && e.kind === :range
+      end
     end
   end
 end

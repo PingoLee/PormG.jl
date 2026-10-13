@@ -120,10 +120,14 @@ PormG.install_ai_skills()      # writes .github/skills/pormg-usage/ into the cur
 
 This copies PormG's usage skill bundle into your app, so an agent working in that repo has accurate
 context on models, queries, writes, error handling and async — rather than guessing from
-Django-shaped intuition. It prints what it did and returns the same facts as a named tuple:
+Django-shaped intuition. Claude Code only registers a skill found under `.claude/skills/`, so it
+also writes `.claude/skills/pormg-usage/SKILL.md`, a short stub that points at the bundle, which
+makes `/pormg-usage` work there. It prints what it did and returns the same facts as a named tuple:
 
-- **the files it wrote.** Run it again after every PormG bump: overwriting the bundle is how it
-  gets refreshed.
+- **the files it wrote** (`written`), and the stub's path (`stub`). Run it again after every PormG
+  bump: overwriting the bundle and the stub is how they get refreshed. When `.claude`,
+  `.claude/skills` or the stub's own path is a link, as in a skills tree shared between tools, no
+  stub is written.
 - **stale files** — files in that directory the installed PormG no longer ships, usually a topic
   file an older version installed. They are left in place; delete them if they came from PormG.
 - **whether anything points at the bundle.** It checks `AGENTS.md`, `CLAUDE.md`,

@@ -3,6 +3,7 @@ using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField
 using PormG.Functions: Sum, Count, Avg, Max, Min, Lower, Coalesce, Value, Rank, WindowOver, Case, When
 using PormG.QueryBuilder: SQLOrder, SQLField
+import Logging
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fluent parity gaps (#208, #272): get_or_create, last(), aggregate(), page()
@@ -616,6 +617,21 @@ end
       msg = _p208_error(run)
       @test occursin("$(terminal) cannot answer for this query", msg)
       @test occursin("no GROUP BY and no HAVING", msg)
+    end
+  end
+end
+
+# #1107: `exists()` logged `@error "Error in exists()"` with a backtrace before rethrowing, so a
+# refusal the caller is meant to read (#1100's) printed an error block first, even under
+# `show_query = :sql`, where nothing reaches the database. `count()` and `list()` never logged. The
+# rethrow is what keeps an error from reading as `false`; the log is gone. Expected: the same
+# `QueryBuildError` as `count()`, and no record at `Error` on either terminal.
+@testset "exists() raises a build refusal without logging it, as count() does (#1107)" begin
+  for model in (GocPg, GocSl)
+    deg = () -> model.objects.filter("points" => 3).values("n" => Count("id"))
+    for run in (q -> q.exists(show_query = :sql), q -> q.exists(), q -> q.count(show_query = :sql))
+      err = @test_logs min_level = Logging.Error (try run(deg()); nothing catch e; e end)
+      @test err isa PormG.QueryBuildError
     end
   end
 end

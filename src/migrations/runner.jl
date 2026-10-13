@@ -1501,7 +1501,9 @@ Report migration status: applied, failed, pending, and drift signals.
 
 The drift signals are about the migration **history**, not the schema: a missing history table,
 failed records, a pending plan beside applied history, and recorded migrations over a database with
-no user tables at all.
+no user tables at all. When that last check cannot read the live tables, `status()` still returns,
+and says so in a signal naming the error type (#1076) — a check that could not look is not a clean
+one.
 
 A failed record counts only while nothing has resolved it (#739). Failures do not block the next
 `migrate`, and a plan runs in one transaction on both engines, so a `failed` row means nothing was
@@ -1567,8 +1569,11 @@ function status(connection::Union{PormGPostgres, PormGSQLite}, settings::PormGSe
         push!(drift_signals, "No user tables found in database but migrations are recorded — possible external drop.")
       end
     catch e
-      # Don't fail status() if drift detection fails
-      @debug "Drift detection skipped" exception=e
+      # #1076: status() stays advisory and does not throw, but a check that could not look must
+      # not read as a clean one — a `@debug` here looked exactly like a database with no drift.
+      # The signal names the error type only: the message is server text (#1010).
+      push!(drift_signals, "Drift detection failed: could not read the live tables " *
+                           "($(nameof(typeof(e)))), so an external drop would not show here.")
     end
   end
   

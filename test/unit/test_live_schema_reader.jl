@@ -35,7 +35,7 @@ import PormG.Migrations: LiveTable, read_live_schema, live_table, model_from_liv
                          convert_schema_to_models, get_migration_plan, _pg_live_table, _key_arm,
                          _integer_key_arm, _coerce_default, _PostgresEngine, _SQLiteEngine,
                          _sqlite_column_checks, check, _sqlite_user_table_names,
-                         _PG_OWNABLE_TABLE_FILTER, _get_live_table_names, _PG_NON_NEGATIVE_CHECK_MATCH,
+                         _pg_ownable_table_filter, _get_live_table_names, _PG_NON_NEGATIVE_CHECK_MATCH,
                          _PG_BYTE_LENGTH_CHECK_MATCH, _PG_BYTE_LENGTH_CHECK_BOUND
 # The SQLite laws open a real (temporary) file. `runtests.jl` loads the weakdep extension for the
 # whole suite; this guard is what makes the file runnable on its own.
@@ -568,7 +568,7 @@ end
 # The query text is asserted for the two predicates no synthetic row can exercise: the backing
 # constraint must be joined on the index's OWN table and kind — a foreign key also records
 # `conindid`, the PARENT's unique index — and `indnullsnotdistinct` must not be named at all, as
-# it is PostgreSQL 15+ and the introspection floor is 11 (#1146).
+# it is PostgreSQL 15+ and the introspection floor is 9.6 (#1162).
 # Mutation gate: drop the `(unique && !constraint)` arm and `ux_g` vanishes; drop the refusal line
 # and all four refused indexes come back. (Since #29 `ix_desc` is read — a non-unique DESC index is a
 # `Models.Index(fields = ["-c", "-d"])`; the #29 testset below covers the advanced shapes.)
@@ -576,8 +576,9 @@ end
 struct CompositeMockPg161 <: PormG.PormGPostgres end
 const PG161_ROWS = Ref(DataFrame())
 const PG161_SQL = Ref("")
+# #1162: the reader asks the server version, to build its statement for it; answered and not recorded.
 fetch(::CompositeMockPg161, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
-  (PG161_SQL[] = sql; PG161_ROWS[])
+  occursin("server_version_num", sql) ? DataFrame(v = [160000]) : (PG161_SQL[] = sql; PG161_ROWS[])
 
 @testset "PostgreSQL: the composite reader reads three unique shapes and refuses four (#161)" begin
   rows = NamedTuple[]
@@ -977,7 +978,7 @@ end
 # PostgreSQL: every query that enumerates live tables carries the ownership filter (#730)
 # `relkind = 'r'` admitted a partition (the partitioned parent is `'p'`, but each partition is
 # `'r'`) and a table an extension owns (PostGIS's `spatial_ref_sys`), so `makemigrations` planned a
-# `DROP TABLE` for each. One constant, `_PG_OWNABLE_TABLE_FILTER`, now closes both, and this pins
+# `DROP TABLE` for each. One fragment, `_pg_ownable_table_filter`, now closes both, and this pins
 # that all three enumerations interpolate it — the schema dump, the composite-index reader, and
 # `status()`'s drift probe — since CI runs no PostgreSQL. The live half, a real partition and a real
 # extension member, is `test/integration/test_importers_introspection.jl`.
@@ -1001,11 +1002,11 @@ fetch(::OwnershipMockPg730, sql::String; conn = nothing, params = nothing, ignor
   Migrations._pg_composite_indexes(OwnershipMockPg730())
   _get_live_table_names(OwnershipMockPg730())
   @test length(PG730_SQL) == 3
-  @test all(sql -> occursin(_PG_OWNABLE_TABLE_FILTER, sql), PG730_SQL)
+  @test all(sql -> occursin(_pg_ownable_table_filter(160000), sql), PG730_SQL)
   # What the filter has to say, clause by clause.
-  @test occursin("NOT c.relispartition", _PG_OWNABLE_TABLE_FILTER)
+  @test occursin("NOT c.relispartition", _pg_ownable_table_filter(160000))
   @test occursin(r"NOT EXISTS \(SELECT 1 FROM pg_depend dep\s+WHERE dep\.classid = 'pg_class'::regclass AND dep\.objid = c\.oid\s+AND dep\.deptype = 'e'\)",
-                 _PG_OWNABLE_TABLE_FILTER)
+                 _pg_ownable_table_filter(160000))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

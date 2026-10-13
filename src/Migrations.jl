@@ -31,6 +31,7 @@ import PormG: PormGError, MigrationError, InvalidMigrationError, ModelDefinition
 # into MigrationError — an unknown key already fails earlier as InvalidConfigurationError.
 import PormG: BackendCapabilityError
 import PormG: _supports, _capability_error, _engine_key  # #1129: the backend capability table (Kernel)
+import PormG: _require_feature, _feature_at, _feature_since, _feature_description, _server_version, _version_text  # #1163: its version rows
 # #749: a managed model on a table the connection's `ignore_tables:` hides contradicts the config.
 import PormG: InvalidConfigurationError
 # #472: introspection catches this NARROWLY to drop a column default it cannot represent

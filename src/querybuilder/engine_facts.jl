@@ -84,9 +84,10 @@ _greatest_skips_nulls(::PormGPostgres) = true
 _greatest_skips_nulls(::PormGSQLite) = false
 
 # NULL placement is emulated with an `(expr IS NULL)` sort key, because the engine has no
-# `NULLS FIRST`/`NULLS LAST` (SQLite before 3.30, #75). A version question, so not a capability row.
+# `NULLS FIRST`/`NULLS LAST` (SQLite before 3.30, #75). The version is the capability table's
+# `:nulls_order` row (#1163); the fact is whether this engine falls back when the row says no.
 _emulates_nulls_order(::PormGPostgres) = false
-_emulates_nulls_order(conn::PormGSQLite) = backend_sqlite_version(conn) < SQLITE_NULLS_ORDER_MIN_VERSION
+_emulates_nulls_order(conn::PormGSQLite) = !_supports(conn, :nulls_order)
 
 # A list membership (`__@in`) binds the whole list as ONE array parameter (`= ANY($1)`), rather than
 # one placeholder per element.

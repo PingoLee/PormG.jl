@@ -455,9 +455,9 @@ _gen_steps(plan) = collect(keys(get(plan, :doc, Dict{String, String}())))
   # ─────────────────────────────────────────────────────────────────────────────
   # Introspection asks only what it reads: PostgreSQL 11, `attgenerated` from 12 (#1146)
   # #1108 refused every schema operation below 13, `inspectdb` included, for a statement only `migrate`
-  # runs. The read now needs 11 (`indnkeyatts`); on 11 the statement leaves `attgenerated` out and
-  # every column reads as not generated, which is exact there. Below 11 the requirement is named
-  # before the schema query runs.
+  # runs. The read needed 11 (`indnkeyatts`), and 9.6 since #1162; on 11 the statement leaves
+  # `attgenerated` out and every column reads as not generated, which is exact there. Below the floor
+  # the requirement is named before the schema query runs.
   # Mutation gate: the floor back at 130000 refuses 11 and 12; the fragment made unconditional makes
   # the 11 mock raise "attgenerated does not exist"; `''::text` in every version reads 12 and 13 wrong.
   # ─────────────────────────────────────────────────────────────────────────────
@@ -483,12 +483,14 @@ _gen_steps(plan) = collect(keys(get(plan, :doc, Dict{String, String}())))
     end
   end
 
-  @testset "PostgreSQL 10 is refused by name, before the schema query (#1146)" begin
-    m = GenMockPgAt1146(100022)
+  # #1162 lowered the read to 9.6 (`test_pg_server_versions.jl` covers 9.6 and 10); below it the
+  # requirement is still named before the schema query.
+  @testset "PostgreSQL 9.5 is refused by name, before the schema query (#1146, #1162)" begin
+    m = GenMockPgAt1146(90524)
     e = _gen_err(() -> Migrations.get_database_schema(m))
     @test e isa PormG.BackendCapabilityError
     msg = _gen_plain(e)
-    @test occursin("needs PostgreSQL 11 or newer", msg) && occursin("server_version_num 100022", msg)
+    @test occursin("needs PostgreSQL 9.6 or newer", msg) && occursin("server_version_num 90524", msg)
     @test occursin("Queries and writes are not affected", msg)
     @test isempty(m.sql)
   end

@@ -331,10 +331,6 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
   # legitimate query would be refused. See the guard's own comment.
 end
 
-# NULLS FIRST/LAST syntax landed in SQLite 3.30.0; older builds need the portable
-# `(expr IS NULL)` prefix instead (#75).
-const SQLITE_NULLS_ORDER_MIN_VERSION = 3030000
-
 # Resolve NULL placement for one ORDER BY term (#75). The canonical default matches PostgreSQL
 # (NULL sorts as the largest value): ASC → :last, DESC → :first — so ordering a nullable column
 # returns the same rows on both backends. An explicit SQLOrder(...; nulls=:first|:last) overrides it.

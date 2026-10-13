@@ -409,7 +409,9 @@ struct InvalidIdxMockPg871 <: PormG.PormGPostgres end
 const PG871_ROWS = Ref(DataFrame())
 const PG871_SQL = Ref("")
 const PG871_PARAMS = Ref{Any}(nothing)
+# #1162: the reader asks the server version, to build its statement for it; answered and not recorded.
 fetch(::InvalidIdxMockPg871, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
+  occursin("server_version_num", sql) ? DataFrame(v = [160000]) :
   (PG871_SQL[] = sql; PG871_PARAMS[] = params; PG871_ROWS[])
 
 @testset "check(kinds = [:invalid_index]) reports invalid PostgreSQL indexes (#871)" begin
@@ -494,7 +496,7 @@ fetch(::InvalidIdxMockPg871, sql::String; conn = nothing, params = nothing, igno
   sql = PG871_SQL[]
   @test occursin("WHERE NOT i.indisvalid", sql)
   @test occursin("c.relkind = 'r'", sql)
-  @test occursin(PormG.Migrations._PG_OWNABLE_TABLE_FILTER, sql)
+  @test occursin(PormG.Migrations._pg_ownable_table_filter(160000), sql)
   @test occursin("n.nspname = \$1", sql) && PG871_PARAMS[] == ["public"]
   # The within-table order: `_sort_findings` ties on (kind, table) for these, so this is final.
   @test occursin("ORDER BY c.relname, ic.relname", sql)

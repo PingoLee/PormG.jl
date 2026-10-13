@@ -231,5 +231,5 @@ fetch(::ViewsCaptureMockPg767, sql::String; conn = nothing, params = nothing, ig
   @test occursin("WHERE c.relkind = 'r'", tables_sql)
   @test !occursin("relkind IN", tables_sql)
   @test occursin("WHERE c.relkind IN ('v', 'm')", views_sql)
-  @test occursin(PormG.Migrations._PG_OWNABLE_TABLE_FILTER, views_sql)
+  @test occursin(PormG.Migrations._pg_ownable_table_filter(160000), views_sql)
 end

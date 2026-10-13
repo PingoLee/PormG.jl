@@ -153,10 +153,9 @@ const _EB_INTEGRATION_REVIEWED = Dict(
   "test/integration/common_setup.jl" => 2,
   # Not in runtests.jl: a run against another folder is a usage error it refuses, not a skip.
   "test/integration/test_allocate_primary_keys_sqlite.jl" => 1,
-  # Deferred from #1179 to a follow-up: fixture DDL written per engine, introspected type names and
-  # catalog text, PostgreSQL-catalog testsets, the statement splitter and importer entry point.
-  # Converted with the helpers above, these counts fall to zero.
-  "test/integration/test_importers_introspection.jl" => 18,
+  # Deferred from #1179 to a follow-up (#1191): legacy history DDL, expected plan text, the PK-less
+  # drop, the edge database and the SQLite-rebuild regressions. Converted with the helpers above,
+  # this count falls to zero.
   "test/integration/test_migration_bootstrap.jl" => 24,
 )
 

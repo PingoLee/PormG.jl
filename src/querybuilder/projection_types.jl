@@ -679,8 +679,8 @@ _json_document_operand(p::FExpression, instruc::SQLInstruction) =
 function _json_document_operand(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction)
   _alias_column_field(p, instruc) isa Models.sJSONField || return false
   # A CTE column the body projected as a key lookup holds that value; its field is the JSONField all
-  # the same, so the body's record says which (`_build_cte_custom_model`).
-  p isa CTEReference && _cte_record_kind(p, instruc) === :json_value && return false
+  # the same, so the body's expression for it says which (`_cte_body_record`).
+  p isa CTEReference && _cte_json_value(p, instruc) && return false
   # The join walk records every key lookup it renders (`_render_json_lookup`); any other path to a
   # JSONField names the column. A handle whose path goes on past the column is let through.
   p isa String || occursin("__", p.path) && return false
@@ -688,29 +688,28 @@ function _json_document_operand(p::Union{String,CTEReference,JoinedReference}, i
 end
 _json_document_operand(::Any, ::SQLInstruction) = false
 
-# #1028 — the classification of a CTE column, as `_build_cte_custom_model` recorded it from the body's
-# own projection while the body's instruction was live. `nothing` for anything else, for a path that
-# hops on through the column (it ends at a real model field, which the field memo answers), and for a
-# column the record has no entry for (a body not built in this pass, or a column with a single text).
+# #1028 — the classification of a CTE column: what the body's own expression for it answers, asked on
+# the body's instruction (`_cte_body_record`). `nothing` for anything else, for a path that hops on
+# through the column (it ends at a real model field, which the field memo answers), and for a column
+# with no answer (a plain path, a body not built in this pass, or a column with a single text).
 function _cte_textless_record(p::CTEReference, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing}
   occursin("__", p.path) && return nothing
-  cte = get(instruc.object.ctes, p.name, nothing)
-  cte === nothing && return nothing
-  record = get(cte, "textless", nothing)
-  record isa Dict || return nothing
-  side = get(record, p.path, nothing)
+  side = _cte_column_record(p, instruc, _concat_textless_operand)
   (side === nothing || side[1] === :json_value) && return nothing
   return (side[1], "the CTE column `$(_concat_operand_label(p))` ($(side[2]))")
 end
 _cte_textless_record(p::SQLField, instruc::SQLInstruction) = _cte_textless_record(p.field, instruc)
-function _cte_record_kind(p::CTEReference, instruc::SQLInstruction)::Union{Symbol,Nothing}
-  cte = get(instruc.object.ctes, p.name, nothing)
-  record = cte === nothing ? nothing : get(cte, "textless", nothing)
-  record isa Dict || return nothing
-  side = get(record, p.path, nothing)
-  return side === nothing ? nothing : side[1]
-end
+# Whether the CTE column is a JSON key lookup in its body — the value at the key, not the document.
+_cte_json_value(p::CTEReference, instruc::SQLInstruction)::Bool =
+  something(_cte_column_record(p, instruc, _concat_textless_operand), (nothing,))[1] === :json_value
 _cte_textless_record(::Any, ::SQLInstruction) = nothing
+# `_cte_body_record` for the CTE `p` names on this query, or `nothing` when it names none. Only the
+# text classifier asks for the JSON key marker: the division ones have no answer for a path column.
+function _cte_column_record(p::CTEReference, instruc::SQLInstruction, classify::Function)
+  cte = get(instruc.object.ctes, p.name, nothing)
+  cte === nothing && return nothing
+  return _cte_body_record(cte, p.path, classify; json_value = classify === _concat_textless_operand)
+end
 
 # #1028 — the declared casts a function renders: `Cast`'s type and the `output_field` of the three that
 # apply theirs (`Dialect._output_field_cast`). `Case` casts its `output_field` too, but its value is a
@@ -1106,17 +1105,15 @@ const _INTEGER_KEEPING_FUNCTIONS = (_NUMERIC_WHOLE_FUNCTIONS..., "ROUND")
 # there only.
 const _DIVISION_KINDS = (:numeric_whole_division,)
 const _FRACTIONAL_KINDS = (:float, :decimal, :numeric, _DIVISION_KINDS...)
-# #1127 — a CTE column answers as its body's expression did, recorded while the body built
-# (`_build_cte_custom_model`): its field cannot say it, since a `Sum` column is typed as an integer
-# whatever it sums. A column with no record — a plain path, a body not built in this pass — has none.
-_whole_numeric_operand(p::CTEReference, instruc::SQLInstruction) = _cte_division_record(p, "whole_numeric", instruc)
-# One of the two division records `_build_cte_custom_model` keeps per computed column, as a
-# `(kind, what)` naming the column, or `nothing`: no record, or a path past the column.
-function _cte_division_record(p::CTEReference, key::String, instruc::SQLInstruction)
+# #1127 — a CTE column answers as its body's expression does, asked on the body's instruction
+# (`_cte_body_record`): its field cannot say it, since a `Sum` column is typed as an integer whatever
+# it sums. A column with no answer — a plain path, a body not built in this pass — has none.
+_whole_numeric_operand(p::CTEReference, instruc::SQLInstruction) = _cte_division_record(p, _whole_numeric_operand, instruc)
+# What one of the two division classifiers answers for a CTE column's body expression, as a
+# `(kind, what)` naming the column, or `nothing`: no answer, or a path past the column.
+function _cte_division_record(p::CTEReference, classify::Function, instruc::SQLInstruction)
   occursin("__", p.path) && return nothing
-  cte = get(instruc.object.ctes, p.name, nothing)
-  record = cte === nothing ? nothing : get(cte, key, nothing)
-  side = record isa Dict ? get(record, p.path, nothing) : nothing
+  side = _cte_column_record(p, instruc, classify)
   return side === nothing ? nothing : (side[1], "the CTE column `$(_concat_operand_label(p))` ($(side[2]))")
 end
 _whole_numeric_operand(p::SQLField, instruc::SQLInstruction) = _whole_numeric_operand(p.field, instruc)
@@ -1198,9 +1195,9 @@ function _bigint_column(p, instruc::SQLInstruction)
   # of its operands' own values over a `bigint` (`_bigint_operand_function`).
   p isa Union{FObject,WindowFunction} && return _bigint_operand_function(p, _bigint_column, instruc)
   # #1127: a CTE column the body computed as a `bigint` (`Count`, `Sum` of an integer, a ranking
-  # window, arithmetic over a BIGINT column) is typed as a plain integer, so its record says it.
+  # window, arithmetic over a BIGINT column) is typed as a plain integer, so its body expression says it.
   if p isa CTEReference
-    side = _cte_division_record(p, "bigint", instruc)
+    side = _cte_division_record(p, _bigint_valued, instruc)
     side === nothing || return side
   end
   field = _alias_column_field(p, instruc)

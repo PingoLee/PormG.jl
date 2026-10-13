@@ -1001,19 +1001,7 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   # describes its columns in that same order instead of a hash of the aliases.
   fields = OrderedCollections.OrderedDict{String,PormGField}()
   selected_field_names = String[]
-  # #1028: each computed column's text classification, read from the body's own projection while this
-  # — the body's instruction — can still resolve its paths. The field below cannot carry it: a `Sum` column
-  # is typed as an integer and an `Avg` one as its operand's field, so `Concat` and `Cast` over the
-  # column would let through what they refuse when the same aggregate is written directly.
-  textless = Dict{String,Tuple{Symbol,String}}()
-  # #1127: and what the same column answers once DIVIDED (`_whole_numeric_operand`, #1111), for the
-  # same reason: a `Sum` of a BIGINT column is typed as an integer, but it is `numeric` on PostgreSQL,
-  # so the column divided split the engines (`7.5` and `7`) while the aggregate divided was refused.
-  # And whether it is a `bigint` there (`_bigint_valued`): a `Count` or a `Sum` of an integer is typed
-  # as an integer too, so an outer `Sum` over it read as `sum(integer)` where it is `sum(bigint)`.
-  whole_numeric = Dict{String,Tuple{Symbol,String}}()
-  bigint = Dict{String,Tuple{Symbol,String}}()
-  # #1147: and every type the column's expression has (`_expression_kind`), which the body's read
+  # #1147: every type the column's expression has (`_expression_kind`), which the body's read
   # kind does not carry: a `Rank`, an integer `Case` or a plain integer column read back with no kind
   # to undo, so `Floor(CTE("c", "rk"))` kept the `::numeric` cast on PostgreSQL and divided by 2 kept
   # the half SQLite drops.
@@ -1021,7 +1009,7 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   @pormg_debug false
   for value_part in values
     # fields[value_part.field] = _set_field_from_sql_function(value_part.field, value_part._as, instruct)
-    key_new = value_part.custom_as !== nothing ? value_part.custom_as : value_part._as
+    key_new, source, _ = _cte_column_source(value_part)
     try
       # #376: `key_new` is the alias `_query_select` renders for this column, and a CTE's columns
       # ARE its aliases — the physical name is consumed inside the body. So the field object that
@@ -1050,25 +1038,8 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
               _set_field_from_sql_function(value_part.field, value_part._as, instruct)
       fields[key_new] = Models.field_without_db_column(typed)
       push!(selected_field_names, key_new)
-      # A plain column path is typed right by its field already, and keeps that field's own wording —
-      # except a JSON key lookup, typed by its JSONField although it holds the value at the key.
-      source = value_part isa SQLText ? value_part : value_part.field
       kind = _expression_kind(source, instruct)
       kind === nothing || (kinds[key_new] = kind)
-      path = source isa AbstractString ? String(source) :
-             source isa SQLField && source.field isa AbstractString ? String(source.field) :
-             source isa FExpression && source.operation === nothing && source.field_name isa String ? source.field_name :
-             nothing
-      if path === nothing
-        side = _concat_textless_operand(source, instruct)
-        side === nothing || (textless[key_new] = side)
-        side = _whole_numeric_operand(source, instruct)
-        side === nothing || (whole_numeric[key_new] = side)
-        side = _bigint_valued(source, instruct)
-        side === nothing || (bigint[key_new] = side)
-      elseif memo_json_lookup(instruct, memo_key(:base, path))
-        textless[key_new] = (:json_value, "")
-      end
     catch e
       @pormg_debug false
       throw(e)
@@ -1083,9 +1054,47 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
     _module = instruct.object.model._module,
     connect_key = instruct.object.model.connect_key
   )
-  cte["textless"] = textless
-  cte["whole_numeric"] = whole_numeric
-  cte["bigint"] = bigint
   cte["kinds"] = kinds
+  # #1034 phase 3: the body's own instruction, which the outer query asks what a column's expression
+  # answers (`_cte_body_record`) — the field above cannot say it: a `Sum` column is typed as an integer
+  # and an `Avg` one as its operand's field. One record for every such question, in place of a dict
+  # per classifier, so a rule added to a classifier reaches the CTE column with no second copy to keep.
+  cte["body"] = instruct
 
+end
+
+# One `values(...)` entry of a CTE body: the column name the outer query uses (`custom_as`, else
+# `_as`), the expression it projects, and that expression's path when it is a plain column path
+# (`nothing` for a computed column).
+function _cte_column_source(value_part)
+  key = value_part.custom_as !== nothing ? value_part.custom_as : value_part._as
+  source = value_part isa SQLText ? value_part : value_part.field
+  path = source isa AbstractString ? String(source) :
+         source isa SQLField && source.field isa AbstractString ? String(source.field) :
+         source isa FExpression && source.operation === nothing && source.field_name isa String ? source.field_name :
+         nothing
+  return key, source, path
+end
+
+# #1028, #1127, #1034 phase 3 — what a classifier answers for the CTE column `column`, asked of the
+# column's expression on the body's instruction (`cte["body"]`), which can still resolve its paths:
+# `(kind, what)`, or `nothing`. A plain column path has no answer here — its field types it, and keeps
+# its own wording — except a JSON key lookup with `json_value`, which is the value at the key although
+# its field is the JSONField: `(:json_value, "")`. A body not built in this pass answers `nothing`.
+# Two entries sharing a name answer as the last one with an answer.
+function _cte_body_record(cte::AbstractDict, column::String, classify::Function; json_value::Bool = false)
+  body = get(cte, "body", nothing)
+  body isa SQLInstruction || return nothing
+  answer = nothing
+  for value_part in body.object.values
+    key, source, path = _cte_column_source(value_part)
+    key == column || continue
+    if path === nothing
+      side = classify(source, body)
+      side === nothing || (answer = side)
+    elseif json_value && memo_json_lookup(body, memo_key(:base, path))
+      answer = (:json_value, "")
+    end
+  end
+  return answer
 end

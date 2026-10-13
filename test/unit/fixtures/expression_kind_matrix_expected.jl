@@ -343,9 +343,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F decimal * 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = "bigint"),
   ("F decimal * 2 | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sFloatField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = "bigint"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = "bigint"),
   ("F decimal * 2 | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sFloatField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = "bigint"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = "bigint"),
   ("F decimal * 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
   ("F decimal * 2 | subquery", :sqlite) =>
@@ -391,9 +391,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F comparison | alone", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing, bigint = nothing),
   ("F comparison | cte", :postgres) =>
-    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", cte_field = "sFloatField", cte_textless = "bool", kind = "CBool()", whole_numeric = nothing, bigint = nothing),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", cte_textless = "bool", kind = "CBool()", whole_numeric = nothing, bigint = nothing),
   ("F comparison | cte", :sqlite) =>
-    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", cte_field = "sFloatField", cte_textless = "bool", kind = "CBool()", whole_numeric = nothing, bigint = nothing),
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", cte_textless = "bool", kind = "CBool()", whole_numeric = nothing, bigint = nothing),
   ("F comparison | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing, bigint = nothing),
   ("F comparison | subquery", :sqlite) =>
@@ -571,9 +571,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum float | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing, bigint = nothing),
   ("Sum float | cte", :postgres) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sIntegerField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing, bigint = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing, bigint = nothing),
   ("Sum float | cte", :sqlite) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sIntegerField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing, bigint = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing, bigint = nothing),
   ("Sum float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing, bigint = nothing),
   ("Sum float | subquery", :sqlite) =>
@@ -583,9 +583,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
   ("Sum decimal | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sIntegerField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
   ("Sum decimal | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sIntegerField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
   ("Sum decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
   ("Sum decimal | subquery", :sqlite) =>
@@ -595,9 +595,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum interval | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing, bigint = nothing),
   ("Sum interval | cte", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", cte_field = "sIntegerField", cte_textless = "interval", kind = "CInterval()", whole_numeric = nothing, bigint = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", cte_textless = "interval", kind = "CInterval()", whole_numeric = nothing, bigint = nothing),
   ("Sum interval | cte", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", cte_field = "sIntegerField", cte_textless = "interval", kind = "CInterval()", whole_numeric = nothing, bigint = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", cte_textless = "interval", kind = "CInterval()", whole_numeric = nothing, bigint = nothing),
   ("Sum interval | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing, bigint = nothing),
   ("Sum interval | subquery", :sqlite) =>
@@ -1087,9 +1087,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Avg int | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing, bigint = nothing),
   ("Avg int | cte", :postgres) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", cte_field = "sIntegerField", cte_textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", cte_field = "sFloatField", cte_textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
   ("Avg int | cte", :sqlite) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", cte_field = "sIntegerField", cte_textless = "numeric", kind = "CFloat64()", whole_numeric = nothing, bigint = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", cte_field = "sFloatField", cte_textless = "numeric", kind = "CFloat64()", whole_numeric = nothing, bigint = nothing),
   ("Avg int | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
   ("Avg int | subquery", :sqlite) =>
@@ -1423,9 +1423,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F decimal / 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
   ("F decimal / 2 | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sFloatField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
   ("F decimal / 2 | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sFloatField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
   ("F decimal / 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
   ("F decimal / 2 | subquery", :sqlite) =>
@@ -1471,9 +1471,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast int numeric / 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
   ("Cast int numeric / 2 | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sFloatField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
   ("Cast int numeric / 2 | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sFloatField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
   ("Cast int numeric / 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing, bigint = nothing),
   ("Cast int numeric / 2 | subquery", :sqlite) =>
@@ -1495,9 +1495,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Lag int default float / 2 | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float", kind = "CFloat64()", whole_numeric = nothing, bigint = nothing),
   ("Lag int default float / 2 | cte", :postgres) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sIntegerField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing, bigint = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing, bigint = nothing),
   ("Lag int default float / 2 | cte", :sqlite) =>
-    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sIntegerField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing, bigint = nothing),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing, bigint = nothing),
   ("Lag int default float / 2 | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float", kind = "CFloat64()", whole_numeric = nothing, bigint = nothing),
   ("Lag int default float / 2 | subquery", :sqlite) =>
@@ -1903,10 +1903,6 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
 # The cells on which two channels disagree, by `_ekm_disagreements`' rule. Derived from the entries
 # above; pinned so the measurement itself is reviewable, and iterated by the integration read-back.
 const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}}}(
-  ("F decimal * 2 | cte", :postgres) =>
-    [(:conflict, "cte_field=float vs cte_textless=decimal"), (:conflict, "read=decimal vs cte_field=float"), (:conflict, "textless=decimal vs cte_field=float")],
-  ("F decimal * 2 | cte", :sqlite) =>
-    [(:conflict, "cte_field=float vs cte_textless=decimal"), (:conflict, "read=decimal vs cte_field=float"), (:conflict, "textless=decimal vs cte_field=float")],
   ("F date - date | alone", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | alone", :sqlite) =>
@@ -1915,26 +1911,10 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | subquery", :sqlite) =>
     [(:unparsed, "read=int has no SQLite read parser")],
-  ("F comparison | cte", :postgres) =>
-    [(:conflict, "cte_field=float vs cte_textless=bool"), (:conflict, "formatter=number vs cte_textless=bool"), (:conflict, "formatter=number vs textless=bool"), (:conflict, "operand=bool vs cte_field=float"), (:conflict, "operand=bool vs formatter=number"), (:conflict, "read=bool vs cte_field=float"), (:conflict, "read=bool vs formatter=number"), (:conflict, "textless=bool vs cte_field=float")],
-  ("F comparison | cte", :sqlite) =>
-    [(:conflict, "cte_field=float vs cte_textless=bool"), (:conflict, "formatter=number vs cte_textless=bool"), (:conflict, "formatter=number vs textless=bool"), (:conflict, "operand=bool vs cte_field=float"), (:conflict, "operand=bool vs formatter=number"), (:conflict, "read=bool vs cte_field=float"), (:conflict, "read=bool vs formatter=number"), (:conflict, "textless=bool vs cte_field=float")],
-  ("Sum float | cte", :postgres) =>
-    [(:conflict, "cte_field=int vs cte_textless=float"), (:conflict, "read=float vs cte_field=int"), (:conflict, "textless=float vs cte_field=int")],
-  ("Sum float | cte", :sqlite) =>
-    [(:conflict, "cte_field=int vs cte_textless=float"), (:conflict, "read=float vs cte_field=int"), (:conflict, "textless=float vs cte_field=int")],
-  ("Sum decimal | cte", :postgres) =>
-    [(:conflict, "cte_field=int vs cte_textless=decimal"), (:conflict, "read=decimal vs cte_field=int"), (:conflict, "textless=decimal vs cte_field=int")],
-  ("Sum decimal | cte", :sqlite) =>
-    [(:conflict, "cte_field=int vs cte_textless=decimal"), (:conflict, "read=decimal vs cte_field=int"), (:conflict, "textless=decimal vs cte_field=int")],
   ("Sum interval | alone", :postgres) =>
     [(:conflict, "formatter=number vs textless=interval"), (:conflict, "read=interval vs formatter=number"), (:conflict, "render=interval vs formatter=number")],
   ("Sum interval | alone", :sqlite) =>
     [(:conflict, "formatter=number vs textless=interval"), (:conflict, "read=interval vs formatter=number"), (:conflict, "render=interval vs formatter=number")],
-  ("Sum interval | cte", :postgres) =>
-    [(:conflict, "cte_field=int vs cte_textless=interval"), (:conflict, "formatter=number vs cte_textless=interval"), (:conflict, "formatter=number vs textless=interval"), (:conflict, "operand=interval vs cte_field=int"), (:conflict, "operand=interval vs formatter=number"), (:conflict, "read=interval vs cte_field=int"), (:conflict, "read=interval vs formatter=number"), (:conflict, "textless=interval vs cte_field=int")],
-  ("Sum interval | cte", :sqlite) =>
-    [(:conflict, "cte_field=int vs cte_textless=interval"), (:conflict, "formatter=number vs cte_textless=interval"), (:conflict, "formatter=number vs textless=interval"), (:conflict, "operand=interval vs cte_field=int"), (:conflict, "operand=interval vs formatter=number"), (:conflict, "read=interval vs cte_field=int"), (:conflict, "read=interval vs formatter=number"), (:conflict, "textless=interval vs cte_field=int")],
   ("Sum interval | subquery", :postgres) =>
     [(:conflict, "formatter=number vs textless=interval"), (:conflict, "operand=interval vs formatter=number"), (:conflict, "read=interval vs formatter=number")],
   ("Sum interval | subquery", :sqlite) =>
@@ -1951,22 +1931,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
   ("Avg interval | subquery", :sqlite) =>
     [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
-  ("Avg int | cte", :postgres) =>
-    [(:conflict, "read=float vs cte_field=int")],
-  ("Avg int | cte", :sqlite) =>
-    [(:conflict, "read=float vs cte_field=int")],
-  ("F decimal / 2 | cte", :postgres) =>
-    [(:conflict, "cte_field=float vs cte_textless=decimal"), (:conflict, "read=decimal vs cte_field=float"), (:conflict, "textless=decimal vs cte_field=float")],
-  ("F decimal / 2 | cte", :sqlite) =>
-    [(:conflict, "cte_field=float vs cte_textless=decimal"), (:conflict, "read=decimal vs cte_field=float"), (:conflict, "textless=decimal vs cte_field=float")],
-  ("Cast int numeric / 2 | cte", :postgres) =>
-    [(:conflict, "cte_field=float vs cte_textless=decimal"), (:conflict, "read=decimal vs cte_field=float"), (:conflict, "textless=decimal vs cte_field=float")],
-  ("Cast int numeric / 2 | cte", :sqlite) =>
-    [(:conflict, "cte_field=float vs cte_textless=decimal"), (:conflict, "read=decimal vs cte_field=float"), (:conflict, "textless=decimal vs cte_field=float")],
-  ("Lag int default float / 2 | cte", :postgres) =>
-    [(:conflict, "cte_field=int vs cte_textless=float"), (:conflict, "read=float vs cte_field=int"), (:conflict, "textless=float vs cte_field=int")],
-  ("Lag int default float / 2 | cte", :sqlite) =>
-    [(:conflict, "cte_field=int vs cte_textless=float"), (:conflict, "read=float vs cte_field=int"), (:conflict, "textless=float vs cte_field=int")],
 )
 
 # The shapes whose channels answer differently across contexts, by `_ekm_cross_context`' rule.
@@ -1975,10 +1939,6 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
     ["drops textless: alone=none, subquery=interval"],
   ("F datetime - datetime", :sqlite) =>
     ["drops textless: alone=none, subquery=interval"],
-  ("F comparison", :postgres) =>
-    ["conflict formatter: alone=bool, cte=number, subquery=bool"],
-  ("F comparison", :sqlite) =>
-    ["conflict formatter: alone=bool, cte=number, subquery=bool"],
   ("Value int", :postgres) =>
     ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Value int", :sqlite) =>
@@ -2003,6 +1963,10 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
     ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Case untyped float col", :sqlite) =>
     ["drops formatter: alone=none, cte=number, subquery=none"],
+  ("Sum interval", :postgres) =>
+    ["conflict formatter: alone=number, cte=interval, subquery=number"],
+  ("Sum interval", :sqlite) =>
+    ["conflict formatter: alone=number, cte=interval, subquery=number"],
   ("Avg interval", :postgres) =>
     ["conflict formatter: alone=number, cte=interval, subquery=number"],
   ("Avg interval", :sqlite) =>

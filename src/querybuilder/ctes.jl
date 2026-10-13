@@ -1009,7 +1009,7 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   @pormg_debug false
   for value_part in values
     # fields[value_part.field] = _set_field_from_sql_function(value_part.field, value_part._as, instruct)
-    key_new, source, _ = _cte_column_source(value_part)
+    key_new, source, path = _cte_column_source(value_part)
     try
       # #376: `key_new` is the alias `_query_select` renders for this column, and a CTE's columns
       # ARE its aliases — the physical name is consumed inside the body. So the field object that
@@ -1036,7 +1036,7 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
       # twice and no `code` at all. It reproduces identically with no db_column anywhere.
       typed = value_part isa SQLText ? _value_projection_field(value_part, key_new, instruct) :
               _set_field_from_sql_function(value_part.field, value_part._as, instruct)
-      fields[key_new] = Models.field_without_db_column(typed)
+      fields[key_new] = Models.field_without_db_column(_meant_column_field(typed, source, path, instruct))
       push!(selected_field_names, key_new)
       kind = _expression_kind(source, instruct)
       kind === nothing || (kinds[key_new] = kind)
@@ -1061,6 +1061,23 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   # per classifier, so a rule added to a classifier reaches the CTE column with no second copy to keep.
   cte["body"] = instruct
 
+end
+
+# #1034 phase 3 — the field a computed CTE column binds a compared value with: the type its expression
+# MEANS (`_MeaningKinds`), which is the same on every engine, when the field
+# `_set_field_from_sql_function` inferred names another family. That inference types `Count` and
+# `Sum` as an integer whatever they sum, and `F` arithmetic as an integer or a float, so a `Sum` of a
+# float, a decimal or an interval, a decimal quotient, an `Avg` of integers and a comparison were each
+# bound as something they are not (a `Period` compared with a summed interval reached a number
+# formatter). The inferred field stays when it agrees, which keeps a declared width, a char length
+# and a foreign key's target; for a plain column path, which is that column; and when the walk names
+# no meaning, or a kind no field spells. Its refusals stand: it still runs first.
+function _meant_column_field(typed::PormGField, source, path, instruct::SQLInstruction)::PormGField
+  path === nothing || return typed
+  meant = _infer_kind(source, instruct, _MeaningKinds())
+  meant === nothing && return typed
+  _kind_family(meant) === _kind_family(_field_kind(typed)) && return typed
+  return something(_kind_field(meant), typed)
 end
 
 # One `values(...)` entry of a CTE body: the column name the outer query uses (`custom_as`, else

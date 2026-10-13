@@ -706,18 +706,22 @@ df = query |> DataFrame
 ## How a CTE Column Is Typed
 
 The outer query treats each CTE column as a field, and that field's type decides how a value
-compared with the column is bound. PormG derives the type from the body's projection:
+compared with the column is bound. PormG derives the type from what the body's projection means, the
+same on PostgreSQL and SQLite, so a `Period` compared with a summed duration binds as a duration and a
+boolean compared with a comparison binds as a boolean (#1034):
 
 | Projection in the CTE body | Column type |
 |---|---|
 | A field path (`"points"`, `"driverid__surname"`) | That field |
-| `Count`, `Sum` | Integer |
-| `Avg`, `Min`, `Max` | The type of what they aggregate: a field path (`Max("raceid__date")`) or a `Joined(...)` column is that field, and `F` arithmetic (`Max(F("points") * 2)`) is typed as the arithmetic row below says. A function is typed as it is when projected bare, so `Max(Coalesce("points", 0.0))` needs an `output_field` (#1116) |
+| `Count` | Integer |
+| `Sum` | The type of what it sums: an integer over integers, a float over a float, a decimal over a decimal, a duration over a duration (`Sum("fastestlaptime")`) |
+| `Avg`, `Min`, `Max` | The type of what they aggregate: a field path (`Max("raceid__date")`) or a `Joined(...)` column is that field, and `F` arithmetic (`Max(F("points") * 2)`) is typed as the arithmetic row below says. `Avg` over integers is a float. A function is typed as it is when projected bare, so `Max(Coalesce("points", 0.0))` needs an `output_field` (#1116) |
 | `Rank`, `DenseRank`, `RowNumber` | Integer |
 | `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` | The column the window reads |
 | A function given `output_field = …`, or `Cast(x, type)` | The type it names |
 | `F("points")` | That field |
-| `F` arithmetic (`F("grid") - F("positionorder")`) | Integer when every operand is an integer, otherwise float |
+| `F` arithmetic (`F("grid") - F("positionorder")`) | Integer when every operand is an integer, a decimal when an operand is a decimal, otherwise float |
+| An `F` comparison (`F("grid") < F("positionorder")`) | Boolean |
 | `Value(x)` | Its Julia type: `1` is an integer, `1.5` a float, `"win"` text |
 | `Case` / `When` | See below |
 
@@ -731,8 +735,8 @@ This type is for **binding** a value compared with the column. **Reading** the c
 separate question, and the answer is the body's own. A column the body selects, such as
 `"date"`, `Max("date")` or `Cast(x, "date")`, reads back with the same Julia type the body would give
 it (a `Date` on both engines). A number the body computes, such as `Avg("points")` or `F` arithmetic,
-reads back as the type it means on both engines, a `Float64` or a `Decimal` (#1121), even though the
-table above binds it as its operand's field (#824). This is the same rule `values(...)` follows
+reads back as the type it means on both engines, a `Float64` or a `Decimal` (#1121); the table above
+binds it as the same type, though an `Avg` of a `DecimalField` keeps that field's declared width there. This is the same rule `values(...)` follows
 outside a CTE (see [The type of a computed number](index.md#The-type-of-a-computed-number)).
 
 The type you declare can be a text, integer, bigint, float, numeric, boolean or date type, and on

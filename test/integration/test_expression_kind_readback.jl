@@ -282,11 +282,14 @@ end
 # "numeric(10,0)")` render `(…)::numeric(10,1)` / `(CASE … END)::numeric(10,0)` on PostgreSQL, which
 # rounds a float to the scale, and are refused on SQLite (#1040, #1187), which would keep every digit.
 # Where they build they record the declared decimal's read kind, so they are kept here, not in the
-# both-engine table above. Why: the cells left the read-back table with the fix, and nothing else
-# reads them back on a live engine.
+# both-engine table above. A `Case`'s own `output_field = "numeric(10,1)"` over `F("points") * 1.5` is
+# the same cast taken on a branch (#1217): `15.0` on result 1 (grid `1`, points `10`) on PostgreSQL,
+# refused on SQLite. Why: the cells left the read-back table with the fix, and nothing else reads
+# them back on a live engine.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "A scaled cast reads back as a Decimal where it builds, and is refused where it departs (#1212)" begin
-  for label in ("Cast float to scale 1", "Cast Case float col to scale 0")
+  for (label, value) in ("Cast float to scale 1" => 10, "Cast Case float col to scale 0" => 10,
+                         "Case F float * 1.5 output scale 1" => 15)
     _, base, build = EKM_SHAPES[findfirst(s -> s[1] == label, EKM_SHAPES)]
     for ctx in (:alone, :cte, :subquery)
       @testset "$label | $ctx" begin
@@ -301,7 +304,7 @@ end
         else
           v = only(q.list())[name]
           @test string(nameof(typeof(v))) == "Decimal"
-          @test v == 10
+          @test v == value
         end
       end
     end

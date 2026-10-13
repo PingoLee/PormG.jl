@@ -555,8 +555,9 @@ end
 # makes it a `float8` on PostgreSQL (`Cast` to an integer rounds there and truncates on SQLite); a
 # `DecimalField` branch keeps its own places, which the type walk drops (`_unify_kinds`), so a
 # zero-scale one is whole here, as the column is. With an `output_field` the cast it renders decides
-# (`_textless_number`).
+# (`_textless_number`), and that cast is checked against the branches (#1217, `_declared_case`).
 _undeclared_case(p) = p isa FObject && p.function_name == "CASE" && !(get(p.kwargs, "output_field", nothing) isa AbstractString)
+_declared_case(p) = p isa FObject && p.function_name == "CASE" && !_undeclared_case(p) && !isempty(p.kwargs["output_field"])
 function _case_textless_branch(p::FObject, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing}
   for value in _case_values(p)
     side = _concat_textless_operand(value, instruc)
@@ -713,9 +714,10 @@ end
 _cte_textless_record(::Any, ::SQLInstruction) = nothing
 
 # #1028 — the declared casts a function renders: `Cast`'s type and the `output_field` of the three that
-# apply theirs (`Dialect._output_field_cast`). `Case` casts its `output_field` too, but its value is a
-# branch, so it is not one of these: without an `output_field` its operands are its branch values
-# (#1187, `_case_values`); `Concat` renders no cast (#835).
+# apply theirs (`Dialect._output_field_cast`). `Case` casts its `output_field` too (`Dialect.CASE`),
+# but its operands are its branch values (`_case_values`), not `v.column`, so it is not one of these:
+# they are read without an `output_field` (#1187) and checked against one (#1217, `_declared_case`,
+# after the default renders); `Concat` renders no cast (#835).
 const _DECLARED_CAST_FUNCTIONS = ("CAST", "COALESCE", "GREATEST", "LEAST")
 # The operands whose value is a whole number on both engines, so a cast to an integer has nothing to
 # round: `Floor`/`Ceil`, and `Round` to no digits. Measured equal on PostgreSQL and SQLite for every
@@ -878,7 +880,7 @@ function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union
         (:decimal, "the DecimalField `$(_concat_operand_label(operand))` ($(places) decimal places)")
     end
   end
-  if operand isa FObject && operand.function_name in _DECLARED_CAST_FUNCTIONS
+  if operand isa FObject && (operand.function_name in _DECLARED_CAST_FUNCTIONS || _declared_case(operand))
     declared = get(operand.kwargs, operand.function_name == "CAST" ? "type" : "output_field", nothing)
     inner = declared isa AbstractString ? _numeric_cast_scale(declared) : nothing
     inner === nothing || return inner <= scale ? nothing : (:decimal, "a value cast to $(declared)")
@@ -963,9 +965,11 @@ _declared_cast_label(v::FObject) = v.function_name == "CAST" ? "Cast(…, \"$(v.
 #
 # `rendered` holds each operand's kind as its render computed it (`_render_operand_kind`): a timestamp
 # or an interval no type reader names (arithmetic, `Sum(duration)`), which matters to a text target.
+# A declared `Case` (#1217) is cast as each row takes a branch, so its operands are its branch values.
 function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::AbstractVector = Any[])
   declared = get(v.kwargs, v.function_name == "CAST" ? "type" : "output_field", nothing)
   (declared isa AbstractString && !isempty(declared)) || return nothing
+  operands = v.function_name == "CASE" ? _case_values(v) : v.column isa AbstractVector ? v.column : (v.column,)
   conn = instruc.connection
   # #1147 step 2: an operand is refused only on the engine that departs from what the cast means
   # (`_departure`); the others build it as written. A divergence that is only each engine's text is
@@ -976,7 +980,7 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::
   size = _numeric_cast_size(declared)
   if size !== nothing
     precision, scale = size
-    for operand in (v.column isa AbstractVector ? v.column : (v.column,))
+    for operand in operands
       # #1087: a literal that overflows the precision, checked first — it fails on PostgreSQL
       # whatever its scale. A `Cast` only: an `output_field` literal is one candidate value.
       if v.function_name == "CAST" && precision <= 1000 && scale <= 1000   # past the bound PostgreSQL rejects the type
@@ -991,7 +995,7 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::
   target = _sql_type_field(declared)
   to_integer = target isa Union{Models.sIntegerField,Models.sBigIntegerField}
   (to_integer || target isa Union{Models.sCharField,Models.sTextField}) || return nothing
-  for (i, operand) in enumerate(v.column isa AbstractVector ? v.column : (v.column,))
+  for (i, operand) in enumerate(operands)
     to_integer && _integral_valued(operand, instruc) && continue
     side = _concat_textless_operand(operand, instruc)
     side === nothing && !to_integer && (side = _rendered_kind_textless(get(rendered, i, nothing)))

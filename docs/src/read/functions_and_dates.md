@@ -470,7 +470,8 @@ refusal covers:
   an integer is that integer (#1196), so it passes;
 - a `Case` with no `output_field` that has one such branch: its value is a branch's on each row, so
   `Case(When("grid" => 1, then = 1.5), default = 0)` is a float (#1187). A `Case` whose branches are
-  all text, integers or dates passes, and so does one with `output_field = "text"`.
+  all text, integers or dates passes, and so does one with `output_field = "text"`, unless a branch
+  is a boolean: that `Case` is refused on SQLite by its own check (#1217).
 
 A literal is refused when the `Concat` is built, and a column when the query is. A date, a time and
 a uuid pass. So does a `DecimalField` with `decimal_places = 0`: it holds whole numbers, as an
@@ -929,7 +930,7 @@ intended trade: the engine that cannot give the meaning says so, rather than ans
 What each row covers:
 
 - **text**: `CharField()`, `TextField()`, `"text"`, `"varchar(20)"`, and the `output_field` of
-  `Coalesce`, `Greatest` and `Least`, which renders the same cast;
+  `Coalesce`, `Greatest`, `Least` and `Case`, which renders the same cast;
 - **an integer**: `IntegerField()`, `BigIntegerField()`, `"integer"`, `"bigint"`, `"int8"`, … A
   boolean casts to `1`/`0` on both engines, and a whole number (`Round(x)`, `Floor(x)`, `Ceil(x)`,
   `Mod` of whole numbers, `+`, `-`, `*` of them) has nothing to round; both pass on every engine;
@@ -945,7 +946,7 @@ What each row covers:
 - **an overflow**: only a literal is checked, because only a literal is certain to overflow (#1087).
   A column or a computed value overflows on the rows that hold a large value and not on the others,
   so on such a row PostgreSQL raises and SQLite answers. Neither is the literal of a `Coalesce`,
-  `Greatest` or `Least` with an `output_field`, which is one candidate value among the operands.
+  `Greatest`, `Least` or `Case` with an `output_field`, which is one candidate value among the operands.
 
 A `Case` with no `output_field` is read branch by branch, each `then` and its default as an operand
 of its own, since its value on a row is one of them (#1151, #1187):
@@ -955,8 +956,12 @@ of its own, since its value on a row is one of them (#1151, #1187):
 - **to `numeric(p, s)`**, each branch is held to the scale: a `FloatField` branch at `numeric(10,0)`
   is refused on SQLite, a `1.5` branch at `numeric(10,2)` passes on both (#1050).
 
-A `Case` with an `output_field` is that type, whatever its branches. An operand PormG cannot type (a
-JSON key lookup) passes every row. A `Subquery` is classified by the expression it projects (#1124).
+A `Case` with an `output_field` is that cast, taken on whichever branch a row matches, so its
+branches are held to it the same way (#1217): `Case(When("grid" => 1, then = F("points")), default = 0;
+output_field = "numeric(10,1)")` is refused on SQLite, and `then = Round("points", 1)` passes on both.
+A `Cast` over such a `Case` reads its declared scale, so `numeric(10,1)` under a `numeric(10,2)` cast
+passes. An operand PormG cannot type (a JSON key lookup) passes every row. A `Subquery` is
+classified by the expression it projects (#1124).
 
 To get an integer on every engine, say how to round first. `Round(x)`, `Floor(x)` and `Ceil(x)` give
 the same whole number on both engines for every stored value measured (PostgreSQL's `round` is the
@@ -1026,19 +1031,19 @@ none on PostgreSQL either:
 M.Result.objects.values("resultid", "slot" => Greatest("grid", 1; output_field = "bigint"))
 ```
 
-The rule above applies to these casts too: `Coalesce`, `Greatest` and `Least` with an `output_field`
-of text, an integer or a scaled `numeric(p, s)` refuse the same operands `Cast` does.
-`Greatest("points", 0; output_field = "integer")` is refused, and `Greatest(Floor("points"), 0;
-output_field = "integer")` passes. A `Case`'s own `output_field` is not checked: its value is one of
-its branches, cast as it is taken, and the branches are not held to it. That includes
-`Case(…; output_field = "numeric(10,1)")`, which PostgreSQL rounds and SQLite does not: round the
-branches yourself, or leave the scale off. (A `Case` with no `output_field` that is the operand of a
-cast is read branch by branch, #1187.)
+The rule above applies to these casts too: `Coalesce`, `Greatest`, `Least` and `Case` with an
+`output_field` of text, an integer or a scaled `numeric(p, s)` refuse the same operands `Cast` does,
+on the engine that departs. `Greatest("points", 0; output_field = "integer")` is refused on SQLite,
+and `Greatest(Floor("points"), 0; output_field = "integer")` passes. A `Case` is held to it branch by
+branch, each `then` and its default (#1217): `Case(When("grid" => 1, then = F("points") * 1.5),
+default = 0; output_field = "numeric(10,1)")` is refused on SQLite, which would keep every digit
+where PostgreSQL rounds. Round the branches to the scale (`then = Round(F("points") * 1.5, 1)`), or
+leave the scale off.
 
 An `output_field` naming a decimal type reads back as a `Decimals.Decimal` on every engine, as a
 `Cast` to one does (#1212): `Coalesce(F("points") * 1.5, 0; output_field = DecimalField())` is a
-`Decimal` on PostgreSQL and on SQLite. The type is the same; at a scale, a `Case`'s value can still
-differ, as described just above.
+`Decimal` on PostgreSQL and on SQLite. The type is the same, and so is the value wherever PormG can
+type the operand: a scale an engine would not round to is refused there, as described just above.
 
 `Concat` renders no cast on either engine, because its result is always text. Its `output_field`
 must therefore be a text type (`CharField()`, `TextField()`, `"text"`, `"varchar(20)"`). Any other

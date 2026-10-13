@@ -1,9 +1,9 @@
 ## `Cast` to a scaled `numeric(p, s)` is refused on SQLite when it would keep digits the scale rounds away (#1040)
 
 - **Version**: Unreleased
-- **PormG ref**: #1040, #1087, amended by #1147 and #1187 ; `src/querybuilder/projection_types.jl` (`_numeric_cast_scale`, `_scale_divergent_operand`, `_precision_overflow_operand`, `_cast_divergent_operand`), `src/querybuilder/engine_departures.jl` (`_MEANING_DEPARTURES`)
+- **PormG ref**: #1040, #1087, amended by #1147, #1187 and #1217 ; `src/querybuilder/projection_types.jl` (`_numeric_cast_scale`, `_scale_divergent_operand`, `_precision_overflow_operand`, `_cast_divergent_operand`), `src/querybuilder/engine_departures.jl` (`_MEANING_DEPARTURES`)
 - **Recorded**: 2026-10-08
-- **Severity**: breaking, on SQLite. A `Cast` to `numeric(p, s)` (or an `output_field` of one on `Coalesce`/`Greatest`/`Least`) over an operand with more than `s` fractional digits raises `QueryBuildError` there where it used to render, and so does a `Cast` of a literal too large for `p` (#1087). PostgreSQL builds both, as in v0.7.0.
+- **Severity**: breaking, on SQLite. A `Cast` to `numeric(p, s)` (or an `output_field` of one on `Coalesce`/`Greatest`/`Least`/`Case`) over an operand with more than `s` fractional digits raises `QueryBuildError` there where it used to render, and so does a `Cast` of a literal too large for `p` (#1087). PostgreSQL builds both, as in v0.7.0.
 
 ### What changed
 
@@ -44,12 +44,23 @@ A `Case` with no `output_field` is read branch by branch (#1187): its value on a
 `Cast(Case(When(…, then = F("points")), default = 0), "numeric(10,0)")` over a `FloatField` is
 refused on SQLite; `then = 1.5` at `numeric(10,2)` has nothing to round and builds.
 
-Not checked, as for #1028: `Case(…; output_field = "numeric(p,s)")`, whose value is a branch, and an
+A `Case` with an `output_field` of `numeric(p, s)` renders that cast over whichever branch a row
+matches, so its branches are held to the scale the same way (#1217). Before, it was not checked:
+
+| expression | PostgreSQL | SQLite |
+|---|---|---|
+| `Case(When("grid" => 1, then = F("points") * 1.5), default = 0; output_field = "numeric(10,1)")` | rounded to 1 place | was every digit, **now refused** |
+| `Case(When("grid" => 1, then = Round(F("points") * 1.5, 1)), default = 0; output_field = "numeric(10,1)")` | builds | builds |
+
+A `Cast` over such a `Case` reads its declared scale: `Cast(Case(…; output_field = "numeric(10,1)"),
+"numeric(10,2)")` builds on SQLite, which refused it before.
+
+Not checked, as for #1028: an
 operand PormG cannot type (a JSON key lookup; a `Subquery` is classified by its projection since
 #1124). PostgreSQL still rounds those. Nor is
 the overflow of a column or a computed value, which depends on the row: PostgreSQL raises on a row
-too large for `p` and SQLite answers it. The literal of a `Coalesce`, `Greatest` or `Least` with an
-`output_field` is not checked for overflow either: it is one candidate value among the operands.
+too large for `p` and SQLite answers it. The literal of a `Coalesce`, `Greatest`, `Least` or `Case`
+with an `output_field` is not checked for overflow either: it is one candidate value among the operands.
 
 ### Who this affects
 
@@ -77,6 +88,13 @@ df.pts = round.(Float64.(df.pts); digits = 2)
 
 # ✓ or round to the scale first: Round(x, d) has at most d places on both engines (#1061)
 M.Result.objects.values("resultid", "pts" => Cast(Round("points", 2), "numeric(10,2)"))
+
+# ✗ before — a Case output_field of a scale: 1.555 read 1.6 on PostgreSQL and 1.555 on SQLite (#1217)
+M.Result.objects.values("resultid", "pts" => Case(When("grid" => 1, then = F("points")), default = 0;
+                                                   output_field = "numeric(10,1)"))
+# ✓ after — round each branch to the scale
+M.Result.objects.values("resultid", "pts" => Case(When("grid" => 1, then = Round("points", 1)), default = 0;
+                                                   output_field = "numeric(10,1)"))
 
 # ✓ and give a literal a precision that holds it (#1087)
 M.Result.objects.values("resultid", "cap" => Cast(Value(100), "numeric(5,2)"))

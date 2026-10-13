@@ -39,11 +39,9 @@ from PostgreSQL's exact `numeric` (`Avg` of the 2008 Australian Grand Prix's con
 number, not a different value.
 
 A declared decimal (#1212) is the most explicit statement of what a value means, so it reads as one.
-Its declared width selects no parser. For a `Cast`, and a `Coalesce`/`Greatest`/`Least` `output_field`,
-PostgreSQL rounds to the scale and SQLite refuses a cast that would have to round (#1040), so the value
-is the same and only its type was split. A `Case`'s own `output_field` is not checked: at a scale
-(`numeric(10,1)`) PostgreSQL rounds and SQLite keeps the digits, and both now read that as a
-`Decimal`, so round the branches yourself or leave the scale off.
+Its declared width selects no parser. For a `Cast`, and a `Coalesce`/`Greatest`/`Least`/`Case`
+`output_field`, PostgreSQL rounds to the scale and SQLite refuses a cast that would have to round
+(#1040; a `Case` branch by branch since #1217), so the value is the same and only its type was split.
 
 Unchanged: a column (a `DecimalField` keeps its declared width and exact parser, a `FloatField` reads
 as before), an extremum or window value of a column (`Max("points")`), a `Coalesce`/`Greatest`/`Least`/

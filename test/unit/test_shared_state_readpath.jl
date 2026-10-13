@@ -81,6 +81,8 @@ end
     # The write-backs must have landed on the internal build copy, not on `q`.
     @test q.object.parameters === nothing          # pre-fix: became a param collector
     @test !haskey(q.object.ctes["agg"], "model")   # pre-fix: "model" leaked onto caller
+    # #1034 phase 3: nor the body's built instruction, which holds the connection and the memos.
+    @test !haskey(q.object.ctes["agg"], "body")
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -106,6 +108,13 @@ end
     @test q2.object.ctes["agg"] !== q.object.ctes["agg"]
     # The transient per-build "model" is not carried into the copy.
     @test !haskey(q2.object.ctes["agg"], "model")
+    # #1034 phase 3: nor the body's built instruction. A direct `query` builds on its query itself, so
+    # that one holds the instruction; a copy taken after it must not, or two queries would share its
+    # memos. A query of its own: building `q` here would leave it unlike the original the rest checks.
+    built = _cte_query()
+    PormG.QueryBuilder.query(built; show_query = :sql)
+    @test haskey(built.object.ctes["agg"], "body")
+    @test !haskey(built.copy().object.ctes["agg"], "body")
 
     # AC3 (deterministic form): a divergent filter on the copy renders its own SQL,
     # and rendering the copy leaves the original untouched.

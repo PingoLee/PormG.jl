@@ -394,6 +394,27 @@ function index_names(pool::PormG.PormGPostgres, table_name::String)::Vector{Stri
 end
 
 """
+    index_columns(pool, index_name::String) → Vector{String}
+
+Return the names of the table columns the index `index_name` covers (expression members omitted).
+"""
+function index_columns(pool::PormG.PormGSQLite, index_name::String)::Vector{String}
+  info = PormG.ConnectionPool.fetch(pool, """PRAGMA index_info("$(index_name)");""") |> DataFrame
+  return nrow(info) > 0 ? String[string(n) for n in info.name if !ismissing(n)] : String[]
+end
+
+function index_columns(pool::PormG.PormGPostgres, index_name::String)::Vector{String}
+  rows = PormG.ConnectionPool.fetch(pool,
+    """SELECT a.attname FROM pg_index i
+       JOIN pg_class c ON c.oid = i.indexrelid
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+       WHERE n.nspname = 'public' AND c.relname = '$index_name';""")
+  df = DataFrame(rows)
+  return nrow(df) > 0 ? String.(df[!, 1]) : String[]
+end
+
+"""
     foreign_key_count(pool, table_name::String) → Int
 
 Return the number of FOREIGN KEY constraints on `table_name`. Used to assert that a migration

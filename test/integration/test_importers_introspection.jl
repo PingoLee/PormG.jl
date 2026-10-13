@@ -41,7 +41,6 @@ end
 @testset "Schema Importer / Introspection ($(PORMG_DB_FOLDER))" begin
   settings = PormG.config[PORMG_DB_FOLDER]
   pool = settings.connections
-  is_pg = adapter_name == "PostgreSQL"
 
   ddl(sql) = PormG.ConnectionPool.fetch(pool, sql)
   # Child before parent: since #276 SQLite enforces foreign keys, so dropping the parent while the
@@ -64,29 +63,33 @@ end
     try; ddl("DROP TABLE IF EXISTS \"$(t)\""); catch; end
   end
 
-  # Adapter-appropriate DDL. The VARCHAR/NUMERIC primary keys only stress the
+  # Each engine's own DDL (#1179). The VARCHAR/NUMERIC primary keys only stress the
   # Postgres max_length/max_digits guard; on SQLite they degrade to TEXT/INTEGER — a bare TEXT
   # key reads as the `UUIDField(primary_key = true)` that renders it there (#522), the INTEGER
   # one as an `IDField`; either way a "PK, no crash" check on the SQLite introspection path.
-  natural_pk_ddl = is_pg ?
-    """CREATE TABLE "pormg_it_natural_key" (code VARCHAR(20) PRIMARY KEY, label VARCHAR(100))""" :
-    """CREATE TABLE "pormg_it_natural_key" (code TEXT PRIMARY KEY, label TEXT)"""
-  numeric_pk_ddl = is_pg ?
-    """CREATE TABLE "pormg_it_numeric_key" (id NUMERIC(10,0) PRIMARY KEY, amount NUMERIC(8,2))""" :
-    """CREATE TABLE "pormg_it_numeric_key" (id INTEGER PRIMARY KEY, amount REAL)"""
-  ignored_ddl = is_pg ?
-    """CREATE TABLE "pormg_it_ignored" (id INTEGER PRIMARY KEY, note VARCHAR(50))""" :
-    """CREATE TABLE "pormg_it_ignored" (id INTEGER PRIMARY KEY, note TEXT)"""
+  #
+  # Whether a textual fixture column below declares a length: `VARCHAR(n)` on PostgreSQL, a bare
+  # `TEXT` on SQLite. The expectations that follow from the length read this, not the engine.
+  sized_text = by_engine(postgres = true, sqlite = false)
+  natural_pk_ddl = by_engine(
+    postgres = """CREATE TABLE "pormg_it_natural_key" (code VARCHAR(20) PRIMARY KEY, label VARCHAR(100))""",
+    sqlite = """CREATE TABLE "pormg_it_natural_key" (code TEXT PRIMARY KEY, label TEXT)""")
+  numeric_pk_ddl = by_engine(
+    postgres = """CREATE TABLE "pormg_it_numeric_key" (id NUMERIC(10,0) PRIMARY KEY, amount NUMERIC(8,2))""",
+    sqlite = """CREATE TABLE "pormg_it_numeric_key" (id INTEGER PRIMARY KEY, amount REAL)""")
+  ignored_ddl = by_engine(
+    postgres = """CREATE TABLE "pormg_it_ignored" (id INTEGER PRIMARY KEY, note VARCHAR(50))""",
+    sqlite = """CREATE TABLE "pormg_it_ignored" (id INTEGER PRIMARY KEY, note TEXT)""")
 
   # #292 fixture: one parent plus a child carrying one FK per referential action. The SET DEFAULT
   # column has a REAL column default, which is the combination #287 made a hard failure and #291
   # documented a hand-edit remedy for. `fk_o2o` is UNIQUE so both readers build an OneToOneField
   # for it (#417) — it had the identical on_delete omission as ForeignKey.
-  fk_parent_ddl = is_pg ?
-    """CREATE TABLE "pormg_it_fk_parent" (id BIGINT PRIMARY KEY, label VARCHAR(50))""" :
-    """CREATE TABLE "pormg_it_fk_parent" (id INTEGER PRIMARY KEY, label TEXT)"""
-  fk_child_ddl = is_pg ?
-    """CREATE TABLE "pormg_it_fk_child" (
+  fk_parent_ddl = by_engine(
+    postgres = """CREATE TABLE "pormg_it_fk_parent" (id BIGINT PRIMARY KEY, label VARCHAR(50))""",
+    sqlite = """CREATE TABLE "pormg_it_fk_parent" (id INTEGER PRIMARY KEY, label TEXT)""")
+  fk_child_ddl = by_engine(
+    postgres = """CREATE TABLE "pormg_it_fk_child" (
          id            BIGINT PRIMARY KEY,
          fk_cascade    BIGINT REFERENCES "pormg_it_fk_parent"(id) ON DELETE CASCADE,
          fk_restrict   BIGINT REFERENCES "pormg_it_fk_parent"(id) ON DELETE RESTRICT,
@@ -94,8 +97,8 @@ end
          fk_setdefault BIGINT DEFAULT 1 REFERENCES "pormg_it_fk_parent"(id) ON DELETE SET DEFAULT,
          fk_plain      BIGINT REFERENCES "pormg_it_fk_parent"(id),
          fk_o2o        BIGINT UNIQUE REFERENCES "pormg_it_fk_parent"(id) ON DELETE CASCADE
-       )""" :
-    """CREATE TABLE "pormg_it_fk_child" (
+       )""",
+    sqlite = """CREATE TABLE "pormg_it_fk_child" (
          id            INTEGER PRIMARY KEY,
          fk_cascade    INTEGER REFERENCES "pormg_it_fk_parent"(id) ON DELETE CASCADE,
          fk_restrict   INTEGER REFERENCES "pormg_it_fk_parent"(id) ON DELETE RESTRICT,
@@ -103,7 +106,7 @@ end
          fk_setdefault INTEGER DEFAULT 1 REFERENCES "pormg_it_fk_parent"(id) ON DELETE SET DEFAULT,
          fk_plain      INTEGER REFERENCES "pormg_it_fk_parent"(id),
          fk_o2o        INTEGER UNIQUE REFERENCES "pormg_it_fk_parent"(id) ON DELETE CASCADE
-       )"""
+       )""")
 
   # #389 fixture: the ONLY mixed-case identifiers in this file. Every other fixture is lowercase,
   # so the quoting hazard was invisible in all of them — which is exactly why the bug survived here.
@@ -112,18 +115,18 @@ end
   # covered the `fk_cols` / `col_name` pairing that had to be normalized in the same change. Since
   # #455 nothing is quoted on the wire, so what this fixture pins is the outcome rather than the
   # transform: one identifier, one spelling, on every side.
-  mixed_parent_ddl = is_pg ?
-    """CREATE TABLE "pormg_it_MixedParent" ("Id" BIGINT PRIMARY KEY, "Label" VARCHAR(50))""" :
-    """CREATE TABLE "pormg_it_MixedParent" ("Id" INTEGER PRIMARY KEY, "Label" TEXT)"""
-  mixed_child_ddl = is_pg ?
-    """CREATE TABLE "pormg_it_MixedChild" (
+  mixed_parent_ddl = by_engine(
+    postgres = """CREATE TABLE "pormg_it_MixedParent" ("Id" BIGINT PRIMARY KEY, "Label" VARCHAR(50))""",
+    sqlite = """CREATE TABLE "pormg_it_MixedParent" ("Id" INTEGER PRIMARY KEY, "Label" TEXT)""")
+  mixed_child_ddl = by_engine(
+    postgres = """CREATE TABLE "pormg_it_MixedChild" (
          id         BIGINT PRIMARY KEY,
          "ParentId" BIGINT REFERENCES "pormg_it_MixedParent"("Id") ON DELETE CASCADE
-       )""" :
-    """CREATE TABLE "pormg_it_MixedChild" (
+       )""",
+    sqlite = """CREATE TABLE "pormg_it_MixedChild" (
          id         INTEGER PRIMARY KEY,
          "ParentId" INTEGER REFERENCES "pormg_it_MixedParent"("Id") ON DELETE CASCADE
-       )"""
+       )""")
 
   # #414 fixture: an identifier CONTAINING A SPACE, on the two axes that used to disagree about it.
   # The PostgreSQL `columns` aggregate WAS `quote_ident(name) || ' ' || format_type(…)` and the
@@ -140,35 +143,35 @@ end
   #
   # Both backends: SQLite reads `PRAGMA` output raw and was never affected, so asserting there is
   # what makes this a cross-engine agreement rather than an assumption.
-  spaced_ddl = is_pg ?
-    """CREATE TABLE "pormg_it_spaced" (
+  spaced_ddl = by_engine(
+    postgres = """CREATE TABLE "pormg_it_spaced" (
          id           BIGINT PRIMARY KEY,
          "driver ref" VARCHAR(30),
          "Parent Id"  BIGINT REFERENCES "pormg_it_MixedParent"("Id") ON DELETE CASCADE
-       )""" :
-    """CREATE TABLE "pormg_it_spaced" (
+       )""",
+    sqlite = """CREATE TABLE "pormg_it_spaced" (
          id           INTEGER PRIMARY KEY,
          "driver ref" TEXT,
          "Parent Id"  INTEGER REFERENCES "pormg_it_MixedParent"("Id") ON DELETE CASCADE
-       )"""
+       )""")
 
   # #415 fixture A: a foreign key that references a NON-PRIMARY-KEY unique column. Legal wherever
   # that column carries a UNIQUE constraint, and the shape the old CTE could not express at all —
   # it read the referenced column from the parent's PRIMARY KEY INDEX, never from `con.confkey`,
   # so this introspected as pointing at `id`. `pk_field` was then wrong and so was every consumer
   # of it, and the DDL PormG emitted named a different column than the live constraint does.
-  uq_parent_ddl = is_pg ?
-    """CREATE TABLE "pormg_it_uq_parent" (id BIGINT PRIMARY KEY, ukey VARCHAR(20) UNIQUE, label VARCHAR(50))""" :
-    """CREATE TABLE "pormg_it_uq_parent" (id INTEGER PRIMARY KEY, ukey TEXT UNIQUE, label TEXT)"""
-  uq_child_ddl = is_pg ?
-    """CREATE TABLE "pormg_it_uq_child" (
+  uq_parent_ddl = by_engine(
+    postgres = """CREATE TABLE "pormg_it_uq_parent" (id BIGINT PRIMARY KEY, ukey VARCHAR(20) UNIQUE, label VARCHAR(50))""",
+    sqlite = """CREATE TABLE "pormg_it_uq_parent" (id INTEGER PRIMARY KEY, ukey TEXT UNIQUE, label TEXT)""")
+  uq_child_ddl = by_engine(
+    postgres = """CREATE TABLE "pormg_it_uq_child" (
          id         BIGINT PRIMARY KEY,
          parent_key VARCHAR(20) REFERENCES "pormg_it_uq_parent"(ukey) ON DELETE CASCADE
-       )""" :
-    """CREATE TABLE "pormg_it_uq_child" (
+       )""",
+    sqlite = """CREATE TABLE "pormg_it_uq_child" (
          id         INTEGER PRIMARY KEY,
          parent_key TEXT REFERENCES "pormg_it_uq_parent"(ukey) ON DELETE CASCADE
-       )"""
+       )""")
 
   # #415 fixture B: a COMPOSITE-KEYED parent carrying both remaining shapes on one child table.
   #
@@ -183,28 +186,28 @@ end
   #
   # Both on ONE table on purpose: `parent_a` is the control proving the skip is per-CONSTRAINT, not
   # per-table. `a` carries its own UNIQUE because a single-column FK requires one.
-  comp_parent_ddl = is_pg ?
-    """CREATE TABLE "pormg_it_comp_parent" (
+  comp_parent_ddl = by_engine(
+    postgres = """CREATE TABLE "pormg_it_comp_parent" (
          a BIGINT UNIQUE, b BIGINT, label VARCHAR(50), PRIMARY KEY (a, b)
-       )""" :
-    """CREATE TABLE "pormg_it_comp_parent" (
+       )""",
+    sqlite = """CREATE TABLE "pormg_it_comp_parent" (
          a INTEGER UNIQUE, b INTEGER, label TEXT, PRIMARY KEY (a, b)
-       )"""
-  comp_child_ddl = is_pg ?
-    """CREATE TABLE "pormg_it_comp_child" (
+       )""")
+  comp_child_ddl = by_engine(
+    postgres = """CREATE TABLE "pormg_it_comp_child" (
          id       BIGINT PRIMARY KEY,
          parent_a BIGINT REFERENCES "pormg_it_comp_parent"(a) ON DELETE SET NULL,
          ca       BIGINT,
          cb       BIGINT,
          FOREIGN KEY (ca, cb) REFERENCES "pormg_it_comp_parent"(a, b) ON DELETE CASCADE
-       )""" :
-    """CREATE TABLE "pormg_it_comp_child" (
+       )""",
+    sqlite = """CREATE TABLE "pormg_it_comp_child" (
          id       INTEGER PRIMARY KEY,
          parent_a INTEGER REFERENCES "pormg_it_comp_parent"(a) ON DELETE SET NULL,
          ca       INTEGER,
          cb       INTEGER,
          FOREIGN KEY (ca, cb) REFERENCES "pormg_it_comp_parent"(a, b) ON DELETE CASCADE
-       )"""
+       )""")
 
   # #415 fixture C: a parent with NO PRIMARY KEY, only a UNIQUE column. Legal on both engines — a
   # referenced column needs uniqueness, not the key — and it used to be INVISIBLE to PostgreSQL
@@ -213,32 +216,32 @@ end
   # column then introspected as an ordinary integer with no relation, while SQLite (whose
   # `PRAGMA foreign_key_list` never consulted a primary key) reported it correctly. Dropping that
   # join is what makes the two engines agree, and this is the fixture that says so.
-  nopk_parent_ddl = is_pg ?
-    """CREATE TABLE "pormg_it_nopk_parent" (ukey VARCHAR(20) UNIQUE, label VARCHAR(50))""" :
-    """CREATE TABLE "pormg_it_nopk_parent" (ukey TEXT UNIQUE, label TEXT)"""
-  nopk_child_ddl = is_pg ?
-    """CREATE TABLE "pormg_it_nopk_child" (
+  nopk_parent_ddl = by_engine(
+    postgres = """CREATE TABLE "pormg_it_nopk_parent" (ukey VARCHAR(20) UNIQUE, label VARCHAR(50))""",
+    sqlite = """CREATE TABLE "pormg_it_nopk_parent" (ukey TEXT UNIQUE, label TEXT)""")
+  nopk_child_ddl = by_engine(
+    postgres = """CREATE TABLE "pormg_it_nopk_child" (
          id         BIGINT PRIMARY KEY,
          parent_key VARCHAR(20) REFERENCES "pormg_it_nopk_parent"(ukey) ON DELETE RESTRICT
-       )""" :
-    """CREATE TABLE "pormg_it_nopk_child" (
+       )""",
+    sqlite = """CREATE TABLE "pormg_it_nopk_child" (
          id         INTEGER PRIMARY KEY,
          parent_key TEXT REFERENCES "pormg_it_nopk_parent"(ukey) ON DELETE RESTRICT
-       )"""
+       )""")
 
   # #318: TWO separate single-column UNIQUEs on one table plus a composite. This is the ONLY place
   # PostgreSQL's `unique_constraints` CTE actually runs, and the two-uniques shape is precisely what
   # it got wrong (it merged both constraints' columns into one per-table array, then rejected both
   # for being length 2). The composite pins the must-NOT-mark half on both backends.
-  uniq_ddl = is_pg ?
-    """CREATE TABLE "pormg_it_uniq" (
+  uniq_ddl = by_engine(
+    postgres = """CREATE TABLE "pormg_it_uniq" (
          id BIGINT PRIMARY KEY, slug VARCHAR(60) UNIQUE, token VARCHAR(60) UNIQUE,
          a INT, b INT, plain TEXT, UNIQUE (a, b)
-       )""" :
-    """CREATE TABLE "pormg_it_uniq" (
+       )""",
+    sqlite = """CREATE TABLE "pormg_it_uniq" (
          id INTEGER PRIMARY KEY, slug TEXT UNIQUE, token TEXT UNIQUE,
          a INTEGER, b INTEGER, plain TEXT, UNIQUE (a, b)
-       )"""
+       )""")
 
   drop_fixtures()                      # clean slate if a prior run aborted mid-test
   ddl(natural_pk_ddl)
@@ -275,7 +278,9 @@ end
   # off-by-one subscript examined the NEXT column's flags and missed a descending first column
   # entirely — with no false positives, so every other test stayed green.
   ddl("""CREATE INDEX "pormg_it_uniq_desc_idx" ON "pormg_it_uniq" (b DESC, a)""")
-  # PostgreSQL only: three more shapes, each reached by a different per-column catalog vector.
+  # Three more shapes, each reached by a different per-column vector of PostgreSQL's catalog — so
+  # they are fixtures where that catalog is read (`catalog_ix`), and the expected index set below
+  # follows from them:
   #   opc  — a non-default operator class (`indclass`), the other half of the same subscript bug.
   #          Read since #29, by name, as `opclasses = ("text_pattern_ops", nothing)`.
   #   nf   — ASCENDING but `NULLS FIRST` (`indoption` = 2). Bit 0 alone is not enough: DESC implies
@@ -283,7 +288,8 @@ end
   #          re-emitting it as NULLS LAST.
   #   coll — an explicit `COLLATE` (`indcollation`), the PostgreSQL twin of SQLite's non-BINARY
   #          `coll` filter. Without it the two backends disagree on the same schema.
-  if is_pg
+  catalog_ix = by_engine(postgres = true, sqlite = false)
+  if catalog_ix
     ddl("""CREATE INDEX "pormg_it_uniq_opc_idx"  ON "pormg_it_uniq" (plain text_pattern_ops, slug)""")
     ddl("""CREATE INDEX "pormg_it_uniq_nf_idx"   ON "pormg_it_uniq" (b NULLS FIRST, a)""")
     ddl("""CREATE INDEX "pormg_it_uniq_coll_idx" ON "pormg_it_uniq" (plain COLLATE "C", slug)""")
@@ -314,39 +320,39 @@ end
   # read for reasons unrelated to #455. #472 closed that (`_field_or_drop_default`) and covers the
   # typed shape in its own fixture below — these columns stay TEXT so this section keeps testing
   # the aggregate delimiters it is about, with the default's VALUE still asserted.
-  ddl(is_pg ?
-      """CREATE TABLE "pormg_it_comma, parent" (
+  ddl(by_engine(
+      postgres = """CREATE TABLE "pormg_it_comma, parent" (
            id BIGINT PRIMARY KEY,
            "Ref, Key" VARCHAR(20) UNIQUE,
-           label VARCHAR(50))""" :
-      """CREATE TABLE "pormg_it_comma, parent" (
+           label VARCHAR(50))""",
+      sqlite = """CREATE TABLE "pormg_it_comma, parent" (
            id INTEGER PRIMARY KEY,
            "Ref, Key" TEXT UNIQUE,
-           label TEXT)""")
+           label TEXT)"""))
 
-  ddl(is_pg ?
-      """CREATE TABLE "pormg_it_comma_child" (
+  ddl(by_engine(
+      postgres = """CREATE TABLE "pormg_it_comma_child" (
            id BIGINT PRIMARY KEY,
            "Race, Total" VARCHAR(20) REFERENCES "pormg_it_comma, parent"("Ref, Key") ON DELETE CASCADE,
            plain_id      VARCHAR(20) REFERENCES "pormg_it_comma, parent"("Ref, Key") ON DELETE SET NULL,
            "Idx, Col"    VARCHAR(30),
            note          TEXT NOT NULL DEFAULT concat('a'::text, 'b'::text),
-           team          TEXT DEFAULT 'Ferrari, Scuderia')""" :
-      """CREATE TABLE "pormg_it_comma_child" (
+           team          TEXT DEFAULT 'Ferrari, Scuderia')""",
+      sqlite = """CREATE TABLE "pormg_it_comma_child" (
            id INTEGER PRIMARY KEY,
            "Race, Total" TEXT REFERENCES "pormg_it_comma, parent"("Ref, Key") ON DELETE CASCADE,
            plain_id      TEXT REFERENCES "pormg_it_comma, parent"("Ref, Key") ON DELETE SET NULL,
            "Idx, Col"    TEXT,
            note          TEXT NOT NULL DEFAULT 'ab',
-           team          TEXT DEFAULT 'Ferrari, Scuderia')""")
+           team          TEXT DEFAULT 'Ferrari, Scuderia')"""))
 
   ddl("""CREATE INDEX "pormg_it_comma_idx" ON "pormg_it_comma_child" ("Idx, Col")""")
 
   # The PK axis needs its own table: `pk_cols` and `columns` tore on the same name, so the two sides
   # agreed on the same wrong names and the table came back with TWO phantom keys and no real one.
-  ddl(is_pg ?
-      """CREATE TABLE "pormg_it_comma_key" ("Key, Col" BIGINT PRIMARY KEY, label VARCHAR(20))""" :
-      """CREATE TABLE "pormg_it_comma_key" ("Key, Col" INTEGER PRIMARY KEY, label TEXT)""")
+  ddl(by_engine(
+      postgres = """CREATE TABLE "pormg_it_comma_key" ("Key, Col" BIGINT PRIMARY KEY, label VARCHAR(20))""",
+      sqlite = """CREATE TABLE "pormg_it_comma_key" ("Key, Col" INTEGER PRIMARY KEY, label TEXT)"""))
 
   # #472: expression defaults on columns that are NOT text — the shape that aborted the entire
   # `convert_schema_to_models` read, and therefore `inspectdb` and `makemigrations`, over a single
@@ -364,8 +370,8 @@ end
   # exactly why a live fixture is worth having for it. The PostgreSQL spelling is `concat(...)`
   # rather than `now()` because PostgreSQL REFUSES `text DEFAULT now()`: there is no implicit cast
   # from timestamptz to text, so the fixture would fail to create.
-  ddl(is_pg ?
-      """CREATE TABLE "pormg_it_expr_defaults" (
+  ddl(by_engine(
+      postgres = """CREATE TABLE "pormg_it_expr_defaults" (
            id BIGINT PRIMARY KEY,
            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
            d          DATE DEFAULT CURRENT_DATE,
@@ -373,15 +379,15 @@ end
            u          UUID DEFAULT gen_random_uuid(),
            ok         INTEGER DEFAULT 5,
            note       TEXT DEFAULT 'Ferrari',
-           note_expr  TEXT DEFAULT concat('a'::text, 'b'::text))""" :
-      """CREATE TABLE "pormg_it_expr_defaults" (
+           note_expr  TEXT DEFAULT concat('a'::text, 'b'::text))""",
+      sqlite = """CREATE TABLE "pormg_it_expr_defaults" (
            id INTEGER PRIMARY KEY,
            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
            d          DATE DEFAULT CURRENT_DATE,
            n          INTEGER DEFAULT (abs(random()) % 10),
            ok         INTEGER DEFAULT 5,
            note       TEXT DEFAULT 'Ferrari',
-           note_expr  TEXT DEFAULT CURRENT_TIMESTAMP)""")
+           note_expr  TEXT DEFAULT CURRENT_TIMESTAMP)"""))
 
   saved_ignore = copy(PormG._EXTRA_IGNORE_TABLES[])
   try
@@ -407,7 +413,7 @@ end
     # SQLite fixture declares no length, so it exercises the LENGTHLESS key — which since #522 is a
     # reconstruction too, and the behaviour that would otherwise be untested anywhere.
     code_field = by_name["pormg_it_natural_key"].fields["code"]
-    if is_pg
+    if sized_text
       @test code_field isa PormG.Models.sCharField
       @test code_field.primary_key
       @test code_field.max_length == 20
@@ -431,7 +437,7 @@ end
     @test by_name["pormg_it_numeric_key"].fields["id"] isa PormG.Models.sIDField
 
     # A non-PK sized column keeps its max_length — the guard skipped only the PK.
-    if is_pg
+    if sized_text
       @test by_name["pormg_it_natural_key"].fields["label"].max_length == 100
     end
 
@@ -520,12 +526,12 @@ end
     # row whose backing index is `indisunique`; on SQLite `il."unique" = 1`. Either filter failing
     # would re-declare a uniqueness guarantee as a plain index.
     # #29 part 2: the explicitly collated one is read too, as SQL text (it used to be refused).
-    expected_ix = is_pg ? ["pormg_it_uniq_ba_idx", "pormg_it_uniq_coll_idx", "pormg_it_uniq_desc_idx", "pormg_it_uniq_nf_idx", "pormg_it_uniq_opc_idx"] :
-                          ["pormg_it_uniq_ba_idx", "pormg_it_uniq_desc_idx"]
+    expected_ix = sort!(vcat(["pormg_it_uniq_ba_idx", "pormg_it_uniq_desc_idx"],
+                             catalog_ix ? ["pormg_it_uniq_coll_idx", "pormg_it_uniq_nf_idx", "pormg_it_uniq_opc_idx"] : String[]))
     @test live_ix_names == expected_ix
     # Named individually as well, so a failure says WHICH shape leaked rather than only that the
     # list moved.
-    if is_pg
+    if catalog_ix
       # ASC + NULLS FIRST (indoption == 2): read since #29 part 2 as text, the placement in the member's words
       @test only(i for i in live_ix if i.name == "pormg_it_uniq_nf_idx").expressions == ["b NULLS FIRST", "a"]
       # explicit COLLATE (indcollation differs): read since #29 part 2 as the catalog's element texts
@@ -537,7 +543,7 @@ end
     # for the `indoption` subscript.
     @test (ix_by_name["pormg_it_uniq_desc_idx"].fields, ix_by_name["pormg_it_uniq_desc_idx"].descending) ==
           (["b", "a"], [true, false])
-    if is_pg
+    if catalog_ix
       @test ix_by_name["pormg_it_uniq_opc_idx"].opclasses == ["text_pattern_ops", nothing]
     end
     # Both are hand-made — read, but never PormG's to drop.
@@ -551,8 +557,8 @@ end
     uniq_src = PormG.Models.Model_to_str(uniq)
     @test occursin("indexes = [Models.Index(fields = (\"b\", \"a\",), name = \"pormg_it_uniq_ba_idx\"), ", uniq_src)
     @test occursin("Models.Index(fields = (\"-b\", \"a\",), name = \"pormg_it_uniq_desc_idx\")", uniq_src)
-    is_pg && @test occursin("Models.Index(expressions = (\"plain COLLATE \\\"C\\\"\", \"slug\",), name = \"pormg_it_uniq_coll_idx\")", uniq_src)
-    is_pg && @test occursin("Models.Index(fields = (\"plain\", \"slug\",), name = \"pormg_it_uniq_opc_idx\", " *
+    catalog_ix && @test occursin("Models.Index(expressions = (\"plain COLLATE \\\"C\\\"\", \"slug\",), name = \"pormg_it_uniq_coll_idx\")", uniq_src)
+    catalog_ix && @test occursin("Models.Index(fields = (\"plain\", \"slug\",), name = \"pormg_it_uniq_opc_idx\", " *
                             "opclasses = (\"text_pattern_ops\", nothing,))", uniq_src)
     uniq_mod = Module()
     Core.eval(uniq_mod, :(import PormG.Models))
@@ -571,7 +577,7 @@ end
     # PostgreSQL names the constraint itself (`<table>_<cols>_key`) and that name is kept, so a
     # re-migration reproduces it. SQLite's `sqlite_autoindex_*` is reserved and is NOT written into
     # the models file: PormG derives a name instead, and a derived name matches any live one.
-    @test is_pg ? ucs[1].name == "pormg_it_uniq_a_b_key" : ucs[1].name === nothing
+    @test isequal(ucs[1].name, by_engine(postgres = "pormg_it_uniq_a_b_key", sqlite = nothing))
     @test occursin("Models.UniqueConstraint(fields = (\"a\", \"b\",)", uniq_src)
     @test [uc.fields for uc in uniq_reloaded.cache["unique_constraints"]["constraints"]] == [["a", "b"]]
 
@@ -653,11 +659,14 @@ end
     # reading back false is the #325 churn, in a new place.
     @test spaced.fields["driver ref"].db_index
     @test spaced.cache["index"]["driver ref"] == "pormg_it_spaced_ref_idx"
-    if is_pg
+    if sized_text
       # The type survived too: `col_parts[2]` was `Id"`-shaped for the FK column and equally wrong
       # here, so a sized textual column degraded to TextField and lost its length.
       @test spaced.fields["driver ref"] isa PormG.Models.sCharField
       @test spaced.fields["driver ref"].max_length == 30
+    else
+      # A bare `TEXT` column has no length to keep.
+      @test spaced.fields["driver ref"] isa PormG.Models.sTextField
     end
 
     # ── 3f. An FK reads the column its constraint names, not the parent's PK (#415) ──
@@ -714,11 +723,11 @@ end
     # consuming app to redeclare these columns by hand, so the type it names has to be the one
     # introspection actually reports — `bigint` maps to `BigIntegerField` (src/constants.jl), and
     # advising `IntegerField` would trade the lost relation for a permanent `:type` proposal.
-    # PostgreSQL only: the SQLite fixture declares `INTEGER`, which is a different (correct) answer.
-    if is_pg
-      @test comp_child.fields["ca"] isa PormG.Models.sBigIntegerField
-      @test comp_child.fields["cb"] isa PormG.Models.sBigIntegerField
-    end
+    # Per engine, from each fixture's DDL: SQLite's declares `INTEGER`, which is a different (correct)
+    # answer.
+    member_type = by_engine(postgres = PormG.Models.sBigIntegerField, sqlite = PormG.Models.sIntegerField)
+    @test comp_child.fields["ca"] isa member_type
+    @test comp_child.fields["cb"] isa member_type
 
     # ── 3h. A foreign key into a PRIMARY-KEY-LESS parent is visible at all (#415) ──
     # The third consequence of correlating through `confkey`, and the one that is a pure gain. The
@@ -801,9 +810,9 @@ end
     #    `, `, and it is the stronger one for a tear because it compares the text byte for byte.
     @test haskey(comma_child.fields, "note")
     @test !comma_child.fields["note"].null
-    if is_pg
-      @test comma_child.fields["note"].default === nothing
-    end
+    # PostgreSQL's fixture default is the expression `concat(...)`, which is not kept as `default=`;
+    # SQLite's is the literal `'ab'`, which is.
+    @test isequal(comma_child.fields["note"].default, by_engine(postgres = nothing, sqlite = "ab"))
 
     # 7. The PK axis. `primary_keys` and `columns` tore on the SAME name, so the two sides agreed
     #    on both wrong names and the table came back with two phantom keys and no real column.
@@ -925,8 +934,8 @@ end
     expr_model = expr_by_name["pormg_it_expr_defaults"]
 
     # 1. Every column arrived. Pre-fix, none did — there was no model at all to look at.
-    expected_cols = is_pg ? ["id", "created_at", "d", "n", "u", "ok", "note", "note_expr"] :
-                            ["id", "created_at", "d", "n", "ok", "note", "note_expr"]
+    expected_cols = by_engine(postgres = ["id", "created_at", "d", "n", "u", "ok", "note", "note_expr"],
+                              sqlite = ["id", "created_at", "d", "n", "ok", "note", "note_expr"])
     @test Set(keys(expr_model.fields)) == Set(expected_cols)
 
     # 2. The expression defaults are CARRIED as `db_default` (#496) and the COLUMN keeps its real
@@ -946,13 +955,10 @@ end
     #     and it is read from a REAL catalog rather than a synthetic row, so it also pins the exact
     #     spelling `pg_get_expr` / `PRAGMA table_info` hands back.
     @test expr_model.fields["d"].db_default == "CURRENT_DATE"
-    if is_pg
-      @test expr_model.fields["created_at"].db_default == (postgres = "now()",)
-      @test expr_model.fields["n"].db_default == (postgres = "random() * (10)::double precision",)
-    else
-      @test expr_model.fields["created_at"].db_default == "CURRENT_TIMESTAMP"
-      @test expr_model.fields["n"].db_default == (sqlite = "abs(random()) % 10",)
-    end
+    @test expr_model.fields["created_at"].db_default ==
+          by_engine(postgres = (postgres = "now()",), sqlite = "CURRENT_TIMESTAMP")
+    @test expr_model.fields["n"].db_default ==
+          by_engine(postgres = (postgres = "random() * (10)::double precision",), sqlite = (sqlite = "abs(random()) % 10",))
 
     # 3. …and NOT NULL survived. The guard rebuilds the field without the default, so a retry that
     #    lost the other kwargs would report this column nullable and make every `makemigrations`
@@ -972,12 +978,13 @@ end
     @test expr_model.fields["note_expr"] isa PormG.Models.sTextField
     @test expr_model.fields["note_expr"].default === nothing
     @test expr_model.fields["note_expr"].db_default ==
-          (is_pg ? (postgres = "concat('a'::text, 'b'::text)",) : "CURRENT_TIMESTAMP")
+          by_engine(postgres = (postgres = "concat('a'::text, 'b'::text)",), sqlite = "CURRENT_TIMESTAMP")
 
-    # 5. PostgreSQL-only: `gen_random_uuid()` on a UUID column, the most common uuid default there
-    #    is. It reaches a DIFFERENT arm from the generic one (the `uuid` branch), which is why the
-    #    fix covers seven call sites rather than the one the issue named.
-    if is_pg
+    # 5. `gen_random_uuid()` on a UUID column, the most common uuid default there is — in the
+    #    fixture where it exists (`u`; SQLite has no UUID type). It reaches a DIFFERENT arm from the
+    #    generic one (the `uuid` branch), which is why the fix covers seven call sites rather than
+    #    the one the issue named.
+    if "u" in expected_cols
       @test expr_model.fields["u"] isa PormG.Models.sUUIDField
       @test expr_model.fields["u"].default === nothing
       @test expr_model.fields["u"].db_default == (postgres = "gen_random_uuid()",)
@@ -993,8 +1000,8 @@ end
     # The columns that USED to be reported, kept as a named set because section 6b below still
     # checks `check()` against exactly this list — the diagnostic survives even though the warning
     # does not.
-    expr_expected_cols = Set(is_pg ? ["created_at", "d", "n", "u", "note_expr"] :
-                                     ["created_at", "d", "n", "note_expr"])
+    expr_expected_cols = Set(by_engine(postgres = ["created_at", "d", "n", "u", "note_expr"],
+                                       sqlite = ["created_at", "d", "n", "note_expr"]))
 
     # 7. The generated model file carries the expression as `db_default=` and never as `default=`.
     #    `Model_to_str` is what `inspectdb` writes to disk, so this is the artifact the user
@@ -1055,7 +1062,7 @@ end
     # engine the suite is running, through the real schema query rather than PRAGMA output alone —
     # and it is the only coverage of `check`'s PostgreSQL arm against a live server.
     chk = PormG.Migrations.check(pool, settings; include_table = ["pormg_it_expr_defaults"])
-    @test chk.backend === (is_pg ? :postgres : :sqlite)
+    @test chk.backend === engine_key()
     chk_cols = Set(only(f.columns) for f in chk.findings)
     @test chk_cols == expr_expected_cols          # the importer and the report cannot disagree
     @test all(f.kind === :expression_default for f in chk.findings)
@@ -1079,12 +1086,11 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Constant column default: the default= spelling converges, the db_default one is refused (#1033)" begin
   pool = PormG.config[PORMG_DB_FOLDER].connections
-  is_pg = adapter_name == "PostgreSQL"
   M1033 = PormG.Models
   tbl = "pormg_it_1033"
   ddl(sql) = PormG.ConnectionPool.fetch(pool, sql)
   drop1033!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
-  pin(s) = is_pg ? (postgres = s,) : (sqlite = s,)
+  pin(s) = NamedTuple{(engine_key(),)}((s,))    # pinned to the engine under test
   cols = Pair{Symbol, Any}[
     :laps     => M1033.IntegerField(null = true, default = 0),
     :status   => M1033.CharField(max_length = 20, null = true, default = "Finished"),
@@ -1093,15 +1099,15 @@ end
     # An expression both catalogs print back as written, so it stays a `db_default` and converges.
     :grid     => M1033.IntegerField(null = true, db_default = pin("0 + 0")),
   ]
-  # PostgreSQL only: the GenericIPAddressField docstring's own example, which replaced the literal
-  # `'10.0.0.1'::inet` it used to recommend. SQLite refuses the type (#28).
-  is_pg && push!(cols, :client => M1033.GenericIPAddressField(null = true, db_default = pin("inet_client_addr()")))
+  # The GenericIPAddressField docstring's own example, which replaced the literal `'10.0.0.1'::inet`
+  # it used to recommend. A feature: a backend without network types refuses the column (#28).
+  requires(:network_types) && push!(cols, :client => M1033.GenericIPAddressField(null = true, db_default = pin("inet_client_addr()")))
   model1033 = M1033.Model(tbl; id = M1033.IDField(), cols...)
   schema1033 = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.PormGModel}}}(
     Symbol(tbl) => Dict{Symbol, Union{Bool, PormG.PormGModel}}(:model => model1033, :exist => false))
   settings1033 = (s = PormG.Configuration.Settings(); s.change_db = true; s)
   plan1033(live) = PormG.Migrations.get_migration_plan(live, schema1033, pool, settings1033; interactive = false)
-  split1033 = is_pg ? PormG.Migrations._split_pg_statements : PormG.Migrations._split_sqlite_statements
+  split1033 = split_statements
 
   # The spelling this issue retires is refused at declaration, on the engine under test.
   @test_throws PormG.FieldValidationError M1033.IntegerField(db_default = pin("0"))
@@ -1136,12 +1142,13 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "An expression default the deparser re-spells converges through its marker (#1037)" begin
   pool = PormG.config[PORMG_DB_FOLDER].connections
-  is_pg = adapter_name == "PostgreSQL"
   M1037 = PormG.Models
   tbl = "pormg_it_1037"
   ddl(sql) = PormG.ConnectionPool.fetch(pool, sql)
   drop1037!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
-  pin(s) = is_pg ? (postgres = s,) : (sqlite = s,)
+  pin(s) = NamedTuple{(engine_key(),)}((s,))    # pinned to the engine under test
+  # Whether the engine re-spells a default, so PormG stamps an ownership marker on the column.
+  marks_default = by_engine(postgres = true, sqlite = false)
   model1037 = M1037.Model(tbl; id = M1037.IDField(),
     status = M1037.CharField(max_length = 20, null = true, db_default = pin("lower('OPEN')")),
     code   = M1037.CharField(max_length = 20, null = true, db_default = pin("replace('P-1', '-', '')")),
@@ -1153,7 +1160,7 @@ end
   settings1037 = (s = PormG.Configuration.Settings(); s.change_db = true; s)
   plan1037(live) = get(PormG.Migrations.get_migration_plan(live, schema1037, pool, settings1037;
                                                            interactive = false), Symbol(tbl), Dict())
-  split1037 = is_pg ? PormG.Migrations._split_pg_statements : PormG.Migrations._split_sqlite_statements
+  split1037 = split_statements
   apply1037!(plan) = foreach(sql -> foreach(ddl, split1037(sql)), values(plan))
   read1037() = only(PormG.Migrations.read_live_schema(pool; include_table = [tbl]))
   comment1037() = only(DataFrame(ddl("SELECT col_description('\"$(tbl)\"'::regclass, " *
@@ -1164,11 +1171,11 @@ end
   try
     first_plan = plan1037(PormG.Migrations.LiveTable[])
     # A pinned expression renders verbatim; PostgreSQL also gets the stamp, SQLite none.
-    @test occursin("DO \$pormg\$", join(values(first_plan), "\n")) == is_pg
+    @test occursin("DO \$pormg\$", join(values(first_plan), "\n")) == marks_default
     apply1037!(first_plan)
     live = read1037()
     @test live.columns["status"].default isa PormG.ExpressionDefault
-    if is_pg
+    if marks_default
       # The deparser's spelling, which is what made the text compare churn…
       @test live.columns["status"].default.sql == "lower('OPEN'::text)"
       @test live.columns["code"].default.sql == "replace('P-1'::text, '-'::text, ''::text)"
@@ -1176,11 +1183,16 @@ end
       @test live.columns["status"].default.owned == PormG.db_default_hash("lower('OPEN')")
       @test live.columns["code"].default.owned == PormG.db_default_hash("replace('P-1', '-', '')")
       @test live.columns["tag"].default.owned == PormG.db_default_hash("lower('A') || 'b'")
+    else
+      # The declared text kept verbatim, and no marker.
+      @test live.columns["status"].default.sql == "lower('OPEN')"
+      @test live.columns["status"].default.owned === nothing
     end
     # THE convergence assertion: nothing is planned against the table just created.
     @test isempty(plan1037([live]))
 
-    if is_pg
+    # The three ways a marker stops vouching — only where there is a marker.
+    if marks_default
       # 1. A comment written over the marker: the column is compared as text again, exactly as
       #    before #1037, so it plans; applying that re-stamps and KEEPS the user's text.
       ddl("COMMENT ON COLUMN \"$(tbl)\".status IS 'Race status, set by the steward'")
@@ -1235,7 +1247,7 @@ end
 # Mutation gate: drop `NOT c.relispartition` and the partition and its index come back; drop the
 # `pg_depend` clause and the extension member does.
 # ─────────────────────────────────────────────────────────────────────────────
-if adapter_name == "PostgreSQL"
+if only_on(:postgres, "partitions and extension members are PostgreSQL catalog relations (SQLite's half: test/unit/test_live_schema_reader.jl)")
   @testset "Introspection ownership: partitions, extension tables and views are not read (#730)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
     ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
@@ -1333,7 +1345,7 @@ end
 # Mutation gate: restore the pre-#847 CTE and every hand-made column reads as indexed and the plan
 # is no longer empty; tighten the collation test to `= 0` and `plain_txt`/`colc` stop reading back.
 # ─────────────────────────────────────────────────────────────────────────────
-if adapter_name == "PostgreSQL"
+if only_on(:postgres, "reads index shapes from PostgreSQL's catalog (pg_index)")
   @testset "One-column index PormG cannot re-emit is neither read nor dropped (#847)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
     ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
@@ -1421,7 +1433,7 @@ end
 # test/unit/test_migrations_check.jl.
 # Mutation gate: drop the `:invalid_index` arm from `check` and the reported set is empty.
 # ─────────────────────────────────────────────────────────────────────────────
-if adapter_name == "PostgreSQL"
+if only_on(:postgres, "an invalid index is PostgreSQL's (CREATE INDEX CONCURRENTLY, indisvalid)")
   @testset "Invalid index is reported by check() and survives the plan (#871)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
     settings = PormG.config[PORMG_DB_FOLDER]
@@ -1511,7 +1523,7 @@ end
 # is no longer empty; put `ILIKE '%>= 0%'` back in `get_constraints_checks` and it names the user's
 # constraint for `grid`/`price`.
 # ─────────────────────────────────────────────────────────────────────────────
-if adapter_name == "PostgreSQL"
+if only_on(:postgres, "reads CHECK text deparsed by pg_get_constraintdef")
   @testset "Non-negative CHECK: a user range check is not PormG's, and PormG's still round-trips (#731)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
     ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
@@ -1606,7 +1618,7 @@ end
 # Read the bound from the front instead of the end and `size <= 9` is missed; drop `quote_ident` from
 # the rebuild and `Mixed` (and the quoted `size <= 9`) are missed.
 # ─────────────────────────────────────────────────────────────────────────────
-if adapter_name == "PostgreSQL"
+if only_on(:postgres, "reads CHECK text deparsed by pg_get_constraintdef")
   @testset "Byte-length CHECK: a user bound is not PormG's, and PormG's still round-trips and is replaced (#747)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
     ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
@@ -1721,7 +1733,7 @@ end
 # Mutation gate: make `alter_field` drop only the first name and both "one apply" assertions fail
 # (the plan after the apply is not empty).
 # ─────────────────────────────────────────────────────────────────────────────
-if adapter_name == "PostgreSQL"
+if only_on(:postgres, "reads CHECK text deparsed by pg_get_constraintdef")
   @testset "Doubled PormG-form CHECKs: the plan drops them all and converges in one apply (#752)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
     ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
@@ -1795,7 +1807,7 @@ end
 # Mutation gate: drop the cap filter from `_reader_checks` and `mid` reads 1500000000, so the
 # unbounded declaration plans a DROP CONSTRAINT and the first convergence assertion fails.
 # ─────────────────────────────────────────────────────────────────────────────
-if adapter_name == "PostgreSQL"
+if only_on(:postgres, "reads CHECK text deparsed by pg_get_constraintdef")
   @testset "Byte bound above 1 GiB: left unread, and the column converges (#751)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
     ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
@@ -1861,7 +1873,7 @@ end
 # type and `holder` is missed; drop the `contype = 'f'` or the owner exclusion (or only its
 # `pg_constraint` arm) and the child's key, a table's own sequence default or its CHECK is reported.
 # ─────────────────────────────────────────────────────────────────────────────
-if adapter_name == "PostgreSQL"
+if only_on(:postgres, "CASCADE dependents are read from PostgreSQL's pg_depend")
   @testset "Dropped tables: dependents CASCADE would take are found (#754)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
     ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
@@ -2044,23 +2056,26 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "inspectdb include_views: real views become unmanaged, keyless models (#767)" begin
   pool = PormG.config[PORMG_DB_FOLDER].connections
-  is_pg = adapter_name == "PostgreSQL"
   ddl(sql) = PormG.ConnectionPool.fetch(pool, sql)
   view, mview = "pormg_it_767_points_v", "pormg_it_767_wins_mv"
+  # Engine facts, one row each: whether the engine has a materialized view to read, and whether it
+  # gives a computed view column (`SUM(points)`) a type.
+  has_mview = by_engine(postgres = true, sqlite = false)
+  types_view_sum = by_engine(postgres = true, sqlite = false)
   function drop767!()
     try; ddl("DROP VIEW IF EXISTS \"$(view)\""); catch; end
-    is_pg && try; ddl("DROP MATERIALIZED VIEW IF EXISTS \"$(mview)\""); catch; end
+    has_mview && try; ddl("DROP MATERIALIZED VIEW IF EXISTS \"$(mview)\""); catch; end
   end
   key = mktempdir()
   drop767!()
   try
     ddl("CREATE VIEW \"$(view)\" AS SELECT \"driverid\", SUM(\"points\") AS \"points\" FROM \"result\" GROUP BY \"driverid\"")
-    if is_pg
+    if has_mview
       ddl("CREATE MATERIALIZED VIEW \"$(mview)\" AS SELECT \"driverid\", COUNT(*) AS \"wins\" " *
           "FROM \"result\" WHERE \"position\" = 1 GROUP BY \"driverid\"")
       ddl("CREATE UNIQUE INDEX \"$(mview)_driverid\" ON \"$(mview)\" (\"driverid\")")
     end
-    names = is_pg ? [view, mview] : [view]
+    names = has_mview ? [view, mview] : [view]
 
     # Only the view reader sees them.
     @test isempty(PormG.Migrations.read_live_schema(pool; include_table = names))
@@ -2068,11 +2083,9 @@ end
 
     # Import them into a scratch folder registered on the suite's own connection.
     PormG.config[key] = PormG.Configuration.Settings(connections = pool, db_def_folder = key, change_data = true)
-    if is_pg
-      PormG.Migrations.import_models_from_postgres(key; force_replace = true, include_table = names, include_views = true)
-    else
-      PormG.Migrations.import_models_from_sqlite(key; force_replace = true, include_table = names, include_views = true)
-    end
+    import_models = by_engine(postgres = PormG.Migrations.import_models_from_postgres,
+                              sqlite = PormG.Migrations.import_models_from_sqlite)
+    import_models(key; force_replace = true, include_table = names, include_views = true)
     content = read(joinpath(key, "automatic_models.jl"), String)
     for n in names
       # The marker line, then the model — captured apart, because the marker itself names
@@ -2085,8 +2098,8 @@ end
       @test !occursin("IDField", block.captures[1])
     end
     # SUM(points): PostgreSQL types it, SQLite gives a computed view column no type — named by a marker.
-    @test occursin("# PormG: the database reports no type for 'points' of the view '$(view)'", content) == !is_pg
-    if is_pg
+    @test occursin("# PormG: the database reports no type for 'points' of the view '$(view)'", content) == !types_view_sum
+    if types_view_sum
       # The shape docs/src/models.md shows: the fixture's bigint key is a nullable BigIntegerField, and
       # SUM over a double precision column a nullable float — every view column reads as nullable.
       @test occursin("Pormg_it_767_points_v = Models.Model(\"pormg_it_767_points_v\", managed = false,\n" *
@@ -2130,7 +2143,7 @@ end
 # reads as positive (the plan stays empty only because the dropper still finds nothing to drop); drop it
 # from the dropper alone and `get_constraints_checks` names the declared CHECK. Each fails one assertion.
 # ─────────────────────────────────────────────────────────────────────────────
-if adapter_name == "PostgreSQL"
+if only_on(:postgres, "constraint ownership markers are PostgreSQL comments (COMMENT ON CONSTRAINT)")
   @testset "CheckConstraint: declared, marked, read back, replaced, renamed and adopted (#742)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
     ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
@@ -2258,7 +2271,7 @@ end
 # Mutation gate: drop `_PG_MARKED_INDEX` from the composite reader's arity predicate and the
 # one-column marked indexes stop reading back, so the converged plan re-creates them.
 # ─────────────────────────────────────────────────────────────────────────────
-if adapter_name == "PostgreSQL"
+if only_on(:postgres, "index access methods and operator classes read from PostgreSQL's catalog (pg_am, pg_opclass)")
   @testset "Index method, opclasses and DESC: declared, marked, read back, adopted, owned (#29)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
     ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
@@ -2383,7 +2396,7 @@ end
 # Mutation gate: refuse `has_include` again in `_pg_composite_indexes` and the declared covering
 # indexes stop reading back, so the converged plan re-creates them.
 # ─────────────────────────────────────────────────────────────────────────────
-if adapter_name == "PostgreSQL"
+if only_on(:postgres, "covering indexes read back from PostgreSQL's pg_get_indexdef, marked with COMMENT ON INDEX")
   @testset "Covering indexes: declared, marked, read back, adopted, owned (#934)" begin
     pool = PormG.config[PORMG_DB_FOLDER].connections
     ddl(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
@@ -2494,8 +2507,16 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Expression and partial indexes: declared, marked, read back, adopted, owned (#29 part 2)" begin
   pool = PormG.config[PORMG_DB_FOLDER].connections
-  pg = adapter_name == "PostgreSQL"
   ddl(sql) = (PormG.ConnectionPool.fetch(pool, sql); nothing)          # DDL: no result set on SQLite
+  # Engine facts, one row each (#1179):
+  #   marks_in_comment — the marker lives in the index's own COMMENT, which adopting an index writes
+  #                      (after a DBA's note); on SQLite it closes the CREATE INDEX text, which
+  #                      adopting cannot rewrite, so an adopted index stays unmarked there;
+  #   catalog_shapes   — two more declared shapes this engine builds and reads back: a GIN index over
+  #                      a tsvector expression, and a NULLS placement inside an index expression
+  #                      (SQLite has neither).
+  marks_in_comment = by_engine(postgres = true, sqlite = false)
+  catalog_shapes = by_engine(postgres = true, sqlite = false)
   q29b(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
   tbl = "pormg_it_29b_driver"
   drop29b!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
@@ -2513,22 +2534,26 @@ end
   plan29b(m) = PormG.Migrations.get_migration_plan([live29b()], schema29b(m), pool, settings29b; interactive = false)
   keys29b(p) = haskey(p, Symbol(tbl)) ? collect(keys(p[Symbol(tbl)])) : String[]
   apply29b!(plan) = for sql in first(PormG.Migrations._order_statements(collect(values(plan))))
-    foreach(ddl, pg ? PormG.Migrations._split_pg_statements(sql) : PormG.Migrations._split_sqlite_statements(sql))
+    foreach(ddl, split_statements(sql))
   end
   # The marker as stored: the index's comment on PostgreSQL, the comment closing the list on SQLite.
-  marker29b(name) = pg ?
-    (r = q29b("SELECT obj_description('\"$(name)\"'::regclass, 'pg_class') AS c")[1, :c]; r === missing ? nothing : String(r)) :
-    PormG.Migrations._sqlite_index_marker(String(q29b("SELECT sql FROM sqlite_master WHERE name = '$(name)'")[1, :sql]))
+  marker29b = by_engine(
+    postgres = name -> (r = q29b("SELECT obj_description('\"$(name)\"'::regclass, 'pg_class') AS c")[1, :c];
+                        r === missing ? nothing : String(r)),
+    sqlite = name -> PormG.Migrations._sqlite_index_marker(
+                       String(q29b("SELECT sql FROM sqlite_master WHERE name = '$(name)'")[1, :sql])))
 
   lower = IX(expressions = ("lower(surname)",), name = "pormg_it_29b_surname_lower")
   finishers(cond) = IX(fields = ("raceid", "-points"), condition = cond, name = "pormg_it_29b_finishers")
-  collated = IX(expressions = (pg ? "surname COLLATE \"C\"" : "surname COLLATE NOCASE",), name = "pormg_it_29b_surname_coll")
+  # An explicit collation, in each engine's own collation name.
+  collation = by_engine(postgres = "surname COLLATE \"C\"", sqlite = "surname COLLATE NOCASE")
+  collated = IX(expressions = (collation,), name = "pormg_it_29b_surname_coll")
   declared = Any[lower, finishers("position IS NOT NULL"), collated]
-  pg && push!(declared, IX(expressions = ("to_tsvector('simple', surname)",), method = "gin", name = "pormg_it_29b_surname_tsv"))
+  catalog_shapes && push!(declared, IX(expressions = ("to_tsvector('simple', surname)",), method = "gin", name = "pormg_it_29b_surname_tsv"))
   # A NULLS placement written as an expression: PostgreSQL stores a plain column with `indoption` 1,
   # which the reader takes as text — so it is read back, and the plan converges (SQLite has no NULLS
   # in CREATE INDEX).
-  pg && push!(declared, IX(expressions = ("points DESC NULLS LAST",), name = "pormg_it_29b_points_nulls"))
+  catalog_shapes && push!(declared, IX(expressions = ("points DESC NULLS LAST",), name = "pormg_it_29b_points_nulls"))
   names = [ix.name for ix in declared]
 
   drop29b!()
@@ -2548,17 +2573,18 @@ end
     @test issubset(names, keys(byname))
     # Measured: PostgreSQL's pretty deparse (`pg_get_indexdef(oid, 0, true)`) — the cast unparenthesised,
     # a keyword-named column quoted in the predicate.
-    @test byname["pormg_it_29b_surname_lower"].expressions == [pg ? "lower(surname::text)" : "lower(surname)"]
+    @test byname["pormg_it_29b_surname_lower"].expressions ==
+          [by_engine(postgres = "lower(surname::text)", sqlite = "lower(surname)")]
     fin = byname["pormg_it_29b_finishers"]
     @test (fin.columns, fin.descending) == (["raceid", "points"], [false, true])
-    @test fin.condition == (pg ? "\"position\" IS NOT NULL" : "position IS NOT NULL")
-    @test byname["pormg_it_29b_surname_coll"].expressions == [pg ? "surname COLLATE \"C\"" : "surname COLLATE NOCASE"]
-    pg && @test byname["pormg_it_29b_surname_tsv"].expressions == ["to_tsvector('simple'::regconfig, surname::text)"]
+    @test fin.condition == by_engine(postgres = "\"position\" IS NOT NULL", sqlite = "position IS NOT NULL")
+    @test byname["pormg_it_29b_surname_coll"].expressions == [collation]
+    catalog_shapes && @test byname["pormg_it_29b_surname_tsv"].expressions == ["to_tsvector('simple'::regconfig, surname::text)"]
     @test isempty(live29b().indexes)                 # none is a `db_index`: one owner per index
     @test all(isempty, values(plan29b(model29b(declared...))))
 
     # The partial index really is partial: the planner may use it for a matching predicate.
-    if !pg
+    if only_on(:sqlite, "reads the plan through SQLite's EXPLAIN QUERY PLAN")
       qp = q29b("EXPLAIN QUERY PLAN SELECT raceid FROM \"$(tbl)\" WHERE raceid = 1 AND position IS NOT NULL ORDER BY points DESC")
       @test any(occursin("pormg_it_29b_finishers", string(d)) for d in qp.detail)
     end
@@ -2566,9 +2592,10 @@ end
     # inspectdb writes the catalog's text, which plans nothing against the live table.
     read_back = only(m for m in PormG.Migrations.convert_schema_to_models(pool; include_table = [tbl]))
     src = PormG.Models.Model_to_str(read_back)
-    @test occursin(pg ? "name = \"pormg_it_29b_finishers\", condition = \"\\\"position\\\" IS NOT NULL\")" :
-                        "name = \"pormg_it_29b_finishers\", condition = \"position IS NOT NULL\")", src)
-    @test occursin(pg ? "Models.Index(expressions = (\"lower(surname::text)\",)" : "Models.Index(expressions = (\"lower(surname)\",)", src)
+    @test occursin(by_engine(postgres = "name = \"pormg_it_29b_finishers\", condition = \"\\\"position\\\" IS NOT NULL\")",
+                             sqlite = "name = \"pormg_it_29b_finishers\", condition = \"position IS NOT NULL\")"), src)
+    @test occursin(by_engine(postgres = "Models.Index(expressions = (\"lower(surname::text)\",)",
+                             sqlite = "Models.Index(expressions = (\"lower(surname)\",)"), src)
     mod29b = Module()
     Core.eval(mod29b, :(import PormG.Models))
     regenerated = Core.eval(mod29b, Meta.parse(src))
@@ -2576,7 +2603,7 @@ end
 
     # A hand-made functional + partial index: read, unmarked, never planned away…
     ddl("CREATE INDEX pormg_it_29b_hand ON \"$(tbl)\" (upper(surname)) WHERE points > 10")
-    pg && ddl("COMMENT ON INDEX pormg_it_29b_hand IS 'built by ops for the standings page'")
+    marks_in_comment && ddl("COMMENT ON INDEX pormg_it_29b_hand IS 'built by ops for the standings page'")
     hand = only(c for c in live29b().composites if c.name == "pormg_it_29b_hand")
     @test hand.marker === nothing && !PormG.Migrations.composite_is_owned(hand)
     @test all(isempty, values(plan29b(model29b(declared...))))
@@ -2589,9 +2616,9 @@ end
     # …and adopted by a declaration of the catalog's text: a COMMENT on PostgreSQL, nothing on SQLite.
     adopting = model29b(declared..., IX(expressions = hand.expressions, condition = hand.condition, name = "pormg_it_29b_hand"))
     p = plan29b(adopting)
-    @test keys29b(p) == (pg ? ["Adopt index: pormg_it_29b_hand"] : String[])
+    @test keys29b(p) == (marks_in_comment ? ["Adopt index: pormg_it_29b_hand"] : String[])
     apply29b!(p)
-    pg && @test marker29b("pormg_it_29b_hand") ==
+    marks_in_comment && @test marker29b("pormg_it_29b_hand") ==
                 "built by ops for the standings page " * PormG.index_text_marker(hand.expressions, hand.condition)
     @test all(isempty, values(plan29b(adopting)))
 
@@ -2611,12 +2638,13 @@ end
 
     # Undeclared: PormG's own go; the hand-made one stays — on SQLite even after adoption.
     p = plan29b(model29b())
-    gone = pg ? vcat(names, "pormg_it_29b_hand") : names
+    gone = marks_in_comment ? vcat(names, "pormg_it_29b_hand") : names
     @test sort(keys29b(p)) == sort(["Remove composite index: $(n)" for n in gone])
     apply29b!(p)
-    left = Set(String(n) for n in q29b(pg ? "SELECT indexname AS n FROM pg_indexes WHERE tablename = '$(tbl)' AND indexname <> '$(tbl)_pkey'" :
-                                         "SELECT name AS n FROM pragma_index_list('$(tbl)') WHERE origin = 'c'").n)
-    @test left == (pg ? Set{String}() : Set(["pormg_it_29b_hand"]))
+    left = Set(String(n) for n in q29b(by_engine(
+      postgres = "SELECT indexname AS n FROM pg_indexes WHERE tablename = '$(tbl)' AND indexname <> '$(tbl)_pkey'",
+      sqlite = "SELECT name AS n FROM pragma_index_list('$(tbl)') WHERE origin = 'c'")).n)
+    @test left == (marks_in_comment ? Set{String}() : Set(["pormg_it_29b_hand"]))
     @test all(isempty, values(plan29b(model29b())))
   finally
     drop29b!()
@@ -2637,8 +2665,12 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Partial and functional UniqueConstraints: declared, marked, enforced, read back, adopted (#934)" begin
   pool = PormG.config[PORMG_DB_FOLDER].connections
-  pg = adapter_name == "PostgreSQL"
   ddl(sql) = (PormG.ConnectionPool.fetch(pool, sql); nothing)
+  # Where the marker lives, as in the #29 part 2 testset above: in the index's COMMENT, which adopting
+  # writes, or (SQLite) closing the CREATE INDEX text, which adopting cannot rewrite.
+  marks_in_comment = by_engine(postgres = true, sqlite = false)
+  # The catalog's text for the declared `lower(code)`, in each engine's own deparse.
+  code_ci_text = by_engine(postgres = "lower(code::text)", sqlite = "lower(code)")
   q934(sql) = DataFrame(PormG.ConnectionPool.fetch(pool, sql))
   tbl = "pormg_it_934_driver"
   drop934u!() = try; ddl("DROP TABLE IF EXISTS \"$(tbl)\""); catch; end
@@ -2654,7 +2686,7 @@ end
   plan934u(m) = PormG.Migrations.get_migration_plan([live934u()], schema934u(m), pool, settings934u; interactive = false)
   keys934u(p) = haskey(p, Symbol(tbl)) ? collect(keys(p[Symbol(tbl)])) : String[]
   apply934u!(plan) = for sql in first(PormG.Migrations._order_statements(collect(values(plan))))
-    foreach(ddl, pg ? PormG.Migrations._split_pg_statements(sql) : PormG.Migrations._split_sqlite_statements(sql))
+    foreach(ddl, split_statements(sql))
   end
   inserts(rows...) = try
     for (r, g, c) in rows
@@ -2689,7 +2721,7 @@ end
     @test issubset(names, keys(byname))
     @test byname["pormg_it_934_one_per_grid"].unique && byname["pormg_it_934_one_per_grid"].condition == "grid > 0"
     @test byname["pormg_it_934_code_ci"].unique &&
-          byname["pormg_it_934_code_ci"].expressions == [pg ? "lower(code::text)" : "lower(code)"]
+          byname["pormg_it_934_code_ci"].expressions == [code_ci_text]
     @test byname["pormg_it_934_code_ci"].marker == PormG.index_text_marker(["lower(code)"], nothing)
     @test all(isempty, values(plan934u(model934u(declared...))))
 
@@ -2698,7 +2730,7 @@ end
     src = PormG.Models.Model_to_str(read_back)
     @test occursin("Models.UniqueConstraint(fields = (\"raceid\", \"grid\",), name = \"pormg_it_934_one_per_grid\", " *
                    "condition = \"grid > 0\")", src)
-    @test occursin("Models.UniqueConstraint(expressions = (\"$(pg ? "lower(code::text)" : "lower(code)")\",), " *
+    @test occursin("Models.UniqueConstraint(expressions = (\"$(code_ci_text)\",), " *
                    "name = \"pormg_it_934_code_ci\")", src)
     mod934u = Module()
     Core.eval(mod934u, :(import PormG.Models))
@@ -2711,13 +2743,13 @@ end
     @test all(isempty, values(plan934u(model934u(declared...))))
     adopting = model934u(declared..., UC(fields = ("code",), condition = hand.condition, name = "pormg_it_934_hand"))
     p = plan934u(adopting)
-    @test keys934u(p) == (pg ? ["Adopt index: pormg_it_934_hand"] : String[])
+    @test keys934u(p) == (marks_in_comment ? ["Adopt index: pormg_it_934_hand"] : String[])
     apply934u!(p)
     @test all(isempty, values(plan934u(adopting)))
 
     # Undeclared: PormG's own go — on PostgreSQL the adopted one too; on SQLite adopting wrote no marker.
     p = plan934u(model934u())
-    gone = pg ? vcat(names, "pormg_it_934_hand") : names
+    gone = marks_in_comment ? vcat(names, "pormg_it_934_hand") : names
     @test sort(keys934u(p)) == sort(["Remove composite index: $(n)" for n in gone])
     apply934u!(p)
     @test all(isempty, values(plan934u(model934u())))
@@ -2744,7 +2776,7 @@ end
 # every "with the key" assertion goes red; revert only `makemigrations`' list to `postgres_ignore_table`,
 # and the CREATE TABLE assertion does.
 # ─────────────────────────────────────────────────────────────────────────────
-if adapter_name == "PostgreSQL"
+if only_on(:postgres, "the built-in ignore prefix is PostgreSQL's (postgres_ignore_table)")
   @testset "unignore_defaults: a built-in prefix read again on one connection (#818)" begin
     settings = PormG.config[PORMG_DB_FOLDER]
     pool = settings.connections

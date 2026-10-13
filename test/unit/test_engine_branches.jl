@@ -142,7 +142,7 @@ end
 # What is left is counted here per file, with the reason. `PORMG_DB_FOLDER ==`, `adapter_name ==`
 # and an inspected query's `[:dialect] ==` count like an `isa`, and so does comparing `engine_key()`
 # to a symbol, which would only respell `is_pg ?`. A line scan, so it counts lines, not decisions: a flag bound once and
-# read sixty times is one hit, so the deferred files' counts are their bindings, not their reads.
+# read sixty times is one hit, so a count is a file's bindings, not its reads.
 # ─────────────────────────────────────────────────────────────────────────────
 const _EB_INTEGRATION_PATTERN = Regex(_EB_PATTERN.pattern *
   raw"|PORMG_DB_FOLDER\s*[!=]=|adapter_name\s*[!=]=|\[:dialect\]\s*[!=]=|engine_key\([^)]*\)\s*(===?|!==?)\s*:")
@@ -153,11 +153,6 @@ const _EB_INTEGRATION_REVIEWED = Dict(
   "test/integration/common_setup.jl" => 2,
   # Not in runtests.jl: a run against another folder is a usage error it refuses, not a skip.
   "test/integration/test_allocate_primary_keys_sqlite.jl" => 1,
-  # Deferred from #1179 to a follow-up: fixture DDL written per engine, introspected type names and
-  # catalog text, PostgreSQL-catalog testsets, the statement splitter and importer entry point.
-  # Converted with the helpers above, these counts fall to zero.
-  "test/integration/test_importers_introspection.jl" => 18,
-  "test/integration/test_migration_bootstrap.jl" => 24,
 )
 
 @testset "#1179: engine branches in test/integration/ match the reviewed counts" begin

@@ -154,6 +154,33 @@ function _field_kind(f::PormGField)::Union{CanonicalType,Nothing}
 end
 _field_kind(::Any) = nothing
 
+# #1034 phase 3 — the field that binds a value compared with a column of kind `k`: `_field_kind`'s
+# inverse, for a column with no field of its own (a CTE column the body computes). A kind no field
+# spells answers `nothing`. A decimal with no declared width is `DecimalField()`, whose width nothing
+# reads for such a column: the read path takes the body's read kind (#1121), and the scale rule reads
+# a declared width only on a model column (#1040).
+_kind_field(::CBool) = Models.BooleanField()
+_kind_field(::Union{CInt16,CInt32}) = Models.IntegerField()
+_kind_field(::CInt64) = Models.BigIntegerField()
+_kind_field(::CFloat64) = Models.FloatField()
+_kind_field(k::CDecimal) = k.precision === nothing ? Models.DecimalField() :
+  Models.DecimalField(max_digits = k.precision, decimal_places = something(k.scale, 0))
+_kind_field(::CText) = Models.TextField()
+_kind_field(k::CVarChar) = k.length === nothing ? Models.TextField() : Models.CharField(max_length = k.length)
+_kind_field(::CDate) = Models.DateField()
+_kind_field(k::CDateTime) = Models.DateTimeField(type = k.with_timezone ? "TIMESTAMPTZ" : "TIMESTAMP")
+_kind_field(::CTime) = Models.TimeField()
+_kind_field(::CInterval) = Models.DurationField()
+_kind_field(::CUUID) = Models.UUIDField()
+_kind_field(::CJSON) = Models.JSONField()
+_kind_field(::Any) = nothing
+# The family a field and a kind agree on: every integer width is one, and so is every text, every
+# decimal width and both timestamps; any other kind is its own.
+_kind_family(::Union{CInt16,CInt32,CInt64}) = CInt64
+_kind_family(::Union{CText,CVarChar}) = CText
+_kind_family(k::CanonicalType) = typeof(k)
+_kind_family(::Nothing) = nothing
+
 _literal_kind(x, ::_ReadKinds) = literal_canonical_kind(x)
 _literal_kind(::Bool, ::_EveryKind) = CBool()
 _literal_kind(::Integer, ::_EveryKind) = CInt64()

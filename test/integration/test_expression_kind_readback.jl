@@ -63,7 +63,10 @@ end
 
 # Measured on both engines. `read` is the kind the build recorded (`nothing`: no read parser runs).
 # An interval reads back `==` on both engines, in different units (PostgreSQL's driver delivers
-# milliseconds, the SQLite parser nanoseconds), so only its printed text differs.
+# milliseconds, the SQLite parser nanoseconds), so only its printed text differs. The CTE columns that
+# were flagged only because the CTE model typed them another field than they mean (`Sum` of a float, a
+# decimal or an interval, `Avg` of integers, a decimal quotient, a comparison) left the set when #1034
+# phase 3 typed that field from what the column means.
 const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Avg interval | alone", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
   ("Avg interval | alone", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
@@ -71,37 +74,14 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Avg interval | cte", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
   ("Avg interval | subquery", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
   ("Avg interval | subquery", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
-  ("F comparison | cte", :postgres) => (type = "Bool", value = "false", read = "CBool()"),
-  ("F comparison | cte", :sqlite) => (type = "Bool", value = "false", read = "CBool()"),
   ("F date - date | alone", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
   ("F date - date | alone", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
   ("F date - date | subquery", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
   ("F date - date | subquery", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
-  ("F decimal * 2 | cte", :postgres) => (type = "Decimal", value = "11", read = "CDecimal(nothing, nothing)"),
-  ("F decimal * 2 | cte", :sqlite) => (type = "Decimal", value = "11", read = "CDecimal(nothing, nothing)"),
-  ("Sum decimal | cte", :postgres) => (type = "Decimal", value = "5.5", read = "CDecimal(nothing, nothing)"),
-  ("Sum decimal | cte", :sqlite) => (type = "Decimal", value = "5.5", read = "CDecimal(nothing, nothing)"),
-  ("Sum float | cte", :postgres) => (type = "Float64", value = "10.0", read = "CFloat64()"),
-  ("Sum float | cte", :sqlite) => (type = "Float64", value = "10.0", read = "CFloat64()"),
   ("Sum interval | alone", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
   ("Sum interval | alone", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
-  ("Sum interval | cte", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
-  ("Sum interval | cte", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
   ("Sum interval | subquery", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
   ("Sum interval | subquery", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
-  # #1150: a decimal or mixed quotient is its fraction on both engines (SQLite divides it as REAL);
-  # result 1's grid is `1`, constructor result 3835 has `5.5` points. Under a CTE the column is still
-  # flagged — the CTE model types it a float or an integer field — and #1121 reads it as what it means.
-  ("Cast int numeric / 2 | cte", :postgres) => (type = "Decimal", value = "0.50", read = "CDecimal(nothing, nothing)"),
-  ("Cast int numeric / 2 | cte", :sqlite) => (type = "Decimal", value = "0.5", read = "CDecimal(nothing, nothing)"),
-  ("F decimal / 2 | cte", :postgres) => (type = "Decimal", value = "2.75", read = "CDecimal(nothing, nothing)"),
-  ("F decimal / 2 | cte", :sqlite) => (type = "Decimal", value = "2.75", read = "CDecimal(nothing, nothing)"),
-  ("Lag int default float / 2 | cte", :postgres) => (type = "Float64", value = "0.75", read = "CFloat64()"),
-  ("Lag int default float / 2 | cte", :sqlite) => (type = "Float64", value = "0.75", read = "CFloat64()"),
-  # #1121: `Avg` over an integer means a float, and reads as one on both engines. Its CTE column stays
-  # flagged because the CTE model types it the operand's integer field (the CTE field typing, #1034).
-  ("Avg int | cte", :postgres) => (type = "Float64", value = "1.0", read = "CFloat64()"),
-  ("Avg int | cte", :sqlite) => (type = "Float64", value = "1.0", read = "CFloat64()"),
 )
 
 # The cells whose value comes back as a DIFFERENT TYPE on the two engines, by the table above. Every

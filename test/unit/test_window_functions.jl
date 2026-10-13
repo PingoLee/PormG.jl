@@ -1327,7 +1327,9 @@ end
     @testset "$backend — the column has the operand's field" begin
       @test _cte_aggregate_field(mod, conn, Max("raceid__date")) isa PormG.Models.sDateField
       @test _cte_aggregate_field(mod, conn, Min_("raceid__round")) isa PormG.Models.sIntegerField
-      @test _cte_aggregate_field(mod, conn, Avg_("raceid__round")) isa PormG.Models.sIntegerField   # Avg's rule: the operand's field
+      # #1034 phase 3: an `Avg` of integers means a float (#1121), so its column is one; it was the
+      # operand's `IntegerField`. Typed through the hop all the same, which is what #1116 pins.
+      @test _cte_aggregate_field(mod, conn, Avg_("raceid__round")) isa PormG.Models.sFloatField
       @test _cte_aggregate_field(mod, conn, Max(Joined_("rc", "date")); joined = true) isa PormG.Models.sDateField
       @test _cte_aggregate_field(mod, conn, Min_(Joined_("rc", "round")); joined = true) isa PormG.Models.sIntegerField
       @test _cte_aggregate_field(mod, conn, Max(F("grid") * 2)) isa PormG.Models.sIntegerField

@@ -201,6 +201,18 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Coalesce date Date(zoned)", :Race,              m -> _EKM_FN.Coalesce("date", Date(_EKM_ZDT))),
   ("Coalesce zoned zoned",    :Race,                m -> _EKM_FN.Coalesce("start_at", _EKM_ZDT)),
   ("Coalesce date zoned output date", :Race,        m -> _EKM_FN.Coalesce("date", _EKM_ZDT; output_field = "date")),
+  # #1212: a declared decimal — a `Cast` over arithmetic, a decimal column and an integer, an
+  # `output_field` on `Coalesce`/`Greatest`/`Case`, an extremum over one — and the float spellings
+  ("Cast F float * 1.5 numeric", :Result,           m -> _EKM_FN.Cast(_EKM_Q.F("points") * 1.5, "numeric")),
+  ("Cast decimal to scale 2", :Constructor_results, m -> _EKM_FN.Cast("points", "numeric(10,2)")),
+  ("Cast int DecimalField",   :Result,              m -> _EKM_FN.Cast("grid", PormG.Models.DecimalField())),
+  ("Coalesce F float output decimal", :Result,      m -> _EKM_FN.Coalesce(_EKM_Q.F("points") * 1.5, 0; output_field = PormG.Models.DecimalField())),
+  ("Greatest float int output decimal", :Result,    m -> _EKM_FN.Greatest("points", "grid"; output_field = PormG.Models.DecimalField())),
+  ("Case float output decimal", :Result,            m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1.5)], default = 0, output_field = PormG.Models.DecimalField())),
+  ("Max Cast F float numeric", :Result,             m -> _EKM_FN.Max(_EKM_FN.Cast(_EKM_Q.F("points") * 1.5, "numeric"))),
+  ("Cast int float8",         :Result,              m -> _EKM_FN.Cast("grid", "float8")),
+  ("Cast int FloatField",     :Result,              m -> _EKM_FN.Cast("grid", PormG.Models.FloatField())),
+  ("Cast float real",         :Result,              m -> _EKM_FN.Cast("points", "real")),
   # ── subqueries ─────────────────────────────────────────────────────────────────────────────────
   ("Subquery Max hop date",   :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Max("raceid__date")))),
   ("Subquery Avg float",      :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Avg("points")))),

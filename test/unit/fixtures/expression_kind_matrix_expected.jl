@@ -1730,6 +1730,126 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
   ("Coalesce date zoned output date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
+  ("Cast F float * 1.5 numeric | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Cast F float * 1.5 numeric | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Cast F float * 1.5 numeric | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Cast F float * 1.5 numeric | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Cast F float * 1.5 numeric | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Cast F float * 1.5 numeric | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Cast decimal to scale 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)"),
+  ("Cast decimal to scale 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)"),
+  ("Cast decimal to scale 2 | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 2)"),
+  ("Cast decimal to scale 2 | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 2)"),
+  ("Cast decimal to scale 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)"),
+  ("Cast decimal to scale 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)"),
+  ("Cast int DecimalField | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Cast int DecimalField | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Cast int DecimalField | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Cast int DecimalField | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Cast int DecimalField | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Cast int DecimalField | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Coalesce F float output decimal | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Coalesce F float output decimal | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Coalesce F float output decimal | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Coalesce F float output decimal | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Coalesce F float output decimal | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Coalesce F float output decimal | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Greatest float int output decimal | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Greatest float int output decimal | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Greatest float int output decimal | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Greatest float int output decimal | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Greatest float int output decimal | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Greatest float int output decimal | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Case float output decimal | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Case float output decimal | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Case float output decimal | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Case float output decimal | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Case float output decimal | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Case float output decimal | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Max Cast F float numeric | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Max Cast F float numeric | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Max Cast F float numeric | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Max Cast F float numeric | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Max Cast F float numeric | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Max Cast F float numeric | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)"),
+  ("Cast int float8 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()"),
+  ("Cast int float8 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()"),
+  ("Cast int float8 | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()"),
+  ("Cast int float8 | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()"),
+  ("Cast int float8 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()"),
+  ("Cast int float8 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()"),
+  ("Cast int FloatField | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()"),
+  ("Cast int FloatField | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()"),
+  ("Cast int FloatField | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()"),
+  ("Cast int FloatField | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()"),
+  ("Cast int FloatField | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()"),
+  ("Cast int FloatField | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()"),
+  ("Cast float real | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()"),
+  ("Cast float real | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()"),
+  ("Cast float real | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()"),
+  ("Cast float real | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()"),
+  ("Cast float real | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()"),
+  ("Cast float real | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()"),
   ("Subquery Max hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
   ("Subquery Max hop date | alone", :sqlite) =>
@@ -1870,6 +1990,90 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
   ("Cast Case float literal to scale 2 | subquery", :postgres) =>
     [(:gap, "read=none vs textless=decimal")],
   ("Cast Case float literal to scale 2 | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast F float * 1.5 numeric | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast F float * 1.5 numeric | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast F float * 1.5 numeric | cte", :postgres) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Cast F float * 1.5 numeric | cte", :sqlite) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Cast F float * 1.5 numeric | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast F float * 1.5 numeric | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast decimal to scale 2 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast decimal to scale 2 | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast decimal to scale 2 | cte", :postgres) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Cast decimal to scale 2 | cte", :sqlite) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Cast decimal to scale 2 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast decimal to scale 2 | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast int DecimalField | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast int DecimalField | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast int DecimalField | cte", :postgres) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Cast int DecimalField | cte", :sqlite) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Cast int DecimalField | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast int DecimalField | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Coalesce F float output decimal | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Coalesce F float output decimal | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Coalesce F float output decimal | cte", :postgres) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Coalesce F float output decimal | cte", :sqlite) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Coalesce F float output decimal | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Coalesce F float output decimal | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Greatest float int output decimal | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Greatest float int output decimal | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Greatest float int output decimal | cte", :postgres) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Greatest float int output decimal | cte", :sqlite) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Greatest float int output decimal | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Greatest float int output decimal | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Case float output decimal | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Case float output decimal | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Case float output decimal | cte", :postgres) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Case float output decimal | cte", :sqlite) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Case float output decimal | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Case float output decimal | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Max Cast F float numeric | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Max Cast F float numeric | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Max Cast F float numeric | cte", :postgres) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Max Cast F float numeric | cte", :sqlite) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Max Cast F float numeric | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Max Cast F float numeric | subquery", :sqlite) =>
     [(:gap, "read=none vs textless=decimal")],
 )
 

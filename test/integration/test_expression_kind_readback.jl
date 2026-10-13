@@ -106,11 +106,23 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   # flagged because the CTE model types it the operand's integer field (the CTE field typing, #1034).
   ("Avg int | cte", :postgres) => (type = "Float64", value = "1.0", read = "CFloat64()"),
   ("Avg int | cte", :sqlite) => (type = "Float64", value = "1.0", read = "CFloat64()"),
+  # #1187: a `Case` is read branch by branch. Result 1's grid is `1`, its points `10`: a float-column
+  # branch at `numeric(10,0)` is refused on SQLite (it keeps every digit the scale rounds away); a `1.5`
+  # literal branch at `numeric(10,2)` has nothing to round and builds on both (#1050).
+  ("Cast Case float col to scale 0 | alone", :postgres) => (type = "Decimal", value = "10", read = nothing),
+  ("Cast Case float col to scale 0 | cte", :postgres) => (type = "Decimal", value = "10", read = nothing),
+  ("Cast Case float col to scale 0 | subquery", :postgres) => (type = "Decimal", value = "10", read = nothing),
+  ("Cast Case float literal to scale 2 | alone", :postgres) => (type = "Decimal", value = "1.5", read = nothing),
+  ("Cast Case float literal to scale 2 | alone", :sqlite) => (type = "Float64", value = "1.5", read = nothing),
+  ("Cast Case float literal to scale 2 | cte", :postgres) => (type = "Decimal", value = "1.5", read = nothing),
+  ("Cast Case float literal to scale 2 | cte", :sqlite) => (type = "Float64", value = "1.5", read = nothing),
+  ("Cast Case float literal to scale 2 | subquery", :postgres) => (type = "Decimal", value = "1.5", read = nothing),
+  ("Cast Case float literal to scale 2 | subquery", :sqlite) => (type = "Float64", value = "1.5", read = nothing),
 )
 
 # The cells whose value comes back as a DIFFERENT TYPE on the two engines, by the table above. Every
-# other disagreeing cell reads back the same type on both, with `==` values. One family is left, and it
-# is representation, not meaning (#1196): `F date - date` is an integer on both engines and records
+# other disagreeing cell reads back the same type on both, with `==` values. Two families are left,
+# both representation, not meaning. The first (#1196): `F date - date` is an integer on both engines and records
 # `CInt32`, which no read parser undoes, so each driver's integer WIDTH comes through (`Int32` vs
 # `Int64`) — the same value spelled in two widths, as an `IntegerField` column itself reads on each.
 # An integer's width follows the engine, for a column and a computed value alike; the testset after
@@ -118,8 +130,15 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
 # arithmetic over a `DecimalField`, `Round`/`Mod` over a float or an integer, `Avg` over an integer,
 # `Sqrt`/`Exp`/`Ln`/`Power` — reads back as the type it means on both engines since #1121, and the
 # testset below the table checks it cell by cell.
+#
+# A second family, also representation: a declared `numeric(p, s)` cast records no read kind (the
+# matrix's `read = nothing`), so each driver's own number comes through — PostgreSQL's `numeric` as a
+# `Decimal`, SQLite's REAL as a `Float64` — the same `1.5` in two types. Measured with the #1187
+# `Case` shapes; a `Cast` that builds on both engines reads so whatever its operand (#1034 read kind).
 const _EKR_TYPE_DIVERGENT = Set{String}([
   "F date - date | alone", "F date - date | subquery",
+  "Cast Case float literal to scale 2 | alone", "Cast Case float literal to scale 2 | cte",
+  "Cast Case float literal to scale 2 | subquery",
 ])
 
 const _EKR_CELLS = sort!([id for (id, backend) in keys(_EKM_DISAGREEMENTS) if backend === _EKR_ENGINE])

@@ -1,7 +1,7 @@
 ## `Round(x, n)` refuses a negative `n` and a text operand; to places it keeps each engine's own `ROUND` (#1044, #1061)
 
 - **Version**: Unreleased
-- **PormG ref**: #1044, #1061 ; `src/querybuilder/functions.jl` (`Round`, `_round_text_refusal`), `src/querybuilder/select_nodes.jl` (`_render_function_body`), reusing `src/querybuilder/projection_types.jl` (`_scale_divergent_operand`)
+- **PormG ref**: #1044, #1061, amended by #1187 ; `src/querybuilder/functions.jl` (`Round`, `_round_text_refusal`), `src/querybuilder/select_nodes.jl` (`_render_function_body`), reusing `src/querybuilder/projection_types.jl` (`_scale_divergent_operand`)
 - **Recorded**: 2026-10-08
 - **Severity**: breaking. `Round(x, n)` with `n < 0` raises `InvalidValueError` when it is built, and `Round(x, n)` with `n > 0` over text raises `QueryBuildError` when the query is built. Both used to render.
 
@@ -19,7 +19,8 @@ and are now refused on both engines:
 | `Round(125, -1)` | `130` | `125.0` (a negative `n` read as 0) | `InvalidValueError` |
 | `Round(<text> 'abc', 2)` | error: not a number | `0.0` | `QueryBuildError` |
 
-A JSON value counts as text. `Round(x)` and `Round(x, n)` over a number are unchanged.
+A JSON value counts as text, and so does a `Case` with no `output_field` that has a text branch
+(`then = "1.5"`), read branch by branch since #1187. `Round(x)` and `Round(x, n)` over a number are unchanged.
 
 ### Who this affects
 

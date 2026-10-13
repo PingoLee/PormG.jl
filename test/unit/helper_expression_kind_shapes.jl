@@ -177,6 +177,11 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Lag int default float / 2", :Result,            m -> _EKM_FN.Lag("grid", default = 1.5, over = _ekm_over(:Result)) / 2),
   # #1151: a `Case` with a float branch is a float, so its cast to an integer departs on SQLite
   ("Cast Case int float to integer", :Result,       m -> _EKM_FN.Cast(_EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1.5)], default = 0), "integer")),
+  # #1187: the other rules read a `Case` branch by branch too — a scale, a decimal branch, `Concat`
+  ("Cast Case float col to scale 0", :Result,       m -> _EKM_FN.Cast(_EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_Q.F("points"))], default = 0), "numeric(10,0)")),
+  ("Cast Case float literal to scale 2", :Result,   m -> _EKM_FN.Cast(_EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1.5)], default = 0), "numeric(10,2)")),
+  ("Cast Case decimal to integer", :Constructor_results, m -> _EKM_FN.Cast(_EKM_FN.Case([_EKM_FN.When("status" => "x", then = _EKM_Q.F("points"))], default = 0), "integer")),
+  ("Concat Case float",       :Result,              m -> _EKM_FN.Concat("positiontext", _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1.5)], default = 0))),
   # ── subqueries ─────────────────────────────────────────────────────────────────────────────────
   ("Subquery Max hop date",   :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Max("raceid__date")))),
   ("Subquery Avg float",      :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Avg("points")))),

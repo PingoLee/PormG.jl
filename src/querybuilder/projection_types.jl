@@ -497,8 +497,10 @@ _operand_kind(p, instruc::SQLInstruction) = _infer_kind(p, instruc, _ReadKinds()
 # that reason, and `Concat` makes text from its operands, so it refuses the same three as operands.
 #
 # Only a type that is KNOWN is answered, as everywhere in this file: an operand whose type cannot be
-# named (an untyped `Case`, a function PormG does not type) is let through, not guessed at. A
-# `Subquery` is known through its one projection, which the inner build classified (#1124). Read
+# named (a function PormG does not type, a `Case` whose branches are all such values) is let through,
+# not guessed at. A `Case` with no `output_field` is known through its branch values (#1187,
+# `_case_textless_branch`), and a `Subquery` through its one projection, which the inner build
+# classified (#1124). Read
 # after the operands render, so a joined path's field memo exists (`_alias_column_field`).
 #
 # #1028 adds three kinds, measured on PostgreSQL 16.15 and SQLite 3.45.1 through the F1 fixture:
@@ -543,7 +545,34 @@ function _concat_textless_operand(p, instruc::SQLInstruction)::Union{Tuple{Symbo
     temporal = _textless_temporal(p, instruc)
     temporal === nothing || return temporal
   end
+  _undeclared_case(p) && return _case_textless_branch(p, instruc)
   return _textless_number(p, instruc)
+end
+
+# #1187 — a `Case` with no `output_field` has one of its branch values on each row, so it has the text
+# of a float, a decimal or a timestamp when one of its branches does: each `then` and the default is
+# classified as an operand of its own, the first such branch answering for the `Case`. A float branch
+# makes it a `float8` on PostgreSQL (`Cast` to an integer rounds there and truncates on SQLite); a
+# `DecimalField` branch keeps its own places, which the type walk drops (`_unify_kinds`), so a
+# zero-scale one is whole here, as the column is. With an `output_field` the cast it renders decides
+# (`_textless_number`).
+_undeclared_case(p) = p isa FObject && p.function_name == "CASE" && !(get(p.kwargs, "output_field", nothing) isa AbstractString)
+function _case_textless_branch(p::FObject, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing}
+  for value in _case_values(p)
+    side = _concat_textless_operand(value, instruc)
+    side === nothing || return (side[1], "`CASE(…)` over $(side[2])")
+  end
+  return nothing
+end
+# The values a `Case` can take: each branch's `then` and its default, NULLs left out (never the value).
+# A raw value is a literal — a string too, not a path (`_case_kind`) — so it is wrapped as one.
+function _case_values(p::FObject)
+  values = Any[]
+  for branch in (p.column isa AbstractVector ? p.column : (p.column,))
+    branch isa SQLTypeFunction && branch.function_name == "WHEN" && push!(values, get(branch.kwargs, "then", nothing))
+  end
+  push!(values, get(p.kwargs, "else", nothing))
+  return Any[v isa Union{SQLObject,SQLType} ? v : SQLText(v) for v in values if !_is_null_literal(v isa SQLText ? v.field : v)]
 end
 
 # #1028 — a timestamp, an interval or a JSON document: each has a text of its own on each engine (the
@@ -605,7 +634,8 @@ _cte_textless_record(::Any, ::SQLInstruction) = nothing
 
 # #1028 — the declared casts a function renders: `Cast`'s type and the `output_field` of the three that
 # apply theirs (`Dialect._output_field_cast`). `Case` casts its `output_field` too, but its value is a
-# branch, which this does not type, so it stays fail-open; `Concat` renders no cast (#835).
+# branch, so it is not one of these: without an `output_field` its operands are its branch values
+# (#1187, `_case_values`); `Concat` renders no cast (#835).
 const _DECLARED_CAST_FUNCTIONS = ("CAST", "COALESCE", "GREATEST", "LEAST")
 # The operands whose value is a whole number on both engines, so a cast to an integer has nothing to
 # round: `Floor`/`Ceil`, and `Round` to no digits. Measured equal on PostgreSQL and SQLite for every
@@ -729,9 +759,9 @@ _literal_exact_value(::Any) = nothing
 # (#1050: `1.5` at scale 2 reads `1.5` on both engines, there is nothing to round), and a nested cast
 # to a scale of at most `s`. Unbounded: a float column, a float literal with more places, a `numeric`
 # function, a decimal of unknown scale, and text — PostgreSQL
-# parses `'1.555'` and rounds it, SQLite converts it and keeps it — including a JSON value. An operand
-# PormG cannot type (an untyped `Case`) passes, as it does for #1028; a `Subquery` is read as its
-# projection (#1124).
+# parses `'1.555'` and rounds it, SQLite converts it and keeps it — including a JSON value. A `Case`
+# with no `output_field` is read branch by branch (#1187); an operand PormG cannot type (a JSON key
+# lookup) passes, as it does for #1028; a `Subquery` is read as its projection (#1124).
 const _SCALE_PRESERVING_FUNCTIONS = ("MAX", "MIN", "ABS", "COALESCE", "GREATEST", "LEAST", "NULLIF")
 function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing}
   _integral_valued(p, instruc) && return nothing
@@ -787,6 +817,17 @@ function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union
     for x in (operand.column isa AbstractVector ? operand.column : (operand.column,))
       side = _scale_divergent_operand(x, scale, instruc)
       side === nothing || return (side[1], "`$(operand.function_name)(…)` over $(side[2])")
+    end
+    return nothing
+  end
+  # #1187: a `Case` with no `output_field` is one of its branch values on each row, so each `then` and
+  # the default is read as an operand of its own, before the shared classifier below: it would name
+  # `then = 1.5` a float at any scale, where #1050 bounds a float literal by its own places, and a
+  # `DecimalField` branch keeps its places only here (the type walk drops them).
+  if _undeclared_case(operand)
+    for x in _case_values(operand)
+      side = _scale_divergent_operand(x, scale, instruc)
+      side === nothing || return (side[1], "`CASE(…)` over $(side[2])")
     end
     return nothing
   end
@@ -874,10 +915,11 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::
     to_integer && _integral_valued(operand, instruc) && continue
     side = _concat_textless_operand(operand, instruc)
     side === nothing && !to_integer && (side = _rendered_kind_textless(get(rendered, i, nothing)))
-    # #1151: an operand the classifier leaves untyped is read through the type walk: a `Case` has the
-    # kind its branch values agree on (`_case_kind`), so a float branch makes it a `float8` on
-    # PostgreSQL, whose cast rounds where SQLite's truncates. Only a float: the walk drops a decimal's
-    # width, and a zero-scale decimal is whole. The whole-number functions passed above.
+    # #1151: an operand the classifier leaves untyped is read through the type walk, which names a
+    # float `float8` on PostgreSQL, whose cast rounds where SQLite's truncates. A `Case` is classified
+    # branch by branch above since #1187 (`_case_textless_branch`), which also reads a decimal branch's
+    # places — the walk drops them; this stays the fallback for a float the classifier cannot name.
+    # The whole-number functions passed above.
     if side === nothing && to_integer && _expression_kind(operand, instruc) isa CFloat64
       side = (:float, operand isa Union{FObject,WindowFunction} ? "`$(operand.function_name)(…)` with a float value" : "a float value")
     end

@@ -543,17 +543,17 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Case untyped int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CInt64()"),
   ("Case untyped float col | alone", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CFloat64()"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float", kind = "CFloat64()"),
   ("Case untyped float col | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CFloat64()"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float", kind = "CFloat64()"),
   ("Case untyped float col | cte", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = nothing, kind = "CFloat64()"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()"),
   ("Case untyped float col | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = nothing, kind = "CFloat64()"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()"),
   ("Case untyped float col | subquery", :postgres) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CFloat64()"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float", kind = "CFloat64()"),
   ("Case untyped float col | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CFloat64()"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float", kind = "CFloat64()"),
   ("Sum int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()"),
   ("Sum int | alone", :sqlite) =>
@@ -1505,15 +1505,63 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast Case int float to integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()"),
   ("Cast Case int float to integer | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` with a float value means the nearest integer (`1.5` → `2`); SQLite computes the truncate"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` over a Float64 literal means the nearest integer (`1.5` → `2`); SQLite computes the trun"),
   ("Cast Case int float to integer | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()"),
   ("Cast Case int float to integer | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` with a float value means the nearest integer (`1.5` → `2`); SQLite computes the truncate"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` over a Float64 literal means the nearest integer (`1.5` → `2`); SQLite computes the trun"),
   ("Cast Case int float to integer | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()"),
   ("Cast Case int float to integer | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` with a float value means the nearest integer (`1.5` → `2`); SQLite computes the truncate"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` over a Float64 literal means the nearest integer (`1.5` → `2`); SQLite computes the trun"),
+  ("Cast Case float col to scale 0 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 0)"),
+  ("Cast Case float col to scale 0 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,0)\") of `CASE(…)` over the FloatField `points` means the value rounded to the scale of numeric(10,0)"),
+  ("Cast Case float col to scale 0 | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 0)"),
+  ("Cast Case float col to scale 0 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,0)\") of `CASE(…)` over the FloatField `points` means the value rounded to the scale of numeric(10,0)"),
+  ("Cast Case float col to scale 0 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 0)"),
+  ("Cast Case float col to scale 0 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,0)\") of `CASE(…)` over the FloatField `points` means the value rounded to the scale of numeric(10,0)"),
+  ("Cast Case float literal to scale 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)"),
+  ("Cast Case float literal to scale 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)"),
+  ("Cast Case float literal to scale 2 | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 2)"),
+  ("Cast Case float literal to scale 2 | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 2)"),
+  ("Cast Case float literal to scale 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)"),
+  ("Cast Case float literal to scale 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)"),
+  ("Cast Case decimal to integer | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()"),
+  ("Cast Case decimal to integer | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` over the DecimalField `points` means the nearest integer (`1.5` → `2`); SQLite computes "),
+  ("Cast Case decimal to integer | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()"),
+  ("Cast Case decimal to integer | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` over the DecimalField `points` means the nearest integer (`1.5` → `2`); SQLite computes "),
+  ("Cast Case decimal to integer | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()"),
+  ("Cast Case decimal to integer | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` over the DecimalField `points` means the nearest integer (`1.5` → `2`); SQLite computes "),
+  ("Concat Case float | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `CASE(…)` over a Float64 literal is not text: say which text you mean (#1027). Cast it to text fi"),
+  ("Concat Case float | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `CASE(…)` over a Float64 literal is not text: say which text you mean (#1027). Cast it to text fi"),
+  ("Concat Case float | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `CASE(…)` over a Float64 literal is not text: say which text you mean (#1027). Cast it to text fi"),
+  ("Concat Case float | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `CASE(…)` over a Float64 literal is not text: say which text you mean (#1027). Cast it to text fi"),
+  ("Concat Case float | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `CASE(…)` over a Float64 literal is not text: say which text you mean (#1027). Cast it to text fi"),
+  ("Concat Case float | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `CASE(…)` over a Float64 literal is not text: say which text you mean (#1027). Cast it to text fi"),
   ("Subquery Max hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
   ("Subquery Max hop date | alone", :sqlite) =>
@@ -1637,6 +1685,24 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:conflict, "cte_field=int vs cte_textless=float"), (:conflict, "read=float vs cte_field=int"), (:conflict, "textless=float vs cte_field=int")],
   ("Lag int default float / 2 | cte", :sqlite) =>
     [(:conflict, "cte_field=int vs cte_textless=float"), (:conflict, "read=float vs cte_field=int"), (:conflict, "textless=float vs cte_field=int")],
+  ("Cast Case float col to scale 0 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast Case float col to scale 0 | cte", :postgres) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Cast Case float col to scale 0 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast Case float literal to scale 2 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast Case float literal to scale 2 | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast Case float literal to scale 2 | cte", :postgres) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Cast Case float literal to scale 2 | cte", :sqlite) =>
+    [(:gap, "read=none vs cte_field=decimal"), (:gap, "read=none vs cte_textless=decimal"), (:gap, "read=none vs textless=decimal")],
+  ("Cast Case float literal to scale 2 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=decimal")],
+  ("Cast Case float literal to scale 2 | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=decimal")],
 )
 
 # The shapes whose channels answer differently across contexts, by `_ekm_cross_context`' rule.
@@ -1670,9 +1736,9 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
   ("Case untyped int", :sqlite) =>
     ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Case untyped float col", :postgres) =>
-    ["drops formatter: alone=none, cte=number, subquery=none", "drops textless: alone=none, cte=float, subquery=none"],
+    ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Case untyped float col", :sqlite) =>
-    ["drops formatter: alone=none, cte=number, subquery=none", "drops textless: alone=none, cte=float, subquery=none"],
+    ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Avg interval", :postgres) =>
     ["conflict formatter: alone=number, cte=interval, subquery=number"],
   ("Avg interval", :sqlite) =>

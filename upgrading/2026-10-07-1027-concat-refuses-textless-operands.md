@@ -1,7 +1,7 @@
 ## `Concat` — a boolean, float or decimal operand is refused (#1027)
 
 - **Version**: Unreleased
-- **PormG ref**: #1027, amended by #1147 ; `src/querybuilder/functions.jl` (`Concat`, `_concat_textless_refusal`), `src/querybuilder/projection_types.jl` (`_concat_textless_operand`), `src/querybuilder/select_nodes.jl`
+- **PormG ref**: #1027, amended by #1147 and #1187 ; `src/querybuilder/functions.jl` (`Concat`, `_concat_textless_refusal`), `src/querybuilder/projection_types.jl` (`_concat_textless_operand`), `src/querybuilder/select_nodes.jl`
 - **Recorded**: 2026-10-07
 - **Severity**: breaking. A `Concat` with a boolean, float or decimal operand raises `QueryBuildError` on every engine where it used to render.
 
@@ -31,7 +31,10 @@ value:
 - an expression of one of those types, when the query is built: a comparison, a `Cast` or
   `output_field` naming a float or decimal type, arithmetic or an extremum over a float, or
   `Avg`/`Round`/`Mod`/`Sqrt`/`Exp`/`Ln`/`Power`. `Round` over an integer is that integer and passes
-  (#1196).
+  (#1196);
+- a `Case` with no `output_field` that has such a branch, when the query is built (#1187): its value
+  is a branch's on each row, so `Case(When(…, then = 1.5), default = 0)` is a float. A `Case` whose
+  branches are all text, integers or dates passes, and so does one with `output_field = "text"`.
 
 Text, integer and date operands are unchanged, and so are the `@yyyy_q` / `@yyyy_quad` labels.
 

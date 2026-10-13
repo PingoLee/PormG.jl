@@ -636,6 +636,26 @@ end
   end
 end
 
+# #1204: the #1107 shape in `filter()` and `values()`. `_check_filter` logged `@error "Error in
+# filter processing '<key>'"` and the `values()` function arm `@error "Invalid values pair"` with the
+# alias, each with a backtrace, before rethrowing. The log was the only place the key or alias
+# appeared: a refusal raised deep in the build ("operator @gt is not valid with a vector value")
+# does not name it. Expected: no record at `Error`, the same `FilterError` type, a message that
+# names the pair it came from, and ONE error on the exception stack. A throw inside the `catch` would
+# keep the original as its cause, and an uncaught refusal would print twice again ("caused by:").
+@testset "filter() and values() name the refused pair in the error instead of logging it (#1204)" begin
+  for model in (GocPg, GocSl)
+    refused_filter = () -> model.objects.filter("points__@gt" => [1, 2])
+    refused_values = () -> model.objects.values("x" => Coalesce("code__@gt", "code"))
+    for (run, pair) in ((refused_filter, "\"points__@gt\" =>"), (refused_values, "values() pair \"x\" =>"))
+      err, depth = @test_logs min_level = Logging.Error (try run(); (nothing, 0) catch e; (e, length(current_exceptions())) end)
+      @test err isa PormG.FilterError
+      @test occursin(pair, PormG.error_message(err))
+      @test depth == 1
+    end
+  end
+end
+
 # #1099: `_degenerate_aggregate` decides BEFORE the build whether a projection builds with no GROUP BY
 # and no HAVING; `Exists(sub)` drops the projection on that answer, so nothing checks it afterwards. A
 # "one row" answer for a shape the build groups would answer for the matched rows instead of the

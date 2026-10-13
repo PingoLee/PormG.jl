@@ -4470,23 +4470,25 @@ function _relation_from_many_to_many(
   # deriving `to_driver_id` for the unpinned half would rewrite a working schema. Explicit wins here
   # as it does everywhere else; the residue (a pin that collides with the derived half) is caught by
   # the guard below rather than by silently overriding what the user wrote.
-  self_relation = field.through === nothing && _same_model_reference(owner_model, related_model)
-  if self_relation && field.source_field === nothing && field.target_field === nothing
-    owner_column = _many_to_many_column_name(owner_model, owner_pk; prefix = "from_")
-    related_column = _many_to_many_column_name(related_model, related_pk; prefix = "to_")
+  #
+  # #1207: derived on the AUTO path only. The `through` branch below takes all four names from the
+  # through model, so a `<model>_<pk>` derived for it was dead work that could only fail: on a model
+  # named `Driver_` the derivation is `driver__id`, which `format_fild_name` refuses.
+  if field.through === nothing
+    self_relation = _same_model_reference(owner_model, related_model)
+    if self_relation && field.source_field === nothing && field.target_field === nothing
+      owner_column = _many_to_many_column_name(owner_model, owner_pk; prefix = "from_")
+      related_column = _many_to_many_column_name(related_model, related_pk; prefix = "to_")
+    else
+      owner_column = field.source_field === nothing ? _many_to_many_column_name(owner_model, owner_pk) : field.source_field
+      related_column = field.target_field === nothing ? _many_to_many_column_name(related_model, related_pk) : field.target_field
+    end
+    # #377: on the AUTO path the field name and the physical column are the same string by
+    # construction — `synthesize_many_to_many_through_models` builds the join table FROM these very
+    # names, so there is no user-declared `db_column` anywhere to diverge from.
+    owner_field = owner_column
+    related_field = related_column
   else
-    owner_column = field.source_field === nothing ? _many_to_many_column_name(owner_model, owner_pk) : field.source_field
-    related_column = field.target_field === nothing ? _many_to_many_column_name(related_model, related_pk) : field.target_field
-  end
-  # #377: on the AUTO path the field name and the physical column are the same string by
-  # construction — `synthesize_many_to_many_through_models` builds the join table FROM these very
-  # names, so there is no user-declared `db_column` anywhere to diverge from. Seeded (rather than
-  # defaulted on the struct) so the slot is written on every path exactly once; the `through` branch
-  # below overwrites all four.
-  owner_field = owner_column
-  related_field = related_column
-
-  if field.through !== nothing
     through_model = if field.through isa PormGModel
       field.through
     elseif _module !== nothing

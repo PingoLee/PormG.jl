@@ -1073,6 +1073,52 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1207 fixture: a hand-written `through=` ManyToMany on a model whose name ends in `_`, no pins.
+#
+# `Driver_` is the shape Django allows with a warning (models.E023) and a hand-written file can carry
+# too. Its derived auto-path column is `driver__id`, a name `set_models` refuses because of the `__`.
+# The `through` path never uses that name, since its join keys are the through model's own foreign
+# keys, so it must not fail on it either.
+# ─────────────────────────────────────────────────────────────────────────────
+module ManyToManyUnderscoreThroughModels
+  import PormG
+  import PormG.Models
+
+  Circuit = Models.Model(id = Models.IDField(), name = Models.CharField(max_length = 40))
+  Driver_ = Models.Model(id = Models.IDField(),
+    tracks = Models.ManyToManyField("Circuit", through = "Visit", related_name = "driver"))
+  Visit = Models.Model(id = Models.IDField(),
+    driver_id = Models.ForeignKey("Driver_", pk_field = "id", on_delete = Models.CASCADE, related_name = "visits"),
+    circuit_id = Models.ForeignKey("Circuit", pk_field = "id", on_delete = Models.CASCADE, related_name = "visits"))
+  # `set_models` runs inside the testset below, so a regression is a test error, not a file abort.
+end
+
+const M2MUND = ManyToManyUnderscoreThroughModels
+
+# What it tests: an unpinned `through=` ManyToMany on `Driver_` loads, and its ends come from the
+# through model's foreign keys. Expected: `owner_field = "driver_id"`, `related_field = "circuit_id"`,
+# columns equal to the fields (no `db_column`). Why: `_relation_from_many_to_many` derived
+# `driver__id` before it checked `through`, and that derivation threw, so the module above failed to
+# load unless both ends were pinned. Control: the AUTO path on the same model still refuses, because
+# there the derived name is the join-table column and it is not a valid field name.
+@testset "an unpinned through= ManyToMany on a model named Driver_ loads (#1207)" begin
+  PormG.Models.set_models(M2MUND, "m2m_mock")
+  rel = Models.get_many_to_many_relation(M2MUND.Driver_, "tracks")
+  @test rel.owner_field == "driver_id"
+  @test rel.related_field == "circuit_id"
+  @test rel.owner_column == "driver_id"
+  @test rel.related_column == "circuit_id"
+  @test rel.through_model_resolved === M2MUND.Visit
+
+  settings = PormG.Configuration.Settings(connections = M2MMockPostgres(), change_data = true)
+  err = @test_throws PormG.ModelDefinitionError Models._relation_from_many_to_many(
+    M2MUND.Driver_, "Driver_", "laps",
+    Models.ManyToManyField(M2MUND.Circuit),
+    M2MUND.Circuit, "Circuit", settings)
+  @test occursin("driver__id", err.value.msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #363 did not disturb the AUTO-derived path.
 #
 # That path already stored a physical name (`_many_to_many_table_name` returns `field.db_table`

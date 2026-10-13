@@ -19,10 +19,15 @@
 # - `formatter` — `_expression_formatter`, the value formatter filters and binds use;
 # - `textless`  — `_concat_textless_operand`, the #1027/#1028 refusals' classifier;
 # - `cte_field` / `cte_textless` — under a CTE: the field the CTE model gives the column
-#                 (`_set_field_from_sql_function`) and the body's textless record (`cte["textless"]`);
+#                 (`_set_field_from_sql_function`) and the column's textless classification as the outer
+#                 query reads it (`_cte_textless_record`);
 # - `kind`      — `_expression_kind`, the one total inference (#1034, phase 2). Recorded, not compared:
 #                 the disagreement rule maps no family for it, so it joins neither pinned set until a
-#                 reader is moved onto it.
+#                 reader is moved onto it;
+# - `whole_numeric` / `bigint` — the integer-division classifiers (`_whole_numeric_operand`,
+#                 `_bigint_column`, #1111/#1127): a whole number PostgreSQL computes as `numeric`, and a
+#                 `bigint` there. Recorded, not compared, as `kind` is; under a CTE they are what the CTE
+#                 column answers, which pins phase 3 step 1 (#1034) moving the CTE's records.
 #
 # A limit of the probe, by construction: every channel but `read` is asked AFTER the build, of the node
 # as the build saw it, and not at its own call site mid-build, so a channel whose answer depends on the
@@ -168,12 +173,18 @@ function _ekm_channels(instr, name::Symbol)
   if cte !== nothing
     ch = merge(ch, (
       cte_field    = _ekm_ask(() -> nameof(typeof(cte["model"].fields["v"]))),
-      cte_textless = _ekm_ask(() -> get(cte["textless"], "v", nothing)),
+      cte_textless = _ekm_ask(() -> _EKM_QB._cte_textless_record(_EKM_QB.CTEReference(name = "g", path = "v"), instr)),
     ))
   end
   # Last, so adding it moved no other channel's text in the fixture. It is no family claim: phase 3 of
   # #1034 moves readers onto it, and each move is then a diff of the channel it replaces.
-  return merge(ch, (kind = _ekm_ask(() -> _EKM_QB._expression_kind(node, instr)),))
+  ch = merge(ch, (kind = _ekm_ask(() -> _EKM_QB._expression_kind(node, instr)),))
+  # The two division classifiers (#1111, #1127), after `kind` for the same reason. Under a CTE they are
+  # asked of the CTE column, so they read what the body answered for it (#1034 phase 3, step 1).
+  return merge(ch, (
+    whole_numeric = _ekm_ask(() -> _EKM_QB._whole_numeric_operand(node, instr)),
+    bigint        = _ekm_ask(() -> _EKM_QB._bigint_column(node, instr)),
+  ))
 end
 
 # What one cell does on one engine: every channel, or the error and the stage it fired at. `nothing`

@@ -1580,3 +1580,72 @@ end
   end
   @test _ccd_builds(nothing; run = avg_cte)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A CTE column answers the division and text rules as its body expression does (#1034 phase 3, step 1)
+# The CTE model types each column with one field (`Count` an integer, `Sum` an integer whatever it
+# sums, `Avg` its operand's field), which cannot say what the rules ask: whether the column is a
+# `bigint` on PostgreSQL, a whole number PostgreSQL computes as `numeric`, or a value with no single
+# text. So the outer query asks the column's BODY expression. This pins what each answer does to the
+# outer query, through every rule that reads it, on shapes the expression-kind matrix cannot build
+# (its models have no JSON field):
+# - a body `Sum(F("laps_total") + F("payload__n"))` sums a `bigint` with a value the walk cannot type,
+#   so PostgreSQL's `sum(bigint)` is a `numeric`: divided, refused there (#1111), built on SQLite;
+# - a body `Count` is a `bigint` on PostgreSQL: summed beside an untyped value, the same (#1111). Beside
+#   an integer column the walk names the sum, and PostgreSQL renders `SUM(…)::bigint` (#1147), so it builds;
+# - a body `Avg` has no single integer: cast to one, refused on SQLite (#1028);
+# - a body JSON key lookup is the key's value, not the document, and a zero-scale decimal is whole:
+#   `Concat` and a scaled cast over them build.
+# The messages name the CTE column and, in parentheses, what its body is.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1034: a CTE column answers the division and text rules as its body expression does" begin
+  function withcte(outer)
+    q = CCD.Ccd_driver.objects
+    body = CCD.Ccd_driver.objects
+    body.values("id",
+                "w"    => Fn.Sum(_CF("laps_total") + _CF("payload__n")),   # a `sum(bigint)` the walk cannot type
+                "cnt"  => Fn.Count("id"),                                    # a `bigint`, typed as an integer
+                "bf"   => _CF("laps_total") * _CF("points"),                 # a float, with a `bigint` side
+                "avgl" => Fn.Avg("laptime"),
+                "avgp" => Fn.Avg("points"),
+                "mxg"  => Fn.Max("grid"),                                    # a zero-scale decimal
+                "drv"  => "payload__driver")                                 # a JSON key's value
+    q.with("c" => body, join_field = "id" => "id")
+    q.values("x" => outer)
+    return q
+  end
+  cte(outer) = conn -> _ccd_sql(withcte(outer); conn = conn)
+  w = "the CTE column `CTE(\"c\", \"w\")` (`SUM(…)` over the BigIntegerField `laps_total`)"
+  # The whole number PostgreSQL computes as `numeric`, divided: under `Coalesce`, an extremum, `Floor`
+  # and an outer `Sum`, to an integer and to a scaled numeric.
+  for outer in (Fn.Cast(Fn.Coalesce(PormG.CTE("c", "w"), 0) / 2, Models.IntegerField()),
+                Fn.Cast(Fn.Max(PormG.CTE("c", "w")) / 2, "numeric(10,1)"),
+                Fn.Cast(Fn.Floor(PormG.CTE("c", "w")) / 2, Models.IntegerField()),
+                Fn.Cast(Fn.Sum(Fn.Coalesce(PormG.CTE("c", "w"), 0)) / 2, Models.IntegerField()))
+    _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111", named = w, run = cte(outer))
+  end
+  # The `bigint` column summed beside a value the walk cannot type, and beside one it can.
+  _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111", named = "the CTE column `CTE(\"c\", \"cnt\")` (`COUNT(…)`)",
+              run = cte(Fn.Cast(Fn.Sum(Fn.Coalesce(PormG.CTE("c", "cnt"), "payload__n")) / 2, Models.IntegerField())))
+  _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111", named = "the CTE column `CTE(\"c\", \"cnt\")` (`COUNT(…)`)",
+              run = cte(Fn.Cast(Fn.Sum(Fn.Greatest(PormG.CTE("c", "cnt"), "payload__n")) / 2, Models.IntegerField())))
+  @test _ccd_builds(nothing; run = cte(Fn.Cast(Fn.Sum(Fn.Coalesce(PormG.CTE("c", "cnt"), "number")) / 2, Models.IntegerField())))
+  # A float with a `bigint` side: the float decides, so the cast to an integer is SQLite's truncation.
+  _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1028",
+              named = "the CTE column `CTE(\"c\", \"bf\")` (arithmetic over the FloatField `points`)",
+              run = cte(Fn.Cast(Fn.Sum(Fn.Coalesce(PormG.CTE("c", "bf"), "payload__n")) / 2, Models.IntegerField())))
+  # An average, of an interval or of a float, cast to an integer.
+  for col in ("avgl", "avgp")
+    _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1028", named = "the CTE column `CTE(\"c\", \"$(col)\")` (`AVG(…)`)",
+                run = cte(Fn.Cast(PormG.CTE("c", col), Models.IntegerField())))
+  end
+  # Explicit intent: an average in `Concat`, on every engine.
+  _ccd_refused_everywhere(nothing; issue = "#1027", named = "the CTE column `CTE(\"c\", \"avgp\")` (`AVG(…)`)",
+                          run = cte(Fn.Concat("surname", PormG.CTE("c", "avgp"))))
+  # Built: the JSON key's value and the zero-scale decimal in `Concat`, the decimal to a wider scale,
+  # and the `numeric` sum to text.
+  for outer in (Fn.Concat("surname", PormG.CTE("c", "drv")), Fn.Concat("surname", PormG.CTE("c", "mxg")),
+                Fn.Cast(PormG.CTE("c", "mxg"), "numeric(10,2)"), Fn.Cast(PormG.CTE("c", "w"), "text"))
+    @test _ccd_builds(nothing; run = cte(outer))
+  end
+end

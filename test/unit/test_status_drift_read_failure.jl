@@ -41,11 +41,17 @@ const _SD1076_SERVER_TEXT = "relation pg_class: permission denied (server text)"
 _sd1076_history() = DataFrame(version = ["20260101000000"], name = ["initial"], checksum = ["abc"],
                               status = ["applied"], is_destructive = [false])
 
-# Answers the history reads by their exact Dialect SQL; any other statement is the live-table read.
+# The PostgreSQL live-table read asks the server version first (#1163), by this exact statement.
+const _SD1076_PG_VERSION_SQL = "SELECT current_setting('server_version_num')::integer AS v"
+
+# Answers the history reads and the version read by their exact SQL; any other statement is the
+# live-table read, so the failing mock fails there and not on a statement in front of it.
 function _sd1076_fetch(c, sql::String, yes)
     sql == Dialect.migrations_table_exists_sql(c) && return DataFrame(x = [yes])
     sql == Dialect.select_all_migrations_sql(c) && return _sd1076_history()
     sql == Dialect.data_steps_table_exists_sql(c) && return DataFrame(x = [zero(yes)])
+    # The PostgreSQL fixture stands for PostgreSQL 16.
+    sql == _SD1076_PG_VERSION_SQL && return DataFrame(v = [160000])
     c.fail && throw(LiveReadFailed1076(_SD1076_SERVER_TEXT))
     # A database holding one user table: no drift to report.
     occursin("pragma_table_list", sql) && return DataFrame(name = ["circuit"], type = ["table"])

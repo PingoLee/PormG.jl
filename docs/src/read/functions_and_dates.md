@@ -800,6 +800,56 @@ A single argument is refused (see the start of this section). On SQLite, `MAX(x)
 one argument are the *aggregates*, so a one-argument `Greatest` used to collapse the result to one
 row.
 
+### Mixed date, time and text operands
+
+`Coalesce`, `Greatest`, `Least`, `NullIf`, a `Case` with no `output_field`, and a `Lag`/`Lead` with a
+`default` all return one of their operands' own values. Their operands must therefore be of one
+temporal type. A date, a timestamp without a time zone, a timestamp with one, a time and an
+interval are five different types here, and text is a sixth. Two different types, or a temporal type
+beside text, are refused with `QueryBuildError` when the query is built, on every engine (#1200):
+
+```julia
+using Dates, TimeZones
+using PormG.Functions: Coalesce
+
+zdt = ZonedDateTime(DateTime(2021, 1, 1, 0, 30), tz"UTC")
+
+# ✗ a date and a timestamp with time zone: refused
+M.Race.objects.values("first_day" => Coalesce("fp1_date", zdt))
+
+# ✓ convert the literal in Julia…
+M.Race.objects.values("first_day" => Coalesce("fp1_date", Date(zdt)))
+# ✓ …or say the type with `output_field`
+M.Race.objects.values("first_day" => Coalesce("fp1_date", zdt; output_field = "date"))
+```
+
+The query does not say which type it means, and each engine would pick its own. With a `DateField`
+beside a zoned literal, PostgreSQL resolves a `timestamptz` and returns a `ZonedDateTime` on every
+row, while SQLite returns each row's own text: a date on one row, a UTC timestamp on another. A text
+column beside a timestamp fails at the PostgreSQL server and builds on SQLite. Django refuses the same
+expressions for the same reason (`Expression contains mixed types … You must set output_field`).
+
+The ways to say the type:
+
+- **convert the literal in Julia**: `Date(zdt)`, `DateTime(zdt, UTC)`, or
+  `ZonedDateTime(dt, tz"UTC")` for a `DateTime` beside a `DateTimeField`. A `DateTimeField` is a
+  timestamp *with* a time zone unless declared `type = "TIMESTAMP"`, so a plain `DateTime` beside one
+  is refused;
+- **an `output_field`** on `Coalesce`, `Greatest`, `Least` or `Case`, for a date beside a timestamp.
+  It casts the function's result, so the operands inside must still have a common type, which a
+  date and a timestamp do on PostgreSQL. `"date"` works on both engines; a timestamp type cannot be
+  cast on SQLite (`BackendCapabilityError`, see `output_field` below). `NullIf`, `Lag` and `Lead` take
+  no `output_field`: cast one operand instead;
+- **beside text, cast the other operand to text**: `Coalesce("name", Cast(Value(zdt), "text"))`. Each
+  engine writes the timestamp's text its own way (see the `Concat` section). An `output_field` does
+  not help here: PostgreSQL has no common type for text and a timestamp inside the function;
+- a time, an interval and a date among themselves have no common type at all: make them one, in
+  Julia or by casting each to text.
+
+An operand whose type PormG cannot name (timestamp arithmetic, a JSON key lookup) is not checked. A
+number beside another number is not this rule's concern: `Coalesce("grid", 0.5)` is a float on both
+engines.
+
 ### `Cast` — Type Conversion
 
 ```julia

@@ -530,6 +530,18 @@ const DOCERR_CASES = [
         () -> PormG.Functions.Least("dob", PormG.Dates.Day(1)),
     ),
     (
+        # #1200. *Mixed date, time and text operands* says two different temporal types, or a temporal
+        # type beside text, among the operands of `Coalesce` & co. are refused with `QueryBuildError`
+        # when the query is built, on every engine. A date column beside a `DateTime` literal.
+        "read/functions_and_dates.md — mixed date, time and text operands raise QueryBuildError (#1200)",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RACE_PG.objects
+            q.values("first" => PormG.Functions.Coalesce("date", PormG.Dates.DateTime(2021, 1, 1)))
+            q.list(show_query = :dict)
+        end,
+    ),
+    (
         # #509. The window-function page states that the same ambiguity applies to an `SQLOrder`
         # entry inside a window's `order_by` — "exactly as it applies to values(), filter() and
         # order_by()". That sentence is the whole point of the fix: this was the one clause where a

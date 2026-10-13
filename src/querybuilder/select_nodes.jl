@@ -219,6 +219,7 @@ function _get_select_query(v::WindowFunction, instruc::SQLInstruction; _as::Unio
     if haskey(v.kwargs, "default")
       resolved_kwargs["default"] = _resolve_window_kwarg(v.kwargs["default"], instruc)
     end
+    _check_temporal_mix(v, instruc)   # #1200: the operand and its default, once both render
     over_sql = _build_over_clause(v.over, instruc)
     return getfield(Dialect, func_name)(resolved_column, over_sql, resolved_kwargs, instruc.connection)
   elseif v.function_name == "NTH_VALUE"
@@ -260,8 +261,10 @@ function _null_skipping_operands(v::SQLTypeFunction, instruc::SQLInstruction)
   (!_greatest_skips_nulls(instruc.connection) && v.function_name in ("GREATEST", "LEAST") &&
    v.column isa AbstractVector && length(v.column) >= 2) || return v.column
   cols = collect(Any, v.column)
+  # `rotation_of` marks the rotations as this node's: the #1200 check reads the node, not each one.
   return Any[FObject(function_name = "COALESCE", column = circshift(cols, 1 - k),
-                     aggregate = _any_agg(cols)) for k in 1:length(cols)]
+                     aggregate = _any_agg(cols), kwargs = Dict{String,Any}("rotation_of" => v.function_name))
+             for k in 1:length(cols)]
 end
 
 # #1028 — one operand of `Concat` or a declared cast, rendered exactly as `_get_select_query` renders
@@ -754,6 +757,9 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     end
   end
 
+  # #1200: a value of one of several operands over two temporal types, or a temporal type and text,
+  # refused on every engine. After Phase 3, so a `Case`'s rendered default has filled its memo.
+  v isa FObject && _check_temporal_mix(v, instruc)
   sql = getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection)
   # #900: PostgreSQL's `avg(interval)` is an interval; the milliseconds' mean is rounded to one, the
   # precision every SQLite interval has (#881).

@@ -538,6 +538,22 @@ end
 # constant, and require the string spelling to render exactly what the `F` spelling renders, SQL
 # and parameters both, on each engine.
 # ─────────────────────────────────────────────────────────────────────────────
+# #1200: a transform whose value is text (`@yyyy_mm`, `@yyyy_q`: a label) beside the date `seen` is
+# refused on every engine — the value does not say whether it is text or a date. The oracle compares
+# OUTCOMES, so each spelling must render the same SQL and parameters or be refused the same way; any
+# other error still fails the test. The operand LABELS are masked: the string spelling reaches the
+# check as the node the walk resolved it into (`EXTRACT_DATE(…)`), the `F` spelling as its path.
+function _tlp_outcome(q, conn)
+  try
+    i = inspect_query(q; connection = conn)
+    return (i[:sql_text], i[:parameters])
+  catch e
+    msg = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
+    (e isa PormG.QueryBuildError && occursin("(#1200)", msg)) || rethrow()
+    return ("refused", replace(msg, r"`[^`]*`" => "`…`"))
+  end
+end
+
 const _TLP_843_CTORS = (
   ("Coalesce", op -> PormG.Functions.Coalesce(op, "seen")),
   ("Greatest", op -> PormG.Functions.Greatest(op, "seen")),
@@ -555,10 +571,7 @@ const _TLP_843_CTORS = (
       path = "$(col)__@$(key)"
       a = TLP.Tlp_row.objects; a.values("x" => ctor(path))
       b = TLP.Tlp_row.objects; b.values("x" => ctor(F(path)))
-      ia = inspect_query(a; connection = conn)
-      ib = inspect_query(b; connection = conn)
-      @test ia[:sql_text] == ib[:sql_text]
-      @test ia[:parameters] == ib[:parameters]
+      @test _tlp_outcome(a, conn) == _tlp_outcome(b, conn)
     end
   end
   # The issue's own query, spelled out: the transform renders, the plain path stays a column.
@@ -648,10 +661,7 @@ end
         path = "$(col)__@$(key)"
         a = TLP.Tlp_row.objects; position(a, path)
         b = TLP.Tlp_row.objects; position(b, F(path))
-        ia = inspect_query(a; connection = conn)
-        ib = inspect_query(b; connection = conn)
-        @test ia[:sql_text] == ib[:sql_text]
-        @test ia[:parameters] == ib[:parameters]
+        @test _tlp_outcome(a, conn) == _tlp_outcome(b, conn)
       end
     end
   end

@@ -1562,6 +1562,174 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `CASE(…)` over a Float64 literal is not text: say which text you mean (#1027). Cast it to text fi"),
   ("Concat Case float | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `CASE(…)` over a Float64 literal is not text: say which text you mean (#1027). Cast it to text fi"),
+  ("Coalesce date zoned literal | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Coalesce date zoned literal | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Coalesce date zoned literal | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Coalesce date zoned literal | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Coalesce date zoned literal | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Coalesce date zoned literal | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Greatest date zoned literal | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Greatest date zoned literal | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Greatest date zoned literal | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Greatest date zoned literal | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Greatest date zoned literal | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Greatest date zoned literal | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Greatest mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Least date zoned literal | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Least mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its va"),
+  ("Least date zoned literal | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Least mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its va"),
+  ("Least date zoned literal | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Least mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its va"),
+  ("Least date zoned literal | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Least mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its va"),
+  ("Least date zoned literal | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Least mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its va"),
+  ("Least date zoned literal | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Least mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its va"),
+  ("NullIf date zoned literal | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its v"),
+  ("NullIf date zoned literal | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its v"),
+  ("NullIf date zoned literal | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its v"),
+  ("NullIf date zoned literal | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its v"),
+  ("NullIf date zoned literal | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its v"),
+  ("NullIf date zoned literal | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its v"),
+  ("Case date branch zoned default | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its val"),
+  ("Case date branch zoned default | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its val"),
+  ("Case date branch zoned default | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its val"),
+  ("Case date branch zoned default | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its val"),
+  ("Case date branch zoned default | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its val"),
+  ("Case date branch zoned default | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its val"),
+  ("Case zoned naive literals | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a timestamp with time zone (a ZonedDateTime literal) and a timestamp without time zone (a DateTime literal), "),
+  ("Case zoned naive literals | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a timestamp with time zone (a ZonedDateTime literal) and a timestamp without time zone (a DateTime literal), "),
+  ("Case zoned naive literals | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a timestamp with time zone (a ZonedDateTime literal) and a timestamp without time zone (a DateTime literal), "),
+  ("Case zoned naive literals | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a timestamp with time zone (a ZonedDateTime literal) and a timestamp without time zone (a DateTime literal), "),
+  ("Case zoned naive literals | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a timestamp with time zone (a ZonedDateTime literal) and a timestamp without time zone (a DateTime literal), "),
+  ("Case zoned naive literals | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case mixes a timestamp with time zone (a ZonedDateTime literal) and a timestamp without time zone (a DateTime literal), "),
+  ("Lag date default zoned | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Lag mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its valu"),
+  ("Lag date default zoned | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Lag mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its valu"),
+  ("Lag date default zoned | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Lag mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its valu"),
+  ("Lag date default zoned | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Lag mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its valu"),
+  ("Lag date default zoned | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Lag mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its valu"),
+  ("Lag date default zoned | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Lag mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its valu"),
+  ("Coalesce date zoned column | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (`start_at`), and does not say which type its value has (#"),
+  ("Coalesce date zoned column | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (`start_at`), and does not say which type its value has (#"),
+  ("Coalesce date zoned column | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (`start_at`), and does not say which type its value has (#"),
+  ("Coalesce date zoned column | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (`start_at`), and does not say which type its value has (#"),
+  ("Coalesce date zoned column | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (`start_at`), and does not say which type its value has (#"),
+  ("Coalesce date zoned column | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (`start_at`), and does not say which type its value has (#"),
+  ("Coalesce zoned naive literal | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp with time zone (`start_at`) and a timestamp without time zone (a DateTime literal), and does "),
+  ("Coalesce zoned naive literal | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp with time zone (`start_at`) and a timestamp without time zone (a DateTime literal), and does "),
+  ("Coalesce zoned naive literal | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp with time zone (`start_at`) and a timestamp without time zone (a DateTime literal), and does "),
+  ("Coalesce zoned naive literal | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp with time zone (`start_at`) and a timestamp without time zone (a DateTime literal), and does "),
+  ("Coalesce zoned naive literal | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp with time zone (`start_at`) and a timestamp without time zone (a DateTime literal), and does "),
+  ("Coalesce zoned naive literal | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp with time zone (`start_at`) and a timestamp without time zone (a DateTime literal), and does "),
+  ("Coalesce text zoned literal | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which ty"),
+  ("Coalesce text zoned literal | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which ty"),
+  ("Coalesce text zoned literal | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which ty"),
+  ("Coalesce text zoned literal | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which ty"),
+  ("Coalesce text zoned literal | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which ty"),
+  ("Coalesce text zoned literal | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which ty"),
+  ("Coalesce time interval | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
+  ("Coalesce time interval | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
+  ("Coalesce time interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
+  ("Coalesce time interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
+  ("Coalesce time interval | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
+  ("Coalesce time interval | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
+  ("Coalesce date Date(zoned) | alone", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
+  ("Coalesce date Date(zoned) | alone", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
+  ("Coalesce date Date(zoned) | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce date Date(zoned) | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce date Date(zoned) | subquery", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
+  ("Coalesce date Date(zoned) | subquery", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
+  ("Coalesce zoned zoned | alone", :postgres) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = "CDateTime(true)", column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)"),
+  ("Coalesce zoned zoned | alone", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = "CDateTime(true)", column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)"),
+  ("Coalesce zoned zoned | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce zoned zoned | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce zoned zoned | subquery", :postgres) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)"),
+  ("Coalesce zoned zoned | subquery", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)"),
+  ("Coalesce date zoned output date | alone", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
+  ("Coalesce date zoned output date | alone", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
+  ("Coalesce date zoned output date | cte", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", cte_textless = nothing, kind = "CDate()"),
+  ("Coalesce date zoned output date | cte", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", cte_textless = nothing, kind = "CDate()"),
+  ("Coalesce date zoned output date | subquery", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
+  ("Coalesce date zoned output date | subquery", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
   ("Subquery Max hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()"),
   ("Subquery Max hop date | alone", :sqlite) =>

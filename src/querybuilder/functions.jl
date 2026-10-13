@@ -877,6 +877,49 @@ function _round_text_refusal(digits::Integer, what::AbstractString)
     "\e[32mRound(Cast(x, FloatField()), $(digits))\e[0m, or fetch the value and round it in Julia.")
 end
 
+# #1200 — a value that is one of several operands' over two temporal types, or a temporal type and
+# text (`_temporal_mix`, projection_types.jl). EXPLICIT INTENT (#1147 step 2): the query does not say
+# which type its value has, so it is refused on every engine, naming the two types and the spellings
+# that say it — Django's `Expression contains mixed types … You must set output_field.`
+#
+# Which spelling works depends on the pair (review of #1200). An `output_field` renders a cast OUTSIDE
+# the function, so PostgreSQL must still find one type for the operands inside it: it does for a date
+# and a timestamp (`date` → `timestamptz` is implicit), not for text beside a timestamp, nor for a time,
+# an interval and a date among themselves. So `output_field` is offered for the date/timestamp pairs
+# only (`NullIf`, `Lag` and `Lead` take none, so a `Cast` of one operand is theirs); beside text, the
+# other operand is cast to text; any other pair has no common type to name. For a date/timestamp pair
+# with a literal side the Julia conversion is offered too, and leads: it works on every engine, where
+# a cast to a timestamp is a feature SQLite lacks (#822), refused there by its own rule.
+const _TEMPORAL_MIX_NOUN = Dict(:date => "a date", :timestamp => "a timestamp without time zone",
+  :timestamptz => "a timestamp with time zone", :time => "a time", :interval => "an interval", :text => "text")
+const _TEMPORAL_MIX_TYPE = Dict(:date => "date", :timestamp => "timestamp", :timestamptz => "timestamptz",
+  :time => "time", :interval => "interval", :text => "text")
+const _TEMPORAL_MIX_NAME = Dict("COALESCE" => "Coalesce", "GREATEST" => "Greatest", "LEAST" => "Least",
+  "NULLIF" => "NullIf", "CASE" => "Case", "LAG" => "Lag", "LEAD" => "Lead")
+const _TEMPORAL_MIX_TIMESTAMPS = (:date, :timestamp, :timestamptz)
+function _temporal_mix_refusal(function_name::AbstractString, a::Tuple{Symbol,String,Bool},
+                               b::Tuple{Symbol,String,Bool})
+  name = _TEMPORAL_MIX_NAME[function_name]
+  types = "\"$(_TEMPORAL_MIX_TYPE[a[1]])\" or \"$(_TEMPORAL_MIX_TYPE[b[1]])\""
+  timestamps = a[1] in _TEMPORAL_MIX_TIMESTAMPS && b[1] in _TEMPORAL_MIX_TIMESTAMPS
+  # `"text"` as the output_field works on both engines for a timestamp pair (PostgreSQL unifies the
+  # two inside, then casts), where SQLite cannot cast to a timestamp type (#822).
+  declare = if timestamps
+    name in ("NullIf", "Lag", "Lead") ? "cast one operand to the other's type, \e[32mCast(x, $(types))\e[0m" :
+      "pass \e[32moutput_field = \"$(_TEMPORAL_MIX_TYPE[a[1]])\", \"$(_TEMPORAL_MIX_TYPE[b[1]])\" or \"text\"\e[0m"
+  elseif :text in (a[1], b[1])
+    "cast the other operand to text, \e[32mCast(x, \"text\")\e[0m"
+  else
+    "make them one type, or cast both to text, \e[32mCast(x, \"text\")\e[0m: they have no common type"
+  end
+  # Converting a literal in Julia resolves a date/timestamp mix only (a `Date(zdt)` beside a date).
+  julia = timestamps && (a[3] || b[3]) ? "convert the literal in Julia first (\e[32mDate(zdt)\e[0m, " *
+    "\e[32mDateTime(zdt, UTC)\e[0m, \e[32mZonedDateTime(dt, tz\"UTC\")\e[0m), or " : ""
+  return QueryBuildError(
+    "\e[4m\e[31m$(name)\e[0m mixes $(_TEMPORAL_MIX_NOUN[a[1]]) ($(a[2])) and $(_TEMPORAL_MIX_NOUN[b[1]]) " *
+    "($(b[2])), and does not say which type its value has (#1200). Say it: $(julia)$(declare).")
+end
+
 # Variadic convenience: Concat("forename", Value(" "), "surname") → same as vector form
 Concat(args...; kwargs...) = Concat(collect(args); kwargs...)
 

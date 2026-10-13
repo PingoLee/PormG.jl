@@ -575,6 +575,86 @@ function _case_values(p::FObject)
   return Any[v isa Union{SQLObject,SQLType} ? v : SQLText(v) for v in values if !_is_null_literal(v isa SQLText ? v.field : v)]
 end
 
+# #1200 — a value that is one of several operands' (`Coalesce`, `Greatest`, `Least`, `NullIf`, a `Case`
+# with no `output_field`, a `Lag`/`Lead` and its `default`) over operands of two different temporal
+# types, or of a temporal type and text, does not say which type it has. Measured with a `DateField`
+# beside a zoned literal: PostgreSQL resolves `timestamptz` and reads every row as an instant, SQLite
+# hands back each row's own text, and a text column beside one fails at the PostgreSQL server. That is
+# explicit intent (#1147): refused on every engine, naming the spellings that say the type, as
+# Django refuses mixed types without an `output_field`. A naive and a zoned timestamp are two types
+# here, as the issue sets it. A number beside a number is not this rule's (#1150 normalizes it).
+#
+# Typed by the walk (`_AllKinds`), after the operands render. An operand the walk cannot type, a NULL,
+# and a kind of any other family are let through, and a conflict between two typed operands is refused
+# whatever the untyped one is. `(class, what, literal)` names each side by its type and its label, never
+# a value, and says whether it is a literal. No departure table is read; the walk's kinds are the
+# engine's own, so a cast the engine renders as text (a uuid cast on SQLite) is text there.
+_temporal_mix_class(::CDate) = :date
+_temporal_mix_class(k::CDateTime) = k.with_timezone ? :timestamptz : :timestamp
+_temporal_mix_class(::CTime) = :time
+_temporal_mix_class(::CInterval) = :interval
+_temporal_mix_class(::Union{CText,CVarChar}) = :text
+_temporal_mix_class(::Any) = nothing
+const _TEMPORAL_MIX_FUNCTIONS = ("COALESCE", "GREATEST", "LEAST", "NULLIF", "CASE", "LAG", "LEAD")
+
+"""
+    _temporal_mix(p, instruc) -> Union{Tuple{Tuple{Symbol,String,Bool},Tuple{Symbol,String,Bool}}, Nothing}
+
+The first two values of `p` (one of `_TEMPORAL_MIX_FUNCTIONS`, with no `output_field`) whose types are
+two different temporal types, or a temporal type and text, as `((class, what, literal), …)`; or
+`nothing`. Read after `p`'s operands render.
+"""
+function _temporal_mix(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
+  p.function_name in _TEMPORAL_MIX_FUNCTIONS || return nothing
+  p isa FObject && get(p.kwargs, "output_field", nothing) isa AbstractString && return nothing
+  # SQLite's NULL-skipping rotations of a `Greatest`/`Least` (`_null_skipping_operands`): that node
+  # checks its own operands, under its own name.
+  haskey(p.kwargs, "rotation_of") && return nothing
+  first_side = nothing
+  for value in _temporal_mix_values(p)
+    class = _temporal_mix_class(_infer_kind(value, instruc, _AllKinds()))
+    class === nothing && continue
+    side = (class, _temporal_mix_label(value), value isa SQLText)
+    first_side === nothing && (first_side = side; continue)
+    class === first_side[1] || return (first_side, side)
+  end
+  return nothing
+end
+# The values the function can take. A `Case`'s branches and a window `default` hold a string as a text
+# literal (`_case_values`, `_bigint_operand_function`); the operands of the others hold it as a path.
+function _temporal_mix_values(p::Union{FObject,WindowFunction})
+  p.function_name == "CASE" && return _case_values(p)
+  values = Any[]
+  if p isa WindowFunction
+    push!(values, p.column isa AbstractVector ? first(p.column) : p.column)
+    default = get(p.kwargs, "default", nothing)
+    default === nothing || push!(values, default isa Union{SQLObject,SQLType} ? default : SQLText(default))
+  else
+    append!(values, p.column isa AbstractVector ? p.column : (p.column,))
+  end
+  return Any[v isa Union{SQLObject,SQLType,AbstractString} ? v : SQLText(v) for v in values
+             if !_is_null_literal(v isa SQLText ? v.field : v)]
+end
+_temporal_mix_label(p::SQLText) = "a $(nameof(typeof(p.field))) literal"
+function _temporal_mix_label(p)
+  label = _concat_operand_label(p)
+  label === nothing || return "`$(label)`"
+  p isa Union{FObject,WindowFunction} && return "`$(p.function_name)(…)`"
+  return "an expression"
+end
+
+"""
+    _check_temporal_mix(p, instruc)
+
+Throws `_temporal_mix_refusal` when `_temporal_mix` finds two values of `p` whose types do not say
+which one the value has (#1200), on every engine.
+"""
+function _check_temporal_mix(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
+  mix = _temporal_mix(p, instruc)
+  mix === nothing || throw(_temporal_mix_refusal(p.function_name, mix...))
+  return nothing
+end
+
 # #1028 — a timestamp, an interval or a JSON document: each has a text of its own on each engine (the
 # measurements above). The kind comes from `_operand_kind`, which already names it for a column, a
 # joined or CTE handle, a transform and a typed function (`Max("start_at")`, `Max("lap")`). Arithmetic

@@ -95,6 +95,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Pattern Lookup on a Temporal, Boolean or Binary Column (#1183)" include("unit/test_pattern_temporal_column.jl")
     @testset "Concat Operands With No Single Text (#1027)" include("unit/test_concat_textless_operands.jl")
     @testset "Divergent Casts And Concat Operands (#1028)" include("unit/test_cast_divergent_operands.jl")
+    @testset "Mixed Temporal Operands Refused (#1200)" include("unit/test_temporal_mix_refusal.jl")
     @testset "Abs/Floor/Ceil Over an Integer Keep It (#1147)" include("unit/test_integer_floor_ceil_abs.jl")
     @testset "Deep FK Traversal (3 hops)" include("unit/test_deep_fk_traversal.jl")
     @testset "Window Function SQL Generation" include("unit/test_window_functions.jl")

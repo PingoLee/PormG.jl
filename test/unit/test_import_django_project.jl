@@ -1446,6 +1446,201 @@ class Pilot(Racer):
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#1197): a base written as a MODULE PATH resolves like a bare one
+#
+# `class Pilot(racing_models.Driver)` after `from racing import models as racing_models`, and
+# `class Pilot(racing.models.Driver)` after `import racing.models`, are the same class to Django as
+# `class Pilot(Driver)` after `from racing.models import Driver`. Base resolution matched names only,
+# so a dotted base never resolved:
+#   - a dotted PROXY's relations degraded: the ForeignKey to a `BigIntegerField`, the ManyToMany
+#     dropped, each under a marker saying the target was not in the import;
+#   - a dotted ABSTRACT base merged none of its fields into the child;
+#   - a dotted CONCRETE base was not seen as multi-table inheritance, so the child was imported as a
+#     table of its own, with only its own fields and an `id` key Django never created.
+# Expected: all three read exactly as the bare spelling does. A dotted base naming a module that is
+# no imported app (`forms.Form`) stays a silent helper; a class's nested class is never a model.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a base written as a module path resolves to the class it names (#1197)" begin
+    racing = """
+from django.db import models
+
+class Driver(models.Model):
+    surname = models.CharField(max_length=40)
+
+class Race(models.Model):
+    rivals = models.ManyToManyField('legacy.Pilot')
+    pilot = models.ForeignKey('legacy.Pilot', on_delete=models.CASCADE)
+"""
+    for (label, legacy) in (
+        "from-imported module alias" => """
+from django.db import models
+from racing import models as racing_models
+
+class Pilot(racing_models.Driver):
+    class Meta:
+        proxy = True
+""",
+        "plain import of the models module" => """
+from django.db import models
+import racing.models
+
+class Pilot(racing.models.Driver):
+    class Meta:
+        proxy = True
+""",
+        "plain import with an alias" => """
+from django.db import models
+import racing.models as rm
+
+class Pilot(rm.Driver):
+    class Meta:
+        proxy = True
+""")
+        @testset "proxy, $label" begin
+            generated, config_key, db_dir_existed = import_project(["racing" => racing, "legacy" => legacy];
+                                                                   output_file = "django_1197_proxy.jl")
+            try
+                @test occursin("pilot_id = Models.ForeignKey(\"Driver\", pk_field=\"id\", on_delete=CASCADE)", generated)
+                @test occursin("rivals = Models.ManyToManyField(\"Driver\", db_table=\"racing_race_rivals\", target_field=\"pilot_id\")", generated)
+                @test !occursin("is not in the imported app set", generated)
+                @test !occursin("BigIntegerField", generated)
+                sandbox = Module()
+                Core.eval(sandbox, Meta.parse(generated))
+                mod = Core.eval(sandbox, :django_1197_proxy)
+                Base.invokelatest(PormG.Models.set_models, mod, "import_1180_mock")
+                race = Core.eval(mod, :Race)
+                @test haskey(race.cache["many_to_many"], "rivals")
+                @test Base.invokelatest(PormG.Models._resolve_target_model,
+                                        race.fields["pilot_id"].to, mod) === Core.eval(mod, :Driver)
+            finally
+                cleanup_project_test!(config_key, db_dir_existed)
+            end
+        end
+    end
+
+    # A dotted ABSTRACT base merges its fields, as `from core.models import TimeStampedModel` does.
+    core = """
+from django.db import models
+
+class TimeStampedModel(models.Model):
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        abstract = True
+"""
+    downstream = """
+from django.db import models
+from core import models as core_models
+
+class ImportBatch(core_models.TimeStampedModel):
+    note = models.CharField(max_length=40)
+"""
+    generated, config_key, db_dir_existed = import_project(["core" => core, "imports" => downstream];
+                                                           output_file = "django_1197_abstract.jl")
+    try
+        @test occursin("created_at = Models.DateTimeField(auto_now_add=true)", generated)
+        @test occursin("\nImportBatch = Models.Model(db_table = \"imports_importbatch\"", generated)
+        @test !occursin("core_models.TimeStampedModel", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # A dotted CONCRETE base is multi-table inheritance, refused with Django's `<parent>_ptr_id`,
+    # instead of a child table holding only its own fields.
+    legacy_mti = """
+from django.db import models
+import racing.models
+
+class Pilot(racing.models.Driver):
+    licence = models.CharField(max_length=10)
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => racing, "legacy" => legacy_mti];
+                                                           output_file = "django_1197_mti.jl")
+    try
+        @test occursin("inherits the concrete model 'racing.models.Driver' (Django multi-table inheritance)", generated)
+        @test occursin("Django keys the child table on a 'driver_ptr_id' one-to-one", generated)
+        @test !occursin("\nPilot = Models.Model", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # Through a re-export façade: `reports.models` imported `Driver` from `racing`, and `legacy` names
+    # it as `reports_models.Driver`. The dotted path reaches `reports`, which follows its own import.
+    reports = """
+from django.db import models
+from racing.models import Driver
+"""
+    legacy_facade = """
+from django.db import models
+from reports import models as reports_models
+
+class Pilot(reports_models.Driver):
+    class Meta:
+        proxy = True
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => racing, "reports" => reports, "legacy" => legacy_facade];
+                                                           output_file = "django_1197_facade.jl")
+    try
+        @test occursin("pilot_id = Models.ForeignKey(\"Driver\", pk_field=\"id\", on_delete=CASCADE)", generated)
+        @test !occursin("is not in the imported app set", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # A dotted base naming a module that is no imported app stays a helper, and silent.
+    helpers = """
+from django import forms
+from django.db import models
+
+class PilotForm(forms.Form):
+    surname = forms.CharField(max_length=40)
+
+class Pilot(models.Model):
+    licence = models.CharField(max_length=10)
+"""
+    generated, config_key, db_dir_existed = import_project(["racing" => racing, "legacy" => helpers];
+                                                           output_file = "django_1197_helpers.jl")
+    try
+        @test !occursin("PilotForm", generated)
+        @test !occursin("Django multi-table inheritance", generated)
+        @test occursin("\nPilot = Models.Model(db_table = \"legacy_pilot\"", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # A prefix bound by `from racing.models import <name>` is a class or an unknown name, never a
+    # module. `racing` declares a concrete `Status`, so reading `Driver.Status` (a nested class) or
+    # `Missing.Status` (a name `racing` does not define) as `racing.models.Status` would refuse the
+    # child as multi-table inheritance of a class it does not inherit.
+    racing_status = racing * """
+
+class Status(models.Model):
+    label = models.CharField(max_length=20)
+"""
+    for (label, imported, base) in (("nested class", "Driver", "Driver.Status"),
+                                    ("unknown name", "Missing", "Missing.Status"))
+        @testset "$label" begin
+            legacy = """
+from django.db import models
+from racing.models import $(imported)
+
+class Pilot($(base)):
+    licence = models.CharField(max_length=10)
+"""
+            generated, config_key, db_dir_existed = import_project(["racing" => racing_status, "legacy" => legacy];
+                                                                   output_file = "django_1197_prefix.jl")
+            try
+                @test !occursin("Django multi-table inheritance", generated)
+                @test !occursin("status_ptr_id", generated)
+                @test occursin("\nPilot = Models.Model(db_table = \"legacy_pilot\"", generated)
+            finally
+                cleanup_project_test!(config_key, db_dir_existed)
+            end
+        end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Django Importer (#1181): an app of proxies does not claim its relations degrade
 #
 # An app that emits no model gets a line at the top of the file (#70). An app whose classes are all
@@ -2710,6 +2905,187 @@ class Driver_(models.Model):
         finally
             cleanup_project_test!(config_key, db_dir_existed)
         end
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Django Importer (#1198): a `through=` ManyToMany pins the through model's keys
+#
+# `set_models` names a ManyToMany's unpinned end from its model's name before it reads the through
+# model, so on `Driver_` (models.E023) or `Pit__stop` (models.E024) it built `driver__id`, a name
+# with PormG's lookup separator, and raised: the whole generated module failed to load. The
+# importer pinned nothing for a `through=` ManyToMany, and it lost Django's `through_fields`, which
+# names those keys outright. Expected, as Django does: `source_field` / `target_field` pinned to the
+# through model's key to each end, from `through_fields` when written, or the single key to that end;
+# a `related_name` on the unloadable reverse accessor (#1174's pin, now reaching a ManyToMany); and a
+# field that cannot be pinned dropped with a marker, so the rest of the file still loads. A
+# ManyToMany whose derived names load is left as it was.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a through= ManyToMany pins the through model's keys, and through_fields is read (#1198)" begin
+    load(generated, mod_name) = begin
+        sandbox = Module()
+        Core.eval(sandbox, Meta.parse(generated))
+        mod = Core.eval(sandbox, mod_name)
+        Base.invokelatest(PormG.Models.set_models, mod, "import_1140_mock")
+        mod
+    end
+    m2m(mod, owner, field) = Core.eval(mod, owner).cache["many_to_many"][field]
+
+    # The issue's shape, and the same on a `__` class: both ends pinned to the through model's keys,
+    # and the reverse accessor named. The file loads, and the relation reads the through model.
+    for (owner, accessor, check) in (("Driver_", "driver", "models.E023"), ("Pit__stop", "pit_stop", "models.E024"))
+        low = lowercase(owner)
+        src = """
+from django.db import models
+
+class Circuit(models.Model):
+    name = models.CharField(max_length=40)
+
+class $(owner)(models.Model):
+    tracks = models.ManyToManyField(Circuit, through='Visit')
+
+class Visit(models.Model):
+    driver = models.ForeignKey($(owner), on_delete=models.CASCADE, related_name='visits')
+    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE, related_name='visits')
+"""
+        @testset "$owner" begin
+            generated, config_key, db_dir_existed = import_one_app(src; output_file = "django_1198.jl")
+            try
+                @test occursin("tracks = Models.ManyToManyField(\"Circuit\", through=\"Visit\", " *
+                               "related_name=\"$(accessor)\", source_field=\"driver_id\", target_field=\"circuit_id\")", generated)
+                @test occursin("is imported with related_name=\"$(accessor)\"", generated)
+                @test occursin(check, generated)
+                mod = load(generated, :django_1198)
+                rel = m2m(mod, Symbol(owner), "tracks")
+                @test rel.owner_field == "driver_id"
+                @test rel.related_field == "circuit_id"
+                @test haskey(Core.eval(mod, :Circuit).related_objects, accessor)
+            finally
+                cleanup_project_test!(config_key, db_dir_existed)
+            end
+        end
+    end
+
+    # `through_fields` is Django's spelling of the two pins, read wherever it is written. A through
+    # model with two keys to one end cannot be inferred, so without it the file did not load.
+    generated, config_key, db_dir_existed = import_one_app("""
+from django.db import models
+
+class Driver(models.Model):
+    surname = models.CharField(max_length=40)
+
+class Team(models.Model):
+    members = models.ManyToManyField(Driver, through='Membership', through_fields=('team', 'driver'))
+
+class Membership(models.Model):
+    team = models.ForeignKey(Team, on_delete=models.CASCADE)
+    driver = models.ForeignKey(Driver, on_delete=models.CASCADE, related_name='memberships')
+    mentor = models.ForeignKey(Driver, on_delete=models.CASCADE, related_name='mentored')
+"""; output_file = "django_1198_fields.jl")
+    try
+        @test occursin("members = Models.ManyToManyField(\"Driver\", through=\"Membership\", " *
+                       "source_field=\"team_id\", target_field=\"driver_id\")", generated)
+        rel = m2m(load(generated, :django_1198_fields), :Team, "members")
+        @test rel.related_field == "driver_id"
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # A `through_fields` that is not two quoted names is not guessed at: dropped, with a marker.
+    generated, config_key, db_dir_existed = import_one_app("""
+from django.db import models
+
+FIELDS = ('team', 'driver')
+
+class Driver(models.Model):
+    surname = models.CharField(max_length=40)
+
+class Team(models.Model):
+    members = models.ManyToManyField(Driver, through='Membership', through_fields=FIELDS)
+
+class Membership(models.Model):
+    team = models.ForeignKey(Team, on_delete=models.CASCADE)
+    driver = models.ForeignKey(Driver, on_delete=models.CASCADE)
+"""; output_file = "django_1198_unreadable.jl")
+    try
+        @test occursin("through_fields on 'Team.members' is not two quoted field names", generated)
+        @test occursin("members = Models.ManyToManyField(\"Driver\", through=\"Membership\")", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # Without `through=` there are no through keys to name: pinning would address auto join-table
+    # columns Django never created (`team_id` / `driver_id` on `racing_team_members`). Dropped.
+    generated, config_key, db_dir_existed = import_one_app("""
+from django.db import models
+
+class Driver(models.Model):
+    surname = models.CharField(max_length=40)
+
+class Team(models.Model):
+    members = models.ManyToManyField(Driver, through_fields=('team', 'driver'))
+"""; output_file = "django_1198_nothrough.jl")
+    try
+        @test occursin("through_fields on 'Team.members' has no through model", generated)
+        @test occursin("members = Models.ManyToManyField(\"Driver\")", generated)
+        @test !occursin("source_field=\"team_id\"", generated)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
+    end
+
+    # Ends that cannot be pinned: `Driver_` with two keys to itself on the through model and no
+    # `through_fields`, and a `through_fields` naming a key that points at the other end. Each field
+    # is dropped with a marker — it could never load — and the rest of the file loads.
+    for (label, decl, needle) in (
+        ("ambiguous", "tracks = models.ManyToManyField(Circuit, through='Visit')",
+         "has 2 foreign keys to 'Driver_'"),
+        ("wrong key", "tracks = models.ManyToManyField(Circuit, through='Visit', through_fields=('circuit', 'driver'))",
+         "through_fields names 'circuit'"))
+        @testset "$label" begin
+            generated, config_key, db_dir_existed = import_one_app("""
+from django.db import models
+
+class Circuit(models.Model):
+    name = models.CharField(max_length=40)
+
+class Driver_(models.Model):
+    $(decl)
+
+class Visit(models.Model):
+    driver = models.ForeignKey(Driver_, on_delete=models.CASCADE, related_name='visits')
+    mentor = models.ForeignKey(Driver_, on_delete=models.CASCADE, related_name='mentees')
+    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE, related_name='visits')
+"""; output_file = "django_1198_drop.jl")
+            try
+                @test !occursin("tracks = Models.ManyToManyField", generated)
+                @test occursin("# PormG: 'Driver_.tracks' is not imported", generated)
+                @test occursin(needle, generated)
+                load(generated, :django_1198_drop)
+            finally
+                cleanup_project_test!(config_key, db_dir_existed)
+            end
+        end
+    end
+
+    # A through ManyToMany whose names PormG derives cleanly is left exactly as it was: no pin.
+    generated, config_key, db_dir_existed = import_one_app("""
+from django.db import models
+
+class Circuit(models.Model):
+    name = models.CharField(max_length=40)
+
+class Driver(models.Model):
+    tracks = models.ManyToManyField(Circuit, through='Visit')
+
+class Visit(models.Model):
+    driver = models.ForeignKey(Driver, on_delete=models.CASCADE)
+    circuit = models.ForeignKey(Circuit, on_delete=models.CASCADE)
+"""; output_file = "django_1198_clean.jl")
+    try
+        @test occursin("tracks = Models.ManyToManyField(\"Circuit\", through=\"Visit\")", generated)
+        load(generated, :django_1198_clean)
+    finally
+        cleanup_project_test!(config_key, db_dir_existed)
     end
 end
 

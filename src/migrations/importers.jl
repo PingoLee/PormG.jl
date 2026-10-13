@@ -820,6 +820,10 @@ The module-level `from … import …` bindings of one `models.py`.
 `from core.models import TimeStampedModel as TSM` records
 `"TSM" => ("core.models", "TimeStampedModel")`. `stars` holds the module paths of
 `from … import *`, which binds names no parser can enumerate without reading that module.
+`modules` maps a dotted name a plain `import` binds to the module it names (#1197):
+`import racing.models` records `"racing.models" => "racing.models"`, and `import racing.models as rm`
+records `"rm" => "racing.models"`. It is what a base written as a module path (`rm.Driver`,
+`racing.models.Driver`) is resolved through.
 
 Read for ONE purpose: deciding whether a base name this app does not define may resolve against
 another app's class (#370). A name the module never imported is not in scope in Python either, so
@@ -829,32 +833,50 @@ app's class is concrete, that edge is read as multi-table inheritance and costs 
 struct _PyImports
   names::Dict{String, Tuple{String, String}}
   stars::Vector{String}
+  modules::Dict{String, String}
 end
 
 # `from <module> import <rest>`. The module may carry leading dots (a relative import) or be
 # nothing but dots (`from . import models`), which is why it is `[.\w]+` and not a dotted name.
 const _FROM_IMPORT_RE = r"^from\s+([.\w]+)\s+import\s+(.+)$"
+# `import <module>[ as <name>][, …]`. Absolute only: Python has no relative plain import.
+const _PLAIN_IMPORT_RE = r"^import\s+(.+)$"
+const _DOTTED_NAME_RE = r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$"
 
 """
     _py_imports(stmts) -> _PyImports
 
-The module-level `from … import …` bindings of a parsed `models.py`.
+The module-level `from … import …` and `import …` bindings of a parsed `models.py`.
 
 Only `indent == 0` statements count: an import inside `if TYPE_CHECKING:` or a `try/except
 ImportError` is not an unconditional module-level binding, and a base arriving that way is reported
 as unresolved rather than guessed at.
 
-Plain `import x.y [as z]` is deliberately NOT recorded. It binds a MODULE, so the base it enables is
-written dotted (`class Foo(x.y.Base)`) — and a dotted token has never matched the bare-name class
-index (`_class_bases` keeps the token verbatim), so honouring it here would resolve nothing.
-Supporting it means teaching base resolution about dotted tokens first; until then leaving it out is
-neither a regression nor a gap this function could close on its own.
+A plain `import x.y [as z]` binds a MODULE, so the base it enables is written dotted
+(`class Foo(x.y.Base)`, `class Foo(z.Base)`). It is recorded in `modules` under the name the base
+list spells it with, which `_resolve_dotted` reads (#1197). Without an alias that name is the whole
+path: `import racing.models` binds `racing`, and `racing.models` is reachable through it because the
+statement imported that submodule. A deeper or shallower path is not recorded, because nothing here
+knows what a package's `__init__.py` imports.
 """
 function _py_imports(stmts::Vector{PyStmt})::_PyImports
   names = Dict{String, Tuple{String, String}}()
   stars = String[]
+  modules = Dict{String, String}()
   for s in stmts
     s.indent == 0 || continue
+    pm = match(_PLAIN_IMPORT_RE, s.text)
+    if pm !== nothing
+      for item in split(String(pm.captures[1]), ',')
+        parts = split(strip(item), r"\s+as\s+")
+        path = String(strip(parts[1]))
+        occursin(_DOTTED_NAME_RE, path) || continue
+        local_name = length(parts) > 1 ? String(strip(parts[end])) : path
+        Base.isidentifier(local_name) || local_name == path || continue
+        modules[local_name] = path                    # last binding wins, as for `names`
+      end
+      continue
+    end
     m = match(_FROM_IMPORT_RE, s.text)
     m === nothing && continue
     mod = String(m.captures[1])
@@ -884,7 +906,7 @@ function _py_imports(stmts::Vector{PyStmt})::_PyImports
       names[local_name] = (mod, origin)
     end
   end
-  return _PyImports(names, stars)
+  return _PyImports(names, stars, modules)
 end
 
 # A compound statement whose block runs conditionally or repeatedly. A name bound inside one is not
@@ -1837,6 +1859,118 @@ function _pin_m2m_join_columns!(index::_DjangoClassIndex)
   return out
 end
 
+"""
+    _pin_through_join_keys!(index) -> IdDict{Any, Vector{String}}
+
+Pin `source_field` / `target_field` on a `through=` ManyToManyField whose end PormG cannot name
+(#1198). Return one `# PormG:` marker per field dropped, keyed by the owning model.
+
+`set_models` names an unpinned end from its model's name, `<model>_<pk>`, before it reads the
+through model (`Models._relation_from_many_to_many`). For a class Django refuses (`Driver_`,
+models.E023; `Pit__stop`, models.E024) that name is `driver__id`, which carries PormG's lookup
+separator, so `set_models` raised and the whole generated module failed to load. A pin skips the
+derivation, and it is what Django does: the end is the through model's key to that model, named by
+`through_fields` or, failing that, the single key to it.
+
+For each ManyToMany whose through model is in the import:
+
+- an end pinned by `through_fields` (`parse_field_args`) must name a foreign key on the through
+  model that points at that end; otherwise `set_models` refuses it (Django's `fields.E338` /
+  `E339`), so the field is dropped with a marker;
+- when every unpinned end's derived name loads, nothing is pinned, so the common case is
+  byte-identical;
+- when one cannot load, every unpinned end is pinned to the through model's single key to it, so the
+  file states both of Django's keys; an end with none or several makes the field unloadable, and it
+  is dropped with a marker naming `through_fields` as the fix.
+
+Runs after every model exists, like `_pin_m2m_join_columns!`, and before
+`_pin_unloadable_reverse_accessors!`, which must not count a field this pass drops.
+"""
+function _pin_through_join_keys!(index::_DjangoClassIndex)
+  by_binding = Dict{String, _DjangoClass}()
+  for e in index.entries
+    e.model === nothing || (by_binding[e.binding] = e)
+  end
+  # The same lazy read `_pin_m2m_join_columns!` makes: a two-primary-key model throws, and that must
+  # skip the question rather than the import.
+  pk_cache = Dict{_DjangoClass, Union{Nothing, String}}()
+  pk_name(e) = get!(pk_cache, e) do
+    try
+      s = Models.get_model_pk_field(e.model)
+      s === nothing ? nothing : String(s)
+    catch err
+      err isa PormGError || rethrow()
+      nothing
+    end
+  end
+  # Asked, not restated: the name `set_models` would derive for an unpinned end, and whether it loads.
+  function derived_loads(e)
+    pk = pk_name(e)
+    pk === nothing && return true          # unknown — leave the end as it was
+    try
+      Models._many_to_many_column_name(e.model, pk)
+      return true
+    catch err
+      err isa ModelDefinitionError || rethrow()
+      return false
+    end
+  end
+  points_at(f, e) = f isa Models.sRelationalColumn &&
+                    (f.to isa AbstractString ? f.to == e.binding : f.to === e.model)
+  dropped = Tuple{_DjangoClass, String, String}[]
+  for owner in index.entries
+    owner.model === nothing && continue
+    for (field_name, field) in owner.model.fields
+      Models.is_many_to_many_field(field) || continue
+      field.through isa AbstractString || continue
+      through = get(by_binding, field.through, nothing)
+      target = field.to isa AbstractString ? get(by_binding, field.to, nothing) : nothing
+      (through === nothing || target === nothing) && continue
+      ends = ((:source_field, owner, field.source_field), (:target_field, target, field.target_field))
+      why = nothing
+      for (_, e, given) in ends
+        given === nothing && continue
+        points_at(get(through.model.fields, given, nothing), e) && continue
+        why = "through_fields names '$(chopsuffix(given, "_id"))' for the '$(e.class)' end, but " *
+              "'$(through.class)' has no foreign key of that name to '$(e.class)'"
+        break
+      end
+      # Pinned only when an unpinned end cannot be derived, and then both ends, as Django states them:
+      # the explicit branch is taken whole, so the file does not depend on PormG's inference.
+      broken = [e for (_, e, given) in ends if given === nothing && !derived_loads(e)]
+      if why === nothing && !isempty(broken)
+        pins = Pair{Symbol, String}[]
+        for (slot, e, given) in ends
+          given === nothing || continue
+          keys_to = sort!([String(k) for (k, f) in through.model.fields if points_at(f, e)])
+          if length(keys_to) == 1
+            push!(pins, slot => keys_to[1])
+            continue
+          end
+          c = first(broken).class
+          check = occursin("__", c) ? " (Django refuses the class name too: models.E024)" :
+                  (startswith(c, "_") || endswith(c, "_")) ? " (Django refuses the class name too: models.E023)" : ""
+          why = "PormG names its join key from the class name '$(c)', which it cannot load$(check), " *
+                "and '$(through.class)' has $(length(keys_to)) foreign keys to '$(e.class)' to pin " *
+                "instead. Name the two keys with through_fields=(…) in models.py"
+          break
+        end
+        why === nothing && foreach(p -> setfield!(field, p.first, p.second), pins)
+      end
+      why === nothing || push!(dropped, (owner, String(field_name), why))
+    end
+  end
+  out = IdDict{Any, Vector{String}}()
+  for (owner, field_name, why) in dropped           # removed after the walk, never while iterating
+    delete!(owner.model.fields, field_name)
+    label = _django_ref_label(owner)
+    @warn "import: a through ManyToManyField whose ends cannot be pinned; dropped" class=label field=field_name
+    push!(get!(out, owner.model, String[]),
+          "# PormG: '$(label).$(field_name)' is not imported — $(why).")
+  end
+  return out
+end
+
 # The rule `ManyToManyField` applies to `source_field` / `target_field` at load, asked rather than
 # restated, so the importer cannot emit a pin that the generated file then refuses.
 function _loadable_m2m_column(name::String)::Bool
@@ -1897,8 +2031,9 @@ end
 """
     _pin_unloadable_reverse_accessors!(index, settings) -> IdDict{Any, Vector{String}}
 
-Give a `related_name` to every foreign key or one-to-one whose DERIVED reverse accessor `set_models`
-would refuse (#1174), and return one `# PormG:` marker per key changed, keyed by the owning model.
+Give a `related_name` to every foreign key, one-to-one or `through=` ManyToMany whose DERIVED reverse
+accessor `set_models` would refuse (#1174, #1198), and return one `# PormG:` marker per relation
+changed, keyed by the owning model.
 
 With no `related_name`, the accessor is the owner's lowercased model name, or `<model>_<field>` in a
 group of relations to one target (`Models._derived_reverse_accessor`). A class Django itself refuses
@@ -1952,11 +2087,9 @@ function _pin_unloadable_reverse_accessors!(index::_DjangoClassIndex, settings::
   for target in index.entries
     rels = get(incoming, target, nothing)
     rels === nothing && continue
-    # Keys only. #1140 drops an AUTO ManyToMany on such a class, and one with `through=` does not load
-    # either way: `set_models` derives its owner column from the class name too (`driver__id`). A pin
-    # here would not make that file load.
-    unloadable = [r for r in rels if r[3] isa Models.sRelationalColumn && r[3].related_name === nothing &&
-                                     Models._illegal_accessor_name(r[4])]
+    # Keys and a `through=` ManyToMany alike (#1198). An AUTO ManyToMany on such a class is gone by
+    # now (#1140), and a through one is loadable once `_pin_through_join_keys!` pinned its ends.
+    unloadable = [r for r in rels if r[3].related_name === nothing && Models._illegal_accessor_name(r[4])]
     isempty(unloadable) && continue
     # One namespace on the target: its fields and every accessor that will register cleanly.
     taken = Set{String}(String(k) for k in keys(target.model.fields))
@@ -2873,6 +3006,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
   # Every model exists now, so both ends of every ManyToManyField are readable. A field whose join
   # column PormG cannot name is dropped, with a marker (#1140).
   undeclarable = _pin_m2m_join_columns!(index)
+  # …and a `through=` ManyToMany whose end PormG would name from an unloadable class name (#1198).
+  unpinnable = _pin_through_join_keys!(index)
   # …and both ends of every key: a managed model's key into an unmanaged one loses its constraint (#741).
   unconstrained = _unconstrain_keys_into_unmanaged!(index)
   # …and every key's reverse accessor: a derived name `set_models` refuses gets a loadable one (#1174).
@@ -2892,7 +3027,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
     # A custom-class note for a field the pin pass dropped would contradict its drop marker (#1041).
     gone = Set(note for (key, note) in noted_fields if !haskey(model.fields, key))
     markers = vcat(filter(m -> !(m in gone), markers),
-                   get(undeclarable, model, String[]), get(unconstrained, model, String[]),
+                   get(undeclarable, model, String[]), get(unpinnable, model, String[]),
+                   get(unconstrained, model, String[]),
                    get(pinned_accessors, model, String[]))
     # #1043: the short form — this file is regenerated from `models.py`, never edited by hand, so a
     # binding that is renamed carries its name with it. `inspectdb` keeps the explicit name.
@@ -3516,10 +3652,59 @@ The app's OWN classes win — Django's rule for an unqualified reference, and th
 documents. Everything else has to be imported: a name this `models.py` never bound is not in scope
 in Python, so resolving it against another app would invent an inheritance edge the project does not
 have (#370).
+
+A dotted token (`racing_models.Driver`, `racing.models.Driver`) names a class through a MODULE and
+goes to [`_resolve_dotted`](@ref) (#1197).
 """
-_resolve_base(scopes::Vector{_AppScope}, from_idx::Int, token::AbstractString) =
-  haskey(scopes[from_idx].own, token) ? (from_idx, scopes[from_idx].own[token]) :
-    _resolve_imported(scopes, from_idx, String(token), Set{Tuple{Int, String}}())
+function _resolve_base(scopes::Vector{_AppScope}, from_idx::Int, token::AbstractString)
+  haskey(scopes[from_idx].own, token) && return (from_idx, scopes[from_idx].own[token])
+  occursin('.', token) && return _resolve_dotted(scopes, from_idx, token)
+  return _resolve_imported(scopes, from_idx, String(token), Set{Tuple{Int, String}}())
+end
+
+"""
+    _resolve_dotted(scopes, from_idx, token) -> Union{Tuple{Int, PyClass}, Nothing}
+
+The class a base written as `<module>.<Class>` names, as seen from app `from_idx` (#1197). Django and
+Python treat `class Pilot(racing_models.Driver)` after `from racing import models as racing_models`,
+and `class Pilot(racing.models.Driver)` after `import racing.models`, as the same class as
+`class Pilot(Driver)` after `from racing.models import Driver`. Resolving only the last spelling
+dropped a proxy's relations, merged no fields from a dotted abstract base, and imported a dotted
+concrete base's child as a table of its own.
+
+The prefix must be a module this `models.py` bound: through a plain `import` (`_PyImports.modules`),
+or through `from <package> import <module>` (`names`, whose origin is then the module). The module
+must then be an imported app's models module, by the same rule a `from` import follows
+(`_app_for_module`), so `forms.Form` and `serializers.Serializer` stay unresolved and are still read
+as helpers. A `from` import binds a module only when what it imports is `models`; any other prefix is
+a class (`Driver.Inner`, a nested class, never a model) or a name nothing here defines, and resolves
+to nothing.
+"""
+function _resolve_dotted(scopes::Vector{_AppScope}, from_idx::Int,
+                         token::AbstractString)::Union{Tuple{Int, PyClass}, Nothing}
+  t = replace(String(token), r"\s*\.\s*" => ".")
+  k = findlast('.', t)
+  prefix, cls = t[1:prevind(t, k)], t[nextind(t, k):end]
+  (isempty(prefix) || isempty(cls)) && return nothing
+  imp = scopes[from_idx].imports
+  mod = get(imp.modules, prefix, nothing)
+  if mod === nothing
+    occursin('.', prefix) && return nothing
+    entry = get(imp.names, prefix, nothing)
+    entry === nothing && return nothing
+    (from_mod, origin) = entry
+    # Only `from <package> import models [as x]` binds a models MODULE. Any other origin is a class
+    # or a name the import cannot see (`from racing.models import Driver` then `Driver.Inner`), and
+    # appending it to the path would let `_app_for_module` match the `racing.models` in front of it.
+    origin == "models" || return nothing
+    mod = endswith(from_mod, ".") ? string(from_mod, origin) : string(from_mod, ".", origin)
+  end
+  a = _app_for_module(scopes, mod)
+  a === nothing && return nothing
+  haskey(scopes[a].own, cls) && return (a, scopes[a].own[cls])
+  # A re-export façade: the models module imported the class from another app.
+  return _resolve_imported(scopes, a, String(cls), Set{Tuple{Int, String}}())
+end
 
 # `seen` is keyed by (app, NAME), not by app. The token changes across a re-export hop — an app
 # reached for `Foo` may still have to be asked about `Bar` — so an app-keyed set makes a second,
@@ -3827,9 +4012,10 @@ function _classify_class!(st::_ClassifyState, app::Int, cls::PyClass)::_ClassInf
   #
   # Restricted to BARE base names, using the same discriminator `_declares_fields` uses one screen
   # down: a namespace is the one piece of information already in the source. `forms.Form` and
-  # `serializers.Serializer` are dotted, so they name a module this file never had and a dotted token
-  # could not have resolved anyway — those are helpers, definitively, and marking them would be pure
-  # noise on every `models.py` that also holds a ModelForm. A BARE `CustomUser` is the ambiguous one:
+  # `serializers.Serializer` are dotted, so they name a module, and a dotted token still UNRESOLVED
+  # here names one outside the import (one inside it resolved, #1197) — those are helpers,
+  # definitively, and marking them would be pure noise on every `models.py` that also holds a
+  # ModelForm. A BARE `CustomUser` is the ambiguous one:
   # it is exactly what an `import` would have bound, which is what makes it worth a line.
   #
   # Deliberately NOT narrowed further by "the name was imported from a module naming no app". That
@@ -5921,6 +6107,7 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
   # that aborted the whole import. This list only drives the REPORT, so one field yields one marker
   # naming every option it lost and why.
   unresolved_enums = Tuple{String, String}[]
+  through_fields_read = false          # #1198: pins taken from `through_fields`, checked after the loop
   for option_str in options_list
       key_value = split(option_str, "=", limit=2)
       if length(key_value) == 2
@@ -5928,6 +6115,26 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
           value = strip(key_value[2])
           field_type == "ManyToManyField" && key == "blank" && continue
           key in parameters_ignore && continue
+          # Django's `through_fields = ("team", "driver")` names the through model's key to each end,
+          # the owner's first (#1198): PormG's `source_field` / `target_field`, which take the
+          # through model's field KEY, and a ForeignKey's key here is `<name>_id`. Left to
+          # `parse_value` it read as a `choices` list of no pairs and was lost, so a through model
+          # with two keys to one end could not be loaded. `_pin_through_join_keys!` checks the pins
+          # against the through model once it is built.
+          if field_type == "ManyToManyField" && key == "through_fields"
+              ends = _parse_through_fields(value)
+              if ends === nothing
+                  @warn "import: through_fields is not two quoted field names; dropped" class=class_label field=field_name
+                  push!(markers, "# PormG: through_fields on '$(class_label).$(field_name)' is not two " *
+                                 "quoted field names, so it is dropped and PormG infers the through " *
+                                 "model's keys instead.")
+              else
+                  options[:source_field] = string(ends[1], "_id")
+                  options[:target_field] = string(ends[2], "_id")
+                  through_fields_read = true
+              end
+              continue
+          end
           # Django callable datetime defaults (e.g. default=timezone.now) have no
           # literal equivalent in PormG. Map them to auto_now_add, which sets the
           # column to the current timestamp on creation — the closest semantics.
@@ -6116,6 +6323,17 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
     push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' declares choices, but " *
                    "$(field_type) has no choices slot in PormG (only CharField does) — dropped. " *
                    "The column is unaffected.")
+  end
+
+  # `through_fields` names keys of a through model; without `through=` there is none, and pinning
+  # its names would address auto join-table columns Django never created (Django refuses the field
+  # too: fields.E337). Decided after the loop because `through=` may come after it (#1198).
+  if through_fields_read && !haskey(options, :through)
+    delete!(options, :source_field)
+    delete!(options, :target_field)
+    @warn "import: through_fields without through=; dropped" class=class_label field=field_name
+    push!(markers, "# PormG: through_fields on '$(class_label).$(field_name)' has no through model " *
+                   "to name keys on (Django refuses it too: fields.E337), so it is dropped.")
   end
 
   return options, related_model, resolved_from_name
@@ -6500,6 +6718,20 @@ visibly the source text rather than a plausible-looking string.
 function _strip_py_quotes(s::AbstractString)::String
   t = strip(s)
   return _py_quoted_literal(t) ? _py_unquote(t) : String(t)
+end
+
+# `through_fields = ("team", "driver")` (or a list) → `("team", "driver")`; `nothing` unless the value
+# is exactly two quoted Python identifiers (#1198). A name built at runtime is not a pin to guess at.
+function _parse_through_fields(value::AbstractString)::Union{Nothing, Tuple{String, String}}
+  t = strip(value)
+  ((startswith(t, "(") && endswith(t, ")")) || (startswith(t, "[") && endswith(t, "]"))) || return nothing
+  inner = t[nextind(t, firstindex(t)):prevind(t, lastindex(t))]
+  parts = filter(!isempty, [strip(p) for p in split_field_options(inner)])
+  length(parts) == 2 || return nothing
+  all(_py_quoted_literal, parts) || return nothing
+  names = map(_py_unquote, parts)
+  all(Base.isidentifier, names) || return nothing
+  return (String(names[1]), String(names[2]))
 end
 
 """

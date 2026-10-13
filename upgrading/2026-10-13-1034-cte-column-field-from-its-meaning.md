@@ -1,9 +1,9 @@
-## A filter on a computed CTE column binds the type the column means: a summed duration takes a `Period`, a comparison a `Bool` (#1034)
+## A computed CTE column is typed by what it means: a filter on a summed duration takes a `Period`, and a comparison column is a boolean (#1034)
 
 - **Version**: Unreleased
 - **PormG ref**: #1034 ; `src/querybuilder/ctes.jl` (`_meant_column_field`), `src/querybuilder/expression_kind.jl` (`_kind_field`)
 - **Recorded**: 2026-10-13
-- **Severity**: behavior change. Some filters on a CTE column that raised now build, and some that built now raise `InvalidValueError`. Number columns bind as before.
+- **Severity**: behavior change. Some filters and functions over a CTE column that raised now build, and some that built now raise (`InvalidValueError` for a filter value, `QueryBuildError` for `Sum`/`Avg` over a comparison column). Number columns bind as before.
 
 ### What changed
 
@@ -35,6 +35,16 @@ What that does to a filter on the column, on both engines:
 | `"r__ahead" => 2` on a comparison | bound `2` | raises `InvalidValueError`, as on a `BooleanField` column |
 | any number against a float, decimal or integer column | bound as a number | unchanged |
 
+The outer query also types a function over the column by this field, so these change too, on the
+engine named or on both:
+
+| outer query over the column | before | now |
+|---|---|---|
+| `Sum(CTE("r", "ahead"))`, `Avg(CTE("r", "ahead"))` over a comparison | built `SUM(…)` / `AVG(…)` | raises `QueryBuildError`, as over a `BooleanField` (#953): count the rows instead, `Sum(Case(When(… => true, then = 1), default = 0))` |
+| `Max(CTE("r", "ahead"))` over a comparison, PostgreSQL | rendered `MAX(…)`, which PostgreSQL does not define for a boolean | renders `BOOL_OR(…)`, as over a `BooleanField` |
+| `Extract(CTE("r", "fast"), "EPOCH")` over a summed duration | raised `QueryBuildError` (its column must be a duration) | builds on PostgreSQL; raises `BackendCapabilityError` on SQLite, as over a `DurationField` |
+| `Case(When(CTE("r", "ahead") => true, …))` | bound `1` | binds `true` |
+
 The values the columns read back as are unchanged: since #1121 the read follows the body's own
 expression, not this field.
 
@@ -43,12 +53,15 @@ a sum of one; that was already so for the first and is tracked separately.
 
 ### Who this affects
 
-Code that filters on a CTE column whose body projects a `Sum` of a duration,
-float or decimal field, an `Avg` of an integer field, decimal `F` arithmetic, or an `F` comparison:
+Code that filters on, or applies a function to, a CTE column whose body projects a `Sum` of a
+duration, float or decimal field, an `Avg` of an integer field, decimal `F` arithmetic, or an `F`
+comparison:
 
 - a filter that passed a bare number for a summed duration, or an integer other than `0`/`1` for a
   comparison, now raises;
-- a filter that passed a `Period` for a summed duration now builds where it raised.
+- a `Sum` or an `Avg` over a comparison column now raises;
+- a filter that passed a `Period` for a summed duration, and an `Extract` over one on PostgreSQL, now
+  build where they raised.
 
 ### How to find the calls to migrate
 
@@ -58,7 +71,8 @@ grep -rnE 'Sum\("[a-z_]*(time|duration|laptime)' --include=*.jl src/ test/
 ```
 
 For each `.with(...)` body, check the computed columns against the first table, then the filters on
-`"<cte>__<column>"` keys against the second.
+`"<cte>__<column>"` keys against the second and the `CTE("<cte>", "<column>")` handles in functions
+against the third.
 
 ### Migrate your app
 

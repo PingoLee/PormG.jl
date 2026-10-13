@@ -1170,8 +1170,9 @@ _whole_numeric_operand(::Any, ::SQLInstruction) = nothing
 # #1141: an integer literal is one too. PostgreSQL binds it as `$n::bigint`
 # (`_infer_parameter_sql_type`), and `int4 + int8` is `int8`, so `Sum(F("number") + 1)` is a
 # `sum(bigint)`, a `numeric` that keeps the half, where SQLite's sum is an integer. Since #1147 step 2
-# PostgreSQL renders every such sum the walk names `::bigint` (`_sums_bigint`); this still answers the
-# CTE `bigint` record and the sums the walk cannot name.
+# PostgreSQL renders every such sum the walk names `::bigint` (`_sums_bigint`); this still answers a
+# CTE column's body expression (`_bigint_valued`, through `_cte_body_record`) and the sums the walk
+# cannot name.
 function _bigint_column(p, instruc::SQLInstruction)
   p isa SQLField && return _bigint_column(p.field, instruc)
   literal = p isa SQLText ? p.field : p
@@ -1273,11 +1274,12 @@ function _whole_quotient_side(x, instruc::SQLInstruction)
     return _whole_quotient_side(x.field_name, instruc) && _whole_quotient_side(x.operand, instruc)
   return _known_whole(x, instruc)
 end
-# #1127 — the `bigint` record of a computed CTE column, `(kind, what)` or `nothing`. The CTE types
-# all of these as a plain integer, so an outer `Sum(CTE(…))` read them as `sum(integer)` — a `bigint`
+# #1127 — whether a computed CTE column's body expression is a `bigint`, `(kind, what)` or `nothing`,
+# asked through `_cte_body_record`. The CTE types all of these as a plain integer field, so an outer
+# `Sum(CTE(…))` read them as `sum(integer)` — a `bigint`
 # on PostgreSQL, divided as an integer — where it is `sum(bigint)`, a `numeric` that keeps the half.
 # `COUNT` and the ranking windows return `bigint`; `SUM` of an integer returns one, and `SUM` of a
-# `bigint` returns `numeric`, which the `whole_numeric` record already carries.
+# `bigint` returns `numeric`, which `_whole_numeric_operand` already answers.
 const _BIGINT_WINDOWS = ("RANK", "DENSE_RANK", "ROW_NUMBER")
 function _bigint_valued(p, instruc::SQLInstruction)
   side = _bigint_column(p, instruc)

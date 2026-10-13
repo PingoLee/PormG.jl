@@ -1596,7 +1596,10 @@ end
 # - a body `Avg` has no single integer: cast to one, refused on SQLite (#1028);
 # - a body JSON key lookup is the key's value, not the document, and a zero-scale decimal is whole:
 #   `Concat` and a scaled cast over them build.
-# The messages name the CTE column and, in parentheses, what its body is.
+# The messages name the CTE column and, in parentheses, what its body is. Expected SQL where it builds,
+# `Cast(CTE("c", "w"), "text")`: the body `SUM(("Tb"."laps_total" + "Tb"."payload" #>> '{"n"}')) as "w"`
+# read as `("R1_1"."w")::text` on PostgreSQL; `SUM(("Tb"."laps_total" + json_extract("Tb"."payload",
+# '$.n'))) as "w"` read as `CAST("R1_1"."w" AS TEXT)` on SQLite.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1034: a CTE column answers the division and text rules as its body expression does" begin
   function withcte(outer)

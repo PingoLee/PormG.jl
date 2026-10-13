@@ -731,7 +731,10 @@ number (a text column plus `1`, or `F("date") + Day(1)`) and to `Value(missing)`
 projected in the body raises `QueryBuildError` too; wrap it in `Cast` to name its type
 (`Cast(Subquery(s), "integer")`). An `Exists` there raises as well; project it in the outer query instead.
 
-This type is for **binding** a value compared with the column. **Reading** the column back is a
+This type is for **binding** a value compared with the column, and for a function over the column in
+the outer query, which treats it as a column of that type: `Sum(CTE("r", "ahead"))` over a comparison
+is refused as a `Sum` over a `BooleanField` is, and `Extract(CTE("r", "fast"), "EPOCH")` over a summed
+duration reads it as a duration (on PostgreSQL; SQLite has no `EPOCH` part). **Reading** the column back is a
 separate question, and the answer is the body's own. A column the body selects, such as
 `"date"`, `Max("date")` or `Cast(x, "date")`, reads back with the same Julia type the body would give
 it (a `Date` on both engines). A number the body computes, such as `Avg("points")` or `F` arithmetic,

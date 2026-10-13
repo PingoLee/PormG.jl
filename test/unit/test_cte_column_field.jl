@@ -90,13 +90,16 @@ function _ccf_fields(q; conn)
 end
 _ccf_params(pair; conn) = inspect_query(_ccf_query(pair); connection = conn)[:parameters]
 _ccf_refusal(pair; conn) = try _ccf_params(pair; conn = conn); nothing catch e; e end
+_ccf_msg(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CTE column field: a computed column is typed by what it means, the same on every engine
 # `Sum` of a duration is a `DurationField`, `Sum` of a float and `Avg` of integers a `FloatField`, a
 # comparison a `BooleanField` — before, the first two were `IntegerField`s and the comparison a
 # `FloatField`. A field that already agrees stays: `Count` an integer, `Max` of a float its operand's
-# own `FloatField`, a plain path its column (a foreign key keeps its target).
+# own `FloatField`, a plain path its column (a foreign key keeps its target). The body's SQL does not
+# change — PostgreSQL still renders `SUM("Tb"."fastestlaptime") as "fast"`; only the outer query's
+# field for the column does, read here off the built instruction.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1034: a computed CTE column's field is the type it means" begin
   for conn in _CCF_ENGINES
@@ -134,8 +137,13 @@ end
     @test _ccf_params("r__fast__@gt" => Minute(1); conn = conn) == Any["00:01:00"]
     @test _ccf_params("r__ahead" => true; conn = conn) == Any[true]
     @test _ccf_params("r__ahead" => 1; conn = conn) == Any[true]
-    @test _ccf_refusal("r__fast__@gt" => 60; conn = conn) isa InvalidValueError
-    @test _ccf_refusal("r__ahead" => 2; conn = conn) isa InvalidValueError
+    # Refused by the column type's own validator, which names it — not by some other check.
+    duration = _ccf_refusal("r__fast__@gt" => 60; conn = conn)
+    @test duration isa InvalidValueError
+    @test occursin("`r__fast` (INTERVAL)", _ccf_msg(duration))
+    boolean = _ccf_refusal("r__ahead" => 2; conn = conn)
+    @test boolean isa InvalidValueError
+    @test occursin("`r__ahead` (BOOLEAN)", _ccf_msg(boolean))
     # Unchanged: a float and a computed average bind as numbers.
     @test _ccf_params("r__pts__@gt" => 10.5; conn = conn) == Any["10.5"]
     @test _ccf_params("r__avg_grid__@gt" => 1.5; conn = conn) == Any["1.5"]
@@ -143,4 +151,33 @@ end
   end
   sql = inspect_query(_ccf_query("r__fast__@gt" => Minute(1)); connection = _CCF_PG)[:sql_text]
   @test occursin("\"R1_1\".\"fast\" > \$1", sql)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CTE column functions: a function over a computed column treats it as a column of its type
+# The outer query types `Sum`, `Max` or `Extract` over `CTE("r", col)` by the column's field, so the
+# rules for that type apply. Over a comparison column, `Sum`/`Avg` are refused as over a `BooleanField`
+# (#953) — they built before — and `Max` renders `BOOL_OR("R1_1"."ahead")` on PostgreSQL, which has no
+# `max(boolean)`; it rendered `MAX(…)`. Over a summed duration, `Extract(…, "EPOCH")` builds on
+# PostgreSQL and is a `BackendCapabilityError` on SQLite, as over a `DurationField`; it was refused on
+# both as a non-temporal column. A `When` on the comparison column binds `true`, where it bound `1`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1034: a function over a computed CTE column treats it as a column of its type" begin
+  over(expr) = (q = _ccf_query(); q.values("x" => expr); q)
+  ahead, fast = PormG.CTE("r", "ahead"), PormG.CTE("r", "fast")
+  for conn in _CCF_ENGINES, f in (_CCF_Fn.Sum, _CCF_Fn.Avg)
+    err = try inspect_query(over(f(ahead)); connection = conn); nothing catch e; e end
+    @test err isa PormG.QueryBuildError
+    @test occursin("over a boolean is not supported", _ccf_msg(err))
+  end
+  @test occursin("BOOL_OR(\"R1_1\".\"ahead\")", inspect_query(over(_CCF_Fn.Max(ahead)); connection = _CCF_PG)[:sql_text])
+  @test occursin("MAX(\"R1_1\".\"ahead\")", inspect_query(over(_CCF_Fn.Max(ahead)); connection = _CCF_SL)[:sql_text])
+  @test occursin("EXTRACT(EPOCH FROM \"R1_1\".\"fast\")",
+                 inspect_query(over(_CCF_Fn.Extract(fast, "EPOCH")); connection = _CCF_PG)[:sql_text])
+  @test_throws PormG.BackendCapabilityError inspect_query(over(_CCF_Fn.Extract(fast, "EPOCH")); connection = _CCF_SL)
+  # A `When` on the comparison column binds its value as a boolean, as on a `BooleanField` (it bound `1`).
+  for conn in _CCF_ENGINES
+    flagged = over(_CCF_Fn.Case([_CCF_Fn.When(ahead => true, then = 1)], default = 0))
+    @test inspect_query(flagged; connection = conn)[:parameters] == Any[true, 1, 0]
+  end
 end

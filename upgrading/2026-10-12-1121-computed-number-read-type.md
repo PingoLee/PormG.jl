@@ -1,9 +1,9 @@
-## A computed number reads back as the type it means, on every engine: `Avg` over integers is a `Float64`, a decimal aggregate a `Decimal` (#1121)
+## A computed number reads back as the type it means, on every engine: `Avg` over integers is a `Float64`, a decimal aggregate or a declared decimal a `Decimal` (#1121, #1212)
 
 - **Version**: Unreleased
-- **PormG ref**: #1121 ; `src/querybuilder/expression_kind.jl` (`_MeaningKinds`, `_output_kind`, `_numeric_read_kind`), `src/querybuilder/build_select.jl`, `src/value_repr.jl`, `src/Dialect.jl` (`_parse_sqlite_computed_decimal`, `_parse_computed_float`)
+- **PormG ref**: #1121, #1212 ; `src/querybuilder/expression_kind.jl` (`_MeaningKinds`, `_output_kind`, `_numeric_read_kind`, `_declares_decimal`), `src/querybuilder/build_select.jl`, `src/value_repr.jl`, `src/Dialect.jl` (`_parse_sqlite_computed_decimal`, `_parse_computed_float`)
 - **Recorded**: 2026-10-12
-- **Severity**: behavior change. The Julia type a caller receives changes for these projections, and the conversion can change the last digits. On PostgreSQL, several calls that read a `Decimal` now read a `Float64`, the nearest double to the `numeric` (a `numeric` holding more than about 16 significant digits loses them). On SQLite, the decimal family that read a `Float64` now reads a `Decimal` of that double's first 15 significant digits (`0.30000000000000004` reads as `0.3`).
+- **Severity**: behavior change. The Julia type a caller receives changes for these projections, and the conversion can change the last digits. On PostgreSQL, several calls that read a `Decimal` now read a `Float64`, the nearest double to the `numeric` (a `numeric` holding more than about 16 significant digits loses them). On SQLite, the decimal family that read a `Float64` (or an `Int64`, for a whole value) now reads a `Decimal` of that double's first 15 significant digits (`0.30000000000000004` reads as `0.3`).
 
 ### What changed
 
@@ -23,6 +23,8 @@ on both engines:
 | `Mod("grid", 2)`, `Sqrt("grid")`, `Power("grid", 2)`, `Exp`, `Ln` over an integer or a float | `Decimal` `1` | `Float64` `1.0` | `Float64` `1.0` |
 | `Sum`/`Avg`/`Abs`/`Round`/`Floor`/`Ceil` of a `DecimalField` (`Constructor_results.points`) | `Decimal` `5.5` | `Float64` `5.5` | `Decimal` `5.5` |
 | arithmetic with a decimal side (`F("points") * 2`, `F("points") / 2` on `Constructor_results`) | `Decimal` `11` | `Float64` `11.0` | `Decimal` `11` |
+| `Cast(x, "numeric")`, `Cast(x, "numeric(p, s)")`, `Cast(x, DecimalField())` (#1212) | `Decimal` `15` | `Float64` `15.0`, or `Int64` `1` over an integer | `Decimal` `15` |
+| an `output_field` naming a decimal type on `Coalesce`/`Greatest`/`Least`/`Case` (#1212) | `Decimal` `10` | `Float64` `10.0` | `Decimal` `10` |
 
 The same holds for the column of a `CTE(...)` whose body computes one of these, for a `Subquery(...)`
 that projects one, for arithmetic over one (`Avg("grid") * 2` is a `Float64`), for a window value
@@ -36,10 +38,17 @@ from PostgreSQL's exact `numeric` (`Avg` of the 2008 Australian Grand Prix's con
 `3.5454545454545455` there and `3.54545454545455` on SQLite). That is each engine's spelling of the
 number, not a different value.
 
+A declared decimal (#1212) is the most explicit statement of what a value means, so it reads as one.
+Its declared width selects no parser. For a `Cast`, and a `Coalesce`/`Greatest`/`Least` `output_field`,
+PostgreSQL rounds to the scale and SQLite refuses a cast that would have to round (#1040), so the value
+is the same and only its type was split. A `Case`'s own `output_field` is not checked: at a scale
+(`numeric(10,1)`) PostgreSQL rounds and SQLite keeps the digits, and both now read that as a
+`Decimal`, so round the branches yourself or leave the scale off.
+
 Unchanged: a column (a `DecimalField` keeps its declared width and exact parser, a `FloatField` reads
 as before), an extremum or window value of a column (`Max("points")`), a `Coalesce`/`Greatest`/`Least`/
-`NullIf`/`Case` over columns and literals only (`Coalesce("grid", "points")`), and every integer
-result. Integer widths still follow the engine. `Round` over an integer is an integer result now: its
+`NullIf`/`Case` over columns and literals only with no decimal `output_field` (`Coalesce("grid",
+"points")`), a `Cast` to a float or an integer type, and every integer result. Integer widths still follow the engine. `Round` over an integer is an integer result now: its
 own entry in this train covers it (#1196).
 
 ### Who this affects
@@ -48,13 +57,15 @@ own entry in this train covers it (#1196).
   `Power`/`Abs`/`Floor`/`Ceil` over an integer or a float, as a `Decimal`. That includes arithmetic
   with a `Decimal` (`x + Decimal("0.5")` now mixes a `Float64` and a `Decimal`), a type assertion or
   dispatch on `Decimal`.
-- On SQLite: code that reads a sum, an average, a rounded value or arithmetic over a `DecimalField`
-  as a `Float64` (`x isa Float64`, `Float64` arithmetic, a `Vector{Float64}` built from the column).
+- On SQLite: code that reads a sum, an average, a rounded value or arithmetic over a `DecimalField`,
+  a `Cast` to a decimal type or a decimal `output_field`, as a `Float64` or an `Int64` (`x isa
+  Float64`, `Float64` arithmetic, a `Vector{Float64}` built from the column).
 
 ### How to find the calls to migrate
 
 ```bash
 grep -rnE '(Avg|Sum|Round|Mod|Sqrt|Exp|Ln|Power|Abs|Floor|Ceil)\(' --include=*.jl src/ test/
+grep -rniE 'Cast\(.*(numeric|decimal|dec\b|DecimalField)|output_field *= *(DecimalField|"(numeric|decimal|dec\b))' --include=*.jl src/ test/
 grep -rnE 'isa (Decimals\.)?Decimal|isa Float64|::(Decimals\.)?Decimal|::Float64' --include=*.jl src/ test/
 ```
 

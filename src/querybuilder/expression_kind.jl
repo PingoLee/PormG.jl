@@ -281,8 +281,9 @@ end
 # kind taken from the others would run text through a date parser (`Coalesce("note", Date(…))`). A
 # NULL literal is skipped: it is never the value. A declared `output_field` other than `date` (which
 # `_infer_function_kind` answers first) is kept only when it names the kind the operands agree on:
-# the cast it renders (#852) is not a read kind of its own — `Cast(x, "numeric(10,2)")` records none
-# either — so a declaration that disagrees with the operands records nothing. (Under `_AllKinds` a
+# the cast it renders (#852) is not a read kind of its own here — `Cast(x, "numeric(10,2)")` records
+# none in this walk either; a declared decimal reads through the numeric read view instead (#1212) —
+# so a declaration that disagrees with the operands records nothing here. (Under `_AllKinds` a
 # declaration has already answered, and the operands agree under PostgreSQL's numeric promotion.)
 function _agreeing_kind(p::FObject, instruc::SQLInstruction, policy::_KindPolicy)::Union{CanonicalType,Nothing}
   kind = nothing
@@ -344,7 +345,7 @@ _computed_kind(::Val, ::Symbol, k, ::Any) = nothing
 # NUMERIC-affinity storage; it is named a width-less decimal, the type PostgreSQL gives the same call.
 # Its read parser (#1121, `value_parser(::CDecimal, ::PormGSQLite)`) builds that decimal from the
 # double through 15 significant digits, Django's rule — never #648's exact parser, which only a
-# declared width reaches.
+# column's declared width reaches.
 _sqlite_number_kind(::Union{CInt16,CInt32,CInt64}) = CInt64()
 _sqlite_number_kind(::CFloat64) = CFloat64()
 _sqlite_number_kind(::CDecimal) = CDecimal(nothing, nothing)
@@ -396,14 +397,22 @@ float or a decimal, or `nothing`. Recorded where the read kind is `nothing` (`ge
 the read path turns PostgreSQL's `numeric` and SQLite's REAL into the one Julia type the call means,
 as Django's `convert_value` turns them by `output_field`. A computed number is arithmetic, a
 `:promoting`/`:numeric` function, a function whose value is one of those (`Max(F("points") * 2)`,
-`Coalesce(Avg("grid"), 0)`, `NullIf`, a `Case` with no `output_field`), or a CTE column or `Subquery`
-whose own build recorded one. A column, a literal, or a `Coalesce`/`Case` over columns is not: each row
-is a value an operand already has, as the driver delivers it. Read after `x` renders.
+`Coalesce(Avg("grid"), 0)`, `NullIf`, a `Case` with no `output_field`), a declared decimal
+(`Cast(x, "numeric(10,2)")`, an `output_field` naming one, #1212), or a CTE column or `Subquery` whose
+own build recorded one. A column, a literal, or a `Coalesce`/`Case` over columns is not: each row is a
+value an operand already has, as the driver delivers it. A decimal records no width (`_computed_meaning`).
+Read after `x` renders.
 """
 _numeric_read_kind(p::FExpression, instruc::SQLInstruction) =
   p.operation === nothing ? nothing : _numeric_view(_infer_kind(p, instruc, _MeaningKinds()))
 _numeric_read_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction) =
-  _computes_number(p, instruc) ? _numeric_view(_infer_kind(p, instruc, _MeaningKinds())) : nothing
+  _computes_number(p, instruc) ? _numeric_view(_computed_meaning(_infer_kind(p, instruc, _MeaningKinds()))) : nothing
+
+# #1212: a computed number's decimal meaning claims no width. Only a declaration names one
+# (`Cast(x, "numeric(10,2)")`, or a value over one, `Max(Cast(…))`), and the read path must not take it
+# to a column's: #648's exact parser is for a value SQLite stored, not a double it computed.
+_computed_meaning(k::CDecimal) = CDecimal(nothing, nothing)
+_computed_meaning(k) = k
 _numeric_read_kind(p::Union{CTEReference,SubqueryObject}, instruc::SQLInstruction) = _numeric_read_record(p, instruc)
 _numeric_read_kind(::Any, ::SQLInstruction) = nothing
 
@@ -411,9 +420,13 @@ _computes_number(p::FExpression, ::SQLInstruction) = p.operation !== nothing
 function _computes_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   rule = _result_rule(p)
   rule in (:promoting, :numeric) && return true
+  # #1212: a declared decimal — `Cast(x, "numeric(10,2)")`, `Coalesce(…; output_field = DecimalField())`
+  # — is the number the caller said it means. Both engines render the cast, and SQLite still computes a
+  # REAL (or an INTEGER, for a whole operand) where PostgreSQL's driver delivers a `Decimal`.
+  p isa FObject && _declares_decimal(p, instruc) && return true
   rule === :operand && return _computes_number(p.column, instruc)
   # A value that is one of its operands' (review of #1121): `Coalesce(Avg("grid"), 0)` is the average
-  # on the rows that have one, so it is a computed number when one of its values is. A declared
+  # on the rows that have one, so it is a computed number when one of its values is. Any other declared
   # `output_field` is a cast both engines render, and its own business.
   (p isa FObject && !(get(p.kwargs, "output_field", nothing) isa AbstractString)) || return false
   rule === :first_operand && return _computes_number(first(p.column), instruc)
@@ -428,6 +441,14 @@ function _computes_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruct
 end
 _computes_number(p::Union{CTEReference,SubqueryObject}, instruc::SQLInstruction) = _numeric_read_record(p, instruc) !== nothing
 _computes_number(::Any, ::SQLInstruction) = false
+
+# Whether `p` declares a decimal type: a `Cast`'s type or an `output_field`, read where
+# `_infer_function_kind` reads one (rules `:declared` and `:one_of`), by the same `_declared_kind`.
+function _declares_decimal(p::FObject, instruc::SQLInstruction)
+  _result_rule(p) in (:declared, :one_of) || return false
+  declared = _declared_cast(p)
+  return declared isa AbstractString && !isempty(declared) && _declared_kind(declared, instruc.connection) isa CDecimal
+end
 
 # The numeric read kind a CTE body or a `Subquery`'s inner build recorded for its column: the meaning
 # the outer query reads it as, and the one `_MeaningKinds` composes over it (`Abs(Subquery(…))`,

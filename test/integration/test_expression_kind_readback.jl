@@ -71,10 +71,6 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Avg interval | cte", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
   ("Avg interval | subquery", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
   ("Avg interval | subquery", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
-  # #1147: SQLite refuses this cell (it keeps every digit the scale rounds away), so only PostgreSQL reads it back.
-  ("Cast float to scale 1 | alone", :postgres) => (type = "Decimal", value = "10", read = nothing),
-  ("Cast float to scale 1 | cte", :postgres) => (type = "Decimal", value = "10", read = nothing),
-  ("Cast float to scale 1 | subquery", :postgres) => (type = "Decimal", value = "10", read = nothing),
   ("F comparison | cte", :postgres) => (type = "Bool", value = "false", read = "CBool()"),
   ("F comparison | cte", :sqlite) => (type = "Bool", value = "false", read = "CBool()"),
   ("F date - date | alone", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
@@ -106,92 +102,22 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   # flagged because the CTE model types it the operand's integer field (the CTE field typing, #1034).
   ("Avg int | cte", :postgres) => (type = "Float64", value = "1.0", read = "CFloat64()"),
   ("Avg int | cte", :sqlite) => (type = "Float64", value = "1.0", read = "CFloat64()"),
-  # #1187: a `Case` is read branch by branch. Result 1's grid is `1`, its points `10`: a float-column
-  # branch at `numeric(10,0)` is refused on SQLite (it keeps every digit the scale rounds away); a `1.5`
-  # literal branch at `numeric(10,2)` has nothing to round and builds on both (#1050).
-  ("Cast Case float col to scale 0 | alone", :postgres) => (type = "Decimal", value = "10", read = nothing),
-  ("Cast Case float col to scale 0 | cte", :postgres) => (type = "Decimal", value = "10", read = nothing),
-  ("Cast Case float col to scale 0 | subquery", :postgres) => (type = "Decimal", value = "10", read = nothing),
-  ("Cast Case float literal to scale 2 | alone", :postgres) => (type = "Decimal", value = "1.5", read = nothing),
-  ("Cast Case float literal to scale 2 | alone", :sqlite) => (type = "Float64", value = "1.5", read = nothing),
-  ("Cast Case float literal to scale 2 | cte", :postgres) => (type = "Decimal", value = "1.5", read = nothing),
-  ("Cast Case float literal to scale 2 | cte", :sqlite) => (type = "Float64", value = "1.5", read = nothing),
-  ("Cast Case float literal to scale 2 | subquery", :postgres) => (type = "Decimal", value = "1.5", read = nothing),
-  ("Cast Case float literal to scale 2 | subquery", :sqlite) => (type = "Float64", value = "1.5", read = nothing),
-  # #1212: every declared decimal that builds on both engines splits the same way — a `Cast` over
-  # arithmetic, a decimal column or an integer, an `output_field` naming a decimal. SQLite's integer
-  # operand comes back as its INTEGER storage (`Int64`). Recorded on unchanged code, before the fix.
-  ("Case float output decimal | alone", :postgres) => (type = "Decimal", value = "1.5", read = nothing),
-  ("Case float output decimal | alone", :sqlite) => (type = "Float64", value = "1.5", read = nothing),
-  ("Case float output decimal | cte", :postgres) => (type = "Decimal", value = "1.5", read = nothing),
-  ("Case float output decimal | cte", :sqlite) => (type = "Float64", value = "1.5", read = nothing),
-  ("Case float output decimal | subquery", :postgres) => (type = "Decimal", value = "1.5", read = nothing),
-  ("Case float output decimal | subquery", :sqlite) => (type = "Float64", value = "1.5", read = nothing),
-  ("Cast decimal to scale 2 | alone", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
-  ("Cast decimal to scale 2 | alone", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
-  ("Cast decimal to scale 2 | cte", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
-  ("Cast decimal to scale 2 | cte", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
-  ("Cast decimal to scale 2 | subquery", :postgres) => (type = "Decimal", value = "5.5", read = nothing),
-  ("Cast decimal to scale 2 | subquery", :sqlite) => (type = "Float64", value = "5.5", read = nothing),
-  ("Cast F float * 1.5 numeric | alone", :postgres) => (type = "Decimal", value = "15", read = nothing),
-  ("Cast F float * 1.5 numeric | alone", :sqlite) => (type = "Float64", value = "15.0", read = nothing),
-  ("Cast F float * 1.5 numeric | cte", :postgres) => (type = "Decimal", value = "15", read = nothing),
-  ("Cast F float * 1.5 numeric | cte", :sqlite) => (type = "Float64", value = "15.0", read = nothing),
-  ("Cast F float * 1.5 numeric | subquery", :postgres) => (type = "Decimal", value = "15", read = nothing),
-  ("Cast F float * 1.5 numeric | subquery", :sqlite) => (type = "Float64", value = "15.0", read = nothing),
-  ("Cast int DecimalField | alone", :postgres) => (type = "Decimal", value = "1", read = nothing),
-  ("Cast int DecimalField | alone", :sqlite) => (type = "Int64", value = "1", read = nothing),
-  ("Cast int DecimalField | cte", :postgres) => (type = "Decimal", value = "1", read = nothing),
-  ("Cast int DecimalField | cte", :sqlite) => (type = "Int64", value = "1", read = nothing),
-  ("Cast int DecimalField | subquery", :postgres) => (type = "Decimal", value = "1", read = nothing),
-  ("Cast int DecimalField | subquery", :sqlite) => (type = "Int64", value = "1", read = nothing),
-  ("Coalesce F float output decimal | alone", :postgres) => (type = "Decimal", value = "15", read = nothing),
-  ("Coalesce F float output decimal | alone", :sqlite) => (type = "Float64", value = "15.0", read = nothing),
-  ("Coalesce F float output decimal | cte", :postgres) => (type = "Decimal", value = "15", read = nothing),
-  ("Coalesce F float output decimal | cte", :sqlite) => (type = "Float64", value = "15.0", read = nothing),
-  ("Coalesce F float output decimal | subquery", :postgres) => (type = "Decimal", value = "15", read = nothing),
-  ("Coalesce F float output decimal | subquery", :sqlite) => (type = "Float64", value = "15.0", read = nothing),
-  ("Greatest float int output decimal | alone", :postgres) => (type = "Decimal", value = "10", read = nothing),
-  ("Greatest float int output decimal | alone", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
-  ("Greatest float int output decimal | cte", :postgres) => (type = "Decimal", value = "10", read = nothing),
-  ("Greatest float int output decimal | cte", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
-  ("Greatest float int output decimal | subquery", :postgres) => (type = "Decimal", value = "10", read = nothing),
-  ("Greatest float int output decimal | subquery", :sqlite) => (type = "Float64", value = "10.0", read = nothing),
-  ("Max Cast F float numeric | alone", :postgres) => (type = "Decimal", value = "15", read = nothing),
-  ("Max Cast F float numeric | alone", :sqlite) => (type = "Float64", value = "15.0", read = nothing),
-  ("Max Cast F float numeric | cte", :postgres) => (type = "Decimal", value = "15", read = nothing),
-  ("Max Cast F float numeric | cte", :sqlite) => (type = "Float64", value = "15.0", read = nothing),
-  ("Max Cast F float numeric | subquery", :postgres) => (type = "Decimal", value = "15", read = nothing),
-  ("Max Cast F float numeric | subquery", :sqlite) => (type = "Float64", value = "15.0", read = nothing),
 )
 
 # The cells whose value comes back as a DIFFERENT TYPE on the two engines, by the table above. Every
-# other disagreeing cell reads back the same type on both, with `==` values. Two families are left,
-# both representation, not meaning. The first (#1196): `F date - date` is an integer on both engines and records
+# other disagreeing cell reads back the same type on both, with `==` values. One family is left,
+# representation, not meaning (#1196): `F date - date` is an integer on both engines and records
 # `CInt32`, which no read parser undoes, so each driver's integer WIDTH comes through (`Int32` vs
 # `Int64`) — the same value spelled in two widths, as an `IntegerField` column itself reads on each.
 # An integer's width follows the engine, for a column and a computed value alike; the testset after
 # the computed-number one pins it for the integer-valued functions, which the unit matrix does not flag. The `numeric` family that was here — an aggregate, `Abs`, `Round` or
 # arithmetic over a `DecimalField`, `Round`/`Mod` over a float or an integer, `Avg` over an integer,
 # `Sqrt`/`Exp`/`Ln`/`Power` — reads back as the type it means on both engines since #1121, and the
-# testset below the table checks it cell by cell.
-#
-# A second family, also representation: a declared `numeric(p, s)` cast records no read kind (the
-# matrix's `read = nothing`), so each driver's own number comes through — PostgreSQL's `numeric` as a
-# `Decimal`, SQLite's REAL as a `Float64` — the same `1.5` in two types. Measured with the #1187
-# `Case` shapes; a `Cast` that builds on both engines reads so whatever its operand (#1034 read kind).
+# testset below the table checks it cell by cell. So does the declared-decimal family that followed it
+# here — a `Cast` to `numeric(p, s)`, `numeric` or `DecimalField()`, an `output_field` naming a decimal
+# — which reads as a `Decimal` on both engines since #1212.
 const _EKR_TYPE_DIVERGENT = Set{String}([
   "F date - date | alone", "F date - date | subquery",
-  "Cast Case float literal to scale 2 | alone", "Cast Case float literal to scale 2 | cte",
-  "Cast Case float literal to scale 2 | subquery",
-  # #1212
-  "Case float output decimal | alone", "Case float output decimal | cte", "Case float output decimal | subquery",
-  "Cast F float * 1.5 numeric | alone", "Cast F float * 1.5 numeric | cte", "Cast F float * 1.5 numeric | subquery",
-  "Cast decimal to scale 2 | alone", "Cast decimal to scale 2 | cte", "Cast decimal to scale 2 | subquery",
-  "Cast int DecimalField | alone", "Cast int DecimalField | cte", "Cast int DecimalField | subquery",
-  "Coalesce F float output decimal | alone", "Coalesce F float output decimal | cte", "Coalesce F float output decimal | subquery",
-  "Greatest float int output decimal | alone", "Greatest float int output decimal | cte", "Greatest float int output decimal | subquery",
-  "Max Cast F float numeric | alone", "Max Cast F float numeric | cte", "Max Cast F float numeric | subquery",
 ])
 
 const _EKR_CELLS = sort!([id for (id, backend) in keys(_EKM_DISAGREEMENTS) if backend === _EKR_ENGINE])
@@ -280,7 +206,7 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A computed number reads back as the type it means, on every engine (#1121)
+# A computed number reads back as the type it means, on every engine (#1121, #1212)
 # Each shape of the computed-number family, projected alone, under a CTE (where the CTE builds it) and
 # inside a `Subquery`, on its pinned row: the Julia type is Django's `output_field` for the call — a
 # `Decimal` over a `DecimalField`, a `Float64` for `Avg`/`Mod`/`Sqrt`/`Exp`/`Ln`/`Power` over an
@@ -288,7 +214,9 @@ end
 # read every `numeric`-computed cell as a `Decimal` and SQLite as a `Float64`. Most of these cells are
 # not flagged by the unit matrix (a float column's textless is the float), so this testset, not the
 # read-back table, is what keeps them; the value is compared to 12 significant digits, because the
-# two engines compute `Sqrt`/`Ln` in different arithmetic (`numeric` against a double).
+# two engines compute `Sqrt`/`Ln` in different arithmetic (`numeric` against a double). A declared
+# decimal (#1212: a `Cast` to one, a decimal `output_field`) is a `Decimal` the same way; its cells
+# left the read-back table when the fix gave them a read kind, so they are kept here.
 # ─────────────────────────────────────────────────────────────────────────────
 const _EKR_MEANING = [
   # label                       type        value      builds under a CTE
@@ -319,8 +247,18 @@ const _EKR_MEANING = [
   ("Lag int default float / 2", "Float64",  0.75,      true),
   ("Max of arithmetic",         "Float64",  20.0,      true),
   ("Subquery Avg float",        "Float64",  10.0,      false),
+  # #1212: a declared decimal is the number the caller said it means. SQLite computed each as a REAL,
+  # or as an INTEGER over a whole operand (`Cast("grid", DecimalField())` read an `Int64`).
+  ("Cast F float * 1.5 numeric", "Decimal", 15.0,      true),
+  ("Cast decimal to scale 2",   "Decimal",  5.5,       true),
+  ("Cast int DecimalField",     "Decimal",  1.0,       true),
+  ("Cast Case float literal to scale 2", "Decimal", 1.5, true),
+  ("Coalesce F float output decimal", "Decimal", 15.0, true),
+  ("Greatest float int output decimal", "Decimal", 10.0, true),
+  ("Case float output decimal", "Decimal",  1.5,       true),
+  ("Max Cast F float numeric",  "Decimal",  15.0,      true),
 ]
-@testset "A computed number reads back as the type it means (#1121)" begin
+@testset "A computed number reads back as the type it means (#1121, #1212)" begin
   for (label, type, value, in_cte) in _EKR_MEANING
     i = findfirst(s -> s[1] == label, EKM_SHAPES)
     @test i !== nothing
@@ -333,6 +271,38 @@ const _EKR_MEANING = [
         v = only(q.list())[name]
         @test string(nameof(typeof(v))) == type
         @test isapprox(parse(Float64, string(v)), value; rtol = 1e-12)
+      end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A scaled cast SQLite refuses reads back as a `Decimal` where it builds (#1212)
+# `Cast("points", "numeric(10,1)")` and `Cast(Case(When(…, then = F("points")), default = 0),
+# "numeric(10,0)")` render `(…)::numeric(10,1)` / `(CASE … END)::numeric(10,0)` on PostgreSQL, which
+# rounds a float to the scale, and are refused on SQLite (#1040, #1187), which would keep every digit.
+# Where they build they record the declared decimal's read kind, so they are kept here, not in the
+# both-engine table above. Why: the cells left the read-back table with the fix, and nothing else
+# reads them back on a live engine.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "A scaled cast reads back as a Decimal where it builds, and is refused where it departs (#1212)" begin
+  for label in ("Cast float to scale 1", "Cast Case float col to scale 0")
+    _, base, build = EKM_SHAPES[findfirst(s -> s[1] == label, EKM_SHAPES)]
+    for ctx in (:alone, :cte, :subquery)
+      @testset "$label | $ctx" begin
+        q, name = ekm_query(M, base, build, ctx)
+        q.filter(EKM_PK[base] => _EKR_ROW[base])
+        # Each engine's expectation, stated: a backend added later gets a missing-row error (#1179).
+        if by_engine(postgres = false, sqlite = true)
+          # The #1040 refusal itself, not any build error a CTE or Subquery wrapping could raise.
+          err = try q.list(); nothing catch e; e end
+          @test err isa PormG.QueryBuildError
+          @test occursin("rounded to the scale of numeric(10,", sprint(showerror, err))
+        else
+          v = only(q.list())[name]
+          @test string(nameof(typeof(v))) == "Decimal"
+          @test v == 10
+        end
       end
     end
   end

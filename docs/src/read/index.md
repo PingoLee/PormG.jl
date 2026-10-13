@@ -88,6 +88,7 @@ on every engine. It is the type Django gives the call (its `output_field`):
 | projected expression | reads back as |
 |---|---|
 | `Sum`, `Avg`, `Abs`, `Round`, `Floor` or `Ceil` over a `DecimalField`; `Mod`, `Power`, `Sqrt`, `Exp` or `Ln` with a decimal operand; arithmetic with a decimal side | `Decimals.Decimal` |
+| a `Cast` to `"numeric"`, `"numeric(p, s)"` or `DecimalField()`; an `output_field` naming a decimal type (`Coalesce`, `Greatest`, `Least`, `Case`) | `Decimals.Decimal` |
 | `Avg`, `Mod`, `Power`, `Sqrt`, `Exp` or `Ln` over integers; any of these functions over a `FloatField`; arithmetic with a float side | `Float64` |
 | `Sum` of integers; `Abs`, `Round`, `Floor` or `Ceil` of an integer; integer arithmetic | an integer |
 
@@ -124,7 +125,9 @@ This applies to the value a projection, a `CTE(...)` column or a `Subquery(...)`
 value that is one of several operands when one of them is a computed number:
 `Coalesce(Avg("grid"), 0)` reads as a `Float64` on both engines. A `Coalesce`, `Greatest`, `Least`,
 `NullIf` or `Case` over columns and literals only is not a computed number: each row's value is one
-of its operands, and it reads back as the driver delivers it.
+of its operands, and it reads back as the driver delivers it. The exception is an `output_field`
+naming a decimal type: the call has declared what it means, so it reads as a `Decimal`, as a `Cast`
+to one does (#1212).
 
 An integer's width follows the engine, for a column and a computed value alike: PostgreSQL keeps the
 column's own type (an `IntegerField` reads as an `Int32`, a `BigIntegerField` or a `Count` as an
@@ -223,8 +226,8 @@ PostgreSQL where more than fifteen digits is the point.
 
     A **computed** decimal also reaches it as a `Decimal` on both engines (#1121): an aggregate
     that computes (`Sum("amount")`, `Avg`), arithmetic (`F("amount") * 2`), `Round`, `Abs`,
-    `Floor` or `Ceil` over the column, and a `CTE(...)` column or `Subquery(...)` whose body
-    computes one. On SQLite that `Decimal` is built from the double SQLite computed, to fifteen
+    `Floor` or `Ceil` over the column, a `Cast` to a decimal type or a decimal `output_field`
+    (#1212), and a `CTE(...)` column or `Subquery(...)` whose body computes one. On SQLite that `Decimal` is built from the double SQLite computed, to fifteen
     significant digits, so its last digits can differ from PostgreSQL's exact `numeric`. See
     [The type of a computed number](#The-type-of-a-computed-number).
 

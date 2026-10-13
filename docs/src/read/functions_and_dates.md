@@ -993,6 +993,24 @@ M.Result.objects.filter("raceid" => 2).values(
     "up"      => Cast(Ceil("points"), IntegerField()))    # 1.5 → 2
 ```
 
+A cast to a decimal type (`"numeric"`, `"numeric(p, s)"`, `"decimal"`, `DecimalField()`) reads back
+as a `Decimals.Decimal` on every engine when its operand is a number (#1212). PostgreSQL's driver delivers
+one. SQLite computes a REAL, or an INTEGER when the operand is whole, and PormG builds the `Decimal`
+from it to 15 significant digits, as it does for a computed decimal (see
+[The type of a computed number](index.md#The-type-of-a-computed-number)). The declared scale is not a read parser: on PostgreSQL it
+rounds, and on SQLite a cast that would have to round is refused, as above.
+
+```julia
+using PormG.Functions: Cast, Round
+using PormG: F
+using PormG.Models: DecimalField
+
+# Result 1 is Lewis Hamilton's win at the 2008 Australian GP: grid 1, 10 points.
+M.Result.objects.filter("resultid" => 1).values(
+    "grid"   => Cast("grid", DecimalField()),                         # Decimal 1 on both engines
+    "scaled" => Cast(Round(F("points") * 1.5, 2), "numeric(10,2)"))   # Decimal 15 on both engines
+```
+
 #### `output_field`
 
 `Case`, `Coalesce`, `Greatest` and `Least` cast their result to the `output_field` they are given, on
@@ -1016,6 +1034,11 @@ its branches, cast as it is taken, and the branches are not held to it. That inc
 `Case(…; output_field = "numeric(10,1)")`, which PostgreSQL rounds and SQLite does not: round the
 branches yourself, or leave the scale off. (A `Case` with no `output_field` that is the operand of a
 cast is read branch by branch, #1187.)
+
+An `output_field` naming a decimal type reads back as a `Decimals.Decimal` on every engine, as a
+`Cast` to one does (#1212): `Coalesce(F("points") * 1.5, 0; output_field = DecimalField())` is a
+`Decimal` on PostgreSQL and on SQLite. The type is the same; at a scale, a `Case`'s value can still
+differ, as described just above.
 
 `Concat` renders no cast on either engine, because its result is always text. Its `output_field`
 must therefore be a text type (`CharField()`, `TextField()`, `"text"`, `"varchar(20)"`). Any other

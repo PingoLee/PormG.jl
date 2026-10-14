@@ -73,8 +73,9 @@ _serializes_get_or_create(::PormGSQLite) = true
 _locks_cascade_parents(::PormGPostgres) = true
 _locks_cascade_parents(::PormGSQLite) = false
 
-# `select_for_update()` takes a real row lock. On SQLite the clause renders `""` (#26), so the
-# guards that exist because of the lock — no `distinct()`, only inside a transaction — do not apply.
+# `select_for_update()` takes a real row lock. On SQLite the clause renders `""` (#26), so the guard
+# that exists because of the lock itself — no `distinct()` — does not apply. The transaction
+# requirement is not one of these: it holds on both engines (#1237).
 _locks_rows(::PormGPostgres) = true
 _locks_rows(::PormGSQLite) = false
 

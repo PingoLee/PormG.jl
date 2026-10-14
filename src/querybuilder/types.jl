@@ -796,9 +796,10 @@ end
 #
 
 # #26: row-level locking clause carried on a SELECT. `nothing` on the query means no lock;
-# a `ForUpdateClause` renders `FOR [NO KEY] UPDATE [NOWAIT|SKIP LOCKED]` on PostgreSQL and is a
-# silent no-op on SQLite (which has no row-level locking). Immutable/set-once — the
-# `_select_for_update!` mutator always builds a fresh clause, so it is shared by reference on copy.
+# a `ForUpdateClause` renders `FOR [NO KEY] UPDATE [NOWAIT|SKIP LOCKED]` on PostgreSQL and
+# nothing on SQLite, which has no row-level locking (the read still needs a transaction, #1237).
+# Immutable/set-once — the `_select_for_update!` mutator always builds a fresh clause, so it is
+# shared by reference on copy.
 #
 # #169: `of` holds the lock targets AS WRITTEN — `"self"`, a relation path, a `cjoin_on` alias — and
 # never reaches the SQL. PostgreSQL's `OF` names a FROM-clause ALIAS, not a table, and PormG's aliases

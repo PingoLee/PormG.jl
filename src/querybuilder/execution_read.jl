@@ -486,17 +486,18 @@ function query(q::SQLObjectHandler;
     return _show_query_result(show_query, resposta, instruction.connection, q.object.model.name, :select;
                             parameters=instruction.parameters)
   end
-  # #26: a locked read executed OUTSIDE a transaction on PostgreSQL is a footgun — the lock is
-  # taken then immediately released at autocommit. Fail loudly (Django's TransactionManagementError
-  # analog). Guarded on the execute path only, so inspect_query/show_query still render FOR UPDATE
-  # without a live transaction. SQLite never locks (clause rendered ""), so it is exempt.
+  # #26: a locked read executed OUTSIDE a transaction is a footgun — the lock is taken then
+  # immediately released at autocommit. Fail loudly (Django's TransactionManagementError analog).
+  # Guarded on the execute path only, so inspect_query/show_query still render FOR UPDATE without a
+  # live transaction. On both engines (#1237): SQLite takes no row lock, but inside a transaction its
+  # writers are serialized, which is the exclusion the caller asked for — and a missing transaction
+  # is a bug in the call that would otherwise surface only in production on PostgreSQL.
   # The transaction must be on the pool this read runs on (#831): a transaction open on another
   # database does not hold this lock. Inside one, `build`'s `ensure_transaction_scope` already
   # refuses a read routed to a pool with no transaction (#838), so what reaches here unguarded is
   # a read with no transaction open anywhere.
-  if q.object.for_update !== nothing && _locks_rows(instruction.connection) &&
-     transaction_connection_for(instruction.connection) === nothing
-    throw(QueryBuildError("select_for_update() must run inside a transaction (run_in_transaction/atomic) on PostgreSQL; otherwise the row lock is released immediately at autocommit."))
+  if q.object.for_update !== nothing && transaction_connection_for(instruction.connection) === nothing
+    throw(QueryBuildError("select_for_update() must run inside a transaction (run_in_transaction/atomic): under autocommit a locked read holds nothing once it returns."))
   end
   return resposta
 end

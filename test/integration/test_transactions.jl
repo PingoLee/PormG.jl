@@ -603,22 +603,25 @@ const TX_LOCKS_ROWS = by_engine(postgres = true, sqlite = false)
         M.Just_a_test_deletion.objects.filter("name" => "lockme").select_for_update(skip_locked = true).list()
       end
       @test length(claimed) == 1
-
-      # Guard: a locked read OUTSIDE a transaction fails loudly (autocommit-release footgun).
-      autocommit_err = try
-        M.Just_a_test_deletion.objects.filter("name" => "lockme").select_for_update().list(); nothing
-      catch e; e end
-      @test autocommit_err isa PormGError && occursin("transaction", autocommit_err.msg)
     else
-      # SQLite: select_for_update is a pure no-op — returns rows normally and never raises,
-      # both inside and outside a transaction (the documented PG/SQLite divergence).
-      outside = M.Just_a_test_deletion.objects.filter("name" => "lockme").select_for_update().list()
-      @test length(outside) == 1
+      # SQLite: no lock clause inside a transaction, and the rows come back (#26).
       inside = PormG.atomic(PORMG_DB_FOLDER) do
-        M.Just_a_test_deletion.objects.filter("name" => "lockme").select_for_update(skip_locked = true).list()
+        q = M.Just_a_test_deletion.objects.filter("name" => "lockme")
+        q.select_for_update(skip_locked = true)
+        @test !contains(q.list(show_query = :sql), "FOR UPDATE")
+        q.list()
       end
       @test length(inside) == 1
     end
+
+    # Both engines: a locked read OUTSIDE a transaction fails loudly before the query is sent — the
+    # autocommit-release footgun on PostgreSQL, and on SQLite the same call, so code tested there
+    # does not first fail in production (#1237; it ran silently before).
+    autocommit_err = try
+      M.Just_a_test_deletion.objects.filter("name" => "lockme").select_for_update().list(); nothing
+    catch e; e end
+    @test autocommit_err isa PormG.QueryBuildError
+    @test occursin("must run inside a transaction", error_message(autocommit_err))
 
     M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end
@@ -698,7 +701,10 @@ const TX_LOCKS_ROWS = by_engine(postgres = true, sqlite = false)
       @test length(rows) == 1
     else
       # SQLite: no lock is rendered, so `of` is a no-op — but the rows still come back.
-      @test length(locked_read(of = ("self", "driverid")).list()) == 1
+      rows = PormG.atomic(PORMG_DB_FOLDER) do
+        locked_read(of = ("self", "driverid")).list()
+      end
+      @test length(rows) == 1
     end
 
     # Both engines: a target that cannot be locked is refused before the database sees the query —

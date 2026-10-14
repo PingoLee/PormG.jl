@@ -286,7 +286,7 @@ PormG gives a query one meaning on every backend. Where a backend computes a dif
 | **`Sum` of a `bigint`** | `sum(bigint)` is `numeric`; PormG renders `SUM(x)::bigint`, an integer ([What a `Sum` returns](read/filters_and_aggregates.md#What-a-Sum-returns)) | an integer |
 | **`Cast` to text** | builds; a boolean reads `true` | builds; a boolean's cast is refused (SQLite writes `1`) — see [A cast an engine computes differently](read/functions_and_dates.md#A-cast-an-engine-computes-differently) |
 | **`Cast` to an integer or `numeric(p, s)`** | builds: rounds to the nearest integer or to the scale | refused where a fraction or extra places would be truncated or kept |
-| **Row locks** (`select_for_update()`) | `SELECT … FOR UPDATE [OF …]` | silent no-op — a SQLite write already locks the whole database |
+| **Row locks** (`select_for_update()`) | `SELECT … FOR UPDATE [OF …]`; refused outside a transaction | no lock clause — a SQLite write transaction already locks the whole database; refused outside a transaction, as on PostgreSQL |
 | **`without_foreign_keys`** | `SET CONSTRAINTS ALL DEFERRED`; an orphan fails `COMMIT` with `IntegrityError` | `PRAGMA foreign_keys = OFF` plus a `foreign_key_check` before `COMMIT` (`UnsafeMutationError`) |
 | **Engine-pinned `db_default`** | `db_default = (postgres = "now()",)` renders | rendering it raises `BackendCapabilityError` — add `sqlite = "…"`, or `sqlite = nothing` for no default |
 

@@ -152,8 +152,9 @@ end
 - `in_transaction_context()` reports whether the current task is inside one. Tasks spawned
   inside a transaction join it — see [`async.md`](async.md).
 
-**Row locking** (PostgreSQL; a silent no-op on SQLite). Inside a transaction, `select_for_update()`
-locks the matched rows until `COMMIT`:
+**Row locking** (PostgreSQL; no lock clause on SQLite, where the transaction serializes writers).
+Inside a transaction, `select_for_update()` locks the matched rows until `COMMIT`. Outside one it
+raises `QueryBuildError` on both engines:
 
 ```julia
 atomic("db") do

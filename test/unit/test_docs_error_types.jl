@@ -1258,6 +1258,14 @@ const DOCERR_CASES = [
         QueryBuildError,
         () -> DOCERR_DRIVER_PG.objects.filter("driverid" => 1).select_for_update().explain(),
     ),
+    # #1237 — write/transaction.md ("Row-Level Locking", "Row locking on SQLite"): a locked read
+    # outside a transaction raises QueryBuildError on SQLite as on PostgreSQL, before the mock's
+    # missing driver is reached.
+    (
+        "write/transaction.md — select_for_update() outside a transaction raises QueryBuildError on SQLite",
+        QueryBuildError,
+        () -> DOCERR_DRIVER_SL.objects.filter("driverid" => 1).select_for_update().list(),
+    ),
     # #169 — `select_for_update(of = …)` (write/transaction.md, "Locking only some tables"): a target
     # the query does not join, a LEFT-joined target (`driverid` is a nullable FK here), any `of` on a
     # query with a RIGHT/FULL join, and an empty `of` raise QueryBuildError; a name that is both a

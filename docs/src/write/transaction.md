@@ -637,21 +637,42 @@ Options (PostgreSQL):
 | `select_for_update(no_key = true)` | `FOR NO KEY UPDATE` | Weaker lock that still allows FK-referencing inserts. |
 | `select_for_update(of = ("self",))` | `FOR UPDATE OF "Tb"` | Lock only the named tables — see below. |
 
-`nowait` and `skip_locked` are mutually exclusive; `of` combines with any of the other three. On
-PostgreSQL a locked read **must run inside a transaction** — calling it under autocommit raises,
-because the lock would be released immediately.
+`nowait` and `skip_locked` are mutually exclusive; `of` combines with any of the other three. A
+locked read **must run inside a transaction**, on PostgreSQL and SQLite alike. Under autocommit it
+raises `QueryBuildError` before the query is sent, because the lock would be released as soon as
+the read returned.
+
+### Claiming the next available row
+
+A worker queue claims one row at a time: lock the next row no other worker holds, process it, and
+write the result in the same transaction, so the lock lasts until the write commits.
 
 ```julia
-# Process pit stops for a race, one worker at a time, skipping rows another worker already holds.
+using Dates
+
+# Claim the next pit stop of a race that no other worker holds, and store its duration.
 atomic("db_2") do
-  next_stop = M.Pit_stops.objects.
+  claimed = M.Pit_stops.objects.
     filter("raceid" => 1120).
     order_by("stop").
-    select_for_update(skip_locked = true).
-    list() |> first
-  # … process next_stop …
+    limit(1).
+    select_for_update(skip_locked = true).   # rows another worker holds are skipped, not waited for
+    list()
+  isempty(claimed) && return nothing         # every matching row is held by another worker
+  stop = first(claimed)
+  M.Pit_stops.objects.
+    filter("raceid" => stop[:raceid], "driverid" => stop[:driverid], "stop" => stop[:stop]).
+    update("duration" => Millisecond(stop[:milliseconds]))
 end
 ```
+
+A real queue also filters out the rows it has already processed, usually with a status column
+that the `update` sets. Without that filter, the next worker claims the same row again once this
+transaction commits.
+
+On SQLite the transaction, not a row lock, provides the exclusion. `atomic` opens with
+`BEGIN IMMEDIATE`, so a second worker waits for the first one's whole transaction instead of
+skipping its row: workers take turns.
 
 ### Locking only some tables: `of`
 
@@ -718,11 +739,13 @@ the query runs, on PostgreSQL and SQLite alike:
 A name that is both a relation path and a `cjoin_on` alias raises `AmbiguousFieldError`.
 
 !!! warning "Row locking on SQLite"
-    SQLite has no `SELECT ... FOR UPDATE`. On SQLite, `select_for_update()` is a **silent no-op** — no
-    lock clause is emitted and no error is raised, so identical query code runs on both backends (this
-    matches Django, SQLAlchemy, and Rails). SQLite already serializes writers per database file via
-    `BEGIN IMMEDIATE` (see [Multithreaded Work](#Multithreaded-Work)); if you need explicit
-    write-serialization there, rely on the transaction itself rather than a row lock. `of` renders
+    SQLite has no `SELECT ... FOR UPDATE`. Inside a transaction, `select_for_update()` on SQLite emits
+    no lock clause and raises nothing, so identical query code runs on both backends (this matches
+    Django, SQLAlchemy, and Rails). SQLite already serializes writers per database file via
+    `BEGIN IMMEDIATE` (see [Multithreaded Work](#Multithreaded-Work)), so the transaction provides the
+    exclusion a row lock would. The transaction requirement is the same on both engines: outside
+    `run_in_transaction` / `atomic`, a locked read raises `QueryBuildError` on SQLite exactly as on
+    PostgreSQL, so code tested on SQLite does not first fail in production. `of` renders
     nothing on SQLite either, but a read that returns rows (`list()`, `first()`, …) still checks the
     targets against the rules above, so a target PostgreSQL would refuse fails during development too.
 
@@ -862,7 +885,7 @@ end
 |---------|----------|
 | `run_in_transaction(settings) do ... end` / `atomic(settings) do ... end` | Most common; automatic commit/rollback |
 | Nested `atomic` on the same database | Automatic savepoint; roll back part of the work without aborting the whole transaction |
-| `select_for_update()` | Lock rows for a safe read-modify-write (PostgreSQL; no-op on SQLite) |
+| `select_for_update()` | Lock rows for a safe read-modify-write, inside a transaction (no lock clause on SQLite, where the transaction serializes writers) |
 | Async tasks inside transaction | Spawn concurrent workers that share the connection |
 | Bulk operations inside transaction | Ensure all-or-nothing for large batch inserts/updates |
 | Manual `with_tx_context` + `with_transaction` | Fine-grained control; hand-rolled multi-statement workflows |

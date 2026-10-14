@@ -2268,9 +2268,9 @@ end
 Render a row-level locking clause for a SELECT (#26), appended after ORDER BY / LIMIT / OFFSET.
 
 - **PostgreSQL** → `FOR [NO KEY] UPDATE [OF <alias>, …] [NOWAIT | SKIP LOCKED]`.
-- **SQLite** → `""`. SQLite has no row-level locking, so the clause is a silent no-op — the one
-  intentional PostgreSQL/SQLite divergence for this feature (keeps `select_for_update` portable;
-  see `docs/src/write/transaction.md`).
+- **SQLite** → `""`. SQLite has no row-level locking; a write transaction's `BEGIN IMMEDIATE`
+  serializes writers instead, so the clause renders nothing (keeps `select_for_update` portable; see
+  `docs/src/write/transaction.md`). The transaction requirement still holds there (#1237).
 
 `of_aliases` are FROM-clause aliases, **already quoted** by the caller (#169) — PostgreSQL's `OF`
 names a range variable, never a table, and only the query builder knows which aliases it generated.

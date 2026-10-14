@@ -1,6 +1,6 @@
 ## A value filtered against a `Cast` or `Subquery` alias is checked against its type (#823, #929, #1078)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #823, #929, #1078 ; `src/querybuilder/projection_types.jl` (`_sql_type_field`, `subquery_formatters`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. A filter that bound its value unchecked now raises

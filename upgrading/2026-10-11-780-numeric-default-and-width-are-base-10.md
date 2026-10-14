@@ -1,6 +1,6 @@
 ## A numeric `default=` or width keyword given as a string is read in base 10, like a value (#780)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #780 ; `src/Models.jl` (`format2int64`, `format2float64`), `src/models/fields.jl` (`_int_kwarg`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. A field declaration that loaded now raises `FieldValidationError`

@@ -1,6 +1,6 @@
 ## `@year` and `@yyyy_mm` values are checked on every path, and a JSON path refuses `Inf` / `NaN` (#1091)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1091 ; `src/Models.jl` (`format_year_sql`, `format_yyyy_mm`), `src/querybuilder/functions.jl` (`_EXTRACT_PART_ROWS`), `src/querybuilder/filter_operators.jl` (`_render_sargable_date_range`, `_year_bucket_bounds`, `_yyyy_mm_bucket_bounds`, `_json_numeric_rhs`)
 - **Recorded**: 2026-10-09
 - **Severity**: behavior. A `@year` outside 1–9999 under `=` or `@in`, a `Bool` year, and a `@yyyy_mm` month that does not exist now raise `InvalidValueError` on every column and lookup, where most paths bound them and matched nothing. A JSON path compared with `Inf` or `NaN` raises too. A `DateField` year comparison outside 1–9999 now builds instead of raising.

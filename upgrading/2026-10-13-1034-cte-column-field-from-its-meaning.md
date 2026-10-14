@@ -1,6 +1,6 @@
 ## A computed CTE column is typed by what it means: a filter on a summed duration takes a `Period`, and a comparison column is a boolean (#1034)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1034 ; `src/querybuilder/ctes.jl` (`_meant_column_field`), `src/querybuilder/expression_kind.jl` (`_kind_field`)
 - **Recorded**: 2026-10-13
 - **Severity**: behavior change. Some filters and functions over a CTE column that raised now build, and some that built now raise (`InvalidValueError` for a filter value, `QueryBuildError` for `Sum`/`Avg` over a comparison column). Number columns bind as before.

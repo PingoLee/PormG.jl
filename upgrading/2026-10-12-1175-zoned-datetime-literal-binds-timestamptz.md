@@ -1,6 +1,6 @@
 ## PostgreSQL: a `ZonedDateTime` literal binds typed `::timestamptz` (#1175)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1175, amended by #1200 ; `src/querybuilder/field_resolution.jl` (`_infer_parameter_sql_type`)
 - **Recorded**: 2026-10-12
 - **Severity**: behavior change, PostgreSQL only. Calls return a different value or type. An

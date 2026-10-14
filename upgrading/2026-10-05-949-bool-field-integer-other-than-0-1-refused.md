@@ -1,6 +1,6 @@
 ## An integer other than 0 or 1 given to a `BooleanField` raises (#949)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #949 ; `src/Models.jl` (`format_bool_sql(::Integer)`), `src/querybuilder/build_query.jl` (`_expression_formatter(::FExpression)`)
 - **Recorded**: 2026-10-05
 - **Severity**: breaking (narrow). Any integer but 1 used to be written and filtered as `false`. It now raises `InvalidValueError` on a write and in a filter (a filter raised `FilterError` until #971).

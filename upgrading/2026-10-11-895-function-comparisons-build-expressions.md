@@ -1,6 +1,6 @@
 ## `==`, `<`, `>`, … on a function or window node build a SQL comparison instead of a Julia `Bool` (#895, #919)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #895, #919 ; `src/querybuilder/operators.jl` (the `FObject` / `WindowFunction` comparisons)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. A Julia comparison whose left side is a SQL function or window node

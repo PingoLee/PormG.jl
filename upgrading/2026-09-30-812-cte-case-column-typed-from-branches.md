@@ -1,6 +1,6 @@
 ## A CTE column projected from `Case` is typed from its branches, and raises when they disagree (#812)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #812, #822 ; `src/querybuilder/ctes.jl`
 - **Recorded**: 2026-09-30
 - **Severity**: behavior change (narrow). A silently wrong result on SQLite is fixed. A `Case` whose type PormG cannot determine now raises at build time instead of being typed as text.

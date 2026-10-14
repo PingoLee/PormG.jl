@@ -1,6 +1,6 @@
 ## `Round(x, n)` refuses a negative `n` and a text operand; to places it keeps each engine's own `ROUND` (#1044, #1061)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1044, #1061, amended by #1187 ; `src/querybuilder/functions.jl` (`Round`, `_round_text_refusal`), `src/querybuilder/select_nodes.jl` (`_render_function_body`), reusing `src/querybuilder/projection_types.jl` (`_scale_divergent_operand`)
 - **Recorded**: 2026-10-08
 - **Severity**: breaking. `Round(x, n)` with `n < 0` raises `InvalidValueError` when it is built, and `Round(x, n)` with `n > 0` over text raises `QueryBuildError` when the query is built. Both used to render.

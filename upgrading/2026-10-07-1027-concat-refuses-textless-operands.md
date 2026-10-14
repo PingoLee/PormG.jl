@@ -1,6 +1,6 @@
 ## `Concat` — a boolean, float or decimal operand is refused (#1027)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1027, amended by #1147 and #1187 ; `src/querybuilder/functions.jl` (`Concat`, `_concat_textless_refusal`), `src/querybuilder/projection_types.jl` (`_concat_textless_operand`), `src/querybuilder/select_nodes.jl`
 - **Recorded**: 2026-10-07
 - **Severity**: breaking. A `Concat` with a boolean, float or decimal operand raises `QueryBuildError` on every engine where it used to render.

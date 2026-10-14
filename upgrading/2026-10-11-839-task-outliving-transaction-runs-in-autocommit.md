@@ -1,6 +1,6 @@
 ## A task that outlives its `run_in_transaction` / `atomic` block no longer uses the block's connection (#839)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #839 ; `src/Configuration.jl` (`with_tx_context`, `_open_tx_context`, `get_tx_connection`, `in_transaction_context`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. A query issued by a task spawned inside a transaction block, and

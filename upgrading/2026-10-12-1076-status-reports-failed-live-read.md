@@ -1,6 +1,6 @@
 ## `status()` reports a failed live-table read as a drift signal (#1076)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1076 ; `src/migrations/runner.jl` (`status`)
 - **Recorded**: 2026-10-12
 - **Severity**: behavior. When `status()` cannot read the live table list, its `drift_signals` now hold a `Drift detection failed` entry, where they were empty.

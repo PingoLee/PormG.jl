@@ -1,6 +1,6 @@
 ## A `Bool` written to or compared with a text field raises (#876)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #876 ; `src/Models.jl` (`format_text_sql(::Bool)`)
 - **Recorded**: 2026-10-02
 - **Severity**: breaking (narrow). A `Bool` in a text field used to be written and filtered. It now raises `InvalidValueError` on a write and `FilterError` in a filter.

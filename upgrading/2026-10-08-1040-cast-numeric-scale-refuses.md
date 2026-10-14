@@ -1,6 +1,6 @@
 ## `Cast` to a scaled `numeric(p, s)` is refused on SQLite when it would keep digits the scale rounds away (#1040)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1040, #1087, amended by #1147, #1187 and #1217 ; `src/querybuilder/projection_types.jl` (`_numeric_cast_scale`, `_scale_divergent_operand`, `_precision_overflow_operand`, `_cast_divergent_operand`), `src/querybuilder/engine_departures.jl` (`_MEANING_DEPARTURES`)
 - **Recorded**: 2026-10-08
 - **Severity**: breaking, on SQLite. A `Cast` to `numeric(p, s)` (or an `output_field` of one on `Coalesce`/`Greatest`/`Least`/`Case`) over an operand with more than `s` fractional digits raises `QueryBuildError` there where it used to render, and so does a `Cast` of a literal too large for `p` (#1087). PostgreSQL builds both, as in v0.7.0.

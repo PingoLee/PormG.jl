@@ -1,6 +1,6 @@
 ## `.db()` and the transaction-scope check — an ORM call is checked against the database it runs on (#838, #831)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #838, #831; `src/Configuration.jl` (`ensure_transaction_scope`), its call sites in
   `src/querybuilder/` (`build`, `insert`, `update`, `delete`, `get_or_create`, `update_or_create`,
   the bulk writers, `allocate_primary_keys`, `resync_sequences`)

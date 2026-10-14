@@ -1,6 +1,6 @@
 ## A NUL in a JSONField value raises (#954)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #954 ; `src/Models.jl` (`format_json_sql`, `_json_has_nul_escape`), `src/querybuilder/sanitization.jl` (`_format_json_named`), `src/querybuilder/execution_bulk.jl` (`_depuration_values_bulk_insert`)
 - **Recorded**: 2026-10-05
 - **Severity**: breaking (narrow). A `JSONField` value containing a NUL character (`'\0'`) used to fail on PostgreSQL's server and be stored on SQLite. It now raises `InvalidValueError` before any statement is sent, on every backend.

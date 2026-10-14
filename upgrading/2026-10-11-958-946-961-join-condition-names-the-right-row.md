@@ -1,6 +1,6 @@
 ## `on()` / `cjoin(filters = …)`: each side of a join condition names the row it should, in every spelling (#958, #946, #961)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #958, #946, #961 ; `src/querybuilder/join_conditions.jl` (`_prefix_join_filter`, `_prefix_join_column`), `src/querybuilder/build_query.jl` (`build_row_join_sql_text`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. The same `on()` / `cjoin(filters = …)` call renders a different

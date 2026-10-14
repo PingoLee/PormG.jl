@@ -1,6 +1,6 @@
 ## Schema management reads generated columns, and states a PostgreSQL floor per operation (#1032)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1032, #1108, #1146, #1162 ; `src/migrations/introspection.jl` (`get_database_schema`, `_pg_live_table`, `_refuse_statements_above_server`), `src/column_ir.jl` (`GeneratedExpression`, `_defaults_equal`)
 - **Recorded**: 2026-10-09
 - **Severity**: behavior change. A generated column is read as generated, not as an expression default. Reading the schema (`inspectdb`, `import_models_from_postgres`, `check`) needs PostgreSQL 9.6 (`status` skips its drift check below it), and a migration plan (`makemigrations`, `migrate`, `check(kinds = [:schema_drift])`) needs 11; each refuses an older server by name with `BackendCapabilityError`. A plan that adds a generated column needs 12, and one that removes `generated_from` needs 13; `makemigrations` and `migrate` refuse it on an older server. Queries and writes are unchanged.

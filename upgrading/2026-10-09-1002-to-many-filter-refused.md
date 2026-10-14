@@ -1,6 +1,6 @@
 ## `filter()` / `order_by()` across a to-many relation — refused unless the query asks for those rows (#1002)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1002 ; `src/querybuilder/build_query.jl` (`_check_join_cardinality`), `src/querybuilder/build_joins.jl` (`_record_join_reach!`), `src/querybuilder/execution_write.jl` (`_get_join_condition_list`)
 - **Recorded**: 2026-10-09
 - **Severity**: behavior change. A query whose filter or ordering crosses a reverse relation or a `ManyToManyField` used to return each base row once per related row, silently, and `count()` counted the repeats. It now raises at build time, unless the query projects that join, is `distinct()`, or only asks whether a row matches.

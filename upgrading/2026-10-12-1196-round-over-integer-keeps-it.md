@@ -1,6 +1,6 @@
 ## `Round` over an integer returns that integer on every engine, and divides as one (#1196)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1196 ; `src/Dialect.jl` (`ROUND`), `src/querybuilder/select_nodes.jl` (`_render_function_body`), `src/querybuilder/functions.jl` (`_computed_kind` for `ROUND`), `src/querybuilder/projection_types.jl` (`_INTEGER_KEEPING_FUNCTIONS`)
 - **Recorded**: 2026-10-12
 - **Severity**: behavior change. `Round(x)` and `Round(x, d)` over an integer `x` read back as an integer instead of a `Decimal` (PostgreSQL) or a `Float64` (SQLite), and a quotient over one (`Round("grid") / 2`) divides as integers on both engines: `2` where it was `2.5`.

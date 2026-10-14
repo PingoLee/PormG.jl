@@ -1,6 +1,6 @@
 ## An expression mixing a column with an aggregate now raises unless that column is grouped (#798)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #798 ; `src/querybuilder/build_query.jl`, `src/querybuilder/types.jl`
 - **Recorded**: 2026-09-29
 - **Severity**: behavior change (narrow). The shape was wrong on SQLite and, but for one case, refused by PostgreSQL; it now raises at build time on both.

@@ -1,6 +1,6 @@
 ## A computed number reads back as the type it means, on every engine: `Avg` over integers is a `Float64`, a decimal aggregate or a declared decimal a `Decimal` (#1121, #1212)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1121, #1212 ; `src/querybuilder/expression_kind.jl` (`_MeaningKinds`, `_output_kind`, `_numeric_read_kind`, `_declares_decimal`), `src/querybuilder/build_select.jl`, `src/value_repr.jl`, `src/Dialect.jl` (`_parse_sqlite_computed_decimal`, `_parse_computed_float`)
 - **Recorded**: 2026-10-12
 - **Severity**: behavior change. The Julia type a caller receives changes for these projections, and the conversion can change the last digits. On PostgreSQL, several calls that read a `Decimal` now read a `Float64`, the nearest double to the `numeric` (a `numeric` holding more than about 16 significant digits loses them). On SQLite, the decimal family that read a `Float64` (or an `Int64`, for a whole value) now reads a `Decimal` of that double's first 15 significant digits (`0.30000000000000004` reads as `0.3`).

@@ -1,6 +1,6 @@
 ## A date part over a foreign key is checked against the related key (#1068, #1004)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1068, #1004 ; `src/querybuilder/memos.jl` (`memo_name`), `src/querybuilder/select_nodes.jl` (`_relation_key_field`, `_check_temporal_operand`)
 - **Recorded**: 2026-10-09
 - **Severity**: behavior. A date part over a `ForeignKey` or `OneToOneField` whose key is not a date now raises `QueryBuildError` when the query is built. Before, PostgreSQL refused it when it ran, and SQLite answered from the key's text.

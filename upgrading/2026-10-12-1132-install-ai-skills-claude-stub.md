@@ -1,6 +1,6 @@
 ## `install_ai_skills()` also writes a Claude Code discovery stub, and returns its path as `stub` (#1132)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1132 ; `src/tools.jl` (`install_ai_skills`, `_write_claude_stub`)
 - **Recorded**: 2026-10-12
 - **Severity**: behavior. `install_ai_skills()` now writes `.claude/skills/pormg-usage/SKILL.md` as well as `.github/skills/pormg-usage/`, and its named tuple gains a `stub` field.

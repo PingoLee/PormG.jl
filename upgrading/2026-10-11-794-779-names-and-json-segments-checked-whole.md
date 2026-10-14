@@ -1,6 +1,6 @@
 ## An alias or JSON key ending in a newline, and a JSON path segment of non-ASCII digits, are refused (#794, #779)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #794, #779 ; `src/querybuilder/sanitization.jl` (`SAFE_IDENTIFIER_PATTERN`, `SAFE_JSON_KEY_PATTERN`), `src/Dialect.jl` (`_is_json_array_index`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. Two name shapes that were accepted now raise `InvalidValueError`;

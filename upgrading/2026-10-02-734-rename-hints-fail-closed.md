@@ -1,6 +1,6 @@
 ## `makemigrations(interactive = false)` refuses a likely rename; `renames =` names it (#734)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **Recorded**: 2026-10-02
 - **PormG ref**: #734; `src/migrations/planner.jl` (`get_migration_plan`, `makemigrations`, `_parse_rename_hints`)
 - **Severity**: behavior change. A non-interactive `makemigrations` that used to write a plan can now

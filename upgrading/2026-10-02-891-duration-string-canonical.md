@@ -1,6 +1,6 @@
 ## `DurationField`: a duration string is stored in canonical `HH:MM:SS` (#891)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **Recorded**: 2026-10-02
 - **PormG ref**: #891; `src/Models.jl` (`_duration_string_nanoseconds`, `_normalize_duration_string`)
 - **Severity**: behavior change. The SQL is unchanged. What changes is the text a duration string is

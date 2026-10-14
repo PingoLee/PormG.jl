@@ -1,6 +1,6 @@
 ## Rows returned by writes, and `Max`/`Min`/window value projections, read back as the column does (#800)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **Recorded**: 2026-09-30
 - **PormG ref**: #800; `src/querybuilder/execution.jl` (`_row_to_field_keyed_dict`,
   `_field_value_parser`), `src/querybuilder/build_query.jl` (`_function_projection_kind`)

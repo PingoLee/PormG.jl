@@ -1,6 +1,6 @@
 ## `db_default` and `CheckConstraint` SQL text refuses quoting only one engine can read (#934)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #934 ; `src/column_ir.jl` (`is_valid_db_default_sql`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. A model declaration that loaded now raises when the models file is

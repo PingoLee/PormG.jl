@@ -1,6 +1,6 @@
 ## `on()` / `cjoin()` on a path crossing a `ManyToManyField` raises (#977)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #977 ; `src/querybuilder/join_conditions.jl` (`_refuse_many_to_many_join_path`)
 - **Recorded**: 2026-10-06
 - **Severity**: breaking (narrow). An `on()` predicate or `join_type` on a path through a ManyToMany relation was dropped from the statement with no error. It now raises `QueryBuildError` when the query is built, on both engines.

@@ -1,6 +1,6 @@
 ## `Concat` — a NULL operand is skipped on SQLite too, so the result is never NULL (#1006)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1006 ; `src/Dialect.jl` (`CONCAT`, SQLite arm)
 - **Recorded**: 2026-10-07
 - **Severity**: behavior change. On SQLite, a `Concat` with a NULL operand reads the other operands joined, where it read `missing`. PostgreSQL already skipped a NULL operand, so nothing changes there.

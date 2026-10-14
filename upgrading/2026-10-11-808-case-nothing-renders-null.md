@@ -1,6 +1,6 @@
 ## `Case` / `When` with `then = nothing` (or `missing`) renders the literal `NULL` (#808)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #808 ; `src/querybuilder/select_nodes.jl` (`_is_null_literal`, the CASE/WHEN keyword loop)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change in the rendered SQL and the parameter vector only. Results are

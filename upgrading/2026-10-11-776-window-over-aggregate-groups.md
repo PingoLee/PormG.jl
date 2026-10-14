@@ -1,6 +1,6 @@
 ## Window functions: a window beside or over an aggregate groups the columns it reads, and SQLite binds a window's own arguments first (#776, #789)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #776, #789, `16fb2ca7` ; `src/querybuilder/types.jl` (`_contains_agg`), `src/querybuilder/build_select.jl` (the GROUP BY decision), `src/querybuilder/select_nodes.jl` (`_get_select_query(::WindowFunction)`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. Three window shapes return different rows or values on SQLite;

@@ -1,6 +1,6 @@
 ## A period transform refuses a `Bool` value instead of reading it as `1` (#955)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #955 ; `src/Models.jl` (`_format_period_sql`)
 - **Recorded**: 2026-10-08
 - **Severity**: behavior. A `Bool` compared against a period transform raises `InvalidValueError` where it used to bind `1` or `0`.

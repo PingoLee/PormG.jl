@@ -1,6 +1,6 @@
 ## Read terminals honor a `limit()`/`offset()` slice, or refuse it (#1053)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1053 ; `src/querybuilder/execution_read.jl` (`_is_sliced`, `_probe_limit`, `_refuse_sliced`, `_count`, `_aggregate`, `_exists`, `first`, `last`, `_extreme`, `get`), `src/querybuilder/filter_nodes.jl` (`_build_exists_query`)
 - **Recorded**: 2026-10-08
 - **Severity**: behavior change. Five terminals return a different answer on a sliced query, and five more raise where they used to answer.

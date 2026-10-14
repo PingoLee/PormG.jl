@@ -1,6 +1,6 @@
 ## `db_default` — a literal value is refused; declare it as `default` (#1033)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1033 ; `src/models/fields.jl` (`_refuse_literal_db_default`), `src/column_ir.jl` (`_db_default_read_back`)
 - **Recorded**: 2026-10-08
 - **Severity**: breaking. A `db_default` whose text is a constant raises `FieldValidationError` when the field is built, where it used to be accepted.

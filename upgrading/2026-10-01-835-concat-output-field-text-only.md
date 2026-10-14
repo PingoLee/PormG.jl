@@ -1,6 +1,6 @@
 ## `Concat(…; output_field = …)` now raises unless the type is text (#835)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #835 ; `src/querybuilder/functions.jl`
 - **Recorded**: 2026-10-01
 - **Severity**: breaking (narrow) — a spelling that built now raises. A non-text `output_field` on `Concat` was never applied to the SQL; it now raises `InvalidValueError` when the expression is built.

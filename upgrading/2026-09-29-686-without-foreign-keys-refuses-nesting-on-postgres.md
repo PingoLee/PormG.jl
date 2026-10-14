@@ -1,6 +1,6 @@
 ## `without_foreign_keys` — refuses to nest inside a transaction on PostgreSQL too (#686)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **Recorded**: 2026-09-29
 - **PormG ref**: #686; `src/ConnectionPool.jl` (`without_foreign_keys`, `_refuse_nested_without_foreign_keys`)
 - **Severity**: behavior change — a `without_foreign_keys` block opened inside `atomic` /

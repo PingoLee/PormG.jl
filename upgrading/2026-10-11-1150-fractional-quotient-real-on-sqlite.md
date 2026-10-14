@@ -1,6 +1,6 @@
 ## A decimal or mixed quotient is a fraction on SQLite too, and `NullIf(<integer>, <fraction>)` stays an integer on PostgreSQL (#1150)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1150 ; `src/querybuilder/expression_render.jl` (`_division_sql`), `src/querybuilder/expression_kind.jl` (`_operation_kind`), `src/Dialect.jl` (`NULLIF`), `src/querybuilder/projection_types.jl`, `src/querybuilder/engine_departures.jl`
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. On SQLite, a quotient over a `DecimalField`, a declared decimal or a value mixing whole numbers and fractions returns its fraction (`4.5`) on the rows where it returned an integer (`4`): in a projection, a filter (which can select different rows), an `update()` and an aggregate. On PostgreSQL, `NullIf(<integer>, <fraction>)` returns the integer's type, so a quotient over it divides as integers.

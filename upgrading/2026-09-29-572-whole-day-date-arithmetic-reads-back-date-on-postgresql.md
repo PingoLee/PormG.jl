@@ -1,6 +1,6 @@
 ## Whole-day arithmetic on a `DateField` reads back as a `Date` on PostgreSQL (#572)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **Recorded**: 2026-09-29
 - **PormG ref**: #572; `src/value_repr.jl` (`sql_canonicalize(::CDate, ::PormGPostgres)`),
   `src/querybuilder/execution.jl` (`_render_temporal_shift`)

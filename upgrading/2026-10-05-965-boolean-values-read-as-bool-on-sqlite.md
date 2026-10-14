@@ -1,6 +1,6 @@
 ## A boolean value reads back as a `Bool` on SQLite, and a `Case` of booleans is a boolean (#965)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #965, #1122; `src/querybuilder/build_query.jl` (`_field_read_kind`,
   `_function_projection_kind`, `_expression_formatter`, `_boolean_case`), `src/querybuilder/execution.jl`
   (`_field_value_parser`); for #1122, `src/querybuilder/build_select.jl` (`get_select_query`)

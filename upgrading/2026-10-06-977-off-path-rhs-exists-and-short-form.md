@@ -1,6 +1,6 @@
 ## `on()` / `cjoin(filters = …)` — an `Exists` or an FK short form naming an off-path relation raises (#977)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #977 ; `src/querybuilder/join_conditions.jl` (`_relation_step`), `src/querybuilder/ctes.jl` (`_off_path_rhs_condition`)
 - **Recorded**: 2026-10-06
 - **Severity**: breaking (narrow). Two right-side shapes escaped #962's check: an `Exists(...)` whose `OuterRef` names another relation, and a right side spelled with the FK short form (`status__name` for `status_id`). They used to render, attached to whichever join came later in `FROM`. They now raise `FilterError` when the query is built, on both engines, as every other spelling has since #962.

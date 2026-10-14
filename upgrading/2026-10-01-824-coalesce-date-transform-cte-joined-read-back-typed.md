@@ -1,6 +1,6 @@
 ## `Coalesce`/`Greatest`/`Least`/`NullIf`, the `@date` transform, and `CTE`/`Joined` columns read back as the column does (#824)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #824; `src/querybuilder/build_query.jl` (`_function_projection_kind`,
   `_multi_operand_kind`, `_operand_kind`, `_cte_column_kind`)
 - **Recorded**: 2026-10-01

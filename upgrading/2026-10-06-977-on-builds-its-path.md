@@ -1,6 +1,6 @@
 ## `on(path, …)` builds its join when nothing else in the query reaches the path (#977)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #977 ; `src/querybuilder/build_query.jl` (the PATH loop in `build`), `src/querybuilder/join_conditions.jl` (`_join_path_columns`)
 - **Recorded**: 2026-10-06
 - **Severity**: behavior change. An `on()` whose path no `values()`, `filter()` or `order_by()` reached was dropped from the statement with no error, `join_type = "INNER"` included. It now joins that path, so the query returns different rows.

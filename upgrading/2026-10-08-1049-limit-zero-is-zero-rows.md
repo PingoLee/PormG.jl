@@ -1,6 +1,6 @@
 ## `limit(0)` returns zero rows, and a negative or `Bool` `limit` / `offset` / `page` raises `QueryBuildError` (#1049)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1049 ; `src/querybuilder/object_manager.jl` (`_check_slice_value`, `_limit!`, `_offset!`, `_page!`, `page`), `src/querybuilder/execution_read.jl` (`_limit_offset_sql`), `src/querybuilder/types.jl` (`SQLObjectQuery.limit`)
 - **Recorded**: 2026-10-08
 - **Severity**: behavior change. `limit(0)` returns no rows where it returned every row, and a negative or `Bool` value raises at the call where it used to reach the database.

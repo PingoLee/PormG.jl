@@ -1,6 +1,6 @@
 ## `n * expr`, `n + expr` — a number on the left keeps the whole expression (#884)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **Recorded**: 2026-10-02
 - **PormG ref**: #884; `src/querybuilder/types.jl` (`Base.:+` / `Base.:*` with a number on the left)
 - **Severity**: behavior change. A silently wrong result on both engines becomes the right one.

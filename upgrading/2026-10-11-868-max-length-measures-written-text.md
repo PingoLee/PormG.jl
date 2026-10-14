@@ -1,6 +1,6 @@
 ## A text field's `max_length` also measures an integer or a date written into it (#868)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #868 ; `src/querybuilder/value_validation.jl` (`_validate_field_value`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. A write that SQLite stored, and PostgreSQL refused at the server (a

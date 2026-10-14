@@ -1,6 +1,6 @@
 ## `count()`, `exists()` and `Exists(...)` answer for the rows a `values()` projection returns (#1066, #1074, #1082)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1066, #1074, #1082, #1100 ; `src/querybuilder/execution_read.jl` (`_projection_shapes_rows`, `_filters_name_alias`, `_degenerate_aggregate`, `_refuse_degenerate_probe`, `_refuse_constant_terminal`, `_count`, `_exists`), `src/querybuilder/filter_nodes.jl` (`_build_exists_query`)
 - **Recorded**: 2026-10-09
 - **Severity**: behavior change. Two counts return a different number, one shape that returned an answer from `count()` and `exists()` now raises, alias filters that used to raise now run, and two shapes raise a different error.

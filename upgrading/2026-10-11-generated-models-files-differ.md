@@ -1,6 +1,6 @@
 ## Regenerated models files differ: `import_models_from_django`, `inspectdb` and `convertSQLToModel` emit what they used to skip or get wrong (#1095, #1041, #948, #1043, #943, #768, #28, #29, #934, #1021, #837, #1172, #1171, #1180, #1181, #1174, #1197, #1198)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1095, #1041, #948, #1043, #943, #768, #28, #29, #934, #1021, #837, #1172, #1171, #1180, #1181, #1174, #1197, #1198 ; `src/migrations/importers.jl`, `src/migrations/introspection.jl`, `src/migrations/column_spec.jl`, `src/Models.jl` (`Model_to_str`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. The functions that write a models file now write a different file

@@ -1,6 +1,6 @@
 ## SQLite computes interval aggregates inside arithmetic, duration literals and `When` conditions in milliseconds (#907)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **Recorded**: 2026-10-03
 - **PormG ref**: #907; `src/querybuilder/execution.jl` (`_render_function_operand_typed`,
   `_render_interval_operand`, `_duration_literal_ms`), `src/querybuilder/build_query.jl`

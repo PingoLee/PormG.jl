@@ -1,6 +1,6 @@
 ## `Greatest`/`Least` skip a `NULL` argument on SQLite, as on PostgreSQL (#844)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #844; `src/querybuilder/build_helpers.jl` (`_null_skipping_operands`)
 - **Recorded**: 2026-10-01
 - **Severity**: behavior change, on SQLite. PostgreSQL is unchanged.

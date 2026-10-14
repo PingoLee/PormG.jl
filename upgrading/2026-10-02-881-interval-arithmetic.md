@@ -1,6 +1,6 @@
 ## Interval arithmetic: SQLite computes on milliseconds; PostgreSQL types the result (#881)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **Recorded**: 2026-10-02
 - **PormG ref**: #881; `src/querybuilder/execution.jl` (`_render_interval_left`, `_render_interval_right`,
   `_render_interval_shift`, `_finalize_render`), `src/querybuilder/types.jl` (`_IntervalMs`),

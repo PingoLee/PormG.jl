@@ -1,6 +1,6 @@
 ## A refused value raises `InvalidValueError` in a filter too, and no refusal prints the value (#971)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #971 ; `src/exceptions.jl` (`InvalidValueError`, `with_location`), `src/querybuilder/build_helpers.jl` (`_locate_filter_refusal`), `src/querybuilder/sanitization.jl`, `src/querybuilder/execution_bulk.jl`, `src/Models.jl`
 - **Recorded**: 2026-10-06
 - **Severity**: breaking (narrow). A filter value the field's formatter refuses raises `InvalidValueError`, not `FilterError`. Every refusal message changed wording, and none contains the refused value any more.

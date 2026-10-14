@@ -1,6 +1,6 @@
 ## `makemigrations` leaves hand-made indexes and CHECKs alone, and stops re-planning a PostgreSQL expression default (#847, #934, #1037)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #847, #934, #1037 ; `src/migrations/introspection.jl` (one-column index readers, `get_constraints_index`), `src/migrations/planner.jl`, `src/migrations/column_spec.jl` (`CHECK_MARKER_RE`, `db_default_owner`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. `makemigrations` writes a different plan for the same models and

@@ -1,6 +1,6 @@
 ## `Concat` and `Cast` classify a `Subquery` operand by the expression it projects (#1124)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1124, amended by #1147 ; `src/querybuilder/projection_types.jl` (`_concat_textless_operand`, `_subquery_projection_textless`), `src/querybuilder/filter_nodes.jl` (`_render_scalar_subquery`), `src/querybuilder/types.jl` (`subquery_textless`)
 - **Recorded**: 2026-10-10
 - **Severity**: breaking. A `Concat` with a `Subquery` operand whose projection is a boolean, a float, a decimal or a `numeric` function raises `QueryBuildError` on every engine where it used to render; a `Cast` (or `output_field` cast) over such a subquery raises where the projection's own cast would (on SQLite, for a boolean to text, a fraction to an integer, and `numeric(p, s)`).

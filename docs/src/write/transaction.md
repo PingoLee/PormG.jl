@@ -675,8 +675,14 @@ That has three costs:
 - **Privilege.** PostgreSQL needs `UPDATE` privilege on every locked table. A role that may only
   read `driver` gets `permission denied`.
 - **Nullable foreign keys fail.** A path through a nullable foreign key is joined `LEFT`, and
-  PostgreSQL refuses to lock the nullable side of an outer join. The query fails with
-  `FOR UPDATE cannot be applied to the nullable side of an outer join`.
+  PostgreSQL refuses to lock the nullable side of an outer join. A lock without `of` beside any
+  `LEFT`, `RIGHT` or `FULL` join therefore raises `QueryBuildError` before the query runs, on
+  PostgreSQL and SQLite alike, and the message names the join. Beside a `LEFT` join there are two
+  fixes. `of = ("self",)` locks the base rows and leaves the nullable side unlocked. An `INNER` join,
+  `on("<path>", join_type = "INNER")` or `cjoin_on(…; join_type = "INNER")`, locks that table too
+  and drops the rows that have no match. It is refused even when a filter on the joined table
+  already requires a match, a shape PostgreSQL itself would accept by planning the join as `INNER`:
+  spell the `INNER` join, which returns the same rows.
 
 `of` names the tables to lock, as in Django:
 
@@ -705,7 +711,8 @@ the query runs, on PostgreSQL and SQLite alike:
 - a target that names nothing this query joins (PormG does not add a join just to lock it);
 - a target joined `LEFT` — the nullable side of an outer join, which PostgreSQL cannot lock;
 - any `of` on a query with a `RIGHT` or `FULL` join, which puts the tables joined before it — the
-  base table included — on the nullable side;
+  base table included — on the nullable side. A lock without `of` is refused there too, since no
+  target avoids it: use an `INNER` join, or lock the rows with a query of their own;
 - an `of` that is empty, or holds an empty string or a value that is not a `String`.
 
 A name that is both a relation path and a `cjoin_on` alias raises `AmbiguousFieldError`.

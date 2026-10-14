@@ -683,14 +683,14 @@ function _each_reach_on(f::Function, instruct::SQLInstruction, key::String)
   return nothing
 end
 
-# #169: whether this build's lock names `of` targets — the only reader of `join_alias_by_path`, so the
-# map is not even allocated otherwise. A subquery is its own build with its own object, and answers
-# for its own lock.
+# #169: whether this build takes a row lock — the lock is the only reader of `join_alias_by_path`, so
+# the map is not even allocated otherwise. An `of` lock resolves its targets through it; a lock
+# without `of` names the outer join it refuses by it (#1106). A subquery is its own build with its
+# own object, and answers for its own lock.
 function _records_lock_targets(instruct::SQLInstruction)::Bool
   obj = instruct.object
   obj isa SQLObjectQuery || return false
-  fu = obj.for_update
-  return fu !== nothing && !isempty(fu.of)
+  return obj.for_update !== nothing
 end
 
 function _record_join_alias!(instruct::SQLInstruction, canonical_path::String, alias::String)

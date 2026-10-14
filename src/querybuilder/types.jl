@@ -526,7 +526,8 @@ end
   # #169: the alias each relation path's join ended up under, keyed by the CANONICAL path — what a
   # `select_for_update(of = …)` target resolves through. `row_path` cannot answer that: it is not
   # aligned with `row_join` and records nothing on a dedup hit. Written by `_finish_hop!` and the M2M
-  # branch only when this query's lock names an `of` target (`_records_lock_targets`), so the other
+  # branch only when this query takes a row lock (`_records_lock_targets`) — an `of` lock resolves
+  # through it, a lock without `of` names the outer join it refuses by it (#1106) — so the other
   # builds never allocate it (#41).
   join_alias_by_path::Union{Nothing,Dict{String,String}} = nothing
   # #977: each `on()` / `cjoin(filters = …)` path's conditions, BOUND — every left-side column lowered

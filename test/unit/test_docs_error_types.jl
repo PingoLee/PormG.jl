@@ -1286,6 +1286,31 @@ const DOCERR_CASES = [
             q.list(show_query = :sql)
         end,
     ),
+    # #1106 — the "Nullable foreign keys fail" bullet: a lock WITHOUT `of` beside a LEFT join (the
+    # nullable `driverid`) or a RIGHT/FULL join raises QueryBuildError, on PostgreSQL and SQLite.
+    (
+        "write/transaction.md — a lock without of beside a LEFT join raises QueryBuildError (PostgreSQL)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.filter("driverid__nationality" => "Brazilian").values("resultid").
+            select_for_update().list(show_query = :sql),
+    ),
+    (
+        "write/transaction.md — a lock without of beside a LEFT join raises QueryBuildError (SQLite)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_SL.objects.filter("driverid__nationality" => "Brazilian").values("resultid").
+            select_for_update().list(show_query = :sql),
+    ),
+    (
+        "write/transaction.md — a lock without of on a query with a RIGHT join raises QueryBuildError",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.on("driverid", join_type = "RIGHT")
+            q.values("resultid", "driverid__nationality")
+            q.select_for_update()
+            q.list(show_query = :sql)
+        end,
+    ),
     (
         "write/transaction.md — an empty of raises QueryBuildError",
         QueryBuildError,

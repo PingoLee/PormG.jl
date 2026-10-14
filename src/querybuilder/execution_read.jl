@@ -268,6 +268,60 @@ function _refuse_lock_targets_beside_right_joins(instruction::SQLInstruction)
   return nothing
 end
 
+# #1106: a lock WITHOUT `of` locks every table the statement reads, so beside an outer join it
+# reaches PostgreSQL only to fail there with `FOR UPDATE cannot be applied to the nullable side of an
+# outer join`, a message that does not point at the fix. Refused here instead, on both engines like
+# the `of` checks above: the query is a bug in the call, and SQLite is where it should surface.
+#
+# RIGHT/FULL first: it puts the base table itself on the nullable side, so `of` cannot help, and a
+# statement that also has a LEFT join must not be told that `of = ("self",)` would. A LEFT join to a
+# CTE is not refused: PostgreSQL does not lock a WITH query, so its nullable side holds nothing to
+# lock. Every other LEFT row targets a table — a `cjoin_on` target is always a model.
+#
+# Refused even when PostgreSQL would run it: a WHERE filter that is strict on the nullable side
+# (`filter("nullable_fk__col" => x)`) lets the planner reduce the join to INNER first, and then the
+# lock succeeds. PormG does not guess what the planner reduces. The message names the explicit
+# spelling of that reduction, an INNER join — the same rows under such a filter, and lockable — beside
+# `of = ("self",)`, which leaves the table unlocked.
+function _refuse_plain_lock_beside_outer_joins(instruction::SQLInstruction)
+  for row in instruction.row_join
+    hasproperty(row, :how) || continue
+    how = uppercase(row.how)
+    how in ("RIGHT", "FULL") || continue
+    throw(QueryBuildError(
+      "select_for_update() cannot be used on a query with a $(how) JOIN (to \"$(row.b)\"): it puts " *
+      "the tables joined before it, the base table included, on the nullable side of an outer join, " *
+      "which PostgreSQL cannot lock, and no `of` target avoids that. Use INNER or LEFT joins, or lock " *
+      "the rows with a query of their own."))
+  end
+  for row in instruction.row_join
+    row isa CteJoin && continue
+    (hasproperty(row, :how) && uppercase(row.how) == "LEFT") || continue
+    label, inner = _lock_join_label(instruction, row)
+    throw(QueryBuildError(
+      "select_for_update() locks every table the query reads, and $(label) is joined LEFT — a " *
+      "nullable foreign key, a hop after one, or an explicit join_type — so it is on the nullable " *
+      "side of an outer join, which PostgreSQL cannot lock. Pass of = (\"self\",) to lock the base " *
+      "rows alone, leaving that table unlocked$(inner), or lock it with a query of its own."))
+  end
+  return nothing
+end
+
+# How the caller spelled the join — its `cjoin_on` alias, or the relation path that reached it —
+# and the INNER spelling that keeps it locked. A hop that no path names (one out of a CTE) falls
+# back to its table, with no INNER spelling to offer.
+function _lock_join_label(instruction::SQLInstruction, row::JoinRow)::Tuple{String,String}
+  inner_tail = " (the same rows when a filter already requires a match)"
+  row isa AnchorlessJoin && return ("the cjoin_on alias \"$(row.alias_b)\"",
+    "; join it with join_type = \"INNER\" to lock it too$(inner_tail)")
+  by_path = something(instruction.join_alias_by_path, Dict{String,String}())
+  paths = sort!([p for (p, a) in by_path if a == row.alias_b])
+  isempty(paths) && return ("the table \"$(row.b)\"", "")
+  path = first(paths)
+  return ("the relation \"$(path)\"",
+    "; on(\"$(path)\", join_type = \"INNER\") locks it too$(inner_tail)")
+end
+
 function query(q::SQLObjectHandler; 
   table_alias::Union{Nothing, SQLTableAlias} = nothing,
   connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing,
@@ -392,10 +446,11 @@ function query(q::SQLObjectHandler;
       # PostgreSQL rejects FOR UPDATE + DISTINCT; fail early with a friendly message. SQLite is
       # exempt — there the lock renders "" (pure no-op), so DISTINCT does not raise (#26). An `of`
       # target that does not resolve raises on both engines (#169): that is a bug in the call, not
-      # a lock the engine lacks.
+      # a lock the engine lacks — and so does a lock without `of` beside an outer join (#1106).
       if q.object.distinct && _locks_rows(instruction.connection)
         throw(QueryBuildError("select_for_update() cannot be combined with distinct() — a locking read must return concrete rows."))
       end
+      isempty(fu.of) && _refuse_plain_lock_beside_outer_joins(instruction)
       of_aliases = isempty(fu.of) ? String[] : _lock_target_aliases(instruction, fu.of)
       print(io, Dialect.for_update_clause(fu.nowait, fu.skip_locked, fu.no_key, of_aliases, instruction.connection))
     end

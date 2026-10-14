@@ -518,7 +518,7 @@ _operand_kind(p, instruc::SQLInstruction) = _infer_kind(p, instruc, _ReadKinds()
 # (`functions.jl`, #1034). `FLOOR`/`CEIL`/`ABS` keep an integer operand's type on both engines (#1147),
 # so they are `:promoting`, not `:numeric`. Over a whole number PormG does not type as an integer they
 # are `numeric` on PostgreSQL, which agrees with SQLite's integer until divided, and that
-# `_whole_numeric_operand` names (#1111): a division PostgreSQL departs on (`_MEANING_DEPARTURES`).
+# `_whole_numeric_operand` names (#1111): a division an engine departs on (`_untyped_sum_departs`).
 function _concat_textless_operand(p, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing}
   p isa SQLText && return _textless_literal(p.field)
   # A `Q(...)` / `Qor(...)` renders a predicate, which is a boolean.
@@ -1074,7 +1074,7 @@ function _textless_number(p::FExpression, instruc::SQLInstruction)
   return side === nothing ? nothing : (side[1], "arithmetic over $(side[2])")
 end
 # #1111 — an operand that is a whole number on both engines but whose quotient PostgreSQL computes
-# as a `numeric`: its `(kind, what)`, the `:numeric_whole_division` kind of `_MEANING_DEPARTURES`.
+# as a `numeric`: its `(kind, what)`, the `:numeric_whole_division` kind (`_INTEGER_QUOTIENT_DEPARTURE`).
 # Read only under `/` (above): under `+`, `-`, `*` and in a bare cast the whole number is the same on
 # both. The functions whose value has an operand's type carry it, as arithmetic does
 # (`Max(Abs("n")) / 2`, `(Floor("n") + 1) / 2`). (A decimal quotient, and a value mixing whole numbers
@@ -1095,7 +1095,7 @@ end
 # Measured on PostgreSQL 16 and SQLite 3.45 through the F1 fixture: `Floor("grid") / 2` over grid
 # 1, 5, 7 read `0.5`, `2.5`, `3.5` and `0`, `2`, `3` before #1147; `Sum("resultid") / 2` over two rows
 # `1.5` and `1` before #1147 step 2. The refusal names the division, not a decimal's text, and advises
-# saying which division is meant (`_MEANING_DEPARTURES`): rounding afterwards cannot bring the half back.
+# saying which division is meant (`_INTEGER_QUOTIENT_DEPARTURE`): rounding afterwards cannot bring the half back.
 const _NUMERIC_WHOLE_FUNCTIONS = ("FLOOR", "CEIL", "ABS")
 # #1196 — the functions that keep an integer operand that integer on every engine (`integer_kind`,
 # `_integer_operand_kind`): the three above, and `Round`, whose places add nothing to an integer (a
@@ -1104,7 +1104,7 @@ const _NUMERIC_WHOLE_FUNCTIONS = ("FLOOR", "CEIL", "ABS")
 # operand's division answer (`_whole_numeric_operand`).
 const _INTEGER_KEEPING_FUNCTIONS = (_NUMERIC_WHOLE_FUNCTIONS..., "ROUND")
 # The division by the engine that departs from the quotient the expression means
-# (`_MEANING_DEPARTURES`): an integer quotient PostgreSQL computes as a `numeric` (a `Floor` over a
+# (`_untyped_sum_departs`): an integer quotient PostgreSQL computes as a `numeric` (a `Floor` over a
 # whole number PormG does not type, a `sum(bigint)` the walk cannot name), a number with a fraction
 # there only.
 const _DIVISION_KINDS = (:numeric_whole_division,)

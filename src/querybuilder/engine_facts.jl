@@ -78,6 +78,14 @@ _locks_cascade_parents(::PormGSQLite) = false
 _locks_rows(::PormGPostgres) = true
 _locks_rows(::PormGSQLite) = false
 
+# #1111, #1034 phase 3 step 2a — a `Sum` over an operand the type walk cannot name may not be the
+# integer the operands add up to, so its quotient may keep a fraction an integer quotient drops. Over
+# a type the walk names the sum is rendered as one (`_sums_bigint`); over an unnamed one PostgreSQL's
+# `sum(bigint)` is a `numeric` (`15 / 2` is `7.5`), where SQLite's sum of integers is an integer. The
+# division refusal (`_INTEGER_QUOTIENT_DEPARTURE`) fires on an engine that answers `true`.
+_untyped_sum_departs(::PormGPostgres) = true
+_untyped_sum_departs(::PormGSQLite) = false
+
 # `Greatest`/`Least` skip a NULL argument natively. SQLite renders the scalar `MAX`/`MIN`, which
 # return NULL when any argument is, so PormG rewrites the operands (#844).
 _greatest_skips_nulls(::PormGPostgres) = true

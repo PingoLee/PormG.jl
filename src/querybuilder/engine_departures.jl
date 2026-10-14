@@ -50,22 +50,30 @@ const _MEANING_DEPARTURES = (
    meaning = declared -> "a numeric field overflow, since $(declared) cannot hold it",
    computes = _ -> "the value as it is",
    fix = (_, declared) -> "Declare a precision that holds it (\e[32mCast(x, \"numeric(p, $(something(_numeric_cast_scale(declared), 0)))\")\e[0m with a larger p), or cast to an unscaled \e[32m\"numeric\"\e[0m."),
-  # #1111: an integer quotient — a `Floor`/`Ceil`/`Abs` over a whole number PormG does not type, which
-  # `Dialect` renders over `(x)::numeric`, or a `sum(bigint)` the walk cannot name — is a `numeric` on
-  # PostgreSQL, which keeps the half.
-  (targets = (:text, :integer, :scale, :concat), kinds = (:numeric_whole_division,), engine = PormGPostgres, issue = "#1111",
-   meaning = _ -> "an integer quotient (`15 / 2` is `7`)",
-   computes = _ -> "a `numeric` one (`7.5`)",
-   fix = (_, _) -> "Say which division you mean: cast the dividend to an integer first, \e[32mCast(x, BigIntegerField()) / 2\e[0m, which divides as integers on every engine, or divide by a float, \e[32mx / 2.0\e[0m, to keep the fraction."),
 )
+
+# #1111 — an integer quotient over a `Sum` the type walk cannot name (`_DIVISION_KINDS`, classified by
+# `_whole_numeric_operand`). Not a row of the table above: which engine departs is not a fixed type
+# but an engine fact, `_untyped_sum_departs` (#1034 phase 3 step 2a), so a backend that has not decided
+# it gets a `MethodError` rather than the meaning by default (#1170). This holds the message only.
+const _INTEGER_QUOTIENT_DEPARTURE = (
+  targets = (:text, :integer, :scale, :concat), issue = "#1111",
+  meaning = _ -> "an integer quotient (`15 / 2` is `7`)",
+  computes = _ -> "a `numeric` one (`7.5`)",
+  fix = (_, _) -> "Say which division you mean: cast the dividend to an integer first, \e[32mCast(x, BigIntegerField()) / 2\e[0m, which divides as integers on every engine, or divide by a float, \e[32mx / 2.0\e[0m, to keep the fraction.")
 
 """
     _departure(conn, target, kind) -> Union{NamedTuple, Nothing}
 
 The `_MEANING_DEPARTURES` row by which `conn`'s engine departs from what `target` over an operand of
-`kind` means, or `nothing` when it keeps the meaning (and the expression builds).
+`kind` means, or `nothing` when it keeps the meaning (and the expression builds). An integer quotient
+(`_DIVISION_KINDS`) departs where the engine fact `_untyped_sum_departs` says it does.
 """
 function _departure(conn, target::Symbol, kind::Symbol)
+  if kind in _DIVISION_KINDS
+    row = _INTEGER_QUOTIENT_DEPARTURE
+    return target in row.targets && _untyped_sum_departs(conn) ? row : nothing
+  end
   for row in _MEANING_DEPARTURES
     target in row.targets && kind in row.kinds && conn isa row.engine && return row
   end
@@ -75,6 +83,7 @@ end
 # Whether some engine departs for `(target, kind)`: a `Concat` operand of such a kind is a meaning
 # question, refused only where it departs; any other kind is explicit intent, refused everywhere.
 _meaning_kind(target::Symbol, kind::Symbol) =
+  kind in _DIVISION_KINDS ? target in _INTEGER_QUOTIENT_DEPARTURE.targets :
   any(row -> target in row.targets && kind in row.kinds, _MEANING_DEPARTURES)
 
 # The one message for a meaning departure: the expression, what it means, what the engine at hand

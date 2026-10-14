@@ -1,6 +1,6 @@
 ## `update()` setting a column from a join — an `on()` / `cjoin(filters = …)` condition raises (#977)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #977 ; `src/querybuilder/execution.jl` (`_get_join_condition_list`)
 - **Recorded**: 2026-10-06
 - **Severity**: breaking (narrow). An `update()` that sets a column from a joined table renders a correlated `UPDATE … FROM`, which joins on the key columns only. A join condition on such a query was dropped from the statement, so the UPDATE was wider than the query described. It now raises `QueryBuildError` when the statement is built, on both engines — as `cjoin_on` (#45) and a CTE (#394) already did there.

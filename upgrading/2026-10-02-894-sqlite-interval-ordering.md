@@ -1,6 +1,6 @@
 ## SQLite orders and compares an interval's value by its milliseconds (#894)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **Recorded**: 2026-10-02
 - **PormG ref**: #894; `src/querybuilder/build_query.jl` (`get_order_query`, `_render_alias_predicate`),
   `src/querybuilder/build_helpers.jl` (`_render_function_typed`, `_sqlite_duration_column_ms`),

@@ -1,6 +1,6 @@
 ## A pattern lookup on a time column matches its text; on a timestamp, duration, boolean or binary column it is refused (#1183)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1183 ; `src/querybuilder/filter_nodes.jl` (`_pattern_text_kind`, `_pattern_kind_read`, `_pattern_operand_kind`, `_pattern_operand`), `src/querybuilder/projection_types.jl` (`_having_alias_kind`, `_render_alias_predicate`), `src/Dialect.jl` (`_pattern_text_operand`)
 - **Recorded**: 2026-10-12
 - **Severity**: behavior. A pattern lookup on a `DateTimeField`, `DurationField`, `BooleanField` or `BinaryField` column, or on an alias over one, now raises `FilterError` on both engines, where SQLite matched the text it stored. A pattern lookup on a `TimeField` now runs on PostgreSQL, where the server rejected it.

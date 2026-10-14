@@ -1,6 +1,6 @@
 ## Data migrations: `Data (pre)`/`Data (post)` plan steps and `run_once`; `DryRunResult` and `MigrationStatus` gain a field (#740)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **Recorded**: 2026-10-02
 - **PormG ref**: #740; `src/migrations/runner.jl` (`run_once`, `_order_statements`, `dry_run`, `DryRunResult`, `status`, `MigrationStatus`), `src/migrations/planner.jl` (`makemigrations`), `src/Dialect.jl` (`pormg_migrations_data`)
 - **Severity**: behavior change, narrow. `run_once` is additive. A plan with no label starting `Data (` runs and checksums exactly as before; `DryRunResult` and `MigrationStatus` each gain a positional field.

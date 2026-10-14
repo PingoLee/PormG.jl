@@ -1,6 +1,6 @@
 ## `BinaryField(max_length = …)` is capped at 1 GiB (#751)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **Recorded**: 2026-09-30
 - **PormG ref**: #751; `src/models/fields.jl` (`BinaryField`, `BINARY_FIELD_MAX_BYTES`), `src/migrations/introspection.jl` (`_reader_checks`)
 - **Severity**: behavior change. A `max_length` above 1 GiB that used to construct a field now raises

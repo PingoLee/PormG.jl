@@ -1,6 +1,6 @@
 ## A column projected after a `When` on the same column reads back as its field's type (#979)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #979 ; `src/querybuilder/build_select.jl` (`get_select_query`, `_memo_node_read_kind`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. The same query returns a different Julia type in one column.

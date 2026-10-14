@@ -1,6 +1,6 @@
 ## `makemigrations` raises when it cannot read the live schema, instead of logging and returning `nothing` (#1018)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1018 ; `src/migrations/planner.jl` (`makemigrations`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. A call that returned `nothing` now raises.

@@ -1,6 +1,6 @@
 ## A column expression on the right of a LIKE, JSON or `@in` lookup is refused with `FilterError` (#811, #793)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #811, #793 ; `src/querybuilder/filter_pairs.jl` (`_check_column_rhs_lookup`), `src/querybuilder/filter_nodes.jl` (`_render_column_rhs`), `src/querybuilder/filter_operators.jl` (`_render_json_lookup_comparison`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. Queries that silently returned no rows, or failed at the server,

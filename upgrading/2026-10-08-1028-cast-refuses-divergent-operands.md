@@ -1,6 +1,6 @@
 ## `Cast` of a boolean to text, or of a fraction to an integer, is refused on SQLite; more `Concat` operands are refused (#1028)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1028, amended by #1147, #1151, #1187 and #1217 ; `src/querybuilder/projection_types.jl` (`_cast_divergent_operand`, `_concat_textless_operand`), `src/querybuilder/engine_departures.jl` (`_MEANING_DEPARTURES`), `src/querybuilder/select_nodes.jl`, `src/querybuilder/functions.jl`, `src/querybuilder/ctes.jl`
 - **Recorded**: 2026-10-08
 - **Severity**: breaking. On SQLite, a `Cast` (or an `output_field` cast) of a boolean to text, or of a fractional number to an integer, raises `QueryBuildError` where it used to render. On every engine, a `Concat` with a timestamp, interval or JSON-document operand does.

@@ -1,6 +1,6 @@
 ## `cjoin_on()` — a predicate naming a path stays in its own `ON` clause, and aliases are emitted in dependency order (#982)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #982 ; `src/querybuilder/join_conditions.jl` (`_bind_cjoin_on_conditions!`), `src/querybuilder/build_query.jl` (`build_row_join_sql_text`)
 - **Recorded**: 2026-10-06
 - **Severity**: behavior change. A `cjoin_on` predicate that names a relation path (`"raceid__circuitid__country" => "Italy"`, `F("driverid__code")`) used to be moved into that path's join. It now stays in the `cjoin_on`'s own `ON` clause, and the path is joined before it. Under `join_type = "LEFT"` the result changes: the predicate now restricts the joined copy instead of dropping base rows. A path that crosses a reverse or ManyToMany relation (`"driverid__result__grid" => 1`) now raises `FilterError` (#992): joined onto the base row it repeated that row once per related row, under any `join_type`. Shapes that raised #435 now render.

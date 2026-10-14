@@ -1,6 +1,6 @@
 ## `Sum` of a `bigint` is an integer on PostgreSQL, and a cross-engine refusal fires only on the engine that departs (#1147)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1147 ; `src/Dialect.jl` (`SUM`), `src/querybuilder/expression_kind.jl` (`_sums_bigint`, `_operation_kind`), `src/querybuilder/engine_departures.jl` (`_MEANING_DEPARTURES`), `src/querybuilder/projection_types.jl` (`_cast_divergent_operand`, `_whole_numeric_operand`), `src/querybuilder/select_nodes.jl`, `src/querybuilder/functions.jl`
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. On PostgreSQL a `Sum` over a `bigint` reads an `Int64` where it read a `Decimal`, a quotient over it truncates, and a sum past the `bigint` range raises. Refusals added earlier in this release now fire on one engine only, and some no longer fire at all (see the table). A few shapes that built in v0.7.0 and answered differently per engine now raise `QueryBuildError` on SQLite: a quotient over a `DecimalField` or over a value mixing whole numbers and fractions (`Coalesce("grid", 0.5)`, a window with a fractional `default`), cast to an integer or a scale. It is a fraction on both engines since #1150 (see that entry), and SQLite's cast truncates it or keeps every digit.

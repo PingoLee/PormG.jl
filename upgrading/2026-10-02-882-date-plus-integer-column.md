@@ -1,6 +1,6 @@
 ## Date arithmetic: an integer column is a day count; other untyped sides are refused on SQLite (#882)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **Recorded**: 2026-10-02
 - **PormG ref**: #882; `src/querybuilder/execution.jl` (`_day_count_column_kind`,
   `_refuse_untyped_date_operand`, `_set_update_query_typed`)

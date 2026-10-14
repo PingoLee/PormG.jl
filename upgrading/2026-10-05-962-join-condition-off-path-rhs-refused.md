@@ -1,6 +1,6 @@
 ## `on()` / `cjoin(filters = …)` — a right side naming a relation off the join path raises (#962)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #962 ; `src/querybuilder/ctes.jl` (`_refuse_off_path_join_rhs!`)
 - **Recorded**: 2026-10-05
 - **Severity**: breaking (narrow). A join condition whose right side named another relation used to render, attached to whichever join came later in `FROM`. It now raises `FilterError` when the query is built, on both engines.

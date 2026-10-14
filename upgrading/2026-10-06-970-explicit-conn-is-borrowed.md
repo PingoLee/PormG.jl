@@ -1,6 +1,6 @@
 ## `fetch(…; conn = c)` — a connection you pass is borrowed, never released for you (#970)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #970 ; `src/ConnectionPool.jl` (`fetch_async`, `await_result`, `FetchTask`, `with_transaction_async`)
 - **Recorded**: 2026-10-06
 - **Severity**: breaking (narrow). `fetch` and `fetch_async` used to release a connection passed as `conn = c` when the statement ended. They now leave it leased, and the caller releases it.

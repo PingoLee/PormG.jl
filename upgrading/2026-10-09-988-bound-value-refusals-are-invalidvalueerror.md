@@ -1,6 +1,6 @@
 ## A filter's own value checks raise `InvalidValueError`, not `FilterError` (#988)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #988 ; `src/querybuilder/filter_operators.jl` (`_year_bucket_bounds`, `_yyyy_mm_bucket_bounds`, `_check_year_bound`, `_render_network_operator`, `_json_numeric_rhs`)
 - **Recorded**: 2026-10-09
 - **Severity**: breaking (narrow). Five value checks that a lookup makes itself raise `InvalidValueError` instead of `FilterError`, located on the field the way a formatter refusal is.

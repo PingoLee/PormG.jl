@@ -1,6 +1,6 @@
 ## `Coalesce`/`Greatest`/`Least` now cast to their `output_field` on both engines (#852)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #852 ; `src/Dialect.jl`
 - **Recorded**: 2026-10-01
 - **Severity**: breaking (narrow). A temporal or array `output_field` on these three functions now raises `BackendCapabilityError` on SQLite, where it used to be ignored. Every other declared type now changes the SQL on SQLite, and for `Greatest`/`Least` on PostgreSQL too.

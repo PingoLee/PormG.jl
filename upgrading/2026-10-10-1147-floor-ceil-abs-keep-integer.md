@@ -1,6 +1,6 @@
 ## `Floor`, `Ceil`, `Abs` over an integer return an integer on PostgreSQL, as on SQLite (#1147)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1147 ; `src/Dialect.jl` (`ABS`, `FLOOR`, `CEIL`), `src/querybuilder/expression_kind.jl` (`_integer_operand_kind`), `src/querybuilder/select_nodes.jl` (`_render_function_body`)
 - **Recorded**: 2026-10-10
 - **Severity**: behavior change. On PostgreSQL, `Floor(x)`, `Ceil(x)` and `Abs(x)` over an integer `x` read back as an `Int16`/`Int32`/`Int64` instead of a `Decimal`, and a quotient over one (`Floor("grid") / 2`) divides as integers: `3` where it was `3.5`. `Abs` of an integer type's most negative value raises `integer out of range` there. SQLite is unchanged.

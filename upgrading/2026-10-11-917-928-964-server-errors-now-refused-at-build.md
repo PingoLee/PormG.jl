@@ -1,6 +1,6 @@
 ## Shapes that failed at the server are refused when the query is built: an aggregate or window in a WHERE filter or a join condition, a bare `When`, a column given to `@isnull` / `@range` (#808, #895, #917, #928, #964)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #808, #895, #917, #928, #964 ; `src/querybuilder/build_filter.jl` (`_guard_no_aggregate_predicate`, `_guard_where_operand`, `_guard_no_aggregate_on_condition`), `src/querybuilder/types.jl` (`_is_window_expr`), `src/querybuilder/select_nodes.jl` (`_render_function_typed`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. The calls below never ran; they now fail earlier and with a

@@ -1,6 +1,6 @@
 ## `Subquery(...)` reads back as its one column does, and functions over it are typed (#888)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #888; `src/querybuilder/build_query.jl` (`_operand_kind`, `_subquery_kind`,
   `_record_subquery_kind!`), `src/querybuilder/build_helpers.jl` (`_get_select_query(::SubqueryObject)`)
 - **Recorded**: 2026-10-03

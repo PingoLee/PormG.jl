@@ -1,6 +1,6 @@
 ## SQLite: a number filtered against a text alias binds as text, so it matches (#851)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #851 ; `src/querybuilder/projection_types.jl` (`_sqlite_preserve_native_parameter`, `_TEXT_OUTPUT_FUNCTIONS`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. On SQLite a filter that returned no rows now returns the rows

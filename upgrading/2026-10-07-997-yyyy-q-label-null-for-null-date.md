@@ -1,6 +1,6 @@
 ## `@yyyy_q` / `@yyyy_quad` — a NULL date gives a NULL label on PostgreSQL, not `"-Q"` (#997)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #997 ; `src/querybuilder/functions.jl` (`Y_Q`, `Y_QUAD`), `src/Dialect.jl` (`CONCAT`), `src/querybuilder/build_helpers.jl` (the #972 `@isnull` refusal removed; `_is_null_propagating_label` licenses `IS NULL` on the label)
 - **Recorded**: 2026-10-07
 - **Severity**: behavior change. On PostgreSQL, `"date__@yyyy_q"` and `"date__@yyyy_quad"` read `missing` for a row whose date is NULL, where they read the partial label `"-Q"`. SQLite already returned NULL, so nothing changes there. `"date__@yyyy_q__@isnull"` and `"date__@yyyy_quad__@isnull"` build now, where they raised `FilterError`.

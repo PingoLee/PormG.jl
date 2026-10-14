@@ -1,6 +1,6 @@
 ## A lossy column change is refused, or needs `destructive = true` (#803, #828, #829, #830)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **Recorded**: 2026-09-30
 - **PormG ref**: #803, #828, #829, #830; `src/migrations/column_spec.jl` (`LossyAlter`, `LOSSY_ALTER_KINDS`), `src/migrations/runner.jl` (`migrate`, `dry_run`, `DryRunResult`, `MigrationPrecheckError`)
 - **Severity**: behavior change

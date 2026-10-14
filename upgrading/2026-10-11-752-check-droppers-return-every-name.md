@@ -1,6 +1,6 @@
 ## `get_constraints_check` → `get_constraints_checks` (and the byte-length twin): a CHECK dropper returns every matching name (#752)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #752 ; `src/Kernel.jl` (the generics), `src/migrations/introspection.jl` (`get_constraints_checks`, `get_constraints_byte_length_checks`), `src/Dialect.jl` (`alter_field`)
 - **Recorded**: 2026-10-11
 - **Severity**: breaking for code that calls or extends the old names; a behavior change in the

@@ -1,6 +1,6 @@
 ## Date differences: `DATE - DATE` is a day count on SQLite, every side is typed, a day count shifts a date (#801, #814)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **Recorded**: 2026-10-01
 - **PormG ref**: #801, #814; `src/querybuilder/execution.jl` (`_side_kind`, `_render_temporal_difference`,
   `_render_day_count_shift`, `_render_operand_typed`), `src/querybuilder/types.jl` (`_CompareLiteral`,

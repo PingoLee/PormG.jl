@@ -1,6 +1,6 @@
 ## `IntegrityError` / `OperationalError` / `StatementError` — the rendered text no longer carries the database's DETAIL; the reason is data (#987)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #987 ; `src/exceptions.jl` (`DatabaseError`), `src/Backend.jl` (`backend_error_fields`), `src/ConnectionPool.jl` (`_as_database_error`), the three `ext/` drivers
 - **Recorded**: 2026-10-06
 - **Severity**: behavior change. `error_message(e)`, `sprint(showerror, e)` and `string(e)` of a `DatabaseError` used to end with the driver's full text. They now render from structured fields only, and never contain the database's `DETAIL`, `HINT` or `LINE n:` excerpt, or the message of a SQLSTATE class `22` error. Those quote the row or the value. The driver's text is unchanged in `e.cause`.

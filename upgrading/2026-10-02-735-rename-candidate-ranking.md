@@ -1,6 +1,6 @@
 ## `makemigrations`: rename candidates are ranked, and a join table follows its model's rename (#735)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **Recorded**: 2026-10-02
 - **PormG ref**: #735, #911; `src/migrations/planner.jl` (`_ranked_field_candidates`, `_ranked_table_candidates`, `_join_table_rename_source`, `_join_table_endpoint_renames`)
 - **Severity**: behavior change, only to the interactive rename questions. A plan built from the

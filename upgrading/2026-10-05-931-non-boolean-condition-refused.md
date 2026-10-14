@@ -1,6 +1,6 @@
 ## An arithmetic or bitwise expression used as a condition raises (#931)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #931 ; `src/querybuilder/build_helpers.jl` (`_check_filter_node(::FExpression)`)
 - **Recorded**: 2026-10-05
 - **Severity**: breaking (narrow). A non-boolean `F` expression in a condition used to render as written. It now raises `QueryBuildError` when the condition is built, on both engines.

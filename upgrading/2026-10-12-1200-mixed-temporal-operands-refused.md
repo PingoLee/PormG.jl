@@ -1,6 +1,6 @@
 ## `Coalesce`, `Greatest`, `Least`, `NullIf`, `Case` and a `Lag`/`Lead` default refuse mixed date, time and text operands (#1200)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1200 ; `src/querybuilder/projection_types.jl` (`_temporal_mix`), `src/querybuilder/functions.jl` (`_temporal_mix_refusal`), `src/querybuilder/select_nodes.jl`
 - **Recorded**: 2026-10-12
 - **Severity**: breaking. An expression that built at v0.7.0 now raises `QueryBuildError` when the query is built, on every engine.

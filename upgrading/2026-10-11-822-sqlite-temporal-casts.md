@@ -1,6 +1,6 @@
 ## SQLite: a cast to `date` returns a date; a cast to a timestamp, time or interval is refused (#822)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #822 ; `src/Dialect.jl` (`sqlite_cast_sql`, the CASE arms), `src/querybuilder/ctes.jl`, `src/querybuilder/build_query.jl`
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. On SQLite one cast returns a different value and the others raise;

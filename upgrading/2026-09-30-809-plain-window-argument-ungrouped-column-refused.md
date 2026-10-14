@@ -1,6 +1,6 @@
 ## A window function's plain argument beside an aggregate now raises unless that column is grouped (#809)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #809 ; `src/querybuilder/build_query.jl`
 - **Recorded**: 2026-09-30
 - **Severity**: behavior change (narrow). The shape was wrong on SQLite and refused by PostgreSQL; it now raises at build time on both.

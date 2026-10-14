@@ -1,6 +1,6 @@
 ## A pattern lookup on a `UUIDField` matches its canonical text as written (#902)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #902 ; `src/querybuilder/filter_nodes.jl` (`_pattern_text_kind`), `src/Dialect.jl` (`_pattern_text_operand`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. A pattern lookup given a whole UUID that is not lowercase and

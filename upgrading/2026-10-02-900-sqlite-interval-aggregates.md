@@ -1,6 +1,6 @@
 ## SQLite sums, averages and compares intervals by their milliseconds in functions too (#900)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **Recorded**: 2026-10-02
 - **PormG ref**: #900; `src/querybuilder/build_helpers.jl` (`_render_function_typed`),
   `src/querybuilder/execution.jl` (`_render_interval_operand`, `_interval_ms_candidate`),

@@ -1,6 +1,6 @@
 ## `Max`/`Min`/`Avg` in a CTE body type as their operand, not by the alias's name (#1116)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1116, #1123 ; `src/querybuilder/ctes.jl` (`_set_field_from_sql_function`, `_aggregate_operand_field`)
 - **Recorded**: 2026-10-10
 - **Severity**: breaking. A CTE body projecting `Max`, `Min` or `Avg` over a function PormG does not type (`Coalesce`, `Floor`, `Concat`, a transform path such as `"dob__@year"`, …) under an alias that happens to name a field of the body's model now raises `QueryBuildError` where it used to build. The same aggregates over a field path, a `Joined(...)` column or `F` arithmetic, which raised `UnknownFieldError`, now build.

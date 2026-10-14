@@ -1,6 +1,6 @@
 ## `fetch` — a dropped connection is retried only when the statement never ran (#1042, #1025)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1042, #1025 ; `src/ConnectionPool.jl` (`fetch`), `src/Backend.jl` (`backend_is_retry_safe`), `ext/PormGLibPQExt.jl`, `ext/PormGPostgresExt.jl`
 - **Recorded**: 2026-10-08
 - **Severity**: behavior change. A statement whose connection drops with no error code raises `OperationalError` where it used to be re-run silently.

@@ -1,6 +1,6 @@
 ## A function whose result is not boolean, used as a When condition, raises (#942)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #942 ; `src/querybuilder/functions.jl` (`When(::SQLTypeFunction)`), `src/querybuilder/build_helpers.jl` (`_function_condition_kind`, `_render_function_body`)
 - **Recorded**: 2026-10-05
 - **Severity**: breaking (narrow). Before this change, a function used as a `When` condition rendered as written whatever its result type. Now, when its result type is known not to be boolean, it raises `QueryBuildError` on both engines.

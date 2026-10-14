@@ -1,6 +1,6 @@
 ## `Coalesce`/`Greatest`/`Least` raise with fewer than two arguments (#859)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #859 ; `src/querybuilder/functions.jl` (`_check_operand_count`)
 - **Recorded**: 2026-10-01
 - **Severity**: breaking (narrow). A call with fewer than two arguments used to build, and now raises `QueryBuildError` when the expression is built.

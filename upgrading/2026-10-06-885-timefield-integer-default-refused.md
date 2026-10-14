@@ -1,6 +1,6 @@
 ## `TimeField(default = …)` refuses a `Bool` or a bare number (#885)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #885 ; `src/models/fields.jl` (`TimeField`)
 - **Recorded**: 2026-10-06
 - **Severity**: breaking (narrow). A `Bool` or a number `default` on a `TimeField` used to construct, read as an hour. It now raises `FieldValidationError` when the model is defined.

@@ -1,6 +1,6 @@
 ## A string value containing a NUL character raises (#951)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #951 ; `src/ConnectionPool.jl` (`_refuse_nul`), `src/querybuilder/sanitization.jl` (`_format_single`), `src/AdvisoryLock.jl` (`_refuse_nul_key`)
 - **Recorded**: 2026-10-05
 - **Severity**: breaking (narrow). A string with an embedded NUL (`'\0'`) used to reach the driver, and each driver handled it differently, none correctly. It now raises `InvalidValueError` before any statement is sent, on every backend.

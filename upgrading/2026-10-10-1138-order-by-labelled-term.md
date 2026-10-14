@@ -1,6 +1,6 @@
 ## `order_by(SQLOrder(SQLField(x, label)))` orders by `x`, even when `label` names a projection (#1138)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1138 ; `src/querybuilder/build_select.jl` (`_is_labelled_term`, `get_order_query`), `src/querybuilder/execution_read.jl` (`_degenerate_aggregate`)
 - **Recorded**: 2026-10-10
 - **Severity**: behavior change. An `SQLOrder(SQLField(x, label))` term whose `label` differs from `x`, such as an expression term or a path written under another name, now sorts by `x` where it used to sort by the `values()` projection named `label`. A term that reads a column outside its aggregate now raises the #798 `QueryBuildError` where it used to build. Under `distinct()` on PostgreSQL, a term that repeats a projected expression which binds a value raises the #76 `QueryBuildError` where it used to build.

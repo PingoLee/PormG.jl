@@ -1,6 +1,6 @@
 ## `create()` / `get_or_create()` inspection on PostgreSQL shows the `RETURNING *` it executes (#48)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #48 ; `src/querybuilder/execution_write.jl` (`insert`, `_get_or_create`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. The executed SQL did not change. The SQL text that inspection

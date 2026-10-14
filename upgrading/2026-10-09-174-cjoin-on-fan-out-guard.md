@@ -1,6 +1,6 @@
 ## `cjoin_on` + `Count`/`Sum`/`Avg` — a join not proven to-one meets the fan-out guard (#174)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #174 ; `src/querybuilder/join_conditions.jl` (`_cjoin_on_to_many`), `src/querybuilder/build_query.jl` (`_check_aggregate_fanout`)
 - **Recorded**: 2026-10-09
 - **Severity**: behavior change. A query that aggregates a base column next to a `cjoin_on` join that can match more than one row per base row used to return a silently multiplied number. It now raises `QueryBuildError` from the #74 fan-out guard, as a reverse foreign key or a many-to-many join already did.

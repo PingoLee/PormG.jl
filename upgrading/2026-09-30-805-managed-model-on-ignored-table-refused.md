@@ -1,6 +1,6 @@
 ## `makemigrations` — a managed model on a registry- or default-ignored table is refused (#805)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **Recorded**: 2026-09-30
 - **PormG ref**: #805; `src/migrations/planner.jl` (`_refuse_managed_models_on_ignored_tables`)
 - **Severity**: behavior change — `makemigrations` and `check(kinds = [:schema_drift])` now raise

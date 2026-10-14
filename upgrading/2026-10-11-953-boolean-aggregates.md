@@ -1,6 +1,6 @@
 ## `Sum` / `Avg` over a `BooleanField` are refused; `Max` / `Min` over one read back a `Bool` (#953)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #953 ; `src/querybuilder/select_nodes.jl` (`_render_function_body`), `src/value_repr.jl` (`value_parser(::CBool)` on SQLite)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. Two aggregates that answered on SQLite now raise on both engines;

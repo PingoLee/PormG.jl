@@ -1,6 +1,6 @@
 ## PostgreSQL: `Value(ip)` binds an IP address typed `::inet` (#903)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #903 ; `src/querybuilder/parameters.jl` (the PostgreSQL scalar `add_parameter!` arm)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change, PostgreSQL only. The rendered SQL changes, and an expression that

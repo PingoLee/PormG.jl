@@ -1,6 +1,6 @@
 ## A date or time transform over a column of the wrong type is refused when the query is built (#955)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #955 ; `src/querybuilder/select_nodes.jl` (the check, called from `_render_function_body`). #1070 replaced its transform tag with a table keyed by part, which also checks `Extract` — see that entry
 - **Recorded**: 2026-10-08
 - **Severity**: behavior. A transform over a column of the wrong type now raises `QueryBuildError` when the query is built. Before, it failed on PostgreSQL, and on SQLite it answered from the column's text, which for a `CharField` of ISO dates was the right answer.

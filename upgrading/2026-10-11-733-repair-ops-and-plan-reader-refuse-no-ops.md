@@ -1,6 +1,6 @@
 ## `mark_failed` / `remove_migration_record` refuse a version with no record, and a plan that repeats a label is refused (#733)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #733 ; `src/migrations/runner.jl` (`_require_recorded_version`, `mark_failed`, `remove_migration_record`, `_read_plan_dict`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change. Two repair calls and the plan reader raise

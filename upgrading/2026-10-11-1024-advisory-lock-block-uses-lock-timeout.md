@@ -1,6 +1,6 @@
 ## `with_advisory_lock(…; strategy = :block)` bounds its wait with `lock_timeout`, not `statement_timeout` (#1024, #1010)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1024, #1010 ; `src/AdvisoryLock.jl` (`with_advisory_lock`)
 - **Recorded**: 2026-10-11
 - **Severity**: behavior change, PostgreSQL only. The statements sent around the lock change, a

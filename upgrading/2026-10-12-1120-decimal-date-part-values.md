@@ -1,6 +1,6 @@
 ## A `Decimal` date-part value is checked by its digits: a fraction is `InvalidValueError`, a whole one binds (#1120)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #1120 ; `src/Models.jl` (`_format_period_sql`, `_decimal_integer`), `src/querybuilder/filter_operators.jl` (`_year_bucket_bounds`)
 - **Recorded**: 2026-10-12
 - **Severity**: behavior. A `Decimals.Decimal` value for a date part (`@year`, `@month`, `@hour`, `@week`, …) raised a raw `ArgumentError`, or blamed the year range, where it now raises `InvalidValueError(:format)` for a fraction and binds for a whole number.

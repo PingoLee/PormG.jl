@@ -1,6 +1,6 @@
 ## `limit()` / `offset()` / `page()` — LIMIT and OFFSET are bound parameters, not literals (#46)
 
-- **Version**: Unreleased
+- **Version**: 0.8.0
 - **PormG ref**: #46 ; `src/querybuilder/execution_read.jl` (`_limit_offset_sql`, `_exists`), `src/querybuilder/parameters.jl` (`:limit` bucket), `src/Dialect.jl` (`limit_offset_clause`)
 - **Recorded**: 2026-10-08
 - **Severity**: behavior change. Query results are unchanged. The rendered SQL text and the parameter vector are different: `show_query`, `inspect_query` and `show_query = :dict` / `:params` output for any query with a limit or an offset.

@@ -225,7 +225,8 @@ disappears.
 
     Load the configuration in **both** places: in the module body, so the right `connect_key` is
     baked into the image, and again from your module's `__init__`, so it is right in the running
-    session. Route both through one helper so they cannot drift apart.
+    session. Route both through one helper so they cannot drift apart. Repeating it costs nothing:
+    a `load` of a folder already loaded with the same environment keeps the existing pool.
 
 ```julia
 module RaceControl

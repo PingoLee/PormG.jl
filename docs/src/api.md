@@ -717,7 +717,7 @@ transaction.
 
 ## Configuration API
 
-### `Configuration.load(path; env=nothing, root=nothing)`
+### `Configuration.load(path; env=nothing, root=nothing, force=false)`
 
 Loads a database configuration folder. Use `env` to explicitly set the environment instead of relying on `ENV["PORMG_ENV"]`.
 
@@ -744,7 +744,12 @@ key = PormG.Configuration.load("db"; env="prod")
 settings = PormG.Configuration.get_settings(key)
 ```
 
-### `Configuration.load_many(paths; env=nothing, root=nothing)`
+Loading a folder that is already loaded with the same environment returns its key and does
+nothing else: the pool and any connection checked out of it are kept, and `connection.yml` is not
+read again (#1225). Another `env` reloads the folder, with a warning. `force = true` re-reads it and
+rebuilds the pool regardless.
+
+### `Configuration.load_many(paths; env=nothing, root=nothing, force=false)`
 
 Bootstraps multiple database folders in one call, with the same `env` and `root` for each:
 

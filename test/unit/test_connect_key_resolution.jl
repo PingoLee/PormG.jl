@@ -417,10 +417,14 @@ end
 
     # 3. The reverse order must NOT demote: an absolute-path load over an existing short key
     #    keeps the short key rather than replacing it with the implicit-looking one.
+    #    Same environment, so since #1225 the repeat is a silent no-op; `force = true` takes the
+    #    reuse branch, which warns — and neither demotes the short key.
     empty!(PormG.config)
     cd(app) do
       Configuration.load("db"; env = "test")
-      @test_logs((:warn,), match_mode = :any, Configuration.load(db; env = "test"))
+      @test_logs(min_level = Logging.Warn, Configuration.load(db; env = "test"))
+      @test collect(keys(PormG.config)) == ["db"]
+      @test_logs((:warn,), match_mode = :any, Configuration.load(db; env = "test", force = true))
       @test collect(keys(PormG.config)) == ["db"]
     end
 
@@ -434,10 +438,11 @@ end
     # 5. The reuse branch must preserve the `db_def_folder == key` invariant. The migration
     #    runner derives the advisory-lock key from that field, so writing the caller's spelling
     #    into a reused entry silently changed one folder's lock identity.
+    #    `force = true`: the plain repeat is a no-op since #1225 and would not reach the branch.
     empty!(PormG.config)
     cd(app) do
       Configuration.load("db"; env = "test")
-      @test_logs((:warn,), match_mode = :any, Configuration.load(db; env = "test"))
+      @test_logs((:warn,), match_mode = :any, Configuration.load(db; env = "test", force = true))
       @test PormG.config["db"].db_def_folder == "db"
     end
 
@@ -496,14 +501,17 @@ end
 
     # 9. Two EXPLICIT spellings of one folder — absolute first, short second — are one entry, kept
     #    under the first key (#553). Before, the absolute one was taken for the implicit load and
-    #    migrated away; it was the application's own choice, so now it is reused, with the same
-    #    "already loaded under a different key" warning the reverse order (step 3) always had.
+    #    migrated away; it was the application's own choice, so now it is reused. Same environment:
+    #    a silent no-op since #1225. Forced, it goes through the reuse branch with the same
+    #    "already loaded under a different key" warning the reverse order (step 3) has.
     empty!(PormG.config)
     Configuration.load(db; env = "test")
     @test !PormG.config[db].implicit
     cd(app) do
+      @test_logs(min_level = Logging.Warn, @test Configuration.load("db"; env = "test") == db)
+      @test collect(keys(PormG.config)) == [db]
       @test_logs((:warn, r"already loaded under a different key"), match_mode = :any,
-                 Configuration.load("db"; env = "test"))
+                 Configuration.load("db"; env = "test", force = true))
       @test collect(keys(PormG.config)) == [db]
       @test !haskey(PormG.config, "db")
     end

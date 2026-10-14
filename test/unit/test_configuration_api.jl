@@ -96,6 +96,166 @@ end
     end
 end
 
+# ─────────────────────────────────────────────────────────────────────────────
+# #1225: loading a folder that is already loaded with the same environment is a no-op.
+# What it tests: a second identical `load`/`load_many` keeps the entry AND its pool (`===`), says
+#   nothing at warn level, and does not re-read `connection.yml`; a different `env`, a changed
+#   `PORMG_ENV`, or `force = true` still rebuild. No SQL — SQLite `:memory:` pools only.
+# Why it matters: the documented package bootstrap calls `load` in the module body and again in
+#   `__init__`, and Julia may run `__init__` more than once. Each repeat used to `close_pool!` and
+#   rebuild, closing whatever connections a request had checked out.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a repeated load of the same folder and environment is a no-op (#1225)" begin
+    mktempdir() do temp_root
+        db_dir = joinpath(temp_root, "db")
+        mkpath(db_dir)
+        yml = joinpath(db_dir, "connection.yml")
+        _write_configuration_test_connection(yml)
+        try
+            @testset "identical calls keep the entry and the pool" begin
+                key = PormG.Configuration.load(db_dir; env = "test")
+                settings = PormG.config[key]
+                pool = settings.connections
+                @test pool !== nothing
+                again = @test_logs min_level = Logging.Warn PormG.Configuration.load(db_dir; env = "test")
+                @test again == key
+                @test PormG.config[key] === settings
+                @test PormG.config[key].connections === pool
+            end
+
+            @testset "the file is not read again" begin
+                # A file that no longer parses would make a re-read throw.
+                cp(yml, yml * ".bak"; force = true)
+                write(yml, "test: [unterminated\n")
+                try
+                    pool = PormG.config[db_dir].connections
+                    @test PormG.Configuration.load(db_dir; env = "test") == db_dir
+                    @test PormG.config[db_dir].connections === pool
+                finally
+                    mv(yml * ".bak", yml; force = true)
+                end
+            end
+
+            @testset "another spelling of the same folder returns the original key, silently" begin
+                pool = PormG.config[db_dir].connections
+                spelled = joinpath(temp_root, ".", "db")
+                got = @test_logs min_level = Logging.Warn PormG.Configuration.load(spelled; env = "test")
+                @test got == db_dir
+                @test !haskey(PormG.config, spelled)
+                @test PormG.config[db_dir].connections === pool
+            end
+
+            @testset "load_many repeats are free too" begin
+                pool = PormG.config[db_dir].connections
+                @test PormG.Configuration.load_many([db_dir]; env = "test") == [db_dir]
+                @test PormG.config[db_dir].connections === pool
+            end
+
+            @testset "a different env for the same key rebuilds, with a warning" begin
+                pool = PormG.config[db_dir].connections
+                @test_logs (:warn, r"reloading a key that is already loaded") match_mode = :any begin
+                    PormG.Configuration.load(db_dir; env = "dev")
+                end
+                @test PormG.config[db_dir].app_env == "dev"
+                @test PormG.config[db_dir].connections !== pool
+                @test PormG.config[db_dir].change_db == false   # the `dev:` block was read
+            end
+
+            @testset "a changed PORMG_ENV under env = nothing rebuilds" begin
+                withenv("PORMG_ENV" => "dev") do
+                    PormG.Configuration.load(db_dir)          # already dev: a no-op
+                end
+                pool = PormG.config[db_dir].connections
+                withenv("PORMG_ENV" => "test") do
+                    @test_logs (:warn, r"reloading a key") match_mode = :any PormG.Configuration.load(db_dir)
+                end
+                @test PormG.config[db_dir].app_env == "test"
+                @test PormG.config[db_dir].connections !== pool
+            end
+
+            @testset "force = true re-reads and rebuilds, without the warning" begin
+                pool = PormG.config[db_dir].connections
+                @test_logs min_level = Logging.Warn PormG.Configuration.load(db_dir; env = "test", force = true)
+                @test PormG.config[db_dir].connections !== pool
+                pool = PormG.config[db_dir].connections
+                PormG.Configuration.load_many([db_dir]; env = "test", force = true)
+                @test PormG.config[db_dir].connections !== pool
+            end
+
+            @testset "the same relative key from another directory is a reload" begin
+                # Without `root` the key is also the folder, resolved against `pwd()`: after a `cd`
+                # `load("db")` names a different folder, and keeping the first pool would serve
+                # another directory's database under this key.
+                # Two fresh roots: `temp_root/db` is already held under its absolute key above, and
+                # `load` would rightly answer with that key instead.
+                first_root, other_root = mktempdir(), mktempdir()
+                mkpath(joinpath(first_root, "db"))
+                cp(yml, joinpath(first_root, "db", "connection.yml"))
+                mkpath(joinpath(other_root, "db"))
+                write(joinpath(other_root, "db", "connection.yml"),
+                      replace(read(yml, String), "change_db: false" => "change_db: true"))
+                # Alone in `config`: an entry another file built by hand keeps the default
+                # `db_def_folder = "db"`, which resolves against `pwd()` too, and `load` would rightly
+                # reuse it (#550) instead of registering "db".
+                saved = copy(PormG.config)
+                empty!(PormG.config)
+                try
+                    cd(first_root) do
+                        PormG.Configuration.load("db"; env = "dev")
+                        @test PormG.config["db"].change_db == false
+                        pool = PormG.config["db"].connections
+                        @test PormG.Configuration.load("db"; env = "dev") == "db"      # same dir: no-op
+                        @test PormG.config["db"].connections === pool
+                        cd(other_root) do
+                            @test_logs (:warn, r"reloading a key") match_mode = :any PormG.Configuration.load("db"; env = "dev")
+                        end
+                        @test PormG.config["db"].connections !== pool
+                        @test PormG.config["db"].change_db == true                      # the other file was read
+                    end
+                finally
+                    _cleanup_configuration_test_keys(["db"])
+                    empty!(PormG.config)
+                    merge!(PormG.config, saved)
+                    rm(first_root; recursive = true, force = true)
+                    rm(other_root; recursive = true, force = true)
+                end
+            end
+
+            @testset "a bad extensions: value fails before a pool exists, so a retry re-reads" begin
+                good = read(yml, String)
+                write(yml, replace(good, "test:\n  adapter: SQLite\n" => "test:\n  adapter: SQLite\n  extensions:\n    name: unaccent\n"))
+                try
+                    pop!(PormG.config, db_dir, nothing)
+                    @test_throws PormG.InvalidConfigurationError PormG.Configuration.load(db_dir; env = "test")
+                    @test PormG.config[db_dir].connections === nothing
+                    write(yml, good)
+                    PormG.Configuration.load(db_dir; env = "test")
+                    @test PormG.config[db_dir].connections !== nothing
+                finally
+                    write(yml, good)
+                end
+            end
+
+            @testset "an entry built by hand is rebuilt, not kept" begin
+                PormG.Configuration.close_pool!(db_dir)
+                pool = PormG.config[db_dir].connections
+                PormG.config[db_dir].loaded_folder = ""
+                PormG.Configuration.load(db_dir; env = "test")
+                @test PormG.config[db_dir].connections !== pool
+            end
+
+            @testset "an entry left without a pool is rebuilt, not kept" begin
+                PormG.Configuration.close_pool!(db_dir)
+                PormG.config[db_dir].connections = nothing
+                PormG.Configuration.load(db_dir; env = "test")
+                @test PormG.config[db_dir].connections !== nothing
+            end
+        finally
+            _cleanup_configuration_test_keys([db_dir])
+        end
+    end
+end
+
 @testset "ping and status distinguish loaded from reachable" begin
     mktempdir() do temp_root
         db_dir = joinpath(temp_root, "db")

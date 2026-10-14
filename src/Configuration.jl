@@ -675,6 +675,27 @@ function _resolve_loaded_key(path_or_key::String,
   return nothing
 end
 
+# #1225: is `settings` already the entry a `load` of `folder` under `env` would build? All four must
+# hold, and each guards a real case:
+#   * a pool exists — a `load` that failed after writing the entry (a bad `ignore_tables:`, an
+#     unreachable server under `fail_fast_on_connect`) leaves one without a pool, and the retry has to
+#     build it;
+#   * the same folder — the canonical one recorded when the entry was loaded (`loaded_folder`), not
+#     `db_def_folder` re-resolved now: `_resolve_loaded_key` answers an exact KEY hit before it looks
+#     at folders, so `load("db"; root = A)` then `root = B` resolves to the same entry, and without
+#     `root` the stored folder is relative, so after a `cd` it names a different folder while
+#     comparing equal to the request. An entry built by hand records none and is rebuilt;
+#   * the same environment — switching environments is a documented reason to call `load` again;
+#   * not an implicit entry being claimed explicitly — that is `load`'s #550 migrate branch, which
+#     re-registers the entry under the caller's key.
+function _already_loaded(settings::PormGSettings, folder::AbstractString, env::String,
+                         implicit::Bool)::Bool
+  settings.connections === nothing && return false
+  settings.implicit && !implicit && return false
+  settings.app_env == env || return false
+  return !isempty(settings.loaded_folder) && settings.loaded_folder == _canonical_folder_path(folder)
+end
+
 # Parse a seconds-valued pool setting from connection.yml. Returns `default` when the key is absent OR
 # the value can't be parsed to a Float64. Pure parser — no `> 0` policy; callers pick the default and
 # any enforcement. Consolidates the tryparse idiom for pool_timeout / idle_timeout / max_lifetime /
@@ -1092,7 +1113,7 @@ end
 
 Allowed user-facing keys in a `connection.yml` `config:` block (#365).
 Internal `Settings` fields (`app_env`, `db_def_folder`, `db_config_settings`, `connections`,
-`implicit`, `dynamic`) are intentionally excluded to prevent tampering from YAML.
+`implicit`, `dynamic`, `loaded_folder`) are intentionally excluded to prevent tampering from YAML.
 """
 const VALID_CONFIG_KEYS = (
   "change_db",
@@ -1404,7 +1425,7 @@ end
 #
 # Kept ABOVE the docstring: a comment between a docstring and its definition detaches it.
 """
-    load(path = "db"; env = nothing, root = nothing, scaffold = false) -> Union{Nothing,String}
+    load(path = "db"; env = nothing, root = nothing, scaffold = false, force = false) -> Union{Nothing,String}
 
 Load the configuration folder `path` (its `connection.yml`) and register it under a connection key.
 Returns the key actually registered — normally `path`, but a folder already loaded under another
@@ -1422,8 +1443,16 @@ PormG.Configuration.load("db"; root = APP_ROOT, env = "prod")   # key "db", fold
 
 `path` must be relative when `root` is given; an absolute one raises `InvalidConfigurationError`,
 since `joinpath` would silently discard `root`.
+
+**Loading the same folder again is free (#1225).** When the folder is already loaded with the same
+environment, `load` returns the key it is registered under and does nothing else: the pool is kept,
+connections checked out of it are untouched, and `connection.yml` is not read again. That makes the
+package bootstrap — `load` in the module body **and** in `__init__` — safe to repeat. A different
+`env` for the same folder is a reload: the file is read again and the pool rebuilt, with a warning,
+since connections checked out of the old pool are closed. Pass `force = true` to re-read and rebuild
+anyway, e.g. after editing `connection.yml` in a running session.
 """
-function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,PormGSettings} = config, implicit::Bool = false, root::Union{Nothing,AbstractString} = nothing)
+function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,PormGSettings} = config, implicit::Bool = false, root::Union{Nothing,AbstractString} = nothing, force::Bool = false)
   # create settings if does not exists
   path === nothing && (path = DB_PATH )
 
@@ -1508,6 +1537,17 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   # The folder a reused entry already records; see the `Settings` write below.
   kept_folder = nothing
   existing = _resolve_loaded_key(path, config; folder = folder)
+
+  # #1225: the same folder in the same environment is already what the caller asks for, so a second
+  # `load` returns its key and touches nothing. It used to fall through to `close_pool!` and rebuild,
+  # which made the documented body-plus-`__init__` bootstrap — and a repeated `__init__` — drop every
+  # borrowed connection. `_already_loaded` holds the conditions; `force = true` is the old behavior.
+  if !force && existing !== nothing && _already_loaded(config[existing], folder, selected_env, implicit)
+    @debug("PormG: configuration already loaded with this folder and environment; keeping its pool.",
+           key = existing, env = selected_env)
+    return existing
+  end
+
   if existing !== nothing && existing != path
     if config[existing].implicit && !implicit
       # The caller is naming the folder explicitly; the entry we hold was minted implicitly, with
@@ -1540,6 +1580,14 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   end
 
   if haskey(config, key) && config[key].connections !== nothing
+    # #1225: past the no-op above, the same key holding a pool means the environment or the folder
+    # changed — a real reload, which closes the pool connections are borrowed from. The reuse branch
+    # above has already said so for its case; `force = true` is the caller asking for exactly this.
+    if existing == path && !force
+      _warn_pool_takeover("PormG: reloading a key that is already loaded — with a different " *
+                          "environment or folder, or over an entry the implicit load minted; its " *
+                          "pool is closed and rebuilt.", folder, key, config)
+    end
     close_pool!(config[key].connections)
   end
 
@@ -1556,7 +1604,8 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   # `<pwd>/db/models.jl`, possibly another project's. For a pre-#857 entry the kept folder IS the
   # key, so that case is unchanged.
   stored_folder = root !== nothing ? folder : something(kept_folder, path)
-  config[key] = Settings(app_env = selected_env, db_def_folder = stored_folder, implicit = implicit)
+  config[key] = Settings(app_env = selected_env, db_def_folder = stored_folder, implicit = implicit,
+                         loaded_folder = _canonical_folder_path(folder))
   settings::PormGSettings = config[key]
 
   # Both given `folder`, the spelling checked against the filesystem above. The pool builder
@@ -1567,6 +1616,9 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   # behind when it does.
   _configured_ignore_tables(settings)
   _configured_unignore_defaults(settings, _builtin_ignores_for_adapter(get(settings.db_config_settings, "adapter", nothing)))
+  # #1225: `extensions:` too. It was first parsed by `_check_configured_extensions!` below, after the
+  # pool existed, so a bad value left an entry WITH a pool — which a repeated `load` now keeps.
+  _configured_extensions(settings)
 
   _build_connection_pool!(settings, folder)
   _check_configured_extensions!(settings)
@@ -1577,11 +1629,12 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
 end
 
 """
-    load_many(paths::AbstractVector{<:AbstractString}; env = nothing, root = nothing)
+    load_many(paths::AbstractVector{<:AbstractString}; env = nothing, root = nothing, force = false)
 
 Load several static configuration folders using the same environment override, and the same
 `root` when one is given (see `load`).
-Returns the list of connection keys that were loaded.
+Returns the list of connection keys that were loaded. A folder already loaded with the same
+environment is kept as it is, pool included, unless `force = true` (see `load`, #1225).
 
 The server form loads short keys from a known project root, whatever the working directory:
 
@@ -1589,14 +1642,14 @@ The server form loads short keys from a known project root, whatever the working
 PormG.Configuration.load_many(["db", "db_analytics"]; root = APP_ROOT, env = "prod")
 ```
 """
-function load_many(paths::AbstractVector{<:AbstractString}; env::Union{Nothing,String} = nothing, config::Dict{String,PormGSettings} = config, root::Union{Nothing,AbstractString} = nothing)
+function load_many(paths::AbstractVector{<:AbstractString}; env::Union{Nothing,String} = nothing, config::Dict{String,PormGSettings} = config, root::Union{Nothing,AbstractString} = nothing, force::Bool = false)
   loaded_keys = String[]
   for path in paths
     key = String(path)
     # #550: `load` may reuse an entry already held under a different spelling of the same folder,
     # so the key it actually registered is not necessarily the string we passed. It returns the
     # real one — callers use this list to look entries up.
-    push!(loaded_keys, something(load(key; env=env, config=config, root=root), key))
+    push!(loaded_keys, something(load(key; env=env, config=config, root=root, force=force), key))
   end
   return loaded_keys
 end
@@ -1892,6 +1945,11 @@ mutable struct Settings <: PormGSettings
   # used to compare `db_def_folder` against the literal "dynamic_connection", which a static folder
   # of that name also stores, so that folder read as dynamic.
   dynamic::Bool
+  # #1225: the canonical folder this entry was loaded from, resolved when `load` built it, or `""` for
+  # an entry built by hand. Without `root` the stored `db_def_folder` is relative ("db"), so it names a
+  # different folder after a `cd`; a repeated `load` compares the request against this instead, or it
+  # would keep a pool built from another directory's `connection.yml`. Internal, not YAML-settable.
+  loaded_folder::String
 
   Settings(;
       app_env             = haskey(ENV, "PORMG_ENV") ? ENV["PORMG_ENV"] : "dev",           
@@ -1904,7 +1962,8 @@ mutable struct Settings <: PormGSettings
           time_zone           = UTC_TIMEZONE,
       django_prefix       = nothing,
       implicit            = false,
-      dynamic             = false
+      dynamic             = false,
+      loaded_folder       = ""
   ) =
   new(
       app_env,
@@ -1917,7 +1976,8 @@ mutable struct Settings <: PormGSettings
       time_zone,
       django_prefix,
       implicit,
-      dynamic
+      dynamic,
+      loaded_folder
   )
 end
 

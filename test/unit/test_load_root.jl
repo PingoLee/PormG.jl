@@ -159,20 +159,25 @@ end
         canonical = PormG.Models._canonical_folder_path(db)
 
         # Explicit absolute key first: one folder, one entry (#550) wins over "the key is `path`",
-        # and the return value says which key was used.
+        # and the return value says which key was used. Same folder, same environment: since #1225
+        # that is a silent no-op; `force = true` still goes through the reuse branch, which warns.
         Configuration.load(db; env = "test")
-        @test_logs((:warn, r"already loaded under a different key"), match_mode = :any,
+        @test_logs(min_level = Logging.Warn,
                    @test Configuration.load("db"; root = root, env = "test") == db)
+        @test_logs((:warn, r"already loaded under a different key"), match_mode = :any,
+                   @test Configuration.load("db"; root = root, env = "test", force = true) == db)
         @test collect(keys(PormG.config)) == [db]
         @test PormG.config[db].db_def_folder == canonical
 
         # The reverse: a short key loaded with `root`, then the same folder named WITHOUT root. The
         # entry is reused, and must keep its absolute folder — overwriting it with the bare key
-        # `"db"` would point `makemigrations` at `<pwd>/db/models.jl`.
+        # `"db"` would point `makemigrations` at `<pwd>/db/models.jl`. `force = true`, because the
+        # plain repeat is a no-op (#1225) and would never reach the reuse branch under test.
         empty!(PormG.config)
         Configuration.load("db"; root = root, env = "test")
+        @test_logs(min_level = Logging.Warn, @test Configuration.load(db; env = "test") == "db")
         @test_logs((:warn, r"already loaded under a different key"), match_mode = :any,
-                   @test Configuration.load(db; env = "test") == "db")
+                   @test Configuration.load(db; env = "test", force = true) == "db")
         @test collect(keys(PormG.config)) == ["db"]
         @test PormG.config["db"].db_def_folder == canonical
     end

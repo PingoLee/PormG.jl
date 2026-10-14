@@ -18,7 +18,8 @@ Common use cases include:
 The `with_advisory_lock` function requires a **connection key** (pointing to a PostgreSQL database) and a **key string**.
 
 ```julia
-# Load your models (preferred: hot-reload-friendly, self-registering)
+# Load the configuration, then your models (preferred: hot-reload-friendly, self-registering)
+PormG.Configuration.load("db"; env = "dev")
 PormG.@import_models "db/models.jl" models
 import .models as M
 

@@ -172,27 +172,43 @@ end
 below is about that match: what it does when it finds nothing, and what it does when it finds more
 than one thing.
 
-### When nothing matches, PormG guesses twice
+### When nothing matches, PormG refuses
 
-`set_models` loads the folder itself — and that implicit load decides two things you did not state.
+If no loaded configuration matches the models folder, `set_models` (and so `@import_models` and
+`@models_module`) raises `InvalidConfigurationError`. The message names the folder, the
+configurations that are loaded, and the call to add:
 
-**It guesses the environment.** `Configuration.load(path)` is called with no `env`, so
-`ENV["PORMG_ENV"]` decides when it is set and the file's `default_env:` otherwise — neither of them
-chosen by your application. In a server that has not selected its environment yet, that is usually
-`dev`, which in a great many deployments points at production.
+```julia
+PormG.Configuration.load("db"; root = APP_ROOT, env = "prod")   # before @import_models
+```
 
-**It guesses the key.** The entry is registered under `path`, which is the *absolute* path of the
-folder — not a name your application chose. A later `Configuration.load("db"; env = "prod")` no
-longer adds a second entry for that folder: it migrates the implicit one to the key you asked for
-and warns. So you end up with one entry under the right key, but with a window beforehand in which
-models bound to the absolute key and its environment came from `PORMG_ENV`/`default_env:`. The
-implicit entry
-is also *marked* as such — `PormG.Configuration.status(key).implicit` reads it back — and that mark,
-not the shape of the key, is what the rules below go by.
+Before #1226, PormG loaded the folder itself and logged a `@warn`. That load decided two things
+you did not state:
 
-PormG emits a `@warn` when this implicit load fires. It does not raise: `@import_models` injects an
-`__init__` that swallows every exception, so a throw would be invisible and the module would
-silently keep whatever key was baked in at precompile.
+- **The environment.** `ENV["PORMG_ENV"]` when it is set, else the file's `default_env:`. In a
+  server that has not selected its environment yet, that is usually `dev`, which in many deployments
+  points at production.
+- **The key.** The folder's path, not a name your application chose.
+
+The warning went to a boot log nobody reads, and the queries ran. Now the registration fails
+instead, so the wrong-database case cannot happen silently.
+
+The same rule holds on the first `Model.objects` of a restored package image. The self-heal there
+(`ensure_model_initialized`) binds the model to a configuration that is already loaded, or raises
+the same error. It never loads one. The `__init__` that `@import_models` and `@models_module` inject
+into the models module binds only when the configuration is already loaded, and otherwise does
+nothing. It runs before your package's own `__init__`, so refusing there would make `using` fail.
+
+**Opting back in.** In a REPL or a one-off script the guess can be convenient:
+
+```julia
+PormG.Configuration.allow_implicit_load!(true)    # for the rest of the session
+PormG.Models.set_models(MyModels, "db"; implicit = true)   # or for one call
+```
+
+Either one loads the folder with the old warning and marks the entry as implicit:
+`PormG.Configuration.status(key).implicit` reads it back. The rules below go by that mark, not by
+the shape of the key.
 
 ### When several configurations match, the explicit key wins
 
@@ -220,8 +236,8 @@ disappears.
     The obvious fix — call `Configuration.load(path; env = ...)` above `@import_models` — is
     correct but **incomplete for a precompiled package**. Module-body code runs at precompile
     time, and PormG's `config` is a global inside PormG, so those entries do not survive into the
-    session. At runtime `config` starts empty again and the first `Model.objects` access
-    re-derives the key through the implicit-load path described above.
+    session. At runtime `config` starts empty again, and the first `Model.objects` access raises
+    `InvalidConfigurationError` because nothing has loaded the folder (see above).
 
     Load the configuration in **both** places: in the module body, so the right `connect_key` is
     baked into the image, and again from your module's `__init__`, so it is right in the running
@@ -256,14 +272,15 @@ Each half does a different job, which is why dropping either one breaks somethin
 | Where the configuration is loaded | After `using`, before any `.objects` | After the first `.objects` access |
 |---|---|---|
 | Module body **and** `__init__` | short key, `config` populated ✔ | unchanged ✔ |
-| Module body only | short key, `config` **empty** | the self-heal re-registers the module and **implicit-loads** it: absolute key, environment from `PORMG_ENV`/`default_env:`, one `@warn` — queries run, against a database you did not choose |
-| `__init__` only | **absolute path**, `config` populated | remapped to the short key with a `@warn`; queries then reach the environment `__init__` selected |
-| Neither | absolute path, `config` empty | as "module body only" |
+| Module body only | short key, `config` **empty** | `InvalidConfigurationError`: the self-heal finds no loaded configuration for the folder, and the message names the `load` call to add |
+| `__init__` only | the precompile run fails: `@import_models` in the module body raises `InvalidConfigurationError` | — |
+| Neither | as "`__init__` only" | — |
 
 The module body runs at precompile time, so it is what bakes the right `connect_key` into the
 image; `__init__` runs in the session, so it is what puts the connection in `config` where a query
-can find it. Neither substitutes for the other — and the row to fear is "module body only", the
-one that looks right after `using` and fails quietly on the first query.
+can find it. Neither substitutes for the other. "Module body only" is the row to watch: it looks
+right after `using` and fails on the first query. Since #1226 it fails with an error that says
+what is missing. Before, it quietly ran against a database you did not choose.
 
 ### Verify the binding instead of assuming it
 
@@ -277,8 +294,7 @@ julia> RaceControl.models.Driver.connect_key   # want the short key, not an abso
 "db"
 ```
 
-An absolute path is the usual sign that the implicit load ran, but the fact is recorded rather than
-inferred: `PormG.Configuration.status(RaceControl.models.Driver.connect_key).implicit` is `true`
-exactly when it did — and then the environment came from `PORMG_ENV`/`default_env:`, not from whatever
-your
+The implicit load runs only when you opted in with `allow_implicit_load!(true)` or
+`implicit = true`. When it did, `PormG.Configuration.status(RaceControl.models.Driver.connect_key).implicit`
+is `true`, and the environment came from `PORMG_ENV`/`default_env:`, not from whatever your
 application selected.

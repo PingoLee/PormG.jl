@@ -733,6 +733,9 @@ The `@import_models` macro is the recommended way to load models in your applica
 module MyApp
     using PormG
     
+    # The configuration first: registering models never loads it for you
+    PormG.Configuration.load("db"; root = normpath(joinpath(@__DIR__, "..")), env = "dev")
+
     # Load models from external file with hot-reload support
     PormG.@import_models "db/models.jl" my_models
     import .my_models as M
@@ -745,14 +748,19 @@ end
 #### What `@import_models` Does
 1. **Resolves the model file path** relative to your source file
 2. **Tracks the file with Revise** (if available) for hot-reloading in interactive sessions
-3. **Registers models** with PormG so fields and metadata are indexed
-4. **Injects `__init__()`** to re-register models after package precompilation
+3. **Registers models** with PormG so fields and metadata are indexed, binding them to the
+   configuration loaded for the folder. With none loaded it raises `InvalidConfigurationError`
+   (see [The Boot-Time Hazard](configuration/advanced.md#The-Boot-Time-Hazard))
+4. **Injects `__init__()`**, which re-binds the models after package precompilation when their
+   configuration is already loaded
 5. **Enables hot-reloading**: Edit your `models.jl`, save, and model changes appear instantly in the REPL
 
 ### Inline Models (without a separate file)
 If you define models directly in code rather than a separate file, use the `@models_module` macro:
 
 ```julia
+PormG.Configuration.load("db"; env = "dev")      # the folder's configuration, first
+
 PormG.@models_module my_models "db" begin
     import PormG.Models as M
 
@@ -810,11 +818,11 @@ For detailed documentation on each field type, including parameters, examples, a
 
 ## Post-Precompilation Behavior
 
-When your package is precompiled (e.g., after `import MyPkg`), the `@import_models` macro ensures models are **automatically re-registered** via injected `__init__()` functions. This means:
+When your package is precompiled (e.g., after `import MyPkg`), the models are re-registered on the first `Model.objects` access, against the configuration loaded in the running session. This means:
 
 - Models are available in package code without manual registration
 - Hot-reloading continues to work in interactive sessions
-- No additional setup is required for REPL users
+- The configuration must be loaded in the session too: call `PormG.Configuration.load` from your package's `__init__` as well as its module body. Otherwise the first `.objects` raises `InvalidConfigurationError`. See [The Boot-Time Hazard](configuration/advanced.md#The-Boot-Time-Hazard)
 
 ---
 For more details, see the [PormG Documentation](index.md) or the example scripts in the `test/integration/` folder.

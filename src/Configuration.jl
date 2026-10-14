@@ -158,6 +158,35 @@ const _CONNECTION_RESOLVER = Ref{Union{Nothing, Function}}(nothing)
 # Optional hook invoked before opening a physical connection (e.g. VPN, SSH tunnel).
 const _BEFORE_CONNECT_HOOK = Ref{Union{Nothing, Function}}(nothing)
 
+# #1226: whether `Models.set_models` may load a models folder nobody loaded. Off: it refuses.
+const _ALLOW_IMPLICIT_LOAD = Ref(false)
+
+"""
+    allow_implicit_load!(flag::Bool = true) -> Bool
+
+Let model registration load a configuration folder that the application has not loaded, for the
+rest of the session. Returns the previous setting.
+
+By default `@import_models`, `@models_module` and `Models.set_models` refuse a models folder that no
+`Configuration.load` has loaded, with `InvalidConfigurationError`: the load they would run picks
+the environment (`PORMG_ENV`, else the file's `default_env:`, else `dev`) and the key for you, and
+in a service that is how queries reach the wrong database. In a REPL or a one-off script that guess
+can be a convenience, and this restores it, with the warning it always carried:
+
+```julia
+PormG.Configuration.allow_implicit_load!(true)
+PormG.@import_models "db/models.jl" models     # loads ./db implicitly, with a warning
+```
+
+`Models.set_models(mod, folder; implicit = true)` does the same for one call. A package should load
+its configuration explicitly instead — see *The Boot-Time Hazard* in the configuration docs.
+"""
+function allow_implicit_load!(flag::Bool = true)::Bool
+  previous = _ALLOW_IMPLICIT_LOAD[]
+  _ALLOW_IMPLICIT_LOAD[] = flag
+  return previous
+end
+
 """
     set_before_connect_hook(f::Function)
 

@@ -1,0 +1,70 @@
+## `set_models` / `@import_models` — a models folder with no loaded configuration is refused; the implicit load is opt-in (#1226)
+
+- **Version**: Unreleased
+- **PormG ref**: #1226 ; `src/Models.jl` (`set_models`, `ensure_model_initialized`, `_bind_if_loaded`), `src/Configuration.jl` (`allow_implicit_load!`), `src/Utils.jl` (the injected `__init__`s)
+- **Recorded**: 2026-10-14
+- **Severity**: breaking. Registering models against a folder that no `Configuration.load` has
+  loaded raises `InvalidConfigurationError`. It used to load the folder itself, with a warning.
+
+### What changed
+
+When `Models.set_models(mod, folder)` found no loaded configuration for `folder`, it called
+`Configuration.load(folder)` itself. That load chose two things the application never stated: the
+environment (`PORMG_ENV`, else the file's `default_env:`, else `dev`) and the key (the folder's
+absolute path). The only signal was a `@warn`. In a service that had not selected its environment,
+`dev` is often the production database.
+
+Now it raises `InvalidConfigurationError`. The message names the folder, the keys that are loaded,
+and the `load` call to add. The same rule holds wherever models are registered:
+
+| where | before | after |
+|---|---|---|
+| `@import_models` / `@models_module` / `set_models`, folder not loaded | `@warn`, then an implicit load | `InvalidConfigurationError` |
+| first `M.Model.objects` after a precompiled image is restored, folder not loaded | self-heal re-registered the module and loaded the folder implicitly | `InvalidConfigurationError` |
+| the `__init__` that `@import_models`/`@models_module` inject, folder not loaded | implicit load, errors swallowed | nothing; the first `.objects` raises the error above |
+
+The implicit load is still there for a REPL or a script, but only when you ask for it:
+`PormG.Configuration.allow_implicit_load!(true)` turns it on for the session, and
+`Models.set_models(mod, folder; implicit = true)` uses it for one call. Either one keeps the old
+warning.
+
+### Who this affects
+
+Code that registers models before loading their configuration: `@import_models`,
+`@models_module` or `set_models` with no earlier `Configuration.load`/`load_many` of that folder in
+the same session, including a precompiled package that loads only in its module body. A log that
+contains `PormG: no configured connection matches this models folder, so it is being loaded
+implicitly` came from this path.
+
+### How to find the calls to migrate
+
+```bash
+grep -rnE '@import_models|@models_module|set_models\(|Configuration\.load(_many)?\(' --include=*.jl .
+grep -rn 'being loaded implicitly' <your logs>
+```
+
+For each models import, check that the same folder is loaded first, in the module body and again in
+`__init__` for a package.
+
+### Migrate your app
+
+```julia
+# ✗ before — the folder was loaded implicitly, in an environment nobody chose
+module RaceControl
+using PormG
+PormG.@import_models "../db/models.jl" models
+end
+
+# ✓ after — load it, with the environment, before importing the models
+module RaceControl
+using PormG
+const APP_ROOT = normpath(joinpath(@__DIR__, ".."))
+_load_configs() = PormG.Configuration.load("db"; root = APP_ROOT, env = get(ENV, "RACECONTROL_ENV", "dev"))
+_load_configs()
+PormG.@import_models "../db/models.jl" models
+__init__() = _load_configs()
+end
+
+# ✓ a REPL or a script that wants the old convenience
+PormG.Configuration.allow_implicit_load!(true)
+```

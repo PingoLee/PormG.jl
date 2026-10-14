@@ -761,6 +761,19 @@ Returns the connection keys actually registered. As with `load`, a folder alread
 spelling is reused, so a returned key is not always the path that was passed — use the returned list
 rather than the one you supplied.
 
+### `Configuration.allow_implicit_load!(flag = true)`
+
+Registering models (`@import_models`, `@models_module`, `Models.set_models`) binds them to a
+configuration that is already loaded, and raises `InvalidConfigurationError` when none matches the
+models folder (#1226). This turns the old implicit load back on for the session, for a REPL or a
+script: the folder is then loaded with a warning, in the environment `PORMG_ENV`/`default_env:`
+selects. Returns the previous setting. `Models.set_models(mod, folder; implicit = true)` does the
+same for one call.
+
+```julia
+PormG.Configuration.allow_implicit_load!(true)
+```
+
 ### `Configuration.is_loaded(path_or_key)`
 
 Returns `true` if PormG has registered settings for the given folder/key. Does not open connections.

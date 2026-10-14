@@ -30,7 +30,7 @@ import PormG: _fk_targets_equal
 #                          querybuilder/value_validation.jl on the insert/update path.
 #   FieldValidationError — `validate_default`, which despite living here is called only from
 #                          field constructors in src/models/fields.jl to check a `default=` kwarg.
-import PormG: ModelDefinitionError, InvalidValueError, FieldValidationError
+import PormG: ModelDefinitionError, InvalidValueError, FieldValidationError, InvalidConfigurationError
 # #496's `db_default` vocabulary and normaliser (Kernel, layer 1). The field constructors validate a
 # declared `db_default` here, at include step 107 — which is why these live in Kernel rather than in
 # `Dialect` (step 118) beside the renderer that also reads them.
@@ -1016,7 +1016,7 @@ end
 # still precompiles, and `checkdocs = :public` only verifies that docstrings which EXIST reach the
 # manual. It cost a debugging round in #295.
 """
-    set_models(_module::Module, path::String) -> nothing
+    set_models(_module::Module, path::String; implicit = false) -> nothing
 
 Register every model defined in `_module` against the database configuration folder `path`, and
 resolve the relationships between them. This is the manual model-loading path; prefer
@@ -1031,15 +1031,16 @@ Registration does four things:
 
 1. **Names the unnamed.** A model declared without a positional table name carries `name == ""`; it
    is filled in here from the Julia binding, lowercased (`Race = Model(...)` → table `race`).
-2. **Binds the connection.** `path` is matched against the configured folders to find the connection
-   key, strongest match first and preferring an explicitly loaded key over one minted by the
-   implicit load below, which is recorded as `implicit = true` on the entry
-   (`_resolve_connect_key`). A folder that matches nothing is loaded
-   implicitly, **with a warning** — that path guesses the environment (from `PORMG_ENV`, else
-   `default_env:`) and
-   the key (the caller's own absolute path), so call `PormG.Configuration.load(path; env = ...)`
-   first when you need a specific one, and expect `MissingConfigurationError` from that implicit
-   load if `path` holds no `connection.yml`. See `docs/src/configuration/advanced.md`.
+2. **Binds the connection.** `path` is matched against the loaded configurations to find the
+   connection key, strongest match first and preferring an explicitly loaded key over one minted by
+   the implicit load (`_resolve_connect_key`). A folder that matches **no loaded configuration
+   raises `InvalidConfigurationError`** (#1226), naming the folder, the keys that are loaded and the
+   `PormG.Configuration.load(…; root, env)` call to add before registering the models. PormG does
+   not load the folder itself unless asked: `implicit = true` (or
+   `PormG.Configuration.allow_implicit_load!(true)` for the session) loads it, **with a warning**,
+   guessing the environment (from `PORMG_ENV`, else `default_env:`) and the key (the caller's own
+   path), and raises `MissingConfigurationError` if `path` holds no `connection.yml`. See
+   `docs/src/configuration/advanced.md`.
 3. **Resolves relationships.** Each `ForeignKey`/`OneToOneField` target is resolved (a target given
    as a model-name `String` is replaced by the model object), `pk_field` defaults are applied, and
    the reverse accessor is installed on the target. An omitted `related_name` is derived and logged:
@@ -1088,13 +1089,27 @@ Models.set_models(@__MODULE__, "db")   # tables `circuit` / `race`; Circuit gain
 end
 ```
 
+with the configuration loaded first, e.g. `PormG.Configuration.load("db"; env = "dev")`.
+
 See also [`Model`](@ref), `PormG.@import_models`, `PormG.@models_module`.
 """
-function set_models(_module::Module, path::String)::Nothing
+function set_models(_module::Module, path::String;
+                    implicit::Bool = Configuration._ALLOW_IMPLICIT_LOAD[])::Nothing
   @pormg_debug false
   # #343: one walk yields the models AND their Julia bindings. The binding cannot be recovered later
   # from a model — `name` is validated lowercase (#300) — so it is captured here or it is lost.
   models, bindings = _collect_models_and_bindings(_module)
+
+  # #550: ranked, unique-or-warn. This was a first-match `break` over `config`, which is a Dict —
+  # so a folder-name match on an earlier-hashed key beat an exact path match on a later one.
+  connect_key = _resolve_connect_key(path, config)
+
+  # #1226: nothing matched, and the application did not opt in to the guess below — refuse, naming
+  # the `load` call that is missing. Before, this always fell through to the implicit load; #550 and
+  # #553 made it warn and rank, and it still connected to whichever environment it guessed. It comes
+  # BEFORE the two records below: a refused call (a typo'd folder) must not register the module or
+  # fix its `__pormg_init_path__` constant, which the self-heal would then keep re-reading.
+  isnothing(connect_key) && !implicit && throw(_unloaded_folder_error(path, config))
 
   # Register for lazy loading / self-healing
   REGISTERED_MODULES[_module] = path
@@ -1110,13 +1125,10 @@ function set_models(_module::Module, path::String)::Nothing
     # Ignore errors if the module is closed or already has it
   end
 
-  # #550: ranked, unique-or-warn. This was a first-match `break` over `config`, which is a Dict —
-  # so a folder-name match on an earlier-hashed key beat an exact path match on a later one.
-  connect_key = _resolve_connect_key(path, config)
-
   @pormg_debug false
   if isnothing(connect_key)
-    # Nothing matched, so this call is about to GUESS two things at once:
+    # Opted in (`implicit = true`, or `Configuration.allow_implicit_load!(true)` for the session),
+    # so this call is about to GUESS two things at once:
     #
     #   1. the environment — `load` is called with no `env`, so `PORMG_ENV` wins when set and the
     #      file's `default_env:` otherwise (`Configuration._effective_env`).
@@ -1234,6 +1246,38 @@ function set_models(_module::Module, path::String)::Nothing
   return nothing
 end
 
+# #1226: the refusal `set_models` raises for a models folder no `Configuration.load` has loaded. It
+# names what is loaded, because the usual cause is a key loaded under another folder (a typo, or a
+# `root` that resolves elsewhere), and the call to add, spelled for the folder at hand so it pastes
+# back: `root` is the folder's parent and the key its last component, as `load(…; root)` expects.
+function _unloaded_folder_error(path::AbstractString, config)::InvalidConfigurationError
+  static = sort!([k for (k, v) in config if !v.dynamic])
+  loaded = isempty(static) ? "none" : join(("\"" * k * "\"" for k in static), ", ")
+  folder = _canonical_folder_path(path)
+  hint = "PormG.Configuration.load($(repr(basename(folder))); root = $(repr(dirname(folder))), env = \"…\")"
+  return InvalidConfigurationError(
+    "No loaded configuration matches the models folder \"$(path)\", so its models cannot be bound to " *
+    "a connection. PormG does not load it for you: that load would choose the environment " *
+    "(`PORMG_ENV`, else the file's `default_env:`) and the key on your behalf. Configurations " *
+    "loaded now: $(loaded). Load it before registering the models — `$(hint)` before " *
+    "`@import_models` — and, in a package, again from `__init__`. In a REPL or a script, " *
+    "`PormG.Configuration.allow_implicit_load!(true)` restores the implicit load.")
+end
+
+# #1226: bind `mod` to `path` only when that will not refuse — a configuration matching `path` is
+# loaded, or the implicit load was opted in to. Otherwise do nothing. This is what the `__init__`
+# that `@import_models` and `@models_module` inject call: `@models_module`'s runs when a package
+# image is restored, BEFORE the parent package's own `__init__` has loaded anything, so refusing
+# there would fail `using` for the documented body-plus-`__init__` bootstrap. Skipping leaves the
+# module to `ensure_model_initialized`, which raises the refusal on the first `.objects` if the
+# folder is still not loaded then.
+function _bind_if_loaded(mod::Module, path::AbstractString)::Nothing
+  if Configuration._ALLOW_IMPLICIT_LOAD[] || _resolve_connect_key(path, config) !== nothing
+    set_models(mod, String(path))
+  end
+  return nothing
+end
+
 """
     _infer_self_heal_key(model::PormGModel, models_in_mod, config) -> String | Nothing
 
@@ -1269,6 +1313,10 @@ If not, attempts self-healing by:
 2. Re-registering via REGISTERED_MODULES
 3. Scanning loaded modules for __pormg_init_path__ markers
 4. Using the model's own `_module` reference (survives precompilation)
+
+It only ever binds to a configuration that is already loaded. When the model's own models folder is
+not loaded, it raises the `InvalidConfigurationError` `set_models` gives (#1226) — unless the
+implicit load was opted in to with `PormG.Configuration.allow_implicit_load!(true)`.
 """
 function ensure_model_initialized(model::PormGModel)
     # Fast path: already properly initialized
@@ -1315,6 +1363,12 @@ function ensure_model_initialized(model::PormGModel)
     #     to the connection it was actually defined for. We must NOT guess by scanning
     #     `config`: in a multi-connection setup the first entry iterated could be the wrong
     #     database, silently routing queries there (e.g. binding `db`-models to `db_reporting`).
+    #
+    #     #1226: it rebinds to a LOADED configuration or refuses — it never loads one. `set_models`
+    #     raises `InvalidConfigurationError` for a folder nothing loaded; that is recorded rather
+    #     than swallowed, and raised below if no other case binds the model. Returning `false` let
+    #     `.objects` carry on to a vaguer "pool does not exist" error at render time.
+    refusal = nothing
     if !isnothing(model._module)
         mod = model._module
         if isdefined(mod, :__pormg_init_path__)
@@ -1324,13 +1378,16 @@ function ensure_model_initialized(model::PormGModel)
                     @info "Self-healing: Re-registered $(model.name) from module $(mod) source path"
                     return true
                 end
-            catch
+            catch e
+                e isa InvalidConfigurationError && (refusal = e)
             end
         end
         # Fallback: infer the key from `config`, but only when unambiguous. The decision
         # (refuse to guess with >1 connection) lives in `_infer_self_heal_key` so it can be
-        # tested in isolation; here we just act on its verdict.
-        if isnothing(model.connect_key)
+        # tested in isolation; here we just act on its verdict. Not after a refusal (#1226): the
+        # module recorded its own folder above, and binding it to the one other folder that happens
+        # to be loaded is the guess the refusal exists to stop.
+        if isnothing(model.connect_key) && refusal === nothing
             try
                 inferred = _infer_self_heal_key(model, get_all_models(mod), config)
                 if inferred !== nothing
@@ -1344,23 +1401,25 @@ function ensure_model_initialized(model::PormGModel)
         end
     end
 
-    # 2c. Scan loaded packages for __pormg_init_path__ markers (injected by @models_module)
+    # 2c. Scan loaded packages for __pormg_init_path__ markers (injected by @models_module).
+    #     Only the module that defines `model` is registered: this used to run `set_models` on every
+    #     marked module it met and check membership afterwards, which bound unrelated modules —
+    #     and, since #1226, would raise a refusal that is not about this model.
     for (pkgid, mod) in Base.loaded_modules
-        if isdefined(mod, :__pormg_init_path__)
+        if isdefined(mod, :__pormg_init_path__) && any(m === model for m in get_all_models(mod))
             path = getfield(mod, :__pormg_init_path__)
             @info "Self-healing: Recovered registration for $(mod) from __pormg_init_path__"
             try
                 set_models(mod, path)
-            catch
+            catch e
+                e isa InvalidConfigurationError && (refusal = e)
                 continue
             end
-            models_in_mod = get_all_models(mod)
-            if any(m === model for m in models_in_mod)
-                return true
-            end
+            return true
         end
     end
 
+    refusal === nothing || throw(refusal)
     return false
 end
 

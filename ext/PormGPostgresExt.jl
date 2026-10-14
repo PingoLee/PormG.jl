@@ -56,12 +56,15 @@ end
 
 # ── Connection-string preflight ──────────────────────────────────────────────
 #
-# The LibPQ extension's rules (#657, #662), applied to what Postgres.jl parsed. Postgres.jl's own parse
-# errors can quote the fragment they choked on — which may be a password (JuliaDatabases/Postgres.jl#22)
-# — and a failure here becomes `PoolConnectError.cause`, so nothing from the string is echoed unmasked.
+# PormG tokenizes the string itself and checks it against Postgres.jl's rules BEFORE the driver sees it
+# (#1235), so a refusal names the bad parameter from PormG's own parse, never from the text of the
+# driver's message: one new message shape in a Postgres.jl release turned `main` red (#1233). The
+# tokenizer follows Postgres.jl's grammar, which is not libpq's (`;` separates parameters too, and keys
+# are lower-cased); the string handed to the driver is the one the user wrote. The LibPQ extension's
+# rules (#657, #662) are then applied to what Postgres.jl parsed. A failure here becomes
+# `PoolConnectError.cause`, so no value is ever echoed — a value may be a password.
 
-# libpq keyword names. A parse error that names one of these may say which, because a keyword is
-# never a secret; any other quoted token might be a fragment of a password.
+# libpq keyword names.
 const _CONNINFO_KEYWORDS = (
   "host", "hostaddr", "port", "dbname", "user", "password", "passfile", "channel_binding",
   "connect_timeout", "client_encoding", "options", "application_name", "fallback_application_name",
@@ -72,19 +75,250 @@ const _CONNINFO_KEYWORDS = (
   "service", "target_session_attrs", "load_balance_hosts", "sslnegotiation",
 )
 
-# Where Postgres.jl's messages put a KEY: before `=` in a quoted `key=value`, quoted after "for
-# connection parameter", or quoted before "is set to a value" — v2.3.0's refusal of a keyword it
-# ignores, whose quoted word is always a key of its own table (#1233). A lone quoted word elsewhere
-# (`connection parameter "horse" is missing '='`) may be a password fragment even when it spells a
-# keyword (`password=my service`), so it never counts. The "for connection parameter" key closes the
-# message, followed by quote-free text at most, because the value it echoes comes first: a value that
-# itself spells `for connection parameter "sslpassword"` is followed by the real key's quotes, so it
-# never matches (#1233 security review).
-const _KEYWORD_POSITIONS = (
-  r"^connection parameter \"([a-z_]+)=",
-  r"for connection parameter \"([a-z_]+)\"(?:;[^\"]*)?$",
-  r"^connection parameter \"([a-z_]+)\" is set to a value ",
+# The keywords Postgres.jl accepts — its `KNOWN_PARAMS`, then the libpq keywords it accepts and ignores
+# (`IGNORED_PARAMS`); both tables are the same in Postgres.jl 2.2.2 and 2.3.0. PormG's own
+# copy, because the refusal is PormG's: a libpq keyword missing here is refused by name as one this
+# driver does not support, and a release that accepts more is a row to add, not a red build.
+const _DRIVER_KEYWORDS = (
+  "host", "port", "user", "password", "dbname", "application_name", "options", "connect_timeout",
+  "sslmode", "sslrootcert", "sslcert", "sslkey", "sslcapath", "sslservername", "gssencmode",
+  "krbsrvname", "gssdelegation", "statement_timeout", "statement_cache_maxsize", "debug", "reconnect",
+  "numeric_overflow",
+  "channel_binding", "target_session_attrs", "gsslib", "sslnegotiation", "sslcompression", "sslcrl",
+  "sslcrldir", "sslpassword", "requiressl", "requirepeer", "hostaddr", "client_encoding", "passfile",
+  "service", "fallback_application_name", "keepalives", "keepalives_idle", "keepalives_interval",
+  "keepalives_count", "tcp_user_timeout", "load_balance_hosts", "replication",
 )
+
+# A refusal names a key only when it is one of these, because a keyword is never a secret. Any other
+# word in a key position may be a password fragment — `password=my secret=x` makes `secret` a key — so
+# it is referred to by its position instead (Postgres.jl v2.3.0 stopped naming one for the same reason).
+const _NAMEABLE_KEYWORDS = Set((_CONNINFO_KEYWORDS..., _DRIVER_KEYWORDS...))
+
+# Ignored keywords Postgres.jl refuses unless set to a no-op value (its `SECURITY_SENSITIVE_IGNORED`):
+# dropping `channel_binding=require` silently would leave the caller believing a protection is in place.
+const _INERT_VALUES = Dict(
+  "channel_binding" => ("", "prefer", "disable"),
+  "target_session_attrs" => ("", "any"),
+  "gsslib" => ("", "gssapi"),
+  "sslnegotiation" => ("", "postgres"),
+  "sslcompression" => ("", "0"),
+  "sslcrl" => ("",),
+  "sslcrldir" => ("",),
+  "sslpassword" => ("",),
+  "requiressl" => ("", "0"),
+  "requirepeer" => ("",),
+  "hostaddr" => ("",),
+  "client_encoding" => ("", "UTF8", "UTF-8", "utf8", "utf-8"),
+  "passfile" => ("",),
+  "service" => ("",),
+  "load_balance_hosts" => ("", "disable"),
+  "replication" => ("", "0", "false", "off"),
+)
+
+# Values Postgres.jl parses when it builds its parameters. An empty integer or boolean means "unset";
+# `numeric_overflow` has no empty form.
+const _INT_KEYWORDS = ("port", "connect_timeout", "statement_timeout", "statement_cache_maxsize")
+const _BOOL_KEYWORDS = ("gssdelegation", "debug", "reconnect")
+const _BOOL_WORDS = ("1", "on", "true", "yes", "0", "off", "false", "no")
+const _NUMERIC_OVERFLOW_VALUES = ("warn", "error")
+
+# One parameter as PormG split it. `label` says where it is ("parameter 3"); `values` holds every
+# reading of its value the driver may take — one, except for a URL query value holding a second `=`,
+# which URIs 1.7 keeps whole and URIs 1.6 cuts at that `=`.
+struct _DsnParam
+  label::String
+  key::String
+  values::Vector{String}
+end
+
+# How a refusal refers to a parameter: by name when it is a keyword, otherwise by position.
+_param_ref(p::_DsnParam) = p.key in _NAMEABLE_KEYWORDS ? "parameter `$(p.key)`" : p.label
+
+# The example deliberately names no `password=`/`user=` key: `PoolConnectError` renders the message
+# through `redact_secret`, which would mask the example into `(password=****)` (as in the LibPQ extension).
+const _QUOTING_HINT = ". A value containing spaces must be single-quoted ('two words'); in a URL, " *
+                      "percent-encode reserved characters"
+
+_unparseable(what::AbstractString) = throw(InvalidConfigurationError(
+  "the PostgreSQL connection string could not be parsed: $(what)$(_QUOTING_HINT)"))
+
+# Postgres.jl's keyword/value grammar, step for step: parameters are separated by whitespace or `;`,
+# a key ends at `=`, whitespace or `;` and is lower-cased, whitespace may surround the `=`, and a value
+# is either single-quoted or runs to the next whitespace or `;`, with `\` escaping the next character
+# in both forms.
+function _keyword_dsn_params(dsn::String)::Vector{_DsnParam}
+  params = _DsnParam[]
+  i = firstindex(dsn)
+  stop = lastindex(dsn)
+  while i <= stop
+    while i <= stop && (isspace(dsn[i]) || dsn[i] == ';')
+      i = nextind(dsn, i)
+    end
+    i > stop && break
+    label = "parameter $(length(params) + 1)"
+    key_start = i
+    while i <= stop && dsn[i] != '=' && !isspace(dsn[i]) && dsn[i] != ';'
+      i = nextind(dsn, i)
+    end
+    key = i == key_start ? "" : lowercase(String(SubString(dsn, key_start, prevind(dsn, i))))
+    isempty(key) && _unparseable("$(label) has an empty name")
+    while i <= stop && isspace(dsn[i])
+      i = nextind(dsn, i)
+    end
+    # Never named, even when the word spells a keyword: a lone word is most often the second word of an
+    # unquoted password (`password=my service`, #1233).
+    (i <= stop && dsn[i] == '=') || _unparseable("$(label) has no `=`")
+    i = nextind(dsn, i)
+    while i <= stop && isspace(dsn[i])
+      i = nextind(dsn, i)
+    end
+    ref = _param_ref(_DsnParam(label, key, String[]))
+    buf = IOBuffer()
+    if i <= stop && dsn[i] == '\''
+      i = nextind(dsn, i)
+      closed = false
+      while i <= stop
+        c = dsn[i]
+        if c == '\\'
+          i = nextind(dsn, i)
+          i <= stop || _unparseable("the value of $(ref) ends in a dangling `\\`")
+          write(buf, dsn[i])
+          i = nextind(dsn, i)
+        elseif c == '\''
+          i = nextind(dsn, i)
+          closed = true
+          break
+        else
+          write(buf, c)
+          i = nextind(dsn, i)
+        end
+      end
+      closed || _unparseable("the quoted value of $(ref) is never closed")
+      (i <= stop && !isspace(dsn[i]) && dsn[i] != ';') &&
+        _unparseable("the quoted value of $(ref) is followed by more text")
+    else
+      while i <= stop && !isspace(dsn[i]) && dsn[i] != ';'
+        c = dsn[i]
+        if c == '\\'
+          i = nextind(dsn, i)
+          i <= stop || _unparseable("the value of $(ref) ends in a dangling `\\`")
+          write(buf, dsn[i])
+        else
+          write(buf, c)
+        end
+        i = nextind(dsn, i)
+      end
+    end
+    push!(params, _DsnParam(label, key, [String(take!(buf))]))
+  end
+  return params
+end
+
+# `URIs.unescapeuri` after `URIs.decodeplus`, the decoding Postgres.jl gives a URL's query: `+` is a
+# space, and `%` takes the next two characters as hex. `nothing` where URIs throws.
+function _decode_query_part(s::AbstractString)::Union{String, Nothing}
+  s = replace(s, '+' => ' ')
+  occursin('%', s) || return String(s)
+  out = IOBuffer()
+  io = IOBuffer(s)
+  while !eof(io)
+    c = read(io, Char)
+    if c == '%'
+      eof(io) && return nothing
+      c1 = read(io, Char)
+      eof(io) && return nothing
+      c2 = read(io, Char)
+      byte = tryparse(UInt8, string(c1, c2); base = 16)
+      byte === nothing && return nothing
+      write(out, byte)
+    else
+      write(out, c)
+    end
+  end
+  return String(take!(out))
+end
+
+# A URL's query parameters, as `URIs.URI` and `URIs.queryparams` split them for Postgres.jl: the query
+# runs from the first `?` to the next `#` — there is none when a `#` comes first — and splits at `&`,
+# then at the first `=`. Keys keep their case. The authority is left to the driver, and so is a
+# bracketed IPv6 host holding a `?` or `#` — no host does, and URIs reads one there differently. On
+# Postgres.jl 2.3.0 a URL it cannot parse is refused with a message that quotes nothing; on 2.2.2
+# URIs' own error reaches `_parse_failure`, which masks only what is double-quoted.
+function _url_query_params(dsn::String)::Vector{_DsnParam}
+  q = findfirst('?', dsn)
+  fragment = findfirst('#', dsn)
+  (q === nothing || (fragment !== nothing && fragment < q)) && return _DsnParam[]
+  q_end = findnext('#', dsn, q)
+  query = SubString(dsn, nextind(dsn, q), q_end === nothing ? lastindex(dsn) : prevind(dsn, q_end))
+  params = _DsnParam[]
+  for entry in split(query, '&'; keepempty = false)
+    label = "query parameter $(length(params) + 1)"
+    parts = split(entry, '='; limit = 3)
+    key = _decode_query_part(parts[1])
+    key === nothing && _unparseable("the name of $(label) is not valid percent-encoding")
+    raw = length(parts) == 1 ? [""] :
+          length(parts) == 2 ? [parts[2]] : unique([string(parts[2], "=", parts[3]), parts[2]])
+    values = String[v for v in (_decode_query_part(r) for r in raw) if v !== nothing]
+    p = _DsnParam(label, key, values)
+    isempty(values) && _unparseable("the value of $(_param_ref(p)) is not valid percent-encoding")
+    push!(params, p)
+  end
+  return params
+end
+
+# Whether `lowercase` can read `s`: it throws an `InvalidCharError` that prints the bytes on a malformed
+# or overlong sequence — and a percent-decoded URL part can be one, whatever the raw string was.
+# A lone surrogate is fine.
+_lowercasable(s::AbstractString) = !any(c -> Base.ismalformed(c) || Base.isoverlong(c), s)
+
+function _value_accepted(key::String, v::String)::Bool
+  inert = get(_INERT_VALUES, key, nothing)
+  inert !== nothing && return v in inert
+  key in _INT_KEYWORDS && return isempty(v) || tryparse(Int, v) !== nothing
+  # A malformed decoded value is no boolean — the driver's own `lowercase` throws on it.
+  key in _BOOL_KEYWORDS && return isempty(v) || (_lowercasable(v) && lowercase(v) in _BOOL_WORDS)
+  key == "numeric_overflow" && return v in _NUMERIC_OVERFLOW_VALUES
+  return true
+end
+
+function _value_refusal(p::_DsnParam)::String
+  base = "the PostgreSQL connection string's $(_param_ref(p))"
+  inert = get(_INERT_VALUES, p.key, nothing)
+  if inert !== nothing
+    # The values listed are the driver's own no-op settings, never the user's.
+    allowed = ["`$(v)`" for v in inert if !isempty(v)]
+    accepts = "only " * join([allowed; "the parameter left out"], ", ", " or ")
+    return "$(base) is set to a value the Postgres.jl driver does not support and cannot safely " *
+           "ignore (it accepts $(accepts)); `postgres_driver: LibPQ` supports it"
+  end
+  p.key in _INT_KEYWORDS && return "$(base) is not an integer"
+  p.key in _BOOL_KEYWORDS && return "$(base) is not a boolean (on/off, true/false, yes/no, 1/0)"
+  return "$(base) must be `warn` or `error`"
+end
+
+# Postgres.jl's rules on what PormG split. Every key must be one it accepts; a value is read only from
+# a key's LAST occurrence, as the driver keeps it, and is refused only when no reading of it would pass.
+function _check_dsn_params(params::Vector{_DsnParam})
+  for p in params
+    p.key in _DRIVER_KEYWORDS && continue
+    p.key in _CONNINFO_KEYWORDS && throw(InvalidConfigurationError(
+      "the PostgreSQL connection string sets `$(p.key)`, a libpq parameter the Postgres.jl driver " *
+      "does not support; leave it out, or use `postgres_driver: LibPQ`"))
+    case_hint = _lowercasable(p.key) && lowercase(p.key) in _NAMEABLE_KEYWORDS ?
+                " (parameter names are lower-case)" : ""
+    throw(InvalidConfigurationError(
+      "the PostgreSQL connection string's $(p.label) is not a connection parameter Postgres.jl " *
+      "recognizes$(case_hint)$(_QUOTING_HINT)"))
+  end
+  last_seen = Dict(p.key => p for p in params)
+  for p in params
+    last_seen[p.key].label == p.label || continue
+    any(v -> _value_accepted(p.key, v), p.values) ||
+      throw(InvalidConfigurationError(_value_refusal(p)))
+  end
+  return nothing
+end
 
 # Mask everything between the first and the last `"`, as the LibPQ extension does for libpq's
 # messages: masking quote PAIRS would leak a value that itself contains a `"`.
@@ -96,22 +330,16 @@ function _mask_quoted(msg::AbstractString)::String
   return PormG.Configuration.redact_secret(msg[1:first_q] * "****\"" * tail)
 end
 
+# A rejection PormG's own pass did not anticipate — a value from a `PG*` environment variable, a rule
+# a later Postgres.jl adds. Shown masked and naming nothing: no parameter is recovered from the
+# driver's text (#1235).
 function _parse_failure(e)::InvalidConfigurationError
   base = "the PostgreSQL connection string could not be parsed"
   # Only a driver-authored message is shown, and only masked. Anything else — a `URIs.ParseError`
   # quotes the user info it rejected — is reduced to its type.
   e isa ArgumentError || e isa Postgres.PostgresInterfaceError ||
     return InvalidConfigurationError("$(base) ($(nameof(typeof(e))))")
-  msg = e.msg
-  keyword = ""
-  for pattern in _KEYWORD_POSITIONS
-    m = match(pattern, msg)   # server-text-match-ok: Postgres.jl's own parse message, client-side text
-    if m !== nothing && m[1] in _CONNINFO_KEYWORDS
-      keyword = " (parameter `$(m[1])`)"
-      break
-    end
-  end
-  return InvalidConfigurationError("$(base): $(_mask_quoted(msg))$(keyword)")
+  return InvalidConfigurationError("$(base): $(_mask_quoted(e.msg))")
 end
 
 # Case-insensitive, as `Postgres.parse_dsn` decides it: `POSTGRESQL://…` is parsed as a URL too.
@@ -132,8 +360,25 @@ function _checked_params(conn_str::AbstractString)::Postgres.ConnectionParams
   # First: a NUL never reaches the parser, and its error would quote the whole string.
   '\0' in conn_str && throw(InvalidConfigurationError(
     "the PostgreSQL connection string contains a NUL character, which a PostgreSQL connection string cannot carry"))
+  dsn = String(conn_str)
+  # Before anything lower-cases it: a malformed or overlong byte sequence makes `lowercase` throw an
+  # `InvalidCharError` that prints the bytes — in our tokenizer and `Postgres.parse_dsn` alike (review
+  # finding, #1235). Exactly what `lowercase` refuses, not `isvalid`: a lone surrogate passes
+  # `lowercase`, and the driver accepts it.
+  _lowercasable(dsn) || throw(InvalidConfigurationError(
+    "the PostgreSQL connection string is not valid UTF-8, which a PostgreSQL connection string must be"))
+  # PormG's own pass refuses only with its own value-free messages. Anything else it throws — a defect —
+  # is reduced to its type, as `_parse_failure` reduces the driver's: Base's errors print their input
+  # (security review, #1235).
+  try
+    _check_dsn_params(_is_url(dsn) ? _url_query_params(dsn) : _keyword_dsn_params(dsn))
+  catch e
+    (e isa InvalidConfigurationError || e isa InterruptException) && rethrow()
+    throw(InvalidConfigurationError(
+      "the PostgreSQL connection string could not be parsed ($(nameof(typeof(e))))"))
+  end
   params = try
-    Postgres.parse_dsn(String(conn_str))
+    Postgres.parse_dsn(dsn)
   catch e
     e isa InterruptException && rethrow()
     throw(_parse_failure(e))
@@ -174,7 +419,7 @@ function _checked_params(conn_str::AbstractString)::Postgres.ConnectionParams
         # Named only when it is one of libpq's keywords: in the spill this check exists for, the
         # "keyword" can itself come from the password.
         keyword = lowercase(_pct_decode(m.captures[1]))
-        named = keyword in _CONNINFO_KEYWORDS ? "`$(keyword)` option" : "query"
+        named = keyword in _NAMEABLE_KEYWORDS ? "`$(keyword)` option" : "query"
         throw(InvalidConfigurationError(
           "the PostgreSQL connection URL's $(named) ends in what looks like a host: an unencoded `@` " *
           "followed by a host, port or path. If it came from a URL password, percent-encode the " *

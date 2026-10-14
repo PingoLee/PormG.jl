@@ -169,6 +169,28 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("F int << 1",              :Result,              m -> _EKM_Q.F("grid") << 1),
   ("Floor F int & 3",         :Result,              m -> _EKM_FN.Floor(_EKM_Q.F("grid") & 3)),
   ("Sum F bigint << 1",       :Result,              m -> _EKM_FN.Sum(_EKM_Q.F("resultid") << 1)),
+  # #1111, #1034 phase 3 step 2a: a `Sum` over an operand the walk does not type (`EXTRACT(EPOCH …)`
+  # has no stated type; SQLite has no such part), divided — whether PostgreSQL's quotient is the
+  # integer one depends on a type the walk cannot name
+  ("Sum F bigint + epoch / 2", :Race,               m -> _EKM_FN.Sum(_EKM_Q.F("raceid") + _EKM_FN.Extract("start_at", "EPOCH")) / 2),
+  ("Sum F int + epoch / 2",   :Race,                m -> _EKM_FN.Sum(_EKM_Q.F("year") + _EKM_FN.Extract("start_at", "EPOCH")) / 2),
+  ("Cast Sum F bigint + epoch / 2 int", :Race,      m -> _EKM_FN.Cast(_EKM_FN.Sum(_EKM_Q.F("raceid") + _EKM_FN.Extract("start_at", "EPOCH")) / 2, "integer")),
+  ("Cast Sum F int + epoch / 2 int", :Race,         m -> _EKM_FN.Cast(_EKM_FN.Sum(_EKM_Q.F("year") + _EKM_FN.Extract("start_at", "EPOCH")) / 2, "integer")),
+  ("Cast Sum F bigint + epoch / 2.0 int", :Race,    m -> _EKM_FN.Cast(_EKM_FN.Sum(_EKM_Q.F("raceid") + _EKM_FN.Extract("start_at", "EPOCH")) / 2.0, "integer")),
+  # … a rounding function between the quotient and the cast, and a divisor that is no literal
+  ("Cast Round Sum F int + epoch / 2 int", :Race,   m -> _EKM_FN.Cast(_EKM_FN.Round(_EKM_FN.Sum(_EKM_Q.F("year") + _EKM_FN.Extract("start_at", "EPOCH")) / 2), "integer")),
+  ("Cast Sum F int + epoch / Count int", :Race,     m -> _EKM_FN.Cast(_EKM_FN.Sum(_EKM_Q.F("year") + _EKM_FN.Extract("start_at", "EPOCH")) / _EKM_FN.Count("raceid"), "integer")),
+  # … and a `Sum` the walk does not type because it is TEMPORAL arithmetic: an interval or a
+  # timestamp difference, which the render types and no integer quotient can be
+  ("Cast Sum F interval + interval / 2 text", :Result, m -> _EKM_FN.Cast(_EKM_FN.Sum(_EKM_Q.F("fastestlaptime") + _EKM_Q.F("fastestlaptime")) / 2, "text")),
+  ("Concat Sum F interval + interval / 2", :Result, m -> _EKM_FN.Concat("positiontext", _EKM_FN.Sum(_EKM_Q.F("fastestlaptime") + _EKM_Q.F("fastestlaptime")) / 2)),
+  ("Cast Sum F interval * 2 / 2 text", :Result,     m -> _EKM_FN.Cast(_EKM_FN.Sum(_EKM_Q.F("fastestlaptime") * 2) / 2, "text")),
+  ("Cast Sum F datetime - datetime / 2 text", :Race, m -> _EKM_FN.Cast(_EKM_FN.Sum(_EKM_Q.F("start_at") - _EKM_Q.F("start_at")) / 2, "text")),
+  ("Cast Sum F int * interval / 2 text", :Result,   m -> _EKM_FN.Cast(_EKM_FN.Sum(_EKM_Q.F("grid") * _EKM_Q.F("fastestlaptime")) / 2, "text")),
+  # … but a date difference is a day count, a number: rooted in a date, summed with a `bigint` it is
+  # a `sum(bigint)` on PostgreSQL
+  ("Cast Sum F date - date + bigint / 2 int", :Race, m -> _EKM_FN.Cast(_EKM_FN.Sum(_EKM_Q.F("date") - _EKM_Q.F("date") + _EKM_Q.F("raceid")) / 2, "integer")),
+  ("Cast Sum F date - date / 2 int", :Race,         m -> _EKM_FN.Cast(_EKM_FN.Sum(_EKM_Q.F("date") - _EKM_Q.F("date")) / 2, "integer")),
   ("Floor Subquery int",      :Result,              m -> _EKM_FN.Floor(_EKM_Q.Subquery(_ekm_sub(m, :Result, "grid")))),
   # #1150: a quotient over a decimal or a float side is one, and SQLite divides it as REAL
   ("F decimal / 2",           :Constructor_results, m -> _EKM_Q.F("points") / 2),

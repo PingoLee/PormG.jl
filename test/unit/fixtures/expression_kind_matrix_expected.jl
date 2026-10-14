@@ -1406,6 +1406,174 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing, bigint = nothing),
   ("Sum F bigint << 1 | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing, bigint = nothing),
+  ("Sum F bigint + epoch / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", kind = nothing, whole_numeric = "numeric_whole_division", bigint = nothing),
+  ("Sum F bigint + epoch / 2 | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Sum F bigint + epoch / 2 | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", cte_field = "sIntegerField", cte_textless = "numeric_whole_division", kind = nothing, whole_numeric = "numeric_whole_division", bigint = nothing),
+  ("Sum F bigint + epoch / 2 | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Sum F bigint + epoch / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", kind = nothing, whole_numeric = "numeric_whole_division", bigint = nothing),
+  ("Sum F bigint + epoch / 2 | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Sum F int + epoch / 2 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing, bigint = nothing),
+  ("Sum F int + epoch / 2 | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Sum F int + epoch / 2 | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = nothing, whole_numeric = nothing, bigint = nothing),
+  ("Sum F int + epoch / 2 | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Sum F int + epoch / 2 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = nothing, whole_numeric = nothing, bigint = nothing),
+  ("Sum F int + epoch / 2 | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F bigint + epoch / 2 int | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over the IDField `raceid` means an integer quotient (`15 / 2` is `7`); Po"),
+  ("Cast Sum F bigint + epoch / 2 int | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F bigint + epoch / 2 int | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over the IDField `raceid` means an integer quotient (`15 / 2` is `7`); Po"),
+  ("Cast Sum F bigint + epoch / 2 int | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F bigint + epoch / 2 int | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over the IDField `raceid` means an integer quotient (`15 / 2` is `7`); Po"),
+  ("Cast Sum F bigint + epoch / 2 int | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F int + epoch / 2 int | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F int + epoch / 2 int | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F int + epoch / 2 int | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F int + epoch / 2 int | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F int + epoch / 2 int | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F int + epoch / 2 int | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F bigint + epoch / 2.0 int | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F bigint + epoch / 2.0 int | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F bigint + epoch / 2.0 int | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F bigint + epoch / 2.0 int | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F bigint + epoch / 2.0 int | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F bigint + epoch / 2.0 int | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Round Sum F int + epoch / 2 int | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Round Sum F int + epoch / 2 int | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Round Sum F int + epoch / 2 int | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Round Sum F int + epoch / 2 int | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Round Sum F int + epoch / 2 int | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Round Sum F int + epoch / 2 int | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F int + epoch / Count int | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F int + epoch / Count int | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F int + epoch / Count int | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F int + epoch / Count int | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F int + epoch / Count int | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F int + epoch / Count int | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F interval + interval / 2 text | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F interval + interval / 2 text | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F interval + interval / 2 text | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", cte_textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F interval + interval / 2 text | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", cte_textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F interval + interval / 2 text | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F interval + interval / 2 text | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Concat Sum F interval + interval / 2 | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
+  ("Concat Sum F interval + interval / 2 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
+  ("Concat Sum F interval + interval / 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
+  ("Concat Sum F interval + interval / 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
+  ("Concat Sum F interval + interval / 2 | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
+  ("Concat Sum F interval + interval / 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
+  ("Cast Sum F interval * 2 / 2 text | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of arithmetic over `SUM(…)` over an integer literal (a `bigint` on PostgreSQL) means an integer quotient"),
+  ("Cast Sum F interval * 2 / 2 text | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F interval * 2 / 2 text | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of arithmetic over `SUM(…)` over an integer literal (a `bigint` on PostgreSQL) means an integer quotient"),
+  ("Cast Sum F interval * 2 / 2 text | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", cte_textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F interval * 2 / 2 text | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of arithmetic over `SUM(…)` over an integer literal (a `bigint` on PostgreSQL) means an integer quotient"),
+  ("Cast Sum F interval * 2 / 2 text | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F datetime - datetime / 2 text | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F datetime - datetime / 2 text | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F datetime - datetime / 2 text | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", cte_textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F datetime - datetime / 2 text | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", cte_textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F datetime - datetime / 2 text | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F datetime - datetime / 2 text | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F int * interval / 2 text | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F int * interval / 2 text | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F int * interval / 2 text | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", cte_textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F int * interval / 2 text | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", cte_textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F int * interval / 2 text | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F int * interval / 2 text | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F date - date + bigint / 2 int | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over the IDField `raceid` means an integer quotient (`15 / 2` is `7`); Po"),
+  ("Cast Sum F date - date + bigint / 2 int | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F date - date + bigint / 2 int | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over the IDField `raceid` means an integer quotient (`15 / 2` is `7`); Po"),
+  ("Cast Sum F date - date + bigint / 2 int | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F date - date + bigint / 2 int | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over the IDField `raceid` means an integer quotient (`15 / 2` is `7`); Po"),
+  ("Cast Sum F date - date + bigint / 2 int | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F date - date / 2 int | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F date - date / 2 int | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F date - date / 2 int | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F date - date / 2 int | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", cte_textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F date - date / 2 int | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
+  ("Cast Sum F date - date / 2 int | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
   ("Floor Subquery int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing, bigint = nothing),
   ("Floor Subquery int | alone", :sqlite) =>
@@ -2075,6 +2243,12 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
   ("Avg interval | subquery", :sqlite) =>
     [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric")],
+  ("Sum F bigint + epoch / 2 | alone", :postgres) =>
+    [(:gap, "read=none vs textless=numeric")],
+  ("Sum F bigint + epoch / 2 | cte", :postgres) =>
+    [(:gap, "read=none vs cte_textless=numeric"), (:gap, "read=none vs textless=numeric")],
+  ("Sum F bigint + epoch / 2 | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=numeric")],
 )
 
 # The shapes whose channels answer differently across contexts, by `_ekm_cross_context`' rule.

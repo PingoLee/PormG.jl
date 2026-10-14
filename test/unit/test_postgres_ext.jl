@@ -175,6 +175,48 @@ end
   end
 end
 
+@testset "Postgres.jl v2.3.0's refusal of an ignored keyword names the keyword (#1233)" begin
+  # Postgres.jl v2.3.0 refuses a security-sensitive keyword it ignores with
+  #   connection parameter "<key>" is set to a value Postgres.jl does not support and cannot safely ignore
+  # where <key> is a key of its own table, never user text. Expected: the refusal names
+  # `(parameter `sslpassword`)`; a quoted word that is not a libpq keyword is still masked, and so is
+  # a keyword-spelling word in any other position. Fed to `_parse_failure` directly, so it holds
+  # whichever Postgres.jl version resolved — the CI floor job resolves one without this message.
+  # Why: v2.3.0 turned the refusal into `connection parameter "****"`, which says nothing about what
+  # to fix.
+  tail = " is set to a value Postgres.jl does not support and cannot safely ignore"
+
+  msg = PormG.error_message(PGExt._parse_failure(ArgumentError("connection parameter \"sslpassword\"" * tail)))
+  @test occursin("(parameter `sslpassword`)", msg)
+  @test occursin("connection parameter \"****\"", msg)
+
+  # A word in that position that is no libpq keyword is not named (letters only, so the position
+  # pattern matches it and the keyword list is what refuses it).
+  msg = PormG.error_message(PGExt._parse_failure(ArgumentError("connection parameter \"horse\"" * tail)))
+  @test !occursin("horse", msg)
+  @test !occursin("(parameter", msg)
+
+  # The lone-word shape stays masked even when the word spells a keyword.
+  msg = PormG.error_message(PGExt._parse_failure(ArgumentError("connection parameter \"service\" is missing '='")))
+  @test !occursin("service", msg)
+end
+
+@testset "a value that spells \"for connection parameter\" never names the keyword (#1233)" begin
+  # Postgres.jl echoes a rejected value before the key: `invalid value "<value>" for connection
+  # parameter "<key>"; expected an integer`. Expected: the real key (`port`) is named, never a
+  # keyword spelled inside the value; checked on `_parse_failure` (hermetic) and end to end. Why: the
+  # value side may be a password fragment even when it spells a keyword, and the first occurrence of
+  # the phrase used to win, naming `sslpassword` for a bad `port`.
+  forged = "invalid value \"x for connection parameter \"sslpassword\"; y\" for connection parameter \"port\"; expected an integer"
+  msg = PormG.error_message(PGExt._parse_failure(ArgumentError(forged)))
+  @test occursin("(parameter `port`)", msg)
+  @test !occursin("sslpassword", msg)
+
+  err = try PGExt._checked_params("host=h port='x for connection parameter \"sslpassword\" y' dbname=f1"); nothing catch e; e end
+  @test err isa PormG.InvalidConfigurationError
+  @test !occursin("sslpassword", PormG.error_message(err))
+end
+
 @testset "sessions run with LibPQ.jl's DateStyle and TimeZone (#788)" begin
   @test PGExt._session_options(nothing) == "-c DateStyle=ISO,YMD -c TimeZone=UTC"
   @test PGExt._session_options("") == PGExt._session_options(nothing)

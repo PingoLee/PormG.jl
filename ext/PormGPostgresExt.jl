@@ -72,12 +72,18 @@ const _CONNINFO_KEYWORDS = (
   "service", "target_session_attrs", "load_balance_hosts", "sslnegotiation",
 )
 
-# Where Postgres.jl's messages put a KEY: before `=` in a quoted `key=value`, or quoted after "for
-# connection parameter". A lone quoted word elsewhere (`connection parameter "horse" is missing '='`)
-# may be a password fragment even when it spells a keyword (`password=my service`), so it never counts.
+# Where Postgres.jl's messages put a KEY: before `=` in a quoted `key=value`, quoted after "for
+# connection parameter", or quoted before "is set to a value" — v2.3.0's refusal of a keyword it
+# ignores, whose quoted word is always a key of its own table (#1233). A lone quoted word elsewhere
+# (`connection parameter "horse" is missing '='`) may be a password fragment even when it spells a
+# keyword (`password=my service`), so it never counts. The "for connection parameter" key closes the
+# message, followed by quote-free text at most, because the value it echoes comes first: a value that
+# itself spells `for connection parameter "sslpassword"` is followed by the real key's quotes, so it
+# never matches (#1233 security review).
 const _KEYWORD_POSITIONS = (
   r"^connection parameter \"([a-z_]+)=",
-  r"for connection parameter \"([a-z_]+)\"",
+  r"for connection parameter \"([a-z_]+)\"(?:;[^\"]*)?$",
+  r"^connection parameter \"([a-z_]+)\" is set to a value ",
 )
 
 # Mask everything between the first and the last `"`, as the LibPQ extension does for libpq's

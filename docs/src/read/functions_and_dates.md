@@ -502,9 +502,13 @@ Say which text you mean:
 (#1147), so `Floor("grid") / 2` and `Sum("resultid") / 2` divide as integers and pass. An integer
 here includes a bitwise operator or a shift over integers (`F("grid") & 3`, `F("resultid") << 1`,
 which has its left operand's type) and a `Subquery` projecting one (#1153). One integer quotient is
-a question of meaning rather than of text: a `Sum` over an operand PormG cannot type that holds a
-`bigint`, which PostgreSQL computes as `numeric`, would keep the half there. It is refused on
-PostgreSQL only (#1111). A sum PormG types as a float or a decimal is that kind's quotient (#1157).
+a question of meaning rather than of text: a `Sum` over a number PormG cannot type (arithmetic
+with a JSON key's value, an `Extract` part it states no type for) may be a `bigint` or a `numeric`
+sum, which PostgreSQL computes as `numeric` and so keeps the half. It is refused on PostgreSQL only
+(#1111), whatever the sum holds: PormG cannot tell, so it does not guess. Give the dividend a type
+(`Cast(Sum(…), BigIntegerField()) / 2`) or divide by a float to say which quotient you mean. A sum
+PormG types as a float or a decimal is that kind's quotient (#1157), and a sum of temporal arithmetic
+(`Sum(F("fastestlaptime") * 2)`) is an interval, not a number.
 
 The check covers only types PormG can name: an operand it cannot type (an extremum over timestamp
 arithmetic, `Greatest`/`Least` over computed timestamps or intervals, a `Case` whose branches are
@@ -916,7 +920,7 @@ other builds the query as written. Measured on PostgreSQL 16 and SQLite 3.45:
 | to an integer, of a float, a decimal with places or a `numeric` function | the nearest integer (`1.5` → `2`) | builds | **refused**: its cast truncates (`1`) |
 | to `numeric(p, s)`, of an operand with more than `s` places | the value rounded to `s` places (`1.555` → `1.56`) | builds | **refused**: it keeps every digit |
 | to `numeric(p, s)`, of a literal it cannot hold (`Cast(Value(100), "numeric(3,2)")`) | an overflow | builds, and raises when the query runs | **refused**: it stores `100` |
-| any of these, of a `Sum` over an operand PormG cannot type that holds a `bigint`, divided | an integer quotient (`7`) | **refused**: it computes `numeric` (`7.5`) | builds |
+| any of these, of a `Sum` over a number PormG cannot type, divided | an integer quotient (`7`) when the sum is whole | **refused**: a `bigint` or `numeric` sum is `numeric` (`7.5`) | builds |
 
 The text of a float, a decimal, a timestamp or a document is the same value written two ways, so it
 is documented, not refused: the `Concat` section above lists each engine's text. A quotient is the

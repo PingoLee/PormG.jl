@@ -58,8 +58,8 @@ const _MEANING_DEPARTURES = (
 # it gets a `MethodError` rather than the meaning by default (#1170). This holds the message only.
 const _INTEGER_QUOTIENT_DEPARTURE = (
   targets = (:text, :integer, :scale, :concat), issue = "#1111",
-  meaning = _ -> "an integer quotient (`15 / 2` is `7`)",
-  computes = _ -> "a `numeric` one (`7.5`)",
+  meaning = _ -> "an integer quotient (`15 / 2` is `7`) when the sum is whole",
+  computes = _ -> "a `numeric` one (`7.5`) for a `bigint` or `numeric` sum",
   fix = (_, _) -> "Say which division you mean: cast the dividend to an integer first, \e[32mCast(x, BigIntegerField()) / 2\e[0m, which divides as integers on every engine, or divide by a float, \e[32mx / 2.0\e[0m, to keep the fraction.")
 
 """

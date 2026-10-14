@@ -235,7 +235,7 @@ _infer_function_kind(::Any, ::SQLInstruction, ::_KindPolicy) = nothing
 # A `Lag`/`Lead` `default` is one of the window's values too: PostgreSQL resolves `lag(int4, int,
 # float8)` to a `float8` and `lag(int4, int, int8)` to an `int8` (review of #1147), so the operand's
 # kind and the default's are unified as a `COALESCE`'s are. A string is a bound text literal there,
-# not a path (`_bigint_operand_function`); any other default PormG cannot type leaves the value untyped.
+# not a path (`_case_kind`); any other default PormG cannot type leaves the value untyped.
 function _with_window_default(p, kind, instruc::SQLInstruction, policy::_EveryKind)
   (p isa WindowFunction && kind !== nothing) || return kind
   default = get(p.kwargs, "default", nothing)

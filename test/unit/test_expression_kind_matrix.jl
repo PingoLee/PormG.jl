@@ -24,10 +24,11 @@
 # - `kind`      — `_expression_kind`, the one total inference (#1034, phase 2). Recorded, not compared:
 #                 the disagreement rule maps no family for it, so it joins neither pinned set until a
 #                 reader is moved onto it;
-# - `whole_numeric` / `bigint` — the integer-division classifiers (`_whole_numeric_operand`,
-#                 `_bigint_column`, #1111/#1127): a whole number PostgreSQL computes as `numeric`, and a
-#                 `bigint` there. Recorded, not compared, as `kind` is; under a CTE they are what the CTE
-#                 column answers, which pins phase 3 step 1 (#1034) moving the CTE's records.
+# - `whole_numeric` — the integer-division classifier (`_whole_numeric_operand`, #1111/#1127): a sum
+#                 the walk cannot type, under any value-carrying wrapper, which PostgreSQL may compute as
+#                 `numeric`. Recorded, not compared, as `kind` is; under a CTE it is what the CTE column
+#                 answers, which pins phase 3 step 1 (#1034) moving the CTE's records. (A `bigint`
+#                 channel beside it recorded the classifier #1034 phase 3 step 2a deleted.)
 #
 # A limit of the probe, by construction: every channel but `read` is asked AFTER the build, of the node
 # as the build saw it, and not at its own call site mid-build, so a channel whose answer depends on the
@@ -179,11 +180,10 @@ function _ekm_channels(instr, name::Symbol)
   # Last, so adding it moved no other channel's text in the fixture. It is no family claim: phase 3 of
   # #1034 moves readers onto it, and each move is then a diff of the channel it replaces.
   ch = merge(ch, (kind = _ekm_ask(() -> _EKM_QB._expression_kind(node, instr)),))
-  # The two division classifiers (#1111, #1127), after `kind` for the same reason. Under a CTE they are
-  # asked of the CTE column, so they read what the body answered for it (#1034 phase 3, step 1).
+  # The division classifier (#1111, #1127), after `kind` for the same reason. Under a CTE it is asked
+  # of the CTE column, so it reads what the body answered for it (#1034 phase 3, step 1).
   return merge(ch, (
     whole_numeric = _ekm_ask(() -> _EKM_QB._whole_numeric_operand(node, instr)),
-    bigint        = _ekm_ask(() -> _EKM_QB._bigint_column(node, instr)),
   ))
 end
 

@@ -42,7 +42,8 @@ on both. #1147 step 2 sorts each case by what the expression MEANS, never by the
   walk names a decimal or a float divides as REAL there, `(CAST(x AS REAL) / ?)` (#1150):
   `<decimal(4,0)> 15 / 2` is `7.5` on both, where #1087 refused it on SQLite.
 
-`output_field` on `Coalesce`/`Greatest`/`Least` renders the same cast, so it follows the same rules.
+`output_field` on `Coalesce`/`Greatest`/`Least` renders the same cast, so it follows the same rules, and
+so does a `Case`'s, over each branch value (#1217).
 A CTE column built from `Sum`/`Avg`, and a `Subquery`, are classified by the body's own projection.
 #1050 narrows the float-literal arm of #1040 to a literal with more places than the scale, and #1087
 reads a zero-scale `DecimalField` like an integer column until it is divided.
@@ -449,9 +450,10 @@ end
 # Review of #1028: a CTE column built from a JSON key lookup holds the value, not the document
 # The CTE types the column with the JSONField itself, so without the body's record it read as the
 # whole document and was refused. The document column is still refused by `Concat`, on every engine
-# (explicit intent). A `Case(…; output_field)` stays unchecked (its value is a branch).
+# (explicit intent). A `Case(…; output_field = "text")` over an integer branch builds: an integer's
+# text is representation (its branches are checked since #1217).
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1028: a JSON key column of a CTE passes; Case output_field is not checked" begin
+@testset "#1028: a JSON key column of a CTE passes; a Case output_field text over an integer builds" begin
   function withcte(col)
     q = CCD.Ccd_team.objects
     body = CCD.Ccd_driver.objects
@@ -473,8 +475,9 @@ end
 # (`_case_kind`); since #1187 the classifier reads the branches itself (`_case_textless_branch`) and
 # names the branch — a `Coalesce` over such a `Case` too. Expected SQL, PostgreSQL:
 #   (CASE WHEN "Tb"."number" = $1 THEN $2::double precision ELSE $3::bigint END)::integer
-# Built on both: integer branches, text branches, a NULL default, a `Case` with an `output_field` (it
-# decides alone), and the cast to text (representation).
+# Built on both: integer branches, text branches, a NULL default, and the cast to text
+# (representation). A `Case` with an `output_field = IntegerField()` over the same `1.5` branch is that
+# cast already, so it is refused on SQLite by itself (#1217), before the outer cast is read.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1151: a Case with a float branch, cast to an integer, is refused on SQLite only" begin
   float_case(; then = 1.5, default = 0) = Fn.Case(Fn.When("number" => 1, then = then), default = default)
@@ -491,10 +494,11 @@ end
   for expr in (Fn.Cast(float_case(then = 1), Models.IntegerField()),
                Fn.Cast(float_case(then = "a", default = "b"), Models.IntegerField()),
                Fn.Cast(float_case(then = 2, default = nothing), Models.IntegerField()),
-               Fn.Cast(Fn.Case(Fn.When("number" => 1, then = 1.5), default = 0; output_field = Models.IntegerField()), Models.IntegerField()),
                Fn.Cast(float_case(), "text"))
     @test _ccd_builds(expr)
   end
+  _ccd_expect(Fn.Cast(Fn.Case(Fn.When("number" => 1, then = 1.5), default = 0; output_field = Models.IntegerField()), Models.IntegerField());
+              departs = _SL_ONLY, issue = "#1028", named = "Case(…; output_field = ")
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -666,6 +670,52 @@ end
       conn in _CCD_ENGINES
     @test _ccd_refusal(expr; conn = conn) === nothing
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1217: a Case's output_field is checked against each branch value, as Cast checks its operand
+# A `Case(…; output_field = T)` renders `(CASE … END)::T` on PostgreSQL and `CAST(CASE … END AS T)` on
+# SQLite, the same declared cast as `Cast` and `Coalesce`'s `output_field`, taken on whichever branch
+# the row matches. So each `then` and the default is an operand: `numeric(10,1)` over a float or a
+# two-place decimal branch is rounded by PostgreSQL and kept by SQLite (#1040), `integer` over `1.5` is
+# `2` on PostgreSQL and `1` on SQLite (#1028), `text` over a boolean is `true` / `1` (#1028): refused
+# on SQLite only. A branch with nothing to round builds on both, and so does a `Cast` over a declared
+# `Case` whose scale the cast's covers (the `Case` is checked itself). Expected SQL, PostgreSQL:
+#   (CASE WHEN "Tb"."number" = $1 THEN "Tb"."points" ELSE $2::numeric(10,1) END)::numeric(10,1)
+# Why: before #1217 every one of these built, a silent different value on SQLite.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1217: a Case output_field is checked against its branches, refused on SQLite only" begin
+  case(then; default = 0, output_field) = Fn.Case(Fn.When("number" => 1, then = then), default = default, output_field = output_field)
+  for (expr, issue, named) in (
+      (case(_CF("points"); output_field = "numeric(10,1)"), "#1040", "the FloatField `points`"),
+      (case(_CF("points") * 1.5; output_field = "numeric(10,1)"), "#1040", "arithmetic over the FloatField `points`"),
+      (case(_CF("price"); output_field = "numeric(10,1)"), "#1040", "the DecimalField `price` (2 decimal places)"),
+      (case(1; default = _CF("points"), output_field = "numeric(10,0)"), "#1040", "the FloatField `points`"),   # the default too
+      (case(1; default = _CF("team__rating"), output_field = "numeric(10,0)"), "#1040", "the FloatField `team__rating`"),   # a joined default (rendered in Phase 3)
+      (case(1.5; output_field = "integer"), "#1028", "a Float64 literal"),
+      (case(1.5; output_field = Models.IntegerField()), "#1028", "a Float64 literal"),
+      (case(_CF("price"); output_field = "bigint"), "#1028", "the DecimalField `price`"),
+      (Fn.Case(Fn.When("number" => 1, then = _CF("active")); output_field = "text"), "#1028", "the BooleanField `active`"),
+      (Fn.Coalesce(case(_CF("points"); output_field = "numeric(10,1)"), 0), "#1040", "the FloatField `points`"))
+    errs = _ccd_expect(expr; departs = _SL_ONLY, issue = issue, named = named)
+    @test occursin("Case(…; output_field = ", _ccd_msg(errs.sqlite))
+  end
+  @test occursin("(CASE WHEN \"Tb\".\"number\" = \$1 THEN \"Tb\".\"points\" ELSE \$2::numeric(10,1) END)::numeric(10,1) as \"x\"",
+                 _ccd_render(case(_CF("points"); output_field = "numeric(10,1)"); conn = _CCD_PG))
+  for expr in (case(Fn.Round("points", 1); output_field = "numeric(10,1)"),
+               case(_CF("number"); output_field = "numeric(10,1)"),
+               case(_CF("price"); output_field = "numeric(10,2)"),
+               case(1.5; output_field = "numeric(10,1)"),          # #1050: one place fits one
+               case(_CF("grid"); output_field = "integer"),        # a zero-scale decimal is whole
+               case(Fn.Floor("points"); output_field = Models.IntegerField()),
+               case(_CF("points"); output_field = "numeric"),      # unscaled keeps the value
+               case(Fn.Value(1); output_field = "text"),            # an integer's text is representation
+               Fn.Cast(case(Fn.Round("points", 1); output_field = "numeric(10,1)"), "numeric(10,2)"))
+    @test _ccd_builds(expr)
+  end
+  # The nested declaration is read for its scale: one place under a cast to none still rounds.
+  _ccd_expect(Fn.Cast(case(Fn.Round("points", 1); output_field = "numeric(10,1)"), "numeric(10,0)");
+              departs = _SL_ONLY, issue = "#1040", named = "a value cast to numeric(10,1)")
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

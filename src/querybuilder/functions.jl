@@ -1158,7 +1158,9 @@ first match.
   `CAST(...)` on SQLite — `date(...)` for a date, and a time type raises `BackendCapabilityError`
   there (#822). In a CTE body it is also the column's type; without it the type is
   inferred from the branches, and branches that do not agree raise `QueryBuildError` — see
-  [How a CTE Column Is Typed](@ref).
+  [How a CTE Column Is Typed](@ref). A text, integer or scaled `numeric(p, s)` `output_field`
+  refuses, branch by branch, the operands [`Cast`](@ref) refuses (#1028, #1040, #1217): round a
+  float branch first (`then = Round("points", 1)` at `numeric(10,1)`).
 
 Usable anywhere a column expression is — in `values()`, nested inside [`Sum`](@ref), as a
 filter right-hand side, and in `.update()`.

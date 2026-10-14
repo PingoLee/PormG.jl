@@ -1,7 +1,7 @@
 ## `Cast` of a boolean to text, or of a fraction to an integer, is refused on SQLite; more `Concat` operands are refused (#1028)
 
 - **Version**: Unreleased
-- **PormG ref**: #1028, amended by #1147, #1151 and #1187 ; `src/querybuilder/projection_types.jl` (`_cast_divergent_operand`, `_concat_textless_operand`), `src/querybuilder/engine_departures.jl` (`_MEANING_DEPARTURES`), `src/querybuilder/select_nodes.jl`, `src/querybuilder/functions.jl`, `src/querybuilder/ctes.jl`
+- **PormG ref**: #1028, amended by #1147, #1151, #1187 and #1217 ; `src/querybuilder/projection_types.jl` (`_cast_divergent_operand`, `_concat_textless_operand`), `src/querybuilder/engine_departures.jl` (`_MEANING_DEPARTURES`), `src/querybuilder/select_nodes.jl`, `src/querybuilder/functions.jl`, `src/querybuilder/ctes.jl`
 - **Recorded**: 2026-10-08
 - **Severity**: breaking. On SQLite, a `Cast` (or an `output_field` cast) of a boolean to text, or of a fractional number to an integer, raises `QueryBuildError` where it used to render. On every engine, a `Concat` with a timestamp, interval or JSON-document operand does.
 
@@ -42,9 +42,16 @@ timestamp or interval branch is refused too (#1187). A CTE column built from an 
 (`Sum("points")`, `Avg("number")`) is classified by the body's own expression, so it is refused
 where the aggregate is.
 
+A `Case` with an `output_field` renders that cast over whichever branch a row matches, so its
+branches are held to it the same way (#1217); before, it was not checked. On SQLite,
+`Case(When("grid" => 1, then = 1.5), default = 0; output_field = IntegerField())` (`2` on
+PostgreSQL, was `1`) and a `Case` with a `BooleanField` branch and `output_field = "text"`
+(`'true'` on PostgreSQL, was `'1'`) are now refused; a `Floor(x)` branch, or an integer
+branch cast to text, builds on both.
+
 Unchanged: a cast of an integer, text, date, time or uuid; a boolean cast to an integer; a cast to
 any other type (`"numeric"`, `"double precision"`, `"date"`; a scaled `"numeric(10,2)"` is checked
-since #1040); a JSON key lookup in `Concat` (`"payload__driver"`); `Case(…; output_field)`; and the
+since #1040); a JSON key lookup in `Concat` (`"payload__driver"`); and the
 `@yyyy_q` / `@yyyy_quad` labels.
 
 ### Who this affects

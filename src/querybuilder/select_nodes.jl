@@ -760,6 +760,13 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # #1200: a value of one of several operands over two temporal types, or a temporal type and text,
   # refused on every engine. After Phase 3, so a `Case`'s rendered default has filled its memo.
   v isa FObject && _check_temporal_mix(v, instruc)
+  # #1217: a `Case`'s `output_field` is the same declared cast as the four above, over its branch
+  # values (`_cast_divergent_operand` reads them). After Phase 3 for the same reason as #1200.
+  if _declared_case(v)
+    d = _cast_divergent_operand(v, instruc)
+    d === nothing || throw(_meaning_refusal(_declared_cast_label(v), d.what, d.row, instruc.connection;
+                                            flag = d.flag, declared = d.declared))
+  end
   sql = getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection)
   # #900: PostgreSQL's `avg(interval)` is an interval; the milliseconds' mean is rounded to one, the
   # precision every SQLite interval has (#881).

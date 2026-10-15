@@ -171,6 +171,9 @@ linha2&#39;)</code></pre><p>imports as <code>default=&quot;linha1linha2&quot;</c
 module MyApp
     using PormG
     
+    # The configuration first: registering models never loads it for you
+    PormG.Configuration.load(&quot;db&quot;; root = normpath(joinpath(@__DIR__, &quot;..&quot;)), env = &quot;dev&quot;)
+
     # Load the converted models
     PormG.@import_models &quot;db/models.jl&quot; models
     import .models as M

@@ -224,8 +224,9 @@ end
     (:Constructor_results, () -> _CN_QB.Cast("points", "numeric(10,2)"),                       _CN_DECIMAL),
     (:Result,              () -> _CN_QB.Cast("grid", dec),                                     _CN_DECIMAL),
     (:Result,              () -> _CN_QB.Cast("grid", "decimal"),                               _CN_DECIMAL),
-    (:Result,              () -> _CN_QB.Coalesce(F("points") * 1.5, 0; output_field = dec),    _CN_DECIMAL),
-    (:Result,              () -> _CN_QB.Greatest("points", "grid"; output_field = dec),        _CN_DECIMAL),
+    # `dec` is `numeric(10,2)` (#1221), so the operands are rounded to fit it on SQLite (#1040)
+    (:Result,              () -> _CN_QB.Coalesce(_CN_QB.Round(F("points") * 1.5, 2), 0; output_field = dec), _CN_DECIMAL),
+    (:Result,              () -> _CN_QB.Greatest(_CN_QB.Round("points", 2), "grid"; output_field = dec), _CN_DECIMAL),
     (:Result,              () -> _CN_QB.Least("grid", "laps"; output_field = "numeric(10,2)"), _CN_DECIMAL),
     (:Result,              () -> _CN_QB.Case([_CN_QB.When("grid" => 1, then = 1.5)], default = 0, output_field = dec), _CN_DECIMAL),
     # a value over a declared decimal composes it, and drops the declared width

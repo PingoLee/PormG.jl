@@ -908,8 +908,8 @@ scale, and a `COLLATE` clause. The same rules apply to the `output_field=` strin
 
 #### A cast an engine computes differently
 
-A cast to text, to an integer or to a scaled `numeric(p, s)` goes through each engine's own
-conversion. PormG checks each engine against what the cast **means**, never against the other
+A cast to text, to an integer, to a scaled `numeric(p, s)` or to a single-precision float goes
+through each engine's own conversion. PormG checks each engine against what the cast **means**, never against the other
 engine (#1147). The engine that departs raises `QueryBuildError` when the query is built, and the
 other builds the query as written. Measured on PostgreSQL 16 and SQLite 3.45:
 
@@ -920,6 +920,7 @@ other builds the query as written. Measured on PostgreSQL 16 and SQLite 3.45:
 | to an integer, of a float, a decimal with places or a `numeric` function | the nearest integer (`1.5` → `2`) | builds | **refused**: its cast truncates (`1`) |
 | to `numeric(p, s)`, of an operand with more than `s` places | the value rounded to `s` places (`1.555` → `1.56`) | builds | **refused**: it keeps every digit |
 | to `numeric(p, s)`, of a literal it cannot hold (`Cast(Value(100), "numeric(3,2)")`) | an overflow | builds, and raises when the query runs | **refused**: it stores `100` |
+| to `real`, of any value | the value rounded to single precision, read back as a `Float32` (`0.1` → `0.10000000149011612` as a `Float64`) | builds | **refused**: it has no 4-byte float and keeps the 8-byte double (`0.1`) |
 | any of these, of a `Sum` over a number PormG cannot type, divided | an integer quotient (`7`) when the sum is whole | **refused**: a `bigint` or `numeric` sum is `numeric` (`7.5`) | builds |
 
 The text of a float, a decimal, a timestamp or a document is the same value written two ways, so it
@@ -947,6 +948,11 @@ What each row covers:
   of them (`Max`, `Min`, `Abs`, `Coalesce`, `Greatest`, `Least`, `NullIf`) pass. So does a `Case`
   with no `output_field` whose every branch passes (#1187): `then = 1.5` at scale 2 passes, a
   `FloatField` branch at scale 0 does not;
+- **single precision**: `"real"`, `"float4"` and `"float(p)"` for `p` up to 24, which PostgreSQL
+  resolves to `real` (#1215), and the same `output_field`. Every operand is refused on SQLite, an
+  integer column included, because the value PostgreSQL returns is a `Float32` whatever it rounded.
+  For a float on every engine, cast to a double: `"float8"`, `"float(25)"` to `"float(53)"`,
+  `"double precision"` or `FloatField()`, a `Float64` on both;
 - **an overflow**: only a literal is checked, because only a literal is certain to overflow (#1087).
   A column or a computed value overflows on the rows that hold a large value and not on the others,
   so on such a row PostgreSQL raises and SQLite answers. Neither is the literal of a `Coalesce`,
@@ -982,10 +988,14 @@ documented rather than refused (#1087).
 For a scaled `numeric`, round to the scale first: `Cast(Round(x, 2), "numeric(10,2)")` builds on
 every engine, because `Round(x, d)` has at most `d` places, so a cast to a scale of at least `d` has
 nothing left to round. Only a decimal tie can differ, in its last digit, as *Rounding to decimal
-places* above describes (#1061). Otherwise cast to an unscaled `"numeric"` (or `DecimalField()`),
-which keeps the value.
+places* above describes (#1061). Otherwise cast to an unscaled `"numeric"`, which keeps the value.
 
-A cast to any other type (`"numeric"`, `"double precision"`, `"date"`) is not checked: it is not a
+A `DecimalField` object declares its precision and scale with its type, as its column does (#1221):
+`Cast(x, DecimalField(max_digits = 10, decimal_places = 1))` is `Cast(x, "numeric(10,1)")`, the same
+SQL on each engine and the same refusal, and `DecimalField()` is `numeric(10,2)`. The same holds for
+an `output_field`. So the unscaled cast is the string `"numeric"`, not `DecimalField()`.
+
+A cast to any other type (`"numeric"`, `"double precision"`, `"float8"`, `"date"`) is not checked: it is not a
 text conversion, and `Concat` refuses the result if you then use it as text.
 
 ```julia
@@ -1002,7 +1012,7 @@ M.Result.objects.filter("raceid" => 2).values(
     "up"      => Cast(Ceil("points"), IntegerField()))    # 1.5 → 2
 ```
 
-A cast to a decimal type (`"numeric"`, `"numeric(p, s)"`, `"decimal"`, `DecimalField()`) reads back
+A cast to a decimal type (`"numeric"`, `"numeric(p, s)"`, `"decimal"`, a `DecimalField`) reads back
 as a `Decimals.Decimal` on every engine when its operand is a number (#1212). PostgreSQL's driver delivers
 one. SQLite computes a REAL, or an INTEGER when the operand is whole, and PormG builds the `Decimal`
 from it to 15 significant digits, as it does for a computed decimal (see
@@ -1016,7 +1026,7 @@ using PormG.Models: DecimalField
 
 # Result 1 is Lewis Hamilton's win at the 2008 Australian GP: grid 1, 10 points.
 M.Result.objects.filter("resultid" => 1).values(
-    "grid"   => Cast("grid", DecimalField()),                         # Decimal 1 on both engines
+    "grid"   => Cast("grid", DecimalField()),                         # numeric(10,2): Decimal 1 on both engines
     "scaled" => Cast(Round(F("points") * 1.5, 2), "numeric(10,2)"))   # Decimal 15 on both engines
 ```
 
@@ -1045,8 +1055,10 @@ where PostgreSQL rounds. Round the branches to the scale (`then = Round(F("point
 leave the scale off.
 
 An `output_field` naming a decimal type reads back as a `Decimals.Decimal` on every engine, as a
-`Cast` to one does (#1212): `Coalesce(F("points") * 1.5, 0; output_field = DecimalField())` is a
-`Decimal` on PostgreSQL and on SQLite. The type is the same, and so is the value wherever PormG can
+`Cast` to one does (#1212): `Coalesce(F("points") * 1.5, 0; output_field = "numeric")` is a
+`Decimal` on PostgreSQL and on SQLite. With `output_field = DecimalField()`, which is
+`numeric(10,2)` (#1221), the float arithmetic is held to two places and refused on SQLite; round it
+first, `Coalesce(Round(F("points") * 1.5, 2), 0; output_field = DecimalField())`. The type is the same, and so is the value wherever PormG can
 type the operand: a scale an engine would not round to is refused there, as described just above.
 
 `Concat` renders no cast on either engine, because its result is always text. Its `output_field`

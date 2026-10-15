@@ -707,10 +707,11 @@ function _check_operand_count(fname::AbstractString, x::Tuple)
 end
 
 # #696: every `output_field=` goes through here, so a type string is validated when the expression
-# is built rather than when it renders. A field object contributes its canonical `type`; the dialect
-# maps that to the engine's spelling (`BLOB` → `bytea`). `""` has always meant "no cast" to `CASE`.
+# is built rather than when it renders. A field object contributes its declared type
+# (`_field_cast_type`); the dialect maps that to the engine's spelling (`BLOB` → `bytea`). `""` has
+# always meant "no cast" to `CASE`.
 _output_field_type(::Nothing) = nothing
-_output_field_type(f::PormGField) = Dialect.cast_type_name(f.type; context = "output_field")
+_output_field_type(f::PormGField) = Dialect.cast_type_name(_field_cast_type(f); context = "output_field")
 _output_field_type(s::AbstractString) = isempty(s) ? nothing : Dialect.cast_type_name(s; context = "output_field")
 
 """
@@ -721,7 +722,9 @@ SQLite has no time types: a `date` target renders `date(x)` there, and `timestam
 `time` and `interval` raise `BackendCapabilityError` (#822).
 
 `type` is preferably a field object (`Cast("grid", BigIntegerField())`), which renders in each
-engine's own spelling. A string is accepted when it is a single type name (`"integer"`, `"bigint"`,
+engine's own spelling. A `DecimalField` casts to its own precision and scale (#1221):
+`Cast(x, DecimalField(max_digits = 10, decimal_places = 1))` is `Cast(x, "numeric(10,1)")`, and
+`DecimalField()` is `numeric(10,2)`. A string is accepted when it is a single type name (`"integer"`, `"bigint"`,
 `"text"`, `"timestamptz"`), one of the multi-word names `"double precision"`,
 `"character varying"`, `"bit varying"`, `"timestamp with time zone"` (and `without`, and the `time`
 forms), optionally followed by a size `(n)` or `(n, m)` — `"numeric(10,2)"`, `"varchar(20)"` — and,
@@ -746,7 +749,10 @@ different value raises `QueryBuildError` when the query is built, and the others
   point (a float column, a float literal with more places (#1050), text, a `numeric` function, a
   decimal with more places) means the value rounded to the scale, and SQLite, which keeps every
   digit, refuses it (#1040). Round it first, `Cast(Round(x, 2), "numeric(10,2)")`, or cast to an
-  unscaled `"numeric"`.
+  unscaled `"numeric"`. A `DecimalField` target is its `numeric(max_digits, decimal_places)`;
+- to a single-precision float (`"real"`, `"float4"`, `"float(p)"` for p ≤ 24), any value means the
+  value rounded to a 4-byte float, a `Float32`, and SQLite, which keeps the 8-byte double, refuses
+  it (#1215). Cast to `"float8"` or `FloatField()`, a `Float64` on every engine.
 
 ```julia
 using PormG.Functions: Cast, Round
@@ -763,8 +769,15 @@ function Cast(x::_ScalarOperand, type::AbstractString)
 end
 _result_rule(::Val{:CAST}) = :declared
 function Cast(x::_ScalarOperand, type::PormGField)
-  return Cast(x, type.type)
+  return Cast(x, _field_cast_type(type))
 end
+# #1221 — the type a field object declares as a cast or an `output_field`: its canonical `type`, except
+# a `DecimalField`, whose precision and scale are part of its type, as they are of its column
+# (`decimal(10, 2)`) and of Django's `Cast`. A sized name skips the type maps, so it renders
+# `numeric(10,2)` on both engines, and the rules for a declared scale (#1040, #1087) read it as they
+# read the string `"numeric(10,2)"`. `DecimalField()` is `(10, 2)`: an unscaled cast is the string `"numeric"`.
+_field_cast_type(f::PormGField) = f.type
+_field_cast_type(f::Models.sDecimalField) = "numeric($(f.max_digits),$(f.decimal_places))"
 
 """
     Concat(expressions; output_field=nothing)
@@ -1154,7 +1167,8 @@ first match.
   you want a real default. `missing` is emitted as `NULL` too, and a column expression
   (`F("grid")`) renders as that column.
 - `output_field`: the result type. Accepts a `PormGField` instance (e.g. `CharField()`, whose
-  `.type` is used) or a raw SQL type string. Renders as a `::type` cast on PostgreSQL and a
+  `.type` is used; a `DecimalField` casts to its `numeric(max_digits, decimal_places)`, #1221) or a
+  raw SQL type string. Renders as a `::type` cast on PostgreSQL and a
   `CAST(...)` on SQLite — `date(...)` for a date, and a time type raises `BackendCapabilityError`
   there (#822). In a CTE body it is also the column's type; without it the type is
   inferred from the branches, and branches that do not agree raise `QueryBuildError` — see

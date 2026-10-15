@@ -249,6 +249,27 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Case decimal output scale 2", :Constructor_results, m -> _EKM_FN.Case([_EKM_FN.When("status" => "x", then = _EKM_Q.F("points"))], default = 0, output_field = "numeric(10,2)")),
   ("Case Floor output integer", :Result,            m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_FN.Floor("points"))], default = 0, output_field = "integer")),
   ("Cast Case output scale 1 to scale 2", :Result,  m -> _EKM_FN.Cast(_EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_FN.Round("points", 1))], default = 0, output_field = "numeric(10,1)"), "numeric(10,2)")),
+  # #1034 phase 3 step 2b: the scale a nested declaration or an extremum carries into a scaled cast
+  ("Cast Cast Round scale 2 to scale 1", :Result,   m -> _EKM_FN.Cast(_EKM_FN.Cast(_EKM_FN.Round("points", 2), "numeric(10,2)"), "numeric(10,1)")),
+  ("Cast Cast Round scale 1 to scale 2", :Result,   m -> _EKM_FN.Cast(_EKM_FN.Cast(_EKM_FN.Round("points", 1), "numeric(10,1)"), "numeric(10,2)")),
+  ("Cast Max decimal to scale 1", :Constructor_results, m -> _EKM_FN.Cast(_EKM_FN.Max("points"), "numeric(10,1)")),
+  ("Cast decimal to scale 1", :Constructor_results, m -> _EKM_FN.Cast("points", "numeric(10,1)")),
+  ("Cast int to scale 1",     :Result,              m -> _EKM_FN.Cast("grid", "numeric(10,1)")),
+  # #1215: a single-precision cast — `real`, `float4`, `float(p)` up to 24 — and `float(25)`, a double
+  ("Cast float float4",       :Result,              m -> _EKM_FN.Cast("points", "float4")),
+  ("Cast float float(24)",    :Result,              m -> _EKM_FN.Cast("points", "float(24)")),
+  ("Cast float float(25)",    :Result,              m -> _EKM_FN.Cast("points", "float(25)")),
+  ("Cast int real",           :Result,              m -> _EKM_FN.Cast("grid", "real")),
+  ("Coalesce float int output real", :Result,       m -> _EKM_FN.Coalesce("points", "grid"; output_field = "real")),
+  ("Case float literal output real", :Result,       m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1.5)], default = 0, output_field = "real")),
+  # #1221: a `DecimalField(max_digits, decimal_places)` declaration, each beside its `"numeric(p,s)"` twin
+  ("Cast float DecimalField(10,1)", :Result,        m -> _EKM_FN.Cast("points", PormG.Models.DecimalField(max_digits = 10, decimal_places = 1))),
+  ("Cast int DecimalField(10,1)", :Result,          m -> _EKM_FN.Cast("grid", PormG.Models.DecimalField(max_digits = 10, decimal_places = 1))),
+  ("Cast decimal DecimalField(10,1)", :Constructor_results, m -> _EKM_FN.Cast("points", PormG.Models.DecimalField(max_digits = 10, decimal_places = 1))),
+  ("Coalesce F float * 1.5 output DecimalField(10,1)", :Result, m -> _EKM_FN.Coalesce(_EKM_Q.F("points") * 1.5, 0; output_field = PormG.Models.DecimalField(max_digits = 10, decimal_places = 1))),
+  ("Case F float * 1.5 output DecimalField(10,1)", :Result, m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_Q.F("points") * 1.5)], default = 0, output_field = PormG.Models.DecimalField(max_digits = 10, decimal_places = 1))),
+  ("Cast Case output DecimalField(10,1) to scale 2", :Result, m -> _EKM_FN.Cast(_EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_FN.Round("points", 1))], default = 0, output_field = PormG.Models.DecimalField(max_digits = 10, decimal_places = 1)), "numeric(10,2)")),
+  ("Cast Cast Round DecimalField(10,2) to scale 1", :Result, m -> _EKM_FN.Cast(_EKM_FN.Cast(_EKM_FN.Round("points", 2), PormG.Models.DecimalField(max_digits = 10, decimal_places = 2)), "numeric(10,1)")),
   # ── subqueries ─────────────────────────────────────────────────────────────────────────────────
   ("Subquery Max hop date",   :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Max("raceid__date")))),
   ("Subquery Avg float",      :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Avg("points")))),

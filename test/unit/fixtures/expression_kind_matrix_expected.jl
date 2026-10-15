@@ -1923,53 +1923,53 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast decimal to scale 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | alone", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce F float output decimal | alone", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce F float output decimal | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,2)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
   ("Coalesce F float output decimal | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce F float output decimal | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,2)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
   ("Coalesce F float output decimal | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce F float output decimal | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,2)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
   ("Greatest float int output decimal | alone", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Greatest float int output decimal | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Greatest(…; output_field = \"numeric(10,2)\") of the FloatField `points` means the value rounded to the scale of numeric(1"),
   ("Greatest float int output decimal | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Greatest float int output decimal | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Greatest(…; output_field = \"numeric(10,2)\") of the FloatField `points` means the value rounded to the scale of numeric(1"),
   ("Greatest float int output decimal | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Greatest float int output decimal | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Greatest(…; output_field = \"numeric(10,2)\") of the FloatField `points` means the value rounded to the scale of numeric(1"),
   ("Case float output decimal | alone", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case float output decimal | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case float output decimal | cte", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case float output decimal | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case float output decimal | subquery", :postgres) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case float output decimal | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Max Cast F float numeric | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | alone", :sqlite) =>
@@ -2009,15 +2009,15 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast float real | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
   ("Cast float real | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
   ("Cast float real | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
   ("Case F float * 1.5 output scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output scale 1 | alone", :sqlite) =>
@@ -2162,6 +2162,222 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output scale 1 to scale 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast Round scale 2 to scale 1 | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast Cast Round scale 2 to scale 1 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
+  ("Cast Cast Round scale 2 to scale 1 | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast Cast Round scale 2 to scale 1 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
+  ("Cast Cast Round scale 2 to scale 1 | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast Cast Round scale 2 to scale 1 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
+  ("Cast Cast Round scale 1 to scale 2 | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast Round scale 1 to scale 2 | alone", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast Round scale 1 to scale 2 | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast Round scale 1 to scale 2 | cte", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast Round scale 1 to scale 2 | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast Round scale 1 to scale 2 | subquery", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Max decimal to scale 1 | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast Max decimal to scale 1 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of `MAX(…)` over the DecimalField `points` (2 decimal places) means the value rounded to the sc"),
+  ("Cast Max decimal to scale 1 | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast Max decimal to scale 1 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of `MAX(…)` over the DecimalField `points` (2 decimal places) means the value rounded to the sc"),
+  ("Cast Max decimal to scale 1 | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast Max decimal to scale 1 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of `MAX(…)` over the DecimalField `points` (2 decimal places) means the value rounded to the sc"),
+  ("Cast decimal to scale 1 | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast decimal to scale 1 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
+  ("Cast decimal to scale 1 | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast decimal to scale 1 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
+  ("Cast decimal to scale 1 | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast decimal to scale 1 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
+  ("Cast int to scale 1 | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast int to scale 1 | alone", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast int to scale 1 | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast int to scale 1 | cte", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast int to scale 1 | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast int to scale 1 | subquery", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast float float4 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast float float4 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float4\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte doub"),
+  ("Cast float float4 | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast float float4 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float4\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte doub"),
+  ("Cast float float4 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast float float4 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float4\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte doub"),
+  ("Cast float float(24) | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast float float(24) | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float(24)\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte d"),
+  ("Cast float float(24) | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast float float(24) | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float(24)\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte d"),
+  ("Cast float float(24) | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast float float(24) | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float(24)\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte d"),
+  ("Cast float float(25) | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast float float(25) | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast float float(25) | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast float float(25) | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast float float(25) | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast float float(25) | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast int real | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast int real | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
+  ("Cast int real | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast int real | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
+  ("Cast int real | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast int real | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
+  ("Coalesce float int output real | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Coalesce float int output real | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite compute"),
+  ("Coalesce float int output real | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Coalesce float int output real | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite compute"),
+  ("Coalesce float int output real | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Coalesce float int output real | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite compute"),
+  ("Case float literal output real | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Case float literal output real | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes th"),
+  ("Case float literal output real | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Case float literal output real | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes th"),
+  ("Case float literal output real | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Case float literal output real | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes th"),
+  ("Cast float DecimalField(10,1) | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast float DecimalField(10,1) | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
+  ("Cast float DecimalField(10,1) | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast float DecimalField(10,1) | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
+  ("Cast float DecimalField(10,1) | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast float DecimalField(10,1) | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
+  ("Cast int DecimalField(10,1) | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast int DecimalField(10,1) | alone", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast int DecimalField(10,1) | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast int DecimalField(10,1) | cte", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast int DecimalField(10,1) | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast int DecimalField(10,1) | subquery", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast decimal DecimalField(10,1) | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast decimal DecimalField(10,1) | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
+  ("Cast decimal DecimalField(10,1) | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast decimal DecimalField(10,1) | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
+  ("Cast decimal DecimalField(10,1) | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast decimal DecimalField(10,1) | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
+  ("Coalesce F float * 1.5 output DecimalField(10,1) | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Coalesce F float * 1.5 output DecimalField(10,1) | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
+  ("Coalesce F float * 1.5 output DecimalField(10,1) | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Coalesce F float * 1.5 output DecimalField(10,1) | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
+  ("Coalesce F float * 1.5 output DecimalField(10,1) | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Coalesce F float * 1.5 output DecimalField(10,1) | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
+  ("Case F float * 1.5 output DecimalField(10,1) | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Case F float * 1.5 output DecimalField(10,1) | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the scale "),
+  ("Case F float * 1.5 output DecimalField(10,1) | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Case F float * 1.5 output DecimalField(10,1) | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the scale "),
+  ("Case F float * 1.5 output DecimalField(10,1) | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Case F float * 1.5 output DecimalField(10,1) | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the scale "),
+  ("Cast Case output DecimalField(10,1) to scale 2 | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Case output DecimalField(10,1) to scale 2 | alone", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Case output DecimalField(10,1) to scale 2 | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Case output DecimalField(10,1) to scale 2 | cte", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Case output DecimalField(10,1) to scale 2 | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Case output DecimalField(10,1) to scale 2 | subquery", :sqlite) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast Round DecimalField(10,2) to scale 1 | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast Cast Round DecimalField(10,2) to scale 1 | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
+  ("Cast Cast Round DecimalField(10,2) to scale 1 | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", cte_textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast Cast Round DecimalField(10,2) to scale 1 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
+  ("Cast Cast Round DecimalField(10,2) to scale 1 | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast Cast Round DecimalField(10,2) to scale 1 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
   ("Subquery Max hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Subquery Max hop date | alone", :sqlite) =>

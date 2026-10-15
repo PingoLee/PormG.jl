@@ -243,10 +243,11 @@ const _EKR_MEANING = [
   ("Cast decimal to scale 2",   "Decimal",  5.5,       true),
   ("Cast int DecimalField",     "Decimal",  1.0,       true),
   ("Cast Case float literal to scale 2", "Decimal", 1.5, true),
-  ("Coalesce F float output decimal", "Decimal", 15.0, true),
-  ("Greatest float int output decimal", "Decimal", 10.0, true),
   ("Case float output decimal", "Decimal",  1.5,       true),
   ("Max Cast F float numeric",  "Decimal",  15.0,      true),
+  # #1221: a `DecimalField(10, 1)` declaration over operands that fit its scale
+  ("Cast int DecimalField(10,1)", "Decimal", 1.0,      true),
+  ("Cast Case output DecimalField(10,1) to scale 2", "Decimal", 10.0, true),
 ]
 @testset "A computed number reads back as the type it means (#1121, #1212)" begin
   for (label, type, value, in_cte) in _EKR_MEANING
@@ -278,8 +279,12 @@ end
 # them back on a live engine.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "A scaled cast reads back as a Decimal where it builds, and is refused where it departs (#1212)" begin
+  # #1221: a `DecimalField` declaration is its `numeric(max_digits, decimal_places)`, so a float under
+  # `DecimalField()` (`numeric(10,2)`) or `DecimalField(10, 1)` is the same scaled cast.
   for (label, value) in ("Cast float to scale 1" => 10, "Cast Case float col to scale 0" => 10,
-                         "Case F float * 1.5 output scale 1" => 15)
+                         "Case F float * 1.5 output scale 1" => 15,
+                         "Coalesce F float output decimal" => 15, "Greatest float int output decimal" => 10,
+                         "Cast float DecimalField(10,1)" => 10, "Coalesce F float * 1.5 output DecimalField(10,1)" => 15)
     _, base, build = EKM_SHAPES[findfirst(s -> s[1] == label, EKM_SHAPES)]
     for ctx in (:alone, :cte, :subquery)
       @testset "$label | $ctx" begin

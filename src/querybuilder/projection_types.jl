@@ -753,8 +753,8 @@ _whole_number(x, instruc::SQLInstruction) = _integral_valued(x, instruc) || _con
 # rounds a value cast to `numeric(p, s)` to `s` digits (half away from zero) and `numeric(p)` to a
 # whole number; SQLite reads either as a type name with NUMERIC affinity and keeps every digit.
 # Measured on PostgreSQL 16.15 and SQLite 3.45.1: `1.5` at `numeric(10,0)` is `2` and `1.5`, `1.555`
-# at `numeric(10,2)` is `1.56` and `1.555`. An unscaled `numeric` (and `DecimalField().type`,
-# `"DECIMAL"`) keeps the value on both, and an array is not a number, so neither has a scale here.
+# at `numeric(10,2)` is `1.56` and `1.555`. An unscaled `numeric` (or `"decimal"`; a `DecimalField`
+# object declares its scale, #1221) keeps the value on both, and an array is not a number, so neither has a scale here.
 # The name is `Dialect.cast_type_name`'s validated spelling, so the size is plain digits.
 function _numeric_cast_scale(type_name::AbstractString)::Union{Int,Nothing}
   size = _numeric_cast_size(type_name)
@@ -771,6 +771,17 @@ function _numeric_cast_size(type_name::AbstractString)::Union{Tuple{Int,Int},Not
   # `parse`). The scale rule still sees the declared scale; the overflow check leaves 1001 to the server.
   bounded(c) = ncodeunits(c) > 4 ? 1001 : min(parse(Int, c), 1001)
   return (bounded(m.captures[1]), m.captures[2] === nothing ? 0 : bounded(m.captures[2]))
+end
+# #1215 — whether a declared type is PostgreSQL's 4-byte float: `real`, `float4`, or `float(p)` for
+# 1 ≤ p ≤ 24, which PostgreSQL resolves to `real` (`float(25)` to `float(53)` is a double).
+function _single_precision_cast(type_name::AbstractString)::Bool
+  occursin(r"^(?i:real|float4)$", type_name) && return true
+  m = match(r"^(?i:float)\((\d+)\)$", type_name)
+  m === nothing && return false
+  # Leading zeros are the same precision to PostgreSQL (`float(0024)` is `real`); a long digit string
+  # is past 53, which PostgreSQL rejects, so it is not parsed.
+  digits = lstrip(m.captures[1], '0')
+  return 1 <= ncodeunits(digits) <= 2 && parse(Int, digits) <= 24
 end
 
 # #1087 — a literal `Cast` operand that does not fit `numeric(p, s)`: rounded to `s` places, it has
@@ -871,18 +882,19 @@ function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union
     # scalar), which rounds it; SQLite's `json_extract` hands over the number, which keeps every digit.
     field isa Models.sJSONField && return (:text, "the JSONField `$(_concat_operand_label(operand))`")
   end
-  if operand isa Union{String,JoinedReference}
-    field = _alias_column_field(operand, instruc)
-    if field isa Models.sDecimalField
-      places = field.decimal_places
-      return places <= scale ? nothing :
-        (:decimal, "the DecimalField `$(_concat_operand_label(operand))` ($(places) decimal places)")
+  # A `DecimalField` column and a nested declaration (a `Cast`, an `output_field`) carry their scale
+  # in the type walk, `CDecimal(p, s)` (#1034 phase 3 step 2b); a decimal of no declared width is read
+  # below. Only these two: an extremum's scale is read operand by operand further down, which names
+  # the column it comes from.
+  declared = operand isa FObject ? _declared_cast(operand) : nothing
+  if operand isa Union{String,JoinedReference} || (declared isa AbstractString && !isempty(declared))
+    k = _expression_kind(operand, instruc)
+    if k isa CDecimal && k.scale !== nothing
+      k.scale <= scale && return nothing
+      return declared === nothing ?
+        (:decimal, "the DecimalField `$(_concat_operand_label(operand))` ($(k.scale) decimal places)") :
+        (:decimal, "a value cast to $(declared)")
     end
-  end
-  if operand isa FObject && (operand.function_name in _DECLARED_CAST_FUNCTIONS || _declared_case(operand))
-    declared = get(operand.kwargs, operand.function_name == "CAST" ? "type" : "output_field", nothing)
-    inner = declared isa AbstractString ? _numeric_cast_scale(declared) : nothing
-    inner === nothing || return inner <= scale ? nothing : (:decimal, "a value cast to $(declared)")
   end
   # #1061: `Round(x, d)` has at most `d` places on both engines, whatever its operand, so it passes a
   # scale of at least `d`; a wider `d` is still a `numeric` function's value, read below.
@@ -975,6 +987,9 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::
   # no departure at all, so it has no row and builds everywhere.
   departs(kind, what, target, flag) = (row = _departure(conn, target, kind);
     row === nothing ? nothing : (kind = kind, what = what, target = target, flag = flag, declared = declared, row = row))
+  # #1215: a single-precision target rounds whatever it casts, so the node is checked once, not per
+  # operand; no other rule below applies to a float target.
+  _single_precision_cast(declared) && return departs(:value, "any value", :single_precision, "<flag>")
   # #1040: a scaled numeric target rounds on PostgreSQL only.
   size = _numeric_cast_size(declared)
   if size !== nothing

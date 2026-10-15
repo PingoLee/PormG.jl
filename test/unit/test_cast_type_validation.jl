@@ -88,7 +88,9 @@ _c696_q() = Cast696Models.Cast696_result.objects
       @test err isa PormG.InvalidValueError
       # Names the cast that does what the caller asked for, spelled with the type they gave.
       msg = replace(PormG.error_message(err), r"\e\[[0-9;]*m" => "")
-      want = lowercase(t isa AbstractString ? t : Dialect.cast_type_name(t.type))
+      # A `DecimalField` declares its precision and scale with its type (#1221).
+      want = lowercase(t isa AbstractString ? t : t isa PormG.Models.sDecimalField ?
+        "numeric($(t.max_digits),$(t.decimal_places))" : Dialect.cast_type_name(t.type))
       @test occursin("Cast(Concat(…), \"$(want)\")", msg)
       # The variadic spelling is the same constructor.
       @test_throws PormG.InvalidValueError Concat("points", Value("-"); output_field = t)
@@ -254,6 +256,13 @@ end
       @test haskey(PormG.postgres_type_map_reverse, t)
       @test haskey(PormG.sqlite_type_map_reverse, t)
       node = Cast("points", f)
+      # #1221: a `DecimalField` casts to its own precision and scale, as the string `"numeric(p,s)"` does.
+      if f isa PormG.Models.sDecimalField
+        twin = Cast("points", "numeric($(f.max_digits),$(f.decimal_places))")
+        @test Dialect.CAST("x", node.kwargs, _CPG) == Dialect.CAST("x", twin.kwargs, _CPG) == "(x)::numeric(10,2)"
+        @test Dialect.CAST("x", node.kwargs, _CSL) == Dialect.CAST("x", twin.kwargs, _CSL)
+        continue
+      end
       @test Dialect.CAST("x", node.kwargs, _CPG) == "(x)::" * PormG.postgres_type_map_reverse[t]
       # The temporal fields are #822's, below: SQLite has no time types to cast to.
       t in ("DATE", "TIMESTAMPTZ", "TIME", "INTERVAL") && continue

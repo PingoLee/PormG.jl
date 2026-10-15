@@ -51,16 +51,50 @@ df = query |> DataFrame
     calls `set_models(...)`, which binds the models to a configuration that is **already loaded**.
     When none matches the models folder, it raises `InvalidConfigurationError`, naming the `load`
     call to add. PormG does not load the folder itself, because that load would choose the
-    environment for you. In a REPL, `PormG.Configuration.allow_implicit_load!(true)` brings back that
-    convenience. See [The Boot-Time Hazard](advanced.md#The-Boot-Time-Hazard) for the full explanation.
+    environment for you. A REPL keeps that convenience: there the folder is loaded, with a warning
+    (#1248). See [The Boot-Time Hazard](advanced.md#The-Boot-Time-Hazard) for the full explanation.
 
 ## The Bootstrap Sequence
 
-For most applications, the bootstrap sequence is:
+The sequence is always the same three steps:
 
-1.  **Define** your environment (e.g., `dev`, `prod`, `test`).
+1.  **Choose** the environment (`dev`, `prod`, `test`) — and pass it, see below.
 2.  **Load** the database configuration folder.
 3.  **Import** your models.
+
+A **package or a service** does steps 1–2 in a helper, called from the module body **and** from
+`__init__`, with an explicit `root` so the key does not depend on the working directory:
+
+```julia
+module RaceControl
+
+using PormG, LibPQ
+
+const DB_DIRS  = ["db"]
+const APP_ROOT = normpath(joinpath(@__DIR__, ".."))
+
+_load_configs() =
+    PormG.Configuration.load_many(DB_DIRS; root = APP_ROOT, env = get(ENV, "RACECONTROL_ENV", "dev"))
+
+_load_configs()                                   # module body: @import_models binds to it
+PormG.@import_models "../db/models.jl" models
+import .models as M
+
+__init__() = _load_configs()                      # runtime: the image's configuration does not survive
+
+end
+```
+
+This is the default to write. The snippet under *Static Configuration* above is the **REPL /
+script** form: one process, no precompilation, so one `load` is enough. Why the package needs both
+loads, and what each one fixes, is in
+[The Boot-Time Hazard](advanced.md#The-Boot-Time-Hazard), under *Loading before `@import_models` is not enough for a package*.
+The rules this sequence relies on:
+
+- registering models never loads a folder outside a REPL — it refuses, naming the `load` call;
+- outside a REPL the environment comes from `env=` or `PORMG_ENV`, never from `default_env:`;
+- loading a folder again with the same environment is free;
+- a restored package image rebinds its models to the key they were imported under, or refuses.
 
 ### Environment Selection
 PormG supports explicit environment loading via `env`:
@@ -68,7 +102,23 @@ PormG supports explicit environment loading via `env`:
 PormG.Configuration.load("db"; env="prod")
 ```
 This is the **preferred method** for server applications, as it avoids relying on global `ENV` state.
-If `env` is not provided, PormG falls back to `ENV["PORMG_ENV"]`, then to a top-level `default_env:` key in `connection.yml`, then to `dev`.
+If `env` is not provided, PormG reads `ENV["PORMG_ENV"]` (a blank value counts as unset).
+
+With neither, what happens depends on the session (#1228):
+
+- **In a REPL** (`isinteractive()`), PormG falls back to a top-level `default_env:` key in
+  `connection.yml`, then to `dev`, and logs at `@info` which of the two decided.
+- **Anywhere else** — a service, a test, a script — `load` raises `InvalidConfigurationError`
+  naming the call to fix. `default_env: dev` is production in many deployments, and a process
+  nobody watches must not pick it.
+
+A **package** passes `env` in its own `load` calls. Its `__init__` runs in whatever session loads
+it, and `using RaceControl` at a REPL makes that session interactive: an env-less `load` there would
+take the REPL fallback (with the `@info`) rather than fail.
+
+The REPL check is the same one that decides the implicit load of an unloaded models folder (#1248),
+so the bootstrap follows one rule: an interactive session gets the conveniences and is told when one
+of them decided, and every other process gets only what was stated.
 
 ### Loading again
 Calling `load` for a folder that is already loaded with the same environment does nothing: it

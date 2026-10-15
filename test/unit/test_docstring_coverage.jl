@@ -343,14 +343,15 @@ end
     # ─────────────────────────────────────────────────────────────────────────
     @testset "the `public`-but-unexported surface is exactly the declared set" begin
         expected = Dict(
-            PormG              => [:install_ai_skills, :setup],
+            PormG              => [:import_models, :install_ai_skills, :setup],
             PormG.QueryBuilder => [:DataFrame, :ObjectHandler, :delete, :earliest, :explain_query, :first,
                                    :inspect_query, :last, :latest, :list, :save, :show_query],
             # Models: the 27 field constructors #289 declared, plus the three entry points #295
             # added (`Model`, `set_models`, `UniqueConstraint`), `Index` (#347),
             # `CheckConstraint` (#742), the two network-address fields (#28), `ArrayField` (#28),
             # `search_vector_expression` (#1021), the text a full-text index is declared with, and
-            # `SearchVectorField` (#1021) = 37.
+            # `SearchVectorField` (#1021) = 37, `connection_key` (#1229), the public read of a
+            # model's binding, and `bind!` (#1230), the narrow half of `set_models` = 39.
             # `Model_Type` is deliberately absent — it is documented but NOT public: users hold one
             # as `M.Driver`, never name it.
             PormG.Models       => [:ArrayField, :AutoField, :BigIntegerField, :BinaryField, :BooleanField,
@@ -362,13 +363,14 @@ end
                                    :PasswordField, :PositiveIntegerField,
                                    :PositiveSmallIntegerField, :search_vector_expression, :SearchVectorField, :SlugField,
                                    :TextField, :TimeField, :UniqueConstraint, :URLField, :UUIDField,
-                                   :set_models],
+                                   :bind!, :connection_key, :set_models],
             PormG.Migrations   => [:MIGRATION_FORMAT_VERSION],
             # `redact_secret` joined the set with #649: `docs/src/api.md` documents it as the
             # supported way to put a connection string into output you control, which is only
-            # an honest instruction if the name is API.
-            PormG.Configuration => [:get_tx_connection, :is_loaded, :load_many, :ping,
-                                    :redact_secret, :status],
+            # an honest instruction if the name is API. `loaded_keys`, `register_offline` and
+            # `close_all!` (#1229) are the registry's public names, replacing reads of `PormG.config`.
+            PormG.Configuration => [:close_all!, :get_tx_connection, :is_loaded, :load_many,
+                                    :loaded_keys, :ping, :redact_secret, :register_offline, :status],
         )
         for (mod, want) in expected
             @testset "$(nameof(mod))" begin

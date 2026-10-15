@@ -3992,3 +3992,92 @@ function _data_steps(connection::Union{PormGPostgres, PormGSQLite})::Vector{Name
   return NamedTuple[(name = String(r.name), transactional = Bool(r.transactional), applied_at = r.applied_at)
                     for r in eachrow(rows)]
 end
+
+# ── ensure_table!: one infrastructure table outside the migration flow (#1230) ──────────────────
+
+# The statements that create `model`'s table from nothing, in plan order: the same `_add_new_table`
+# a migration plan uses for a new model — table, foreign keys, composite indexes and constraints,
+# CHECKs — so a table made here and one `migrate` would make are one rendering. `indexes = false`
+# drops only the plain indexes ("Create index…" entries); unique constraints are kept, since they
+# are part of what the rows mean.
+function _ensure_table_statements(connection::Union{PormGPostgres, PormGSQLite}, model::PormGModel;
+                                  indexes::Bool = true)::Vector{String}
+  plan = OrderedDict{Symbol, OrderedDict{String, String}}()
+  _add_new_table(connection, plan, Symbol(model_table_name(model)), model)
+  return String[last(entry) for entry in _ordered_entries(values(plan))
+                if indexes || !startswith(first(entry), "Create index")]
+end
+
+"""
+    ensure_table!(model, key::String; indexes = true) -> Symbol
+
+Create `model`'s table on the connection `key` if it does not exist yet, and return what happened:
+`:created`, `:exists`, or `:disabled` when the connection is `change_db: false` (nothing is read or
+written, as with `migrate`). For the infrastructure tables a library ships on top of PormG (a
+live-timing feed table, say) that are kept out of `makemigrations` with `register_ignore_tables!` (#1230).
+
+The DDL is what a migration would emit for a new model — `CREATE TABLE`, its foreign keys, indexes
+(including a PostgreSQL `Index(...; opclasses = ("text_pattern_ops",))`), unique constraints and
+CHECKs — rendered for the connection's engine and run in one transaction. `indexes = false` leaves
+the plain indexes out. On PostgreSQL it runs under the migration advisory lock, and the existence
+check is repeated under it, so two instances booting together create the table once; on SQLite the
+check and the DDL share one write transaction.
+
+```julia
+PormG.Migrations.ensure_table!(M.Lap_times, "db")   # :created the first time, :exists after
+```
+
+`ensure_table!` never alters a table that exists: a changed model is `migrate`'s job. A `key` that is
+not loaded raises `InvalidConfigurationError`. Inside an open transaction on that connection it raises
+`TransactionError`: its DDL would become a savepoint that commits only with the outer block, after the
+lock that serializes it is released.
+"""
+function ensure_table!(model::PormGModel, key::String; indexes::Bool = true,
+                       config::Dict{String,PormGSettings} = config)::Symbol
+  haskey(config, key) || throw(InvalidConfigurationError(
+    "ensure_table!: no configuration is loaded under \"$(key)\". Load it first — " *
+    "`PormG.Configuration.load($(repr(key)); env = \"…\")`."))
+  settings = config[key]
+  connection = settings.connections
+  connection === nothing && throw(InvalidConfigurationError(
+    "ensure_table!: the configuration \"$(key)\" has no connection pool."))
+  if !settings.change_db
+    @warn("ensure_table!: the connection is not set to change_db, so the table was not created.",
+          key = key, table = model_table_name(model))
+    return :disabled
+  end
+  # `run_once`'s rule: inside an enclosing transaction the DDL would be a savepoint, and on PostgreSQL
+  # the advisory lock is released before the outer COMMIT, so a second instance re-checking under the
+  # lock would not see the table and would run the DDL again.
+  Configuration.in_transaction_on(connection) && throw(TransactionError(
+    "ensure_table! cannot run inside an open transaction on this database: the table is created in " *
+    "a transaction of its own. Call it outside the transaction block."))
+  statements = _ensure_table_statements(connection, model; indexes = indexes)
+  return _ensure_table_locked(connection, settings, String(model_table_name(model)), statements)
+end
+
+function _ensure_table_locked(connection::PormGPostgres, settings::PormGSettings, table::String,
+                              statements::Vector{String})::Symbol
+  _live_table_exists(connection, table) && return :exists      # the common case, without the lock
+  return AdvisoryLock.with_advisory_lock(connection, _migration_lock_key(settings);
+                                         wait = true, timeout_ms = _migration_timeouts().lock_wait_ms) do
+    _live_table_exists(connection, table) && return :exists    # another instance won the race
+    run_in_transaction(connection) do
+      for statement in statements, part in _split_pg_statements(statement)
+        fetch(connection, part)
+      end
+    end
+    return :created
+  end
+end
+
+function _ensure_table_locked(connection::PormGSQLite, ::PormGSettings, table::String,
+                              statements::Vector{String})::Symbol
+  return run_in_transaction(connection) do
+    _live_table_exists(connection, table) && return :exists
+    for statement in statements, part in _split_sqlite_statements(statement)
+      isempty(strip(part)) || fetch(connection, String(strip(part)))
+    end
+    return :created
+  end
+end

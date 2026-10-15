@@ -187,7 +187,8 @@ you did not state:
 
 - **The environment.** `ENV["PORMG_ENV"]` when it is set, else the file's `default_env:`. In a
   server that has not selected its environment yet, that is usually `dev`, which in many deployments
-  points at production.
+  points at production. Since #1228, that fallback past `PORMG_ENV` is a REPL's only, for every
+  `load` (see [Environment Selection](setup.md#Environment-Selection)).
 - **The key.** The folder's path, not a name your application chose.
 
 The warning went to a boot log nobody reads, and the queries ran. Now the registration fails
@@ -199,14 +200,20 @@ the same error. It never loads one. The `__init__` that `@import_models` and `@m
 into the models module binds only when the configuration is already loaded, and otherwise does
 nothing. It runs before your package's own `__init__`, so refusing there would make `using` fail.
 
-**Opting back in.** In a REPL or a one-off script the guess can be convenient:
+**The REPL keeps the convenience.** In an interactive session (`isinteractive()`), a direct
+`@import_models` or `set_models` with nothing loaded loads the folder anyway, with the old warning
+(#1248). A service, a test or a script is not interactive and gets the refusal; it can still ask for
+the guess one call at a time:
 
 ```julia
-PormG.Configuration.allow_implicit_load!(true)    # for the rest of the session
-PormG.Models.set_models(MyModels, "db"; implicit = true)   # or for one call
+PormG.Models.set_models(MyModels, "db"; implicit = true)
 ```
 
-Either one loads the folder with the old warning and marks the entry as implicit:
+There is no process-wide switch: whether a registration refuses never depends on what some other
+code in the process turned on earlier. The self-heal and the injected `__init__` above never load,
+not even in a REPL — `using SomePackage` at a REPL is an interactive session too.
+
+An implicit load marks the entry as implicit:
 `PormG.Configuration.status(key).implicit` reads it back. The rules below go by that mark, not by
 the shape of the key.
 
@@ -257,7 +264,7 @@ const APP_ROOT = normpath(joinpath(@__DIR__, ".."))
 _load_configs() =
     PormG.Configuration.load_many(DB_DIRS; root = APP_ROOT, env = get(ENV, "RACECONTROL_ENV", "dev"))
 
-_load_configs()                       # precompile: bakes the right connect_key into the image
+_load_configs()                       # precompile: lets @import_models bind, and record the key
 PormG.@import_models "../db/models.jl" models
 
 __init__() = _load_configs()          # runtime: the image's configuration did not survive
@@ -272,13 +279,23 @@ Each half does a different job, which is why dropping either one breaks somethin
 | Where the configuration is loaded | After `using`, before any `.objects` | After the first `.objects` access |
 |---|---|---|
 | Module body **and** `__init__` | short key, `config` populated ✔ | unchanged ✔ |
-| Module body only | short key, `config` **empty** | `InvalidConfigurationError`: the self-heal finds no loaded configuration for the folder, and the message names the `load` call to add |
+| Module body only | short key, `config` **empty** | `InvalidConfigurationError`: the key the models were imported under is not loaded, and the message names the `load(key; root, env)` call to add |
 | `__init__` only | the precompile run fails: `@import_models` in the module body raises `InvalidConfigurationError` | — |
 | Neither | as "`__init__` only" | — |
 
-The module body runs at precompile time, so it is what bakes the right `connect_key` into the
-image; `__init__` runs in the session, so it is what puts the connection in `config` where a query
-can find it. Neither substitutes for the other. "Module body only" is the row to watch: it looks
+The module body runs at precompile time, so it is what lets `@import_models` bind the models at
+all; `__init__` runs in the session, so it is what puts the connection in `config` where a query
+can find it. Neither substitutes for the other.
+
+**What the first `.objects` binds to (#1227).** When `@import_models` binds the models it records,
+in the models module, the key the folder was loaded under and the `root` it was loaded relative to
+(`__pormg_binding__`). That record is part of the image. On the first `.objects` of a restored
+session the self-heal reads it back and binds to that **key** — the one your `__init__` loads — or
+refuses, naming `load(key; root, env)`. It does not look through `config` for some other
+configuration that happens to match the folder, so a session that loaded the same folder under a
+different key, or from a different working directory, cannot quietly change which entry the models
+use. The module-body load is therefore what makes the import succeed and fixes the key; the
+`__init__` load is the one the running session depends on. "Module body only" is the row to watch: it looks
 right after `using` and fails on the first query. Since #1226 it fails with an error that says
 what is missing. Before, it quietly ran against a database you did not choose.
 
@@ -294,7 +311,6 @@ julia> RaceControl.models.Driver.connect_key   # want the short key, not an abso
 "db"
 ```
 
-The implicit load runs only when you opted in with `allow_implicit_load!(true)` or
-`implicit = true`. When it did, `PormG.Configuration.status(RaceControl.models.Driver.connect_key).implicit`
+The implicit load runs only in a REPL or when a call passed `implicit = true`. When it did, `PormG.Configuration.status(RaceControl.models.Driver.connect_key).implicit`
 is `true`, and the environment came from `PORMG_ENV`/`default_env:`, not from whatever your
 application selected.

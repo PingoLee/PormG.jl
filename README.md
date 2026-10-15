@@ -64,7 +64,7 @@ Pkg.add("SQLite")    # SQLite
 # Pkg.add("Postgres") # PostgreSQL through Postgres.jl — experimental, opt in with `postgres_driver: Postgres`
 ```
 
-A bare `using PormG` loads the ORM but no backend; the first query then raises a clear error
+A bare `using PormG` loads the ORM but no backend; `Configuration.load` then raises a clear error
 telling you to `using LibPQ` (or `using SQLite`).
 
 ---
@@ -153,7 +153,7 @@ end
 using PormG, LibPQ, DataFrames          # LibPQ → PostgreSQL; swap in SQLite for the SQLite backend
 using PormG.Functions: Count            # SQL functions (Count, Sum, Max, …) — namespaced
 
-PormG.Configuration.load("db")          # loads db/connection.yml (must precede @import_models)
+PormG.Configuration.load("db"; env = "dev")   # the dev block of db/connection.yml (must precede @import_models)
 PormG.@import_models "db/models.jl" models
 import .models as M
 ```

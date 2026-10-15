@@ -18,7 +18,7 @@ Or you can manually create the `connection.yml` file and populate it using the s
 
 ## Adapters & Environments
 
-Each top-level block (`dev`, `prod`, `test`, …) describes one environment, and PormG loads whichever one is active. The active environment is chosen by the `env=` argument to `load(...)`, the `PORMG_ENV` variable, or an optional top-level `default_env:` key — see [Multi-environment Routing](#Multi-environment-Routing) below. The supported adapters are `PostgreSQL` and `SQLite`; any other is refused when the file is loaded. MySQL is planned ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)).
+Each top-level block (`dev`, `prod`, `test`, …) describes one environment, and PormG loads whichever one is active. The active environment is chosen by the `env=` argument to `load(...)`, the `PORMG_ENV` variable, or — in an interactive session only — an optional top-level `default_env:` key; see [Multi-environment Routing](#Multi-environment-Routing) below. The supported adapters are `PostgreSQL` and `SQLite`; any other is refused when the file is loaded. MySQL is planned ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)).
 
 ### Using PostgreSQL
 
@@ -396,11 +396,16 @@ SQLite configurations ignore `extensions` with a warning, and `iunaccent_contain
 PormG selects the active environment block by this precedence — **first match wins**:
 
 1. the `env=` argument to `load(...)` — e.g. `PormG.Configuration.load("db"; env="prod")`;
-2. the `PORMG_ENV` environment variable — e.g. `PORMG_ENV=prod`;
-3. the optional top-level `default_env:` key in this file — e.g. `default_env: prod`;
-4. otherwise `dev`.
+2. the `PORMG_ENV` environment variable — e.g. `PORMG_ENV=prod` (a blank value counts as unset);
+3. **in an interactive session only**, the optional top-level `default_env:` key in this file — e.g.
+   `default_env: prod`;
+4. **in an interactive session only**, otherwise `dev`.
 
-The recommended pattern for a server is to let the **host** resolve its own environment and pass it explicitly: a framework (or your `bootstrap`) reads its own env var and calls `load(...; env=…)`, so the same `connection.yml` works unchanged in every environment. `default_env:` is a convenience for scripts and single-environment apps that would rather pin a default in the file than set an env var — omit it and PormG falls back to `dev`.
+Steps 3 and 4 are guesses, so they are a REPL's (#1228): there `load` logs which one decided. A
+service, a test or a script that reaches step 3 gets `InvalidConfigurationError` instead, naming the
+`load(…; env = …)` call to add.
+
+The recommended pattern for a server is to let the **host** resolve its own environment and pass it explicitly: a framework (or your `bootstrap`) reads its own env var and calls `load(...; env=…)`, so the same `connection.yml` works unchanged in every environment. `default_env:` is a convenience for a REPL session that would rather pin a default in the file than pass `env` every time — omit it and the REPL falls back to `dev`. A script or a single-environment app states its environment with `env=` or `PORMG_ENV`.
 
 !!! note "The bare `env:` key is ignored"
     A top-level `env:` key (as opposed to `default_env:`) does **nothing** — it was renamed to `default_env:`. If a stale config still has `env:`, PormG warns once on load and keeps using the environment resolved above.

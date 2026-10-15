@@ -34,7 +34,7 @@ if !isfile(conn_yml)
 end
 
 @info "Loading configuration from $DB_KEY..."
-PormG.Configuration.load(DB_KEY)
+PormG.Configuration.load(DB_KEY; env = "dev")   # stated: a script gets no fallback (#1228)
 
 # 1b. Bootstrap the migration history table and inspect the starting state.
 #

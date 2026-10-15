@@ -195,7 +195,7 @@ The abstract umbrellas exist so a handler can name a family without listing its 
 
 ```julia
 try
-    PormG.Configuration.load("db_2")
+    PormG.Configuration.load("db_2"; env = "prod")
     PormG.Migrations.migrate()
 catch e
     if e isa ConfigurationError

@@ -718,9 +718,15 @@ transaction.
 
 ## Configuration API
 
-### `Configuration.load(path; env=nothing, root=nothing, force=false)`
+### `Configuration.load(path; env=nothing, root=nothing, force=false, before_connect=nothing)`
 
-Loads a database configuration folder. Use `env` to explicitly set the environment instead of relying on `ENV["PORMG_ENV"]`.
+Loads a database configuration folder. Use `env` to explicitly set the environment instead of relying on `ENV["PORMG_ENV"]`;
+outside a REPL one of the two is required (#1228).
+
+The adapter's driver package must be loaded first — `using LibPQ` (or `Postgres`) / `using SQLite` —
+or `load` raises `MissingConfigurationError` naming it, at boot rather than on the first query
+(#1232). `before_connect = (key, settings) -> Bool` gives this key its own hook, run before a
+physical connection is opened, in place of the process-wide `set_before_connect_hook`.
 
 ```julia
 PormG.Configuration.load("db"; env="prod")
@@ -762,19 +768,6 @@ Returns the connection keys actually registered. As with `load`, a folder alread
 spelling is reused, so a returned key is not always the path that was passed — use the returned list
 rather than the one you supplied.
 
-### `Configuration.allow_implicit_load!(flag = true)`
-
-Registering models (`@import_models`, `@models_module`, `Models.set_models`) binds them to a
-configuration that is already loaded, and raises `InvalidConfigurationError` when none matches the
-models folder (#1226). This turns the old implicit load back on for the session, for a REPL or a
-script: the folder is then loaded with a warning, in the environment `PORMG_ENV`/`default_env:`
-selects. Returns the previous setting. `Models.set_models(mod, folder; implicit = true)` does the
-same for one call.
-
-```julia
-PormG.Configuration.allow_implicit_load!(true)
-```
-
 ### `Configuration.is_loaded(path_or_key)`
 
 Returns `true` if PormG has registered settings for the given folder/key. Does not open connections.
@@ -791,6 +784,69 @@ Returns a rich status payload:
 s = PormG.Configuration.status("db")
 # (key="db", loaded=true, reachable=true, adapter="PostgreSQL", app_env="prod",
 #  db_def_folder="db", dynamic=false, implicit=false)
+```
+
+### `Configuration.loaded_keys()`
+
+The connection keys PormG has registered — static and dynamic — sorted (#1229). The public way to
+ask what is loaded, instead of iterating `PormG.config`:
+
+```julia
+PormG.Configuration.loaded_keys()   # ["db", "db_telemetry"]
+```
+
+### `Configuration.register_offline(key; adapter = :postgres, django_prefix = nothing, change_data = true)`
+
+Registers `key` as a connection that renders SQL and never connects (#1229), for golden-SQL tests
+and `inspect_query` with no database. `adapter` (`:postgres` or `:sqlite`) picks the dialect. Models
+bind to it like a loaded folder. Running a query on it raises `InvalidConfigurationError`, and a key
+already registered as a live connection is refused:
+
+```julia
+PormG.Configuration.register_offline("db")
+PormG.@import_models "db/models.jl" models
+info = PormG.inspect_query(models.Driver.objects.filter("surname" => "Senna"))
+info[:sql_text]    # "SELECT\n    *\nFROM \"drivers\" as \"Tb\"\nWHERE \"Tb\".\"surname\" = \$1\n"
+PormG.Configuration.unregister_connection("db")
+```
+
+### `Configuration.close_all!()`
+
+Closes every registered pool without waiting for connections still checked out; the entries stay
+registered (#1229). It is what PormG runs at process exit, for a script or a test that wants to
+release its connections early.
+
+### `Models.connection_key(model)`
+
+The connection key a model is bound to, or `nothing` before it is bound (#1229). Read this rather
+than the `connect_key` field to check which database a model's queries reach:
+
+```julia
+PormG.Models.connection_key(M.Driver)   # "db"
+```
+
+### `Models.bind!(model, key)`
+
+Binds one model to the loaded connection `key` and does nothing else (#1230): the narrow half of
+`set_models`, for a model built at runtime — a library's own infrastructure table — that is not part
+of a models module. An unloaded `key` raises `InvalidConfigurationError`; nothing is loaded for you.
+It does not register a module, resolve `ForeignKey` targets given by name, or install reverse
+accessors.
+
+### `Migrations.ensure_table!(model, key; indexes = true)`
+
+Creates `model`'s table on `key` if it does not exist and returns `:created`, `:exists`, or
+`:disabled` on a `change_db: false` connection (#1230). The DDL is what a migration emits for a new
+model — table, foreign keys, indexes (a PostgreSQL `Index(...; opclasses = ("text_pattern_ops",))`
+included), unique constraints and CHECKs — in one transaction, under the migration advisory lock on
+PostgreSQL. It never alters an existing table. For infrastructure tables kept out of
+`makemigrations` with `register_ignore_tables!`:
+
+```julia
+LiveTiming = PormG.Models.Model("live_timing", id = PormG.Models.IDField(),
+                                driverref = PormG.Models.CharField(max_length = 64))
+PormG.Models.bind!(LiveTiming, "db")
+PormG.Migrations.ensure_table!(LiveTiming, "db")   # :created, then :exists on every later boot
 ```
 
 ### `Configuration.redact_secret(conn_str)`
@@ -1038,7 +1094,7 @@ Reacting to a whole category — the umbrellas make one `catch` enough:
 
 ```julia
 try
-    PormG.Configuration.load("db_2")
+    PormG.Configuration.load("db_2"; env = "dev")
     PormG.Migrations.migrate("db_2")
 catch e
     e isa PormG.ConfigurationError && @error "check connection.yml" exception=e
@@ -1068,11 +1124,18 @@ on SQLite a write needs `mode = :write`)
 ### Utilities & lifecycle
 `upgrade_guide`, `register_ignore_tables!`, `@import_models`, `@models_module`, `@pormg_debug`
 
-!!! note "`setup` and `install_ai_skills` are qualified-call-only"
-    The one-off lifecycle helpers `PormG.setup()` (interactive project wizard) and
-    `PormG.install_ai_skills()` are deliberately **not exported** — their generic names
-    would otherwise land in every `using PormG` namespace. Call them qualified, exactly
-    as shown throughout these docs.
+`PormG.import_models(path; into = Main)` is the function form of `@import_models` (#1232), for a
+script or a REPL that compares several databases: it includes the models file at `path` (relative to
+`pwd()`), registers its models like the macro, and returns the models module.
+
+`Configuration.connection(key)` returns the pool registered under `key`, positionally like
+`get_settings(key)`, `ping(key)` and `status(key)`; the keyword form `connection(; key)` is legacy.
+
+!!! note "`setup`, `install_ai_skills` and `import_models` are qualified-call-only"
+    The one-off lifecycle helpers `PormG.setup()` (interactive project wizard),
+    `PormG.install_ai_skills()` and `PormG.import_models(...)` are deliberately **not exported** —
+    their generic names would otherwise land in every `using PormG` namespace. Call them qualified,
+    exactly as shown throughout these docs.
 
 !!! note "`fetch` extends `Base.fetch`"
     The low-level `fetch(settings, sql; params=[...])` escape hatch (values bound with

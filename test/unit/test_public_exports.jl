@@ -64,6 +64,8 @@ const EXPECTED_TOPLEVEL = Set([
     # `public`, which is what puts them in `names(PormG)` and therefore in this set — recording
     # that they ARE API (as docs/src/api.md already stated) without widening `using`.
     :setup, :install_ai_skills,
+    # #1232: the function form of `@import_models`, public and qualified-call-only on the same grounds.
+    :import_models,
 ])
 
 # The SQL function library, namespaced under PormG.Functions (NOT exported by PormG).

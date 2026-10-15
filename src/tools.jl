@@ -1,10 +1,38 @@
 
-# User-facing lifecycle helpers: `setup`, `install_ai_skills`, `upgrade_guide`. Included last in
-# PormG.jl — this file consumes the layers above and nothing depends on it.
+# User-facing lifecycle helpers: `setup`, `install_ai_skills`, `upgrade_guide`, `import_models`.
+# Included last in PormG.jl — this file consumes the layers above and nothing depends on it.
 #
 # `_emsg` used to live here, which forced this file to be included before Models/QueryBuilder even
 # though nothing else in it is infrastructure. It now lives in `Kernel`, next to the `PormGError`
 # root — the error types whose constructors call it need it available from layer 1.
+
+"""
+    import_models(path::AbstractString; into::Module = Main) -> Module
+
+The function form of `@import_models` (#1232), for a script or a REPL session — one that compares
+two databases, say — where the macro's string literal and module context get in the way. Includes
+the models file at `path` (relative to `pwd()`, or absolute) into `into`, registers its models
+exactly as the macro does, and returns the models module:
+
+```julia
+PormG.Configuration.load("db"; env = "dev")
+PormG.Configuration.load("db_archive"; env = "dev")
+M = PormG.import_models("db/models.jl"; into = Module(:Live))         # both files define
+A = PormG.import_models("db_archive/models.jl"; into = Module(:Archive))   # `module models`
+M.Driver.objects.filter("surname" => "Senna").count(), A.Driver.objects.count()
+```
+
+The file must define one `module`; its folder must be loaded first, as with the macro. In a package,
+keep the macro: it resolves the path against the calling file and precompiles with the package.
+"""
+function import_models(path::AbstractString; into::Module = Main)::Module
+    resolved = abspath(path)
+    mod = Base.include(into, resolved)
+    mod isa Module || throw(InvalidConfigurationError(
+        "import_models: $(repr(path)) must define a models module (`module models … end`)."))
+    Base.invokelatest(Utils._setup_imported_models!, mod, resolved)
+    return mod
+end
 
 """
     setup(path::String = DB_PATH)

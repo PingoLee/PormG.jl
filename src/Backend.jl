@@ -38,6 +38,11 @@ const _SQLITE_DRIVER_HINT = "PormG: the SQLite backend requires SQLite. Run `usi
 # Keyed by driver; the value is the package the user must load for it.
 const _PG_DRIVER_PACKAGES = (libpq = "LibPQ", postgres = "Postgres")
 
+# #1232: the weakdep extension that implements each driver — `:sqlite` and the keys of
+# `_PG_DRIVER_PACKAGES`. `Configuration.load` asks before it replaces anything, so a missing
+# `using LibPQ` fails at boot instead of on the first query.
+const _DRIVER_EXTENSIONS = (sqlite = :PormGSQLiteExt, libpq = :PormGLibPQExt, postgres = :PormGPostgresExt)
+
 """
     postgres_driver(pool::PormGPostgres) -> Symbol
 
@@ -50,8 +55,9 @@ postgres_driver(::PormGPostgres) = :libpq
 
 # The missing-driver message for a PostgreSQL pool. A LibPQ pool keeps `_PG_DRIVER_HINT` byte for
 # byte (docs/src/index.md quotes it).
-function _pg_driver_hint(pool::PormGPostgres)::String
-  driver = postgres_driver(pool)
+_pg_driver_hint(pool::PormGPostgres)::String = _pg_driver_hint(postgres_driver(pool))
+
+function _pg_driver_hint(driver::Symbol)::String
   driver === :libpq && return _PG_DRIVER_HINT
   # `get`, not indexing: this runs inside a fallback that must raise InvalidConfigurationError, and
   # a mock pool may answer a driver no real pool can have.
@@ -59,6 +65,9 @@ function _pg_driver_hint(pool::PormGPostgres)::String
   return "PormG: this PostgreSQL pool is configured for the $(package).jl driver. Run `using $(package)` " *
          "(or `using PormG, $(package)`) so its PostgreSQL extension loads."
 end
+
+# #1232: a driver (`_DRIVER_EXTENSIONS`' keys) → the message naming the package to load for it.
+_driver_hint(driver::Symbol)::String = driver === :sqlite ? _SQLITE_DRIVER_HINT : _pg_driver_hint(driver)
 
 # Backend generics. Real methods are added by the driver extensions; the fallbacks
 # below fire when the matching driver has not been loaded.

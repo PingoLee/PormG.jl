@@ -3,7 +3,8 @@ using PormG
 import Logging
 import LibPQ   # `LibPQ.conninfo` — libpq's own conninfo parser, no server needed (#650)
 
-if !haskey(ENV, "PORMG_ENV")
+# A blank value is unset (#1228), so it gets the default too.
+if isempty(strip(get(ENV, "PORMG_ENV", "")))
     ENV["PORMG_ENV"] = "test"
 end
 
@@ -690,6 +691,18 @@ end
     end
 end
 
+# Pins the `isinteractive()` seam (`Configuration._INTERACTIVE`, #1248/#1228) for the duration of
+# `f`. The env fallbacks below are a REPL's only, so the tests that exercise them say so explicitly.
+function _cfg_with_interactive(f, flag::Bool)
+    previous = PormG.Configuration._INTERACTIVE[]
+    PormG.Configuration._INTERACTIVE[] = () -> flag
+    try
+        return f()
+    finally
+        PormG.Configuration._INTERACTIVE[] = previous
+    end
+end
+
 # ── #205: connection.yml env selection + fail-loud load ────────────────────────────────────────
 # Pins the config-loading onboarding fixes: `default_env:` is honored as the lowest-priority
 # environment selector, the legacy `env:` key is inert but warns, `load` throws (rather than
@@ -710,8 +723,11 @@ end
             write(joinpath(db_dir, "connection.yml"), "default_env: prod\n" * _dev_prod_blocks)
 
             # No `env=` and no PORMG_ENV → the file's `default_env: prod` beats the built-in `dev`.
+            # A REPL's fallback only (#1228): the non-interactive side is pinned in the #1228 testset.
             withenv("PORMG_ENV" => nothing) do
-                PormG.Configuration.load(db_dir)
+                _cfg_with_interactive(true) do
+                    PormG.Configuration.load(db_dir)
+                end
             end
             s = PormG.Configuration.get_settings(db_dir)
             @test s.app_env == "prod"
@@ -754,7 +770,9 @@ end
             write(joinpath(db_dir, "connection.yml"), "env: prod\n" * _dev_prod_blocks)
 
             withenv("PORMG_ENV" => nothing) do
-                @test_logs (:warn,) match_mode=:any PormG.Configuration.load(db_dir)
+                _cfg_with_interactive(true) do
+                    @test_logs (:warn,) match_mode=:any PormG.Configuration.load(db_dir)
+                end
             end
             s = PormG.Configuration.get_settings(db_dir)
             @test s.app_env == "dev"          # bare `env: prod` ignored
@@ -1917,6 +1935,118 @@ end
             end
 
             _cleanup_configuration_test_keys([db_dir, sl_dir, key, "pormg788_sqlite", "pormg788_resolved"])
+        end
+    end
+end
+
+# ── #1228: the environment is stated, not guessed, outside a REPL ───────────────────────────────
+# What it tests: with neither `env=` nor a non-blank `PORMG_ENV`, a non-interactive `load` raises
+#   `InvalidConfigurationError` naming the folder and the `load(…; env = …)` call, and registers
+#   nothing; an interactive one falls back to `default_env:`, then `dev`, and logs at `@info` which
+#   source decided. `PORMG_ENV` is accepted either way and logs nothing. A blank `PORMG_ENV` is unset
+#   (it used to select the environment `""`). An implicit load (`implicit = true`, which asked for
+#   the guess) keeps the fallback. `Settings()` and `register_connection` read the same helper. No SQL.
+# Why it matters: `default_env: dev` is production in many deployments, so a service that never
+#   chose an environment got one chosen for it — the #550 incident's other half. A blank
+#   `PORMG_ENV` selected the environment `""`, so a caller clearing the variable broke `load`.
+@testset "the environment is stated, not guessed, outside a REPL (#1228)" begin
+    _blocks =
+        "dev:\n  adapter: SQLite\n  database: \":memory:\"\n  config:\n    change_db: false\n    change_data: false\n" *
+        "prod:\n  adapter: SQLite\n  database: \":memory:\"\n  config:\n    change_db: true\n    change_data: true\n"
+
+    mktempdir() do temp_root
+        db_dir = joinpath(temp_root, "db"); mkpath(db_dir)
+        write(joinpath(db_dir, "connection.yml"), "default_env: prod\n" * _blocks)
+        bare_dir = joinpath(temp_root, "bare"); mkpath(bare_dir)
+        write(joinpath(bare_dir, "connection.yml"), _blocks)    # no default_env:
+
+        @testset "non-interactive, nothing stated: refused, nothing registered" begin
+            for value in (nothing, "", "   ")          # unset, blank, whitespace — all unset
+                err = withenv("PORMG_ENV" => value) do
+                    _cfg_with_interactive(false) do
+                        try
+                            PormG.Configuration.load(db_dir)
+                            nothing
+                        catch e
+                            e
+                        end
+                    end
+                end
+                @test err isa PormG.InvalidConfigurationError
+                msg = sprint(showerror, err)
+                @test occursin("No environment was selected for the configuration folder", msg)
+                @test occursin(db_dir, msg)                                         # the folder
+                @test occursin("PormG.Configuration.load($(repr(db_dir)); env = ", msg)   # the call
+                @test !PormG.Configuration.is_loaded(db_dir)
+            end
+        end
+
+        @testset "the refusal's hint keeps the root it was loaded with" begin
+            err = withenv("PORMG_ENV" => nothing) do
+                _cfg_with_interactive(false) do
+                    try
+                        PormG.Configuration.load("db"; root = temp_root)
+                        nothing
+                    catch e
+                        e
+                    end
+                end
+            end
+            @test err isa PormG.InvalidConfigurationError
+            @test occursin("PormG.Configuration.load(\"db\"; root = $(repr(temp_root)), env = ", sprint(showerror, err))
+        end
+
+        @testset "non-interactive: env= or a non-blank PORMG_ENV is enough, silently" begin
+            _cfg_with_interactive(false) do
+                withenv("PORMG_ENV" => nothing) do
+                    @test_logs min_level = Logging.Info PormG.Configuration.load(db_dir; env = "dev")
+                end
+                @test PormG.Configuration.get_settings(db_dir).app_env == "dev"
+                _cleanup_configuration_test_keys([db_dir])
+                withenv("PORMG_ENV" => "dev") do
+                    @test_logs min_level = Logging.Info PormG.Configuration.load(db_dir)
+                end
+                @test PormG.Configuration.get_settings(db_dir).app_env == "dev"   # not default_env: prod
+                _cleanup_configuration_test_keys([db_dir])
+            end
+        end
+
+        @testset "interactive: default_env:, then dev, and the log names the source" begin
+            withenv("PORMG_ENV" => "") do           # blank: unset, so the fallback decides
+                _cfg_with_interactive(true) do
+                    @test_logs (:info, r"the file's `default_env:` selected the environment") PormG.Configuration.load(db_dir)
+                    @test PormG.Configuration.get_settings(db_dir).app_env == "prod"
+                    @test_logs (:info, r"the built-in default selected the environment") PormG.Configuration.load(bare_dir)
+                    @test PormG.Configuration.get_settings(bare_dir).app_env == "dev"
+                end
+            end
+            _cleanup_configuration_test_keys([db_dir, bare_dir])
+        end
+
+        @testset "an implicit load asked for the guess and keeps the fallback" begin
+            withenv("PORMG_ENV" => nothing) do
+                _cfg_with_interactive(false) do
+                    PormG.Configuration.load(db_dir; implicit = true)
+                end
+            end
+            @test PormG.Configuration.get_settings(db_dir).app_env == "prod"
+            _cleanup_configuration_test_keys([db_dir])
+        end
+
+        @testset "a blank PORMG_ENV is unset for Settings() and register_connection too" begin
+            withenv("PORMG_ENV" => "") do
+                @test PormG.Configuration.Settings().app_env == "dev"
+                @test PormG.Configuration._pormg_env() === nothing
+                try
+                    PormG.Configuration.register_connection("cfg1228_blank", ":memory:"; adapter = "SQLite")
+                    @test PormG.config["cfg1228_blank"].app_env == "dev"
+                finally
+                    PormG.Configuration.unregister_connection("cfg1228_blank")
+                end
+            end
+            withenv("PORMG_ENV" => " prod ") do
+                @test PormG.Configuration._pormg_env() == "prod"      # trimmed
+            end
         end
     end
 end

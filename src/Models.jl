@@ -84,7 +84,7 @@ public ArrayField, AutoField, BigIntegerField, BinaryField, BooleanField, CharFi
 # `Model_Type` is deliberately NOT here. It is documented (users hold one as `M.Driver`) but never
 # named: it appears zero times in `docs/src`, and the vocabulary users are given for "a model" is
 # the abstract `PormGModel`. Publishing the concrete name would invite code to depend on it.
-public Model, UniqueConstraint, CheckConstraint, Index, set_models
+public Model, UniqueConstraint, CheckConstraint, Index, set_models, connection_key, bind!
 # #1021: the text an `Index(expressions = …)` is written with to serve a full-text query.
 public search_vector_expression
 
@@ -1016,7 +1016,7 @@ end
 # still precompiles, and `checkdocs = :public` only verifies that docstrings which EXIST reach the
 # manual. It cost a debugging round in #295.
 """
-    set_models(_module::Module, path::String; implicit = false) -> nothing
+    set_models(_module::Module, path::String; implicit = isinteractive()) -> nothing
 
 Register every model defined in `_module` against the database configuration folder `path`, and
 resolve the relationships between them. This is the manual model-loading path; prefer
@@ -1036,11 +1036,11 @@ Registration does four things:
    the implicit load (`_resolve_connect_key`). A folder that matches **no loaded configuration
    raises `InvalidConfigurationError`** (#1226), naming the folder, the keys that are loaded and the
    `PormG.Configuration.load(…; root, env)` call to add before registering the models. PormG does
-   not load the folder itself unless asked: `implicit = true` (or
-   `PormG.Configuration.allow_implicit_load!(true)` for the session) loads it, **with a warning**,
-   guessing the environment (from `PORMG_ENV`, else `default_env:`) and the key (the caller's own
-   path), and raises `MissingConfigurationError` if `path` holds no `connection.yml`. See
-   `docs/src/configuration/advanced.md`.
+   not load the folder itself outside an interactive session (#1248): in a REPL (`isinteractive()`)
+   it loads it, **with a warning**, guessing the environment (from `PORMG_ENV`, else
+   `default_env:`) and the key (the caller's own path); a service, a test or a script gets that
+   only per call, with `implicit = true`. Either way it raises `MissingConfigurationError` if
+   `path` holds no `connection.yml`. See `docs/src/configuration/advanced.md`.
 3. **Resolves relationships.** Each `ForeignKey`/`OneToOneField` target is resolved (a target given
    as a model-name `String` is replaced by the model object), `pk_field` defaults are applied, and
    the reverse accessor is installed on the target. An omitted `related_name` is derived and logged:
@@ -1094,41 +1094,23 @@ with the configuration loaded first, e.g. `PormG.Configuration.load("db"; env = 
 See also [`Model`](@ref), `PormG.@import_models`, `PormG.@models_module`.
 """
 function set_models(_module::Module, path::String;
-                    implicit::Bool = Configuration._ALLOW_IMPLICIT_LOAD[])::Nothing
+                    implicit::Bool = Configuration._is_interactive())::Nothing
   @pormg_debug false
-  # #343: one walk yields the models AND their Julia bindings. The binding cannot be recovered later
-  # from a model — `name` is validated lowercase (#300) — so it is captured here or it is lost.
-  models, bindings = _collect_models_and_bindings(_module)
-
   # #550: ranked, unique-or-warn. This was a first-match `break` over `config`, which is a Dict —
   # so a folder-name match on an earlier-hashed key beat an exact path match on a later one.
   connect_key = _resolve_connect_key(path, config)
 
-  # #1226: nothing matched, and the application did not opt in to the guess below — refuse, naming
+  # #1226: nothing matched, and the call did not opt in to the guess below — refuse, naming
   # the `load` call that is missing. Before, this always fell through to the implicit load; #550 and
   # #553 made it warn and rank, and it still connected to whichever environment it guessed. It comes
   # BEFORE the two records below: a refused call (a typo'd folder) must not register the module or
   # fix its `__pormg_init_path__` constant, which the self-heal would then keep re-reading.
   isnothing(connect_key) && !implicit && throw(_unloaded_folder_error(path, config))
 
-  # Register for lazy loading / self-healing
-  REGISTERED_MODULES[_module] = path
-  
-  # Try to inject a fallback constant into the module so it survives precompilation
-  # This allows Models.ensure_model_initialized to recover even if REGISTERED_MODULES is lost.
-  try
-    if !isdefined(_module, :__pormg_init_path__)
-        # We use Core.eval to define a constant in the module
-        Base.invokelatest(Core.eval, _module, :(const __pormg_init_path__ = $path))
-    end
-  catch e
-    # Ignore errors if the module is closed or already has it
-  end
-
   @pormg_debug false
   if isnothing(connect_key)
-    # Opted in (`implicit = true`, or `Configuration.allow_implicit_load!(true)` for the session),
-    # so this call is about to GUESS two things at once:
+    # Opted in (`implicit = true`, which a REPL gets by default — #1248), so this call is about to
+    # GUESS two things at once:
     #
     #   1. the environment — `load` is called with no `env`, so `PORMG_ENV` wins when set and the
     #      file's `default_env:` otherwise (`Configuration._effective_env`).
@@ -1154,8 +1136,48 @@ function set_models(_module::Module, path::String;
     # so the key it registered is not necessarily the string we handed it.
     connect_key = something(_resolve_connect_key(path, config), path)
   end
-  
+
+  _register_models!(_module, path, connect_key)
+  return nothing
+end
+
+# The half of `set_models` after the key is decided: record the module, then bind and wire every
+# model in it to `connect_key`. Split out (#1227) so `ensure_model_initialized` can rebind a module
+# to the key `__pormg_binding__` recorded without resolving the folder again — resolving is a scan
+# of `config`, and that is the step a restored image must not repeat.
+function _register_models!(_module::Module, path::String, connect_key::String)::Nothing
+  # #343: one walk yields the models AND their Julia bindings. The binding cannot be recovered later
+  # from a model — `name` is validated lowercase (#300) — so it is captured here or it is lost.
+  models, bindings = _collect_models_and_bindings(_module)
+
+  # Register for lazy loading / self-healing
+  REGISTERED_MODULES[_module] = path
+
   settings::PormGSettings = Configuration.get_settings(connect_key)
+
+  # Try to inject fallback constants into the module so they survive precompilation, which is what
+  # lets `ensure_model_initialized` recover after REGISTERED_MODULES is lost with the session.
+  #   * `__pormg_init_path__` — the folder, for modules registered before #1227 recorded more.
+  #   * `__pormg_binding__` (#1227) — the KEY the application loaded the folder under and the root it
+  #     loaded it relative to (#857). A restored image rebinds from it by key, never by scanning
+  #     `config`, and the refusal it raises names the exact `load(key; root, env)` call to add.
+  #     Not recorded for an implicit entry, whose key is a guessed absolute path, nor for a module
+  #     whose `__pormg_init_path__` was pre-declared `""` — the precompile workload's marker that the
+  #     module must not bake a (temporary) folder into the image.
+  try
+    if !isdefined(_module, :__pormg_init_path__)
+        # We use Core.eval to define a constant in the module
+        Base.invokelatest(Core.eval, _module, :(const __pormg_init_path__ = $path))
+    end
+    if !settings.implicit && !isdefined(_module, :__pormg_binding__) &&
+       Base.invokelatest(getfield, _module, :__pormg_init_path__) != ""
+        binding = (key = connect_key, root = _binding_root(connect_key, settings.db_def_folder),
+                   folder = path)
+        Base.invokelatest(Core.eval, _module, :(const __pormg_binding__ = $binding))
+    end
+  catch e
+    # Ignore errors if the module is closed or already has it
+  end
 
   # set the original module in models and clear related objects for idempotency
   for model in models
@@ -1246,6 +1268,86 @@ function set_models(_module::Module, path::String;
   return nothing
 end
 
+"""
+    connection_key(model) -> Union{String, Nothing}
+
+The connection key `model` is bound to — the configuration its queries run against — or `nothing`
+while it is not bound yet (#1229). The public way to ask what the `connect_key` field holds:
+
+```julia
+PormG.Models.connection_key(M.Driver)   # "db"
+```
+
+It reads the binding as it stands and does not trigger the self-heal; a model that has not been
+queried yet in a restored session can still report its import-time key while that key is unloaded.
+"""
+connection_key(model::PormGModel)::Union{String, Nothing} = model.connect_key
+
+"""
+    bind!(model, key::String) -> model
+
+Bind one model to the loaded connection `key`, and do nothing else (#1230): the narrow half of
+`set_models`, for a model built at runtime — a library's own infrastructure table, say — that is not
+part of a models module. It sets the connection the model's queries use and returns the model.
+
+```julia
+LiveTiming = PormG.Models.Model("live_timing", id = PormG.Models.IDField(),
+                                payload = PormG.Models.TextField())
+PormG.Models.bind!(LiveTiming, "db")
+PormG.Migrations.ensure_table!(LiveTiming, "db")
+```
+
+`key` must be loaded; an unloaded one raises `InvalidConfigurationError` naming the `load` call, and
+nothing is loaded for you (#1226). Unlike `set_models`, it does not register a module, record a
+binding, name the model, resolve `ForeignKey` targets given by name or install reverse accessors — a
+model that relates to others belongs in a models module registered with `@import_models`.
+"""
+function bind!(model::PormGModel, key::String)
+  haskey(config, key) || throw(InvalidConfigurationError(
+    "Cannot bind the model \"$(model.name)\" to \"$(key)\": no configuration is loaded under that " *
+    "key. Load it first — `PormG.Configuration.load($(repr(key)); env = \"…\")` — PormG does not " *
+    "load it for you."))
+  isempty(model.name) && throw(InvalidConfigurationError(
+    "Cannot bind a model with no table name: give `Models.Model` the name as its first argument " *
+    "(`Model(\"live_timing\", …)`), or register it through a models module."))
+  model.connect_key = key
+  return model
+end
+
+# #1227: the root a key was loaded relative to — `load(key; root)` stores the folder as the canonical
+# `joinpath(root, key)` — or `nothing` when it was not (`load("db")` keeps the folder relative; an
+# absolute key has no root). Read off the stored folder so the binding needs no new `Settings` slot.
+function _binding_root(key::AbstractString, folder::AbstractString)::Union{Nothing, String}
+  (isabspath(key) || !isabspath(folder)) && return nothing
+  key_parts, folder_parts = splitpath(normpath(key)), splitpath(folder)
+  n = length(key_parts)
+  (n < length(folder_parts) && folder_parts[end-n+1:end] == key_parts) || return nothing
+  return joinpath(folder_parts[1:end-n]...)
+end
+
+# #1227: rebind `mod` from the `__pormg_binding__` it recorded at import. `false` when it recorded
+# none (a module registered before #1227, or one behind the precompile marker), so the caller falls
+# back to the older cases. Otherwise it binds to the recorded key when that key is loaded, and raises
+# `InvalidConfigurationError` when it is not — naming the key and the `load` call. It never scans
+# `config` for another key and never loads: which configuration the models use was decided by the
+# application at import time, and a restored image repeats that decision rather than re-deriving it.
+function _rebind_from_record(mod::Module)::Bool
+  Base.invokelatest(isdefined, mod, :__pormg_binding__) || return false
+  binding = Base.invokelatest(getfield, mod, :__pormg_binding__)
+  # Destructured: `test_memo_interface.jl` pins every read of a `root` field in src/ (#478).
+  (; key, root, folder) = binding
+  if haskey(config, key) && !config[key].dynamic
+    _register_models!(mod, folder, key)
+    return true
+  end
+  root_kw = root === nothing ? "" : "root = $(repr(root)), "
+  throw(InvalidConfigurationError(
+    "The models in $(mod) were bound to the configuration \"$(key)\" when they were imported, and " *
+    "\"$(key)\" is not loaded in this session. Load it before the first query — " *
+    "`PormG.Configuration.load($(repr(key)); $(root_kw)env = \"…\")`, in a package from `__init__`. " *
+    "PormG does not bind them to another configuration in its place."))
+end
+
 # #1226: the refusal `set_models` raises for a models folder no `Configuration.load` has loaded. It
 # names what is loaded, because the usual cause is a key loaded under another folder (a typo, or a
 # `root` that resolves elsewhere), and the call to add, spelled for the folder at hand so it pastes
@@ -1260,20 +1362,32 @@ function _unloaded_folder_error(path::AbstractString, config)::InvalidConfigurat
     "a connection. PormG does not load it for you: that load would choose the environment " *
     "(`PORMG_ENV`, else the file's `default_env:`) and the key on your behalf. Configurations " *
     "loaded now: $(loaded). Load it before registering the models — `$(hint)` before " *
-    "`@import_models` — and, in a package, again from `__init__`. In a REPL or a script, " *
-    "`PormG.Configuration.allow_implicit_load!(true)` restores the implicit load.")
+    "`@import_models` — and, in a package, again from `__init__`. To load it implicitly anyway, " *
+    "with a warning, pass `implicit = true` to `Models.set_models`; a REPL does that by default.")
 end
 
-# #1226: bind `mod` to `path` only when that will not refuse — a configuration matching `path` is
-# loaded, or the implicit load was opted in to. Otherwise do nothing. This is what the `__init__`
+# #1226: bind `mod` to `path` only when a configuration matching `path` is loaded. Otherwise do
+# nothing — never the implicit load, not even in a REPL (#1248): `using SomePackage` at a REPL is an
+# interactive session too, and a package's `__init__` loading a folder for it is the guess #1226
+# removed. This is what the `__init__`
 # that `@import_models` and `@models_module` inject call: `@models_module`'s runs when a package
 # image is restored, BEFORE the parent package's own `__init__` has loaded anything, so refusing
 # there would fail `using` for the documented body-plus-`__init__` bootstrap. Skipping leaves the
 # module to `ensure_model_initialized`, which raises the refusal on the first `.objects` if the
 # folder is still not loaded then.
 function _bind_if_loaded(mod::Module, path::AbstractString)::Nothing
-  if Configuration._ALLOW_IMPLICIT_LOAD[] || _resolve_connect_key(path, config) !== nothing
-    set_models(mod, String(path))
+  # #1227: a module that recorded its binding binds to that KEY or not at all — the same rule as the
+  # self-heal. `@models_module`'s `__init__` runs when an image is restored, so resolving the folder
+  # here would bind it to whichever key happens to hold the folder in this session.
+  if Base.invokelatest(isdefined, mod, :__pormg_binding__)
+    binding = Base.invokelatest(getfield, mod, :__pormg_binding__)
+    if haskey(config, binding.key) && !config[binding.key].dynamic
+      _register_models!(mod, binding.folder, binding.key)
+    end
+    return nothing
+  end
+  if _resolve_connect_key(path, config) !== nothing
+    set_models(mod, String(path); implicit = false)
   end
   return nothing
 end
@@ -1308,19 +1422,29 @@ end
     ensure_model_initialized(model::PormGModel)
 
 Checks if a model has been initialized (i.e., has a connect_key that exists in `config`).
-If not, attempts self-healing by:
+If not, and its module recorded the key it was bound to at import (`__pormg_binding__`, #1227), it
+rebinds to that key when it is loaded and raises `InvalidConfigurationError` naming the
+`load(key; root, env)` call when it is not — without looking for another key. A module with no
+record (registered before #1227) is self-healed by:
 1. Remapping stale path-based keys to current session alias keys
 2. Re-registering via REGISTERED_MODULES
 3. Scanning loaded modules for __pormg_init_path__ markers
 4. Using the model's own `_module` reference (survives precompilation)
 
-It only ever binds to a configuration that is already loaded. When the model's own models folder is
-not loaded, it raises the `InvalidConfigurationError` `set_models` gives (#1226) — unless the
-implicit load was opted in to with `PormG.Configuration.allow_implicit_load!(true)`.
+It only ever binds to a configuration that is already loaded — never the implicit load, not even in
+a REPL (#1248). When the model's own models folder is not loaded, it raises the
+`InvalidConfigurationError` `set_models` gives (#1226).
 """
 function ensure_model_initialized(model::PormGModel)
     # Fast path: already properly initialized
     if !isnothing(model.connect_key) && haskey(config, model.connect_key)
+        return true
+    end
+
+    # #1227: the module recorded the key it was bound to at import — rebind to it, or refuse. This
+    # comes before every case below, which all re-derive a key: case 1 and the inference by scanning
+    # `config`, 2a–2c by resolving a folder again.
+    if !isnothing(model._module) && _rebind_from_record(model._module)
         return true
     end
 
@@ -1351,7 +1475,7 @@ function ensure_model_initialized(model::PormGModel)
         for m in models_in_mod
             if m === model
                 @info "Self-healing: Initializing model $(model.name) from registered module $(mod)"
-                set_models(mod, path)
+                set_models(mod, path; implicit = false)
                 return true
             end
         end
@@ -1373,7 +1497,7 @@ function ensure_model_initialized(model::PormGModel)
         mod = model._module
         if isdefined(mod, :__pormg_init_path__)
             try
-                set_models(mod, getfield(mod, :__pormg_init_path__))
+                set_models(mod, getfield(mod, :__pormg_init_path__); implicit = false)
                 if !isnothing(model.connect_key) && haskey(config, model.connect_key)
                     @info "Self-healing: Re-registered $(model.name) from module $(mod) source path"
                     return true
@@ -1391,7 +1515,7 @@ function ensure_model_initialized(model::PormGModel)
             try
                 inferred = _infer_self_heal_key(model, get_all_models(mod), config)
                 if inferred !== nothing
-                    set_models(mod, config[inferred].db_def_folder)
+                    set_models(mod, config[inferred].db_def_folder; implicit = false)
                     if !isnothing(model.connect_key) && haskey(config, model.connect_key)
                         return true
                     end
@@ -1407,10 +1531,11 @@ function ensure_model_initialized(model::PormGModel)
     #     and, since #1226, would raise a refusal that is not about this model.
     for (pkgid, mod) in Base.loaded_modules
         if isdefined(mod, :__pormg_init_path__) && any(m === model for m in get_all_models(mod))
+            _rebind_from_record(mod) && return true     # #1227, as above
             path = getfield(mod, :__pormg_init_path__)
             @info "Self-healing: Recovered registration for $(mod) from __pormg_init_path__"
             try
-                set_models(mod, path)
+                set_models(mod, path; implicit = false)
             catch e
                 e isa InvalidConfigurationError && (refusal = e)
                 continue

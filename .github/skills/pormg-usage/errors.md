@@ -109,7 +109,7 @@ end
 | pool exhausted / database unreachable | `PoolTimeoutError` / `PoolConnectError` |
 | `with_advisory_lock(...; wait = false)` while held | `OperationalError` |
 | `Configuration.load` with bad settings | `InvalidConfigurationError` |
-| `@import_models` / `set_models` / first `.objects` with the models folder not loaded | `InvalidConfigurationError` (load it first; `allow_implicit_load!(true)` for a REPL) |
+| `@import_models` / `set_models` / first `.objects` with the models folder not loaded | `InvalidConfigurationError` (load it first; a REPL loads it with a warning, elsewhere `set_models(…; implicit = true)` per call) |
 | a definition error in `models.jl` | `FieldValidationError` / `ModelDefinitionError` |
 | non-interactive `migrate` of a destructive plan | `PormG.Migrations.DestructiveMigrationError` |
 | `migrate` of a column change that would fail on existing rows | `PormG.Migrations.MigrationPrecheckError` (nothing written) |

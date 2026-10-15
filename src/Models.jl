@@ -1424,6 +1424,35 @@ function _infer_self_heal_key(model::PormGModel, models_in_mod, config)
     return key
 end
 
+# #1250: the negative result of the self-heal scan, per model, for a model that is bound to nothing
+# and belongs to no module — one built with a bare `Models.Model(...)` and never passed to
+# `set_models` or `bind!`. `.objects` calls `ensure_model_initialized` on every access, so such a
+# model used to repeat cases 2a and 2c (every registered module's models, then every loaded module
+# carrying the marker) on every query, only to return `false` again: about a millisecond a query with
+# fifty models in one marked module.
+#
+# For such a model the scan reads two collections — `REGISTERED_MODULES` (2a) and
+# `Base.loaded_modules` (2c); case 1 needs a `connect_key` and 2b a `_module` — so the cache
+# stores their sizes, `_unbound_scan_signature`, and skips the scan while they are the ones recorded
+# with the last "not found".
+#
+# Thread safety. `WeakKeyDict` serializes its reads and writes under its own lock, so concurrent
+# `.objects` calls never see a torn entry; a weak key does not keep a runtime-built model alive. The
+# signature is taken BEFORE the scan and recorded only when the scan found nothing, so it describes
+# what the scan read: a registration racing with the scan changes a size and the next call scans
+# again, at the cost of one more scan, never a stale "not found". Binding the model — `set_models`,
+# `bind!`, an assignment to `connect_key` — takes it out of the cached case and onto the fast path.
+# What the sizes cannot see is a module replaced by another of the same count, or a model `eval`ed
+# into an already-registered module afterwards; either still has to go through `set_models`, which
+# binds it.
+#
+# A model with a `connect_key` or a `_module` is never cached: case 1 reads `config`, and a
+# registered model's misses go through #1227's rebind and #1226's refusal, which raise rather than
+# return `false`.
+const _UNBOUND_SCAN = WeakKeyDict{PormGModel, Tuple{Int, Int}}()
+
+_unbound_scan_signature()::Tuple{Int, Int} = (length(REGISTERED_MODULES), length(Base.loaded_modules))
+
 """
     ensure_model_initialized(model::PormGModel)
 
@@ -1445,6 +1474,14 @@ function ensure_model_initialized(model::PormGModel)
     # Fast path: already properly initialized
     if !isnothing(model.connect_key) && haskey(config, model.connect_key)
         return true
+    end
+
+    # #1250: a model with no module that the last scan did not find, with nothing it reads changed
+    # since, is not found again — see `_UNBOUND_SCAN`.
+    signature = isnothing(model._module) && isnothing(model.connect_key) ?
+        _unbound_scan_signature() : nothing
+    if signature !== nothing && get(_UNBOUND_SCAN, model, nothing) == signature
+        return false
     end
 
     # #1227: the module recorded the key it was bound to at import — rebind to it, or refuse. This
@@ -1551,6 +1588,7 @@ function ensure_model_initialized(model::PormGModel)
     end
 
     refusal === nothing || throw(refusal)
+    signature === nothing || (_UNBOUND_SCAN[model] = signature)
     return false
 end
 

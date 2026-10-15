@@ -206,7 +206,7 @@ end
 # explain: a locked read keeps its transaction requirement
 # explain() builds the statement on the execute path, so select_for_update() outside a transaction
 # raises exactly as running it would — with or without ANALYZE, which would execute the query and
-# take the lock.
+# take the lock. On SQLite too (#1237): the requirement is the call's, not the lock's.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "explain: select_for_update outside a transaction" begin
   q = ExplainPG.Driver.objects.filter("driverid" => 1).values("surname").select_for_update()
@@ -217,4 +217,10 @@ end
     @test occursin("must run inside a transaction", sprint(showerror, err))
     @test isempty(EXPLAIN_CALLS)
   end
+  empty!(EXPLAIN_CALLS)
+  q = ExplainSL.Driver.objects.filter("driverid" => 1).values("surname").select_for_update()
+  err = try q.explain(); nothing catch e; e end
+  @test err isa PormG.QueryBuildError
+  @test occursin("must run inside a transaction", sprint(showerror, err))
+  @test isempty(EXPLAIN_CALLS)
 end

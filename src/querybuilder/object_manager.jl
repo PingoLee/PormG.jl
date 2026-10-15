@@ -536,8 +536,9 @@ function _distinct!(q::SQLObject, value)
 end
 
 # #26: mark the query for row-level locking. Renders `FOR [NO KEY] UPDATE [NOWAIT|SKIP LOCKED]`
-# on PostgreSQL; a silent no-op on SQLite. `nowait` and `skip_locked` are mutually exclusive
-# (Django parity). Always builds a fresh ForUpdateClause (set-once semantics).
+# on PostgreSQL and no clause on SQLite, where a transaction is still required (#1237). `nowait`
+# and `skip_locked` are mutually exclusive (Django parity). Always builds a fresh ForUpdateClause
+# (set-once semantics).
 #
 # #169: `of` is checked for SHAPE only — one name or a collection of names. Whether a name resolves
 # is decided after the build (`_lock_target_aliases`), because the joins it may name do not exist

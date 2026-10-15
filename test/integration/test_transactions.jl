@@ -603,30 +603,34 @@ const TX_LOCKS_ROWS = by_engine(postgres = true, sqlite = false)
         M.Just_a_test_deletion.objects.filter("name" => "lockme").select_for_update(skip_locked = true).list()
       end
       @test length(claimed) == 1
-
-      # Guard: a locked read OUTSIDE a transaction fails loudly (autocommit-release footgun).
-      autocommit_err = try
-        M.Just_a_test_deletion.objects.filter("name" => "lockme").select_for_update().list(); nothing
-      catch e; e end
-      @test autocommit_err isa PormGError && occursin("transaction", autocommit_err.msg)
     else
-      # SQLite: select_for_update is a pure no-op — returns rows normally and never raises,
-      # both inside and outside a transaction (the documented PG/SQLite divergence).
-      outside = M.Just_a_test_deletion.objects.filter("name" => "lockme").select_for_update().list()
-      @test length(outside) == 1
+      # SQLite: no lock clause inside a transaction, and the rows come back (#26).
       inside = PormG.atomic(PORMG_DB_FOLDER) do
-        M.Just_a_test_deletion.objects.filter("name" => "lockme").select_for_update(skip_locked = true).list()
+        q = M.Just_a_test_deletion.objects.filter("name" => "lockme")
+        q.select_for_update(skip_locked = true)
+        @test !contains(q.list(show_query = :sql), "FOR UPDATE")
+        q.list()
       end
       @test length(inside) == 1
     end
+
+    # Both engines: a locked read OUTSIDE a transaction fails loudly before the query is sent — the
+    # autocommit-release footgun on PostgreSQL, and on SQLite the same call, so code tested there
+    # does not first fail in production (#1237; it ran silently before).
+    autocommit_err = try
+      M.Just_a_test_deletion.objects.filter("name" => "lockme").select_for_update().list(); nothing
+    catch e; e end
+    @test autocommit_err isa PormG.QueryBuildError
+    @test occursin("must run inside a transaction", error_message(autocommit_err))
 
     M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
   # select_for_update(of = …): which tables a locked read actually locks (#169)
-  # Without `of`, PostgreSQL locks every table in FROM — the joined `driver` row too — and refuses a
-  # LEFT-joined (nullable FK) table outright. With `of`, only the named aliases are locked. Proven by
+  # Without `of`, PostgreSQL locks every table in FROM — the joined `driver` row too — and cannot lock
+  # a LEFT-joined (nullable FK) table at all, which PormG refuses before the query runs (#1106). With
+  # `of`, only the named aliases are locked. Proven by
   # CONTENTION, not by SQL shape: a second transaction tries the same rows with NOWAIT, which fails
   # (lock_not_available, 55P03) exactly when the first one holds the lock.
   # ─────────────────────────────────────────────────────────────────────────────
@@ -645,6 +649,11 @@ const TX_LOCKS_ROWS = by_engine(postgres = true, sqlite = false)
     locked_read(; kw...) = M.Result.objects.
       filter("resultid" => rid, "driverid__nationality" => nat).
       values("resultid").
+      select_for_update(; kw...)
+    # A nullable FK (`test_result`), which joins LEFT.
+    nullable_read(; kw...) = M.Just_a_test_deletion.objects.
+      filter("name" => "lockme").
+      values("id", "test_result__points").
       select_for_update(; kw...)
 
     if TX_LOCKS_ROWS
@@ -684,29 +693,18 @@ const TX_LOCKS_ROWS = by_engine(postgres = true, sqlite = false)
       # of names the relation path: the driver row is locked through its generated alias.
       @test contended(() -> locked_read(of = ("self", "driverid")), driver_row) == :locked
 
-      # A nullable FK joins LEFT, and PostgreSQL refuses to lock the nullable side: a plain lock
-      # fails at the database, while of = ("self",) runs.
-      nullable_read(; kw...) = M.Just_a_test_deletion.objects.
-        filter("name" => "lockme").
-        values("id", "test_result__points").
-        select_for_update(; kw...)
-      db_err = try
-        PormG.atomic(PORMG_DB_FOLDER) do
-          nullable_read().list()
-        end
-        nothing
-      catch e
-        e
-      end
-      @test db_err isa PormG.DatabaseError
-      @test occursin("nullable side of an outer join", error_message(db_err))
+      # A nullable FK joins LEFT, and PostgreSQL refuses to lock the nullable side: of = ("self",),
+      # the fix the plain lock's refusal names (#1106, below), runs and locks the base row.
       rows = PormG.atomic(PORMG_DB_FOLDER) do
         nullable_read(of = ("self",)).list()
       end
       @test length(rows) == 1
     else
       # SQLite: no lock is rendered, so `of` is a no-op — but the rows still come back.
-      @test length(locked_read(of = ("self", "driverid")).list()) == 1
+      rows = PormG.atomic(PORMG_DB_FOLDER) do
+        locked_read(of = ("self", "driverid")).list()
+      end
+      @test length(rows) == 1
     end
 
     # Both engines: a target that cannot be locked is refused before the database sees the query —
@@ -726,6 +724,62 @@ const TX_LOCKS_ROWS = by_engine(postgres = true, sqlite = false)
     catch e; e end
     @test left isa PormG.QueryBuildError
     @test occursin("is joined LEFT", error_message(left))
+
+    # #1106: a lock without `of` beside that LEFT join used to reach PostgreSQL and fail there with
+    # `FOR UPDATE cannot be applied to the nullable side of an outer join`, and ran on SQLite. Now it
+    # is refused before any statement is sent, on both engines, and the message names the fix.
+    plain = try
+      PormG.atomic(PORMG_DB_FOLDER) do
+        nullable_read().list()
+      end
+      nothing
+    catch e; e end
+    @test plain isa PormG.QueryBuildError
+    @test occursin("the relation \"test_result\" is joined LEFT", error_message(plain))
+    @test occursin("of = (\"self\",)", error_message(plain))
+
+    # A filter on the nullable side lets PostgreSQL reduce the join to INNER, and there the lock
+    # ran. It is refused all the same: the INNER join the message names is the explicit spelling of
+    # that reduction, and it runs and locks the joined row too.
+    M.Just_a_test_deletion.objects.create("name" => "lockme_fk", "test_result" => rid)
+    filtered_read(; inner = false) = begin
+      q = M.Just_a_test_deletion.objects
+      inner && q.on("test_result", join_type = "INNER")
+      q.filter("name" => "lockme_fk", "test_result__points__@gte" => 0)
+      q.values("id")
+      q.select_for_update()
+      q
+    end
+    reduced = try
+      PormG.atomic(PORMG_DB_FOLDER) do
+        filtered_read().list()
+      end
+      nothing
+    catch e; e end
+    @test reduced isa PormG.QueryBuildError
+    @test occursin("on(\"test_result\", join_type = \"INNER\") locks it too", error_message(reduced))
+    rows = PormG.atomic(PORMG_DB_FOLDER) do
+      filtered_read(inner = true).list()
+    end
+    @test length(rows) == 1
+    if TX_LOCKS_ROWS
+      @test contended(() -> filtered_read(inner = true),
+                      () -> M.Result.objects.filter("resultid" => rid).values("resultid")) == :locked
+    end
+
+    # A keyed CTE joins LEFT by default, but PostgreSQL does not lock a WITH query, so a lock
+    # without `of` beside one is not refused — and the database agrees: the read runs.
+    cte_rows = PormG.atomic(PORMG_DB_FOLDER) do
+      q = M.Result.objects
+      q.with("lock_drivers" => M.Driver.objects.filter("driverid" => did).values("driverid"),
+             join_field = "driverid" => "driverid")
+      q.filter("resultid" => rid)
+      q.values("resultid", "lock_drivers__driverid")
+      q.select_for_update()
+      @test occursin("LEFT JOIN \"lock_drivers\"", q.list(show_query = :sql))
+      q.list()
+    end
+    @test length(cte_rows) == 1
 
     M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end

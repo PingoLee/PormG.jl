@@ -7,7 +7,8 @@ PostgreSQL's `OF` names a range variable, not a table. PormG always aliases (`FR
 `relation "result" in FOR UPDATE/FOR SHARE clause not found in FROM clause`. That is why the
 option was deferred in #26. Without it a plain `select_for_update()` locks every table in FROM,
 including the ones a `__` filter joins, and fails outright when such a join is LEFT (a nullable
-foreign key): PostgreSQL cannot lock the nullable side of an outer join.
+foreign key): PostgreSQL cannot lock the nullable side of an outer join. Such a lock is refused while
+the query is built, on both engines, naming the join and `of = ("self",)` (#1106).
 
 Every assertion here ties an `OF` alias to the TABLE it was joined under, read back off the same
 statement, so a resolver that returns the wrong alias fails even when the alias count is right.
@@ -74,6 +75,34 @@ PormG.Models.set_models(@__MODULE__, "sfu_of_pg")
 end
 
 const SFU = SfuOfModels
+
+# The same relations registered on the SQLite mock. A `cjoin_on` target is bound to its model's
+# connection and cannot be re-routed with `.db(...)`, so a SQLite `cjoin_on` case needs models of
+# its own.
+module SfuOfModelsSL
+import PormG
+import PormG.Models
+Circuit = Models.Model("circuit",
+  circuitid = Models.IDField(),
+  name      = Models.CharField(),
+)
+Race = Models.Model("race",
+  raceid    = Models.IDField(),
+  circuitid = Models.ForeignKey(Circuit, on_delete = "CASCADE", related_name = "races"),
+)
+Constructor = Models.Model("constructor",
+  constructorid = Models.IDField(),
+  name          = Models.CharField(),
+)
+Result = Models.Model("result",
+  resultid      = Models.IDField(),
+  raceid        = Models.ForeignKey(Race, on_delete = "CASCADE", related_name = "results"),
+  constructorid = Models.ForeignKey(Constructor, on_delete = "CASCADE", related_name = "results", null = true),
+)
+PormG.Models.set_models(@__MODULE__, "sfu_of_sl")
+end
+
+const SFU_SL = SfuOfModelsSL
 import PormG.QueryBuilder: Joined, F
 
 _sfu_err(f) = try f(); nothing catch e; e end
@@ -308,7 +337,9 @@ end
 # select_for_update(of): a RIGHT or FULL join refuses `of` for the whole statement
 # A RIGHT/FULL join puts the tables joined BEFORE it — the base table included — on the nullable
 # side, so even `of = ("self",)` would fail on PostgreSQL although no target's own row is LEFT. The
-# refusal is statement-wide on both engines; a plain lock (no `of`) is left to PostgreSQL as before.
+# refusal is statement-wide on both engines. A lock without `of` is refused too (#1106), and its
+# message does not offer `of`, which cannot help here — not even beside a LEFT join, whose own
+# message would.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a RIGHT or FULL join refuses of (#169)" begin
   # An explicit `on(...)` join type, FULL and RIGHT, and a RIGHT `cjoin_on`.
@@ -340,9 +371,108 @@ end
       @test err isa PormG.QueryBuildError
       @test occursin("cannot be used on a query with a", _sfu_msg(err))
     end
-    # Without `of` nothing new is refused: PormG renders the plain lock as #26 always did.
-    @test _sfu_lock(shape().select_for_update().list(show_query = :sql)) == "FOR UPDATE"
+    # #1106: without `of` the lock reaches every table, the base one included.
+    err = _sfu_err(() -> shape().select_for_update().list(show_query = :sql))
+    @test err isa PormG.QueryBuildError
+    msg = _sfu_msg(err)
+    @test occursin("select_for_update() cannot be used on a query with a", msg)
+    @test occursin("no `of` target avoids that", msg)
+    @test !occursin("of = (\"self\",)", msg)
   end
+  # A RIGHT join beside a LEFT one (the nullable `constructorid`): the RIGHT join's reason wins.
+  err = _sfu_err(() -> begin
+    q = SFU.Result.objects
+    q.on("driverid", join_type = "RIGHT")
+    q.filter("constructorid__name" => "Ferrari")
+    q.values("resultid", "driverid__nationality")
+    q.select_for_update()
+    q.list(show_query = :sql)
+  end)
+  @test err isa PormG.QueryBuildError
+  @test occursin("RIGHT JOIN (to \"driver\")", _sfu_msg(err))
+  @test !occursin("of = (\"self\",)", _sfu_msg(err))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# select_for_update() without `of`: a LEFT join is refused before the database (#1106)
+# A lock without `of` locks every table the statement reads, so beside a LEFT join PostgreSQL fails
+# at execution with `FOR UPDATE cannot be applied to the nullable side of an outer join`, a message
+# that does not point at the fix. PormG refuses it while building, on both engines — SQLite takes no
+# lock, but the call is wrong on either, and development is where it should surface. The message
+# names the join as the caller spelled it and both fixes — `of = ("self",)`, which leaves the table
+# unlocked, and the INNER spelling, which locks it — and each is checked to render.
+# A filter on the nullable side is refused too, though PostgreSQL would reduce that join to INNER
+# and run the lock: the INNER join is the explicit spelling of what the planner would do.
+# Not refused: INNER joins only (Django's default, rendered as before) and a LEFT join to a CTE,
+# which PostgreSQL does not lock.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a lock without of beside a LEFT join is refused (#1106)" begin
+  for (Mods, engine_locks) in ((SFU, true), (SFU_SL, false))
+    # The nullable FK projected only: the shape PostgreSQL itself refuses.
+    left_fk = (; inner = false) -> begin
+      q = Mods.Result.objects
+      inner && q.on("constructorid", join_type = "INNER")
+      q.values("resultid", "constructorid__name")
+      q
+    end
+    # The nullable FK filtered on: PostgreSQL would reduce it; refused all the same.
+    left_fk_filtered = (; inner = false) -> begin
+      q = Mods.Result.objects
+      inner && q.on("constructorid", join_type = "INNER")
+      q.filter("constructorid__name" => "Ferrari")
+      q.values("resultid")
+      q
+    end
+    left_cjoin = (; inner = false) -> begin
+      q = Mods.Result.objects
+      q.cjoin_on("Circuit", alias = "c", join_type = inner ? "INNER" : "LEFT",
+                 on = [Joined("c", "circuitid") == F("raceid__circuitid")])
+      q.values("resultid")
+      q
+    end
+    shapes = (
+      (left_fk, "the relation \"constructorid\"", "on(\"constructorid\", join_type = \"INNER\") locks it too"),
+      (left_fk_filtered, "the relation \"constructorid\"", "on(\"constructorid\", join_type = \"INNER\") locks it too"),
+      (left_cjoin, "the cjoin_on alias \"c\"", "join it with join_type = \"INNER\" to lock it too"),
+    )
+    for (shape, named, inner_fix) in shapes
+      err = _sfu_err(() -> shape().select_for_update().list(show_query = :sql))
+      @test err isa PormG.QueryBuildError
+      msg = _sfu_msg(err)
+      @test occursin("$(named) is joined LEFT", msg)
+      @test occursin("on the nullable side of an outer join", msg)
+      @test occursin("Pass of = (\"self\",) to lock the base rows alone", msg)
+      @test occursin(inner_fix, msg)
+      # Fix 1: the base rows only on PostgreSQL, no clause on SQLite (#26).
+      sql = shape().select_for_update(of = ("self",)).list(show_query = :sql)
+      @test occursin("LEFT JOIN", sql)
+      @test engine_locks ? _sfu_lock(sql) == "FOR UPDATE OF \"Tb\"" : !occursin("FOR UPDATE", sql)
+      # Fix 2: joined INNER, the plain lock builds and locks every table.
+      sql = shape(inner = true).select_for_update().list(show_query = :sql)
+      @test !occursin("LEFT JOIN", sql) && occursin("INNER JOIN", sql)
+      @test engine_locks ? _sfu_lock(sql) == "FOR UPDATE" : !occursin("FOR UPDATE", sql)
+    end
+  end
+
+  # INNER joins only: the statement is the one #26 rendered, byte for byte.
+  sql = SFU.Result.objects.
+    filter("driverid__nationality" => "Dutch").
+    values("resultid").
+    select_for_update().
+    list(show_query = :sql)
+  @test sql == "SELECT\n    \"Tb\".\"resultid\" as \"resultid\"\nFROM \"result\" as \"Tb\"\n" *
+    " INNER JOIN \"driver\" AS \"Tb_1\" ON \"Tb\".\"driverid\" = \"Tb_1\".\"driverid\" \n" *
+    "WHERE \"Tb_1\".\"nationality\" = \$1\nFOR UPDATE \n"
+
+  # A keyed CTE joins LEFT by default, and PostgreSQL does not lock a WITH query: not refused.
+  q = SFU.Result.objects
+  q.with("dutch" => SFU.Driver.objects.filter("nationality" => "Dutch").values("driverid"),
+         join_field = "driverid" => "driverid")
+  q.values("resultid", "dutch__driverid")   # the CTE is joined once a column of it is read
+  q.select_for_update()
+  sql = q.list(show_query = :sql)
+  @test occursin("LEFT JOIN \"dutch\"", sql)
+  @test _sfu_lock(sql) == "FOR UPDATE"
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -409,18 +539,20 @@ PormG.Configuration.transaction_connection_for(::SfuOfMockPostgres) = :sfu_of_mo
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# select_for_update(of): the path→alias map is built only for a lock that names targets
-# Every build is allocation-sensitive (#41), and only an `of` lock reads the map, so a build without
-# one must leave it `nothing` — including a joined build with a plain lock.
+# select_for_update: the path→alias map is built only for a locked read
+# Every build is allocation-sensitive (#41), and only a lock reads the map — an `of` lock resolves its
+# targets through it, a lock without `of` names the outer join it refuses by it (#1106) — so a build
+# without a lock must leave it `nothing`.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "the alias map is allocated only when of is given (#169)" begin
+@testset "the alias map is allocated only for a locked read (#169, #1106)" begin
   map_of(q) = begin
     seen = Ref{Any}(:unset)
     PormG.QueryBuilder.query(q; show_query = :sql, built = i -> (seen[] = i.join_alias_by_path))
     seen[]
   end
   joined = () -> SFU.Result.objects.filter("driverid__nationality" => "Dutch").values("resultid")
+  expected = Dict("driverid" => _sfu_alias(joined().list(show_query = :sql), "driver"))
   @test map_of(joined()) === nothing
-  @test map_of(joined().select_for_update()) === nothing
-  @test map_of(joined().select_for_update(of = "self")) == Dict("driverid" => _sfu_alias(joined().list(show_query = :sql), "driver"))
+  @test map_of(joined().select_for_update()) == expected
+  @test map_of(joined().select_for_update(of = "self")) == expected
 end

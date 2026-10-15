@@ -96,7 +96,8 @@ function PormG.backend_copy_in!(pool::MockPGPool831, conn, sql::String, data_itr
 end
 
 # ── Two mock PostgreSQL databases for the `select_for_update` guard ──
-# The guard only exists on PostgreSQL (SQLite never locks). A model bound to database A, read
+# The guard holds on both engines (#1237); its SQLite half runs on database B's real `circuits`
+# table (`SFU_CIRCUITS_831`, below). A model bound to database A, read
 # through `.db(B)`, is what routes the query away from the model's own connection. `fetch` is
 # stubbed to record the statement and answer with no rows; distinct `name`s keep the two pools
 # non-`===`.
@@ -118,6 +119,10 @@ end
 const SFU_LAP_TIMES_831 = Model("pormg831_lap_times",
   id = IDField(), driver = CharField(), lap = IntegerField())
 SFU_LAP_TIMES_831.connect_key = "pormg831_pg_a"
+
+# The SQLite half (#1237): a model on scratch database B's `circuits` table.
+const SFU_CIRCUITS_831 = Model("circuits", id = IDField(), name = CharField())
+SFU_CIRCUITS_831.connect_key = POOL_B_KEY_831
 
 # ── A many-to-many pair bound to the mock database B (#838) ──
 # The manager's add/remove/clear/set issue raw `fetch` calls, so the scope check has to sit in
@@ -424,6 +429,32 @@ ORM_DRIVERS_B_831.connect_key = POOL_B_KEY_831
         end
         @test length(SFU_SQL_831) == 1
         @test occursin("FOR UPDATE", SFU_SQL_831[1])
+      end
+
+      # ─────────────────────────────────────────────────────────────────────────────
+      # select_for_update needs a transaction on SQLite too (#1237)
+      # SQLite takes no row lock, but a locked read outside a transaction is the same bug in the call
+      # as on PostgreSQL. It used to run here silently and raise only in production, so it is refused
+      # the same way, before the query is sent. Inside a transaction on B it reads with no lock
+      # clause. A transaction open on A does not count: the #838 scope check refuses the read.
+      # ─────────────────────────────────────────────────────────────────────────────
+      @testset "select_for_update on SQLite needs a transaction on that database (#1237)" begin
+        err = _raised_831(() -> SFU_CIRCUITS_831.objects.select_for_update().list())
+        @test err isa PormG.QueryBuildError
+        @test occursin("select_for_update() must run inside a transaction", PormG.error_message(err))
+
+        rows = PormG.atomic(POOL_B_KEY_831) do
+          q = SFU_CIRCUITS_831.objects
+          q.select_for_update()
+          @test !occursin("FOR UPDATE", q.list(show_query = :sql))
+          q.list()
+        end
+        @test sort([r[:name] for r in rows]) == _circuit_names_831(b)
+
+        err = _raised_831(() -> PormG.atomic(POOL_A_KEY_831) do
+          SFU_CIRCUITS_831.objects.select_for_update().list()
+        end)
+        @test err isa PormG.TransactionError
       end
 
       # ═════════════════════════════════════════════════════════════════════════════

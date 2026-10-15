@@ -124,7 +124,7 @@ The facts are what the plan states. PormG does not guess whether an index is *mi
 scan of a small table is the right plan.
 
 - `analyze = true` **executes the query** (`EXPLAIN ANALYZE`) to measure real timing.
-- A `select_for_update()` query needs a transaction on PostgreSQL to be explained at all — with or
+- A `select_for_update()` query needs a transaction to be explained at all, on either engine — with or
   without `analyze` — exactly as it does to run.
 - `buffers` / `verbose` add PostgreSQL's `BUFFERS` / `VERBOSE` detail to `:plan`.
 - SQLite has only `EXPLAIN QUERY PLAN`: any of the three options raises `BackendCapabilityError`

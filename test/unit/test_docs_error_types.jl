@@ -1258,6 +1258,14 @@ const DOCERR_CASES = [
         QueryBuildError,
         () -> DOCERR_DRIVER_PG.objects.filter("driverid" => 1).select_for_update().explain(),
     ),
+    # #1237 — write/transaction.md ("Row-Level Locking", "Row locking on SQLite"): a locked read
+    # outside a transaction raises QueryBuildError on SQLite as on PostgreSQL, before the mock's
+    # missing driver is reached.
+    (
+        "write/transaction.md — select_for_update() outside a transaction raises QueryBuildError on SQLite",
+        QueryBuildError,
+        () -> DOCERR_DRIVER_SL.objects.filter("driverid" => 1).select_for_update().list(),
+    ),
     # #169 — `select_for_update(of = …)` (write/transaction.md, "Locking only some tables"): a target
     # the query does not join, a LEFT-joined target (`driverid` is a nullable FK here), any `of` on a
     # query with a RIGHT/FULL join, and an empty `of` raise QueryBuildError; a name that is both a
@@ -1283,6 +1291,31 @@ const DOCERR_CASES = [
             q.on("driverid", join_type = "RIGHT")
             q.values("resultid", "driverid__nationality")
             q.select_for_update(of = ("self",))
+            q.list(show_query = :sql)
+        end,
+    ),
+    # #1106 — the "Nullable foreign keys fail" bullet: a lock WITHOUT `of` beside a LEFT join (the
+    # nullable `driverid`) or a RIGHT/FULL join raises QueryBuildError, on PostgreSQL and SQLite.
+    (
+        "write/transaction.md — a lock without of beside a LEFT join raises QueryBuildError (PostgreSQL)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_PG.objects.filter("driverid__nationality" => "Brazilian").values("resultid").
+            select_for_update().list(show_query = :sql),
+    ),
+    (
+        "write/transaction.md — a lock without of beside a LEFT join raises QueryBuildError (SQLite)",
+        QueryBuildError,
+        () -> DOCERR_RESULT_SL.objects.filter("driverid__nationality" => "Brazilian").values("resultid").
+            select_for_update().list(show_query = :sql),
+    ),
+    (
+        "write/transaction.md — a lock without of on a query with a RIGHT join raises QueryBuildError",
+        QueryBuildError,
+        () -> begin
+            q = DOCERR_RESULT_PG.objects
+            q.on("driverid", join_type = "RIGHT")
+            q.values("resultid", "driverid__nationality")
+            q.select_for_update()
             q.list(show_query = :sql)
         end,
     ),

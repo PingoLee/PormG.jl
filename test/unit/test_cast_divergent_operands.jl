@@ -847,6 +847,42 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1034 phase 3 step 2c: a CTE column keeps its body's declared scale under a scaled cast
+# A CTE column's kind is its body expression's (`cte["kinds"]`), so a `DecimalField(10,2)` path or a
+# `numeric(10,1)` cast in the body carries its scale through the CTE, as the same column does
+# without one: a cast to a scale at least as wide has nothing to round and builds on both engines,
+# and a narrower one is refused on SQLite (#1040), naming the column's places. A decimal the body
+# computes (`Avg("price")`) has no declared scale, and is refused on SQLite as before. Expected SQL,
+# SQLite: CAST("R1_1"."r1" AS NUMERIC(10,2)) (the alias as the CTE join names it).
+# Why: before step 2c the scale check skipped a CTE column and refused all four casts that build.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1034: a CTE column keeps its body's declared scale under a scaled cast" begin
+  function withcte(outer)
+    q = CCD.Ccd_driver.objects
+    body = CCD.Ccd_driver.objects
+    body.values("id", "r1" => Fn.Cast(Fn.Round("points", 1), "numeric(10,1)"),
+                "r3" => Fn.Cast(Fn.Round("points", 3), "numeric(10,3)"), "pr" => "price", "pa" => Fn.Avg("price"))
+    q.with("c" => body, join_field = "id" => "id")
+    q.values("x" => outer)
+    return q
+  end
+  cte(outer) = conn -> _ccd_sql(withcte(outer); conn = conn)
+  for outer in (Fn.Cast(PormG.CTE("c", "r1"), "numeric(10,2)"), Fn.Cast("c__r1", "numeric(10,2)"),
+                Fn.Cast(PormG.CTE("c", "pr"), "numeric(10,2)"), Fn.Cast(PormG.CTE("c", "r1"), "numeric(10,1)"),
+                Fn.Coalesce(PormG.CTE("c", "r1"), 0; output_field = "numeric(10,2)"))
+    @test _ccd_builds(nothing; run = cte(outer))
+  end
+  @test occursin("CAST(\"R1_1\".\"r1\" AS NUMERIC(10,2)) as \"x\"", cte(Fn.Cast(PormG.CTE("c", "r1"), "numeric(10,2)"))(_CCD_SL))
+  for (col, places, target) in (("r3", "3 decimal places", "numeric(10,2)"), ("pr", "2 decimal places", "numeric(10,1)"),
+                                ("r1", "1 decimal place", "numeric(10,0)"))
+    _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1040",
+                named = "the DecimalField `CTE(\"c\", \"$(col)\")` ($(places))",
+                run = cte(Fn.Cast(PormG.CTE("c", col), target)))
+  end
+  _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1040", run = cte(Fn.Cast(PormG.CTE("c", "pa"), "numeric(10,2)")))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #1050: a float literal that fits the scale passes, as a Decimal literal does
 # What SQLite departs on is a literal with more fractional digits than `s`, refused there only.
 # Measured on PostgreSQL 16.15 / SQLite 3.45.1: `1.5`, `0.1`, `2.25` read the same at scale 2; `2.675`

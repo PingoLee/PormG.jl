@@ -2381,11 +2381,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast CTE scale 1 col to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 1 col to scale 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DecimalField `CTE(\"c\", \"r1\")` means the value rounded to the scale of numeric(10,2); SQL"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 1 col to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 1 col to scale 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DecimalField `CTE(\"c\", \"r1\")` means the value rounded to the scale of numeric(10,2); SQL"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 1 col to scale 2 | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast CTE scale 1 col to scale 2 | subquery", :sqlite) =>
@@ -2393,11 +2393,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast CTE scale 3 col to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 3 col to scale 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DecimalField `CTE(\"c\", \"r3\")` means the value rounded to the scale of numeric(10,2); SQL"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DecimalField `CTE(\"c\", \"r3\")` (3 decimal places) means the value rounded to the scale of"),
   ("Cast CTE scale 3 col to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 3 col to scale 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DecimalField `CTE(\"c\", \"r3\")` means the value rounded to the scale of numeric(10,2); SQL"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DecimalField `CTE(\"c\", \"r3\")` (3 decimal places) means the value rounded to the scale of"),
   ("Cast CTE scale 3 col to scale 2 | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast CTE scale 3 col to scale 2 | subquery", :sqlite) =>
@@ -2405,11 +2405,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast CTE decimal col to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DecimalField `CTE(\"c\", \"p\")` means the value rounded to the scale of numeric(10,2); SQLi"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DecimalField `CTE(\"c\", \"p\")` means the value rounded to the scale of numeric(10,2); SQLi"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast CTE decimal col to scale 2 | subquery", :sqlite) =>
@@ -2417,11 +2417,11 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast CTE decimal col to scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 1 | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `CTE(\"c\", \"p\")` means the value rounded to the scale of numeric(10,1); SQLi"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `CTE(\"c\", \"p\")` (2 decimal places) means the value rounded to the scale of "),
   ("Cast CTE decimal col to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 1 | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `CTE(\"c\", \"p\")` means the value rounded to the scale of numeric(10,1); SQLi"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `CTE(\"c\", \"p\")` (2 decimal places) means the value rounded to the scale of "),
   ("Cast CTE decimal col to scale 1 | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast CTE decimal col to scale 1 | subquery", :sqlite) =>

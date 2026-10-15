@@ -897,14 +897,16 @@ function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union
   # A `DecimalField` column and a nested declaration (a `Cast`, an `output_field`) carry their scale
   # in the type walk, `CDecimal(p, s)` (#1034 phase 3 step 2b); a decimal of no declared width is read
   # below. Only these two: an extremum's scale is read operand by operand further down, which names
-  # the column it comes from.
+  # the column it comes from. A CTE column is the first (#1034 phase 3 step 2c): its kind is its body
+  # expression's, so a `DecimalField(10,2)` path or a `numeric(10,1)` cast in the body keeps its scale
+  # through the CTE (`cte["kinds"]`), and a decimal the body computes has none.
   declared = operand isa FObject ? _declared_cast(operand) : nothing
-  if operand isa Union{String,JoinedReference} || (declared isa AbstractString && !isempty(declared))
+  if operand isa Union{String,JoinedReference,CTEReference} || (declared isa AbstractString && !isempty(declared))
     k = _expression_kind(operand, instruc)
     if k isa CDecimal && k.scale !== nothing
       k.scale <= scale && return nothing
       return declared === nothing ?
-        (:decimal, "the DecimalField `$(_concat_operand_label(operand))` ($(k.scale) decimal places)") :
+        (:decimal, "the DecimalField `$(_concat_operand_label(operand))` ($(k.scale == 1 ? "1 decimal place" : "$(k.scale) decimal places"))") :
         (:decimal, "a value cast to $(declared)")
     end
   end

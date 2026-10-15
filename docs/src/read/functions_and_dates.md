@@ -953,7 +953,9 @@ What each row covers:
   integer, a whole number, a `DecimalField` with at most `s` places and a function whose value is one
   of them (`Max`, `Min`, `Abs`, `Coalesce`, `Greatest`, `Least`, `NullIf`) pass. So does a `Case`
   with no `output_field` whose every branch passes (#1187): `then = 1.5` at scale 2 passes, a
-  `FloatField` branch at scale 0 does not;
+  `FloatField` branch at scale 0 does not. A CTE column keeps the scale its body declares, a
+  `DecimalField` column or a cast to `numeric(p, s)`, so it passes the same way; a decimal the body
+  computes (`Avg("price")`) has no declared scale;
 - **single precision**: `"real"`, `"float4"` and `"float(p)"` for `p` up to 24, which PostgreSQL
   resolves to `real` (#1215), and the same `output_field`. Every operand is refused on SQLite, an
   integer column included, because the value PostgreSQL returns is a `Float32` whatever it rounded.

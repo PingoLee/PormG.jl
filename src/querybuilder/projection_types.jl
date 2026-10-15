@@ -871,18 +871,19 @@ function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union
     # scalar), which rounds it; SQLite's `json_extract` hands over the number, which keeps every digit.
     field isa Models.sJSONField && return (:text, "the JSONField `$(_concat_operand_label(operand))`")
   end
-  if operand isa Union{String,JoinedReference}
-    field = _alias_column_field(operand, instruc)
-    if field isa Models.sDecimalField
-      places = field.decimal_places
-      return places <= scale ? nothing :
-        (:decimal, "the DecimalField `$(_concat_operand_label(operand))` ($(places) decimal places)")
+  # A `DecimalField` column and a nested declaration (a `Cast`, an `output_field`) carry their scale
+  # in the type walk, `CDecimal(p, s)` (#1034 phase 3 step 2b); a decimal of no declared width is read
+  # below. Only these two: an extremum's scale is read operand by operand further down, which names
+  # the column it comes from.
+  declared = operand isa FObject ? _declared_cast(operand) : nothing
+  if operand isa Union{String,JoinedReference} || (declared isa AbstractString && !isempty(declared))
+    k = _expression_kind(operand, instruc)
+    if k isa CDecimal && k.scale !== nothing
+      k.scale <= scale && return nothing
+      return declared === nothing ?
+        (:decimal, "the DecimalField `$(_concat_operand_label(operand))` ($(k.scale) decimal places)") :
+        (:decimal, "a value cast to $(declared)")
     end
-  end
-  if operand isa FObject && (operand.function_name in _DECLARED_CAST_FUNCTIONS || _declared_case(operand))
-    declared = get(operand.kwargs, operand.function_name == "CAST" ? "type" : "output_field", nothing)
-    inner = declared isa AbstractString ? _numeric_cast_scale(declared) : nothing
-    inner === nothing || return inner <= scale ? nothing : (:decimal, "a value cast to $(declared)")
   end
   # #1061: `Round(x, d)` has at most `d` places on both engines, whatever its operand, so it passes a
   # scale of at least `d`; a wider `d` is still a `numeric` function's value, read below.

@@ -387,6 +387,15 @@ end
 # Case-insensitive, as `Postgres.parse_dsn` decides it: `POSTGRESQL://…` is parsed as a URL too.
 _is_url(s::AbstractString) = (l = lowercase(s); startswith(l, "postgresql://") || startswith(l, "postgres://"))
 
+# The values Postgres.jl accepts when it CONNECTS (the same in 2.2.2 and 2.3.0), compared lower-cased
+# as it compares them. Read off the params the driver parsed — PormG's policy on the driver's own
+# result, like `reconnect`, not a table run before it (#1247). A release that accepts `allow` or
+# `verify-ca` needs its row here. In the driver's order: `gssencmode` is checked before dialling.
+const _CONNECT_TIME_VALUES = (
+  :gssencmode => ("disable", "prefer", "require"),
+  :sslmode => ("disable", "prefer", "require", "verify-full"),
+)
+
 # Fields a URL may legitimately carry an `@` in: the credentials themselves and free text.
 const _URL_AT_OK_FIELDS = (:user, :password, :application_name)
 
@@ -482,6 +491,25 @@ function _checked_params(conn_str::AbstractString;
           "password's `/` as %2F, `?` as %3F and `@` as %40"))
       end
     end
+  end
+  # #1242: Postgres.jl takes any `sslmode`/`gssencmode` when it parses, and refuses one only in
+  # `connect` — `gssencmode` before dialling, `sslmode` once the socket is open — with a message that
+  # echoes the value: in the #662 spill shape, a password's tail with no `@` to catch it above.
+  # Refused here instead, before any I/O, by name. An empty value too: the
+  # driver keeps it so that an unexpanded `${PGSSLMODE}` fails loudly, and so does this.
+  # Under `gssencmode=require` the driver connects over GSS or fails before TLS, and never reads
+  # `sslmode`, so a value it would refuse there still connects and is not refused here (review).
+  gss = params.gssencmode
+  gss_only = gss !== nothing && _lowercasable(gss) && lowercase(gss) == "require"
+  for (field, accepted) in _CONNECT_TIME_VALUES
+    field === :sslmode && gss_only && continue
+    v = getfield(params, field)
+    (v === nothing || (_lowercasable(v) && lowercase(v) in accepted)) && continue
+    accepts = join(("`$(a)`" for a in accepted), ", ", " or ")
+    throw(InvalidConfigurationError(
+      "the PostgreSQL connection's `$(field)` (from the connection string or `PG$(uppercase(String(field)))`) " *
+      "$(isempty(v) ? "is empty" : "is set to a value the Postgres.jl driver does not support"); " *
+      "it accepts $(accepts). `postgres_driver: LibPQ` supports libpq's other modes"))
   end
   return params
 end

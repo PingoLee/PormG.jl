@@ -332,6 +332,54 @@ end
   end
 end
 
+@testset "sslmode and gssencmode are refused before any I/O, by name, never by value (#1242)" begin
+  # What: a `sslmode`/`gssencmode` value Postgres.jl parses but refuses when it connects — libpq's
+  # `allow`/`verify-ca`, an empty value, a password fragment — in keyword form, URL form and from
+  # `PGSSLMODE`/`PGGSSENCMODE`. Expected: `_checked_params` refuses it with an
+  # `InvalidConfigurationError` that names the setting and lists the values the driver accepts, never
+  # the value; the accepted values pass in any case. Why: the driver checks these only after opening
+  # the socket, and its `invalid sslmode: <value>` echoes the value — the tail of a password when an
+  # unencoded `?` spilled it into the query with no `@` for the #662 check to catch.
+  refusal(dsn) = (try PGExt._checked_params(dsn); "" catch e; e isa PormG.InvalidConfigurationError ? PormG.error_message(e) : rethrow() end)
+  withenv("PGSSLMODE" => nothing, "PGGSSENCMODE" => nothing) do
+    for (dsn, field) in (("host=h sslmode=allow dbname=f1", "sslmode"),
+                         ("host=h sslmode=verify-ca dbname=f1", "sslmode"),
+                         ("host=h sslmode=SECssl dbname=f1", "sslmode"),
+                         ("postgresql://u:p@h/f1?sslmode=SECurl", "sslmode"),
+                         ("host=h gssencmode=SECgss dbname=f1", "gssencmode"),
+                         ("postgresql://u:p@h/f1?gssencmode=verify-full", "gssencmode"),
+                         # A spilled password tail with no `@` in the query, so the #662 check passes it.
+                         ("postgresql://u:1234/f1?gssencmode=SECspill", "gssencmode"))
+      msg = refusal(dsn)
+      @test occursin("the PostgreSQL connection's `$(field)`", msg)
+      @test occursin("is set to a value the Postgres.jl driver does not support", msg)
+      @test occursin(field == "sslmode" ? "`disable`, `prefer`, `require` or `verify-full`" :
+                                          "`disable`, `prefer` or `require`", msg)
+      @test !occursin("SEC", msg) && !occursin("sec", msg)
+      @test !occursin("allow", msg) && !occursin("verify-ca", msg)
+    end
+    # Empty: refused, not taken for "unset" — an unexpanded `${PGSSLMODE}` must fail loudly.
+    for dsn in ("host=h sslmode='' dbname=f1", "postgresql://u:p@h/f1?gssencmode=")
+      @test occursin("is empty", refusal(dsn))
+    end
+    # Under `gssencmode=require` the driver never reads `sslmode` (it connects over GSS or fails
+    # before TLS), so a `sslmode` it would refuse still connects, and is not refused. `prefer` falls
+    # back to TLS and reads it, so it is.
+    @test refusal("host=h gssencmode=REQUIRE sslmode=verify-ca dbname=f1") == ""
+    @test occursin("`sslmode`", refusal("host=h gssencmode=prefer sslmode=verify-ca dbname=f1"))
+    @test occursin("`gssencmode`", refusal("host=h gssencmode=SECg sslmode=verify-ca dbname=f1"))
+    # The accepted values pass, compared lower-cased as the driver compares them.
+    for dsn in ("host=h sslmode=disable dbname=f1", "host=h sslmode=REQUIRE gssencmode=Prefer dbname=f1",
+                "postgresql://u:p@h/f1?sslmode=verify-full&gssencmode=require", "host=h dbname=f1")
+      @test refusal(dsn) == ""
+    end
+  end
+  # From the environment: the setting is named, the variable too, the value never.
+  msg = withenv(() -> refusal("host=h dbname=f1"), "PGSSLMODE" => "SECenv")
+  @test occursin("`sslmode` (from the connection string or `PGSSLMODE`)", msg)
+  @test !occursin("SECenv", msg) && !occursin("secenv", msg)
+end
+
 @testset "a driver rejection PormG did not anticipate names no parameter (#1235)" begin
   # What: `_parse_failure`, the fallback for whatever Postgres.jl rejects that PormG's own parse cannot
   # attribute — a value from a `PG*` environment variable, or a rule a later release adds. Expected: the message is

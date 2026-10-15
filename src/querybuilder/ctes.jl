@@ -1006,10 +1006,20 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   # to undo, so `Floor(CTE("c", "rk"))` kept the `::numeric` cast on PostgreSQL and divided by 2 kept
   # the half SQLite drops.
   kinds = Dict{String,CanonicalType}()
+  # #1034 phase 3 step 2c: and what the integer-division view answers for each computed column
+  # (`CTEDivision`), which the type walk cannot carry.
+  divisions = Dict{String,CTEDivision}()
   @pormg_debug false
   for value_part in values
     # fields[value_part.field] = _set_field_from_sql_function(value_part.field, value_part._as, instruct)
-    key_new, source, path = _cte_column_source(value_part)
+    # The column name the outer query uses, the expression it projects, and that expression's path when
+    # it is a plain column path (`nothing` for a computed column).
+    key_new = value_part.custom_as !== nothing ? value_part.custom_as : value_part._as
+    source = value_part isa SQLText ? value_part : value_part.field
+    path = source isa AbstractString ? String(source) :
+           source isa SQLField && source.field isa AbstractString ? String(source.field) :
+           source isa FExpression && source.operation === nothing && source.field_name isa String ? source.field_name :
+           nothing
     try
       # #376: `key_new` is the alias `_query_select` renders for this column, and a CTE's columns
       # ARE its aliases — the physical name is consumed inside the body. So the field object that
@@ -1038,8 +1048,14 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
               _set_field_from_sql_function(value_part.field, value_part._as, instruct)
       fields[key_new] = Models.field_without_db_column(_meant_column_field(typed, source, path, instruct))
       push!(selected_field_names, key_new)
+      # A JSON key lookup holds the value at the key, which the walk types by its column's JSONField:
+      # it records no kind, so the outer query does not read it as the document (`_json_document_operand`).
       kind = _expression_kind(source, instruct)
-      kind === nothing || (kinds[key_new] = kind)
+      json_value = path !== nothing && memo_json_lookup(instruct, memo_key(:base, path))
+      # A later entry under the same name answers for it, as its field does (a JSON key lookup drops an
+      # earlier entry's kind).
+      json_value ? delete!(kinds, key_new) : kind === nothing || (kinds[key_new] = kind)
+      path === nothing && _record_cte_division!(divisions, key_new, source, instruct)
     catch e
       @pormg_debug false
       throw(e)
@@ -1055,12 +1071,24 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
     connect_key = instruct.object.model.connect_key
   )
   cte["kinds"] = kinds
-  # #1034 phase 3: the body's own instruction, which the outer query asks what a column's expression
-  # answers (`_cte_body_record`) — the field above cannot say it: a `Sum` column is typed as an integer
-  # and an `Avg` one as its operand's field. One record for every such question, in place of a dict
-  # per classifier, so a rule added to a classifier reaches the CTE column with no second copy to keep.
-  cte["body"] = instruct
+  cte["divisions"] = divisions
 
+end
+
+# #1111, #1127, #1034 phase 3 step 2c — the integer-division answers of the computed CTE column `key`,
+# asked of its expression on the body's instruction, which can still resolve its paths. The field
+# above cannot carry them (a `Sum` column is typed as an integer whatever it sums), and neither can the
+# column's kind: they hold where the walk names none. Two entries sharing a name answer as the last one
+# with an answer, each question on its own.
+function _record_cte_division!(divisions::Dict{String,CTEDivision}, key::String, source, instruct::SQLInstruction)
+  divided = _whole_numeric_operand(source, instruct)
+  quotient = _concat_textless_operand(source, instruct)
+  quotient === nothing || quotient[1] in _DIVISION_KINDS || (quotient = nothing)
+  divided === nothing && quotient === nothing && return nothing
+  old = get(divisions, key, (divided = nothing, quotient = nothing))
+  divisions[key] = (divided = something(divided, old.divided, Some(nothing)),
+                    quotient = something(quotient, old.quotient, Some(nothing)))
+  return nothing
 end
 
 # #1034 phase 3 — the field a computed CTE column binds a compared value with: the type its expression
@@ -1078,40 +1106,4 @@ function _meant_column_field(typed::PormGField, source, path, instruct::SQLInstr
   meant === nothing && return typed
   _kind_family(meant) === _kind_family(_field_kind(typed)) && return typed
   return something(_kind_field(meant), typed)
-end
-
-# One `values(...)` entry of a CTE body: the column name the outer query uses (`custom_as`, else
-# `_as`), the expression it projects, and that expression's path when it is a plain column path
-# (`nothing` for a computed column).
-function _cte_column_source(value_part)
-  key = value_part.custom_as !== nothing ? value_part.custom_as : value_part._as
-  source = value_part isa SQLText ? value_part : value_part.field
-  path = source isa AbstractString ? String(source) :
-         source isa SQLField && source.field isa AbstractString ? String(source.field) :
-         source isa FExpression && source.operation === nothing && source.field_name isa String ? source.field_name :
-         nothing
-  return key, source, path
-end
-
-# #1028, #1127, #1034 phase 3 — what a classifier answers for the CTE column `column`, asked of the
-# column's expression on the body's instruction (`cte["body"]`), which can still resolve its paths:
-# `(kind, what)`, or `nothing`. A plain column path has no answer here — its field types it, and keeps
-# its own wording — except a JSON key lookup with `json_value`, which is the value at the key although
-# its field is the JSONField: `(:json_value, "")`. A body not built in this pass answers `nothing`.
-# Two entries sharing a name answer as the last one with an answer.
-function _cte_body_record(cte::AbstractDict, column::String, classify::Function; json_value::Bool = false)
-  body = get(cte, "body", nothing)
-  body isa SQLInstruction || return nothing
-  answer = nothing
-  for value_part in body.object.values
-    key, source, path = _cte_column_source(value_part)
-    key == column || continue
-    if path === nothing
-      side = classify(source, body)
-      side === nothing || (answer = side)
-    elseif json_value && memo_json_lookup(body, memo_key(:base, path))
-      answer = (:json_value, "")
-    end
-  end
-  return answer
 end

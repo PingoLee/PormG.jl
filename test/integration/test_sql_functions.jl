@@ -2000,14 +2000,15 @@ end
     @test is_concat(refusal(race(Concat(Value("|"), "start_at"))))
     @test is_concat(refusal(() -> (q = M.Lap_times.objects; q.filter("raceid" => 841); q.values("x" => Concat(Value("|"), "time")); q |> DataFrame)))
     @test is_concat(refusal(() -> (q = M.Field_validation_scratch.objects; q.values("x" => Concat(Value("|"), "payload")); q |> DataFrame)))
-    # A CTE column built from `Sum("points")`, which the CTE types as an integer, is a float to Concat.
+    # A CTE column built from `Sum("points")` is a float to Concat: the CTE model types it as the float
+    # it means (#1218), and the message names that field (#1034 phase 3 step 2c).
     q = M.Driver.objects
     body = M.Result.objects
     body.values("driverid", "total" => Sum("points"))
     q.with("c" => body, join_field = "driverid" => "driverid")
     q.values("x" => Concat("driverref", Value("-"), CTE("c", "total")))
     err = refusal(() -> q |> DataFrame)
-    @test err isa PormG.QueryBuildError && occursin("the CTE column `CTE(\"c\", \"total\")`", sprint(showerror, err))
+    @test err isa PormG.QueryBuildError && occursin("the FloatField `CTE(\"c\", \"total\")`", sprint(showerror, err))
 
     # The integer escape: every rounding function reads what Julia computes, on every engine.
     q = M.Result.objects
@@ -2095,6 +2096,35 @@ end
     @test all(x -> x isa Float64, skipmissing(df.x))
     @test any(p -> !isinteger(p), df.points)
     @test isequal(df.x, df.points)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cast an interval to a number: refused on SQLite, rejected by the PostgreSQL server (#1259)
+# An interval has no numeric value: PostgreSQL rejects the cast when the query runs, which is the
+# meaning (#1087's tie-breaker). SQLite stores a duration as its `HH:MM:SS.sss` text, and its cast read
+# that text's hours, a silent different answer, so it refuses the cast when the query is built. The
+# duration's text builds on every engine. Expected SQL, PostgreSQL: ("Tb"."fastestlaptime")::integer,
+# which the server rejects with `cannot cast type interval to integer`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1259: an interval cast to a number is refused on SQLite and rejected by PostgreSQL" begin
+    engine = engine_key()   # `departs[engine]` has no fallback: a backend added later states its row (#1179)
+    departs = (sqlite = true, postgres = false)
+    refusal(f) = try f(); nothing catch e; e end
+    proj(expr) = () -> (q = M.Result.objects; q.filter("raceid" => 2); q.values("resultid", "x" => expr); q |> DataFrame)
+    for expr in (Cast("fastestlaptime", PormG.Models.IntegerField()), Cast("fastestlaptime", "bigint"),
+                 Cast("fastestlaptime", "numeric"), Cast("fastestlaptime", PormG.Models.FloatField()))
+        e = refusal(proj(expr))
+        if departs[engine]
+            @test e isa PormG.QueryBuildError && occursin("#1259", sprint(showerror, e))
+        else
+            # Built, and the server's own error when it runs: the meaning, not a PormG refusal.
+            @test e !== nothing && !(e isa PormG.QueryBuildError)
+            @test occursin("cannot cast type interval to", sprint(showerror, e))
+        end
+    end
+    df = proj(Cast("fastestlaptime", "text"))()
+    @test nrow(df) > 0
+    @test any(x -> x isa AbstractString, df.x)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

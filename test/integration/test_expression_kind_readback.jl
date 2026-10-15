@@ -66,12 +66,11 @@ end
 # milliseconds, the SQLite parser nanoseconds), so only its printed text differs. The CTE columns that
 # were flagged only because the CTE model typed them another field than they mean (`Sum` of a float, a
 # decimal or an interval, `Avg` of integers, a decimal quotient, a comparison) left the set when #1034
-# phase 3 typed that field from what the column means.
+# phase 3 typed that field from what the column means, and an `Avg` of an interval left it in step 2c,
+# when `Concat` and the casts read the column by the kind it means rather than the body's `:numeric` tag.
 const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Avg interval | alone", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
   ("Avg interval | alone", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
-  ("Avg interval | cte", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
-  ("Avg interval | cte", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
   ("Avg interval | subquery", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
   ("Avg interval | subquery", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
   ("F date - date | alone", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),

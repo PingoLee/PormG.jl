@@ -270,6 +270,15 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Case F float * 1.5 output DecimalField(10,1)", :Result, m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_Q.F("points") * 1.5)], default = 0, output_field = PormG.Models.DecimalField(max_digits = 10, decimal_places = 1))),
   ("Cast Case output DecimalField(10,1) to scale 2", :Result, m -> _EKM_FN.Cast(_EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_FN.Round("points", 1))], default = 0, output_field = PormG.Models.DecimalField(max_digits = 10, decimal_places = 1)), "numeric(10,2)")),
   ("Cast Cast Round DecimalField(10,2) to scale 1", :Result, m -> _EKM_FN.Cast(_EKM_FN.Cast(_EKM_FN.Round("points", 2), PormG.Models.DecimalField(max_digits = 10, decimal_places = 2)), "numeric(10,1)")),
+  # #1034 phase 3 step 2c: a CTE column under a scaled cast, its scale declared in the body (`EKM_PREP`)
+  ("Cast CTE scale 1 col to scale 2", :Result,      m -> _EKM_FN.Cast(PormG.CTE("c", "r1"), "numeric(10,2)")),
+  ("Cast CTE scale 3 col to scale 2", :Result,      m -> _EKM_FN.Cast(PormG.CTE("c", "r3"), "numeric(10,2)")),
+  ("Cast CTE decimal col to scale 2", :Constructor_results, m -> _EKM_FN.Cast(PormG.CTE("c", "p"), "numeric(10,2)")),
+  ("Cast CTE decimal col to scale 1", :Constructor_results, m -> _EKM_FN.Cast(PormG.CTE("c", "p"), "numeric(10,1)")),
+  # #1259: an interval cast to an integer
+  ("Cast interval int",       :Result,              m -> _EKM_FN.Cast("fastestlaptime", "integer")),
+  ("Cast Sum interval int",   :Result,              m -> _EKM_FN.Cast(_EKM_FN.Sum("fastestlaptime"), "integer")),
+  ("Cast Avg interval int",   :Result,              m -> _EKM_FN.Cast(_EKM_FN.Avg("fastestlaptime"), "integer")),
   # ── subqueries ─────────────────────────────────────────────────────────────────────────────────
   ("Subquery Max hop date",   :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Max("raceid__date")))),
   ("Subquery Avg float",      :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Avg("points")))),
@@ -282,8 +291,18 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
 # `Subquery`'s inner query — declares that join first.
 _ekm_join_race!(q, mod) = q.cjoin_on(mod.Race; alias = "rc",
                                      on = [_EKM_Q.Joined("rc", "raceid") == _EKM_Q.F("raceid")])
+# A CTE `c` whose columns declare their scale: two casts of a rounded float (each builds on both
+# engines, #1061), and a `DecimalField(10,2)` path.
+_ekm_cte_scaled!(q, mod) = q.with("c" => mod.Result.objects.values("resultid",
+                                    "r1" => _EKM_FN.Cast(_EKM_FN.Round("points", 1), "numeric(10,1)"),
+                                    "r3" => _EKM_FN.Cast(_EKM_FN.Round("points", 3), "numeric(10,3)")),
+                                  join_field = "resultid" => "resultid")
+_ekm_cte_decimal!(q, mod) = q.with("c" => mod.Constructor_results.objects.values("constructorresultsid", "p" => "points"),
+                                   join_field = "constructorresultsid" => "constructorresultsid")
 const EKM_PREP = Dict{String,Function}(
-  "Joined date" => _ekm_join_race!, "Joined datetime" => _ekm_join_race!, "Max Joined date" => _ekm_join_race!)
+  "Joined date" => _ekm_join_race!, "Joined datetime" => _ekm_join_race!, "Max Joined date" => _ekm_join_race!,
+  "Cast CTE scale 1 col to scale 2" => _ekm_cte_scaled!, "Cast CTE scale 3 col to scale 2" => _ekm_cte_scaled!,
+  "Cast CTE decimal col to scale 2" => _ekm_cte_decimal!, "Cast CTE decimal col to scale 1" => _ekm_cte_decimal!)
 
 """`true` for a shape whose node is a column path — the shapes the `When` context applies to (#979)."""
 ekm_is_path(build, mod) = (n = build(mod); n isa AbstractString && !occursin("__@", n))

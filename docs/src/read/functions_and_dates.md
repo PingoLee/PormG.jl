@@ -515,8 +515,10 @@ arithmetic, `Greatest`/`Least` over computed timestamps or intervals, a `Case` w
 such values) passes. A JSON key lookup (`"payload__driver"`) passes too: PormG cannot know which type a key
 holds. A `Subquery` is classified by the one expression it projects (#1124): one over a float
 column or an `Avg` is refused as the float or the `Avg` is, and one over a text or integer column,
-or over `Cast(Round(x), IntegerField())`, passes. A CTE column is classified by its body's own
-expression (#1127), since the CTE gives a computed column a plain type whatever it computes.
+or over `Cast(Round(x), IntegerField())`, passes. A CTE column is classified by the type its body
+expression means: an `Avg` column is a float (or a decimal, or an interval), as the `Avg` is, and a
+column that is an integer quotient PostgreSQL computes as `numeric` is refused as that quotient is
+(#1127).
 
 ```julia
 using PormG.Functions: Case, When, Concat, Cast, Value
@@ -918,6 +920,7 @@ other builds the query as written. Measured on PostgreSQL 16 and SQLite 3.45:
 | to text, of a float, a decimal, a `numeric` function, a timestamp, an interval or a JSON document | the value's text | builds (`'10'`, `'14.00'`) | builds (`'10.0'`, `'14'`) |
 | to text, of a boolean | `'true'` / `'false'` | builds | **refused**: it writes `'1'` / `'0'` |
 | to an integer, of a float, a decimal with places or a `numeric` function | the nearest integer (`1.5` → `2`) | builds | **refused**: its cast truncates (`1`) |
+| to a number (an integer, a float, a `numeric`, scaled or not), of an interval | an error, since an interval has no numeric value | builds, and raises when the query runs | **refused**: it casts the stored `HH:MM:SS` text and reads its hours (`00:01:23.456` → `0`) |
 | to `numeric(p, s)`, of an operand with more than `s` places | the value rounded to `s` places (`1.555` → `1.56`) | builds | **refused**: it keeps every digit |
 | to `numeric(p, s)`, of a literal it cannot hold (`Cast(Value(100), "numeric(3,2)")`) | an overflow | builds, and raises when the query runs | **refused**: it stores `100` |
 | to `real`, of any value | the value rounded to single precision, read back as a `Float32` (`0.1` → `0.10000000149011612` as a `Float64`) | builds | **refused**: it has no 4-byte float and keeps the 8-byte double (`0.1`) |
@@ -938,7 +941,10 @@ What each row covers:
   `Coalesce`, `Greatest`, `Least` and `Case`, which renders the same cast;
 - **an integer**: `IntegerField()`, `BigIntegerField()`, `"integer"`, `"bigint"`, `"int8"`, … A
   boolean casts to `1`/`0` on both engines, and a whole number (`Round(x)`, `Floor(x)`, `Ceil(x)`,
-  `Mod` of whole numbers, `+`, `-`, `*` of them) has nothing to round; both pass on every engine;
+  `Mod` of whole numbers, `+`, `-`, `*` of them) has nothing to round; both pass on every engine.
+  An interval (a `DurationField`, its `Sum` or `Avg`, a duration literal, temporal arithmetic) is refused on
+  SQLite, here and under any other number type (#1259). For a number from a duration, fetch it and
+  take the number in Julia;
 - **a scale**: `numeric(p, s)`, `decimal(p, s)`, `dec(p, s)`, and `numeric(p)`, whose scale is 0
   (#1040, #1078). An operand with more than `s` places is a float column, a float literal with more
   than `s` places (`Value(1.5)` at scale 2 passes, #1050), a function PostgreSQL computes as
@@ -947,7 +953,9 @@ What each row covers:
   integer, a whole number, a `DecimalField` with at most `s` places and a function whose value is one
   of them (`Max`, `Min`, `Abs`, `Coalesce`, `Greatest`, `Least`, `NullIf`) pass. So does a `Case`
   with no `output_field` whose every branch passes (#1187): `then = 1.5` at scale 2 passes, a
-  `FloatField` branch at scale 0 does not;
+  `FloatField` branch at scale 0 does not. A CTE column keeps the scale its body declares, a
+  `DecimalField` column or a cast to `numeric(p, s)`, so it passes the same way; a decimal the body
+  computes (`Avg("price")`) has no declared scale;
 - **single precision**: `"real"`, `"float4"` and `"float(p)"` for `p` up to 24, which PostgreSQL
   resolves to `real` (#1215), and the same `output_field`. Every operand is refused on SQLite, an
   integer column included, because the value PostgreSQL returns is a `Float32` whatever it rounded.

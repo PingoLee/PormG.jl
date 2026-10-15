@@ -988,8 +988,12 @@ documented rather than refused (#1087).
 For a scaled `numeric`, round to the scale first: `Cast(Round(x, 2), "numeric(10,2)")` builds on
 every engine, because `Round(x, d)` has at most `d` places, so a cast to a scale of at least `d` has
 nothing left to round. Only a decimal tie can differ, in its last digit, as *Rounding to decimal
-places* above describes (#1061). Otherwise cast to an unscaled `"numeric"` (or `DecimalField()`),
-which keeps the value.
+places* above describes (#1061). Otherwise cast to an unscaled `"numeric"`, which keeps the value.
+
+A `DecimalField` object declares its precision and scale with its type, as its column does (#1221):
+`Cast(x, DecimalField(max_digits = 10, decimal_places = 1))` is `Cast(x, "numeric(10,1)")`, the same
+SQL on each engine and the same refusal, and `DecimalField()` is `numeric(10,2)`. The same holds for
+an `output_field`. So the unscaled cast is the string `"numeric"`, not `DecimalField()`.
 
 A cast to any other type (`"numeric"`, `"double precision"`, `"float8"`, `"date"`) is not checked: it is not a
 text conversion, and `Concat` refuses the result if you then use it as text.
@@ -1008,7 +1012,7 @@ M.Result.objects.filter("raceid" => 2).values(
     "up"      => Cast(Ceil("points"), IntegerField()))    # 1.5 → 2
 ```
 
-A cast to a decimal type (`"numeric"`, `"numeric(p, s)"`, `"decimal"`, `DecimalField()`) reads back
+A cast to a decimal type (`"numeric"`, `"numeric(p, s)"`, `"decimal"`, a `DecimalField`) reads back
 as a `Decimals.Decimal` on every engine when its operand is a number (#1212). PostgreSQL's driver delivers
 one. SQLite computes a REAL, or an INTEGER when the operand is whole, and PormG builds the `Decimal`
 from it to 15 significant digits, as it does for a computed decimal (see
@@ -1022,7 +1026,7 @@ using PormG.Models: DecimalField
 
 # Result 1 is Lewis Hamilton's win at the 2008 Australian GP: grid 1, 10 points.
 M.Result.objects.filter("resultid" => 1).values(
-    "grid"   => Cast("grid", DecimalField()),                         # Decimal 1 on both engines
+    "grid"   => Cast("grid", DecimalField()),                         # numeric(10,2): Decimal 1 on both engines
     "scaled" => Cast(Round(F("points") * 1.5, 2), "numeric(10,2)"))   # Decimal 15 on both engines
 ```
 
@@ -1051,8 +1055,10 @@ where PostgreSQL rounds. Round the branches to the scale (`then = Round(F("point
 leave the scale off.
 
 An `output_field` naming a decimal type reads back as a `Decimals.Decimal` on every engine, as a
-`Cast` to one does (#1212): `Coalesce(F("points") * 1.5, 0; output_field = DecimalField())` is a
-`Decimal` on PostgreSQL and on SQLite. The type is the same, and so is the value wherever PormG can
+`Cast` to one does (#1212): `Coalesce(F("points") * 1.5, 0; output_field = "numeric")` is a
+`Decimal` on PostgreSQL and on SQLite. With `output_field = DecimalField()`, which is
+`numeric(10,2)` (#1221), the float arithmetic is held to two places and refused on SQLite; round it
+first, `Coalesce(Round(F("points") * 1.5, 2), 0; output_field = DecimalField())`. The type is the same, and so is the value wherever PormG can
 type the operand: a scale an engine would not round to is refused there, as described just above.
 
 `Concat` renders no cast on either engine, because its result is always text. Its `output_field`

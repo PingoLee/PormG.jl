@@ -88,7 +88,7 @@ on every engine. It is the type Django gives the call (its `output_field`):
 | projected expression | reads back as |
 |---|---|
 | `Sum`, `Avg`, `Abs`, `Round`, `Floor` or `Ceil` over a `DecimalField`; `Mod`, `Power`, `Sqrt`, `Exp` or `Ln` with a decimal operand; arithmetic with a decimal side | `Decimals.Decimal` |
-| a `Cast` to `"numeric"`, `"numeric(p, s)"` or `DecimalField()`; an `output_field` naming a decimal type (`Coalesce`, `Greatest`, `Least`, `Case`) | `Decimals.Decimal` |
+| a `Cast` to `"numeric"`, `"numeric(p, s)"` or a `DecimalField` (its `numeric(max_digits, decimal_places)`, #1221); an `output_field` naming a decimal type (`Coalesce`, `Greatest`, `Least`, `Case`) | `Decimals.Decimal` |
 | `Avg`, `Mod`, `Power`, `Sqrt`, `Exp` or `Ln` over integers; any of these functions over a `FloatField`; arithmetic with a float side | `Float64` |
 | `Sum` of integers; `Abs`, `Round`, `Floor` or `Ceil` of an integer; integer arithmetic | an integer |
 

@@ -641,8 +641,9 @@ end
     @test !_is_1040(_ccd_refusal(Fn.Cast(operand, "numeric(10,1)"); conn = conn))
   end
   # An unscaled numeric keeps the value on both engines, so any operand passes; the escape renders.
+  # A `DecimalField` object is not unscaled: it declares its precision and scale (#1221, below).
   for operand in ("points", "surname", Fn.Round("price", 2)),
-      target in ("numeric", "decimal", Models.DecimalField(max_digits = 10, decimal_places = 2)),
+      target in ("numeric", "decimal"),
       conn in _CCD_ENGINES
     @test _ccd_refusal(Fn.Cast(operand, target); conn = conn) === nothing
   end
@@ -748,6 +749,55 @@ end
   for target in ("float8", Models.FloatField(), "float(25)", "float(0025)", "float(53)", "double precision", "float")
     @test _ccd_builds(Fn.Cast("points", target))
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1221: a DecimalField declaration is its numeric(max_digits, decimal_places), as the string is
+# `Cast(x, DecimalField(max_digits = 10, decimal_places = 1))` and the same `output_field` used to keep
+# only the field's `"DECIMAL"` and render an unscaled `decimal`, so neither engine applied the scale the
+# declaration names. Now the field object and the string `"numeric(10,1)"` are one declaration: the same
+# SQL on each engine, and the same #1040 / #1087 refusal on the engine that departs — a float or a
+# wider decimal at scale 1 is refused on SQLite, a fitting operand builds on both. `DecimalField()` is
+# `(10, 2)`. Expected SQL, PostgreSQL: ("Tb"."number")::numeric(10,1)
+# Why: the same declaration spelled two ways meant two things, and the field spelling silently
+# dropped the rounding PostgreSQL applies to the string one.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1221: a DecimalField declaration renders and refuses as its numeric(p, s) string" begin
+  d(p, s) = Models.DecimalField(max_digits = p, decimal_places = s)
+  case(then; output_field) = Fn.Case(Fn.When("number" => 1, then = then), default = 0, output_field = output_field)
+  shapes = (
+    (op, t) -> Fn.Cast(op, t),
+    (op, t) -> Fn.Coalesce(op, 0; output_field = t),
+    (op, t) -> Fn.Greatest(op, "number"; output_field = t),
+    (op, t) -> Fn.Least(op, "number"; output_field = t),
+    (op, t) -> case(op; output_field = t),
+  )
+  outcome(expr, conn) = try (:sql, _ccd_render(expr; conn = conn)) catch e; (:refused, _ccd_msg(e)) end
+  for shape in shapes, (op, refused) in (("points" => true), (_CF("price") => true), (Fn.Round("points", 1) => false),
+                                         (_CF("number") => false), (_CF("grid") => false))
+    field_form, string_form = shape(op, d(10, 1)), shape(op, "numeric(10,1)")
+    for conn in _CCD_ENGINES
+      @test outcome(field_form, conn) == outcome(string_form, conn)
+    end
+    if refused
+      _ccd_expect(field_form; departs = _SL_ONLY, issue = "#1040")
+    else
+      @test _ccd_builds(field_form)
+    end
+  end
+  @test occursin("(\"Tb\".\"number\")::numeric(10,1) as \"x\"", _ccd_render(Fn.Cast("number", d(10, 1)); conn = _CCD_PG))
+  @test occursin(r"CAST\(\"Tb\".\"number\" AS NUMERIC\(10,1\)\)"i, _ccd_render(Fn.Cast("number", d(10, 1)); conn = _CCD_SL))
+  # The default width is (10, 2): a two-place decimal fits it, a float does not.
+  @test _ccd_builds(Fn.Cast("price", Models.DecimalField()))
+  _ccd_expect(Fn.Cast("points", Models.DecimalField()); departs = _SL_ONLY, issue = "#1040", named = "numeric(10,2)")
+  # A literal the precision cannot hold overflows (#1087), as with the string.
+  _ccd_expect(Fn.Cast(Fn.Value(100), d(3, 2)); departs = _SL_ONLY, issue = "#1087")
+  # A nested declaration carries its scale into an outer cast.
+  @test _ccd_builds(Fn.Cast(Fn.Cast(Fn.Round("points", 1), d(10, 1)), "numeric(10,2)"))
+  _ccd_expect(Fn.Cast(Fn.Cast(Fn.Round("points", 2), d(10, 2)), "numeric(10,1)");
+              departs = _SL_ONLY, issue = "#1040", named = "a value cast to numeric(10,2)")
+  # The unscaled escape is the string `"numeric"`, which keeps the value on both engines.
+  @test _ccd_builds(Fn.Cast("points", "numeric"))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

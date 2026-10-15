@@ -753,8 +753,8 @@ _whole_number(x, instruc::SQLInstruction) = _integral_valued(x, instruc) || _con
 # rounds a value cast to `numeric(p, s)` to `s` digits (half away from zero) and `numeric(p)` to a
 # whole number; SQLite reads either as a type name with NUMERIC affinity and keeps every digit.
 # Measured on PostgreSQL 16.15 and SQLite 3.45.1: `1.5` at `numeric(10,0)` is `2` and `1.5`, `1.555`
-# at `numeric(10,2)` is `1.56` and `1.555`. An unscaled `numeric` (and `DecimalField().type`,
-# `"DECIMAL"`) keeps the value on both, and an array is not a number, so neither has a scale here.
+# at `numeric(10,2)` is `1.56` and `1.555`. An unscaled `numeric` (or `"decimal"`; a `DecimalField`
+# object declares its scale, #1221) keeps the value on both, and an array is not a number, so neither has a scale here.
 # The name is `Dialect.cast_type_name`'s validated spelling, so the size is plain digits.
 function _numeric_cast_scale(type_name::AbstractString)::Union{Int,Nothing}
   size = _numeric_cast_size(type_name)

@@ -18,9 +18,10 @@
 #                 recorded as `"rooted: <kind>"` and is no claim about the expression;
 # - `formatter` — `_expression_formatter`, the value formatter filters and binds use;
 # - `textless`  — `_concat_textless_operand`, the #1027/#1028 refusals' classifier;
-# - `cte_field` / `cte_textless` — under a CTE: the field the CTE model gives the column
-#                 (`_set_field_from_sql_function`) and the column's textless classification as the outer
-#                 query reads it (`_cte_textless_record`);
+# - `cte_field` — under a CTE: the field the CTE model gives the column (`_set_field_from_sql_function`).
+#                 The column's textless classification as the outer query reads it is `textless` itself,
+#                 asked of the CTE column. A `cte_textless` channel beside it recorded only the body
+#                 record behind that answer, which #1034 phase 3 step 2c replaces;
 # - `kind`      — `_expression_kind`, the one total inference (#1034, phase 2). Recorded, not compared:
 #                 the disagreement rule maps no family for it, so it joins neither pinned set until a
 #                 reader is moved onto it;
@@ -174,7 +175,6 @@ function _ekm_channels(instr, name::Symbol)
   if cte !== nothing
     ch = merge(ch, (
       cte_field    = _ekm_ask(() -> nameof(typeof(cte["model"].fields["v"]))),
-      cte_textless = _ekm_ask(() -> _EKM_QB._cte_textless_record(_EKM_QB.CTEReference(name = "g", path = "v"), instr)),
     ))
   end
   # Last, so adding it moved no other channel's text in the fixture. It is no family claim: phase 3 of
@@ -261,7 +261,7 @@ function _ekm_family(channel::Symbol, answer)
   (startswith(answer, "error: ") || startswith(answer, "rooted: ")) && return nothing
   channel in _EKM_KIND_CHANNELS && return _ekm_kind_family(answer)
   channel === :formatter && return get(_EKM_FORMATTER_FAMILY, answer, :other)
-  channel in (:textless, :cte_textless) && return get(_EKM_TEXTLESS_FAMILY, answer, :other)
+  channel === :textless && return get(_EKM_TEXTLESS_FAMILY, answer, :other)
   channel === :cte_field && return get(_EKM_FIELD_FAMILY, answer, :other)
   return nothing
 end

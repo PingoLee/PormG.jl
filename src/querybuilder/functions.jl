@@ -746,7 +746,10 @@ different value raises `QueryBuildError` when the query is built, and the others
   point (a float column, a float literal with more places (#1050), text, a `numeric` function, a
   decimal with more places) means the value rounded to the scale, and SQLite, which keeps every
   digit, refuses it (#1040). Round it first, `Cast(Round(x, 2), "numeric(10,2)")`, or cast to an
-  unscaled `"numeric"`.
+  unscaled `"numeric"`;
+- to a single-precision float (`"real"`, `"float4"`, `"float(p)"` for p ≤ 24), any value means the
+  value rounded to a 4-byte float, a `Float32`, and SQLite, which keeps the 8-byte double, refuses
+  it (#1215). Cast to `"float8"` or `FloatField()`, a `Float64` on every engine.
 
 ```julia
 using PormG.Functions: Cast, Round

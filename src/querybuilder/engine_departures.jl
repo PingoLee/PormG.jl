@@ -27,8 +27,8 @@
 # gets one failing line per row instead of inheriting "keeps the meaning". `targets` are the sites
 # that ask: `:text` and `:integer`
 # (a declared cast to one), `:scale` (`numeric(p, s)`), `:precision` (a literal `numeric(p, s)` cannot
-# hold) and `:concat` (a `Concat` operand). `kinds` are the operand classes the classifiers in
-# `projection_types.jl` name. `meaning`, `computes` and `fix` take the declared type, and `fix` also
+# hold), `:single_precision` (`real`, #1215) and `:concat` (a `Concat` operand). `kinds` are the
+# operand classes the classifiers in `projection_types.jl` name. `meaning`, `computes` and `fix` take the declared type, and `fix` also
 # the operand's flag, the path a suggestion can name.
 const _MEANING_DEPARTURES = (
   # #1028: a boolean's text is the word. SQLite has no boolean and stores 1 / 0.
@@ -54,6 +54,14 @@ const _MEANING_DEPARTURES = (
    meaning = declared -> "a numeric field overflow, since $(declared) cannot hold it",
    computes = _ -> "the value as it is",
    fix = (_, declared) -> "Declare a precision that holds it (\e[32mCast(x, \"numeric(p, $(something(_numeric_cast_scale(declared), 0)))\")\e[0m with a larger p), or cast to an unscaled \e[32m\"numeric\"\e[0m."),
+  # #1215: a single-precision float (`real`, `float4`, `float(p)` for p ≤ 24) is the value rounded to a
+  # 4-byte float, which reads back as a `Float32`. SQLite has no 4-byte REAL: its cast keeps the
+  # 8-byte double, so `0.1` stays `0.1` where single precision holds `0.10000000149011612`. The
+  # operand does not decide it, so the one kind is `:value`, any operand.
+  (targets = (:single_precision,), kinds = (:value,), departs = (PormGSQLite,), keeps = (PormGPostgres,), issue = "#1215",
+   meaning = _ -> "the value rounded to single precision, a `Float32`",
+   computes = _ -> "the 8-byte double, every digit of it",
+   fix = (_, _) -> "Cast to a double, which is a `Float64` on every engine: \e[32mCast(x, \"float8\")\e[0m or \e[32mCast(x, FloatField())\e[0m."),
 )
 
 # #1111 — an integer quotient over a `Sum` the type walk cannot name (`_DIVISION_KINDS`, classified by

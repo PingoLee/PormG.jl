@@ -719,6 +719,38 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1215: a cast to a single-precision float is refused on SQLite, whatever it casts
+# MEANING: `real` (`float4`, and `float(p)` for p ≤ 24, which PostgreSQL resolves to `real`) is the
+# value rounded to a 4-byte float, which PostgreSQL computes and reads back as a `Float32`. SQLite has
+# no 4-byte REAL: `CAST(x AS REAL)` keeps the 8-byte double, so `0.1` stays `0.1` where `real` holds
+# `0.10000000149011612`. The operand does not decide it — an integer column is a `Float32` too — so
+# every operand is refused on SQLite, on `Cast` and on each `output_field`. A double (`float8`,
+# `FloatField()`, `float(25)`) is a `Float64` on both engines and builds. Expected SQL, PostgreSQL:
+#   ("Tb"."points")::real
+# Why: before #1215 the cast built on both engines and returned a different type and value on each.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1215: a single-precision cast is refused on SQLite only, naming the double" begin
+  case(then; output_field) = Fn.Case(Fn.When("number" => 1, then = then), default = 0, output_field = output_field)
+  for target in ("real", "float4", "REAL", "Float4", "float(1)", "float(24)", "float(0024)"),
+      expr in (Fn.Cast("points", target), Fn.Cast("number", target), Fn.Cast(_CF("price"), target), Fn.Cast(Fn.Value(1), target))
+    errs = _ccd_expect(expr; departs = _SL_ONLY, issue = "#1215", named = "rounded to single precision")
+    msg = _ccd_msg(errs.sqlite)
+    @test occursin("Cast(…, \"$(target)\")", msg)
+    @test occursin("Cast(x, \"float8\")", msg) && occursin("Cast(x, FloatField())", msg)
+  end
+  for expr in (Fn.Coalesce("points", "number"; output_field = "real"),
+               Fn.Greatest("points", "number"; output_field = "float4"),
+               Fn.Least("points", "number"; output_field = "real"),
+               case(1.5; output_field = "real"))
+    _ccd_expect(expr; departs = _SL_ONLY, issue = "#1215", named = "output_field = \"")
+  end
+  @test occursin("(\"Tb\".\"points\")::real as \"x\"", _ccd_render(Fn.Cast("points", "real"); conn = _CCD_PG))
+  for target in ("float8", Models.FloatField(), "float(25)", "float(0025)", "float(53)", "double precision", "float")
+    @test _ccd_builds(Fn.Cast("points", target))
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #1050: a float literal that fits the scale passes, as a Decimal literal does
 # What SQLite departs on is a literal with more fractional digits than `s`, refused there only.
 # Measured on PostgreSQL 16.15 / SQLite 3.45.1: `1.5`, `0.1`, `2.25` read the same at scale 2; `2.675`

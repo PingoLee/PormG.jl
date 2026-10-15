@@ -2069,6 +2069,35 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Cast to a single-precision float: refused on SQLite, a Float32 on PostgreSQL (#1215)
+# `real` means the value rounded to a 4-byte float. PostgreSQL computes it and its driver reads it back
+# as a `Float32`; SQLite has no 4-byte float and kept the double (`Float64`), a different type and, for
+# a value with no exact binary form, a different value. So SQLite refuses it, PostgreSQL builds it, and
+# a double (`float8`, `FloatField()`) is a `Float64` on every engine.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1215: a cast to real is refused on SQLite and reads a Float32 on PostgreSQL" begin
+    engine = engine_key()   # `departs[engine]` has no fallback: a backend added later states its row (#1179)
+    departs = (sqlite = true, postgres = false)
+    refusal(f) = try f(); nothing catch e; e end
+    is_1215(e) = e isa PormG.QueryBuildError && occursin("#1215", sprint(showerror, e))
+    proj(expr) = () -> (q = M.Result.objects; q.filter("raceid" => 2); q.values("resultid", "points", "x" => expr); q |> DataFrame)
+    for expr in (Cast("points", "real"), Cast("grid", "float4"), Coalesce("points", 0; output_field = "real"))
+        if departs[engine]
+            @test is_1215(refusal(proj(expr)))
+        else
+            df = proj(expr)()
+            @test nrow(df) > 0
+            @test all(x -> x isa Float32, skipmissing(df.x))
+        end
+    end
+    # The double is a `Float64` on every engine, and keeps the half points of race 2 exactly.
+    df = proj(Cast("points", "float8"))()
+    @test all(x -> x isa Float64, skipmissing(df.x))
+    @test any(p -> !isinteger(p), df.points)
+    @test isequal(df.x, df.points)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # `Sum` over a `bigint` is an integer on every engine (#1147)
 # PostgreSQL widens `sum(bigint)` to `numeric`, which read as a `Decimal` and kept the half once divided
 # (`Sum("resultid") / 2` over results 1 and 2 was 1.5 there and 1 on SQLite). PormG renders

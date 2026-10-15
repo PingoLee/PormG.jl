@@ -746,7 +746,8 @@ The type you declare can be a text, integer, bigint, float, numeric, boolean or 
 PostgreSQL also `uuid`, `inet` or `cidr`. SQLite renders those three casts as text, so a CTE column declared as one is refused there. That
 includes the aliases `int2`, `int4`, `int8`, `float4` and `float8`, and any field object with one of
 those types, such as `PositiveIntegerField()`, which is typed as a plain integer because a cast does
-not enforce the sign. A timestamp, time or interval type is refused, since each has more than one
+not enforce the sign. A single-precision float (`real`, `float4`) is refused on SQLite, which has no
+4-byte float to round to (#1215, see [Functions and Dates](functions_and_dates.md)). A timestamp, time or interval type is refused, since each has more than one
 text form. A declared type is also what the SQL casts the value to, on both engines: a `date` on
 `Cast`, `Case`, `Coalesce`, `Greatest` or `Least` renders `date(…)` on SQLite. `Concat` only
 takes a text type, on both engines (see

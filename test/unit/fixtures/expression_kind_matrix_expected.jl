@@ -2009,15 +2009,15 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast float real | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
   ("Cast float real | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
   ("Cast float real | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
   ("Case F float * 1.5 output scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output scale 1 | alone", :sqlite) =>
@@ -2225,27 +2225,27 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast float float4 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float4 | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float4\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte doub"),
   ("Cast float float4 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float4 | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float4\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte doub"),
   ("Cast float float4 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float4 | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float4\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte doub"),
   ("Cast float float(24) | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(24) | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float(24)\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte d"),
   ("Cast float float(24) | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(24) | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float(24)\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte d"),
   ("Cast float float(24) | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(24) | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float(24)\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte d"),
   ("Cast float float(25) | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(25) | alone", :sqlite) =>
@@ -2261,39 +2261,39 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast int real | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int real | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
   ("Cast int real | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int real | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
   ("Cast int real | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int real | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
   ("Coalesce float int output real | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce float int output real | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite compute"),
   ("Coalesce float int output real | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce float int output real | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite compute"),
   ("Coalesce float int output real | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce float int output real | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite compute"),
   ("Case float literal output real | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal output real | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes th"),
   ("Case float literal output real | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal output real | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", cte_textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes th"),
   ("Case float literal output real | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal output real | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes th"),
   ("Cast float DecimalField(10,1) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast float DecimalField(10,1) | alone", :sqlite) =>

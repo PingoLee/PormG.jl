@@ -1206,7 +1206,12 @@ _cte_refusal(Model_, expr) = try _cte_case_field(Model_, expr); nothing catch e;
       @test _cte_case_field(Model_, Cast_("raceid", "int8")) isa PormG.Models.sBigIntegerField
       @test _cte_case_field(Model_, Cast_("raceid", "int4")) isa PormG.Models.sIntegerField
       @test _cte_case_field(Model_, Cast_("raceid", "int2")) isa PormG.Models.sIntegerField
-      @test _cte_case_field(Model_, Cast_("points", "float4")) isa PormG.Models.sFloatField
+      # #1215: a single-precision cast is refused on SQLite, which has no 4-byte float to round to.
+      if backend == "PostgreSQL"
+        @test _cte_case_field(Model_, Cast_("points", "float4")) isa PormG.Models.sFloatField
+      else
+        @test occursin("(#1215)", sprint(showerror, _cte_refusal(Model_, Cast_("points", "float4"))))
+      end
       @test _cte_case_field(Model_, Cast_("points", "float8")) isa PormG.Models.sFloatField
       # `PositiveIntegerField().type` is "INTEGER UNSIGNED". A cast does not enforce the sign, so the
       # column is a plain integer, as `PositiveSmallIntegerField()`'s "SMALLINT" already was.

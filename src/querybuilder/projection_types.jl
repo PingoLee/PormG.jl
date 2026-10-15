@@ -772,6 +772,17 @@ function _numeric_cast_size(type_name::AbstractString)::Union{Tuple{Int,Int},Not
   bounded(c) = ncodeunits(c) > 4 ? 1001 : min(parse(Int, c), 1001)
   return (bounded(m.captures[1]), m.captures[2] === nothing ? 0 : bounded(m.captures[2]))
 end
+# #1215 — whether a declared type is PostgreSQL's 4-byte float: `real`, `float4`, or `float(p)` for
+# 1 ≤ p ≤ 24, which PostgreSQL resolves to `real` (`float(25)` to `float(53)` is a double).
+function _single_precision_cast(type_name::AbstractString)::Bool
+  occursin(r"^(?i:real|float4)$", type_name) && return true
+  m = match(r"^(?i:float)\((\d+)\)$", type_name)
+  m === nothing && return false
+  # Leading zeros are the same precision to PostgreSQL (`float(0024)` is `real`); a long digit string
+  # is past 53, which PostgreSQL rejects, so it is not parsed.
+  digits = lstrip(m.captures[1], '0')
+  return 1 <= ncodeunits(digits) <= 2 && parse(Int, digits) <= 24
+end
 
 # #1087 — a literal `Cast` operand that does not fit `numeric(p, s)`: rounded to `s` places, it has
 # more than `p − s` digits before the point (`100`, or `9.999`, which rounds to `10.00`, at
@@ -976,6 +987,9 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::
   # no departure at all, so it has no row and builds everywhere.
   departs(kind, what, target, flag) = (row = _departure(conn, target, kind);
     row === nothing ? nothing : (kind = kind, what = what, target = target, flag = flag, declared = declared, row = row))
+  # #1215: a single-precision target rounds whatever it casts, so the node is checked once, not per
+  # operand; no other rule below applies to a float target.
+  _single_precision_cast(declared) && return departs(:value, "any value", :single_precision, "<flag>")
   # #1040: a scaled numeric target rounds on PostgreSQL only.
   size = _numeric_cast_size(declared)
   if size !== nothing

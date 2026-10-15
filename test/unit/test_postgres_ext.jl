@@ -8,9 +8,11 @@
 #   and coexists with the LibPQ extension: every `backend_*` generic resolves to the right extension for
 #   each pool type, and loading both introduces no method ambiguity (Aqua's own check loads neither
 #   extension, so it cannot see this). A connection string never leaks a credential through a parse
-#   error. Sessions run with LibPQ.jl's DateStyle/TimeZone, results decode to the types LibPQ.jl
-#   delivers, errors classify by SQLSTATE rather than by message text, an interrupt wrapped by the TLS
-#   layer is recognised as an abandoned await, and COPY reports an exact record count.
+#   error, and a refusal names the bad parameter from PormG's own parse of the string — which agrees
+#   with Postgres.jl's — never from the driver's message text (#1235). Sessions run with LibPQ.jl's
+#   DateStyle/TimeZone, results decode to the types LibPQ.jl delivers, errors classify by SQLSTATE
+#   rather than by message text, an interrupt wrapped by the TLS layer is recognised as an abandoned
+#   await, and COPY reports an exact record count.
 #
 # No live database: parsers, classifiers and preflight are exercised directly. The integration suite
 # runs PormG end to end through this driver with `PORMG_POSTGRES_DRIVER=Postgres`.
@@ -175,46 +177,214 @@ end
   end
 end
 
-@testset "Postgres.jl v2.3.0's refusal of an ignored keyword names the keyword (#1233)" begin
-  # Postgres.jl v2.3.0 refuses a security-sensitive keyword it ignores with
-  #   connection parameter "<key>" is set to a value Postgres.jl does not support and cannot safely ignore
-  # where <key> is a key of its own table, never user text. Expected: the refusal names
-  # `(parameter `sslpassword`)`; a quoted word that is not a libpq keyword is still masked, and so is
-  # a keyword-spelling word in any other position. Fed to `_parse_failure` directly, so it holds
-  # whichever Postgres.jl version resolved — the CI floor job resolves one without this message.
-  # Why: v2.3.0 turned the refusal into `connection parameter "****"`, which says nothing about what
-  # to fix.
-  tail = " is set to a value Postgres.jl does not support and cannot safely ignore"
+@testset "a refusal names the parameter from PormG's own parse, never its value (#1235, #1233)" begin
+  # What: `_checked_params` splits the string itself and checks it against Postgres.jl's rules before
+  # the driver sees it. Expected: each refusal names the offending keyword — an ignored keyword set to
+  # a value the driver refuses, a libpq keyword the driver lacks, a malformed integer, boolean or
+  # `numeric_overflow` — in keyword and URL form alike; it never shows the value; and a key that is no
+  # keyword is referred to by its position, because it may be a password fragment. Why: the name used
+  # to be read back from the driver's message text, and a Postgres.jl release that changed one message
+  # shape turned the refusal into `connection parameter "****"` and `main` red (#1233).
+  named(dsn) = (try PGExt._checked_params(dsn); "" catch e; e isa PormG.InvalidConfigurationError ? PormG.error_message(e) : rethrow() end)
+  cases = [
+    # (DSN, the text the refusal must carry, fragments it must not carry)
+    ("host=h sslpassword=SECssl dbname=f1", "parameter `sslpassword`", ["SECssl"]),
+    ("host=h channel_binding=SECcb dbname=f1", "parameter `channel_binding`", ["SECcb"]),
+    ("host=h port=SECport dbname=f1", "parameter `port` is not an integer", ["SECport"]),
+    ("host=h connect_timeout='1 SECct' dbname=f1", "parameter `connect_timeout` is not an integer", ["SECct"]),
+    ("host=h debug=SECdbg dbname=f1", "parameter `debug` is not a boolean", ["SECdbg"]),
+    ("host=h numeric_overflow=SECno dbname=f1", "parameter `numeric_overflow` must be `warn` or `error`", ["SECno"]),
+    ("host=h sslsni=1 dbname=f1", "sets `sslsni`, a libpq parameter the Postgres.jl driver does not support", String[]),
+    # A word in a key position that is no keyword: by position. Here it is a password's second word.
+    ("host=h password=abc SECkey=ghi dbname=f1", "parameter 3 is not a connection parameter", ["SECkey", "ghi"]),
+    ("host=h ssl_mode=require", "parameter 2 is not a connection parameter", ["ssl_mode"]),
+    # A lone word is never named even when it spells a keyword (#1233): `service` is the password's.
+    ("host=h password=my service dbname=f1", "parameter 3 has no `=`", ["service"]),
+    ("host=h password=corr3ct horse battery dbname=f1", "parameter 3 has no `=`", ["horse", "battery"]),
+    ("host=h password='SECunterminated dbname=f1", "the quoted value of parameter `password` is never closed", ["SECunterminated"]),
+    ("host=h password='SECq'x dbname=f1", "the quoted value of parameter `password` is followed by more text", ["SECq"]),
+    ("host=h password=SECdangling\\", "the value of parameter `password` ends in a dangling", ["SECdangling"]),
+    ("host=h =x", "parameter 2 has an empty name", String[]),
+    # URL form: the query is split as URIs splits it, and keys keep their case there.
+    ("postgresql://u:p@h/f1?port=SECurlport", "parameter `port` is not an integer", ["SECurlport"]),
+    ("postgresql://u:p@h/f1?sslpassword=SECurlssl", "parameter `sslpassword`", ["SECurlssl"]),
+    ("postgresql://u:p@h/f1?SSLMODE=require", "query parameter 1 is not a connection parameter Postgres.jl recognizes (parameter names are lower-case)", ["SSLMODE"]),
+    ("postgresql://u:p@h/f1?sslmode=require&SECq=1", "query parameter 2 is not a connection parameter", ["SECq"]),
+    ("postgresql://u:p@h/f1?sslpassword=SEC%zz", "the value of parameter `sslpassword` is not valid percent-encoding", ["SEC"]),
+  ]
+  for (dsn, expected, secrets) in cases
+    @testset "$(expected)" begin
+      msg = named(dsn)
+      @test occursin(expected, msg)
+      for s in secrets
+        @test !occursin(s, msg)
+      end
+    end
+  end
 
-  msg = PormG.error_message(PGExt._parse_failure(ArgumentError("connection parameter \"sslpassword\"" * tail)))
-  @test occursin("(parameter `sslpassword`)", msg)
-  @test occursin("connection parameter \"****\"", msg)
-
-  # A word in that position that is no libpq keyword is not named (letters only, so the position
-  # pattern matches it and the keyword list is what refuses it).
-  msg = PormG.error_message(PGExt._parse_failure(ArgumentError("connection parameter \"horse\"" * tail)))
-  @test !occursin("horse", msg)
-  @test !occursin("(parameter", msg)
-
-  # The lone-word shape stays masked even when the word spells a keyword.
-  msg = PormG.error_message(PGExt._parse_failure(ArgumentError("connection parameter \"service\" is missing '='")))
-  @test !occursin("service", msg)
-end
-
-@testset "a value that spells \"for connection parameter\" never names the keyword (#1233)" begin
-  # Postgres.jl echoes a rejected value before the key: `invalid value "<value>" for connection
-  # parameter "<key>"; expected an integer`. Expected: the real key (`port`) is named, never a
-  # keyword spelled inside the value; checked on `_parse_failure` (hermetic) and end to end. Why: the
-  # value side may be a password fragment even when it spells a keyword, and the first occurrence of
-  # the phrase used to win, naming `sslpassword` for a bad `port`.
-  forged = "invalid value \"x for connection parameter \"sslpassword\"; y\" for connection parameter \"port\"; expected an integer"
-  msg = PormG.error_message(PGExt._parse_failure(ArgumentError(forged)))
-  @test occursin("(parameter `port`)", msg)
+  # The forged value (#1233 security review): a `port` that itself spells `for connection parameter
+  # "sslpassword"` names `port`, and `sslpassword` nowhere.
+  msg = named("host=h port='x for connection parameter \"sslpassword\" y' dbname=f1")
+  @test occursin("parameter `port` is not an integer", msg)
   @test !occursin("sslpassword", msg)
 
-  err = try PGExt._checked_params("host=h port='x for connection parameter \"sslpassword\" y' dbname=f1"); nothing catch e; e end
+  # An invalid UTF-8 byte is refused as such, before anything lower-cases the string: `lowercase`
+  # would throw an `InvalidCharError` printing the byte, a password's here (review finding).
+  for dsn in ("host=h password=ab\xffSECutf dbname=f1", "postgresql://u:p@h/f1?application_name=\xffSECutf",
+              "host=h password=ab\xc0\x80SECutf dbname=f1")   # overlong
+    err = try PGExt._checked_params(dsn); nothing catch e; e end
+    @test err isa PormG.InvalidConfigurationError
+    @test occursin("not valid UTF-8", PormG.error_message(err))
+    @test !occursin("SECutf", PormG.error_message(err))
+  end
+  # …but only what `lowercase` refuses: a lone surrogate is well-formed WTF-8, and the driver takes it.
+  @test named("host=h password=a\ud800b dbname=f1") == ""
+  # A URL's percent-decoding can MAKE invalid text out of a valid string, so no decoded key or value is
+  # lower-cased unchecked: `lowercase` would throw an `InvalidCharError` printing the bytes — two
+  # characters of the password in the spill shape `u:pa?ss%ffword@…` (security review). Each is a
+  # value-free `InvalidConfigurationError`; a malformed boolean is refused as one, as the driver does.
+  for dsn in ("postgresql://u:pa?ss%ffword@h/f1", "postgresql://u:p@h/f1?%ff=1",
+              "postgresql://u:p@h/f1?x%e9y=1", "postgresql://u:p@h/f1?reconnect=%C0%80",
+              "postgresql://u:p@h/f1?debug=%ffSECdbg")
+    err = try PGExt._checked_params(dsn); nothing catch e; e end
+    @test err isa PormG.InvalidConfigurationError
+    rendered = sprint(showerror, err)
+    @test !occursin("\\x", rendered)
+    @test !occursin("SEC", rendered)
+  end
+  @test occursin("parameter `debug` is not a boolean", named("postgresql://u:p@h/f1?debug=%ffSECdbg"))
+  # The key rows again, on PormG's pass alone: `_checked_params`' safety net would turn a throwing
+  # `lowercase` into a value-free type name too, so only this shows the guard itself holds (review).
+  for (dsn, label) in (("postgresql://u:pa?ss%ffword@h/f1", "query parameter 1"),
+                       ("postgresql://u:p@h/f1?%ff=1", "query parameter 1"),
+                       ("postgresql://u:p@h/f1?x%e9y=1", "query parameter 1"))
+    err = try PGExt._check_dsn_params(PGExt._url_query_params(dsn)); nothing catch e; e end
+    @test err isa PormG.InvalidConfigurationError
+    @test occursin("$(label) is not a connection parameter", PormG.error_message(err))
+  end
+  # A decoded value nothing lower-cases stays the driver's to take, as it was.
+  @test named("postgresql://u:p@h/f1?application_name=%ff") == ""
+
+  # Only the LAST occurrence of a key is read, as Postgres.jl keeps it: a bad earlier value is never
+  # used, so it is not refused.
+  @test named("host=h port=x port=5432 dbname=f1") == ""
+  # A URL value holding a second `=` is refused only when no reading of it passes — URIs 1.7 keeps
+  # `5=x` whole, URIs 1.6 cuts it to `5`.
+  @test PGExt._check_dsn_params(PGExt._url_query_params("postgresql://u:p@h/f1?port=5=x")) === nothing
+  @test occursin("parameter `port` is not an integer", named("postgresql://u:p@h/f1?port=x=y"))
+end
+
+@testset "a driver rejection PormG did not anticipate names no parameter (#1235)" begin
+  # What: `_parse_failure`, the fallback for whatever Postgres.jl still rejects after PormG's own pass —
+  # a value from a `PG*` environment variable, or a rule a later release adds. Expected: the message is
+  # masked and carries no `(parameter …)` for ANY driver message shape, including the three the old
+  # text matching recognised and a forged value that spells one of them. Why: the parameter name now
+  # comes only from PormG's own parse; reading it from the driver's prose is what broke on #1233.
+  # (This flips the assertions #1233/#1234 made here: they expected the name to be recovered.)
+  shapes = [
+    "connection parameter \"sslpassword\" is set to a value Postgres.jl does not support and cannot safely ignore",
+    "connection parameter \"sslpassword=SECv\" is not supported by Postgres.jl and cannot be safely ignored",
+    "invalid value \"x for connection parameter \"sslpassword\"; y\" for connection parameter \"port\"; expected an integer",
+    "connection parameter \"service\" is missing '='",
+    "unrecognized connection parameter; recognized parameters are host, port",
+  ]
+  for shape in shapes
+    msg = PormG.error_message(PGExt._parse_failure(ArgumentError(shape)))
+    @test startswith(msg, "the PostgreSQL connection string could not be parsed")
+    @test !occursin("(parameter", msg)
+    @test !occursin("sslpassword", msg)
+    @test !occursin("SECv", msg)
+  end
+  # An exception that is not the driver's own is reduced to its type.
+  @test PormG.error_message(PGExt._parse_failure(EOFError())) ==
+        "the PostgreSQL connection string could not be parsed (EOFError)"
+
+  # End to end: a bad `PGPORT` is the driver's to reject, so nothing is named and its value is masked.
+  err = withenv("PGPORT" => "SECenv") do
+    try PGExt._checked_params("host=h dbname=f1"); nothing catch e; e end
+  end
   @test err isa PormG.InvalidConfigurationError
-  @test !occursin("sslpassword", PormG.error_message(err))
+  @test !occursin("SECenv", PormG.error_message(err))
+  @test !occursin("(parameter", PormG.error_message(err))
+end
+
+@testset "PormG's DSN tokenizer agrees with Postgres.parse_dsn (#1235)" begin
+  # What: the parity PormG's own pass depends on — whatever Postgres.jl accepts, PormG accepts, with
+  # the same value for every key; whatever PormG accepts, Postgres.jl accepts (keyword form; a URL the
+  # driver cannot parse is its own, quote-free refusal); and no refusal ever carries a value. Checked
+  # on grammar rows (quoting, `\` escapes, `;`, upper-case keys, spaces around `=`, URL `+`/`%xx`) and
+  # on a seeded fuzz. Why: a tokenizer that disagreed would refuse a valid string — a behavior change
+  # for a working app — or name the wrong key. Compared through the public `Postgres.parse_dsn` only,
+  # so a renamed driver internal cannot turn this red.
+  string_fields = ("host", "user", "password", "dbname", "application_name", "options", "sslrootcert",
+                   "sslcert", "sslkey", "sslcapath", "sslservername", "krbsrvname")
+  problems = String[]
+  function compare(dsn)
+    mine = try
+      ps = PGExt._is_url(dsn) ? PGExt._url_query_params(dsn) : PGExt._keyword_dsn_params(dsn)
+      PGExt._check_dsn_params(ps)
+      ps
+    catch e
+      e isa PormG.InvalidConfigurationError || rethrow()
+      e
+    end
+    theirs = try Postgres.parse_dsn(dsn) catch e; e end
+    if mine isa Exception
+      occursin("SEC", PormG.error_message(mine)) && push!(problems, "leak: $(repr(dsn))")
+      theirs isa Exception || push!(problems, "refused by PormG only: $(repr(dsn))")
+    elseif theirs isa Exception
+      PGExt._is_url(dsn) || push!(problems, "refused by the driver only: $(repr(dsn))")
+    else
+      for p in values(Dict(p.key => p for p in mine))
+        p.key in string_fields || continue
+        getfield(theirs, Symbol(p.key)) in p.values || push!(problems, "value of $(p.key) differs: $(repr(dsn))")
+      end
+    end
+  end
+
+  grammar = [
+    "host=h password='two words' dbname=f1", "host=h password='it\\'s' dbname=f1",
+    "host=h password='back\\\\slash' dbname=f1", "host=h password=bare\\ space dbname=f1",
+    "host=h;port=5432;dbname=f1", "HOST=h Port = 5432 dbname= f1", "host=h\tdbname=f1",
+    "host=h options='-c search_path=x' dbname=f1", "host=h password='' dbname=f1", "host=h port= dbname=f1",
+    "host=h password='SECa'SECb dbname=f1", "host=h password='SECa", "host=h password=SECa\\",
+    "postgresql://u:p@h/f1?application_name=a+b&options=-c%20x%3D1",
+    "postgresql://u:p@h/f1?port=5#x=SEC", "postgresql://u:p@h/f1#?port=SEC",
+    "postgresql://u:p@h/f1?client_encoding=UTF8&channel_binding=prefer",
+  ]
+
+  # Seeded fuzz: half structured `key=value` lists, half random concatenations of grammar pieces.
+  # A seeded xorshift64, so the file needs no `Random` in the test environment.
+  state = Ref(UInt64(1235))
+  next!() = (x = state[]; x ⊻= x << 13; x ⊻= x >> 7; x ⊻= x << 17; state[] = x)
+  pick(xs) = xs[Int(next!() % UInt64(length(xs))) + firstindex(xs)]
+  chance(p) = next!() % 1000 < p * 1000
+  fuzz_keys = ["host", "port", "password", "sslpassword", "options", "debug", "numeric_overflow",
+          "channel_binding", "sslmode", "service", "sslsni", "SEC", "Host", "connect_timeout",
+          "reconnect", "client_encoding", "application_name", "user", "dbname", "gssdelegation"]
+  vals = ["", "5", " 7 ", "on", "warn", "prefer", "UTF8", "x y", "a'b", "a\\b", "SEC", "SEC;x", "off",
+          "-c x=1", "é", "%41", "%zz", "+", "a&b", "a=b", "#", "maybe", "SEC=x", "%ff", "%C0%80", "%e9"]
+  pieces = ["host", "port", "password", "sslpassword", "debug", "service", "SEC", "PORT", "=", "=",
+            " ", ";", "'", "\\", "x", "5", "on", "\t", "é", "%41", "%zz", "+", "&", "?", "#", "@", "\""]
+  kwquote(v) = "'" * replace(v, "\\" => "\\\\", "'" => "\\'") * "'"
+  kwbare(v) = replace(v, "\\" => "\\\\", " " => "\\ ", ";" => "\\;", "'" => "\\'")
+  withenv([k => nothing for k in keys(ENV) if startswith(k, "PG")]...) do
+    foreach(compare, grammar)
+    for _ in 1:20_000
+      url = chance(0.4)
+      body = if chance(0.5)
+        parts = [(k = pick(fuzz_keys); v = pick(vals);
+                  url ? "$(k)=$(v)" : k * pick(["=", " = "]) * (chance(0.4) ? kwquote(v) : kwbare(v)))
+                 for _ in 1:pick(1:5)]
+        join(parts, url ? "&" : pick([" ", ";", "\t"]))
+      else
+        join(pick(pieces) for _ in 1:pick(1:12))
+      end
+      compare(url ? "postgresql://u:p@h/f1?" * body : body)
+    end
+  end
+  @test isempty(problems)
+  isempty(problems) || foreach(println, first(problems, 20))
 end
 
 @testset "sessions run with LibPQ.jl's DateStyle and TimeZone (#788)" begin

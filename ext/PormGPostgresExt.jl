@@ -56,12 +56,14 @@ end
 
 # ── Connection-string preflight ──────────────────────────────────────────────
 #
-# PormG tokenizes the string itself and checks it against Postgres.jl's rules BEFORE the driver sees it
-# (#1235), so a refusal names the bad parameter from PormG's own parse, never from the text of the
-# driver's message: one new message shape in a Postgres.jl release turned `main` red (#1233). The
-# tokenizer follows Postgres.jl's grammar, which is not libpq's (`;` separates parameters too, and keys
-# are lower-cased); the string handed to the driver is the one the user wrote. The LibPQ extension's
-# rules (#657, #662) are then applied to what Postgres.jl parsed. A failure here becomes
+# The driver decides what it accepts: `Postgres.parse_dsn` reads the string as the user wrote it, and
+# a string it parses meets no refusal from PormG's tables (#1247) — tables copied from one release must
+# never refuse what a later one accepts. Only when the driver refuses does PormG tokenize the string
+# and check it against Postgres.jl's rules, to NAME the bad parameter from its own parse, never from
+# the text of the driver's message: one new message shape in a Postgres.jl release turned `main` red
+# (#1233, #1235). The tokenizer follows Postgres.jl's grammar, which is not libpq's (`;` separates
+# parameters too, and keys are lower-cased). PormG's own policy — the LibPQ extension's rules (#657,
+# #662), `reconnect`, Unix sockets — is then applied to what Postgres.jl parsed. A failure here becomes
 # `PoolConnectError.cause`, so no value is ever echoed — a value may be a password.
 
 # libpq keyword names.
@@ -77,8 +79,9 @@ const _CONNINFO_KEYWORDS = (
 
 # The keywords Postgres.jl accepts — its `KNOWN_PARAMS`, then the libpq keywords it accepts and ignores
 # (`IGNORED_PARAMS`); both tables are the same in Postgres.jl 2.2.2 and 2.3.0. PormG's own
-# copy, because the refusal is PormG's: a libpq keyword missing here is refused by name as one this
-# driver does not support, and a release that accepts more is a row to add, not a red build.
+# copy, because the WORDING of a refusal is PormG's: a libpq keyword missing here is named as one this
+# driver does not support. A release that accepts more still connects, because the table is read
+# only after the driver refused (#1247); the new keyword is a row to add, never a refusal.
 const _DRIVER_KEYWORDS = (
   "host", "port", "user", "password", "dbname", "application_name", "options", "connect_timeout",
   "sslmode", "sslrootcert", "sslcert", "sslkey", "sslcapath", "sslservername", "gssencmode",
@@ -395,7 +398,26 @@ const _URL_QUERY_PARAM_RE = r"[?&]([^=&]*)=([^&]*)"
 _pct_decode(s::AbstractString) =
   replace(s, r"%[0-9A-Fa-f]{2}" => h -> string(Char(parse(UInt8, h[2:3]; base = 16))))
 
-function _checked_params(conn_str::AbstractString)::Postgres.ConnectionParams
+# Why the driver refused, in PormG's own words. PormG's pass names the parameter; anything else it
+# throws — a defect — is reduced to its type, as `_parse_failure` reduces the driver's: Base's errors
+# print their input (security review, #1235). When PormG's pass finds nothing wrong — a value from a
+# `PG*` environment variable, a rule a later Postgres.jl adds — the driver's own message is shown
+# masked, naming nothing.
+function _driver_refusal(dsn::String, e)::InvalidConfigurationError
+  try
+    _check_dsn(dsn)
+  catch named
+    named isa InterruptException && rethrow()
+    named isa InvalidConfigurationError && return named
+    return InvalidConfigurationError(
+      "the PostgreSQL connection string could not be parsed ($(nameof(typeof(named))))")
+  end
+  return _parse_failure(e)
+end
+
+# `parse` is the seam a test replaces with a driver release that accepts more than PormG's tables.
+function _checked_params(conn_str::AbstractString;
+                         parse = Postgres.parse_dsn)::Postgres.ConnectionParams
   # First: a NUL never reaches the parser, and its error would quote the whole string.
   '\0' in conn_str && throw(InvalidConfigurationError(
     "the PostgreSQL connection string contains a NUL character, which a PostgreSQL connection string cannot carry"))
@@ -406,22 +428,17 @@ function _checked_params(conn_str::AbstractString)::Postgres.ConnectionParams
   # `lowercase`, and the driver accepts it.
   _lowercasable(dsn) || throw(InvalidConfigurationError(
     "the PostgreSQL connection string is not valid UTF-8, which a PostgreSQL connection string must be"))
-  # PormG's own pass refuses only with its own value-free messages. Anything else it throws — a defect —
-  # is reduced to its type, as `_parse_failure` reduces the driver's: Base's errors print their input
-  # (security review, #1235).
-  try
-    _check_dsn(dsn)
-  catch e
-    (e isa InvalidConfigurationError || e isa InterruptException) && rethrow()
-    throw(InvalidConfigurationError(
-      "the PostgreSQL connection string could not be parsed ($(nameof(typeof(e))))"))
-  end
+  # The driver first (#1247). Its refusal is explained outside the `catch`, so the exception stack never
+  # carries the driver's error, whose message may quote the string — as Postgres.jl 2.3.0 does itself.
+  refused = nothing
   params = try
-    Postgres.parse_dsn(dsn)
+    parse(dsn)
   catch e
     e isa InterruptException && rethrow()
-    throw(_parse_failure(e))
+    refused = e
+    nothing
   end
+  refused === nothing || throw(_driver_refusal(dsn, refused))
   # `reconnect=true` would let Postgres.jl reopen a dropped connection in the middle of a transaction
   # PormG opened with a raw `BEGIN` — the rest of the transaction would run in autocommit. The pool
   # already renews dead connections itself.

@@ -8,8 +8,9 @@
 #   and coexists with the LibPQ extension: every `backend_*` generic resolves to the right extension for
 #   each pool type, and loading both introduces no method ambiguity (Aqua's own check loads neither
 #   extension, so it cannot see this). A connection string never leaks a credential through a parse
-#   error, and a refusal names the bad parameter from PormG's own parse of the string — which agrees
-#   with Postgres.jl's — never from the driver's message text (#1235). Sessions run with LibPQ.jl's
+#   error. The driver decides what it accepts, so PormG's tables never refuse a string it parses
+#   (#1247), and a refusal it makes names the bad parameter from PormG's own parse of the string —
+#   which agrees with Postgres.jl's — never from the driver's message text (#1235). Sessions run with LibPQ.jl's
 #   DateStyle/TimeZone, results decode to the types LibPQ.jl delivers, errors classify by SQLSTATE
 #   rather than by message text, an interrupt wrapped by the TLS layer is recognised as an abandoned
 #   await, and COPY reports an exact record count.
@@ -287,9 +288,53 @@ end
   @test occursin("parameter `port` is not an integer", named("postgresql://u:p@h/f1?port=x=y"))
 end
 
+@testset "the driver decides what it accepts; PormG's tables only name its refusals (#1247)" begin
+  # What: `_checked_params` hands the string to the driver first, and reads it with PormG's tables only
+  # once the driver has refused it. Expected: a key a later Postgres.jl accepts but PormG's table lacks
+  # — `sslsni`, stood in for by a stub `parse` — connects through; PormG's own policy checks still run
+  # on what the driver parsed; and a refusal is still named from PormG's parse. Why: the tables match
+  # Postgres.jl 2.2.2 and 2.3.0, and run first they would refuse a valid string the day a release
+  # accepted more; CI resolves the newest Postgres.jl, so a working configuration would stop connecting.
+  # The parity fuzz below cannot see it: it generates only keys the tables already know.
+  newer_driver(dsn) = Postgres.parse_dsn(replace(dsn, r"\s*sslsni=\S*" => ""))
+  for dsn in ("host=h sslsni=1 dbname=f1", "postgresql://u:p@h/f1?sslsni=1")
+    # Today's driver refuses the key, and PormG names it…
+    err = try PGExt._checked_params(dsn); nothing catch e; e end
+    @test err isa PormG.InvalidConfigurationError
+    @test occursin("sets `sslsni`, a libpq parameter the Postgres.jl driver does not support", PormG.error_message(err))
+    # …a release that accepts it connects, whatever PormG's table says.
+    params = PGExt._checked_params(dsn; parse = newer_driver)
+    @test params isa Postgres.ConnectionParams
+    @test params.host == "h" && params.dbname == "f1"
+  end
+  # A value rule the driver relaxes: PormG's table says `numeric_overflow` is `warn` or `error`.
+  relaxed(dsn) = Postgres.parse_dsn(replace(dsn, "numeric_overflow=saturate" => ""))
+  @test PGExt._checked_params("host=h numeric_overflow=saturate dbname=f1"; parse = relaxed) isa Postgres.ConnectionParams
+  # PormG's own policy is not a table: it still refuses what any driver parses.
+  @test_throws PormG.InvalidConfigurationError PGExt._checked_params("host=h sslsni=1 reconnect=true dbname=f1"; parse = newer_driver)
+
+  # The driver's own error never rides along: its message may quote the string, and an error thrown
+  # inside a `catch` would carry it on the exception stack ("caused by: …").
+  # Both explanations: one PormG's parse names, and one only the driver's masked message can give.
+  for (dsn, env) in (("host=h password=SECstack sslpassword=SECstack2 dbname=f1", "PGPORT" => nothing),
+                     ("host=h password=SECstack dbname=f1", "PGPORT" => "SECstack3"))
+    stack = withenv(env) do
+      try
+        PGExt._checked_params(dsn)
+        nothing
+      catch
+        current_exceptions()
+      end
+    end
+    @test length(stack) == 1
+    @test stack[1].exception isa PormG.InvalidConfigurationError
+    @test !occursin("SECstack", sprint(showerror, stack[1].exception))
+  end
+end
+
 @testset "a driver rejection PormG did not anticipate names no parameter (#1235)" begin
-  # What: `_parse_failure`, the fallback for whatever Postgres.jl still rejects after PormG's own pass —
-  # a value from a `PG*` environment variable, or a rule a later release adds. Expected: the message is
+  # What: `_parse_failure`, the fallback for whatever Postgres.jl rejects that PormG's own parse cannot
+  # attribute — a value from a `PG*` environment variable, or a rule a later release adds. Expected: the message is
   # masked and carries no `(parameter …)` for ANY driver message shape, including the three the old
   # text matching recognised and a forged value that spells one of them. Why: the parameter name now
   # comes only from PormG's own parse; reading it from the driver's prose is what broke on #1233.

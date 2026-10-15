@@ -79,7 +79,8 @@ end
 #     CREATE INDEX "live_timing_driverref_like" ON "live_timing" ("driverref" text_pattern_ops);
 #     COMMENT ON INDEX "live_timing_driverref_like" IS 'pormg:index';
 #   `indexes = false` keeps only the table. On SQLite an opclass index is refused with
-#   `BackendCapabilityError`, as `makemigrations` refuses it.
+#   `BackendCapabilityError`, as `makemigrations` refuses it. A dotted `db_table`
+#   (`"telemetry.lap_times"`) is quoted whole on both engines, never as `"telemetry"."lap_times"` (#1254).
 # Why it matters: a host could not express an opclass through `Dialect.create_index`'s internal
 #   signature; through the model's own `Index(...; opclasses)` it is the same rendering migrate uses.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -103,6 +104,17 @@ end
     @test Migrations._ensure_table_statements(pg, _host1230_timing(indexes = [like]); indexes = false) == [table_pg]
 
     @test_throws PormG.BackendCapabilityError Migrations._ensure_table_statements(sl, _host1230_timing(indexes = [like]))
+
+    # #1254: a dotted `db_table` is ONE identifier, quoted whole — the name `_live_table_exists`
+    # looks up whole too (`to_regclass(quote_ident($1))`). It is not split into a schema and a table.
+    dotted = Models.Model("live_timing", db_table = "telemetry.lap_times",
+                          id = Models.IDField(), driverref = Models.CharField(max_length = 64, db_index = true))
+    for conn in (pg, sl)
+      statements = Migrations._ensure_table_statements(conn, dotted)
+      @test startswith(statements[1], "CREATE TABLE IF NOT EXISTS \"telemetry.lap_times\" (")
+      @test any(s -> occursin("ON \"telemetry.lap_times\"", s) && occursin("CREATE INDEX", s), statements)
+      @test !any(s -> occursin("\"telemetry\".\"lap_times\"", s), statements)
+    end
   finally
     Configuration.unregister_connection("host1230_pg")
     Configuration.unregister_connection("host1230_sl")

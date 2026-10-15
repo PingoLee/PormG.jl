@@ -1278,6 +1278,9 @@ After converting your Django models to PormG format, you can load them in your a
 module MyApp
     using PormG
     
+    # The configuration first: registering models never loads it for you
+    PormG.Configuration.load("db"; root = normpath(joinpath(@__DIR__, "..")), env = "dev")
+
     # Load the converted models
     PormG.@import_models "db/models.jl" models
     import .models as M

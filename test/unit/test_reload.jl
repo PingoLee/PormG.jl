@@ -286,6 +286,9 @@ end
     end
     """)
 
+    # #1226: registering models no longer loads their folder; load it as an application would.
+    PormG.Configuration.load(fixture_dir; env = "test")
+
     @info "Importing initial model..."
     PormG.@import_models "db_r/tmp_reload_models.jl" reload_models
     import .reload_models as RM
@@ -333,6 +336,8 @@ end
     @test basename(RM.ReloadTest.connect_key) == "db_r"
 
     rm(tmp_model_file)
+    PormG.Configuration.close_pool!(fixture_dir)
+    pop!(PormG.config, fixture_dir, nothing)
 end
 
 @testset "@import_models Package Regression" begin
@@ -396,6 +401,9 @@ end
     # Second witness. If the submodule `__init__` ever fired first, the parent's `__init__` would
     # then MIGRATE the implicit entry to "db"/dev, so the key and env markers above would still
     # read right — only `connect_key` (a plain field, no self-heal on read) would betray it. The
-    # implicit load also warns, and that warning is in the merged transcript.
+    # implicit load also warns, and that warning is in the merged transcript. Since #1226 the
+    # injected `__init__` calls `Models._bind_if_loaded`, which does nothing with `config` empty, so
+    # an early `__init__` now leaves no trace at all — and the outcome it would have changed (the
+    # key, the environment) is what the markers above pin.
     @test !occursin("loaded implicitly", output)
 end

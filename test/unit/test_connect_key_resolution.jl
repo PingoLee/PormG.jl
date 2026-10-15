@@ -325,55 +325,186 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Call site: set_models warns when it falls through to the implicit load
-# The branch that guesses BOTH the environment (from `default_env:`) and the key (the caller's
-# absolute path). It was silent before #550. Driving the real `set_models` also proves that call
-# site consults the resolver rather than its own loop.
+# Call site: set_models refuses a folder nothing loaded; the implicit load is opt-in (#1226)
+# What it tests: with no loaded configuration matching the folder, `set_models` raises
+#   `InvalidConfigurationError` naming the folder, the loaded keys and the `load(…; root, env)` call,
+#   and leaves `config` untouched. `implicit = true` and `allow_implicit_load!(true)` restore the old
+#   branch — the warning and an entry keyed by the caller's path, flagged `implicit` (#553). No SQL.
+# Why it matters: the implicit load guessed BOTH the environment (`PORMG_ENV`/`default_env:`) and
+#   the key, and a warning in a boot log was the only trace. The guessed environment is the
+#   wrong-database incident behind #550.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "set_models warns on the implicit load" begin
+function _ck1226_scratch(name::Symbol)
+  scratch = Module(name)
+  Core.eval(scratch, :(import PormG.Models))
+  Core.eval(scratch, :(Thing = Models.Model("thing", id = Models.IDField())))
+  return scratch
+end
+
+function _ck1226_folder(root::AbstractString)
+  db = joinpath(root, "scratch_db")
+  mkpath(db)
+  write(joinpath(db, "connection.yml"),
+        "default_env: test\ntest:\n  adapter: SQLite\n  database: \":memory:\"\n" *
+        "  config:\n    change_db: true\n    change_data: true\n")
+  return db
+end
+
+@testset "set_models refuses an unloaded folder; the implicit load is opt-in (#1226)" begin
   saved = copy(PormG.config)
+  previous = Configuration.allow_implicit_load!(false)
   root = mktempdir()
   try
     empty!(PormG.config)
-    db = joinpath(root, "scratch_db")
-    mkpath(db)
-    write(joinpath(db, "connection.yml"),
-          "default_env: test\ntest:\n  adapter: SQLite\n  database: \":memory:\"\n" *
-          "  config:\n    change_db: true\n    change_data: true\n")
-
+    db = _ck1226_folder(root)
     # A throwaway module holding one model, exactly what `@import_models` would produce.
-    scratch = Module(:ScratchImplicitModels)
-    Core.eval(scratch, :(import PormG.Models))
-    Core.eval(scratch, :(Thing = Models.Model("thing", id = Models.IDField())))
+    scratch = _ck1226_scratch(:ScratchImplicitModels)
 
     # Every call below goes through `invokelatest`, and that is not incidental: since Julia 1.12
     # a binding created by `Core.eval` is only visible in a LATER world age, so calling
     # `set_models` directly from this block makes `names()` inside it return an empty module.
     # It would collect no models, bind nothing, and every assertion here would pass vacuously.
-    # `@import_models`'s injected `__init__` calls it through `invokelatest` for the same reason
-    # (see `Utils.ensure_models_init!`), so this also matches how production reaches it.
     @test :Thing in Base.invokelatest(names, scratch; all = true, imported = true)
 
-    # Nothing is configured, so the resolver returns nothing and set_models guesses.
-    @test_logs((:warn,), match_mode = :any,
-               Base.invokelatest(PormG.Models.set_models, scratch, db))
+    @testset "no match, no opt-in: refused, nothing loaded" begin
+      err = try
+        Base.invokelatest(PormG.Models.set_models, scratch, db)
+        nothing
+      catch e
+        e
+      end
+      @test err isa PormG.InvalidConfigurationError
+      msg = sprint(showerror, err)
+      @test occursin(db, msg)                                  # the folder
+      @test occursin("Configurations loaded now: none", msg)   # what IS loaded
+      @test occursin("PormG.Configuration.load(\"scratch_db\"; root = ", msg)  # the call to add
+      @test occursin("allow_implicit_load!(true)", msg)        # the opt-in
+      @test isempty(PormG.config)                              # no guess was made
+      @test Base.invokelatest(getfield, scratch, :Thing).connect_key === nothing
+      # …and nothing recorded about the module: a refused call (a typo'd folder) must not register
+      # it for the self-heal or fix its `__pormg_init_path__` to the wrong folder for good.
+      @test !haskey(PormG.Models.REGISTERED_MODULES, scratch)
+      @test !Base.invokelatest(isdefined, scratch, :__pormg_init_path__)
+    end
 
-    # The guess is visible twice over: the config gains an entry keyed by the caller's own
-    # absolute path, and the model binds to it. Neither name was chosen by the application.
-    # The exact value is knowable here, so assert it rather than merely its shape.
-    @test haskey(PormG.config, db)
-    @test Base.invokelatest(getfield, scratch, :Thing).connect_key == db
-    @test PormG.config[db].implicit                 # recorded on the entry (#553), not read off the key
+    @testset "the refusal lists the keys that are loaded" begin
+      other = joinpath(root, "other_db")
+      cp(db, other)
+      Configuration.load(other; env = "test")
+      err = try
+        Base.invokelatest(PormG.Models.set_models, scratch, db)
+        nothing
+      catch e
+        e
+      end
+      @test err isa PormG.InvalidConfigurationError
+      @test occursin("Configurations loaded now: \"$(other)\"", sprint(showerror, err))
+      Configuration.close_pool!(other)
+      empty!(PormG.config)
+    end
 
-    # An explicit reload of that same key rebuilds the entry unflagged: `existing == path`, so no
-    # migrate/reuse branch runs and the fact recorded is this caller's, not the old entry's.
-    Configuration.load(db; env = "test")
-    @test !PormG.config[db].implicit
+    @testset "implicit = true keeps the old warning and load" begin
+      @test_logs((:warn, r"loaded implicitly"), match_mode = :any,
+                 Base.invokelatest(PormG.Models.set_models, scratch, db; implicit = true))
+      # The guess is visible twice over: the config gains an entry keyed by the caller's own
+      # path, and the model binds to it. Neither name was chosen by the application.
+      @test haskey(PormG.config, db)
+      @test Base.invokelatest(getfield, scratch, :Thing).connect_key == db
+      @test PormG.config[db].implicit                 # recorded on the entry (#553), not read off the key
 
-    # Second call, now that the folder IS configured under that key: resolves silently.
-    @test_logs(min_level = Logging.Warn,
-               Base.invokelatest(PormG.Models.set_models, scratch, db))
+      # An explicit reload of that same key rebuilds the entry unflagged: `existing == path`, so no
+      # migrate/reuse branch runs and the fact recorded is this caller's, not the old entry's.
+      Configuration.load(db; env = "test")
+      @test !PormG.config[db].implicit
+
+      # Now that the folder IS configured under that key, a plain call resolves silently.
+      @test_logs(min_level = Logging.Warn,
+                 Base.invokelatest(PormG.Models.set_models, scratch, db))
+      Configuration.close_pool!(db)
+      empty!(PormG.config)
+    end
+
+    @testset "allow_implicit_load!(true) opts the whole session in" begin
+      scratch2 = _ck1226_scratch(:ScratchImplicitModelsSession)
+      @test Configuration.allow_implicit_load!(true) == false   # returns the previous setting
+      try
+        @test_logs((:warn, r"loaded implicitly"), match_mode = :any,
+                   Base.invokelatest(PormG.Models.set_models, scratch2, db))
+        @test PormG.config[db].implicit
+      finally
+        @test Configuration.allow_implicit_load!(false) == true
+      end
+      Configuration.close_pool!(db)
+      empty!(PormG.config)
+    end
   finally
+    Configuration.allow_implicit_load!(previous)
+    empty!(PormG.config)
+    merge!(PormG.config, saved)
+    rm(root; recursive = true, force = true)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The first `.objects` binds to a LOADED configuration or refuses; the injected `__init__` binds
+# only when loaded (#1226)
+# What it tests: `ensure_model_initialized` on a model whose module records an unloaded folder
+#   raises the `set_models` refusal (it used to return `false`, leaving a vaguer error for render
+#   time), and does not fall back to binding the only other loaded configuration. `_bind_if_loaded`
+#   — what the injected `__init__`s call — does nothing when the folder is not loaded and binds when
+#   it is. No SQL.
+# Why it matters: the self-heal runs on the first `.objects` of a restored package image, and its
+#   catch-all used to turn the implicit load's guess into a silent success.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "self-heal and the injected __init__ never load a folder (#1226)" begin
+  saved = copy(PormG.config)
+  previous = Configuration.allow_implicit_load!(false)
+  root = mktempdir()
+  try
+    empty!(PormG.config)
+    db = _ck1226_folder(root)
+    scratch = _ck1226_scratch(:ScratchSelfHeal1226)
+    Core.eval(scratch, :(const __pormg_init_path__ = $db))
+    thing = Base.invokelatest(getfield, scratch, :Thing)
+    thing._module = scratch     # what a first `set_models` in the precompile worker leaves behind
+
+    @testset "_bind_if_loaded skips an unloaded folder" begin
+      @test Base.invokelatest(PormG.Models._bind_if_loaded, scratch, db) === nothing
+      @test thing.connect_key === nothing
+      @test isempty(PormG.config)
+    end
+
+    @testset "ensure_model_initialized raises the refusal" begin
+      @test_throws PormG.InvalidConfigurationError PormG.Models.ensure_model_initialized(thing)
+      @test isempty(PormG.config)
+    end
+
+    @testset "…and does not bind the only other loaded folder instead" begin
+      other = joinpath(root, "other_db")
+      cp(db, other)
+      Configuration.load(other; env = "test")
+      # A refused `set_models` records nothing, so this reaches case 2b and the inference after it
+      # rather than case 2a.
+      @test !haskey(PormG.Models.REGISTERED_MODULES, scratch)
+      @test_throws PormG.InvalidConfigurationError PormG.Models.ensure_model_initialized(thing)
+      @test thing.connect_key === nothing
+      Configuration.close_pool!(other)
+      empty!(PormG.config)
+    end
+
+    @testset "once the folder is loaded, both bind" begin
+      Configuration.load(db; env = "test")
+      Base.invokelatest(PormG.Models._bind_if_loaded, scratch, db)
+      @test thing.connect_key == db
+      thing.connect_key = nothing
+      @test PormG.Models.ensure_model_initialized(thing)
+      @test thing.connect_key == db
+    end
+  finally
+    Configuration.allow_implicit_load!(previous)
+    for k in collect(keys(PormG.config))
+      try Configuration.close_pool!(k) catch end
+    end
     empty!(PormG.config)
     merge!(PormG.config, saved)
     rm(root; recursive = true, force = true)
@@ -417,10 +548,14 @@ end
 
     # 3. The reverse order must NOT demote: an absolute-path load over an existing short key
     #    keeps the short key rather than replacing it with the implicit-looking one.
+    #    Same environment, so since #1225 the repeat is a silent no-op; `force = true` takes the
+    #    reuse branch, which warns — and neither demotes the short key.
     empty!(PormG.config)
     cd(app) do
       Configuration.load("db"; env = "test")
-      @test_logs((:warn,), match_mode = :any, Configuration.load(db; env = "test"))
+      @test_logs(min_level = Logging.Warn, Configuration.load(db; env = "test"))
+      @test collect(keys(PormG.config)) == ["db"]
+      @test_logs((:warn,), match_mode = :any, Configuration.load(db; env = "test", force = true))
       @test collect(keys(PormG.config)) == ["db"]
     end
 
@@ -434,10 +569,11 @@ end
     # 5. The reuse branch must preserve the `db_def_folder == key` invariant. The migration
     #    runner derives the advisory-lock key from that field, so writing the caller's spelling
     #    into a reused entry silently changed one folder's lock identity.
+    #    `force = true`: the plain repeat is a no-op since #1225 and would not reach the branch.
     empty!(PormG.config)
     cd(app) do
       Configuration.load("db"; env = "test")
-      @test_logs((:warn,), match_mode = :any, Configuration.load(db; env = "test"))
+      @test_logs((:warn,), match_mode = :any, Configuration.load(db; env = "test", force = true))
       @test PormG.config["db"].db_def_folder == "db"
     end
 
@@ -496,14 +632,17 @@ end
 
     # 9. Two EXPLICIT spellings of one folder — absolute first, short second — are one entry, kept
     #    under the first key (#553). Before, the absolute one was taken for the implicit load and
-    #    migrated away; it was the application's own choice, so now it is reused, with the same
-    #    "already loaded under a different key" warning the reverse order (step 3) always had.
+    #    migrated away; it was the application's own choice, so now it is reused. Same environment:
+    #    a silent no-op since #1225. Forced, it goes through the reuse branch with the same
+    #    "already loaded under a different key" warning the reverse order (step 3) has.
     empty!(PormG.config)
     Configuration.load(db; env = "test")
     @test !PormG.config[db].implicit
     cd(app) do
+      @test_logs(min_level = Logging.Warn, @test Configuration.load("db"; env = "test") == db)
+      @test collect(keys(PormG.config)) == [db]
       @test_logs((:warn, r"already loaded under a different key"), match_mode = :any,
-                 Configuration.load("db"; env = "test"))
+                 Configuration.load("db"; env = "test", force = true))
       @test collect(keys(PormG.config)) == [db]
       @test !haskey(PormG.config, "db")
     end

@@ -2873,6 +2873,14 @@ const DOCERR_CASES = [
         InvalidConfigurationError,
         () -> PormG.Configuration.load(abspath("docerr_857_db"); root = pwd()),
     ),
+    # #1226 — registering models against a folder no `load` has loaded is refused instead of loading
+    # it implicitly. The refusal fires before any model is wired, so an empty module is enough, and
+    # no configuration names a folder called `docerr_1226_unloaded`.
+    (
+        "configuration/advanced.md / setup.md / models.md / api.md — set_models with the models folder not loaded raises InvalidConfigurationError (#1226)",
+        InvalidConfigurationError,
+        () -> PormG.Models.set_models(Module(:DocErr1226), "docerr_1226_unloaded"),
+    ),
     # #683 — a `register_connection` entry has no models folder. The entry is added and removed
     # inside the call so no other case sees a dynamic key in `config`; the refusal fires before
     # the mock connection is ever touched.

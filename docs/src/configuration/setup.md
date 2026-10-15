@@ -48,11 +48,11 @@ df = query |> DataFrame
 
 !!! warning "`load()` must come before `@import_models`"
     The order in the snippet above is a requirement, not a style preference. `@import_models`
-    calls `set_models(...)`, which triggers an implicit `Configuration.load(path)` if no
-    configuration is loaded yet — and that implicit load picks the **default** environment and
-    keeps it for the rest of the process. Nothing errors; the application just runs against the
-    wrong database until it restarts. See
-    [The Boot-Time Hazard](advanced.md#The-Boot-Time-Hazard) for the full explanation.
+    calls `set_models(...)`, which binds the models to a configuration that is **already loaded**.
+    When none matches the models folder, it raises `InvalidConfigurationError`, naming the `load`
+    call to add. PormG does not load the folder itself, because that load would choose the
+    environment for you. In a REPL, `PormG.Configuration.allow_implicit_load!(true)` brings back that
+    convenience. See [The Boot-Time Hazard](advanced.md#The-Boot-Time-Hazard) for the full explanation.
 
 ## The Bootstrap Sequence
 
@@ -69,6 +69,17 @@ PormG.Configuration.load("db"; env="prod")
 ```
 This is the **preferred method** for server applications, as it avoids relying on global `ENV` state.
 If `env` is not provided, PormG falls back to `ENV["PORMG_ENV"]`, then to a top-level `default_env:` key in `connection.yml`, then to `dev`.
+
+### Loading again
+Calling `load` for a folder that is already loaded with the same environment does nothing: it
+returns the key, keeps the pool and any connection checked out of it, and does not read
+`connection.yml` again. So a bootstrap step that loads the configuration is safe to repeat. Two
+cases do reload, closing the pool and building a new one:
+
+```julia
+PormG.Configuration.load("db"; env = "staging")             # another environment: reload, with a warning
+PormG.Configuration.load("db"; env = "dev", force = true)   # re-read an edited connection.yml
+```
 
 ### Loading from a project root
 `load("db")` uses the string you pass for two things: the **connection key** your models bind to,

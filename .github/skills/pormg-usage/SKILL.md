@@ -27,7 +27,9 @@ task needs.
    A handler is mutable, so the statement form is equivalent and common in the docs:
    `q = M.Result.objects; q.filter(...); q.values(...)`.
 3. **Load the configuration before importing models.** `PormG.Configuration.load("db")` first,
-   then `PormG.@import_models "db/models.jl" models`.
+   then `PormG.@import_models "db/models.jl" models`. Registering models never loads their folder:
+   with none loaded it raises `InvalidConfigurationError`. In a package, load it again in
+   `__init__`; repeating `load` with the same environment is free.
 4. **Load a driver package.** `LibPQ` (PostgreSQL) and `SQLite` are weak dependencies:
    `using PormG, LibPQ`. Without one the first query raises *"the PostgreSQL backend requires
    LibPQ"*.

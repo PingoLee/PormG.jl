@@ -27,7 +27,8 @@ PormG provides methods for inserting data into your database, from single rows t
 Use the `.create()` method to insert individual records. It returns a [`PormGRow`](../read/index.md) — the same row object `get()`, `first()`, and `list()` return — containing the newly created record, including any database-generated fields (like auto-increment primary keys). Because it's a `PormGRow`, you can read fields by dot-access or key, and mutate it and call `.save()` to persist further changes.
 
 ```julia
-# Load your models (preferred: hot-reload-friendly, self-registering)
+# Load the configuration, then your models (preferred: hot-reload-friendly, self-registering)
+PormG.Configuration.load("db"; env = "dev")
 PormG.@import_models "db/models.jl" models
 import .models as M
 

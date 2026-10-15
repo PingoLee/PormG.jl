@@ -718,7 +718,7 @@ transaction.
 
 ## Configuration API
 
-### `Configuration.load(path; env=nothing, root=nothing)`
+### `Configuration.load(path; env=nothing, root=nothing, force=false)`
 
 Loads a database configuration folder. Use `env` to explicitly set the environment instead of relying on `ENV["PORMG_ENV"]`.
 
@@ -745,7 +745,12 @@ key = PormG.Configuration.load("db"; env="prod")
 settings = PormG.Configuration.get_settings(key)
 ```
 
-### `Configuration.load_many(paths; env=nothing, root=nothing)`
+Loading a folder that is already loaded with the same environment returns its key and does
+nothing else: the pool and any connection checked out of it are kept, and `connection.yml` is not
+read again (#1225). Another `env` reloads the folder, with a warning. `force = true` re-reads it and
+rebuilds the pool regardless.
+
+### `Configuration.load_many(paths; env=nothing, root=nothing, force=false)`
 
 Bootstraps multiple database folders in one call, with the same `env` and `root` for each:
 
@@ -756,6 +761,19 @@ PormG.Configuration.load_many(["db", "db_analytics"]; root = APP_ROOT, env = "pr
 Returns the connection keys actually registered. As with `load`, a folder already held under another
 spelling is reused, so a returned key is not always the path that was passed — use the returned list
 rather than the one you supplied.
+
+### `Configuration.allow_implicit_load!(flag = true)`
+
+Registering models (`@import_models`, `@models_module`, `Models.set_models`) binds them to a
+configuration that is already loaded, and raises `InvalidConfigurationError` when none matches the
+models folder (#1226). This turns the old implicit load back on for the session, for a REPL or a
+script: the folder is then loaded with a warning, in the environment `PORMG_ENV`/`default_env:`
+selects. Returns the previous setting. `Models.set_models(mod, folder; implicit = true)` does the
+same for one call.
+
+```julia
+PormG.Configuration.allow_implicit_load!(true)
+```
 
 ### `Configuration.is_loaded(path_or_key)`
 

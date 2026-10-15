@@ -121,9 +121,12 @@ end
 #     run at all. The recovery comes from `Models.ensure_model_initialized` cases 2b/2c, which
 #     read `__pormg_init_path__` on the first `.objects` access.
 #   * If a Julia release ever DID run it, it would fire before the parent package's `__init__`,
-#     with `config` still empty, so `set_models` would implicit-load: absolute key, environment
-#     from PORMG_ENV/`default_env:` — the #550 incident. `test/unit/test_reload.jl`'s
-#     boot-pattern testset is what would notice.
+#     with `config` still empty. It calls `Models._bind_if_loaded`, not `set_models` (#1226): with
+#     nothing loaded it does nothing, rather than refuse inside an `__init__` (failing `using`) or,
+#     as before #1226, implicit-load — absolute key, environment from PORMG_ENV/`default_env:`, the
+#     #550 incident. The first `.objects` then binds or refuses (`ensure_model_initialized`).
+#     Firing early is therefore harmless and invisible; `test/unit/test_reload.jl`'s boot-pattern
+#     testset pins the outcome (the short key and the application's environment), not the firing.
 #
 # It is kept as a no-cost belt, not as the mechanism.
 function ensure_models_init!(mod::Module, dir_path::AbstractString)
@@ -134,7 +137,7 @@ function ensure_models_init!(mod::Module, dir_path::AbstractString)
     init_expr = quote
         function __init__()
             try
-                Base.invokelatest(PormG.Models.set_models, @__MODULE__, $dir_path)
+                Base.invokelatest(PormG.Models._bind_if_loaded, @__MODULE__, $dir_path)
             catch
             end
         end
@@ -284,9 +287,11 @@ macro models_module(name, path, block)
 
             Base.invokelatest(Models.set_models, @__MODULE__, __pormg_init_path__)
 
+            # Runs when a package image is restored, before the parent's `__init__` has loaded
+            # the configuration: bind only if it is already loaded (#1226), see `ensure_models_init!`.
             function __init__()
                 try
-                    Base.invokelatest(Models.set_models, @__MODULE__, __pormg_init_path__)
+                    Base.invokelatest(Models._bind_if_loaded, @__MODULE__, __pormg_init_path__)
                 catch
                 end
             end

@@ -669,11 +669,14 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "the self-heal rebinds from the recorded binding, never by scanning (#1227)" begin
   @testset "_binding_root reads the root off the stored folder" begin
-    @test PormG.Models._binding_root("db", "/srv/app/db") == "/srv/app"
-    @test PormG.Models._binding_root("sub/db", "/srv/app/sub/db") == "/srv/app"
-    @test PormG.Models._binding_root("db", "db") === nothing              # load("db"): relative, no root
-    @test PormG.Models._binding_root("/srv/app/db", "/srv/app/db") === nothing   # absolute key
-    @test PormG.Models._binding_root("db", "/srv/app/other") === nothing  # not joinpath(root, key)
+    # Built with `joinpath` from an absolute root, never as "/srv/app" literals: `load(…; root)` stores
+    # the folder with the platform's separator, so on Windows the root comes back as `D:\srv\app`.
+    app = abspath(joinpath("srv", "app"))
+    @test PormG.Models._binding_root("db", joinpath(app, "db")) == app
+    @test PormG.Models._binding_root("sub/db", joinpath(app, "sub", "db")) == app
+    @test PormG.Models._binding_root("db", "db") === nothing                      # load("db"): relative, no root
+    @test PormG.Models._binding_root(joinpath(app, "db"), joinpath(app, "db")) === nothing   # absolute key
+    @test PormG.Models._binding_root("db", joinpath(app, "other")) === nothing    # not joinpath(root, key)
   end
 
   saved = copy(PormG.config)

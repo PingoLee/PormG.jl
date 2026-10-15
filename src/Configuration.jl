@@ -158,8 +158,9 @@ const _CONNECTION_RESOLVER = Ref{Union{Nothing, Function}}(nothing)
 # Optional hook invoked before opening a physical connection (e.g. VPN, SSH tunnel).
 const _BEFORE_CONNECT_HOOK = Ref{Union{Nothing, Function}}(nothing)
 
-# Whether the process is an interactive session (#1248). The bootstrap's conveniences — the
-# implicit load of an unloaded models folder — are a REPL's, and they say in the log that they
+# Whether the process is an interactive session (#1248, #1228). The bootstrap has one policy and
+# this is its only input: the conveniences — the implicit load of an unloaded models folder, the
+# `default_env:`/`dev` environment fallback — are a REPL's, and they say in the log that they
 # decided; a non-interactive process (a service, a test, a script, a precompile) gets only what was
 # stated. A `Ref` so the tests can stand in for `isinteractive()` the way they stand in for a
 # connection; nothing outside the tests sets it.
@@ -629,16 +630,47 @@ function env(;path::String=DB_PATH)::String
 end
 env(x::String) = env(path=x)
 
-# Resolve the active environment (#205). Precedence, first wins:
+# The environment the process states (#1228): `ENV["PORMG_ENV"]`, or `nothing` when it is unset or
+# blank. A blank value used to count as set and select the environment `""`, which no
+# `connection.yml` defines; a host that clears the variable means "unset", so it is read that way.
+# The one reader of the variable — `_effective_env`, `register_connection` and `Settings()` all ask here.
+function _pormg_env()::Union{Nothing, String}
+  value = get(ENV, "PORMG_ENV", nothing)
+  value === nothing && return nothing
+  stated = strip(value)
+  return isempty(stated) ? nothing : String(stated)
+end
+
+# Resolve the active environment (#205, #1228). Precedence, first wins:
 #   1. explicit `env=` kwarg to `load(...)`
-#   2. `ENV["PORMG_ENV"]` (set by the user or a host framework)
-#   3. the yaml's top-level `default_env:` (a per-file default)
-#   4. `"dev"`
-function _effective_env(env::Union{Nothing, String}, file_default::Union{Nothing, String} = nothing)::String
+#   2. a non-blank `ENV["PORMG_ENV"]` (set by the user, the deployment or a host framework)
+#   3. the yaml's top-level `default_env:` (a per-file default)        — `fallback` only
+#   4. `"dev"`                                                           — `fallback` only
+# 1 and 2 are stated by someone; 3 and 4 are guesses. `fallback` is `_is_interactive()` at the call
+# (or a per-call `implicit` load, which asked for the guess), the same rule as the implicit load
+# (#1248): a REPL gets the guess and is told which source decided, a service, a test or a script
+# gets `InvalidConfigurationError` naming the call. `default_env: dev` is production in many
+# deployments, so the guess is not one a process nobody watches may make.
+function _effective_env(env::Union{Nothing, String}, file_default::Union{Nothing, String} = nothing;
+                        fallback::Bool = true, path::AbstractString = DB_PATH,
+                        folder::AbstractString = path,
+                        root::Union{Nothing, AbstractString} = nothing)::String
   env !== nothing && return env
-  haskey(ENV, "PORMG_ENV") && return ENV["PORMG_ENV"]
-  file_default !== nothing && return file_default
-  return DEV
+  stated = _pormg_env()
+  stated !== nothing && return stated
+  if !fallback
+    root_kw = root === nothing ? "" : "root = $(repr(String(root))), "
+    throw(InvalidConfigurationError(
+      "No environment was selected for the configuration folder \"$(folder)\". Pass it — " *
+      "`PormG.Configuration.load($(repr(path)); $(root_kw)env = \"…\")` — or set `PORMG_ENV`. Outside an " *
+      "interactive session PormG does not fall back to the file's `default_env:` or to `$(DEV)`: " *
+      "in a service or a test that guess is how queries reach the wrong database."))
+  end
+  source = file_default !== nothing ? "the file's `default_env:`" : "the built-in default"
+  selected = something(file_default, DEV)
+  @info("PormG: no `env` was passed to `load` and `PORMG_ENV` is not set, so $(source) selected " *
+        "the environment. Pass `env = …` to choose it.", env = selected, folder = folder)
+  return selected
 end
 
 # Read only the top-level `default_env:` from a connection.yml, for env precedence (#205).
@@ -1397,7 +1429,8 @@ function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{
   avail_str = isempty(available) ? "(none defined)" : join(available, ", ")
   throw(MissingConfigurationError(
     "environment \"$(settings.app_env)\" not found in $(db_settings_file); available: $(avail_str). " *
-    "Select one with `load(...; env=\"…\")`, `ENV[\"PORMG_ENV\"]`, or a top-level `default_env:` in the yaml."))
+    "Select one with `load(...; env=\"…\")` or `ENV[\"PORMG_ENV\"]` (an interactive session also reads a " *
+    "top-level `default_env:` in the yaml)."))
 end
 
 
@@ -1439,6 +1472,14 @@ Load the configuration folder `path` (its `connection.yml`) and register it unde
 Returns the key actually registered — normally `path`, but a folder already loaded under another
 spelling is reused rather than registered twice (#550) — or `nothing` when `scaffold = true` wrote a
 skeleton instead.
+
+**The environment is stated, not guessed (#1228).** It is `env`, else a non-blank `PORMG_ENV`. Only
+an interactive session (`isinteractive()`, a REPL) falls back further — to the file's top-level
+`default_env:`, then `"dev"` — and logs which source decided. A service, a test or a script with
+neither raises `InvalidConfigurationError` naming the call: `default_env: dev` is production in many
+deployments, and a process nobody watches must not pick it. A blank `PORMG_ENV` counts as unset.
+A package states `env` in its own `load` calls: its `__init__` runs in whatever session loads it, and
+`using` it from a REPL makes that session interactive.
 
 Without `root`, `path` is both the key and the folder, resolved against `pwd()`. With `root`, the
 two separate (#857): the key is `path` exactly as passed, and the folder is `joinpath(root, path)`,
@@ -1531,8 +1572,11 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
       "to write a skeleton to edit."))
   end
 
-  # Resolve the environment with the file's `default_env:` folded into the precedence (#205).
-  selected_env = _effective_env(env, _peek_default_env(db_settings_file))
+  # Resolve the environment with the file's `default_env:` folded into the precedence (#205). The
+  # guesses (`default_env:`, `dev`) are a REPL's or an implicit load's only (#1228).
+  selected_env = _effective_env(env, _peek_default_env(db_settings_file);
+                                fallback = implicit || _is_interactive(), path = path, folder = folder,
+                                root = root)
 
   # #550: one folder, one entry. `config[path] = …` used to add a SECOND entry whenever the same
   # folder was already registered under a different spelling — typically the absolute path minted
@@ -1748,7 +1792,7 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
   # `db_def_folder` holds a label only, kept so a `before_connect` hook reading the folder still
   # gets a string — nothing in PormG compares against it.
   settings = Settings(
-    app_env = haskey(ENV, "PORMG_ENV") ? ENV["PORMG_ENV"] : DEV,
+    app_env = something(_pormg_env(), DEV),
     db_def_folder = "dynamic_connection",
     dynamic = true
   )
@@ -1960,7 +2004,7 @@ mutable struct Settings <: PormGSettings
   loaded_folder::String
 
   Settings(;
-      app_env             = haskey(ENV, "PORMG_ENV") ? ENV["PORMG_ENV"] : "dev",           
+      app_env             = something(_pormg_env(), DEV),
       db_def_folder       = DB_PATH,
       model_file          = MODEL_FILE,
       db_config_settings  = Dict{String,Any}(),

@@ -26,10 +26,12 @@ task needs.
    ```
    A handler is mutable, so the statement form is equivalent and common in the docs:
    `q = M.Result.objects; q.filter(...); q.values(...)`.
-3. **Load the configuration before importing models.** `PormG.Configuration.load("db")` first,
-   then `PormG.@import_models "db/models.jl" models`. Registering models never loads their folder:
-   with none loaded it raises `InvalidConfigurationError`. In a package, load it again in
-   `__init__`; repeating `load` with the same environment is free.
+3. **Load the configuration before importing models, with its environment.**
+   `PormG.Configuration.load("db"; env = "dev")` first, then
+   `PormG.@import_models "db/models.jl" models`. Outside a REPL, `load` needs `env=` or `PORMG_ENV`
+   (it never falls back to `default_env:`), and registering models never loads their folder: with
+   none loaded it raises `InvalidConfigurationError`. In a package, load it again in `__init__`;
+   repeating `load` with the same environment is free.
 4. **Load a driver package.** `LibPQ` (PostgreSQL) and `SQLite` are weak dependencies:
    `using PormG, LibPQ`. Without one the first query raises *"the PostgreSQL backend requires
    LibPQ"*.
@@ -57,7 +59,7 @@ task needs.
 using PormG, LibPQ, DataFrames
 using PormG.Functions: Count, Sum
 
-PormG.Configuration.load("db")                  # 1. configuration first
+PormG.Configuration.load("db"; env = "dev")     # 1. configuration first, environment stated
 PormG.@import_models "db/models.jl" models      # 2. then the models
 import .models as M
 

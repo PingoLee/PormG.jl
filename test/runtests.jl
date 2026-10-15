@@ -15,7 +15,8 @@ const HAS_AQUA = let available = false
 end
 
 # Ensure environment is set for unit tests
-if !haskey(ENV, "PORMG_ENV")
+# A blank value is unset (#1228), so it gets the default too.
+if isempty(strip(get(ENV, "PORMG_ENV", "")))
     ENV["PORMG_ENV"] = "test"
 end
 # The unit suite pins its own PostgreSQL driver. A `PORMG_POSTGRES_DRIVER` exported in the shell to run

@@ -1025,7 +1025,7 @@ Reacting to a whole category — the umbrellas make one `catch` enough:
 
 ```julia
 try
-    PormG.Configuration.load("db_2")
+    PormG.Configuration.load("db_2"; env = "dev")
     PormG.Migrations.migrate("db_2")
 catch e
     e isa PormG.ConfigurationError && @error "check connection.yml" exception=e

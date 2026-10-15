@@ -149,7 +149,7 @@ M.Lap_times.objects.
 ## Multiple databases and tenants
 
 ```julia
-PormG.Configuration.load_many(["db", "db_reporting"])        # several static configs
+PormG.Configuration.load_many(["db", "db_reporting"]; env = "dev")   # several static configs
 M.Driver.objects.filter("nationality" => "British").db("db_reporting").list()
 
 PormG.register_connection("tenant_42", "postgres://user:pass@host/tenant_42")  # at runtime

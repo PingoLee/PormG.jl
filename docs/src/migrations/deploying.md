@@ -10,7 +10,7 @@ it already applied. This page covers what makes that safe, and what `migrate()` 
 ```julia
 using PormG
 
-PormG.Configuration.load("db")
+PormG.Configuration.load("db"; env = "prod")
 result = PormG.Migrations.migrate("db"; interactive = false)
 @info "Schema migration" outcome = result.outcome version = result.version
 ```

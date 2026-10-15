@@ -1,7 +1,8 @@
 using Test
 using PormG
 
-if !haskey(ENV, "PORMG_ENV")
+# A blank value is unset (#1228), so it gets the default too.
+if isempty(strip(get(ENV, "PORMG_ENV", "")))
     ENV["PORMG_ENV"] = "test"
 end
 

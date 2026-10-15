@@ -68,7 +68,23 @@ PormG supports explicit environment loading via `env`:
 PormG.Configuration.load("db"; env="prod")
 ```
 This is the **preferred method** for server applications, as it avoids relying on global `ENV` state.
-If `env` is not provided, PormG falls back to `ENV["PORMG_ENV"]`, then to a top-level `default_env:` key in `connection.yml`, then to `dev`.
+If `env` is not provided, PormG reads `ENV["PORMG_ENV"]` (a blank value counts as unset).
+
+With neither, what happens depends on the session (#1228):
+
+- **In a REPL** (`isinteractive()`), PormG falls back to a top-level `default_env:` key in
+  `connection.yml`, then to `dev`, and logs at `@info` which of the two decided.
+- **Anywhere else** — a service, a test, a script — `load` raises `InvalidConfigurationError`
+  naming the call to fix. `default_env: dev` is production in many deployments, and a process
+  nobody watches must not pick it.
+
+A **package** passes `env` in its own `load` calls. Its `__init__` runs in whatever session loads
+it, and `using RaceControl` at a REPL makes that session interactive: an env-less `load` there would
+take the REPL fallback (with the `@info`) rather than fail.
+
+The REPL check is the same one that decides the implicit load of an unloaded models folder (#1248),
+so the bootstrap follows one rule: an interactive session gets the conveniences and is told when one
+of them decided, and every other process gets only what was stated.
 
 ### Loading again
 Calling `load` for a folder that is already loaded with the same environment does nothing: it

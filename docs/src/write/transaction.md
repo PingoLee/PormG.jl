@@ -27,7 +27,7 @@ using PormG, LibPQ   # "db_2" is a PostgreSQL connection
 using DataFrames
 
 # Load configuration
-PormG.Configuration.load("db_2")
+PormG.Configuration.load("db_2"; env = "dev")
 
 # Load models
 include("db_2/models.jl")

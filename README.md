@@ -153,7 +153,7 @@ end
 using PormG, LibPQ, DataFrames          # LibPQ → PostgreSQL; swap in SQLite for the SQLite backend
 using PormG.Functions: Count            # SQL functions (Count, Sum, Max, …) — namespaced
 
-PormG.Configuration.load("db")          # loads db/connection.yml (must precede @import_models)
+PormG.Configuration.load("db"; env = "dev")   # the dev block of db/connection.yml (must precede @import_models)
 PormG.@import_models "db/models.jl" models
 import .models as M
 ```

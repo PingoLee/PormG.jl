@@ -180,8 +180,9 @@ end
 ```julia
 using PormG, LibPQ, DataFrames   # LibPQ → PostgreSQL; use SQLite instead if your adapter is SQLite
 
-# Load configuration — must happen BEFORE importing models
-PormG.Configuration.load("db")
+# Load configuration — must happen BEFORE importing models. Outside a REPL the environment is
+# stated: `env =` here, or the PORMG_ENV variable.
+PormG.Configuration.load("db"; env = "dev")
 
 # Import models with hot-reload support (Revise.jl)
 PormG.@import_models "db/models.jl" models

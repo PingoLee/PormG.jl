@@ -187,7 +187,8 @@ you did not state:
 
 - **The environment.** `ENV["PORMG_ENV"]` when it is set, else the file's `default_env:`. In a
   server that has not selected its environment yet, that is usually `dev`, which in many deployments
-  points at production.
+  points at production. Since #1228, that fallback past `PORMG_ENV` is a REPL's only, for every
+  `load` (see [Environment Selection](setup.md#Environment-Selection)).
 - **The key.** The folder's path, not a name your application chose.
 
 The warning went to a boot log nobody reads, and the queries ran. Now the registration fails

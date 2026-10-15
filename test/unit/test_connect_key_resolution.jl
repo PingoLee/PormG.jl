@@ -948,7 +948,7 @@ end
       # Registered while no `db` folder exists. `register_connection`'s own `isdir(key)` guard
       # reads the working directory at REGISTRATION time, which is exactly why it cannot cover
       # this: the folder appears afterwards, or a later `cd` lands somewhere it already exists.
-      Configuration.register_connection("db", "file::memory:?cache=shared"; adapter = "SQLite")
+      Configuration.register_connection("db", "file::memory:?cache=shared"; adapter = "SQLite", env = "test")
       @test PormG.config["db"].dynamic
       pool_before = PormG.config["db"].connections
 
@@ -990,7 +990,7 @@ end
     # to create a folder of that name — advice which manufactures the collision above.
     empty!(PormG.config)
     cd(app) do
-      Configuration.register_connection("tenant7", "file::memory:?cache=shared"; adapter = "SQLite")
+      Configuration.register_connection("tenant7", "file::memory:?cache=shared"; adapter = "SQLite", env = "test")
       err = try
         Configuration.load("tenant7"; env = "test")
         nothing
@@ -1014,7 +1014,7 @@ end
     app3 = joinpath(root, "app3")
     mkpath(app3)
     cd(app3) do
-      Configuration.register_connection("db", "file::memory:?cache=shared"; adapter = "SQLite")
+      Configuration.register_connection("db", "file::memory:?cache=shared"; adapter = "SQLite", env = "test")
       mkpath("db")
       _yml(joinpath("db", "connection.yml"))
       @test Configuration.load("./db"; env = "test") == "./db"

@@ -810,6 +810,24 @@ info[:sql_text]    # "SELECT\n    *\nFROM \"drivers\" as \"Tb\"\nWHERE \"Tb\".\"
 PormG.Configuration.unregister_connection("db")
 ```
 
+Its environment is always `"dev"`, whatever `PORMG_ENV` says (#1256): an offline entry reads no
+`connection.yml`, so there is no environment block to select, and the value is a constant rather than
+`load`'s fallback.
+
+### `Configuration.register_connection(key, url; adapter = "PostgreSQL", pool_size = 3, env = nothing, …)`
+
+Registers a connection pool at runtime from a connection string — see
+[Dynamic & Multi-Tenancy](configuration/dynamic.md). The environment the entry records, which
+`env(key)` and `status(key)` report, follows `load`'s rule (#1228, #1256): `env =` when passed, else a
+non-blank `PORMG_ENV`, else — in an interactive session only — `"dev"` with an `@info`. A service, a
+test or a script that states neither gets `InvalidConfigurationError`, before any pool is built or
+replaced. A connection resolver states it with an `"env"` entry in the `Dict` it returns:
+
+```julia
+PormG.Configuration.register_connection("tenant_monaco", "postgres://user:pass@host/monaco"; env = "prod")
+PormG.Configuration.env("tenant_monaco")   # "prod"
+```
+
 ### `Configuration.close_all!()`
 
 Closes every registered pool without waiting for connections still checked out; the entries stay

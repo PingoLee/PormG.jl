@@ -2038,7 +2038,11 @@ end
                 @test PormG.Configuration.Settings().app_env == "dev"
                 @test PormG.Configuration._pormg_env() === nothing
                 try
-                    PormG.Configuration.register_connection("cfg1228_blank", ":memory:"; adapter = "SQLite")
+                    # Interactive: since #1256 `register_connection` follows the #1228 rule, so the
+                    # `dev` it falls back to is a REPL's (the non-interactive side is pinned below).
+                    _cfg_with_interactive(true) do
+                        PormG.Configuration.register_connection("cfg1228_blank", ":memory:"; adapter = "SQLite")
+                    end
                     @test PormG.config["cfg1228_blank"].app_env == "dev"
                 finally
                     PormG.Configuration.unregister_connection("cfg1228_blank")
@@ -2047,6 +2051,151 @@ end
             withenv("PORMG_ENV" => " prod ") do
                 @test PormG.Configuration._pormg_env() == "prod"      # trimmed
             end
+        end
+    end
+end
+
+# ── #1256: register_connection states its environment the way load does ─────────────────────────
+# What it tests: with `PORMG_ENV` unset and the `isinteractive()` seam pinned false,
+#   `register_connection` without `env=` raises `InvalidConfigurationError` naming the
+#   `register_connection(key, url; env = …)` call, registers nothing, and leaves an existing dynamic
+#   entry under that key serving: no "Closing old pool" warning is logged, for this refusal or an
+#   unsupported adapter's, while an accepted re-registration does log it. `env=` and a
+#   non-blank `PORMG_ENV` are accepted silently; an interactive session falls back to `dev` with an
+#   `@info`. A resolver's Dict states it with `"env"`, and a resolver key that cannot state one
+#   raises that refusal from `get_settings` instead of logging it and raising "not found".
+#   `register_offline` records `dev` whatever `PORMG_ENV` says. No SQL — SQLite `:memory:` pools.
+# Why it matters: `register_connection` builds a live pool, and its `app_env` is what `env(key)` and
+#   `status(key)` report; code that branches on it (a migration gate, a log line) read `dev` in a
+#   service that never chose an environment — the guess #1228 removed from `load`.
+@testset "register_connection states its environment the way load does (#1256)" begin
+    @testset "non-interactive, nothing stated: refused before the old pool is touched" begin
+        try
+            PormG.Configuration.register_connection("cfg1256_t", ":memory:"; adapter = "SQLite", env = "test")
+            old_pool = PormG.config["cfg1256_t"].connections
+            # `close_pool!` closes the pool in place and leaves the entry, so "still serving" is read
+            # off the log: a refusal that came after the close would have logged its warning.
+            refused(f) = Test.collect_test_logs() do
+                try
+                    f()
+                    nothing
+                catch e
+                    e
+                end
+            end
+            closed_old(logs) = any(l -> occursin("Closing old pool", string(l.message)), logs)
+            for value in (nothing, "", "   ")
+                logs, err = withenv("PORMG_ENV" => value) do
+                    _cfg_with_interactive(false) do
+                        refused(() -> PormG.Configuration.register_connection("cfg1256_t", ":memory:"; adapter = "SQLite"))
+                    end
+                end
+                @test err isa PormG.InvalidConfigurationError
+                msg = sprint(showerror, err)
+                @test occursin("No environment was selected for the dynamic connection \"cfg1256_t\"", msg)
+                @test occursin("PormG.Configuration.register_connection(\"cfg1256_t\", url; env = ", msg)
+                @test !closed_old(logs)                                        # still serving
+                @test PormG.config["cfg1256_t"].connections === old_pool
+                @test PormG.config["cfg1256_t"].app_env == "test"
+            end
+            # An unsupported adapter is refused before the close too.
+            logs, err = refused(() -> PormG.Configuration.register_connection("cfg1256_t", ":memory:";
+                                                                              adapter = "Oracle", env = "test"))
+            @test err isa PormG.InvalidConfigurationError
+            @test occursin("Unsupported adapter: Oracle", sprint(showerror, err))
+            @test !closed_old(logs)
+            # Discrimination: an accepted re-registration does close the old pool, with the warning.
+            logs, err = refused(() -> PormG.Configuration.register_connection("cfg1256_t", ":memory:";
+                                                                              adapter = "SQLite", env = "test"))
+            @test err === nothing
+            @test closed_old(logs)
+            err = withenv("PORMG_ENV" => nothing) do
+                _cfg_with_interactive(false) do
+                    try
+                        PormG.Configuration.register_connection("cfg1256_new", ":memory:"; adapter = "SQLite")
+                        nothing
+                    catch e
+                        e
+                    end
+                end
+            end
+            @test err isa PormG.InvalidConfigurationError
+            @test !PormG.Configuration.is_loaded("cfg1256_new")
+        finally
+            PormG.Configuration.unregister_connection("cfg1256_t")
+        end
+    end
+
+    @testset "env= or a non-blank PORMG_ENV is enough, silently; a REPL falls back to dev" begin
+        try
+            withenv("PORMG_ENV" => nothing) do
+                _cfg_with_interactive(false) do
+                    @test_logs min_level = Logging.Info PormG.Configuration.register_connection(
+                        "cfg1256_kw", ":memory:"; adapter = "SQLite", env = "prod")
+                end
+                @test PormG.Configuration.env("cfg1256_kw") == "prod"
+                _cfg_with_interactive(true) do
+                    @test_logs (:info, r"no `env` was passed to `register_connection`") PormG.Configuration.register_connection(
+                        "cfg1256_repl", ":memory:"; adapter = "SQLite")
+                end
+                @test PormG.Configuration.env("cfg1256_repl") == "dev"
+            end
+            withenv("PORMG_ENV" => "prod") do
+                _cfg_with_interactive(false) do
+                    @test_logs min_level = Logging.Info PormG.Configuration.register_connection(
+                        "cfg1256_var", ":memory:"; adapter = "SQLite")
+                end
+                @test PormG.Configuration.env("cfg1256_var") == "prod"
+                # env= outranks PORMG_ENV, as it does for load.
+                PormG.Configuration.register_connection("cfg1256_both", ":memory:"; adapter = "SQLite", env = "test")
+                @test PormG.Configuration.env("cfg1256_both") == "test"
+            end
+        finally
+            foreach(PormG.Configuration.unregister_connection, ("cfg1256_kw", "cfg1256_repl", "cfg1256_var", "cfg1256_both"))
+        end
+    end
+
+    @testset "a resolver states it with \"env\", and its refusal reaches the caller" begin
+        previous = PormG.Configuration._CONNECTION_RESOLVER[]
+        try
+            PormG.Configuration.set_connection_resolver() do key
+                key == "cfg1256_dict" && return Dict("url" => ":memory:", "adapter" => "SQLite", "env" => "prod")
+                key == "cfg1256_tuple" && return (":memory:", "SQLite", 1)
+                return nothing
+            end
+            withenv("PORMG_ENV" => nothing) do
+                _cfg_with_interactive(false) do
+                    @test PormG.Configuration.get_settings("cfg1256_dict").app_env == "prod"
+                    err = try
+                        PormG.Configuration.get_settings("cfg1256_tuple")
+                        nothing
+                    catch e
+                        e
+                    end
+                    @test err isa PormG.InvalidConfigurationError
+                    @test occursin("No environment was selected for the dynamic connection \"cfg1256_tuple\"",
+                                   sprint(showerror, err))
+                    @test !PormG.Configuration.is_loaded("cfg1256_tuple")
+                end
+            end
+        finally
+            PormG.Configuration._CONNECTION_RESOLVER[] = previous
+            foreach(PormG.Configuration.unregister_connection, ("cfg1256_dict", "cfg1256_tuple"))
+        end
+    end
+
+    @testset "register_offline records dev whatever PORMG_ENV says" begin
+        try
+            for value in ("prod", nothing)
+                withenv("PORMG_ENV" => value) do
+                    _cfg_with_interactive(false) do
+                        PormG.Configuration.register_offline("cfg1256_off")
+                    end
+                end
+                @test PormG.Configuration.env("cfg1256_off") == "dev"
+            end
+        finally
+            PormG.Configuration.unregister_connection("cfg1256_off")
         end
     end
 end

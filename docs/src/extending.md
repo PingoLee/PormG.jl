@@ -82,19 +82,22 @@ compare `key == "db"` or the folder's `basename`, never `settings.db_def_folder 
 
 Register a callback that **lazily resolves unknown connection keys** — useful for multi-tenant
 apps where the connection list isn't known up front. `f(key::String)` returns `nothing` (can't
-resolve) or `(url, adapter, pool_size)` / a `Dict` with those keys.
+resolve) or `(url, adapter, pool_size)` / a `Dict` with those keys, plus an optional `"env"`.
 
 ```julia
 PormG.set_connection_resolver() do key
     startswith(key, "tenant_") || return nothing
-    return (tenant_url(key), "PostgreSQL", 3)
+    return Dict("url" => tenant_url(key), "adapter" => "PostgreSQL", "pool_size" => 3, "env" => "prod")
 end
 ```
 
-### `register_connection(key, url; adapter, pool_size)`
+### `register_connection(key, url; adapter, pool_size, env)`
 
 Register a connection pool dynamically at runtime (instead of from a `connection.yml` folder).
-See [Dynamic & Multi-Tenancy](configuration/dynamic.md).
+The environment it records follows `load`'s rule: `env =`, else a non-blank `PORMG_ENV`, else — in a
+REPL only — `"dev"`; a service that states neither gets `InvalidConfigurationError` (#1256). A
+resolver's tuple carries no environment, so a host whose process does not export `PORMG_ENV` returns
+the `Dict` form with `"env"`. See [Dynamic & Multi-Tenancy](configuration/dynamic.md).
 
 !!! note "Planned hook"
     Nitro guards a call to `PormG.register_field_hook(:PasswordField, :auto_hash, …)` with

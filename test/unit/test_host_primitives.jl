@@ -86,7 +86,7 @@ end
   try
     Configuration.set_connection_resolver() do key
       key == "tenant_f1" || return nothing
-      return Dict("url" => ":memory:", "adapter" => "SQLite", "pool_size" => 1)
+      return Dict("url" => ":memory:", "adapter" => "SQLite", "pool_size" => 1, "env" => "test")
     end
     timing = _host1230_timing()
     @test !Configuration.is_loaded("tenant_f1")

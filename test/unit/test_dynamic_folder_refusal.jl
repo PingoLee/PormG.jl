@@ -75,7 +75,7 @@ class Circuit(models.Model):
       # A NAMED in-memory database, not `file::memory:?cache=shared`: that one name is shared by the
       # whole process, so a pool another file left open could hold a `pormg_migrations` table and
       # turn the history-table assertion below falsely red.
-      Configuration.register_connection(key, "file:refusal683?mode=memory&cache=shared"; adapter = "SQLite")
+      Configuration.register_connection(key, "file:refusal683?mode=memory&cache=shared"; adapter = "SQLite", env = "test")
       @test PormG.config[key].dynamic
       @test PormG.config[key].db_def_folder == "dynamic_connection"   # the label the bug followed
       # Enabled on the settings object — the only way a dynamic entry can enable it — and
@@ -174,7 +174,7 @@ end
 
       # Django import on a dynamic key with an explicit output folder succeeds, and writes there
       # and only there.
-      Configuration.register_connection(key, "file:refusal683_ok?mode=memory&cache=shared"; adapter = "SQLite")
+      Configuration.register_connection(key, "file:refusal683_ok?mode=memory&cache=shared"; adapter = "SQLite", env = "test")
       out = joinpath(root, "out")
       Migrations.import_models_from_django(_DJANGO_SRC_683; db = key, output_path = out, force_replace = true)
       @test isfile(joinpath(out, "automatic_models.jl"))

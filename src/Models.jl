@@ -84,7 +84,7 @@ public ArrayField, AutoField, BigIntegerField, BinaryField, BooleanField, CharFi
 # `Model_Type` is deliberately NOT here. It is documented (users hold one as `M.Driver`) but never
 # named: it appears zero times in `docs/src`, and the vocabulary users are given for "a model" is
 # the abstract `PormGModel`. Publishing the concrete name would invite code to depend on it.
-public Model, UniqueConstraint, CheckConstraint, Index, set_models
+public Model, UniqueConstraint, CheckConstraint, Index, set_models, connection_key
 # #1021: the text an `Index(expressions = …)` is written with to serve a full-text query.
 public search_vector_expression
 
@@ -1267,6 +1267,21 @@ function _register_models!(_module::Module, path::String, connect_key::String)::
 
   return nothing
 end
+
+"""
+    connection_key(model) -> Union{String, Nothing}
+
+The connection key `model` is bound to — the configuration its queries run against — or `nothing`
+while it is not bound yet (#1229). The public way to ask what the `connect_key` field holds:
+
+```julia
+PormG.Models.connection_key(M.Driver)   # "db"
+```
+
+It reads the binding as it stands and does not trigger the self-heal; a model that has not been
+queried yet in a restored session can still report its import-time key while that key is unloaded.
+"""
+connection_key(model::PormGModel)::Union{String, Nothing} = model.connect_key
 
 # #1227: the root a key was loaded relative to — `load(key; root)` stores the folder as the canonical
 # `joinpath(root, key)` — or `nothing` when it was not (`load("db")` keeps the folder relative; an

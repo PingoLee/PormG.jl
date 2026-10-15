@@ -780,6 +780,45 @@ s = PormG.Configuration.status("db")
 #  db_def_folder="db", dynamic=false, implicit=false)
 ```
 
+### `Configuration.loaded_keys()`
+
+The connection keys PormG has registered — static and dynamic — sorted (#1229). The public way to
+ask what is loaded, instead of iterating `PormG.config`:
+
+```julia
+PormG.Configuration.loaded_keys()   # ["db", "db_telemetry"]
+```
+
+### `Configuration.register_offline(key; adapter = :postgres, django_prefix = nothing, change_data = true)`
+
+Registers `key` as a connection that renders SQL and never connects (#1229), for golden-SQL tests
+and `inspect_query` with no database. `adapter` (`:postgres` or `:sqlite`) picks the dialect. Models
+bind to it like a loaded folder. Running a query on it raises `InvalidConfigurationError`, and a key
+already registered as a live connection is refused:
+
+```julia
+PormG.Configuration.register_offline("db")
+PormG.@import_models "db/models.jl" models
+info = PormG.inspect_query(models.Driver.objects.filter("surname" => "Senna"))
+info[:sql_text]    # "SELECT\n    *\nFROM \"drivers\" as \"Tb\"\nWHERE \"Tb\".\"surname\" = \$1\n"
+PormG.Configuration.unregister_connection("db")
+```
+
+### `Configuration.close_all!()`
+
+Closes every registered pool without waiting for connections still checked out; the entries stay
+registered (#1229). It is what PormG runs at process exit, for a script or a test that wants to
+release its connections early.
+
+### `Models.connection_key(model)`
+
+The connection key a model is bound to, or `nothing` before it is bound (#1229). Read this rather
+than the `connect_key` field to check which database a model's queries reach:
+
+```julia
+PormG.Models.connection_key(M.Driver)   # "db"
+```
+
 ### `Configuration.redact_secret(conn_str)`
 
 Masks the credentials in a connection string. This is the single rule PormG applies everywhere a

@@ -25,6 +25,7 @@ export set_before_connect_hook, ensure_before_connect!
 # own "Configuration API" section and `configuration/server.md` calls them qualified. Required for
 # them to survive `Private = false` in the api.md `@autodocs` block; see the note in QueryBuilder.jl.
 public is_loaded, load_many, ping, status, get_tx_connection, redact_secret
+public loaded_keys, register_offline, close_all!   # the registry's public names (#1229)
 
 # ── The redaction rule (#649) ────────────────────────────────────────────────
 #
@@ -1872,6 +1873,81 @@ function unregister_connection(key::String)
 end
 
 """
+    loaded_keys() -> Vector{String}
+
+The connection keys PormG has registered — static (`load`, `load_many`, `register_offline`) and
+dynamic (`register_connection`) — sorted, so the answer is the same on every run.
+
+```julia
+PormG.Configuration.load("db"; env = "dev")
+PormG.Configuration.loaded_keys()   # ["db"]
+```
+
+The public way to ask what `PormG.config` holds (#1229); the dictionary itself is internal.
+"""
+loaded_keys()::Vector{String} = sort!(collect(keys(config)))
+
+# The connection string an offline pool carries (#1229). It is never opened: `ensure_before_connect!`
+# refuses an offline entry before any driver sees it.
+const _OFFLINE_CONNECTION = "pormg-offline"
+
+"""
+    register_offline(key; adapter = :postgres, django_prefix = nothing, change_data = true) -> String
+
+Register `key` as a connection that renders SQL but never connects (#1229) — for golden-SQL tests
+and `inspect_query`/`show_query` without a database. `adapter` (`:postgres` or `:sqlite`) picks the
+dialect. Models bind to it like any loaded configuration: `@import_models`/`set_models` with a
+folder named `key`, or `Models.bind!(model, key)`. Executing a query on it raises
+`InvalidConfigurationError`. Remove it with `unregister_connection(key)`.
+
+```julia
+PormG.Configuration.register_offline("db")
+PormG.@import_models "db/models.jl" models
+sql = PormG.inspect_query(models.Driver.objects.filter("surname" => "Senna"))
+PormG.Configuration.unregister_connection("db")
+```
+
+Registering the same key again replaces the offline entry. A key that `load` or
+`register_connection` registered is refused, not overwritten.
+"""
+function register_offline(key::String; adapter::Symbol = :postgres,
+                          django_prefix::Union{Nothing, AbstractString} = nothing,
+                          change_data::Bool = true)::String
+  adapter in (:postgres, :sqlite) || throw(InvalidConfigurationError(
+    "register_offline: `adapter` must be :postgres or :sqlite, got $(repr(adapter))."))
+  if haskey(config, key)
+    _is_offline(config[key]) || throw(InvalidConfigurationError(
+      "Cannot register \"$(key)\" offline: that key is already registered as a live connection. " *
+      "Pick another key, or `unregister_connection($(repr(key)))` first."))
+    close_pool!(key)
+  end
+  CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
+  pool = adapter === :postgres ? CP.PostgresConnectionPool(_OFFLINE_CONNECTION; pool_size = 1) :
+                                 CP.SQLiteConnectionPool(_OFFLINE_CONNECTION; pool_size = 1)
+  config[key] = Settings(
+    app_env = something(_pormg_env(), DEV),
+    db_def_folder = key,          # `set_models(mod, key)` resolves to it like a loaded folder
+    db_config_settings = Dict{String, Any}("adapter" => (adapter === :postgres ? "PostgreSQL" : "SQLite"),
+                                           "offline" => true),
+    change_data = change_data,
+    connections = pool,
+    django_prefix = django_prefix === nothing ? nothing : String(django_prefix),
+  )
+  return key
+end
+
+_is_offline(settings)::Bool = get(settings.db_config_settings, "offline", false) === true
+
+"""
+    close_all!() -> Nothing
+
+Close every registered connection pool (#1229), without waiting for connections still checked out.
+The entries stay registered, so a later query reopens a pool. The public name of what PormG runs at
+process exit; a script or a test calls it to release its connections early.
+"""
+close_all!()::Nothing = (__cleanup__(); nothing)
+
+"""
     close_pool!(pool::Union{PormGPostgres, PormGSQLite}; drain_seconds = 5.0)
     close_pool!(db::String; drain_seconds = 5.0)
 
@@ -2040,10 +2116,17 @@ Run the registered `before_connect` hook before opening a physical connection.
 When no hook is registered, connection setup proceeds normally.
 """
 function ensure_before_connect!(pool::Union{PormGPostgres, PormGSQLite})::Bool
+  key = connection_key_for_pool(pool)
+  # #1229: an offline entry renders SQL and never connects. Refused here, before the hook and before
+  # any driver sees its placeholder connection string.
+  if key !== nothing && _is_offline(config[key])
+    throw(InvalidConfigurationError(
+      "The connection \"$(key)\" was registered with `register_offline`: it renders SQL " *
+      "(`inspect_query`, `show_query`) but cannot run a query. Load a real configuration to execute."))
+  end
+
   hook = _BEFORE_CONNECT_HOOK[]
   hook === nothing && return true
-
-  key = connection_key_for_pool(pool)
   key === nothing && return true
 
   settings = config[key]

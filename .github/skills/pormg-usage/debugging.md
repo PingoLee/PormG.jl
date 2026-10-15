@@ -32,6 +32,27 @@ info[:sql_text]; info[:parameters]; info[:dialect]
 Placeholders differ by backend: `$1, $2, …` on PostgreSQL, `?` on SQLite. Values are always
 parameters. If a value appears inline in the SQL text, that is a bug worth reporting.
 
+### Testing SQL without a database
+
+A golden-SQL test needs a configuration to bind the models to, but no server. Register the key
+**offline** — it renders the dialect's SQL and refuses to run anything:
+
+```julia
+using Test, PormG
+PormG.Configuration.register_offline("db"; adapter = :postgres)   # or :sqlite
+PormG.@import_models "db/models.jl" models
+
+q = models.Driver.objects.filter("surname" => "Senna")
+@test inspect_query(q)[:sql_text] ==
+      "SELECT\n    *\nFROM \"drivers\" as \"Tb\"\nWHERE \"Tb\".\"surname\" = \$1\n"
+@test PormG.Models.connection_key(models.Driver) == "db"
+
+PormG.Configuration.unregister_connection("db")
+```
+
+Do not write a mock backend type into `PormG.config` by hand: `register_offline` is the public
+form of that, and `Configuration.loaded_keys()` answers "what is loaded?".
+
 ## See the plan the database chooses
 
 `show_query` shows what PormG sends; `.explain()` asks the database how it would run the `SELECT`:

@@ -1798,29 +1798,35 @@ function connection(; key::String = "db")
 end
 connection(key::String) = connection(; key = key)
 
-function get_settings(key::String)
-  if !haskey(config, key) && _CONNECTION_RESOLVER[] !== nothing
-    # Attempt lazy resolution
-    try
-      res = _CONNECTION_RESOLVER[](key)
-      if res !== nothing
-        if res isa Tuple
-          url, adapter, pool_size = res
-          register_connection(key, url; adapter=adapter, pool_size=pool_size)
-        elseif res isa Dict
-          url = get(res, "url", nothing)
-          adapter = get(res, "adapter", "PostgreSQL")
-          pool_size = get(res, "pool_size", 3)
-          postgres_driver = get(res, "postgres_driver", nothing)
-          url !== nothing && register_connection(key, url; adapter=adapter, pool_size=pool_size,
-                                                 postgres_driver=postgres_driver)
-        end
+# Ask the connection resolver (`set_connection_resolver`) for a `key` that is not in `config`, and
+# register what it answers. A no-op when the key is registered or no resolver is set. The one place
+# a key is resolved lazily: `get_settings` and `Models.bind!` (#1255) both call it, so a key that
+# every query on a model would resolve is one `bind!` accepts too.
+function _resolve_lazily!(key::String)::Nothing
+  (haskey(config, key) || _CONNECTION_RESOLVER[] === nothing) && return nothing
+  try
+    res = _CONNECTION_RESOLVER[](key)
+    if res !== nothing
+      if res isa Tuple
+        url, adapter, pool_size = res
+        register_connection(key, url; adapter=adapter, pool_size=pool_size)
+      elseif res isa Dict
+        url = get(res, "url", nothing)
+        adapter = get(res, "adapter", "PostgreSQL")
+        pool_size = get(res, "pool_size", 3)
+        postgres_driver = get(res, "postgres_driver", nothing)
+        url !== nothing && register_connection(key, url; adapter=adapter, pool_size=pool_size,
+                                               postgres_driver=postgres_driver)
       end
-    catch e
-      @error "Error in lazy connection resolver for key '$key'" exception=(e, catch_backtrace())
     end
+  catch e
+    @error "Error in lazy connection resolver for key '$key'" exception=(e, catch_backtrace())
   end
+  return nothing
+end
 
+function get_settings(key::String)
+  _resolve_lazily!(key)
   haskey(config, key) || throw(InvalidConfigurationError("Settings for key '$(key)' not found. Ensure it is loaded via 'load()' or registered via 'register_connection()'."))
   return config[key]  
 end

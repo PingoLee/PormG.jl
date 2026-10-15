@@ -829,8 +829,10 @@ PormG.Models.connection_key(M.Driver)   # "db"
 
 Binds one model to the loaded connection `key` and does nothing else (#1230): the narrow half of
 `set_models`, for a model built at runtime — a library's own infrastructure table — that is not part
-of a models module. An unloaded `key` raises `InvalidConfigurationError`; nothing is loaded for you.
-It does not register a module, resolve `ForeignKey` targets given by name, or install reverse
+of a models module. `key` is accepted when it is registered (`load`, `register_connection`,
+`register_offline`) or served by the connection resolver (`set_connection_resolver`), which `bind!`
+consults as `get_settings(key)` does (#1255). Any other key raises `InvalidConfigurationError`; no
+folder is loaded for you. It does not register a module, resolve `ForeignKey` targets given by name, or install reverse
 accessors.
 
 ### `Migrations.ensure_table!(model, key; indexes = true)`

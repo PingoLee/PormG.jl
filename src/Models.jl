@@ -1297,16 +1297,22 @@ PormG.Models.bind!(LiveTiming, "db")
 PormG.Migrations.ensure_table!(LiveTiming, "db")
 ```
 
-`key` must be loaded; an unloaded one raises `InvalidConfigurationError` naming the `load` call, and
-nothing is loaded for you (#1226). Unlike `set_models`, it does not register a module, record a
+`key` is accepted when it names a configuration that is registered — by `load`, `register_connection`
+or `register_offline` — or one the connection resolver (`Configuration.set_connection_resolver`)
+serves: such a key is resolved here as `get_settings(key)` would resolve it, so no prior call is
+needed (#1255). Any other key raises `InvalidConfigurationError` naming the `load` call, and no
+folder is loaded for you (#1226). Unlike `set_models`, it does not register a module, record a
 binding, name the model, resolve `ForeignKey` targets given by name or install reverse accessors — a
 model that relates to others belongs in a models module registered with `@import_models`.
 """
 function bind!(model::PormGModel, key::String)
+  Configuration._resolve_lazily!(key)
+  resolver = Configuration._CONNECTION_RESOLVER[] === nothing ? "" :
+    " The connection resolver did not resolve it either."
   haskey(config, key) || throw(InvalidConfigurationError(
     "Cannot bind the model \"$(model.name)\" to \"$(key)\": no configuration is loaded under that " *
-    "key. Load it first — `PormG.Configuration.load($(repr(key)); env = \"…\")` — PormG does not " *
-    "load it for you."))
+    "key.$(resolver) Load it first — `PormG.Configuration.load($(repr(key)); env = \"…\")` — PormG " *
+    "does not load it for you."))
   isempty(model.name) && throw(InvalidConfigurationError(
     "Cannot bind a model with no table name: give `Models.Model` the name as its first argument " *
     "(`Model(\"live_timing\", …)`), or register it through a models module."))

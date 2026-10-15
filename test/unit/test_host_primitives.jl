@@ -72,6 +72,44 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Models.bind! accepts a key the connection resolver serves
+# What it tests: with a resolver registered for "tenant_f1" (a SQLite `:memory:` pool through the
+#   resolver's Dict form), `bind!(model, "tenant_f1")` binds without a prior `get_settings` call, and
+#   the key is then registered as a dynamic entry. A key the resolver answers `nothing` for is still
+#   refused, and the message says the resolver was consulted. No SQL.
+# Why it matters: every query on the model resolves such a key through `get_settings`, so `bind!`
+#   refusing it made a library force the resolution itself with an undocumented `get_settings` call
+#   before binding its infrastructure model to a tenant key.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Models.bind! accepts a key the connection resolver serves (#1255)" begin
+  previous = Configuration._CONNECTION_RESOLVER[]
+  try
+    Configuration.set_connection_resolver() do key
+      key == "tenant_f1" || return nothing
+      return Dict("url" => ":memory:", "adapter" => "SQLite", "pool_size" => 1)
+    end
+    timing = _host1230_timing()
+    @test !Configuration.is_loaded("tenant_f1")
+    @test Models.bind!(timing, "tenant_f1") === timing
+    @test Models.connection_key(timing) == "tenant_f1"
+    @test PormG.config["tenant_f1"].dynamic
+
+    err = try
+      Models.bind!(_host1230_timing(), "tenant_unknown")
+      nothing
+    catch e
+      e
+    end
+    @test err isa PormG.InvalidConfigurationError
+    @test occursin("The connection resolver did not resolve it either.", sprint(showerror, err))
+    @test !Configuration.is_loaded("tenant_unknown")
+  finally
+    Configuration._CONNECTION_RESOLVER[] = previous
+    Configuration.unregister_connection("tenant_f1")
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ensure_table!'s DDL is a migration's DDL, per engine
 # What it tests: `_ensure_table_statements` renders what a migration emits for a new model —
 #   PostgreSQL:

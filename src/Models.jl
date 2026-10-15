@@ -84,7 +84,7 @@ public ArrayField, AutoField, BigIntegerField, BinaryField, BooleanField, CharFi
 # `Model_Type` is deliberately NOT here. It is documented (users hold one as `M.Driver`) but never
 # named: it appears zero times in `docs/src`, and the vocabulary users are given for "a model" is
 # the abstract `PormGModel`. Publishing the concrete name would invite code to depend on it.
-public Model, UniqueConstraint, CheckConstraint, Index, set_models, connection_key
+public Model, UniqueConstraint, CheckConstraint, Index, set_models, connection_key, bind!
 # #1021: the text an `Index(expressions = …)` is written with to serve a full-text query.
 public search_vector_expression
 
@@ -1282,6 +1282,37 @@ It reads the binding as it stands and does not trigger the self-heal; a model th
 queried yet in a restored session can still report its import-time key while that key is unloaded.
 """
 connection_key(model::PormGModel)::Union{String, Nothing} = model.connect_key
+
+"""
+    bind!(model, key::String) -> model
+
+Bind one model to the loaded connection `key`, and do nothing else (#1230): the narrow half of
+`set_models`, for a model built at runtime — a library's own infrastructure table, say — that is not
+part of a models module. It sets the connection the model's queries use and returns the model.
+
+```julia
+LiveTiming = PormG.Models.Model("live_timing", id = PormG.Models.IDField(),
+                                payload = PormG.Models.TextField())
+PormG.Models.bind!(LiveTiming, "db")
+PormG.Migrations.ensure_table!(LiveTiming, "db")
+```
+
+`key` must be loaded; an unloaded one raises `InvalidConfigurationError` naming the `load` call, and
+nothing is loaded for you (#1226). Unlike `set_models`, it does not register a module, record a
+binding, name the model, resolve `ForeignKey` targets given by name or install reverse accessors — a
+model that relates to others belongs in a models module registered with `@import_models`.
+"""
+function bind!(model::PormGModel, key::String)
+  haskey(config, key) || throw(InvalidConfigurationError(
+    "Cannot bind the model \"$(model.name)\" to \"$(key)\": no configuration is loaded under that " *
+    "key. Load it first — `PormG.Configuration.load($(repr(key)); env = \"…\")` — PormG does not " *
+    "load it for you."))
+  isempty(model.name) && throw(InvalidConfigurationError(
+    "Cannot bind a model with no table name: give `Models.Model` the name as its first argument " *
+    "(`Model(\"live_timing\", …)`), or register it through a models module."))
+  model.connect_key = key
+  return model
+end
 
 # #1227: the root a key was loaded relative to — `load(key; root)` stores the folder as the canonical
 # `joinpath(root, key)` — or `nothing` when it was not (`load("db")` keeps the folder relative; an

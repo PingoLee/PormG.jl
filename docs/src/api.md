@@ -819,6 +819,30 @@ than the `connect_key` field to check which database a model's queries reach:
 PormG.Models.connection_key(M.Driver)   # "db"
 ```
 
+### `Models.bind!(model, key)`
+
+Binds one model to the loaded connection `key` and does nothing else (#1230): the narrow half of
+`set_models`, for a model built at runtime — a library's own infrastructure table — that is not part
+of a models module. An unloaded `key` raises `InvalidConfigurationError`; nothing is loaded for you.
+It does not register a module, resolve `ForeignKey` targets given by name, or install reverse
+accessors.
+
+### `Migrations.ensure_table!(model, key; indexes = true)`
+
+Creates `model`'s table on `key` if it does not exist and returns `:created`, `:exists`, or
+`:disabled` on a `change_db: false` connection (#1230). The DDL is what a migration emits for a new
+model — table, foreign keys, indexes (a PostgreSQL `Index(...; opclasses = ("text_pattern_ops",))`
+included), unique constraints and CHECKs — in one transaction, under the migration advisory lock on
+PostgreSQL. It never alters an existing table. For infrastructure tables kept out of
+`makemigrations` with `register_ignore_tables!`:
+
+```julia
+LiveTiming = PormG.Models.Model("live_timing", id = PormG.Models.IDField(),
+                                driverref = PormG.Models.CharField(max_length = 64))
+PormG.Models.bind!(LiveTiming, "db")
+PormG.Migrations.ensure_table!(LiveTiming, "db")   # :created, then :exists on every later boot
+```
+
 ### `Configuration.redact_secret(conn_str)`
 
 Masks the credentials in a connection string. This is the single rule PormG applies everywhere a

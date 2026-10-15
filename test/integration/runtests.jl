@@ -66,6 +66,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "migrate() at Boot (#737)"     begin include("test_migrate_boot.jl")       end
     @testset "Lossy ALTERs (#803)"          begin include("test_lossy_alter.jl")        end
     @testset "Schema Drift Gate (#738)"     begin include("test_schema_drift_check.jl") end
+    @testset "ensure_table! (#1230)"        begin include("test_ensure_table.jl")        end
     @testset "Having (Aggregates)"          begin include("test_having.jl")             end
     @testset "Field Validation DB Tests"    begin include("test_field_validation_db_roundtrip.jl") end
     @testset "requires(:feature) (#1129)"   begin include("test_requires_feature.jl")   end

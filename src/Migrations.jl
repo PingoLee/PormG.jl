@@ -139,7 +139,7 @@ export get_migration_plan
 # Exports — new migration lifecycle APIs (Phases 1–7)
 export init_migrations, status, dry_run, check
 export mark_applied, mark_failed, remove_migration_record, discard_pending_migration
-export run_once
+export run_once, ensure_table!
 export MigrationStatus, DryRunResult, SchemaCheckResult, SchemaCheckFinding, MigrationResult
 
 # `public` (Julia 1.11+) — user-facing but not exported (#289). `docs/src/migrations/stability.md`

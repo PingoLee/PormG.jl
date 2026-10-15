@@ -350,8 +350,8 @@ end
             # added (`Model`, `set_models`, `UniqueConstraint`), `Index` (#347),
             # `CheckConstraint` (#742), the two network-address fields (#28), `ArrayField` (#28),
             # `search_vector_expression` (#1021), the text a full-text index is declared with, and
-            # `SearchVectorField` (#1021) = 37, and `connection_key` (#1229), the public read of a
-            # model's binding = 38.
+            # `SearchVectorField` (#1021) = 37, `connection_key` (#1229), the public read of a
+            # model's binding, and `bind!` (#1230), the narrow half of `set_models` = 39.
             # `Model_Type` is deliberately absent — it is documented but NOT public: users hold one
             # as `M.Driver`, never name it.
             PormG.Models       => [:ArrayField, :AutoField, :BigIntegerField, :BinaryField, :BooleanField,
@@ -363,7 +363,7 @@ end
                                    :PasswordField, :PositiveIntegerField,
                                    :PositiveSmallIntegerField, :search_vector_expression, :SearchVectorField, :SlugField,
                                    :TextField, :TimeField, :UniqueConstraint, :URLField, :UUIDField,
-                                   :connection_key, :set_models],
+                                   :bind!, :connection_key, :set_models],
             PormG.Migrations   => [:MIGRATION_FORMAT_VERSION],
             # `redact_secret` joined the set with #649: `docs/src/api.md` documents it as the
             # supported way to put a connection string into output you control, which is only

@@ -82,6 +82,16 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum interval | alone", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
   ("Sum interval | subquery", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
   ("Sum interval | subquery", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
+  # #1111: a `Sum` over an operand the walk does not type, divided — PostgreSQL's quotient is a
+  # `numeric`, which keeps the half, over an `integer` column as over a `bigint` one; the division
+  # view fails closed on it since #1034 phase 3 step 2a. SQLite has no `EPOCH` part, so the shape
+  # does not build there.
+  ("Sum F bigint + epoch / 2 | alone", :postgres) => (type = "Decimal", value = "619153200.5", read = nothing),
+  ("Sum F bigint + epoch / 2 | cte", :postgres) => (type = "Decimal", value = "619153200.5", read = nothing),
+  ("Sum F bigint + epoch / 2 | subquery", :postgres) => (type = "Decimal", value = "619153200.5", read = nothing),
+  ("Sum F int + epoch / 2 | alone", :postgres) => (type = "Decimal", value = "619154204.5", read = nothing),
+  ("Sum F int + epoch / 2 | cte", :postgres) => (type = "Decimal", value = "619154204.5", read = nothing),
+  ("Sum F int + epoch / 2 | subquery", :postgres) => (type = "Decimal", value = "619154204.5", read = nothing),
 )
 
 # The cells whose value comes back as a DIFFERENT TYPE on the two engines, by the table above. Every

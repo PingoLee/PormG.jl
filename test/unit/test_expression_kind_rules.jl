@@ -102,7 +102,7 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Function result rules: every rule is one the readers know
-# `_infer_function_kind`, `_textless_number`, `_whole_numeric_operand` and `_known_whole` branch on
+# `_infer_function_kind`, `_textless_number` and `_whole_numeric_operand` branch on
 # these symbols;
 # a misspelt rule would match none of their branches and silently read as untyped.
 # ─────────────────────────────────────────────────────────────────────────────

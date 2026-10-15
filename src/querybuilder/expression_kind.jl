@@ -235,7 +235,7 @@ _infer_function_kind(::Any, ::SQLInstruction, ::_KindPolicy) = nothing
 # A `Lag`/`Lead` `default` is one of the window's values too: PostgreSQL resolves `lag(int4, int,
 # float8)` to a `float8` and `lag(int4, int, int8)` to an `int8` (review of #1147), so the operand's
 # kind and the default's are unified as a `COALESCE`'s are. A string is a bound text literal there,
-# not a path (`_bigint_operand_function`); any other default PormG cannot type leaves the value untyped.
+# not a path (`_case_kind`); any other default PormG cannot type leaves the value untyped.
 function _with_window_default(p, kind, instruc::SQLInstruction, policy::_EveryKind)
   (p isa WindowFunction && kind !== nothing) || return kind
   default = get(p.kwargs, "default", nothing)
@@ -366,7 +366,8 @@ _numeric_rank(::Any) = nothing
 # dropped: a sum of `numeric(10,2)` values is not a `numeric(10,2)`.
 _computed_kind(::Val, ::Symbol, k, ::PormGPostgres) = CDecimal(nothing, nothing)
 _computed_kind(::Val, rule::Symbol, k, ::PormGSQLite) = rule === :numeric ? CFloat64() : _sqlite_number_kind(k)
-_computed_kind(::Val, ::Symbol, k, ::Any) = nothing
+# No method for any other backend (#1034 phase 3 step 2a, #1129 item 2): what an engine computes is
+# that engine's fact, so a third backend (#1130) gets a `MethodError` naming it rather than "unknown".
 # A number SQLite computes over `k` without a cast: an integer is a 64-bit integer, and anything else
 # is not a number this names. Over a `DecimalField` SQLite computes a REAL or an INTEGER from its
 # NUMERIC-affinity storage; it is named a width-less decimal, the type PostgreSQL gives the same call.
@@ -379,8 +380,10 @@ _sqlite_number_kind(::CDecimal) = CDecimal(nothing, nothing)
 _sqlite_number_kind(::Any) = nothing
 
 # A `:promoting`/`:numeric` function's kind: what this engine computes (`_computed_kind`, from the
-# first operand), or what the call means (`_output_kind`, from every operand).
+# first operand), or what the call means (`_output_kind`, from every operand). An instruction over
+# the declaration alone (`_declaration_instruction`) has no engine, so nothing is computed there.
 _number_kind(p::SQLTypeFunction, rule::Symbol, instruc::SQLInstruction, policy::_AllKinds) =
+  instruc.connection === nothing ? nothing :
   _computed_kind(Val(Symbol(p.function_name)), rule, _infer_kind(_first_operand(p), instruc, policy), instruc.connection)
 function _number_kind(p::SQLTypeFunction, rule::Symbol, instruc::SQLInstruction, policy::_MeaningKinds)
   operands = p.column isa AbstractVector ? p.column : (p.column,)

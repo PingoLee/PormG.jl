@@ -49,7 +49,8 @@ const _EF_FACTS = vcat(
    (_EF_MIG, :_invalid_index_findings),             # check(): invalid indexes
    (_EF_QB, :_explain_sql),                         # the EXPLAIN statement
    (_EF_QB, :_explain_facts),                       # the facts read from its rows
-   (_EF_QB, :_affected_row_count)],                 # the rows a DELETE / bulk UPDATE matched
+   (_EF_QB, :_affected_row_count),                  # the rows a DELETE / bulk UPDATE matched
+   (_EF_QB, :_computed_kind)],                      # the type a function computes (#1034, beside each constructor)
 )
 
 # The engine a method parameter names: `:postgres`, `:sqlite`, or `nothing` for a non-engine one.
@@ -111,6 +112,11 @@ end
   end
   @test_throws MethodError _EF_QB._interval_as_ms(_EfOther())
   @test_throws MethodError PormG.Kernel._engine_key(_EfOther())
+  # #1034 phase 3 step 2a: what a function computes was "unknown" on any other backend until its
+  # fallback was deleted; the division refusal's departure is a fact of its own.
+  @test_throws MethodError _EF_QB._computed_kind(Val(:SUM), :promoting, PormG.CInt64(), _EfOther())
+  @test_throws MethodError _EF_QB._untyped_sum_departs(_EfOther())
+  @test _EF_QB._untyped_sum_departs(_EfPg()) && !_EF_QB._untyped_sum_departs(_EfSl())
   # Sanity on the two engines: the facts answer, and answer differently where they should.
   @test _EF_QB._interval_as_ms(_EfSl()) && !_EF_QB._interval_as_ms(_EfPg())
   @test PormG.Kernel._engine_key(_EfPg()) === :postgres && PormG.Kernel._engine_key(_EfSl()) === :sqlite

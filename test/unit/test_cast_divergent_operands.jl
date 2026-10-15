@@ -1068,11 +1068,60 @@ end
   # `Mod` and `Round(x)` are whole in value but no integer in type (a `numeric` on PostgreSQL, a REAL
   # on SQLite): a quotient over them keeps the half on both, so it is a fraction, not an integer one.
   @test _ccd_builds(Fn.Cast(Fn.Floor(Fn.Round("number")) / 2, "text"))
-  # What still reaches the #1111 row: a `bigint` summed with an operand the walk cannot type (a JSON
-  # key lookup), which PostgreSQL's `sum(bigint)` would widen. Fail-closed on PostgreSQL until #1034's
-  # phase 4 decides what an unknown kind means per view.
+  # What still reaches the #1111 refusal: a sum of an operand the walk cannot type (a JSON key lookup
+  # beside a column), which PostgreSQL may compute as a `sum(bigint)`, a `numeric`.
   _ccd_expect(Fn.Cast(Fn.Sum(_CF("laps_total") + _CF("payload__n")) / 2, Models.IntegerField()); departs = _PG_ONLY,
-              issue = "#1111", named = "`SUM(…)` over the BigIntegerField `laps_total`")
+              issue = "#1111", named = "`SUM(…)` over a value PormG cannot type")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A Sum the walk cannot type, divided, fails closed on PostgreSQL (#1034 phase 3 step 2a)
+# Unknown is decided once for the division view: refused on the engine whose sum can depart
+# (`_untyped_sum_departs`), whether or not a `bigint` can be seen inside. Before, a separate classifier
+# looked for one, and `Sum(F("number") + F("payload__n")) / 2` (an `integer` column) built on
+# PostgreSQL. Expected on PostgreSQL: the #1111 refusal naming the untyped sum; SQLite builds
+# `CAST((SUM(("Tb"."number" + json_extract("Tb"."payload", '$.n'))) / ?) AS INTEGER)`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1034 phase 3 step 2a: a Sum the walk cannot type, divided, is refused on PostgreSQL" begin
+  for target in (Models.IntegerField(), Models.CharField(), "numeric(10,1)")
+    _ccd_expect(Fn.Cast(Fn.Sum(_CF("number") + _CF("payload__n")) / 2, target); departs = _PG_ONLY,
+                issue = "#1111", named = "`SUM(…)` over a value PormG cannot type")
+  end
+  @test occursin("CAST((SUM((\"Tb\".\"number\" + json_extract(\"Tb\".\"payload\", '\$.n'))) / ?) AS INTEGER) as \"x\"",
+                 _ccd_render(Fn.Cast(Fn.Sum(_CF("number") + _CF("payload__n")) / 2, Models.IntegerField()); conn = _CCD_SL))
+  # The message says the sum is untyped and what each spelling divides as.
+  msg = _ccd_msg(_ccd_refusal(Fn.Cast(Fn.Sum(_CF("number") + _CF("payload__n")) / 2, Models.IntegerField()); conn = _CCD_PG))
+  @test occursin("means an integer quotient (`15 / 2` is `7`) when the sum is whole", msg)
+  @test occursin("PostgreSQL computes a `numeric` one (`7.5`) for a `bigint` or `numeric` sum", msg)
+  # Typed, the same sum builds on both engines: the walk names it, so PostgreSQL renders it `::bigint`.
+  @test _ccd_builds(Fn.Cast(Fn.Sum(_CF("number") + _CF("laps_total")) / 2, Models.IntegerField()))
+  # A float divisor keeps the fraction on every engine, so it is no integer quotient.
+  @test _ccd_builds(Fn.Cast(Fn.Sum(_CF("number") + _CF("payload__n")) / 2.0, "text"))
+  # A sum of TEMPORAL arithmetic is untyped to the walk too, but the render types it an interval, no
+  # integer quotient: its text builds on both engines, whichever side the interval is on, and `Concat`
+  # refuses it on both as explicit intent (#1028), not on PostgreSQL alone as a division.
+  for x in (Fn.Sum(_CF("laptime") + _CF("laptime")) / 2, Fn.Sum(_CF("laptime") * 2) / 2,
+            Fn.Sum(_CF("number") * _CF("laptime")) / 2, Fn.Sum(_CF("start_at") - _CF("start_at")) / 2),
+      target in ("text", Models.CharField())
+    @test _ccd_builds(Fn.Cast(x, target))
+  end
+  _ccd_refused_everywhere(Fn.Concat("surname", Fn.Sum(_CF("laptime") + _CF("laptime")) / 2); issue = "#1028",
+                          named = "an interval expression")
+  # Only a quotient that IS the operand answers as its rendered interval: an untyped sum's quotient
+  # times an interval is an interval at the top, but the half reaches its value, so it stays refused.
+  _ccd_expect(Fn.Cast(Fn.Sum(_CF("laps_total") + _CF("payload__n")) / 2 * Fn.Max(_CF("laptime")), "text");
+              departs = _PG_ONLY, issue = "#1111", named = "`SUM(…)` over a value PormG cannot type")
+  # A date difference is a day count, a NUMBER, though it roots in a date: summed with a `bigint` it
+  # is a `sum(bigint)` on PostgreSQL, refused. Alone it is an integer sum, but the walk does not type
+  # a day count yet (F-arithmetic typing is #1034 phase 3 step 5), so it fails closed too; a typed
+  # dividend says which quotient is meant and builds.
+  for x in (Fn.Sum(_CF("born") - _CF("born") + _CF("laps_total")) / 2, Fn.Sum(_CF("born") - _CF("born")) / 2)
+    _ccd_expect(Fn.Cast(x, Models.IntegerField()); departs = _PG_ONLY, issue = "#1111",
+                named = "`SUM(…)` over a value PormG cannot type")
+  end
+  @test _ccd_builds(Fn.Cast(Fn.Cast(Fn.Sum(_CF("born") - _CF("born")), Models.BigIntegerField()) / 2, Models.IntegerField()))
+  # The escape the message and the docs name: a dividend given a type divides as that type.
+  @test _ccd_builds(Fn.Cast(Fn.Cast(Fn.Sum(_CF("number") + _CF("payload__n")), Models.BigIntegerField()) / 2, Models.IntegerField()))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1668,19 +1717,22 @@ end
     return q
   end
   cte(outer) = conn -> _ccd_sql(withcte(outer); conn = conn)
-  w = "the CTE column `CTE(\"c\", \"w\")` (`SUM(…)` over the BigIntegerField `laps_total`)"
+  w = "the CTE column `CTE(\"c\", \"w\")` (`SUM(…)` over a value PormG cannot type)"
   # The whole number PostgreSQL computes as `numeric`, divided: under `Coalesce`, an extremum, `Floor`
   # and an outer `Sum`, to an integer and to a scaled numeric.
   for outer in (Fn.Cast(Fn.Coalesce(PormG.CTE("c", "w"), 0) / 2, Models.IntegerField()),
                 Fn.Cast(Fn.Max(PormG.CTE("c", "w")) / 2, "numeric(10,1)"),
-                Fn.Cast(Fn.Floor(PormG.CTE("c", "w")) / 2, Models.IntegerField()),
-                Fn.Cast(Fn.Sum(Fn.Coalesce(PormG.CTE("c", "w"), 0)) / 2, Models.IntegerField()))
+                Fn.Cast(Fn.Floor(PormG.CTE("c", "w")) / 2, Models.IntegerField()))
     _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111", named = w, run = cte(outer))
   end
-  # The `bigint` column summed beside a value the walk cannot type, and beside one it can.
-  _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111", named = "the CTE column `CTE(\"c\", \"cnt\")` (`COUNT(…)`)",
+  # An outer `Sum` over it is itself a sum the walk cannot type, so the refusal names that one.
+  _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111", named = "of arithmetic over `SUM(…)` over a value PormG cannot type",
+              run = cte(Fn.Cast(Fn.Sum(Fn.Coalesce(PormG.CTE("c", "w"), 0)) / 2, Models.IntegerField())))
+  # The `bigint` column summed beside a value the walk cannot type, and beside one it can. The sum is
+  # what the walk cannot type, so the refusal names it (#1034 phase 3 step 2a), not the `bigint` inside.
+  _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111", named = "`SUM(…)` over a value PormG cannot type",
               run = cte(Fn.Cast(Fn.Sum(Fn.Coalesce(PormG.CTE("c", "cnt"), "payload__n")) / 2, Models.IntegerField())))
-  _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111", named = "the CTE column `CTE(\"c\", \"cnt\")` (`COUNT(…)`)",
+  _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111", named = "`SUM(…)` over a value PormG cannot type",
               run = cte(Fn.Cast(Fn.Sum(Fn.Greatest(PormG.CTE("c", "cnt"), "payload__n")) / 2, Models.IntegerField())))
   @test _ccd_builds(nothing; run = cte(Fn.Cast(Fn.Sum(Fn.Coalesce(PormG.CTE("c", "cnt"), "number")) / 2, Models.IntegerField())))
   # A float with a `bigint` side: the float decides, so the cast to an integer is SQLite's truncation.

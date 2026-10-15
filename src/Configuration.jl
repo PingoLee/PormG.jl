@@ -14,6 +14,7 @@ import PormG: @pormg_debug
 # Backend generics — driver bodies live in the weakdep extensions (no direct LibPQ/SQLite here).
 import PormG: backend_num_rows, backend_is_alive
 import PormG: _PG_DRIVER_PACKAGES  # the PostgreSQL drivers a pool can be built for (#785, #788)
+import PormG: _DRIVER_EXTENSIONS, _driver_hint  # the extension a configuration needs, checked at `load` (#1232)
 
 using Base.ScopedValues: ScopedValue, with
 
@@ -187,7 +188,9 @@ with an absolute folder (#857), so compare `key == "db"` or the folder's `basena
 `settings.db_def_folder == "db"`.
 
 Typical uses include VPN setup, credential refresh, or SSH tunnel activation.
-When no hook is registered, connections proceed normally.
+When no hook is registered, connections proceed normally. A key loaded with its own hook —
+`load(key; before_connect = f)` (#1232) — uses that one instead, so a hook for one connection no
+longer has to test `key == "…"` and be registered from both the module body and `__init__`.
 """
 function set_before_connect_hook(f::Function)
   _BEFORE_CONNECT_HOOK[] = f
@@ -1467,7 +1470,8 @@ end
 #
 # Kept ABOVE the docstring: a comment between a docstring and its definition detaches it.
 """
-    load(path = "db"; env = nothing, root = nothing, scaffold = false, force = false) -> Union{Nothing,String}
+    load(path = "db"; env = nothing, root = nothing, scaffold = false, force = false,
+         before_connect = nothing) -> Union{Nothing,String}
 
 Load the configuration folder `path` (its `connection.yml`) and register it under a connection key.
 Returns the key actually registered — normally `path`, but a folder already loaded under another
@@ -1481,6 +1485,16 @@ neither raises `InvalidConfigurationError` naming the call: `default_env: dev` i
 deployments, and a process nobody watches must not pick it. A blank `PORMG_ENV` counts as unset.
 A package states `env` in its own `load` calls: its `__init__` runs in whatever session loads it, and
 `using` it from a REPL makes that session interactive.
+
+**The driver is checked at boot (#1232).** The configuration's adapter needs its driver package
+loaded — `using LibPQ` (or `Postgres`, when `postgres_driver: postgres`) for PostgreSQL, `using SQLite`
+for SQLite. Without it `load` raises `MissingConfigurationError` naming the package and registers
+nothing; it used to succeed and fail on the first query instead.
+
+**A hook for this key only (#1232).** `before_connect = f` runs `f(key, settings)` before PormG opens
+a physical connection for this key, in place of the process-wide hook set with
+`set_before_connect_hook` (which still serves every key that has none). Passing it again on a repeated
+`load` updates it without rebuilding the pool; a reload that omits it keeps the key's hook.
 
 Without `root`, `path` is both the key and the folder, resolved against `pwd()`. With `root`, the
 two separate (#857): the key is `path` exactly as passed, and the folder is `joinpath(root, path)`,
@@ -1502,7 +1516,7 @@ package bootstrap — `load` in the module body **and** in `__init__` — safe t
 since connections checked out of the old pool are closed. Pass `force = true` to re-read and rebuild
 anyway, e.g. after editing `connection.yml` in a running session.
 """
-function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,PormGSettings} = config, implicit::Bool = false, root::Union{Nothing,AbstractString} = nothing, force::Bool = false)
+function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,PormGSettings} = config, implicit::Bool = false, root::Union{Nothing,AbstractString} = nothing, force::Bool = false, before_connect::Union{Nothing,Function} = nothing)
   # create settings if does not exists
   path === nothing && (path = DB_PATH )
 
@@ -1578,6 +1592,9 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   selected_env = _effective_env(env, _peek_default_env(db_settings_file);
                                 fallback = implicit || _is_interactive(), path = path, folder = folder,
                                 root = root)
+  # #1232: the driver's extension, before anything below closes or replaces an entry — a refused
+  # load leaves the registry exactly as it found it.
+  _require_driver_extension(_peek_driver(db_settings_file, selected_env), path)
 
   # #550: one folder, one entry. `config[path] = …` used to add a SECOND entry whenever the same
   # folder was already registered under a different spelling — typically the absolute path minted
@@ -1595,9 +1612,15 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   # `load` returns its key and touches nothing. It used to fall through to `close_pool!` and rebuild,
   # which made the documented body-plus-`__init__` bootstrap — and a repeated `__init__` — drop every
   # borrowed connection. `_already_loaded` holds the conditions; `force = true` is the old behavior.
+  # #1232: a key's own hook survives a reload that does not pass one (`force`, another env, a reuse):
+  # the module body passed it, and an `__init__` that omits it must not silently fall back to the
+  # process-wide hook.
+  previous_hook = existing === nothing ? nothing : config[existing].before_connect
   if !force && existing !== nothing && _already_loaded(config[existing], folder, selected_env, implicit)
     @debug("PormG: configuration already loaded with this folder and environment; keeping its pool.",
            key = existing, env = selected_env)
+    # #1232: a hook passed again (the body-plus-`__init__` bootstrap) applies; it needs no new pool.
+    before_connect === nothing || (config[existing].before_connect = before_connect)
     return existing
   end
 
@@ -1658,7 +1681,8 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   # key, so that case is unchanged.
   stored_folder = root !== nothing ? folder : something(kept_folder, path)
   config[key] = Settings(app_env = selected_env, db_def_folder = stored_folder, implicit = implicit,
-                         loaded_folder = _canonical_folder_path(folder))
+                         loaded_folder = _canonical_folder_path(folder),
+                         before_connect = something(before_connect, previous_hook, Some(nothing)))
   settings::PormGSettings = config[key]
 
   # Both given `folder`, the spelling checked against the filesystem above. The pool builder
@@ -1682,7 +1706,8 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
 end
 
 """
-    load_many(paths::AbstractVector{<:AbstractString}; env = nothing, root = nothing, force = false)
+    load_many(paths::AbstractVector{<:AbstractString}; env = nothing, root = nothing, force = false,
+              before_connect = nothing)
 
 Load several static configuration folders using the same environment override, and the same
 `root` when one is given (see `load`).
@@ -1695,16 +1720,48 @@ The server form loads short keys from a known project root, whatever the working
 PormG.Configuration.load_many(["db", "db_analytics"]; root = APP_ROOT, env = "prod")
 ```
 """
-function load_many(paths::AbstractVector{<:AbstractString}; env::Union{Nothing,String} = nothing, config::Dict{String,PormGSettings} = config, root::Union{Nothing,AbstractString} = nothing, force::Bool = false)
+function load_many(paths::AbstractVector{<:AbstractString}; env::Union{Nothing,String} = nothing, config::Dict{String,PormGSettings} = config, root::Union{Nothing,AbstractString} = nothing, force::Bool = false, before_connect::Union{Nothing,Function} = nothing)
   loaded_keys = String[]
   for path in paths
     key = String(path)
     # #550: `load` may reuse an entry already held under a different spelling of the same folder,
     # so the key it actually registered is not necessarily the string we passed. It returns the
     # real one — callers use this list to look entries up.
-    push!(loaded_keys, something(load(key; env=env, config=config, root=root, force=force), key))
+    push!(loaded_keys, something(load(key; env=env, config=config, root=root, force=force,
+                                      before_connect=before_connect), key))
   end
   return loaded_keys
+end
+
+# #1232: the driver the environment block `env` of a connection.yml needs — `:sqlite`, or the
+# PostgreSQL driver `_resolve_postgres_driver` picks — or `nothing` when the file does not say (an
+# unknown adapter or a malformed block is refused later, by the reader that owns the message).
+# Read from the file rather than the built pool so `load` can ask before it touches the registry.
+function _peek_driver(db_settings_file::String, env::String)::Union{Nothing, Symbol}
+  raw = try
+    open(YAML.load, db_settings_file)
+  catch
+    return nothing
+  end
+  raw isa AbstractDict || return nothing
+  block = get(raw, env, nothing)
+  block isa AbstractDict || return nothing
+  adapter = get(block, "adapter", nothing)
+  adapter == "SQLite" && return :sqlite
+  adapter == "PostgreSQL" || return nothing
+  return _resolve_postgres_driver(get(block, "postgres_driver", nothing); source = "connection.yml")
+end
+
+# #1232: a configuration needs its driver's weakdep extension, and without it the first query raised
+# `_PG_DRIVER_HINT` — far from the boot that forgot `using LibPQ`. `load` asks first instead and raises
+# `MissingConfigurationError` naming the package. Skipped while precompiling: PormG's own workload
+# loads configurations before any extension can exist, and a package's precompile is followed by the
+# runtime `__init__` load, which asks again.
+function _require_driver_extension(driver::Union{Nothing, Symbol}, key::String)::Nothing
+  driver === nothing && return nothing
+  ccall(:jl_generating_output, Cint, ()) == 1 && return nothing
+  Base.get_extension(parentmodule(@__MODULE__), _DRIVER_EXTENSIONS[driver]) === nothing || return nothing
+  throw(MissingConfigurationError("cannot load \"$(key)\": " * _driver_hint(driver)))
 end
 
 # The key `settings` is registered under, found by identity — or `db_def_folder` when it is not in
@@ -1728,10 +1785,18 @@ function is_loaded(path_or_key::String)::Bool
   return _resolve_loaded_key(path_or_key) !== nothing
 end
 
-function connection(; key::String = "db") 
+"""
+    connection(key::String) -> pool
+    connection(; key::String = "db") -> pool
+
+The connection pool registered under `key`. The positional form matches `get_settings(key)`,
+`ping(key)` and `status(key)` (#1232); the keyword form is kept for existing callers and is legacy.
+"""
+function connection(; key::String = "db")
   settings = config[key]
   return settings.connections
 end
+connection(key::String) = connection(; key = key)
 
 function get_settings(key::String)
   if !haskey(config, key) && _CONNECTION_RESOLVER[] !== nothing
@@ -2078,6 +2143,10 @@ mutable struct Settings <: PormGSettings
   # different folder after a `cd`; a repeated `load` compares the request against this instead, or it
   # would keep a pool built from another directory's `connection.yml`. Internal, not YAML-settable.
   loaded_folder::String
+  # #1232: this key's own `before_connect` hook, from `load(…; before_connect = f)`, or `nothing` to
+  # use the process-wide one (`set_before_connect_hook`). Not YAML-settable; never displayed or
+  # serialized (`display.jl` and `json_lower.jl` render an allowlist of slots).
+  before_connect::Union{Nothing, Function}
 
   Settings(;
       app_env             = something(_pormg_env(), DEV),
@@ -2091,7 +2160,8 @@ mutable struct Settings <: PormGSettings
       django_prefix       = nothing,
       implicit            = false,
       dynamic             = false,
-      loaded_folder       = ""
+      loaded_folder       = "",
+      before_connect      = nothing
   ) =
   new(
       app_env,
@@ -2105,14 +2175,16 @@ mutable struct Settings <: PormGSettings
       django_prefix,
       implicit,
       dynamic,
-      loaded_folder
+      loaded_folder,
+      before_connect
   )
 end
 
 """
     ensure_before_connect!(pool) -> Bool
 
-Run the registered `before_connect` hook before opening a physical connection.
+Run the `before_connect` hook before opening a physical connection: the key's own hook from
+`load(key; before_connect = f)` (#1232), else the one registered with `set_before_connect_hook`.
 When no hook is registered, connection setup proceeds normally.
 """
 function ensure_before_connect!(pool::Union{PormGPostgres, PormGSQLite})::Bool
@@ -2125,11 +2197,11 @@ function ensure_before_connect!(pool::Union{PormGPostgres, PormGSQLite})::Bool
       "(`inspect_query`, `show_query`) but cannot run a query. Load a real configuration to execute."))
   end
 
-  hook = _BEFORE_CONNECT_HOOK[]
-  hook === nothing && return true
   key === nothing && return true
-
   settings = config[key]
+  # #1232: the key's own hook, else the process-wide one.
+  hook = settings.before_connect === nothing ? _BEFORE_CONNECT_HOOK[] : settings.before_connect
+  hook === nothing && return true
 
   try
     return hook(key, settings) === true

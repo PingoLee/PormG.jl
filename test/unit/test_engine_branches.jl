@@ -34,13 +34,15 @@ const _EB_REVIEWED = Dict(
   # What remains:
   #   - Configuration: `_builtin_ignores_for_adapter` and `register_connection` name both adapters
   #     and refuse any other (two each); the `url:` / `postgres_driver:` warnings are SQLite-only
-  #     advice that fires only for `adapter: SQLite`;
+  #     advice that fires only for `adapter: SQLite`; `_peek_driver` (#1232) names both adapters to
+  #     pick the driver extension `load` checks, and leaves any other adapter to the reader that
+  #     refuses it (two);
   #   - ConnectionPool: waiting for the SQLite worker before closing a handle, and SQLite's benign
   #     "no transaction is active" rollback — quirks whose other arm is the engine-neutral path;
   #   - planner: SQLite's reserved `sqlite_` index prefix, and its three `ADD COLUMN` limits, whose
   #     other arm is the plain `ADD COLUMN` every engine has;
   #   - importers: the SQLite-only importer's capability refusal; tools: the setup wizard's choice.
-  "src/Configuration.jl" => 6,
+  "src/Configuration.jl" => 8,
   "src/ConnectionPool.jl" => 2,
   "src/migrations/importers.jl" => 1,
   "src/migrations/planner.jl" => 4,

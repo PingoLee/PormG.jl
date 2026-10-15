@@ -189,9 +189,12 @@ function _run_boot_pattern_regression()
         # stdlib: under `Pkg.test` the child inherits a sandboxed load path with no default
         # environment and no `@stdlib`, so the child script's `using Pkg` resolves only through
         # this project. A developer's shell masks that (CI caught it on PR #621).
+        # `SQLite` because the package loads a SQLite configuration: since #1232 `load` refuses one
+        # whose driver extension is not loaded, at boot rather than on the first query.
         _write_scratch_project(pkg_root, pkg_name, _BOOT_APP_UUID,
-                               ["Pkg"   => "44cfe95a-1eb2-52ea-b672-e2afdf69b78f",
-                                "PormG" => "7d8d7541-4d3d-4580-80a2-17064efb0993"])
+                               ["Pkg"    => "44cfe95a-1eb2-52ea-b672-e2afdf69b78f",
+                                "PormG"  => "7d8d7541-4d3d-4580-80a2-17064efb0993",
+                                "SQLite" => "0aa819cd-b072-5ff4-a722-6bc24af294d9"])
 
         # Three environments so each wrong answer names its source: `test` is what the parent
         # process's PORMG_ENV would select through the implicit load, `staging` is what the file's
@@ -219,7 +222,7 @@ function _run_boot_pattern_regression()
         # witnesses that the body ran in the precompile worker and `__init__` in the loading process.
         write(joinpath(src_dir, "$(pkg_name).jl"), """
         module $(pkg_name)
-        using PormG
+        using PormG, SQLite
 
         const APP_ROOT = normpath(joinpath(@__DIR__, ".."))
         const DB_DIRS  = ["db"]

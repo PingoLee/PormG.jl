@@ -149,6 +149,8 @@ using .Utils
 # is what makes `using PormG; @import_models` work (and it's pinned in
 # test_public_exports.jl). Removing either export breaks the public macros.
 export @models_module, @import_models
+# The function form `import_models` (#1232) is defined in tools.jl and declared `public` below,
+# beside `setup`: a generic name, called qualified.
 
 include("Dialect.jl")
 import .Dialect
@@ -260,7 +262,7 @@ export with_tx_context, in_transaction_context  # Transaction context helpers
 # which is how every doc and README example already shows them. They ARE public API though, and
 # `docs/src/api.md` says so — `public` (Julia 1.11+) records that without putting them in scope on
 # a bare `using PormG`, and keeps them on the API page under `Private = false` (#289).
-public setup, install_ai_skills
+public setup, install_ai_skills, import_models
 export upgrade_guide  # version-scoped emitter over the `upgrading/` log (#216)
 
 include("Migrations.jl")

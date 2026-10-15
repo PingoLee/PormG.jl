@@ -61,8 +61,8 @@ PostgreSQL can also run on the pure-Julia [Postgres.jl](https://github.com/Julia
 `postgres_driver: Postgres` — see [Choosing the PostgreSQL driver](configuration/connection_yml.md#Choosing-the-PostgreSQL-driver).
 
 Load the driver alongside PormG (`using PormG, LibPQ` or `using PormG, SQLite`). A bare
-`using PormG` loads the ORM but no backend, so the first query raises a clear error telling you
-which driver to load:
+`using PormG` loads the ORM but no backend, so `Configuration.load` raises a clear error
+(`MissingConfigurationError`) telling you which driver to load:
 
 ```text
 PormG: the PostgreSQL backend requires LibPQ. Run `using LibPQ` (or `using PormG, LibPQ`) so the PostgreSQL extension loads.

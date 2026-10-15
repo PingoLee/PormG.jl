@@ -161,17 +161,23 @@ macro so that the submodule binding lands in the correct world age.
 function _post_import_setup(calling_module::Module, source_file::String,
                             import_path::String, alias::Symbol)
     resolved_path = resolve_import_models_path(source_file, import_path, calling_module)
-    dir_path = dirname(resolved_path)
-    is_precompiling = ccall(:jl_generating_output, Cint, ()) != 0
-
     # Obtain the freshly-created submodule
     mod = getfield(calling_module, alias)
+    _setup_imported_models!(mod, resolved_path)
+    return nothing
+end
+
+# What `@import_models` and `import_models` do once the models module exists: the `__init__` belt,
+# the Revise callback, and the registration (#1232 shares it between the macro and the function).
+function _setup_imported_models!(mod::Module, resolved_path::String)::Nothing
+    dir_path = dirname(resolved_path)
+    is_precompiling = ccall(:jl_generating_output, Cint, ()) != 0
 
     # Inject __init__() into the submodule (a belt only — see the note on `ensure_models_init!`)
     try
         ensure_models_init!(mod, dir_path)
     catch e
-        @warn "PormG: Failed to inject __init__() for module $(string(alias))" exception=e
+        @warn "PormG: Failed to inject __init__() for module $(string(nameof(mod)))" exception=e
     end
 
     # Register a Revise hot-reload callback (skip during precompilation)

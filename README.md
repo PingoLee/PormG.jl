@@ -64,7 +64,7 @@ Pkg.add("SQLite")    # SQLite
 # Pkg.add("Postgres") # PostgreSQL through Postgres.jl — experimental, opt in with `postgres_driver: Postgres`
 ```
 
-A bare `using PormG` loads the ORM but no backend; the first query then raises a clear error
+A bare `using PormG` loads the ORM but no backend; `Configuration.load` then raises a clear error
 telling you to `using LibPQ` (or `using SQLite`).
 
 ---

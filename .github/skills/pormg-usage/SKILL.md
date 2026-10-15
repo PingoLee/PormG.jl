@@ -33,8 +33,8 @@ task needs.
    none loaded it raises `InvalidConfigurationError`. In a package, load it again in `__init__`;
    repeating `load` with the same environment is free.
 4. **Load a driver package.** `LibPQ` (PostgreSQL) and `SQLite` are weak dependencies:
-   `using PormG, LibPQ`. Without one the first query raises *"the PostgreSQL backend requires
-   LibPQ"*.
+   `using PormG, LibPQ`. Without one `Configuration.load` raises `MissingConfigurationError`
+   (*"the PostgreSQL backend requires LibPQ"*) at boot.
 5. **Field lookups are case-sensitive.** Query a field in the case it was declared
    (`"constructorid__name"`, not `"constructorId__name"`).
 6. **Traverse relations with `__`, filter with `__@op`.** `"driverid__nationality" => "British"`,

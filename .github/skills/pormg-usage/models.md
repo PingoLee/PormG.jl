@@ -53,6 +53,16 @@ PormG.@import_models "db/models.jl" models
 import .models as M
 ```
 
+A script that works with two databases at once can use the function form, which takes the path
+relative to `pwd()` and returns the models module:
+
+```julia
+PormG.Configuration.load("db"; env = "dev")
+PormG.Configuration.load("db_archive"; env = "dev")
+M = PormG.import_models("db/models.jl"; into = Module(:Live))         # both files define
+A = PormG.import_models("db_archive/models.jl"; into = Module(:Archive))   # `module models`
+```
+
 `@import_models` resolves its path relative to the file that calls it. It evaluates the models
 module and registers every model with PormG. Prefer it to `include` — it is what makes a model
 edit reload cleanly under Revise.

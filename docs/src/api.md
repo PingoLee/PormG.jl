@@ -718,9 +718,15 @@ transaction.
 
 ## Configuration API
 
-### `Configuration.load(path; env=nothing, root=nothing, force=false)`
+### `Configuration.load(path; env=nothing, root=nothing, force=false, before_connect=nothing)`
 
-Loads a database configuration folder. Use `env` to explicitly set the environment instead of relying on `ENV["PORMG_ENV"]`.
+Loads a database configuration folder. Use `env` to explicitly set the environment instead of relying on `ENV["PORMG_ENV"]`;
+outside a REPL one of the two is required (#1228).
+
+The adapter's driver package must be loaded first — `using LibPQ` (or `Postgres`) / `using SQLite` —
+or `load` raises `MissingConfigurationError` naming it, at boot rather than on the first query
+(#1232). `before_connect = (key, settings) -> Bool` gives this key its own hook, run before a
+physical connection is opened, in place of the process-wide `set_before_connect_hook`.
 
 ```julia
 PormG.Configuration.load("db"; env="prod")
@@ -1118,11 +1124,18 @@ on SQLite a write needs `mode = :write`)
 ### Utilities & lifecycle
 `upgrade_guide`, `register_ignore_tables!`, `@import_models`, `@models_module`, `@pormg_debug`
 
-!!! note "`setup` and `install_ai_skills` are qualified-call-only"
-    The one-off lifecycle helpers `PormG.setup()` (interactive project wizard) and
-    `PormG.install_ai_skills()` are deliberately **not exported** — their generic names
-    would otherwise land in every `using PormG` namespace. Call them qualified, exactly
-    as shown throughout these docs.
+`PormG.import_models(path; into = Main)` is the function form of `@import_models` (#1232), for a
+script or a REPL that compares several databases: it includes the models file at `path` (relative to
+`pwd()`), registers its models like the macro, and returns the models module.
+
+`Configuration.connection(key)` returns the pool registered under `key`, positionally like
+`get_settings(key)`, `ping(key)` and `status(key)`; the keyword form `connection(; key)` is legacy.
+
+!!! note "`setup`, `install_ai_skills` and `import_models` are qualified-call-only"
+    The one-off lifecycle helpers `PormG.setup()` (interactive project wizard),
+    `PormG.install_ai_skills()` and `PormG.import_models(...)` are deliberately **not exported** —
+    their generic names would otherwise land in every `using PormG` namespace. Call them qualified,
+    exactly as shown throughout these docs.
 
 !!! note "`fetch` extends `Base.fetch`"
     The low-level `fetch(settings, sql; params=[...])` escape hatch (values bound with

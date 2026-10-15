@@ -44,7 +44,9 @@ on both. #1147 step 2 sorts each case by what the expression MEANS, never by the
 
 `output_field` on `Coalesce`/`Greatest`/`Least` renders the same cast, so it follows the same rules, and
 so does a `Case`'s, over each branch value (#1217).
-A CTE column built from `Sum`/`Avg`, and a `Subquery`, are classified by the body's own projection.
+A CTE column is read by the field the CTE model gives it, the type its expression means (#1218), and
+a `Subquery` by the expression it projects. A whole number PostgreSQL computes as `numeric` is the one
+answer a CTE column keeps from its body, which records it while it builds (#1127).
 #1050 narrows the float-literal arm of #1040 to a literal with more places than the scale, and #1087
 reads a zero-scale `DecimalField` like an integer column until it is divided.
 
@@ -358,12 +360,14 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CTE: a column built from Sum or Avg is classified by the body's projection
+# CTE: a column built from Sum or Avg is classified like the aggregate
 # `_set_field_from_sql_function` types a `Sum` column as an integer and an `Avg` one as its
 # operand's field, which let `Concat` over `Avg("number")` or `Sum("points")` through as a CTE
-# column while the same aggregate written directly was refused. The body's classification is
-# recorded while it builds, so both `Concat` and `Cast` see it: `Concat` refuses it on every engine
-# (explicit intent), a cast of the `Avg` column to an integer on SQLite only (meaning, #1028).
+# column while the same aggregate written directly was refused. The CTE model now gives a computed
+# column the field its expression means (#1218): `Avg("number")` is a float, `Sum("points")` a float,
+# so both `Concat` and `Cast` read it as one, and the message names that field (#1034 phase 3 step
+# 2c). `Concat` refuses it on every engine (explicit intent), a cast of the `Avg` column to an integer
+# on SQLite only (meaning, #1028).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1028: a CTE column from Sum/Avg is classified like the aggregate" begin
   function withcte(outer)
@@ -376,18 +380,17 @@ end
     return q
   end
   cte(outer) = conn -> _ccd_sql(withcte(outer); conn = conn)
-  for (col, kind, issue) in (("avg_n", "`AVG(…)`", "#1027"), ("sum_p", "`SUM(…)` over the FloatField `points`", "#1027"),
-                             ("last", "timestamp", "#1028"))
+  for (col, field, issue) in (("avg_n", "FloatField", "#1027"), ("sum_p", "FloatField", "#1027"),
+                              ("last", "DateTimeField", "#1028"))
     for msg in _ccd_refused_everywhere(nothing; issue = issue, run = cte(Fn.Concat(Fn.Value("-"), PormG.CTE("c", col))))
-      @test occursin("the CTE column `CTE(\"c\", \"$(col)\")`", msg)
-      @test occursin(kind, msg)
+      @test occursin("the $(field) `CTE(\"c\", \"$(col)\")`", msg)
     end
     # The same spelling `"c__<col>"` resolves to the same handle.
     for msg in _ccd_refused_everywhere(nothing; issue = issue, run = cte(Fn.Concat(Fn.Value("-"), "c__$(col)")))
-      @test occursin("the CTE column", msg) && occursin(kind, msg)
+      @test occursin("the $(field) `CTE(\"c\", \"$(col)\")`", msg)
     end
   end
-  _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1028", named = "the CTE column `CTE(\"c\", \"avg_n\")`",
+  _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1028", named = "the FloatField `CTE(\"c\", \"avg_n\")`",
               run = cte(Fn.Cast(PormG.CTE("c", "avg_n"), Models.IntegerField())))
   # An integer CTE column has one text, and passes both.
   for col in ("max_n", "cnt")
@@ -1806,22 +1809,23 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A CTE column answers the division and text rules as its body expression does (#1034 phase 3, step 1)
-# The CTE model types each column with one field (`Count` an integer, `Sum` an integer whatever it
-# sums, `Avg` its operand's field), which cannot say what the rules ask: whether the column is a
-# `bigint` on PostgreSQL, a whole number PostgreSQL computes as `numeric`, or a value with no single
-# text. So the outer query asks the column's BODY expression. This pins what each answer does to the
-# outer query, through every rule that reads it, on shapes the expression-kind matrix cannot build
-# (its models have no JSON field):
+# A CTE column answers the division and text rules as its body expression does (#1034 phase 3, steps 1, 2c)
+# A CTE column is read as a column is: by the field the CTE model gives it, which is the type its
+# expression means (#1218), and its kind (`cte["kinds"]`). Neither can say whether it is a whole
+# number PostgreSQL computes as `numeric`, which holds exactly where the walk names no kind, so the
+# body records that answer while it builds (`CTEDivision`, #1127). This pins what each answer does to
+# the outer query, through every rule that reads it, on shapes the expression-kind matrix cannot
+# build (its models have no JSON field):
 # - a body `Sum(F("laps_total") + F("payload__n"))` sums a `bigint` with a value the walk cannot type,
 #   so PostgreSQL's `sum(bigint)` is a `numeric`: divided, refused there (#1111), built on SQLite;
 # - a body `Count` is a `bigint` on PostgreSQL: summed beside an untyped value, the same (#1111). Beside
 #   an integer column the walk names the sum, and PostgreSQL renders `SUM(…)::bigint` (#1147), so it builds;
-# - a body `Avg` has no single integer: cast to one, refused on SQLite (#1028); of an interval, as an
-#   interval (#1259);
+# - a body `Avg` of a float is a float: cast to an integer, refused on SQLite (#1028). Of an interval
+#   it is an interval, whose cast to an integer SQLite refuses too (#1259);
 # - a body JSON key lookup is the key's value, not the document, and a zero-scale decimal is whole:
 #   `Concat` and a scaled cast over them build.
-# The messages name the CTE column and, in parentheses, what its body is. Expected SQL where it builds,
+# A division answer names the CTE column and, in parentheses, what its body is; any other names the
+# column by its field. Expected SQL where it builds,
 # `Cast(CTE("c", "w"), "text")`: the body `SUM(("Tb"."laps_total" + "Tb"."payload" #>> '{"n"}')) as "w"`
 # read as `("R1_1"."w")::text` on PostgreSQL; `SUM(("Tb"."laps_total" + json_extract("Tb"."payload",
 # '$.n'))) as "w"` read as `CAST("R1_1"."w" AS TEXT)` on SQLite.
@@ -1832,6 +1836,7 @@ end
     body = CCD.Ccd_driver.objects
     body.values("id",
                 "w"    => Fn.Sum(_CF("laps_total") + _CF("payload__n")),   # a `sum(bigint)` the walk cannot type
+                "wq"   => Fn.Sum(_CF("laps_total") + _CF("payload__n")) / 2,  # … and its quotient
                 "cnt"  => Fn.Count("id"),                                    # a `bigint`, typed as an integer
                 "bf"   => _CF("laps_total") * _CF("points"),                 # a float, with a `bigint` side
                 "avgl" => Fn.Avg("laptime"),
@@ -1851,6 +1856,14 @@ end
                 Fn.Cast(Fn.Floor(PormG.CTE("c", "w")) / 2, Models.IntegerField()))
     _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111", named = w, run = cte(outer))
   end
+  # The column that IS that quotient holds PostgreSQL's half already: cast to an integer or a scaled
+  # numeric, refused there. The undivided sum has nothing to split, so the same casts build. The type
+  # walk names neither, so the body records which one each column is (`CTEDivision`).
+  wq = "the CTE column `CTE(\"c\", \"wq\")` (arithmetic over `SUM(…)` over a value PormG cannot type)"
+  for target in (Models.IntegerField(), "numeric(10,1)")
+    _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111", named = wq, run = cte(Fn.Cast(PormG.CTE("c", "wq"), target)))
+    @test _ccd_builds(nothing; run = cte(Fn.Cast(PormG.CTE("c", "w"), target)))
+  end
   # An outer `Sum` over it is itself a sum the walk cannot type, so the refusal names that one.
   _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111", named = "of arithmetic over `SUM(…)` over a value PormG cannot type",
               run = cte(Fn.Cast(Fn.Sum(Fn.Coalesce(PormG.CTE("c", "w"), 0)) / 2, Models.IntegerField())))
@@ -1863,15 +1876,15 @@ end
   @test _ccd_builds(nothing; run = cte(Fn.Cast(Fn.Sum(Fn.Coalesce(PormG.CTE("c", "cnt"), "number")) / 2, Models.IntegerField())))
   # A float with a `bigint` side: the float decides, so the cast to an integer is SQLite's truncation.
   _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1028",
-              named = "the CTE column `CTE(\"c\", \"bf\")` (arithmetic over the FloatField `points`)",
+              named = "over the FloatField `CTE(\"c\", \"bf\")`",
               run = cte(Fn.Cast(Fn.Sum(Fn.Coalesce(PormG.CTE("c", "bf"), "payload__n")) / 2, Models.IntegerField())))
   # An average, of an interval or of a float, cast to an integer.
-  for (col, issue) in (("avgl", "#1259"), ("avgp", "#1028"))
-    _ccd_expect(nothing; departs = _SL_ONLY, issue = issue, named = "the CTE column `CTE(\"c\", \"$(col)\")` (`AVG(…)`)",
+  for (col, field, issue) in (("avgl", "DurationField", "#1259"), ("avgp", "FloatField", "#1028"))
+    _ccd_expect(nothing; departs = _SL_ONLY, issue = issue, named = "the $(field) `CTE(\"c\", \"$(col)\")`",
                 run = cte(Fn.Cast(PormG.CTE("c", col), Models.IntegerField())))
   end
   # Explicit intent: an average in `Concat`, on every engine.
-  _ccd_refused_everywhere(nothing; issue = "#1027", named = "the CTE column `CTE(\"c\", \"avgp\")` (`AVG(…)`)",
+  _ccd_refused_everywhere(nothing; issue = "#1027", named = "the FloatField `CTE(\"c\", \"avgp\")`",
                           run = cte(Fn.Concat("surname", PormG.CTE("c", "avgp"))))
   # Built: the JSON key's value and the zero-scale decimal in `Concat`, the decimal to a wider scale,
   # and the `numeric` sum to text.
@@ -1879,4 +1892,48 @@ end
                 Fn.Cast(PormG.CTE("c", "mxg"), "numeric(10,2)"), Fn.Cast(PormG.CTE("c", "w"), "text"))
     @test _ccd_builds(nothing; run = cte(outer))
   end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1034 phase 3 step 2c: a CTE column is classified by its kind before its field
+# The field the CTE model gives a computed column can be narrower than the column's kind: a `Case`
+# takes its first branch's field (a zero-scale `DecimalField` beside one with places, a `DurationField`
+# or `DateTimeField` branch the read path keeps no record of), and an `Avg` of a zero-scale decimal
+# keeps its operand's. So `Concat` and the casts read the kind the column means first
+# (`_cte_textless_record`): each column below is refused where it was when the classifier asked the
+# body's expression, before step 2c. Messages name the field that spells the kind.
+# Why: reading the field alone let a duration `Case` through a CTE build on SQLite under an integer
+# cast (its hours), and a zero-scale `Avg` through every cast there (review of step 2c).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1034: a CTE column is classified by its kind before its field" begin
+  function withcte(col, expr, outer)
+    group = startswith(col, "avg") ? "team" : "id"
+    q = CCD.Ccd_team.objects
+    body = CCD.Ccd_driver.objects
+    body.values(group, col => expr)
+    q.with("c" => body, join_field = "id" => group)
+    q.values("x" => outer)
+    return q
+  end
+  cte(col, expr, outer) = conn -> _ccd_sql(withcte(col, expr, outer); conn = conn)
+  ref(col) = PormG.CTE("c", col)
+  case_lt = Fn.Case(Fn.When("number" => 1, then = _CF("laptime")))
+  case_ts = Fn.Case(Fn.When("number" => 1, then = _CF("start_at")), default = nothing)
+  case_gp = Fn.Case(Fn.When("number" => 1, then = _CF("grid")), default = _CF("price"))
+  avg_g = Fn.Avg("grid")
+  # Explicit intent: each in `Concat`, on every engine.
+  for (col, expr, issue, field) in (("case_lt", case_lt, "#1028", "DurationField"), ("case_ts", case_ts, "#1028", "DateTimeField"),
+                                    ("case_gp", case_gp, "#1027", "DecimalField"), ("avg_g", avg_g, "#1027", "DecimalField"))
+    _ccd_refused_everywhere(nothing; issue = issue, named = "the $(field) `CTE(\"c\", \"$(col)\")`",
+                            run = cte(col, expr, Fn.Concat(Fn.Value("-"), ref(col))))
+  end
+  # Meaning, on SQLite: the duration to a number (#1259), the decimals to an integer (#1028) and to a scale (#1040).
+  for target in (Models.IntegerField(), "numeric(10,0)")
+    _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1259", run = cte("case_lt", case_lt, Fn.Cast(ref("case_lt"), target)))
+  end
+  for (col, expr) in (("case_gp", case_gp), ("avg_g", avg_g))
+    _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1028", run = cte(col, expr, Fn.Cast(ref(col), Models.IntegerField())))
+    _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1040", run = cte(col, expr, Fn.Cast(ref(col), "numeric(10,0)")))
+  end
+  _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1040", run = cte("avg_g", avg_g, Fn.Cast(ref("avg_g"), "numeric(10,2)")))
 end

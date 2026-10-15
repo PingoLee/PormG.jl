@@ -515,8 +515,10 @@ arithmetic, `Greatest`/`Least` over computed timestamps or intervals, a `Case` w
 such values) passes. A JSON key lookup (`"payload__driver"`) passes too: PormG cannot know which type a key
 holds. A `Subquery` is classified by the one expression it projects (#1124): one over a float
 column or an `Avg` is refused as the float or the `Avg` is, and one over a text or integer column,
-or over `Cast(Round(x), IntegerField())`, passes. A CTE column is classified by its body's own
-expression (#1127), since the CTE gives a computed column a plain type whatever it computes.
+or over `Cast(Round(x), IntegerField())`, passes. A CTE column is classified by the type its body
+expression means: an `Avg` column is a float (or a decimal, or an interval), as the `Avg` is, and a
+column that is an integer quotient PostgreSQL computes as `numeric` is refused as that quotient is
+(#1127).
 
 ```julia
 using PormG.Functions: Case, When, Concat, Cast, Value

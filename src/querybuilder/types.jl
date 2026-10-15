@@ -216,12 +216,19 @@ const OptionalString = Union{String,Nothing}
 """Database connections."""
 const ConnType = Union{PormGSQLite,PormGPostgres,Nothing}
 
-# #1147: `"kinds"` holds the type of each column's expression (`_expression_kind`); #1034 phase 3:
-# `"body"` the body's built instruction, which the outer query asks about a column's expression
-# (`_cte_body_record`). Both are per build (`_build_cte_custom_model`).
+# #1034 phase 3 step 2c — what the integer-division view (#1111) answers for a computed CTE column,
+# asked while the body could still resolve its paths: `divided`, the column divided
+# (`_whole_numeric_operand`), and `quotient`, the column itself when it is such a quotient (a division
+# kind of `_concat_textless_operand`). Each is a `(kind, what)` or `nothing`. The type walk cannot
+# carry either: they hold where it names no kind (a `Sum` it cannot type), and a sum and its quotient
+# have that same no-kind.
+const CTEDivision = @NamedTuple{divided::Union{Tuple{Symbol,String},Nothing}, quotient::Union{Tuple{Symbol,String},Nothing}}
+# #1147: `"kinds"` holds the type of each column's expression (`_expression_kind`); #1034 phase 3 step
+# 2c: `"divisions"` the division answers of each computed column that has one. Both are per build
+# (`_build_cte_custom_model`).
 """CTE configuration dictionary."""
-const CTEDict = Dict{String,Union{SQLObjectHandler,PormGModel,Pair,String,Nothing,SQLInstruction,
-                                  Dict{String,CanonicalType}}}
+const CTEDict = Dict{String,Union{SQLObjectHandler,PormGModel,Pair,String,Nothing,
+                                  Dict{String,CanonicalType},Dict{String,CTEDivision}}}
 
 # #487 — one materialized JOIN, typed by KIND.
 #
@@ -920,7 +927,7 @@ function _copy_ctes(ctes::OrderedCollections.OrderedDict{String,CTEDict})::Order
   for (name, cte_dict) in ctes
     fresh = CTEDict()
     for (k, v) in cte_dict
-      k in ("model", "kinds", "body") && continue  # transient per-build artifacts; re-materialized each build
+      k in ("model", "kinds", "divisions") && continue  # transient per-build artifacts; re-materialized each build
       fresh[k] = v isa SQLObjectHandler ? deepcopy(v) : v
     end
     out[name] = fresh

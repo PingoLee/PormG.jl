@@ -2000,14 +2000,15 @@ end
     @test is_concat(refusal(race(Concat(Value("|"), "start_at"))))
     @test is_concat(refusal(() -> (q = M.Lap_times.objects; q.filter("raceid" => 841); q.values("x" => Concat(Value("|"), "time")); q |> DataFrame)))
     @test is_concat(refusal(() -> (q = M.Field_validation_scratch.objects; q.values("x" => Concat(Value("|"), "payload")); q |> DataFrame)))
-    # A CTE column built from `Sum("points")`, which the CTE types as an integer, is a float to Concat.
+    # A CTE column built from `Sum("points")` is a float to Concat: the CTE model types it as the float
+    # it means (#1218), and the message names that field (#1034 phase 3 step 2c).
     q = M.Driver.objects
     body = M.Result.objects
     body.values("driverid", "total" => Sum("points"))
     q.with("c" => body, join_field = "driverid" => "driverid")
     q.values("x" => Concat("driverref", Value("-"), CTE("c", "total")))
     err = refusal(() -> q |> DataFrame)
-    @test err isa PormG.QueryBuildError && occursin("the CTE column `CTE(\"c\", \"total\")`", sprint(showerror, err))
+    @test err isa PormG.QueryBuildError && occursin("the FloatField `CTE(\"c\", \"total\")`", sprint(showerror, err))
 
     # The integer escape: every rounding function reads what Julia computes, on every engine.
     q = M.Result.objects

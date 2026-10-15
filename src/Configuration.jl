@@ -637,7 +637,8 @@ env(x::String) = env(path=x)
 # The environment the process states (#1228): `ENV["PORMG_ENV"]`, or `nothing` when it is unset or
 # blank. A blank value used to count as set and select the environment `""`, which no
 # `connection.yml` defines; a host that clears the variable means "unset", so it is read that way.
-# The one reader of the variable — `_effective_env`, `register_connection` and `Settings()` all ask here.
+# The one reader of the variable — `_effective_env`, `_registered_env` (`register_connection`) and
+# `Settings()` all ask here.
 function _pormg_env()::Union{Nothing, String}
   value = get(ENV, "PORMG_ENV", nothing)
   value === nothing && return nothing
@@ -1798,44 +1799,81 @@ function connection(; key::String = "db")
 end
 connection(key::String) = connection(; key = key)
 
-function get_settings(key::String)
-  if !haskey(config, key) && _CONNECTION_RESOLVER[] !== nothing
-    # Attempt lazy resolution
-    try
-      res = _CONNECTION_RESOLVER[](key)
-      if res !== nothing
-        if res isa Tuple
-          url, adapter, pool_size = res
-          register_connection(key, url; adapter=adapter, pool_size=pool_size)
-        elseif res isa Dict
-          url = get(res, "url", nothing)
-          adapter = get(res, "adapter", "PostgreSQL")
-          pool_size = get(res, "pool_size", 3)
-          postgres_driver = get(res, "postgres_driver", nothing)
-          url !== nothing && register_connection(key, url; adapter=adapter, pool_size=pool_size,
-                                                 postgres_driver=postgres_driver)
-        end
+# Ask the connection resolver (`set_connection_resolver`) for a `key` that is not in `config`, and
+# register what it answers. A no-op when the key is registered or no resolver is set. The one place
+# a key is resolved lazily: `get_settings` and `Models.bind!` (#1255) both call it, so a key that
+# every query on a model would resolve is one `bind!` accepts too.
+function _resolve_lazily!(key::String)::Nothing
+  (haskey(config, key) || _CONNECTION_RESOLVER[] === nothing) && return nothing
+  try
+    res = _CONNECTION_RESOLVER[](key)
+    if res !== nothing
+      if res isa Tuple
+        url, adapter, pool_size = res
+        register_connection(key, url; adapter=adapter, pool_size=pool_size)
+      elseif res isa Dict
+        url = get(res, "url", nothing)
+        adapter = get(res, "adapter", "PostgreSQL")
+        pool_size = get(res, "pool_size", 3)
+        postgres_driver = get(res, "postgres_driver", nothing)
+        env = get(res, "env", nothing)
+        url !== nothing && register_connection(key, url; adapter=adapter, pool_size=pool_size,
+                                               postgres_driver=postgres_driver, env=env)
       end
-    catch e
-      @error "Error in lazy connection resolver for key '$key'" exception=(e, catch_backtrace())
     end
+  catch e
+    # A refusal from `register_connection` — no environment stated (#1256), an unsupported adapter —
+    # is the caller's to see: logging it and then raising "not found" hid what to fix.
+    e isa InvalidConfigurationError && rethrow()
+    @error "Error in lazy connection resolver for key '$key'" exception=(e, catch_backtrace())
   end
+  return nothing
+end
 
+# The environment a `register_connection` entry records (#1256): the #1228 rule `load` follows, with
+# messages that name this call. First wins: `env=`, a non-blank `PORMG_ENV`, then — in an interactive
+# session only — `"dev"`, logged. A service, a test or a script that states neither gets
+# `InvalidConfigurationError`: the entry's `app_env` is what `env(key)` and `status(key)` report, and
+# code that branches on it would read an environment nobody chose.
+function _registered_env(env::Union{Nothing, AbstractString}, key::String)::String
+  env !== nothing && return String(env)
+  stated = _pormg_env()
+  stated !== nothing && return stated
+  if !_is_interactive()
+    throw(InvalidConfigurationError(
+      "No environment was selected for the dynamic connection \"$(key)\". Pass it — " *
+      "`PormG.Configuration.register_connection($(repr(key)), url; env = \"…\")`, or an \"env\" entry " *
+      "in the resolver's Dict — or set `PORMG_ENV`. Outside an interactive session PormG does not " *
+      "fall back to `$(DEV)`."))
+  end
+  @info("PormG: no `env` was passed to `register_connection` and `PORMG_ENV` is not set, so the " *
+        "built-in default selected the environment. Pass `env = …` to choose it.", env = DEV, key = key)
+  return DEV
+end
+
+function get_settings(key::String)
+  _resolve_lazily!(key)
   haskey(config, key) || throw(InvalidConfigurationError("Settings for key '$(key)' not found. Ensure it is loaded via 'load()' or registered via 'register_connection()'."))
   return config[key]  
 end
 
 """
-    register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3)
+    register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, env = nothing)
 
 Register a new database connection pool dynamically using a connection URL.
 Useful for multi-tenant applications or connecting to dynamic data sources.
+
+`env` is the environment the entry records — what `env(key)` and `status(key)` report. The rule is
+`load`'s (#1228, #1256): `env =` when passed, else a non-blank `PORMG_ENV`, else — in an interactive
+session (a REPL) only — `"dev"`, with an `@info` saying so. A service, a test or a script that states
+neither gets `InvalidConfigurationError`, before any pool is built or replaced. A connection resolver
+(`set_connection_resolver`) states it with an `"env"` entry in the `Dict` it returns.
 
 `postgres_driver` picks the driver of a PostgreSQL pool, as the `postgres_driver:` key does in
 `connection.yml`: `"LibPQ"` or `"Postgres"` (experimental). Unset, it falls back to the
 `PORMG_POSTGRES_DRIVER` environment variable, then LibPQ.
 """
-function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, leak_detection_threshold::Real = 0, fail_fast_on_connect::Bool = true, postgres_driver::Union{Nothing, AbstractString, Symbol} = nothing)
+function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, leak_detection_threshold::Real = 0, fail_fast_on_connect::Bool = true, postgres_driver::Union{Nothing, AbstractString, Symbol} = nothing, env::Union{Nothing, AbstractString} = nothing)
   # SAFETY: Deny using folder paths as dynamic keys to avoid hijacking static configs
   if isdir(key)
     throw(InvalidConfigurationError("Cannot register dynamic connection using key '$(key)'. Folder paths are reserved for static configurations loaded via 'load()'."))
@@ -1844,12 +1882,15 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
   # Default acquire timeout (#126); <= 0 falls back to DEFAULT_POOL_TIMEOUT (shared with _build_connection_pool!).
   pool_timeout = _normalize_pool_timeout(pool_timeout)
 
+  if haskey(config, key) && !config[key].dynamic
+    throw(InvalidConfigurationError("Cannot overwrite static connection '$(key)'. This key is bound to folder '$(config[key].db_def_folder)'."))
+  end
+  # Every refusal comes before the existing entry is closed below, so a refused re-registration
+  # leaves its pool serving (#1256): the adapter, then the environment.
+  adapter in ("PostgreSQL", "SQLite") || throw(InvalidConfigurationError("Unsupported adapter: $adapter"))
+  app_env = _registered_env(env, key)
+
   if haskey(config, key)
-    existing = config[key]
-    if !existing.dynamic
-      throw(InvalidConfigurationError("Cannot overwrite static connection '$(key)'. This key is bound to folder '$(existing.db_def_folder)'."))
-    end
-    
     @warn "Dynamic connection '$(key)' already exists. Closing old pool before re-registering."
     close_pool!(key)
   end
@@ -1858,7 +1899,7 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
   # `db_def_folder` holds a label only, kept so a `before_connect` hook reading the folder still
   # gets a string — nothing in PormG compares against it.
   settings = Settings(
-    app_env = something(_pormg_env(), DEV),
+    app_env = app_env,
     db_def_folder = "dynamic_connection",
     dynamic = true
   )
@@ -1974,6 +2015,11 @@ PormG.Configuration.unregister_connection("db")
 
 Registering the same key again replaces the offline entry. A key that `load` or
 `register_connection` registered is refused, not overwritten.
+
+The entry's environment is always `"dev"` — `env(key)` and `status(key)` report it — whatever
+`PORMG_ENV` says (#1256). An offline entry reads no `connection.yml`, so there is no environment block
+for anything to select; the value is a constant, not the `load` fallback, and no session-dependent
+rule applies.
 """
 function register_offline(key::String; adapter::Symbol = :postgres,
                           django_prefix::Union{Nothing, AbstractString} = nothing,
@@ -1990,7 +2036,7 @@ function register_offline(key::String; adapter::Symbol = :postgres,
   pool = adapter === :postgres ? CP.PostgresConnectionPool(_OFFLINE_CONNECTION; pool_size = 1) :
                                  CP.SQLiteConnectionPool(_OFFLINE_CONNECTION; pool_size = 1)
   config[key] = Settings(
-    app_env = something(_pormg_env(), DEV),
+    app_env = DEV,                # a constant (#1256): an offline entry has no environment to select
     db_def_folder = key,          # `set_models(mod, key)` resolves to it like a loaded folder
     db_config_settings = Dict{String, Any}("adapter" => (adapter === :postgres ? "PostgreSQL" : "SQLite"),
                                            "offline" => true),

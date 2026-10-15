@@ -12,7 +12,7 @@ Register a connection pool manually at any time using a connection string or ada
     The first write raises `WritesDisabledError`. Enable it on the settings object directly:
 
     ```julia
-    PormG.register_connection("tenant_01", "postgres://user:pass@host/db_01")
+    PormG.register_connection("tenant_01", "postgres://user:pass@host/db_01"; env = "prod")
     PormG.config["tenant_01"].change_data = true    # otherwise every write is refused
     ```
 
@@ -39,11 +39,19 @@ Register a connection pool manually at any time using a connection string or ada
 
 ```julia
 # PostgreSQL
-PormG.register_connection("tenant_01", "postgres://user:pass@localhost/db_01")
+PormG.register_connection("tenant_01", "postgres://user:pass@localhost/db_01"; env = "prod")
 
 # SQLite
-PormG.register_connection("temp_cache", "cache.db"; adapter="SQLite")
+PormG.register_connection("temp_cache", "cache.db"; adapter="SQLite", env = "prod")
 ```
+
+!!! note "The environment is stated, not guessed (#1256)"
+    The entry records an environment — what `Configuration.env(key)` and `status(key)` report —
+    chosen the way [`load` chooses one](connection_yml.md): `env =` when passed, else a non-blank
+    `PORMG_ENV`, else, in an interactive session (a REPL) only, `"dev"` with an `@info` saying so.
+    A service, a test or a script that states neither gets `InvalidConfigurationError`, raised before
+    any pool is built or an existing one under the key is closed. A deployment that exports
+    `PORMG_ENV` needs no `env =` on each call.
 
 A PostgreSQL connection can pick its driver with `postgres_driver = "Postgres"` (experimental; the
 default is `"LibPQ"`), as the `postgres_driver:` key does in `connection.yml` — see
@@ -84,7 +92,7 @@ PormG.Configuration.set_connection_resolver() do key
     if startswith(key, "client_")
         client_id = split(key, "_")[2]
         url = "postgres://user:pass@server/db_$(client_id)"
-        return (url, "PostgreSQL", 5) # (url, adapter, pool_size)
+        return Dict("url" => url, "adapter" => "PostgreSQL", "pool_size" => 5, "env" => "prod")
     end
     return nothing
 end
@@ -92,5 +100,9 @@ end
 # Use the key! PormG loads it lazily.
 results = M.Driver.objects.db("client_42").list()
 ```
+
+The resolver may also return a `(url, adapter, pool_size)` tuple, which carries no environment, so
+the key then takes it from `PORMG_ENV` (see the note above). A resolved key that cannot state one
+raises that `InvalidConfigurationError` from the query, rather than a generic "not found".
 
 This is the standard way to implement multi-tenancy in PormG. The developer logic resides in the resolver function, keeping the app code clean of connection-management details.

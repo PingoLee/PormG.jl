@@ -152,13 +152,15 @@ M.Lap_times.objects.
 PormG.Configuration.load_many(["db", "db_reporting"]; env = "dev")   # several static configs
 M.Driver.objects.filter("nationality" => "British").db("db_reporting").list()
 
-PormG.register_connection("tenant_42", "postgres://user:pass@host/tenant_42")  # at runtime
+PormG.register_connection("tenant_42", "postgres://user:pass@host/tenant_42"; env = "prod")  # at runtime
 PormG.config["tenant_42"].change_data = true    # runtime connections start read-only
 M.Driver.objects.db("tenant_42").list()
 ```
 
-`PormG.Configuration.set_connection_resolver(key -> …)` registers a resolver that PormG calls for an
-unknown key. That is the usual way to do per-tenant databases. See
+`register_connection` states its environment like `load`: `env =`, else `PORMG_ENV`; outside a REPL
+neither is an `InvalidConfigurationError`. `PormG.Configuration.set_connection_resolver(key -> …)`
+registers a resolver that PormG calls for an unknown key; it returns a `Dict` with `"url"`,
+`"adapter"`, `"pool_size"` and `"env"`. That is the usual way to do per-tenant databases. See
 [Dynamic & Multi-Tenancy](https://pingolee.github.io/PormG.jl/stable/configuration/dynamic/).
 
 ## Advisory locks (application-level mutual exclusion)

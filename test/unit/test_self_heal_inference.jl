@@ -45,3 +45,74 @@ using PormG.Models: Model, IDField
   static = Configuration.Settings(db_def_folder = "dynamic_connection")
   @test PormG.Models._infer_self_heal_key(m, [m], Dict("dynamic_connection" => static)) == "dynamic_connection"
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A never-registered model does not repeat the self-heal scan on every .objects (#1250)
+# What it tests: a model built with a bare `Model(...)` (no `_module`, no `connect_key`) is not
+#   found by `ensure_model_initialized`, and the "not found" is recorded against the signature of
+#   what the scan reads (`_unbound_scan_signature`). The next call does not scan: a registered module
+#   that DOES hold the model, swapped in for a placeholder without changing `REGISTERED_MODULES`'s
+#   size, is not found — the scan would have bound the model to it. Registering one more module
+#   changes the signature, so the call after that scans and binds. `.objects.db(key)` works on the
+#   cached model, and a model WITH a `_module` or a `connect_key` is never cached. No SQL: an
+#   offline key.
+# Why it matters: `.objects` calls `ensure_model_initialized` on every access, before `.db(key)` is
+#   seen, so a library's infrastructure model routed only through `.db(key)` paid a scan of every
+#   registered and marked module on every query (about a millisecond a query with fifty models in
+#   one marked module) for an answer that cannot change while nothing it reads changes.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a never-registered model is not re-scanned on every .objects (#1250)" begin
+  Models = PormG.Models
+  key = "heal1250_db"
+  registered = copy(Models.REGISTERED_MODULES)
+  try
+    Configuration.register_offline(key)
+    bare = Model("heal1250_tbl", id = IDField())
+    placeholder = Module(:Heal1250Placeholder)
+    Models.REGISTERED_MODULES[placeholder] = key
+
+    @test Models.ensure_model_initialized(bare) === false
+    @test get(Models._UNBOUND_SCAN, bare, nothing) == Models._unbound_scan_signature()
+
+    # Swap the placeholder for a module that holds `bare`: same size, so the scan is skipped. Both
+    # calls below go through `invokelatest`: the `Core.eval` binding is invisible to this running
+    # closure's world (Julia 1.12), so a direct call would not find `holder` even if it scanned,
+    # and the "skipped" assertion would pass for the wrong reason.
+    holder = Module(:Heal1250Holder)
+    Core.eval(holder, :(Heal1250_tbl = $bare))
+    delete!(Models.REGISTERED_MODULES, placeholder)
+    Models.REGISTERED_MODULES[holder] = key
+    @test Base.invokelatest(Models.ensure_model_initialized, bare) === false
+    @test Models.connection_key(bare) === nothing
+
+    # One more registered module changes the signature: the scan runs and finds `holder`.
+    Models.REGISTERED_MODULES[placeholder] = key
+    @test Base.invokelatest(Models.ensure_model_initialized, bare) === true
+    @test Models.connection_key(bare) == key
+
+    # Through `.objects`, routed by `.db(key)`: the first access records the miss, and the query is
+    # routed by `.db(key)` either way. (That the second access skips the scan is what the holder
+    # swap above proves; an equal entry afterwards would also follow from a second scan.)
+    routed = Model("heal1250_routed", id = IDField())
+    @test occursin("heal1250_routed", PormG.inspect_query(routed.objects.db(key))[:sql_text])
+    recorded = get(Models._UNBOUND_SCAN, routed, nothing)
+    @test recorded == Models._unbound_scan_signature()
+    @test occursin("heal1250_routed", PormG.inspect_query(routed.objects.db(key))[:sql_text])
+    @test get(Models._UNBOUND_SCAN, routed, nothing) === recorded
+
+    # A model with a module goes through #1226/#1227's paths, and one with a key through case 1,
+    # which reads `config`: neither is cached.
+    owned = Model("heal1250_owned", id = IDField())
+    owned._module = Module(:Heal1250Owner)
+    Models.ensure_model_initialized(owned)
+    @test !haskey(Models._UNBOUND_SCAN, owned)
+    keyed = Model("heal1250_keyed", id = IDField())
+    keyed.connect_key = "heal1250_unloaded"
+    @test Models.ensure_model_initialized(keyed) === false
+    @test !haskey(Models._UNBOUND_SCAN, keyed)
+  finally
+    empty!(Models.REGISTERED_MODULES)
+    merge!(Models.REGISTERED_MODULES, registered)
+    Configuration.unregister_connection(key)
+  end
+end

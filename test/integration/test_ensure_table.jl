@@ -92,3 +92,41 @@ end
         run_sql("DROP TABLE IF EXISTS \"$(table)\";")
     end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ensure_table! on a dotted db_table: one identifier, found again on every later boot (#1254)
+# What it tests: a model whose `db_table` holds a dot (`"ensure1254.lap_times"`) and a plain index (`db_index = true`).
+#   The first call returns `:created`, the second and third `:exists` without raising. The DDL quotes
+#   the whole name (`CREATE TABLE IF NOT EXISTS "ensure1254.lap_times"`), and `_live_table_exists`
+#   asks for the same single identifier (`to_regclass(quote_ident($1))` on PostgreSQL), so the two
+#   agree. No schema named `ensure1254` is involved.
+# Why it matters: #1254 read `quote_ident` as missing a schema-qualified table, which would make
+#   every boot re-run the DDL and fail on the plain `CREATE INDEX`. `db_table` is stored and quoted
+#   verbatim as ONE identifier on every path (`docs/src/schema_conventions.md`), so the existence
+#   check must look the name up whole; splitting it on the dot would look where the DDL never writes.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "ensure_table! on a dotted db_table on the live $(adapter_name) fixture (#1254)" begin
+    key = PORMG_DB_FOLDER
+    conn = PormG.config[key].connections
+    table = "ensure1254.lap_times"
+    model = PormG.Models.Model("ensure1254",
+        db_table = table,
+        id = PormG.Models.IDField(),
+        driverref = PormG.Models.CharField(max_length = 64, db_index = true))
+    PormG.Models.bind!(model, key)
+    run_sql(sql) = for part in split_statements(sql; conn = conn)
+        PormG.ConnectionPool.fetch(conn, part)
+    end
+
+    run_sql("DROP TABLE IF EXISTS \"$(table)\";")
+    try
+        @test !PormG.Migrations._live_table_exists(conn, table)
+        @test PormG.Migrations.ensure_table!(model, key) === :created
+        @test PormG.Migrations._live_table_exists(conn, table)
+        @test PormG.Migrations.ensure_table!(model, key) === :exists
+        @test PormG.Migrations.ensure_table!(model, key) === :exists   # no second CREATE INDEX
+        @test PormG.Migrations._live_column_exists(conn, table, "driverref")
+    finally
+        run_sql("DROP TABLE IF EXISTS \"$(table)\";")
+    end
+end

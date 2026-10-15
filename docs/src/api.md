@@ -810,6 +810,24 @@ info[:sql_text]    # "SELECT\n    *\nFROM \"drivers\" as \"Tb\"\nWHERE \"Tb\".\"
 PormG.Configuration.unregister_connection("db")
 ```
 
+Its environment is always `"dev"`, whatever `PORMG_ENV` says (#1256): an offline entry reads no
+`connection.yml`, so there is no environment block to select, and the value is a constant rather than
+`load`'s fallback.
+
+### `Configuration.register_connection(key, url; adapter = "PostgreSQL", pool_size = 3, env = nothing, …)`
+
+Registers a connection pool at runtime from a connection string — see
+[Dynamic & Multi-Tenancy](configuration/dynamic.md). The environment the entry records, which
+`env(key)` and `status(key)` report, follows `load`'s rule (#1228, #1256): `env =` when passed, else a
+non-blank `PORMG_ENV`, else — in an interactive session only — `"dev"` with an `@info`. A service, a
+test or a script that states neither gets `InvalidConfigurationError`, before any pool is built or
+replaced. A connection resolver states it with an `"env"` entry in the `Dict` it returns:
+
+```julia
+PormG.Configuration.register_connection("tenant_monaco", "postgres://user:pass@host/monaco"; env = "prod")
+PormG.Configuration.env("tenant_monaco")   # "prod"
+```
+
 ### `Configuration.close_all!()`
 
 Closes every registered pool without waiting for connections still checked out; the entries stay
@@ -829,8 +847,10 @@ PormG.Models.connection_key(M.Driver)   # "db"
 
 Binds one model to the loaded connection `key` and does nothing else (#1230): the narrow half of
 `set_models`, for a model built at runtime — a library's own infrastructure table — that is not part
-of a models module. An unloaded `key` raises `InvalidConfigurationError`; nothing is loaded for you.
-It does not register a module, resolve `ForeignKey` targets given by name, or install reverse
+of a models module. `key` is accepted when it is registered (`load`, `register_connection`,
+`register_offline`) or served by the connection resolver (`set_connection_resolver`), which `bind!`
+consults as `get_settings(key)` does (#1255). Any other key raises `InvalidConfigurationError`; no
+folder is loaded for you. It does not register a module, resolve `ForeignKey` targets given by name, or install reverse
 accessors.
 
 ### `Migrations.ensure_table!(model, key; indexes = true)`

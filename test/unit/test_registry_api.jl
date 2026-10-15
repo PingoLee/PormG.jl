@@ -99,7 +99,7 @@ end
     @test length(JSON.json(PormG.config[key])) < 1000
     @test !occursin("pormg-offline", JSON.json(PormG.config[key]))
 
-    Configuration.register_connection(live, ":memory:"; adapter = "SQLite")
+    Configuration.register_connection(live, ":memory:"; adapter = "SQLite", env = "test")
     err = try
       Configuration.register_offline(live)
       nothing
@@ -128,7 +128,7 @@ end
     empty!(PormG.config)
     @test Configuration.loaded_keys() == String[]
     Configuration.register_offline("reg1229_b")
-    Configuration.register_connection("reg1229_a", ":memory:"; adapter = "SQLite")
+    Configuration.register_connection("reg1229_a", ":memory:"; adapter = "SQLite", env = "test")
     @test Configuration.loaded_keys() == ["reg1229_a", "reg1229_b"]
 
     pool = PormG.config["reg1229_a"].connections

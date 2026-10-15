@@ -962,6 +962,8 @@ _text_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "a text 
 #   same value, so no row, and the cast builds everywhere;
 # - to an integer: a fractional number means the nearest integer, and SQLite's cast truncates (`1.5`
 #   is `1`). A boolean is `1`/`0` on both, and passes;
+# - `:integer` and `:number` (#1259): an interval is no number, so its cast to any number type is an
+#   error, and SQLite reads its stored text's hours;
 # - `:scale` (#1040): a `numeric(p, s)` cast over an operand with more than `s` fractional digits
 #   (`_scale_divergent_operand`) means the value rounded to `s`; SQLite keeps every digit;
 # - `:precision` (#1087): a literal `Cast` operand too large for `p` (`_precision_overflow_operand`)
@@ -990,8 +992,18 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::
   # #1215: a single-precision target rounds whatever it casts, so the node is checked once, not per
   # operand; no other rule below applies to a float target.
   _single_precision_cast(declared) && return departs(:value, "any value", :single_precision, "<flag>")
-  # #1040: a scaled numeric target rounds on PostgreSQL only.
   size = _numeric_cast_size(declared)
+  target = _sql_type_field(declared)
+  # #1259: an interval is no number, whatever number the target is: an integer, a float, a `numeric`,
+  # scaled or not. Checked ahead of the number rules, which read a fraction, not a duration.
+  if size !== nothing || target isa Union{Models.sIntegerField,Models.sBigIntegerField,Models.sFloatField,Models.sDecimalField}
+    numeric_target = target isa Union{Models.sIntegerField,Models.sBigIntegerField} ? :integer : :number
+    for (i, operand) in enumerate(operands)
+      side = _interval_operand(operand, get(rendered, i, nothing), instruc)
+      side === nothing || (d = departs(side[1], side[2], numeric_target, _concat_flag(operand)); d === nothing || return d)
+    end
+  end
+  # #1040: a scaled numeric target rounds on PostgreSQL only.
   if size !== nothing
     precision, scale = size
     for operand in operands
@@ -1006,7 +1018,6 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::
     end
     return nothing
   end
-  target = _sql_type_field(declared)
   to_integer = target isa Union{Models.sIntegerField,Models.sBigIntegerField}
   (to_integer || target isa Union{Models.sCharField,Models.sTextField}) || return nothing
   for (i, operand) in enumerate(operands)
@@ -1027,6 +1038,21 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::
     d === nothing || return d
   end
   return nothing
+end
+# #1259 — an operand that is an interval, as `(kind, what)`, or `nothing`: one the classifier names
+# (a `DurationField` column, its `Sum`, a duration literal), one only its render types (temporal
+# arithmetic, a `Sum` of it, `rendered`), or one whose meaning is an interval though the classifier
+# tags it by its rule (`Avg` of a duration is `:numeric` there, an interval to `_MeaningKinds`). A
+# timestamp is not this rule's.
+function _interval_operand(operand, rendered, instruc::SQLInstruction)
+  side = _division_or_rendered(_concat_textless_operand(operand, instruc), rendered, operand)
+  side !== nothing && side[1] === :interval && return side
+  if side === nothing || side[1] === :numeric
+    _infer_kind(operand, instruc, _MeaningKinds()) isa CInterval &&
+      return (:interval, side === nothing ? "an interval expression" : side[2])
+  end
+  side === nothing && (side = _rendered_kind_textless(rendered))
+  return side !== nothing && side[1] === :interval ? side : nothing
 end
 # A rendered kind no type reader gave (`_render_operand_kind`), as a `_concat_textless_operand` answer.
 _rendered_kind_textless(kind) =

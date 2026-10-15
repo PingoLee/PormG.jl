@@ -918,6 +918,7 @@ other builds the query as written. Measured on PostgreSQL 16 and SQLite 3.45:
 | to text, of a float, a decimal, a `numeric` function, a timestamp, an interval or a JSON document | the value's text | builds (`'10'`, `'14.00'`) | builds (`'10.0'`, `'14'`) |
 | to text, of a boolean | `'true'` / `'false'` | builds | **refused**: it writes `'1'` / `'0'` |
 | to an integer, of a float, a decimal with places or a `numeric` function | the nearest integer (`1.5` → `2`) | builds | **refused**: its cast truncates (`1`) |
+| to a number (an integer, a float, a `numeric`, scaled or not), of an interval | an error, since an interval has no numeric value | builds, and raises when the query runs | **refused**: it casts the stored `HH:MM:SS` text and reads its hours (`00:01:23.456` → `0`) |
 | to `numeric(p, s)`, of an operand with more than `s` places | the value rounded to `s` places (`1.555` → `1.56`) | builds | **refused**: it keeps every digit |
 | to `numeric(p, s)`, of a literal it cannot hold (`Cast(Value(100), "numeric(3,2)")`) | an overflow | builds, and raises when the query runs | **refused**: it stores `100` |
 | to `real`, of any value | the value rounded to single precision, read back as a `Float32` (`0.1` → `0.10000000149011612` as a `Float64`) | builds | **refused**: it has no 4-byte float and keeps the 8-byte double (`0.1`) |
@@ -938,7 +939,10 @@ What each row covers:
   `Coalesce`, `Greatest`, `Least` and `Case`, which renders the same cast;
 - **an integer**: `IntegerField()`, `BigIntegerField()`, `"integer"`, `"bigint"`, `"int8"`, … A
   boolean casts to `1`/`0` on both engines, and a whole number (`Round(x)`, `Floor(x)`, `Ceil(x)`,
-  `Mod` of whole numbers, `+`, `-`, `*` of them) has nothing to round; both pass on every engine;
+  `Mod` of whole numbers, `+`, `-`, `*` of them) has nothing to round; both pass on every engine.
+  An interval (a `DurationField`, its `Sum` or `Avg`, a duration literal, temporal arithmetic) is refused on
+  SQLite, here and under any other number type (#1259). For a number from a duration, fetch it and
+  take the number in Julia;
 - **a scale**: `numeric(p, s)`, `decimal(p, s)`, `dec(p, s)`, and `numeric(p)`, whose scale is 0
   (#1040, #1078). An operand with more than `s` places is a float column, a float literal with more
   than `s` places (`Value(1.5)` at scale 2 passes, #1050), a function PostgreSQL computes as

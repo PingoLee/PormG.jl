@@ -2098,6 +2098,35 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Cast an interval to a number: refused on SQLite, rejected by the PostgreSQL server (#1259)
+# An interval has no numeric value: PostgreSQL rejects the cast when the query runs, which is the
+# meaning (#1087's tie-breaker). SQLite stores a duration as its `HH:MM:SS.sss` text, and its cast read
+# that text's hours, a silent different answer, so it refuses the cast when the query is built. The
+# duration's text builds on every engine. Expected SQL, PostgreSQL: ("Tb"."fastestlaptime")::integer,
+# which the server rejects with `cannot cast type interval to integer`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1259: an interval cast to a number is refused on SQLite and rejected by PostgreSQL" begin
+    engine = engine_key()   # `departs[engine]` has no fallback: a backend added later states its row (#1179)
+    departs = (sqlite = true, postgres = false)
+    refusal(f) = try f(); nothing catch e; e end
+    proj(expr) = () -> (q = M.Result.objects; q.filter("raceid" => 2); q.values("resultid", "x" => expr); q |> DataFrame)
+    for expr in (Cast("fastestlaptime", PormG.Models.IntegerField()), Cast("fastestlaptime", "bigint"),
+                 Cast("fastestlaptime", "numeric"), Cast("fastestlaptime", PormG.Models.FloatField()))
+        e = refusal(proj(expr))
+        if departs[engine]
+            @test e isa PormG.QueryBuildError && occursin("#1259", sprint(showerror, e))
+        else
+            # Built, and the server's own error when it runs: the meaning, not a PormG refusal.
+            @test e !== nothing && !(e isa PormG.QueryBuildError)
+            @test occursin("cannot cast type interval to", sprint(showerror, e))
+        end
+    end
+    df = proj(Cast("fastestlaptime", "text"))()
+    @test nrow(df) > 0
+    @test any(x -> x isa AbstractString, df.x)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # `Sum` over a `bigint` is an integer on every engine (#1147)
 # PostgreSQL widens `sum(bigint)` to `numeric`, which read as a `Decimal` and kept the half once divided
 # (`Sum("resultid") / 2` over results 1 and 2 was 1.5 there and 1 on SQLite). PormG renders

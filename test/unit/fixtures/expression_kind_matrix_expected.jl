@@ -2429,39 +2429,39 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast interval int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast interval int | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DurationField `fastestlaptime` means an error, since an interval has no numeric value; SQLite "),
   ("Cast interval int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast interval int | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DurationField `fastestlaptime` means an error, since an interval has no numeric value; SQLite "),
   ("Cast interval int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast interval int | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DurationField `fastestlaptime` means an error, since an interval has no numeric value; SQLite "),
   ("Cast Sum interval int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum interval int | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
   ("Cast Sum interval int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum interval int | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
   ("Cast Sum interval int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum interval int | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
   ("Cast Avg interval int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Avg interval int | alone", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means the nearest integer (`1.5` → `2`); SQLite computes the truncated one (`1`), so Porm"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; SQLite computes the leading digit"),
   ("Cast Avg interval int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Avg interval int | cte", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means the nearest integer (`1.5` → `2`); SQLite computes the truncated one (`1`), so Porm"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; SQLite computes the leading digit"),
   ("Cast Avg interval int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Avg interval int | subquery", :sqlite) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means the nearest integer (`1.5` → `2`); SQLite computes the truncated one (`1`), so Porm"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; SQLite computes the leading digit"),
   ("Subquery Max hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Subquery Max hop date | alone", :sqlite) =>

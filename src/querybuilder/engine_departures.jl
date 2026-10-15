@@ -26,7 +26,7 @@
 # decision nobody made; `test/unit/test_meaning_departures.jl` fails on it, so a new backend (#1130)
 # gets one failing line per row instead of inheriting "keeps the meaning". `targets` are the sites
 # that ask: `:text` and `:integer`
-# (a declared cast to one), `:scale` (`numeric(p, s)`), `:precision` (a literal `numeric(p, s)` cannot
+# (a declared cast to one), `:number` (a cast to any number type, #1259), `:scale` (`numeric(p, s)`), `:precision` (a literal `numeric(p, s)` cannot
 # hold), `:single_precision` (`real`, #1215) and `:concat` (a `Concat` operand). `kinds` are the
 # operand classes the classifiers in `projection_types.jl` name. `meaning`, `computes` and `fix` take the declared type, and `fix` also
 # the operand's flag, the path a suggestion can name.
@@ -41,6 +41,14 @@ const _MEANING_DEPARTURES = (
    meaning = _ -> "the nearest integer (`1.5` → `2`)",
    computes = _ -> "the truncated one (`1`)",
    fix = (_, _) -> "Say how to round it: \e[32mCast(Round(x), IntegerField())\e[0m, \e[32mFloor(x)\e[0m or \e[32mCeil(x)\e[0m."),
+  # #1259: an interval is no number, so its cast to an integer, a float or a `numeric` is an error (the
+  # tie-breaker: an error on one engine is left to raise when the engines that answer give the
+  # meaning). SQLite casts the stored `HH:MM:SS.sss` text and reads its leading digits, the hours: a
+  # silent different answer.
+  (targets = (:integer, :number), kinds = (:interval,), departs = (PormGSQLite,), keeps = (PormGPostgres,), issue = "#1259",
+   meaning = _ -> "an error, since an interval has no numeric value",
+   computes = _ -> "the leading digits of its `HH:MM:SS` text, the hours",
+   fix = (flag, _) -> "Fetch the duration and take the number you mean in Julia, or ask for its text, \e[32mCast(\"$(flag)\", \"text\")\e[0m, which each engine writes in its own form."),
   # #1040: a cast to `numeric(p, s)` rounds to `s` places. SQLite reads the type name as NUMERIC
   # affinity and keeps every digit; text is parsed and rounded by PostgreSQL, kept by SQLite.
   (targets = (:scale,), kinds = (:float, :decimal, :numeric, :text), departs = (PormGSQLite,), keeps = (PormGPostgres,), issue = "#1040",

@@ -539,12 +539,13 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # Review of #1028: the checks render a literal operand as before
 # A duration literal under a cast renders as the bound text on SQLite, as it did before the check
-# re-routed the operands — not through the millisecond form `_render_interval_operand` gives it.
+# re-routed the operands — not through the millisecond form `_render_interval_operand` gives it. To
+# text: an integer target is refused on SQLite since #1259.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1028: a literal operand renders as it did" begin
-  sql = _ccd_render(Fn.Cast(Fn.Value(Minute(1)), Models.IntegerField()); conn = _CCD_SL)
-  @test occursin("CAST(? AS INTEGER)", sql)
-  sql = _ccd_render(Fn.Coalesce("laptime", Fn.Value(Minute(1)); output_field = "integer"); conn = _CCD_SL)
+  sql = _ccd_render(Fn.Cast(Fn.Value(Minute(1)), "text"); conn = _CCD_SL)
+  @test occursin("CAST(? AS TEXT)", sql)
+  sql = _ccd_render(Fn.Coalesce("laptime", Fn.Value(Minute(1)); output_field = "text"); conn = _CCD_SL)
   @test !occursin("_pormg_ms", sql)
 end
 
@@ -748,6 +749,48 @@ end
   @test occursin("(\"Tb\".\"points\")::real as \"x\"", _ccd_render(Fn.Cast("points", "real"); conn = _CCD_PG))
   for target in ("float8", Models.FloatField(), "float(25)", "float(0025)", "float(53)", "double precision", "float")
     @test _ccd_builds(Fn.Cast("points", target))
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1259: an interval cast to a number is refused on SQLite, which reads its text's hours
+# MEANING: an interval has no numeric value, so PostgreSQL rejects the cast when the query runs, the
+# meaning by the #1087 tie-breaker. SQLite stores a duration as its `HH:MM:SS.sss` text, and
+# `CAST(x AS INTEGER)` reads that text's leading digits, the hours (`00:01:23.456` is `0`), as its
+# casts to `REAL` and `NUMERIC` do: a silent different answer, refused there. A `DurationField`
+# column, its `Sum`, a duration literal, temporal arithmetic, and each `output_field` site, to an
+# integer, a bigint, a float or a `numeric`, scaled or not. The message names fetching the
+# duration, or its text: `Cast(x, "text")` is a representation, which builds on both engines. (SQLite
+# renders no `Extract(x, "EPOCH")`, so the seconds are no spelling it can name there.) An `Avg` of a
+# duration is an interval too, whatever the target, and so is a `Subquery` projecting one. Expected
+# SQL, PostgreSQL: ("Tb"."laptime")::integer
+# Why: before #1259 SQLite answered the hours where PostgreSQL raised.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1259: an interval cast to a number is refused on SQLite only" begin
+  case(then; output_field = "integer") = Fn.Case(Fn.When("number" => 1, then = then), output_field = output_field)
+  for expr in (Fn.Cast("laptime", Models.IntegerField()), Fn.Cast("laptime", Models.BigIntegerField()),
+               Fn.Cast(Fn.Sum("laptime"), Models.IntegerField()), Fn.Cast(Fn.Value(Minute(1)), Models.IntegerField()),
+               Fn.Cast(_CF("start_at") - _CF("start_at"), Models.IntegerField()),
+               Fn.Coalesce("laptime", Fn.Value(Minute(1)); output_field = "integer"),
+               Fn.Greatest("laptime", "laptime"; output_field = "integer"),
+               case(_CF("laptime")),
+               Fn.Cast("laptime", Models.FloatField()), Fn.Cast("laptime", "float8"), Fn.Cast("laptime", "numeric"),
+               Fn.Cast("laptime", "numeric(10,2)"), Fn.Cast(Fn.Sum("laptime"), "numeric(10,0)"),
+               Fn.Coalesce("laptime", Fn.Value(Minute(1)); output_field = "numeric(10,2)"),
+               case(_CF("laptime"); output_field = "numeric"))
+    errs = _ccd_expect(expr; departs = _SL_ONLY, issue = "#1259", named = "an interval has no numeric value")
+    @test occursin("Fetch the duration", _ccd_msg(errs.sqlite))
+  end
+  @test occursin("Cast(\"laptime\", \"text\")",
+                 _ccd_msg(_ccd_refusal(Fn.Cast("laptime", Models.IntegerField()); conn = _CCD_SL)))
+  @test occursin("(\"Tb\".\"laptime\")::integer as \"x\"", _ccd_render(Fn.Cast("laptime", Models.IntegerField()); conn = _CCD_PG))
+  for target in (Models.IntegerField(), Models.FloatField(), "float8", "numeric", "numeric(10,2)")
+    _ccd_expect(Fn.Cast(Fn.Avg("laptime"), target); departs = _SL_ONLY, issue = "#1259", named = "`AVG(…)`")
+  end
+  avg_sub() = (s = CCD.Ccd_driver.objects; s.filter("id" => PormG.OuterRef("id")); s.values("t" => Fn.Avg("laptime")); PormG.Subquery(s))
+  _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1259", run = conn -> _ccd_render(Fn.Cast(avg_sub(), Models.FloatField()); conn = conn))
+  for expr in (Fn.Cast("laptime", "text"), Fn.Cast("laptime", Models.CharField()))
+    @test _ccd_builds(expr)
   end
 end
 
@@ -1774,7 +1817,8 @@ end
 #   so PostgreSQL's `sum(bigint)` is a `numeric`: divided, refused there (#1111), built on SQLite;
 # - a body `Count` is a `bigint` on PostgreSQL: summed beside an untyped value, the same (#1111). Beside
 #   an integer column the walk names the sum, and PostgreSQL renders `SUM(…)::bigint` (#1147), so it builds;
-# - a body `Avg` has no single integer: cast to one, refused on SQLite (#1028);
+# - a body `Avg` has no single integer: cast to one, refused on SQLite (#1028); of an interval, as an
+#   interval (#1259);
 # - a body JSON key lookup is the key's value, not the document, and a zero-scale decimal is whole:
 #   `Concat` and a scaled cast over them build.
 # The messages name the CTE column and, in parentheses, what its body is. Expected SQL where it builds,
@@ -1822,8 +1866,8 @@ end
               named = "the CTE column `CTE(\"c\", \"bf\")` (arithmetic over the FloatField `points`)",
               run = cte(Fn.Cast(Fn.Sum(Fn.Coalesce(PormG.CTE("c", "bf"), "payload__n")) / 2, Models.IntegerField())))
   # An average, of an interval or of a float, cast to an integer.
-  for col in ("avgl", "avgp")
-    _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1028", named = "the CTE column `CTE(\"c\", \"$(col)\")` (`AVG(…)`)",
+  for (col, issue) in (("avgl", "#1259"), ("avgp", "#1028"))
+    _ccd_expect(nothing; departs = _SL_ONLY, issue = issue, named = "the CTE column `CTE(\"c\", \"$(col)\")` (`AVG(…)`)",
                 run = cte(Fn.Cast(PormG.CTE("c", col), Models.IntegerField())))
   end
   # Explicit intent: an average in `Concat`, on every engine.

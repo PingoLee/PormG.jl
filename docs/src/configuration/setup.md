@@ -51,8 +51,8 @@ df = query |> DataFrame
     calls `set_models(...)`, which binds the models to a configuration that is **already loaded**.
     When none matches the models folder, it raises `InvalidConfigurationError`, naming the `load`
     call to add. PormG does not load the folder itself, because that load would choose the
-    environment for you. In a REPL, `PormG.Configuration.allow_implicit_load!(true)` brings back that
-    convenience. See [The Boot-Time Hazard](advanced.md#The-Boot-Time-Hazard) for the full explanation.
+    environment for you. A REPL keeps that convenience: there the folder is loaded, with a warning
+    (#1248). See [The Boot-Time Hazard](advanced.md#The-Boot-Time-Hazard) for the full explanation.
 
 ## The Bootstrap Sequence
 

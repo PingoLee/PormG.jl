@@ -1,10 +1,11 @@
-## `set_models` / `@import_models` — a models folder with no loaded configuration is refused; the implicit load is opt-in (#1226)
+## `set_models` / `@import_models` — a models folder with no loaded configuration is refused; the implicit load is a REPL's (#1226, #1248)
 
 - **Version**: Unreleased
-- **PormG ref**: #1226 ; `src/Models.jl` (`set_models`, `ensure_model_initialized`, `_bind_if_loaded`), `src/Configuration.jl` (`allow_implicit_load!`), `src/Utils.jl` (the injected `__init__`s)
+- **PormG ref**: #1226, #1248 ; `src/Models.jl` (`set_models`, `ensure_model_initialized`, `_bind_if_loaded`), `src/Configuration.jl` (`_is_interactive`), `src/Utils.jl` (the injected `__init__`s)
 - **Recorded**: 2026-10-14
 - **Severity**: breaking. Registering models against a folder that no `Configuration.load` has
-  loaded raises `InvalidConfigurationError`. It used to load the folder itself, with a warning.
+  loaded raises `InvalidConfigurationError` outside an interactive session. It used to load the
+  folder itself, with a warning, everywhere.
 
 ### What changed
 
@@ -19,14 +20,15 @@ and the `load` call to add. The same rule holds wherever models are registered:
 
 | where | before | after |
 |---|---|---|
-| `@import_models` / `@models_module` / `set_models`, folder not loaded | `@warn`, then an implicit load | `InvalidConfigurationError` |
+| `@import_models` / `@models_module` / `set_models`, folder not loaded | `@warn`, then an implicit load | `InvalidConfigurationError`; in a REPL, the `@warn` and the load as before |
 | first `M.Model.objects` after a precompiled image is restored, folder not loaded | self-heal re-registered the module and loaded the folder implicitly | `InvalidConfigurationError` |
 | the `__init__` that `@import_models`/`@models_module` inject, folder not loaded | implicit load, errors swallowed | nothing; the first `.objects` raises the error above |
 
-The implicit load is still there for a REPL or a script, but only when you ask for it:
-`PormG.Configuration.allow_implicit_load!(true)` turns it on for the session, and
-`Models.set_models(mod, folder; implicit = true)` uses it for one call. Either one keeps the old
-warning.
+The implicit load is still there in a REPL: when `isinteractive()` is true, a direct
+`@import_models` or `set_models` loads the folder, with the old warning. A service, a test or a
+script is not interactive and gets the refusal; `Models.set_models(mod, folder; implicit = true)`
+asks for the implicit load in one call. There is no process-wide switch. The self-heal and the
+injected `__init__` (the last two rows) never load a folder, not even in a REPL.
 
 ### Who this affects
 
@@ -65,6 +67,6 @@ PormG.@import_models "../db/models.jl" models
 __init__() = _load_configs()
 end
 
-# ✓ a REPL or a script that wants the old convenience
-PormG.Configuration.allow_implicit_load!(true)
+# ✓ a script that wants the old convenience for one registration (a REPL has it already)
+PormG.Models.set_models(MyModels, "db"; implicit = true)
 ```

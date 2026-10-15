@@ -51,7 +51,8 @@ function _default_add_revise_callback(path, mod_obj, dir)
         Main.Revise.add_callback() do
             try
                 Base.invokelatest(reload_module_contents!, mod_obj, path)
-                Base.invokelatest(PormG.Models.set_models, mod_obj, dir)
+                # A reload is not a direct registration: it never loads a folder, even in a REPL (#1248).
+                Base.invokelatest(PormG.Models.set_models, mod_obj, dir; implicit = false)
             catch
             end
         end

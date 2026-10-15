@@ -199,14 +199,20 @@ the same error. It never loads one. The `__init__` that `@import_models` and `@m
 into the models module binds only when the configuration is already loaded, and otherwise does
 nothing. It runs before your package's own `__init__`, so refusing there would make `using` fail.
 
-**Opting back in.** In a REPL or a one-off script the guess can be convenient:
+**The REPL keeps the convenience.** In an interactive session (`isinteractive()`), a direct
+`@import_models` or `set_models` with nothing loaded loads the folder anyway, with the old warning
+(#1248). A service, a test or a script is not interactive and gets the refusal; it can still ask for
+the guess one call at a time:
 
 ```julia
-PormG.Configuration.allow_implicit_load!(true)    # for the rest of the session
-PormG.Models.set_models(MyModels, "db"; implicit = true)   # or for one call
+PormG.Models.set_models(MyModels, "db"; implicit = true)
 ```
 
-Either one loads the folder with the old warning and marks the entry as implicit:
+There is no process-wide switch: whether a registration refuses never depends on what some other
+code in the process turned on earlier. The self-heal and the injected `__init__` above never load,
+not even in a REPL — `using SomePackage` at a REPL is an interactive session too.
+
+An implicit load marks the entry as implicit:
 `PormG.Configuration.status(key).implicit` reads it back. The rules below go by that mark, not by
 the shape of the key.
 
@@ -294,7 +300,6 @@ julia> RaceControl.models.Driver.connect_key   # want the short key, not an abso
 "db"
 ```
 
-The implicit load runs only when you opted in with `allow_implicit_load!(true)` or
-`implicit = true`. When it did, `PormG.Configuration.status(RaceControl.models.Driver.connect_key).implicit`
+The implicit load runs only in a REPL or when a call passed `implicit = true`. When it did, `PormG.Configuration.status(RaceControl.models.Driver.connect_key).implicit`
 is `true`, and the environment came from `PORMG_ENV`/`default_env:`, not from whatever your
 application selected.

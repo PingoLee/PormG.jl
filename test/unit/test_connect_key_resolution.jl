@@ -325,15 +325,30 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Call site: set_models refuses a folder nothing loaded; the implicit load is opt-in (#1226)
-# What it tests: with no loaded configuration matching the folder, `set_models` raises
-#   `InvalidConfigurationError` naming the folder, the loaded keys and the `load(…; root, env)` call,
-#   and leaves `config` untouched. `implicit = true` and `allow_implicit_load!(true)` restore the old
-#   branch — the warning and an entry keyed by the caller's path, flagged `implicit` (#553). No SQL.
+# Call site: set_models refuses a folder nothing loaded; the implicit load is a REPL's (#1226, #1248)
+# What it tests: with no loaded configuration matching the folder, a non-interactive `set_models`
+#   raises `InvalidConfigurationError` naming the folder, the loaded keys and the `load(…; root, env)`
+#   call, and leaves `config` untouched. `implicit = true` (per call) and an interactive session
+#   (`Configuration._INTERACTIVE`, the `isinteractive()` seam) restore the old branch — the warning
+#   and an entry keyed by the caller's path, flagged `implicit` (#553). No SQL.
 # Why it matters: the implicit load guessed BOTH the environment (`PORMG_ENV`/`default_env:`) and
 #   the key, and a warning in a boot log was the only trace. The guessed environment is the
-#   wrong-database incident behind #550.
+#   wrong-database incident behind #550. #1248 removed the process-wide switch that turned it back
+#   on: whether a call refuses must not depend on what other code in the process set earlier.
 # ─────────────────────────────────────────────────────────────────────────────
+# Pins the `isinteractive()` seam (`Configuration._INTERACTIVE`, #1248) for the duration of `f`.
+# `Pkg.test` runs non-interactively, so the default already answers `false`; pinning it anyway keeps
+# a file run from a REPL (`include("test/unit/…")`) testing the same branch.
+function _ck_with_interactive(f, flag::Bool)
+  previous = Configuration._INTERACTIVE[]
+  Configuration._INTERACTIVE[] = () -> flag
+  try
+    return f()
+  finally
+    Configuration._INTERACTIVE[] = previous
+  end
+end
+
 function _ck1226_scratch(name::Symbol)
   scratch = Module(name)
   Core.eval(scratch, :(import PormG.Models))
@@ -350,10 +365,10 @@ function _ck1226_folder(root::AbstractString)
   return db
 end
 
-@testset "set_models refuses an unloaded folder; the implicit load is opt-in (#1226)" begin
+@testset "set_models refuses an unloaded folder; the implicit load is a REPL's (#1226, #1248)" begin
   saved = copy(PormG.config)
-  previous = Configuration.allow_implicit_load!(false)
   root = mktempdir()
+  _ck_with_interactive(false) do
   try
     empty!(PormG.config)
     db = _ck1226_folder(root)
@@ -378,7 +393,8 @@ end
       @test occursin(db, msg)                                  # the folder
       @test occursin("Configurations loaded now: none", msg)   # what IS loaded
       @test occursin("PormG.Configuration.load(\"scratch_db\"; root = ", msg)  # the call to add
-      @test occursin("allow_implicit_load!(true)", msg)        # the opt-in
+      @test occursin("implicit = true", msg)                   # the per-call opt-in
+      @test !occursin("allow_implicit_load!", msg)             # the removed switch (#1248)
       @test isempty(PormG.config)                              # no guess was made
       @test Base.invokelatest(getfield, scratch, :Thing).connect_key === nothing
       # …and nothing recorded about the module: a refused call (a typo'd folder) must not register
@@ -424,24 +440,36 @@ end
       empty!(PormG.config)
     end
 
-    @testset "allow_implicit_load!(true) opts the whole session in" begin
+    @testset "an interactive session keeps the old warning and load (#1248)" begin
       scratch2 = _ck1226_scratch(:ScratchImplicitModelsSession)
-      @test Configuration.allow_implicit_load!(true) == false   # returns the previous setting
-      try
+      _ck_with_interactive(true) do
         @test_logs((:warn, r"loaded implicitly"), match_mode = :any,
                    Base.invokelatest(PormG.Models.set_models, scratch2, db))
-        @test PormG.config[db].implicit
-      finally
-        @test Configuration.allow_implicit_load!(false) == true
       end
+      @test PormG.config[db].implicit
+      @test Base.invokelatest(getfield, scratch2, :Thing).connect_key == db
       Configuration.close_pool!(db)
       empty!(PormG.config)
     end
+
+    @testset "…and an explicit implicit = false refuses even there (#1248)" begin
+      scratch3 = _ck1226_scratch(:ScratchImplicitModelsDeclined)
+      _ck_with_interactive(true) do
+        @test_throws PormG.InvalidConfigurationError Base.invokelatest(
+          PormG.Models.set_models, scratch3, db; implicit = false)
+      end
+      @test isempty(PormG.config)
+    end
+
+    @testset "allow_implicit_load! is gone (#1248)" begin
+      @test !isdefined(Configuration, :allow_implicit_load!)
+      @test !isdefined(Configuration, :_ALLOW_IMPLICIT_LOAD)
+    end
   finally
-    Configuration.allow_implicit_load!(previous)
     empty!(PormG.config)
     merge!(PormG.config, saved)
     rm(root; recursive = true, force = true)
+  end
   end
 end
 
@@ -458,7 +486,6 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "self-heal and the injected __init__ never load a folder (#1226)" begin
   saved = copy(PormG.config)
-  previous = Configuration.allow_implicit_load!(false)
   root = mktempdir()
   try
     empty!(PormG.config)
@@ -468,15 +495,23 @@ end
     thing = Base.invokelatest(getfield, scratch, :Thing)
     thing._module = scratch     # what a first `set_models` in the precompile worker leaves behind
 
-    @testset "_bind_if_loaded skips an unloaded folder" begin
-      @test Base.invokelatest(PormG.Models._bind_if_loaded, scratch, db) === nothing
-      @test thing.connect_key === nothing
-      @test isempty(PormG.config)
-    end
+    # Both answers of the `isinteractive()` seam: neither path loads, even in a REPL (#1248), where
+    # `using SomePackage` is an interactive session too.
+    for interactive in (false, true)
+      @testset "_bind_if_loaded skips an unloaded folder (interactive = $interactive)" begin
+        _ck_with_interactive(interactive) do
+          @test Base.invokelatest(PormG.Models._bind_if_loaded, scratch, db) === nothing
+        end
+        @test thing.connect_key === nothing
+        @test isempty(PormG.config)
+      end
 
-    @testset "ensure_model_initialized raises the refusal" begin
-      @test_throws PormG.InvalidConfigurationError PormG.Models.ensure_model_initialized(thing)
-      @test isempty(PormG.config)
+      @testset "ensure_model_initialized raises the refusal (interactive = $interactive)" begin
+        _ck_with_interactive(interactive) do
+          @test_throws PormG.InvalidConfigurationError PormG.Models.ensure_model_initialized(thing)
+        end
+        @test isempty(PormG.config)
+      end
     end
 
     @testset "…and does not bind the only other loaded folder instead" begin
@@ -501,7 +536,110 @@ end
       @test thing.connect_key == db
     end
   finally
-    Configuration.allow_implicit_load!(previous)
+    for k in collect(keys(PormG.config))
+      try Configuration.close_pool!(k) catch end
+    end
+    empty!(PormG.config)
+    merge!(PormG.config, saved)
+    rm(root; recursive = true, force = true)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Both Revise reload callbacks re-register without the implicit load (#1248)
+# What it tests: the core callback (`src/Utils.jl`) and the Revise extension's
+#   (`ext/PormGReviseExt.jl`) call `set_models(mod_obj, dir; implicit = false)` — a source pin,
+#   because a live Revise callback cannot be driven from the unit suite. No SQL.
+# Why it matters: `set_models`' default is `isinteractive()`, and Revise runs in a REPL, so a
+#   callback using the default would load a folder that was unloaded between edits. A reload is not
+#   a direct registration; only those get the REPL convenience.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "both Revise reload callbacks pass implicit = false (#1248)" begin
+  root = pkgdir(PormG)
+  for file in ("src/Utils.jl", "ext/PormGReviseExt.jl")
+    text = read(joinpath(root, file), String)
+    calls = [m.match for m in eachmatch(r"invokelatest\(PormG\.Models\.set_models,[^\n]*", text)]
+    @test length(calls) == 1
+    @test occursin("set_models, mod_obj, dir; implicit = false)", only(calls))
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Self-heal cases 2a and 2c, the two paths #1244 left without an assertion (#1248)
+# What it tests:
+#   * 2a — a model whose module is in `REGISTERED_MODULES` under a folder that is no longer loaded:
+#     `ensure_model_initialized` raises the `set_models` refusal (case 2a is not wrapped in a `try`),
+#     and the message names that folder and "Configurations loaded now: none".
+#   * 2c — the `Base.loaded_modules` scan for `__pormg_init_path__` markers registers ONLY the module
+#     that defines the model. A second marked module, recording a folder that is not loaded, is
+#     neither bound nor allowed to turn the scan into a refusal about a model it does not hold.
+#   No SQL.
+# Why it matters: 2c used to `set_models` every marked module it met and check membership after,
+#   binding unrelated modules; since #1226 that would raise another module's refusal. 2a is the path
+#   a live session reaches after `close_pool!` + `empty!`-style resets.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "self-heal 2a raises the refusal; 2c binds only the owning module (#1248)" begin
+  saved = copy(PormG.config)
+  root = mktempdir()
+  added = Base.PkgId[]
+  try
+    empty!(PormG.config)
+    db = _ck1226_folder(root)
+
+    @testset "2a: a registered module whose folder is not loaded" begin
+      scratch = _ck1226_scratch(:ScratchSelfHeal2a)
+      Configuration.load(db; env = "test")
+      Base.invokelatest(PormG.Models.set_models, scratch, db)
+      @test PormG.Models.REGISTERED_MODULES[scratch] == db
+      thing = Base.invokelatest(getfield, scratch, :Thing)
+      Configuration.close_pool!(db)
+      empty!(PormG.config)
+      thing.connect_key = nothing    # skip case 1; reach 2a through the registry
+      err = try
+        _ck_with_interactive(false) do
+          PormG.Models.ensure_model_initialized(thing)
+        end
+        nothing
+      catch e
+        e
+      end
+      @test err isa PormG.InvalidConfigurationError
+      msg = sprint(showerror, err)
+      @test occursin("models folder \"$(db)\"", msg)
+      @test occursin("Configurations loaded now: none", msg)
+      @test isempty(PormG.config)                 # refused, not loaded
+      delete!(PormG.Models.REGISTERED_MODULES, scratch)
+    end
+
+    @testset "2c: only the module that defines the model is registered" begin
+      owner = _ck1226_scratch(:ScratchSelfHeal2cOwner)
+      bystander = _ck1226_scratch(:ScratchSelfHeal2cBystander)
+      unloaded = joinpath(root, "never_loaded_db")
+      Core.eval(owner, :(const __pormg_init_path__ = $db))
+      Core.eval(bystander, :(const __pormg_init_path__ = $unloaded))
+      # What a package image restore leaves behind: the modules are in `Base.loaded_modules`, and
+      # neither `REGISTERED_MODULES` nor the model's `_module` points at them (2a and 2b skip).
+      for (name, mod) in (("ScratchSelfHeal2cOwner", owner), ("ScratchSelfHeal2cBystander", bystander))
+        id = Base.PkgId(nothing, name)
+        Base.loaded_modules[id] = mod
+        push!(added, id)
+      end
+      thing = Base.invokelatest(getfield, owner, :Thing)
+      other = Base.invokelatest(getfield, bystander, :Thing)
+      @test thing._module === nothing && other._module === nothing
+      Configuration.load(db; env = "test")
+      @test _ck_with_interactive(false) do
+        PormG.Models.ensure_model_initialized(thing)
+      end
+      @test thing.connect_key == db
+      @test other.connect_key === nothing                           # the bystander was not bound…
+      @test !haskey(PormG.Models.REGISTERED_MODULES, bystander)       # …nor registered
+      @test PormG.Models.REGISTERED_MODULES[owner] == db
+      @test !haskey(PormG.config, unloaded)                          # and its folder not loaded
+      delete!(PormG.Models.REGISTERED_MODULES, owner)
+    end
+  finally
+    foreach(id -> delete!(Base.loaded_modules, id), added)
     for k in collect(keys(PormG.config))
       try Configuration.close_pool!(k) catch end
     end

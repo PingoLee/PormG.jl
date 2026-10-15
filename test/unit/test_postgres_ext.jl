@@ -8,8 +8,9 @@
 #   and coexists with the LibPQ extension: every `backend_*` generic resolves to the right extension for
 #   each pool type, and loading both introduces no method ambiguity (Aqua's own check loads neither
 #   extension, so it cannot see this). A connection string never leaks a credential through a parse
-#   error, and a refusal names the bad parameter from PormG's own parse of the string — which agrees
-#   with Postgres.jl's — never from the driver's message text (#1235). Sessions run with LibPQ.jl's
+#   error. The driver decides what it accepts, so PormG's tables never refuse a string it parses
+#   (#1247), and a refusal it makes names the bad parameter from PormG's own parse of the string —
+#   which agrees with Postgres.jl's — never from the driver's message text (#1235). Sessions run with LibPQ.jl's
 #   DateStyle/TimeZone, results decode to the types LibPQ.jl delivers, errors classify by SQLSTATE
 #   rather than by message text, an interrupt wrapped by the TLS layer is recognised as an abandoned
 #   await, and COPY reports an exact record count.
@@ -110,7 +111,17 @@ end
   cases = [
     ("NUL byte", "host=localhost password=s3cr\0etNUL dbname=f1", ["s3cr", "etNUL"]),
     ("unquoted passphrase", "host=localhost password=corr3ct horse battery dbname=f1", ["horse", "battery"]),
-    ("bad percent-escape URL", "postgresql://u:p%zzSECRET788@localhost/f1", ["SECRET788", "p%zz"]),
+    # #1243: on Postgres.jl 2.2.2, URIs' `unescapeuri` raised Base's `invalid base 16 digit 'z' in "…"`,
+    # and the single-quoted character — the password's — was outside what `_mask_quoted` masks.
+    ("bad percent-escape URL", "postgresql://u:p%zzSECRET788@localhost/f1", ["SECRET788", "p%zz", "'z'"]),
+    ("bad percent-escape in a realistic URL password", "postgresql://u:50%offSEC788@localhost/f1", ["SEC788", "'o'", "off"]),
+    ("bad percent-escape in a URL user", "postgresql://SEC788%zz:p@localhost/f1", ["SEC788", "'z'"]),
+    ("bad percent-escape in a URL host", "postgresql://u:p@SEC788%zz/f1", ["SEC788", "'z'"]),
+    ("bad percent-escape in a URL database name", "postgresql://u:p@localhost/SEC788%zz", ["SEC788", "'z'"]),
+    ("truncated percent-escape in a URL password", "postgresql://u:SEC788%4@localhost/f1", ["SEC788"]),
+    # A query value URIs 1.6 cuts at its second `=` and URIs 1.7 decodes whole: PormG's pass takes the
+    # reading that decodes, so only `_mask_quoted` stands between Base's `'o'` and the message.
+    ("bad percent-escape in a URL query value", "postgresql://u:p@localhost/f1?password=x=50%offSEC788", ["SEC788", "'o'", "off"]),
     ("unencoded @ in URL password", "postgresql://u:pa@ssSEC788@localhost:1/f1", ["ssSEC788"]),
     ("unencoded @ and : in URL password", "postgresql://u:pa@ss:PORTSEC788@localhost/f1", ["PORTSEC788"]),
     ("unencoded / in URL password", "postgresql://u:pa/ssSEC788@localhost/f1", ["ssSEC788"]),
@@ -211,6 +222,9 @@ end
     ("postgresql://u:p@h/f1?SSLMODE=require", "query parameter 1 is not a connection parameter Postgres.jl recognizes (parameter names are lower-case)", ["SSLMODE"]),
     ("postgresql://u:p@h/f1?sslmode=require&SECq=1", "query parameter 2 is not a connection parameter", ["SECq"]),
     ("postgresql://u:p@h/f1?sslpassword=SEC%zz", "the value of parameter `sslpassword` is not valid percent-encoding", ["SEC"]),
+    # Before the query (#1243): the user info, host and database name, which Postgres.jl decodes too.
+    ("postgresql://u:SEC%zz@h/f1", "URL's user info, host, port or database name is not valid percent-encoding", ["SEC", "'z'"]),
+    ("postgresql://u:p@h/SEC%z", "URL's user info, host, port or database name is not valid percent-encoding", ["SEC", "'z'"]),
   ]
   for (dsn, expected, secrets) in cases
     @testset "$(expected)" begin
@@ -274,9 +288,101 @@ end
   @test occursin("parameter `port` is not an integer", named("postgresql://u:p@h/f1?port=x=y"))
 end
 
+@testset "the driver decides what it accepts; PormG's tables only name its refusals (#1247)" begin
+  # What: `_checked_params` hands the string to the driver first, and reads it with PormG's tables only
+  # once the driver has refused it. Expected: a key a later Postgres.jl accepts but PormG's table lacks
+  # — `sslsni`, stood in for by a stub `parse` — connects through; PormG's own policy checks still run
+  # on what the driver parsed; and a refusal is still named from PormG's parse. Why: the tables match
+  # Postgres.jl 2.2.2 and 2.3.0, and run first they would refuse a valid string the day a release
+  # accepted more; CI resolves the newest Postgres.jl, so a working configuration would stop connecting.
+  # The parity fuzz below cannot see it: it generates only keys the tables already know.
+  newer_driver(dsn) = Postgres.parse_dsn(replace(dsn, r"\s*sslsni=\S*" => ""))
+  for dsn in ("host=h sslsni=1 dbname=f1", "postgresql://u:p@h/f1?sslsni=1")
+    # Today's driver refuses the key, and PormG names it…
+    err = try PGExt._checked_params(dsn); nothing catch e; e end
+    @test err isa PormG.InvalidConfigurationError
+    @test occursin("sets `sslsni`, a libpq parameter the Postgres.jl driver does not support", PormG.error_message(err))
+    # …a release that accepts it connects, whatever PormG's table says.
+    params = PGExt._checked_params(dsn; parse = newer_driver)
+    @test params isa Postgres.ConnectionParams
+    @test params.host == "h" && params.dbname == "f1"
+  end
+  # A value rule the driver relaxes: PormG's table says `numeric_overflow` is `warn` or `error`.
+  relaxed(dsn) = Postgres.parse_dsn(replace(dsn, "numeric_overflow=saturate" => ""))
+  @test PGExt._checked_params("host=h numeric_overflow=saturate dbname=f1"; parse = relaxed) isa Postgres.ConnectionParams
+  # PormG's own policy is not a table: it still refuses what any driver parses.
+  @test_throws PormG.InvalidConfigurationError PGExt._checked_params("host=h sslsni=1 reconnect=true dbname=f1"; parse = newer_driver)
+
+  # The driver's own error never rides along: its message may quote the string, and an error thrown
+  # inside a `catch` would carry it on the exception stack ("caused by: …").
+  # Both explanations: one PormG's parse names, and one only the driver's masked message can give.
+  for (dsn, env) in (("host=h password=SECstack sslpassword=SECstack2 dbname=f1", "PGPORT" => nothing),
+                     ("host=h password=SECstack dbname=f1", "PGPORT" => "SECstack3"))
+    stack = withenv(env) do
+      try
+        PGExt._checked_params(dsn)
+        nothing
+      catch
+        current_exceptions()
+      end
+    end
+    @test length(stack) == 1
+    @test stack[1].exception isa PormG.InvalidConfigurationError
+    @test !occursin("SECstack", sprint(showerror, stack[1].exception))
+  end
+end
+
+@testset "sslmode and gssencmode are refused before any I/O, by name, never by value (#1242)" begin
+  # What: a `sslmode`/`gssencmode` value Postgres.jl parses but refuses when it connects — libpq's
+  # `allow`/`verify-ca`, an empty value, a password fragment — in keyword form, URL form and from
+  # `PGSSLMODE`/`PGGSSENCMODE`. Expected: `_checked_params` refuses it with an
+  # `InvalidConfigurationError` that names the setting and lists the values the driver accepts, never
+  # the value; the accepted values pass in any case. Why: the driver checks these only after opening
+  # the socket, and its `invalid sslmode: <value>` echoes the value — the tail of a password when an
+  # unencoded `?` spilled it into the query with no `@` for the #662 check to catch.
+  refusal(dsn) = (try PGExt._checked_params(dsn); "" catch e; e isa PormG.InvalidConfigurationError ? PormG.error_message(e) : rethrow() end)
+  withenv("PGSSLMODE" => nothing, "PGGSSENCMODE" => nothing) do
+    for (dsn, field) in (("host=h sslmode=allow dbname=f1", "sslmode"),
+                         ("host=h sslmode=verify-ca dbname=f1", "sslmode"),
+                         ("host=h sslmode=SECssl dbname=f1", "sslmode"),
+                         ("postgresql://u:p@h/f1?sslmode=SECurl", "sslmode"),
+                         ("host=h gssencmode=SECgss dbname=f1", "gssencmode"),
+                         ("postgresql://u:p@h/f1?gssencmode=verify-full", "gssencmode"),
+                         # A spilled password tail with no `@` in the query, so the #662 check passes it.
+                         ("postgresql://u:1234/f1?gssencmode=SECspill", "gssencmode"))
+      msg = refusal(dsn)
+      @test occursin("the PostgreSQL connection's `$(field)`", msg)
+      @test occursin("is set to a value the Postgres.jl driver does not support", msg)
+      @test occursin(field == "sslmode" ? "`disable`, `prefer`, `require` or `verify-full`" :
+                                          "`disable`, `prefer` or `require`", msg)
+      @test !occursin("SEC", msg) && !occursin("sec", msg)
+      @test !occursin("allow", msg) && !occursin("verify-ca", msg)
+    end
+    # Empty: refused, not taken for "unset" — an unexpanded `${PGSSLMODE}` must fail loudly.
+    for dsn in ("host=h sslmode='' dbname=f1", "postgresql://u:p@h/f1?gssencmode=")
+      @test occursin("is empty", refusal(dsn))
+    end
+    # Under `gssencmode=require` the driver never reads `sslmode` (it connects over GSS or fails
+    # before TLS), so a `sslmode` it would refuse still connects, and is not refused. `prefer` falls
+    # back to TLS and reads it, so it is.
+    @test refusal("host=h gssencmode=REQUIRE sslmode=verify-ca dbname=f1") == ""
+    @test occursin("`sslmode`", refusal("host=h gssencmode=prefer sslmode=verify-ca dbname=f1"))
+    @test occursin("`gssencmode`", refusal("host=h gssencmode=SECg sslmode=verify-ca dbname=f1"))
+    # The accepted values pass, compared lower-cased as the driver compares them.
+    for dsn in ("host=h sslmode=disable dbname=f1", "host=h sslmode=REQUIRE gssencmode=Prefer dbname=f1",
+                "postgresql://u:p@h/f1?sslmode=verify-full&gssencmode=require", "host=h dbname=f1")
+      @test refusal(dsn) == ""
+    end
+  end
+  # From the environment: the setting is named, the variable too, the value never.
+  msg = withenv(() -> refusal("host=h dbname=f1"), "PGSSLMODE" => "SECenv")
+  @test occursin("`sslmode` (from the connection string or `PGSSLMODE`)", msg)
+  @test !occursin("SECenv", msg) && !occursin("secenv", msg)
+end
+
 @testset "a driver rejection PormG did not anticipate names no parameter (#1235)" begin
-  # What: `_parse_failure`, the fallback for whatever Postgres.jl still rejects after PormG's own pass —
-  # a value from a `PG*` environment variable, or a rule a later release adds. Expected: the message is
+  # What: `_parse_failure`, the fallback for whatever Postgres.jl rejects that PormG's own parse cannot
+  # attribute — a value from a `PG*` environment variable, or a rule a later release adds. Expected: the message is
   # masked and carries no `(parameter …)` for ANY driver message shape, including the three the old
   # text matching recognised and a forged value that spells one of them. Why: the parameter name now
   # comes only from PormG's own parse; reading it from the driver's prose is what broke on #1233.
@@ -295,6 +401,18 @@ end
     @test !occursin("sslpassword", msg)
     @test !occursin("SECv", msg)
   end
+  # A Base `parse` error reaching it names the rejected character as a `Char` literal, outside the
+  # double quotes (#1243): on Postgres.jl 2.2.2, `?password=x=50%off…` with URIs 1.7, or a bracketed
+  # host holding `#`, gets past PormG's escape check. Every literal is masked, whatever the shape.
+  for (shape, char) in (("invalid base 16 digit 'o' in \"ffSECb\"", "'o'"),
+                        ("invalid base 16 digit '\\'' in \"'fSECb\"", "'\\''"),
+                        ("invalid base 16 digit '\\x01' in \"\\x01SECb\"", "'\\x01'"),
+                        ("invalid base 16 digit 'é' in \"éSECb\"", "'é'"))
+    msg = PormG.error_message(PGExt._parse_failure(ArgumentError(shape)))
+    @test occursin("invalid base 16 digit '****' in \"****\"", msg)
+    @test !occursin(char, msg)
+    @test !occursin("SECb", msg)
+  end
   # An exception that is not the driver's own is reduced to its type.
   @test PormG.error_message(PGExt._parse_failure(EOFError())) ==
         "the PostgreSQL connection string could not be parsed (EOFError)"
@@ -312,8 +430,8 @@ end
   # What: the parity PormG's own pass depends on — whatever Postgres.jl accepts, PormG accepts, with
   # the same value for every key; whatever PormG accepts, Postgres.jl accepts (keyword form; a URL the
   # driver cannot parse is its own, quote-free refusal); and no refusal ever carries a value. Checked
-  # on grammar rows (quoting, `\` escapes, `;`, upper-case keys, spaces around `=`, URL `+`/`%xx`) and
-  # on a seeded fuzz. Why: a tokenizer that disagreed would refuse a valid string — a behavior change
+  # on grammar rows (quoting, `\` escapes, `;`, upper-case keys, spaces around `=`, URL `+`/`%xx`, and
+  # `%xx` before the query, #1243) and on a seeded fuzz. Why: a tokenizer that disagreed would refuse a valid string — a behavior change
   # for a working app — or name the wrong key. Compared through the public `Postgres.parse_dsn` only,
   # so a renamed driver internal cannot turn this red.
   string_fields = ("host", "user", "password", "dbname", "application_name", "options", "sslrootcert",
@@ -321,9 +439,8 @@ end
   problems = String[]
   function compare(dsn)
     mine = try
-      ps = PGExt._is_url(dsn) ? PGExt._url_query_params(dsn) : PGExt._keyword_dsn_params(dsn)
-      PGExt._check_dsn_params(ps)
-      ps
+      PGExt._check_dsn(dsn)
+      PGExt._is_url(dsn) ? PGExt._url_query_params(dsn) : PGExt._keyword_dsn_params(dsn)
     catch e
       e isa PormG.InvalidConfigurationError || rethrow()
       e
@@ -351,7 +468,13 @@ end
     "postgresql://u:p@h/f1?application_name=a+b&options=-c%20x%3D1",
     "postgresql://u:p@h/f1?port=5#x=SEC", "postgresql://u:p@h/f1#?port=SEC",
     "postgresql://u:p@h/f1?client_encoding=UTF8&channel_binding=prefer",
+    # Escapes before the query (#1243): an IPv6 zone id is `%25`-encoded, and a fragment is not decoded.
+    "postgresql://u:p%41@h/f%C3%A91", "postgresql://u:p@[fe80::1%25eth0]/f1", "postgresql://u:p@h/f1#%zz",
   ]
+  # The URL prefixes the fuzz puts its query on: well-formed, and each slot with a bad escape.
+  url_prefixes = ["postgresql://u:p@h/f1?", "postgresql://u:%41@h/f1?", "postgresql://u:p%zz@h/f1?",
+                  "postgresql://u%4:p@h/f1?", "postgresql://u:p@h%zz/f1?", "postgresql://u:p@h/f%z?",
+                  "postgresql://u:p@[fe80::1%eth0]/f1?"]
 
   # Seeded fuzz: half structured `key=value` lists, half random concatenations of grammar pieces.
   # A seeded xorshift64, so the file needs no `Random` in the test environment.
@@ -380,7 +503,7 @@ end
       else
         join(pick(pieces) for _ in 1:pick(1:12))
       end
-      compare(url ? "postgresql://u:p@h/f1?" * body : body)
+      compare(url ? (chance(0.7) ? first(url_prefixes) : pick(url_prefixes)) * body : body)
     end
   end
   @test isempty(problems)

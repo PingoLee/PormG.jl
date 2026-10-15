@@ -56,12 +56,14 @@ end
 
 # ── Connection-string preflight ──────────────────────────────────────────────
 #
-# PormG tokenizes the string itself and checks it against Postgres.jl's rules BEFORE the driver sees it
-# (#1235), so a refusal names the bad parameter from PormG's own parse, never from the text of the
-# driver's message: one new message shape in a Postgres.jl release turned `main` red (#1233). The
-# tokenizer follows Postgres.jl's grammar, which is not libpq's (`;` separates parameters too, and keys
-# are lower-cased); the string handed to the driver is the one the user wrote. The LibPQ extension's
-# rules (#657, #662) are then applied to what Postgres.jl parsed. A failure here becomes
+# The driver decides what it accepts: `Postgres.parse_dsn` reads the string as the user wrote it, and
+# a string it parses meets no refusal from PormG's tables (#1247) — tables copied from one release must
+# never refuse what a later one accepts. Only when the driver refuses does PormG tokenize the string
+# and check it against Postgres.jl's rules, to NAME the bad parameter from its own parse, never from
+# the text of the driver's message: one new message shape in a Postgres.jl release turned `main` red
+# (#1233, #1235). The tokenizer follows Postgres.jl's grammar, which is not libpq's (`;` separates
+# parameters too, and keys are lower-cased). PormG's own policy — the LibPQ extension's rules (#657,
+# #662), `reconnect`, Unix sockets — is then applied to what Postgres.jl parsed. A failure here becomes
 # `PoolConnectError.cause`, so no value is ever echoed — a value may be a password.
 
 # libpq keyword names.
@@ -77,8 +79,9 @@ const _CONNINFO_KEYWORDS = (
 
 # The keywords Postgres.jl accepts — its `KNOWN_PARAMS`, then the libpq keywords it accepts and ignores
 # (`IGNORED_PARAMS`); both tables are the same in Postgres.jl 2.2.2 and 2.3.0. PormG's own
-# copy, because the refusal is PormG's: a libpq keyword missing here is refused by name as one this
-# driver does not support, and a release that accepts more is a row to add, not a red build.
+# copy, because the WORDING of a refusal is PormG's: a libpq keyword missing here is named as one this
+# driver does not support. A release that accepts more still connects, because the table is read
+# only after the driver refused (#1247); the new keyword is a row to add, never a refusal.
 const _DRIVER_KEYWORDS = (
   "host", "port", "user", "password", "dbname", "application_name", "options", "connect_timeout",
   "sslmode", "sslrootcert", "sslcert", "sslkey", "sslcapath", "sslservername", "gssencmode",
@@ -267,6 +270,29 @@ function _url_query_params(dsn::String)::Vector{_DsnParam}
   return params
 end
 
+# Whether every `%` in a URL before its query — the user info, host, port and database name —
+# starts a two-hex-digit escape; no release of the driver accepts one that does not. On Postgres.jl
+# 2.2.2 a bad one in the user info, host or database name reaches `URIs.unescapeuri`, whose Base
+# `parse` error names the offending character: one character of a password (#1243). This names the
+# fault; `_mask_quoted` is what keeps that character out of any message this does not anticipate.
+function _url_escapes_ok(dsn::String)::Bool
+  scheme_end = findfirst("://", dsn)
+  scheme_end === nothing && return true
+  query = findfirst(c -> c == '?' || c == '#', dsn)
+  stop = query === nothing ? lastindex(dsn) : prevind(dsn, query)
+  i = nextind(dsn, last(scheme_end))
+  while i <= stop
+    if dsn[i] == '%'
+      for _ in 1:2
+        i = nextind(dsn, i)
+        (i <= stop && isxdigit(dsn[i])) || return false
+      end
+    end
+    i = nextind(dsn, i)
+  end
+  return true
+end
+
 # Whether `lowercase` can read `s`: it throws an `InvalidCharError` that prints the bytes on a malformed
 # or overlong sequence — and a percent-decoded URL part can be one, whatever the raw string was.
 # A lone surrogate is fine.
@@ -320,9 +346,25 @@ function _check_dsn_params(params::Vector{_DsnParam})
   return nothing
 end
 
-# Mask everything between the first and the last `"`, as the LibPQ extension does for libpq's
-# messages: masking quote PAIRS would leak a value that itself contains a `"`.
+# PormG's whole pass over the string: a URL's escapes before its query, then every parameter.
+function _check_dsn(dsn::String)
+  _is_url(dsn) || return _check_dsn_params(_keyword_dsn_params(dsn))
+  _url_escapes_ok(dsn) || throw(InvalidConfigurationError(
+    "the PostgreSQL connection URL's user info, host, port or database name is not valid " *
+    "percent-encoding: a `%` must start an escape such as %25, which is a literal `%`"))
+  return _check_dsn_params(_url_query_params(dsn))
+end
+
+# A `Char` as Base's errors print one — `'o'`, `'\''`, `'\x01'` — the way a Base `parse` error names
+# the character it rejected: on Postgres.jl 2.2.2 one character of a password (#1243).
+const _CHAR_LITERAL = r"'(?:\\(?:'|[^']*)|[^'\\])'"
+
+# Mask every character literal, then everything between the first and the last `"`, as the LibPQ
+# extension does for libpq's messages: masking quote PAIRS would leak a value that itself contains a
+# `"`. Masking the literals does not depend on the message's shape, so it holds for whichever driver
+# and URIs release produced it; PormG's own escape check can only cover the shapes it knows.
 function _mask_quoted(msg::AbstractString)::String
+  msg = replace(msg, _CHAR_LITERAL => "'****'")
   first_q = findfirst('"', msg)
   first_q === nothing && return PormG.Configuration.redact_secret(msg)
   last_q = findlast('"', msg)
@@ -345,6 +387,15 @@ end
 # Case-insensitive, as `Postgres.parse_dsn` decides it: `POSTGRESQL://…` is parsed as a URL too.
 _is_url(s::AbstractString) = (l = lowercase(s); startswith(l, "postgresql://") || startswith(l, "postgres://"))
 
+# The values Postgres.jl accepts when it CONNECTS (the same in 2.2.2 and 2.3.0), compared lower-cased
+# as it compares them. Read off the params the driver parsed — PormG's policy on the driver's own
+# result, like `reconnect`, not a table run before it (#1247). A release that accepts `allow` or
+# `verify-ca` needs its row here. In the driver's order: `gssencmode` is checked before dialling.
+const _CONNECT_TIME_VALUES = (
+  :gssencmode => ("disable", "prefer", "require"),
+  :sslmode => ("disable", "prefer", "require", "verify-full"),
+)
+
 # Fields a URL may legitimately carry an `@` in: the credentials themselves and free text.
 const _URL_AT_OK_FIELDS = (:user, :password, :application_name)
 
@@ -356,7 +407,26 @@ const _URL_QUERY_PARAM_RE = r"[?&]([^=&]*)=([^&]*)"
 _pct_decode(s::AbstractString) =
   replace(s, r"%[0-9A-Fa-f]{2}" => h -> string(Char(parse(UInt8, h[2:3]; base = 16))))
 
-function _checked_params(conn_str::AbstractString)::Postgres.ConnectionParams
+# Why the driver refused, in PormG's own words. PormG's pass names the parameter; anything else it
+# throws — a defect — is reduced to its type, as `_parse_failure` reduces the driver's: Base's errors
+# print their input (security review, #1235). When PormG's pass finds nothing wrong — a value from a
+# `PG*` environment variable, a rule a later Postgres.jl adds — the driver's own message is shown
+# masked, naming nothing.
+function _driver_refusal(dsn::String, e)::InvalidConfigurationError
+  try
+    _check_dsn(dsn)
+  catch named
+    named isa InterruptException && rethrow()
+    named isa InvalidConfigurationError && return named
+    return InvalidConfigurationError(
+      "the PostgreSQL connection string could not be parsed ($(nameof(typeof(named))))")
+  end
+  return _parse_failure(e)
+end
+
+# `parse` is the seam a test replaces with a driver release that accepts more than PormG's tables.
+function _checked_params(conn_str::AbstractString;
+                         parse = Postgres.parse_dsn)::Postgres.ConnectionParams
   # First: a NUL never reaches the parser, and its error would quote the whole string.
   '\0' in conn_str && throw(InvalidConfigurationError(
     "the PostgreSQL connection string contains a NUL character, which a PostgreSQL connection string cannot carry"))
@@ -367,22 +437,17 @@ function _checked_params(conn_str::AbstractString)::Postgres.ConnectionParams
   # `lowercase`, and the driver accepts it.
   _lowercasable(dsn) || throw(InvalidConfigurationError(
     "the PostgreSQL connection string is not valid UTF-8, which a PostgreSQL connection string must be"))
-  # PormG's own pass refuses only with its own value-free messages. Anything else it throws — a defect —
-  # is reduced to its type, as `_parse_failure` reduces the driver's: Base's errors print their input
-  # (security review, #1235).
-  try
-    _check_dsn_params(_is_url(dsn) ? _url_query_params(dsn) : _keyword_dsn_params(dsn))
-  catch e
-    (e isa InvalidConfigurationError || e isa InterruptException) && rethrow()
-    throw(InvalidConfigurationError(
-      "the PostgreSQL connection string could not be parsed ($(nameof(typeof(e))))"))
-  end
+  # The driver first (#1247). Its refusal is explained outside the `catch`, so the exception stack never
+  # carries the driver's error, whose message may quote the string — as Postgres.jl 2.3.0 does itself.
+  refused = nothing
   params = try
-    Postgres.parse_dsn(dsn)
+    parse(dsn)
   catch e
     e isa InterruptException && rethrow()
-    throw(_parse_failure(e))
+    refused = e
+    nothing
   end
+  refused === nothing || throw(_driver_refusal(dsn, refused))
   # `reconnect=true` would let Postgres.jl reopen a dropped connection in the middle of a transaction
   # PormG opened with a raw `BEGIN` — the rest of the transaction would run in autocommit. The pool
   # already renews dead connections itself.
@@ -426,6 +491,25 @@ function _checked_params(conn_str::AbstractString)::Postgres.ConnectionParams
           "password's `/` as %2F, `?` as %3F and `@` as %40"))
       end
     end
+  end
+  # #1242: Postgres.jl takes any `sslmode`/`gssencmode` when it parses, and refuses one only in
+  # `connect` — `gssencmode` before dialling, `sslmode` once the socket is open — with a message that
+  # echoes the value: in the #662 spill shape, a password's tail with no `@` to catch it above.
+  # Refused here instead, before any I/O, by name. An empty value too: the
+  # driver keeps it so that an unexpanded `${PGSSLMODE}` fails loudly, and so does this.
+  # Under `gssencmode=require` the driver connects over GSS or fails before TLS, and never reads
+  # `sslmode`, so a value it would refuse there still connects and is not refused here (review).
+  gss = params.gssencmode
+  gss_only = gss !== nothing && _lowercasable(gss) && lowercase(gss) == "require"
+  for (field, accepted) in _CONNECT_TIME_VALUES
+    field === :sslmode && gss_only && continue
+    v = getfield(params, field)
+    (v === nothing || (_lowercasable(v) && lowercase(v) in accepted)) && continue
+    accepts = join(("`$(a)`" for a in accepted), ", ", " or ")
+    throw(InvalidConfigurationError(
+      "the PostgreSQL connection's `$(field)` (from the connection string or `PG$(uppercase(String(field)))`) " *
+      "$(isempty(v) ? "is empty" : "is set to a value the Postgres.jl driver does not support"); " *
+      "it accepts $(accepts). `postgres_driver: LibPQ` supports libpq's other modes"))
   end
   return params
 end

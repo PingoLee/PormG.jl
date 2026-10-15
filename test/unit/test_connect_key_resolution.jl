@@ -588,9 +588,13 @@ end
 
     @testset "2a: a registered module whose folder is not loaded" begin
       scratch = _ck1226_scratch(:ScratchSelfHeal2a)
+      # No `__pormg_binding__` record (#1227) — the precompile workload's `""` marker suppresses it —
+      # so this is a module the binding path cannot answer for, and 2a is what runs.
+      Core.eval(scratch, :(const __pormg_init_path__ = ""))
       Configuration.load(db; env = "test")
       Base.invokelatest(PormG.Models.set_models, scratch, db)
       @test PormG.Models.REGISTERED_MODULES[scratch] == db
+      @test !Base.invokelatest(isdefined, scratch, :__pormg_binding__)
       thing = Base.invokelatest(getfield, scratch, :Thing)
       Configuration.close_pool!(db)
       empty!(PormG.config)
@@ -640,6 +644,130 @@ end
     end
   finally
     foreach(id -> delete!(Base.loaded_modules, id), added)
+    for k in collect(keys(PormG.config))
+      try Configuration.close_pool!(k) catch end
+    end
+    empty!(PormG.config)
+    merge!(PormG.config, saved)
+    rm(root; recursive = true, force = true)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# @import_models records the binding; the self-heal rebinds from it (#1227)
+# What it tests: `set_models` records `__pormg_binding__ = (key, root, folder)` in the models module
+#   — the key the application loaded the folder under and the root it loaded it relative to (#857).
+#   With that key gone from `config`, `ensure_model_initialized` raises `InvalidConfigurationError`
+#   naming the key and `load(key; root, env)`, loads nothing, and does NOT bind to the same folder
+#   loaded under another key (the old case-1 scan would have remapped to it). Once the key is loaded
+#   again — from any working directory — it rebinds to it. No record for an implicit entry or behind
+#   the precompile marker. `_binding_root` reads the root off the stored folder. No SQL.
+# Why it matters: after precompilation `config` is empty, and the first `.objects` used to re-derive
+#   the key by scanning whatever the application had loaded by then — which is why the docs told a
+#   package to load in both the module body and `__init__`. The key is known at import; a restored
+#   image now repeats the application's choice instead of guessing one.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the self-heal rebinds from the recorded binding, never by scanning (#1227)" begin
+  @testset "_binding_root reads the root off the stored folder" begin
+    @test PormG.Models._binding_root("db", "/srv/app/db") == "/srv/app"
+    @test PormG.Models._binding_root("sub/db", "/srv/app/sub/db") == "/srv/app"
+    @test PormG.Models._binding_root("db", "db") === nothing              # load("db"): relative, no root
+    @test PormG.Models._binding_root("/srv/app/db", "/srv/app/db") === nothing   # absolute key
+    @test PormG.Models._binding_root("db", "/srv/app/other") === nothing  # not joinpath(root, key)
+  end
+
+  saved = copy(PormG.config)
+  root = mktempdir()
+  try
+    empty!(PormG.config)
+    db = _ck1226_folder(root)                 # root/scratch_db
+    elsewhere = mktempdir()
+
+    scratch = _ck1226_scratch(:ScratchBinding1227)
+    thing = Base.invokelatest(getfield, scratch, :Thing)
+    # Loaded the way a package does it: a short key relative to the project root (#857).
+    cd(elsewhere) do
+      Configuration.load("scratch_db"; root = root, env = "test")
+    end
+    Base.invokelatest(PormG.Models.set_models, scratch, db)
+    @test thing.connect_key == "scratch_db"
+
+    @testset "set_models records the key, the root and the folder" begin
+      binding = Base.invokelatest(getfield, scratch, :__pormg_binding__)
+      @test binding.key == "scratch_db"
+      @test binding.root == PormG._canonical_folder_path(root)
+      @test binding.folder == db
+    end
+
+    # What a restored image looks like: the model keeps its baked key, `config` is empty.
+    Configuration.close_pool!("scratch_db")
+    empty!(PormG.config)
+
+    @testset "key not loaded: refused, naming the load call; nothing loaded" begin
+      err = try
+        _ck_with_interactive(true) do      # even a REPL: the record is the application's decision
+          PormG.Models.ensure_model_initialized(thing)
+        end
+        nothing
+      catch e
+        e
+      end
+      @test err isa PormG.InvalidConfigurationError
+      msg = sprint(showerror, err)
+      @test occursin("bound to the configuration \"scratch_db\" when they were imported", msg)
+      @test occursin("PormG.Configuration.load(\"scratch_db\"; root = $(repr(PormG._canonical_folder_path(root))), env = ", msg)
+      @test isempty(PormG.config)
+    end
+
+    @testset "the same folder under another key is not a substitute" begin
+      Configuration.load(db; env = "test")         # absolute key, same folder
+      @test_throws PormG.InvalidConfigurationError PormG.Models.ensure_model_initialized(thing)
+      @test thing.connect_key == "scratch_db"         # not remapped to the absolute key
+      Configuration.close_pool!(db)
+      empty!(PormG.config)
+    end
+
+    @testset "the injected __init__ honours the record too" begin
+      # `_bind_if_loaded` is what `@models_module`'s `__init__` calls at image restore. With the
+      # recorded key absent and the same folder under another key, it must not bind there.
+      Configuration.load(db; env = "test")
+      thing.connect_key = nothing
+      @test Base.invokelatest(PormG.Models._bind_if_loaded, scratch, db) === nothing
+      @test thing.connect_key === nothing
+      Configuration.close_pool!(db)
+      empty!(PormG.config)
+      Configuration.load("scratch_db"; root = root, env = "test")
+      Base.invokelatest(PormG.Models._bind_if_loaded, scratch, db)
+      @test thing.connect_key == "scratch_db"
+      Configuration.close_pool!("scratch_db")
+      empty!(PormG.config)
+      thing.connect_key = "scratch_db"     # the baked key, as before
+    end
+
+    @testset "once the key is loaded again, from anywhere, it rebinds" begin
+      cd(mktempdir()) do
+        Configuration.load("scratch_db"; root = root, env = "test")
+      end
+      thing.connect_key = nothing
+      @test PormG.Models.ensure_model_initialized(thing)
+      @test thing.connect_key == "scratch_db"
+    end
+
+    @testset "no record for an implicit entry or behind the precompile marker" begin
+      Configuration.close_pool!("scratch_db")
+      empty!(PormG.config)
+      implicit_mod = _ck1226_scratch(:ScratchBinding1227Implicit)
+      _ck_with_interactive(false) do
+        Base.invokelatest(PormG.Models.set_models, implicit_mod, db; implicit = true)
+      end
+      @test PormG.config[db].implicit
+      @test !Base.invokelatest(isdefined, implicit_mod, :__pormg_binding__)
+      marked = _ck1226_scratch(:ScratchBinding1227Marker)
+      Core.eval(marked, :(const __pormg_init_path__ = ""))
+      Base.invokelatest(PormG.Models.set_models, marked, db)
+      @test !Base.invokelatest(isdefined, marked, :__pormg_binding__)
+    end
+  finally
     for k in collect(keys(PormG.config))
       try Configuration.close_pool!(k) catch end
     end

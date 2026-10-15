@@ -1,7 +1,7 @@
 ## `set_models` / `@import_models` — a models folder with no loaded configuration is refused; the implicit load is a REPL's (#1226, #1248)
 
 - **Version**: Unreleased
-- **PormG ref**: #1226, #1248 ; `src/Models.jl` (`set_models`, `ensure_model_initialized`, `_bind_if_loaded`), `src/Configuration.jl` (`_is_interactive`), `src/Utils.jl` (the injected `__init__`s)
+- **PormG ref**: #1226, #1248, #1227 ; `src/Models.jl` (`set_models`, `ensure_model_initialized`, `_bind_if_loaded`, `_rebind_from_record`), `src/Configuration.jl` (`_is_interactive`), `src/Utils.jl` (the injected `__init__`s)
 - **Recorded**: 2026-10-14
 - **Severity**: breaking. Registering models against a folder that no `Configuration.load` has
   loaded raises `InvalidConfigurationError` outside an interactive session. It used to load the
@@ -21,7 +21,7 @@ and the `load` call to add. The same rule holds wherever models are registered:
 | where | before | after |
 |---|---|---|
 | `@import_models` / `@models_module` / `set_models`, folder not loaded | `@warn`, then an implicit load | `InvalidConfigurationError`; in a REPL, the `@warn` and the load as before |
-| first `M.Model.objects` after a precompiled image is restored, folder not loaded | self-heal re-registered the module and loaded the folder implicitly | `InvalidConfigurationError` |
+| first `M.Model.objects` after a precompiled image is restored, the import-time key not loaded | self-heal re-registered the module and loaded the folder implicitly, or remapped the models to any loaded key matching the folder | `InvalidConfigurationError` naming that key and its `load(key; root, env)` call; it binds only to the key recorded at import (#1227) |
 | the `__init__` that `@import_models`/`@models_module` inject, folder not loaded | implicit load, errors swallowed | nothing; the first `.objects` raises the error above |
 
 The implicit load is still there in a REPL: when `isinteractive()` is true, a direct
@@ -29,6 +29,11 @@ The implicit load is still there in a REPL: when `isinteractive()` is true, a di
 script is not interactive and gets the refusal; `Models.set_models(mod, folder; implicit = true)`
 asks for the implicit load in one call. There is no process-wide switch. The self-heal and the
 injected `__init__` (the last two rows) never load a folder, not even in a REPL.
+
+The self-heal also stopped re-deriving the key (#1227). `@import_models` records in the models
+module the key the folder was loaded under and its `root`. On the first `.objects` of a restored
+image the models bind to that key when it is loaded and raise when it is not. A configuration loaded
+under a different key — the same folder by its absolute path, say — is no longer used in its place.
 
 ### Who this affects
 

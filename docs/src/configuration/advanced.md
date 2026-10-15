@@ -264,7 +264,7 @@ const APP_ROOT = normpath(joinpath(@__DIR__, ".."))
 _load_configs() =
     PormG.Configuration.load_many(DB_DIRS; root = APP_ROOT, env = get(ENV, "RACECONTROL_ENV", "dev"))
 
-_load_configs()                       # precompile: bakes the right connect_key into the image
+_load_configs()                       # precompile: lets @import_models bind, and record the key
 PormG.@import_models "../db/models.jl" models
 
 __init__() = _load_configs()          # runtime: the image's configuration did not survive
@@ -279,13 +279,23 @@ Each half does a different job, which is why dropping either one breaks somethin
 | Where the configuration is loaded | After `using`, before any `.objects` | After the first `.objects` access |
 |---|---|---|
 | Module body **and** `__init__` | short key, `config` populated ✔ | unchanged ✔ |
-| Module body only | short key, `config` **empty** | `InvalidConfigurationError`: the self-heal finds no loaded configuration for the folder, and the message names the `load` call to add |
+| Module body only | short key, `config` **empty** | `InvalidConfigurationError`: the key the models were imported under is not loaded, and the message names the `load(key; root, env)` call to add |
 | `__init__` only | the precompile run fails: `@import_models` in the module body raises `InvalidConfigurationError` | — |
 | Neither | as "`__init__` only" | — |
 
-The module body runs at precompile time, so it is what bakes the right `connect_key` into the
-image; `__init__` runs in the session, so it is what puts the connection in `config` where a query
-can find it. Neither substitutes for the other. "Module body only" is the row to watch: it looks
+The module body runs at precompile time, so it is what lets `@import_models` bind the models at
+all; `__init__` runs in the session, so it is what puts the connection in `config` where a query
+can find it. Neither substitutes for the other.
+
+**What the first `.objects` binds to (#1227).** When `@import_models` binds the models it records,
+in the models module, the key the folder was loaded under and the `root` it was loaded relative to
+(`__pormg_binding__`). That record is part of the image. On the first `.objects` of a restored
+session the self-heal reads it back and binds to that **key** — the one your `__init__` loads — or
+refuses, naming `load(key; root, env)`. It does not look through `config` for some other
+configuration that happens to match the folder, so a session that loaded the same folder under a
+different key, or from a different working directory, cannot quietly change which entry the models
+use. The module-body load is therefore what makes the import succeed and fixes the key; the
+`__init__` load is the one the running session depends on. "Module body only" is the row to watch: it looks
 right after `using` and fails on the first query. Since #1226 it fails with an error that says
 what is missing. Before, it quietly ran against a database you did not choose.
 

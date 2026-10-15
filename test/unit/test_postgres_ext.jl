@@ -110,7 +110,17 @@ end
   cases = [
     ("NUL byte", "host=localhost password=s3cr\0etNUL dbname=f1", ["s3cr", "etNUL"]),
     ("unquoted passphrase", "host=localhost password=corr3ct horse battery dbname=f1", ["horse", "battery"]),
-    ("bad percent-escape URL", "postgresql://u:p%zzSECRET788@localhost/f1", ["SECRET788", "p%zz"]),
+    # #1243: on Postgres.jl 2.2.2, URIs' `unescapeuri` raised Base's `invalid base 16 digit 'z' in "…"`,
+    # and the single-quoted character — the password's — was outside what `_mask_quoted` masks.
+    ("bad percent-escape URL", "postgresql://u:p%zzSECRET788@localhost/f1", ["SECRET788", "p%zz", "'z'"]),
+    ("bad percent-escape in a realistic URL password", "postgresql://u:50%offSEC788@localhost/f1", ["SEC788", "'o'", "off"]),
+    ("bad percent-escape in a URL user", "postgresql://SEC788%zz:p@localhost/f1", ["SEC788", "'z'"]),
+    ("bad percent-escape in a URL host", "postgresql://u:p@SEC788%zz/f1", ["SEC788", "'z'"]),
+    ("bad percent-escape in a URL database name", "postgresql://u:p@localhost/SEC788%zz", ["SEC788", "'z'"]),
+    ("truncated percent-escape in a URL password", "postgresql://u:SEC788%4@localhost/f1", ["SEC788"]),
+    # A query value URIs 1.6 cuts at its second `=` and URIs 1.7 decodes whole: PormG's pass takes the
+    # reading that decodes, so only `_mask_quoted` stands between Base's `'o'` and the message.
+    ("bad percent-escape in a URL query value", "postgresql://u:p@localhost/f1?password=x=50%offSEC788", ["SEC788", "'o'", "off"]),
     ("unencoded @ in URL password", "postgresql://u:pa@ssSEC788@localhost:1/f1", ["ssSEC788"]),
     ("unencoded @ and : in URL password", "postgresql://u:pa@ss:PORTSEC788@localhost/f1", ["PORTSEC788"]),
     ("unencoded / in URL password", "postgresql://u:pa/ssSEC788@localhost/f1", ["ssSEC788"]),
@@ -211,6 +221,9 @@ end
     ("postgresql://u:p@h/f1?SSLMODE=require", "query parameter 1 is not a connection parameter Postgres.jl recognizes (parameter names are lower-case)", ["SSLMODE"]),
     ("postgresql://u:p@h/f1?sslmode=require&SECq=1", "query parameter 2 is not a connection parameter", ["SECq"]),
     ("postgresql://u:p@h/f1?sslpassword=SEC%zz", "the value of parameter `sslpassword` is not valid percent-encoding", ["SEC"]),
+    # Before the query (#1243): the user info, host and database name, which Postgres.jl decodes too.
+    ("postgresql://u:SEC%zz@h/f1", "URL's user info, host, port or database name is not valid percent-encoding", ["SEC", "'z'"]),
+    ("postgresql://u:p@h/SEC%z", "URL's user info, host, port or database name is not valid percent-encoding", ["SEC", "'z'"]),
   ]
   for (dsn, expected, secrets) in cases
     @testset "$(expected)" begin
@@ -295,6 +308,18 @@ end
     @test !occursin("sslpassword", msg)
     @test !occursin("SECv", msg)
   end
+  # A Base `parse` error reaching it names the rejected character as a `Char` literal, outside the
+  # double quotes (#1243): on Postgres.jl 2.2.2, `?password=x=50%off…` with URIs 1.7, or a bracketed
+  # host holding `#`, gets past PormG's escape check. Every literal is masked, whatever the shape.
+  for (shape, char) in (("invalid base 16 digit 'o' in \"ffSECb\"", "'o'"),
+                        ("invalid base 16 digit '\\'' in \"'fSECb\"", "'\\''"),
+                        ("invalid base 16 digit '\\x01' in \"\\x01SECb\"", "'\\x01'"),
+                        ("invalid base 16 digit 'é' in \"éSECb\"", "'é'"))
+    msg = PormG.error_message(PGExt._parse_failure(ArgumentError(shape)))
+    @test occursin("invalid base 16 digit '****' in \"****\"", msg)
+    @test !occursin(char, msg)
+    @test !occursin("SECb", msg)
+  end
   # An exception that is not the driver's own is reduced to its type.
   @test PormG.error_message(PGExt._parse_failure(EOFError())) ==
         "the PostgreSQL connection string could not be parsed (EOFError)"
@@ -312,8 +337,8 @@ end
   # What: the parity PormG's own pass depends on — whatever Postgres.jl accepts, PormG accepts, with
   # the same value for every key; whatever PormG accepts, Postgres.jl accepts (keyword form; a URL the
   # driver cannot parse is its own, quote-free refusal); and no refusal ever carries a value. Checked
-  # on grammar rows (quoting, `\` escapes, `;`, upper-case keys, spaces around `=`, URL `+`/`%xx`) and
-  # on a seeded fuzz. Why: a tokenizer that disagreed would refuse a valid string — a behavior change
+  # on grammar rows (quoting, `\` escapes, `;`, upper-case keys, spaces around `=`, URL `+`/`%xx`, and
+  # `%xx` before the query, #1243) and on a seeded fuzz. Why: a tokenizer that disagreed would refuse a valid string — a behavior change
   # for a working app — or name the wrong key. Compared through the public `Postgres.parse_dsn` only,
   # so a renamed driver internal cannot turn this red.
   string_fields = ("host", "user", "password", "dbname", "application_name", "options", "sslrootcert",
@@ -321,9 +346,8 @@ end
   problems = String[]
   function compare(dsn)
     mine = try
-      ps = PGExt._is_url(dsn) ? PGExt._url_query_params(dsn) : PGExt._keyword_dsn_params(dsn)
-      PGExt._check_dsn_params(ps)
-      ps
+      PGExt._check_dsn(dsn)
+      PGExt._is_url(dsn) ? PGExt._url_query_params(dsn) : PGExt._keyword_dsn_params(dsn)
     catch e
       e isa PormG.InvalidConfigurationError || rethrow()
       e
@@ -351,7 +375,13 @@ end
     "postgresql://u:p@h/f1?application_name=a+b&options=-c%20x%3D1",
     "postgresql://u:p@h/f1?port=5#x=SEC", "postgresql://u:p@h/f1#?port=SEC",
     "postgresql://u:p@h/f1?client_encoding=UTF8&channel_binding=prefer",
+    # Escapes before the query (#1243): an IPv6 zone id is `%25`-encoded, and a fragment is not decoded.
+    "postgresql://u:p%41@h/f%C3%A91", "postgresql://u:p@[fe80::1%25eth0]/f1", "postgresql://u:p@h/f1#%zz",
   ]
+  # The URL prefixes the fuzz puts its query on: well-formed, and each slot with a bad escape.
+  url_prefixes = ["postgresql://u:p@h/f1?", "postgresql://u:%41@h/f1?", "postgresql://u:p%zz@h/f1?",
+                  "postgresql://u%4:p@h/f1?", "postgresql://u:p@h%zz/f1?", "postgresql://u:p@h/f%z?",
+                  "postgresql://u:p@[fe80::1%eth0]/f1?"]
 
   # Seeded fuzz: half structured `key=value` lists, half random concatenations of grammar pieces.
   # A seeded xorshift64, so the file needs no `Random` in the test environment.
@@ -380,7 +410,7 @@ end
       else
         join(pick(pieces) for _ in 1:pick(1:12))
       end
-      compare(url ? "postgresql://u:p@h/f1?" * body : body)
+      compare(url ? (chance(0.7) ? first(url_prefixes) : pick(url_prefixes)) * body : body)
     end
   end
   @test isempty(problems)

@@ -267,6 +267,29 @@ function _url_query_params(dsn::String)::Vector{_DsnParam}
   return params
 end
 
+# Whether every `%` in a URL before its query — the user info, host, port and database name —
+# starts a two-hex-digit escape; no release of the driver accepts one that does not. On Postgres.jl
+# 2.2.2 a bad one in the user info, host or database name reaches `URIs.unescapeuri`, whose Base
+# `parse` error names the offending character: one character of a password (#1243). This names the
+# fault; `_mask_quoted` is what keeps that character out of any message this does not anticipate.
+function _url_escapes_ok(dsn::String)::Bool
+  scheme_end = findfirst("://", dsn)
+  scheme_end === nothing && return true
+  query = findfirst(c -> c == '?' || c == '#', dsn)
+  stop = query === nothing ? lastindex(dsn) : prevind(dsn, query)
+  i = nextind(dsn, last(scheme_end))
+  while i <= stop
+    if dsn[i] == '%'
+      for _ in 1:2
+        i = nextind(dsn, i)
+        (i <= stop && isxdigit(dsn[i])) || return false
+      end
+    end
+    i = nextind(dsn, i)
+  end
+  return true
+end
+
 # Whether `lowercase` can read `s`: it throws an `InvalidCharError` that prints the bytes on a malformed
 # or overlong sequence — and a percent-decoded URL part can be one, whatever the raw string was.
 # A lone surrogate is fine.
@@ -320,9 +343,25 @@ function _check_dsn_params(params::Vector{_DsnParam})
   return nothing
 end
 
-# Mask everything between the first and the last `"`, as the LibPQ extension does for libpq's
-# messages: masking quote PAIRS would leak a value that itself contains a `"`.
+# PormG's whole pass over the string: a URL's escapes before its query, then every parameter.
+function _check_dsn(dsn::String)
+  _is_url(dsn) || return _check_dsn_params(_keyword_dsn_params(dsn))
+  _url_escapes_ok(dsn) || throw(InvalidConfigurationError(
+    "the PostgreSQL connection URL's user info, host, port or database name is not valid " *
+    "percent-encoding: a `%` must start an escape such as %25, which is a literal `%`"))
+  return _check_dsn_params(_url_query_params(dsn))
+end
+
+# A `Char` as Base's errors print one — `'o'`, `'\''`, `'\x01'` — the way a Base `parse` error names
+# the character it rejected: on Postgres.jl 2.2.2 one character of a password (#1243).
+const _CHAR_LITERAL = r"'(?:\\(?:'|[^']*)|[^'\\])'"
+
+# Mask every character literal, then everything between the first and the last `"`, as the LibPQ
+# extension does for libpq's messages: masking quote PAIRS would leak a value that itself contains a
+# `"`. Masking the literals does not depend on the message's shape, so it holds for whichever driver
+# and URIs release produced it; PormG's own escape check can only cover the shapes it knows.
 function _mask_quoted(msg::AbstractString)::String
+  msg = replace(msg, _CHAR_LITERAL => "'****'")
   first_q = findfirst('"', msg)
   first_q === nothing && return PormG.Configuration.redact_secret(msg)
   last_q = findlast('"', msg)
@@ -371,7 +410,7 @@ function _checked_params(conn_str::AbstractString)::Postgres.ConnectionParams
   # is reduced to its type, as `_parse_failure` reduces the driver's: Base's errors print their input
   # (security review, #1235).
   try
-    _check_dsn_params(_is_url(dsn) ? _url_query_params(dsn) : _keyword_dsn_params(dsn))
+    _check_dsn(dsn)
   catch e
     (e isa InvalidConfigurationError || e isa InterruptException) && rethrow()
     throw(InvalidConfigurationError(

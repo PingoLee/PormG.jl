@@ -409,6 +409,11 @@ end
 _is_bare_column(s::String) = !occursin("__@", s)
 _is_bare_column(::JoinedReference) = true
 _is_bare_column(x::FExpression) = x.operation === nothing && _is_bare_column(x.field_name)
+# #1285 — a CTE column, as a `Joined` handle is: the outer query reads the column the body projected,
+# and a SQLite body leaves an interval as its text (`Dialect._sqlite_interval_text` over a computed
+# one), so `_sqlite_interval_ms` converts it once, exactly. A transform on it (`__@…`) is no column.
+# `_operand_column_field` has no CTE arm, so the day-count and number-side readers still type nothing.
+_is_bare_column(r::CTEReference) = !occursin("__@", r.path)
 _is_bare_column(::Any) = false
 
 # A day count's SQL as a day shift reads it. Only a `BIGINT` count on PostgreSQL changes.
@@ -706,6 +711,7 @@ _interval_ms_candidate(::FExpression) = true
 _interval_ms_candidate(p::String) = _is_bare_column(p)
 _interval_ms_candidate(p::SQLField) = _interval_ms_candidate(p.field)
 _interval_ms_candidate(::JoinedReference) = true
+_interval_ms_candidate(r::CTEReference) = _is_bare_column(r)   # #1285: ordering or aggregating one
 function _interval_ms_candidate(p::FObject)
   if p.function_name in _INTERVAL_MS_AGGREGATES
     return !(p.column isa AbstractVector) && _interval_ms_candidate(p.column)

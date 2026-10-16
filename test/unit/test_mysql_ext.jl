@@ -11,7 +11,8 @@
 #   (SQLSTATE `HY000` covers both statements and connections), the server's text survives only for
 #   numbers whose text names objects, no failure is retry-safe (2006 is raised whether or not the
 #   statement ran), and an interrupt a wrapper carries in `.cause` is rethrown bare. The capability
-#   table refuses a server older than 8.4 (#1264) in its own words.
+#   table refuses a server older than 8.4 (#1264) in its own words. A DATETIME(6) value with digits
+#   below the millisecond is refused, never truncated to a `DateTime` (#1270 decides what it reads as).
 #
 # No live database: parsers and classifiers are exercised directly. The connection, the pool,
 # cancellation and advisory locks run against a live MySQL in
@@ -23,6 +24,7 @@
 using Test
 using PormG
 using DataFrames, Decimals
+import Dates
 
 include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
@@ -247,6 +249,30 @@ end
   @test PormG.backend_num_rows(_my_pool(), r) == 2
   empty = _MyExt.MySQLResult(Symbol[], AbstractVector[], 0, 3, UInt64(5))
   @test PormG.backend_num_affected_rows(_my_pool(), empty) == 3 && isempty(collect(empty))
+end
+
+# What: a `Timestamp{Microsecond}` (a DATETIME(6) or TIMESTAMP(6) column) with digits below the
+#   millisecond is refused, with or without a column, by an `InvalidValueError` that names its
+#   precision and #1270, carries the column as `field`, and never the value; one whose
+#   sub-millisecond part is zero reads as a `DateTime`, as does a `Timestamp{Millisecond}`.
+# Why: a `DateTime` holds milliseconds, so `DateTime(v)` dropped the last three digits silently,
+#   and raw `fetch` is a public path. What a `DateTimeField` declares on MySQL is #1270's decision.
+@testset "a DATETIME(6) value finer than a millisecond is refused, not truncated (#1130, #1270)" begin
+  fine = MySQL.Timestamp{Dates.Microsecond}(2026, 10, 16, 12, 34, 56, 789, 123)
+  e = try _MyExt._read_value(fine, :fastest_lap_at); nothing catch err; err end
+  @test e isa PormG.InvalidValueError && e.kind === :range
+  @test e.field == "fastest_lap_at" && e.op == "a MySQL read"
+  @test occursin("`fastest_lap_at`", e.msg) && occursin("microsecond precision", e.msg)
+  @test occursin("DATETIME(6)", e.msg) && occursin("#1270", e.msg)
+  @test !occursin("2026", e.msg) && !occursin("789", e.msg) && !occursin("123", e.msg)
+  # One decision for every caller: the column-less form refuses too, rather than truncating.
+  @test_throws PormG.InvalidValueError _MyExt._read_value(fine)
+
+  whole = MySQL.Timestamp{Dates.Microsecond}(2026, 10, 16, 12, 34, 56, 789, 0)
+  @test _MyExt._read_value(whole, :fastest_lap_at) === Dates.DateTime(2026, 10, 16, 12, 34, 56, 789)
+  milli = MySQL.Timestamp{Dates.Millisecond}(2026, 10, 16, 12, 34, 56, 789)
+  @test _MyExt._read_value(milli, :fastest_lap_at) === Dates.DateTime(2026, 10, 16, 12, 34, 56, 789)
+  @test _MyExt._read_value(missing, :fastest_lap_at) === missing
 end
 
 # What: the capability table refuses a MySQL server older than 8.4 in its own words, and names

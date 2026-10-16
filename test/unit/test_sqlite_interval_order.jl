@@ -1101,7 +1101,8 @@ end
       @test _io_params(agg(fn)) == Any[]
       pg = _io_sql(agg(fn); conn = _IO_PG)
       @test occursin("$(pg_value) as \"m\"", pg) && !occursin("substr(", pg)
-      # Typed an interval on both engines, so it reads back as one.
+      # Typed an interval on both engines, so it reads back as one. A regression guard: SQLite
+      # recorded the kind before the fix too, over the text's maximum.
       for conn in (_IO_SL, _IO_PG)
         q = agg(fn)
         QB.query(q; connection = conn, show_query = :sql)
@@ -1112,11 +1113,54 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1285 — a filter on, and arithmetic over, an aggregate of a duration CTE column; old-SQLite NULLs
+# Once the aggregate has a millisecond form, so do the surfaces #894 and #907 built on it for the
+# model column. Expected SQL, SQLite: `HAVING MAX(<ms>) > ?` with `[356400000]`, where it was
+# `HAVING MAX("R1_1"."t") > ?` with `["99:00:00"]`; `Max(CTE) - Min(CTE)` the difference of the two
+# millisecond aggregates as the interval's text, where it was refused. Before SQLite 3.30 the NULL
+# placement of an ORDER BY on the column is emulated over its milliseconds, `ORDER BY (<ms> IS NULL)
+# ASC, <ms> ASC`, binding nothing, as for the model column. PostgreSQL: unchanged SQL. Why: a filter
+# that compared the text returned other rows than the same filter over the model column.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1285: a filter on and arithmetic over a duration CTE aggregate use milliseconds on SQLite" begin
+  c = PormG.CTE("c", "t")
+  having() = (q = _IOM.Io_lap.objects; _io_cte_lap!(q);
+              q.values("circuit", "m" => _IO_FN.Max(c)); q.filter("m__@gt" => Dates.Hour(99)); q)
+  @test occursin("HAVING MAX($(_IO_CTE_MS)) > ?", _io_sql(having()))
+  @test _io_params(having()) == Any[356_400_000]
+  @test occursin("HAVING MAX(\"R1_1\".\"t\") > \$1", _io_sql(having(); conn = _IO_PG))
+  @test _io_params(having(); conn = _IO_PG) == Any["99:00:00"]
+
+  span() = (q = _IOM.Io_lap.objects; _io_cte_lap!(q);
+            q.values("circuit", "d" => _IO_FN.Max(c) - _IO_FN.Min(c)); q)
+  @test occursin("$(_io_text("(MAX($(_IO_CTE_MS)) - MIN($(_IO_CTE_MS)))")) as \"d\"", _io_sql(span()))
+  @test occursin("(MAX(\"R1_1\".\"t\") - MIN(\"R1_1\".\"t\")) as \"d\"", _io_sql(span(); conn = _IO_PG))
+  # The mean, as over the model column (#907): the sum's milliseconds over the count, rounded to a
+  # millisecond, typed a duration on both engines (PostgreSQL left it untyped before the fix).
+  mean() = (q = _IOM.Io_lap.objects; _io_cte_lap!(q);
+            q.values("circuit", "d" => _IO_FN.Sum(c) / _IO_FN.Count("id")); q)
+  @test occursin("$(_io_text("CAST(round((SUM($(_IO_CTE_MS))) * 1.0 / (COUNT(\"R1\".\"id\"))) AS INTEGER)")) as \"d\"",
+                 _io_sql(mean()))
+  for conn in (_IO_SL, _IO_PG)
+    q = mean()
+    QB.query(q; connection = conn, show_query = :sql)
+    @test q.object.projection_kinds[:d] isa PormG.CInterval
+  end
+
+  q = _IOM.Io_lap.objects
+  _io_cte_lap!(q); q.values("id"); q.order_by("c__t")
+  @test occursin("ORDER BY ($(_IO_CTE_MS) IS NULL) ASC, $(_IO_CTE_MS) ASC", _io_sql(q; conn = _IO_OLD))
+  @test _io_params(q; conn = _IO_OLD) == Any[]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #1285 — the oracle: ordering and aggregating a duration CTE column, run against SQLite itself
 # The #894 rows (laps 1 → 99 h, 2 → 100 h, 3 → -1 h, 4 → -2 h, 5 → 1:30), read through a CTE that
 # projects them. Each expected value is the one PostgreSQL computes, and the one the model column
 # gives on SQLite (asserted beside it). Under the text, the order was [3, 4, 5, 2, 1], `Max` returned
-# `"99:00:00"`, `Min` `"-01:00:00"` and `Sum` the number 196.
+# `"99:00:00"`, `Min` `"-01:00:00"`, `Sum` the float 196.0, a filter on `Max` past 99 h matched no
+# circuit (b's text maximum `"100:00:00"` sorts below `"99:00:00"`), `Sum / Count` was a float of
+# hours, and `Max - Min` was refused.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1285: SQLite orders and aggregates a duration CTE column numerically (in-memory oracle)" begin
   isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
@@ -1156,6 +1200,13 @@ end
     # Ordered by an aggregate over the CTE column: circuit sums a 98 h, b 98 h, c 1:30.
     @test col(lap, :circuit, q -> (_io_cte_lap!(q); q.values("circuit", "m" => _IO_FN.Max(PormG.CTE("c", "t"))); q.order_by("m"))) ==
           ["c", "a", "b"]
+    # A filter on the aggregate's alias, and arithmetic over two of them, per circuit.
+    @test col(lap, :circuit, q -> (_io_cte_lap!(q); q.values("circuit", "m" => _IO_FN.Max(PormG.CTE("c", "t")));
+                                   q.filter("m__@gt" => Dates.Hour(99)); q.order_by("circuit"))) == ["b"]
+    @test col(lap, :d, q -> (_io_cte_lap!(q); q.values("circuit", "d" => _IO_FN.Max(PormG.CTE("c", "t")) - _IO_FN.Min(PormG.CTE("c", "t")));
+                             q.order_by("circuit"))) == ["100:00:00", "102:00:00", "00:00:00"]
+    @test col(lap, :d, q -> (_io_cte_lap!(q); q.values("circuit", "d" => _IO_FN.Sum(PormG.CTE("c", "t")) / _IO_FN.Count("id"));
+                             q.order_by("circuit"))) == ["49:00:00", "49:00:00", "00:01:30"]
   finally
     close(db)
   end

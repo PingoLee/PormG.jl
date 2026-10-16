@@ -744,6 +744,9 @@ end
       (case(_CF("number"); default = 1.5, output_field = "integer"), "numeric", "integer"),
       (case(_CF("price"); default = 1.5, output_field = "numeric(20,6)"), "numeric", "numeric(20,6)"),
       (case(_CF("points"); default = 1.5, output_field = "numeric"), "double precision", "decimal"),
+      # under a float `output_field` a fraction stays a float: `-0.0` and `Inf` have no `numeric`
+      (case(_CF("number"); default = -0.0, output_field = "float8"), "double precision", "float8"),
+      (case(_CF("number"); default = Inf, output_field = Models.FloatField()), "double precision", "float"),
       (case(_CF("points"); default = 0, output_field = "numeric(10,1)"), "double precision", "numeric(10,1)"),
       (case(_CF("price"); default = 0, output_field = "numeric(12,2)"), "numeric", "numeric(12,2)"),
       (case(_CF("number"); default = 0, output_field = "text"), "bigint", "text"),

@@ -372,10 +372,12 @@ end
 # A fractional default is a `numeric` here, as PostgreSQL types a written `1.5`: bound as a `double
 # precision` it would make the whole `CASE` one beside an integer or a decimal branch, and a double
 # keeps 15 significant digits where the `numeric` the `output_field` gave kept every one. Beside a
-# float branch the `CASE` is a double either way.
+# float branch the `CASE` is a double either way. Under a float `output_field` it stays a float, as
+# the `output_field` bind made it: a `numeric` has no `-0.0`, nor an infinity before PostgreSQL 14.
 function _case_default_bind_type(v::SQLTypeFunction, value, instruc::SQLInstruction)
   (v isa FObject && v.function_name == "CASE") || return nothing
-  kind = value isa Base.IEEEFloat ? CDecimal(nothing, nothing) : _literal_kind(value, _AllKinds())
+  float_declared = _sql_type_field(something(get(v.kwargs, "output_field", nothing), "")) isa Models.sFloatField
+  kind = value isa Base.IEEEFloat && !float_declared ? CDecimal(nothing, nothing) : _literal_kind(value, _AllKinds())
   kind === nothing && return nothing
   typed_branch = false
   for branch in (v.column isa AbstractVector ? v.column : (v.column,))

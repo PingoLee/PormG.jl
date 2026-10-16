@@ -645,6 +645,20 @@ end
     kinds = _rvc_kinds(q -> q.values("id", "p" => F_.Lag(PormG.Subquery(sub), over = F_.WindowOver(order_by = "id")));
                        connection = _RVC_PG)
     @test kinds[:p] == PormG.CDate()
+
+    # #1034 step 3: a `default` stands in on the rows with no previous value, so it does not change the
+    # kind (Django gives `Lag`/`Lead` their expression's `output_field`): a decimal keeps its width,
+    # under a number literal default too, and a date column stays a date whatever the default is.
+    over = F_.WindowOver(order_by = "id")
+    kinds = _rvc_kinds(q -> q.values("id",
+      "ld" => F_.Lag("amount", default = 0, over = over),
+      "le" => F_.Lead("amount", default = PormG.F("amount"), over = over),
+      "lt" => F_.Lag("d", default = Date(2031, 1, 1), over = over),
+      "li" => F_.Lag("d", default = PormG.F("id"), over = over)); connection = _RVC_PG)
+    @test kinds[:ld] == PormG.CDecimal(12, 2)
+    @test kinds[:le] == PormG.CDecimal(12, 2)
+    @test kinds[:lt] == PormG.CDate()
+    @test kinds[:li] == PormG.CDate()
   end
 
   # #824: the `@date` transform is a date whatever its operand — `(col)::date` on PostgreSQL,
@@ -729,6 +743,38 @@ end
       "w" => F_.Coalesce("amount", "cost")))
     for alias in (:c, :e, :f, :g, :w)
       @test !haskey(kinds, alias)
+    end
+  end
+
+  # #1262: a `Case` with no `output_field` is one of its branches' values on each row, as `Coalesce` is
+  # one of its operands', so it records the kind its `then` values and its default agree on — a NULL
+  # default (none written) is never the value. It recorded none before, so SQLite read a `DurationField`
+  # branch back as its stored `"00:01:27.452"` text while PostgreSQL's driver delivered the interval.
+  # (A `Lag`/`Lead` `default` is not such a value: it only stands in for missing rows, #800's testset.)
+  @testset "an undeclared Case records the kind its values agree on (#1262)" begin
+    F_ = PormG.Functions
+    when(v) = [F_.When("id" => 1, then = PormG.F(v))]
+    for conn in (_RVC_SL, _RVC_PG)
+      kinds = _rvc_kinds(q -> q.values(
+        "i"  => F_.Case(when("dur")),
+        "d"  => F_.Case(when("d")),
+        "ts" => F_.Case(when("ts")),
+        "t"  => F_.Case(when("t")),
+        "a"  => F_.Case(when("amount")),
+        "dd" => F_.Case(when("d"); default = PormG.F("d")),
+        # disagreeing values: two decimal widths, a decimal beside a number literal (text beside a date
+        # is refused before any kind is recorded, #1200)
+        "w"  => F_.Case(when("amount"); default = PormG.F("cost")),
+        "n"  => F_.Case(when("amount"); default = 0)); connection = conn)
+      @test kinds[:i] == PormG.CInterval()
+      @test kinds[:d] == PormG.CDate()
+      @test kinds[:dd] == PormG.CDate()
+      @test kinds[:ts] == PormG.CDateTime(true)
+      @test kinds[:t] == PormG.CTime()
+      @test kinds[:a] == PormG.CDecimal(12, 2)
+      for alias in (:w, :n)
+        @test !haskey(kinds, alias)
+      end
     end
   end
 

@@ -1179,6 +1179,12 @@ first match.
 Usable anywhere a column expression is — in `values()`, nested inside [`Sum`](@ref), as a
 filter right-hand side, and in `.update()`.
 
+Without `output_field`, a projected `Case` reads back as the type its branch values and `default`
+agree on, on every engine, as [`Coalesce`](@ref) does. Over a `DurationField`,
+`Case([When("grid" => 1, then = F("fastestlaptime"))])` is a `Dates.CompoundPeriod` on SQLite as on
+PostgreSQL, not the stored interval text (#1262). Values of different types read back as the driver
+delivers them.
+
 ```julia
 using PormG.Functions: Case, When
 using PormG.Models: CharField          # field types are not part of PormG.Functions

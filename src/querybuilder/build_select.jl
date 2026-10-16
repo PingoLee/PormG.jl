@@ -24,35 +24,11 @@ _projection_output_name(v::SQLTypeText) = v.custom_as !== nothing ? v.custom_as 
 # column names: the predecessor of this code keyed only on the field name, so a
 # `DateTimeField(db_column = "created")` was silently never coerced. A key the row does not carry
 # costs nothing — the read loop only visits keys the row has.
-# #965 — the kind a model FIELD's values are READ as: its canonical kind, or `CBool` for a boolean.
-# SQLite stores a boolean as 0/1 and its driver hands back the integer, while PostgreSQL's hands back a
-# `Bool`; `value_parser(::CBool, ::PormGSQLite)` turns the one into the other. Read path only: the
-# boolean stays out of `field_canonical_kind`, because that table also feeds the comparison binder and
-# the CTE kind records (#882's reason), and none of them has a boolean representation to undo.
-function _field_read_kind(f::PormGField)::Union{CanonicalType,Nothing}
-  kind = field_canonical_kind(f)
-  kind === nothing && f.formatter === Models.format_bool_sql && return CBool()
-  return kind
-end
-
-# #979 — the read kind of a projection the memo can stand for: a path, a `Joined`/`CTE` handle, an
-# outer reference (the `memo_node` gate in `get_select_query`). Asked AFTER the column resolved, so
-# it is the same answer whether this projection rendered it or reused the entry an earlier render
-# left under its name — a `When("finished" => true, …)` condition renders the bare column there.
-# A path takes its column's unnarrowed kind (`_projection_column_kind`, not the arithmetic-narrowed
-# `_operand_column_kind`: a `TimeField` or `DurationField` has a representation to undo even though
-# neither can be the left of date arithmetic); a handle reads as `Max` over it does (#824). A
-# boolean column reads as a `Bool` (#965), as `_field_read_kind` types it for a wildcard read; a
-# transformed path is the transform's result, not the column, so it keeps the kind it was given.
-function _memo_node_read_kind(original, instruc::SQLInstruction)::Union{CanonicalType,Nothing}
-  kind = original isa String ? _projection_column_kind(original, instruc) :
-         original isa Union{JoinedReference,CTEReference} ? _operand_kind(original, instruc) : nothing
-  kind === nothing && !(original isa AbstractString && occursin("__@", original)) &&
-    _expression_formatter(original, instruc) === Models.format_bool_sql && (kind = CBool())
-  # #1121: a CTE column the body computed as a number reads as what it means.
-  kind === nothing && original isa CTEReference && (kind = _numeric_read_kind(original, instruc))
-  return kind
-end
+# #965 — the kind a model FIELD's values are READ as: the read view (`_read_kind`) of the field's own
+# kind, so a column reads the same in a wildcard as it does projected. A boolean reads as `CBool`:
+# SQLite stores it as 0/1 and its driver hands back the integer, while PostgreSQL's hands back a `Bool`,
+# and `value_parser(::CBool, ::PormGSQLite)` turns the one into the other.
+_field_read_kind(f::PormGField)::Union{CanonicalType,Nothing} = _stored_read_view(_field_kind(f))
 
 function _record_wildcard_projection_kinds!(instruc::SQLInstruction)
   # An EXPLICIT `"*"` counts too, not only an empty projection list. `values("*")` and
@@ -145,11 +121,10 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
         # carries `+00:00`) — the column's behavior, not a new one. `nothing` for every non-temporal
         # literal. On PostgreSQL the kind is inert: every `value_parser` there is `nothing`.
         # #1122: a `Bool` literal reads as `CBool`, as `_field_read_kind` types a boolean column
-        # (#965) — SQLite binds it as 0/1 and hands the integer back. Here and not in
-        # `literal_canonical_kind`, which also feeds `_operand_kind` and the binders (#882's reason).
-        # A `Subquery` over it inherits the kind through the inner build's record.
-        kind = literal_canonical_kind(v_copy.field)
-        kind === nothing && v_copy.field isa Bool && (kind = CBool())
+        # (#965) — SQLite binds it as 0/1 and hands the integer back. In the read view
+        # (`_literal_read_kind`) and not in `literal_canonical_kind`, which also feeds the binders
+        # (#882's reason). A `Subquery` over it inherits the kind through the inner build's record.
+        kind = _read_kind(v_copy, instruc)
         kind === nothing || (instruc.projection_kinds[Symbol(alias)] = kind)
       end
       continue
@@ -210,8 +185,8 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       # this name. A `When("finished" => true, …)` condition in an earlier projection renders the bare
       # column under the same key, and recording nothing here left the column reading raw on SQLite
       # (a 0/1 for a boolean, the stored text for a date). The memo already holds the resolution the
-      # kind is read from, so the answer is the one the render branch gives.
-      kind = _memo_node_read_kind(v_copy.field, instruc)
+      # kind is read from, so the answer is the one the render branch gives (`_read_kind`, as below).
+      kind = _read_kind(v_copy.field, instruc)
       kind === nothing || (instruc.projection_kinds[Symbol(_projection_output_name(cached))] = kind)
     else
       @pormg_debug false
@@ -224,10 +199,10 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
       # the duplication #564 exists to remove, and it would be free to drift.
       #
       # `FExpression` concretely, not the abstract `SQLTypeF`: `OuterRefObject` is also `<: SQLTypeF`
-      # (#533) and has no typed renderer. A function is typed only when it returns its operand's own
-      # value (`_function_projection_kind`, #800). Everything else — other functions, an `Exists` —
-      # answers `nothing`, which means "no representation this table owns", and the read path then
-      # leaves the column exactly as the driver delivered it.
+      # (#533) and has no typed renderer. The kind is the read view of the walk (`_read_kind`, #1034
+      # step 3), asked once the node rendered, with the kind the render itself computed where the walk
+      # names none yet. `nothing` means "no representation a read parser undoes", and the read path
+      # then leaves the column exactly as the driver delivered it.
       # #932: the projection renders in the SELECT list's `:group` phase, under its own output name —
       # what the #194 message calls it. When the outer query groups by this projection's POSITION (the
       # push above, decided before the render), the whole expression is a GROUP BY key, so a correlated
@@ -241,24 +216,17 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
         kind = nothing
         if original isa FExpression
           # #881: one of the renderer's two doors out — an interval it held in milliseconds on SQLite
-          # arrives here as the stored text, typed `CInterval`.
-          v_copy.field, kind = _set_update_query_typed(original, instruc)
-          # #824: a bare `F("ts__@date")` is the transform's result, which the column lookup cannot
-          # name. Since #814 `_set_update_query_typed` names it too (`_side_kind`), because the same
-          # call types the sides of date arithmetic, and a transformed side has to be typed there. This
-          # fallback stays for whatever else `_operand_kind` resolves on a bare `F` and that does not.
-          kind === nothing && original.operation === nothing && (kind = _operand_kind(original, instruc))
-          # #965: a comparison is a boolean (`_expression_formatter` has typed it so since #949), and so
-          # is a bare boolean `F`. On SQLite the 0/1 it evaluates to reads back as a `Bool` only when the
-          # projection says so. The kind is recorded here, never returned by `_render_expr_typed`, whose
-          # kind is the comparison binder's `left_kind`.
-          kind === nothing && _expression_formatter(original, instruc) === Models.format_bool_sql && (kind = CBool())
-          # #1121: arithmetic reads as the number it means — a `Decimal` or a `Float64` on every engine.
-          kind === nothing && (kind = _numeric_read_kind(original, instruc))
+          # arrives here as the stored text, typed `CInterval`. Date arithmetic is typed by the render,
+          # which the walk does not do yet (#1034 step 5); everything else by the walk: a bare
+          # `F("ts__@date")` (#824), a comparison or a bare boolean `F` (#965 — the kind is recorded
+          # here, never returned by `_render_expr_typed`, whose kind is the comparison binder's
+          # `left_kind`), and arithmetic as the number it means (#1121).
+          v_copy.field, rendered = _set_update_query_typed(original, instruc)
+          kind = _read_kind(original, instruc; rendered = rendered)
         else
           # #894: `Max`/`Min` over an interval are computed on SQLite milliseconds and leave as the
           # interval text — the second door #881 describes, and typed the way a difference is, on
-          # both engines. `_operand_kind` cannot type `Max(F("start_at") - F("date"))` (arithmetic
+          # both engines. The walk cannot type `Max(F("start_at") - F("date"))` (temporal arithmetic
           # answers `nothing`), so the kind is taken from the same call that renders, as above.
           interval = false
           if _is_fts_node(original, "SEARCH_VECTOR")
@@ -283,27 +251,10 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
             v_copy.field = _get_select_query(original, instruc, _as=memo_name(v_copy))   # #1004, as above
           end
           # Render first (above), THEN type — the memo ordering `_render_left_typed` documents. A
-          # dotted join key cannot be typed before it has been resolved.
-          if memo_node
-            # A path or a `Joined(...)` / `CTE(...)` handle (a `"cte__col"` path is retagged to one
-            # before this loop). One rule, shared with the reuse branch above (#979).
-            kind = _memo_node_read_kind(original, instruc)
-          else
-            # #800: an extremum or a window value function has its operand's kind.
-            original isa SQLTypeFunction &&
-              (kind = interval ? CInterval() : _function_projection_kind(original, instruc))
-            # #888: a `Subquery(...)` reads as its one column — rendered above, which is what
-            # recorded its kind.
-            original isa SubqueryObject && (kind = _operand_kind(original, instruc))
-            # #965: a boolean value (a `Subquery` of one, an `Exists`) reads as a `Bool`. A function
-            # has answered already, through `_function_projection_kind`, whose rule for one is
-            # stricter than its formatter's (`_is_boolean_valued`).
-            kind === nothing && !(original isa SQLTypeFunction) &&
-              _expression_formatter(original, instruc) === Models.format_bool_sql && (kind = CBool())
-            # #1121: a computed number reads as the type it means, whichever engine computed it:
-            # PostgreSQL's `numeric` and SQLite's REAL become the one `Decimal` or `Float64`.
-            kind === nothing && (kind = _numeric_read_kind(original, instruc))
-          end
+          # dotted join key cannot be typed before it has been resolved. A path or a handle reads by the
+          # same rule in the reuse branch above (#979); a `Subquery(...)` reads as its one column, which
+          # rendering it recorded (#888).
+          kind = _read_kind(original, instruc; rendered = interval ? CInterval() : nothing)
         end
         kind
       end
@@ -434,7 +385,7 @@ end
 # has been rendered, so the memo the kind lookup reads is populated.
 _orders_as_sqlite_interval(term::SQLField, instruc::SQLInstruction) =
   _interval_as_ms(instruc.connection) && term.field isa String && _is_bare_column(term.field) &&
-  _operand_kind(term.field, instruc) isa CInterval
+  _expression_kind(term.field, instruc) isa CInterval
 _orders_as_sqlite_interval(::Any, ::SQLInstruction) = false
 
 function get_order_query(object::SQLObject, instruc::SQLInstruction)

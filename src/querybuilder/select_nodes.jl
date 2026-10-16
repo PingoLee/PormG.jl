@@ -468,7 +468,7 @@ function _pad_textless(operand, kind, instruc::SQLInstruction)::Union{String,Not
   rendered === nothing || return rendered[2]
   # A time of day formats as text, so the formatter cannot tell it from text; its kind can, through
   # the functions that keep their operand's (`Max("clock")`, `Coalesce`, a `Subquery`).
-  time_kind = _operand_kind(operand, instruc) isa CTime
+  time_kind = _expression_kind(operand, instruc) isa CTime
   formatter = _expression_formatter(operand, instruc)
   column = operand isa FExpression && operand.operation === nothing ? operand.field_name : operand
   column = column isa SQLField ? column.field : column

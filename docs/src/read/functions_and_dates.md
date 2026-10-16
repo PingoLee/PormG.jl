@@ -958,7 +958,9 @@ What each row covers:
   computes (`Avg("price")`) has no declared scale;
 - **single precision**: `"real"`, `"float4"` and `"float(p)"` for `p` up to 24, which PostgreSQL
   resolves to `real` (#1215), and the same `output_field`. Every operand is refused on SQLite, an
-  integer column included, because the value PostgreSQL returns is a `Float32` whatever it rounded.
+  integer column included, because the value PostgreSQL returns is a `Float32` whatever it rounded,
+  and a `Float32` holds an integer exactly only up to 2^24 (16 777 216): unlike a scaled `numeric`,
+  which lets a whole operand through (#1040), single precision changes an integer's value (#1258).
   For a float on every engine, cast to a double: `"float8"`, `"float(25)"` to `"float(53)"`,
   `"double precision"` or `FloatField()`, a `Float64` on both;
 - **an overflow**: only a literal is checked, because only a literal is certain to overflow (#1087).

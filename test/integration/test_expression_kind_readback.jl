@@ -342,3 +342,44 @@ const _EKR_INTEGER = [
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A Case with no output_field reads back as the column its branches are, on every engine (#1262)
+# `Case(When(…, then = F(col)))` over a `DurationField`, a `DateField`, a `DateTimeField`, a
+# `TimeField` and a `DecimalField`, each `When` true on its pinned row (result 1 has grid `1`, race 1
+# is the 2009 race, constructor result 3835 is its own key), projected alone, under a CTE and inside a
+# `Subquery`. It must read back as the column itself does: the same Julia type, `==` to it. Before
+# #1262 the `Case` recorded no read kind, so SQLite handed back each value's stored text (the interval
+# as `"00:01:27.452"`) while PostgreSQL's driver delivered the typed value. Why: the cells agree in the
+# unit matrix, so the read-back table above does not visit them.
+# ─────────────────────────────────────────────────────────────────────────────
+const _EKR_CASE_COLUMN = [
+  # label                       column            type
+  ("Case untyped interval col", "fastestlaptime", "CompoundPeriod"),
+  ("Case untyped date col",     "date",           "Date"),
+  ("Case untyped zoned col",    "start_at",       "ZonedDateTime"),
+  ("Case untyped time col",     "time",           "Time"),
+  ("Case untyped decimal col",  "points",         "Decimal"),
+]
+@testset "A Case with no output_field reads back as its branches' column (#1262)" begin
+  for (label, column, type) in _EKR_CASE_COLUMN
+    i = findfirst(s -> s[1] == label, EKM_SHAPES)
+    @test i !== nothing
+    i === nothing && continue
+    _, base, build = EKM_SHAPES[i]
+    pk = EKM_PK[base]
+    plain = getfield(M, base).objects
+    plain.filter(pk => _EKR_ROW[base])
+    plain.values("c" => column)
+    stored = only(plain.list())[:c]
+    for ctx in (:alone, :cte, :subquery)
+      @testset "$label | $ctx" begin
+        q, name = ekm_query(M, base, build, ctx)
+        q.filter(pk => _EKR_ROW[base])
+        v = only(q.list())[name]
+        @test string(nameof(typeof(v))) == type
+        @test v == stored
+      end
+    end
+  end
+end

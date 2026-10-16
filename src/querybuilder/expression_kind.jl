@@ -289,6 +289,12 @@ _first_operand(p::SQLTypeFunction) = p.column isa AbstractVector ? first(p.colum
 # The kind a declared type names on the engine. `_sql_type_field` maps a type NAME to a field and drops
 # its size, so the size is read here: `numeric(10,2)` is `CDecimal(10, 2)`, a bare `numeric` has no
 # width, and `smallint` is not an `integer`. A `real` is a `CFloat64`: no kind names a 4-byte float.
+# #1258: so `CFloat64` stands for both widths here, while PostgreSQL's driver returns a `Float32` for
+# a `real` (SQLite refuses the cast, #1215). Every reader is indifferent to the width: the read view
+# records no declared float (only arithmetic over one, which means a float, #1121, and whose parser
+# returns a `Float32` unchanged), a pattern lookup refuses either as an inexact number, `Concat` and
+# the casts classify either as a float, and a CTE column over it is a `FloatField`, which binds either.
+# A reader that must tell the widths apart is the point to add a `CFloat32`.
 # On SQLite a uuid or network cast renders `CAST(x AS TEXT)` (`_declared_type_formatter`), so it is text.
 function _declared_kind(type_name::AbstractString, conn)::Union{CanonicalType,Nothing}
   size = _numeric_cast_size(type_name)

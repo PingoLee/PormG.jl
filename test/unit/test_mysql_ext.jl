@@ -255,5 +255,6 @@ PormG.backend_mysql_version(c::_MyAt1130) = c.v
   e = PormG._capability_error(_MyAt1130(80_036), :supported_server, "Connecting to MySQL")
   @test sprint(showerror, e) == "Connecting to MySQL needs MySQL 8.4 or newer, " *
                                "for a server version PormG is verified against; this server is 8.0.36."
+  @test PormG._supports(_MyAt1130(80_411), :advisory_locks)
   @test !PormG._supports(_MyAt1130(80_411), :jsonb_operators)   # every other row waits for its phase
 end

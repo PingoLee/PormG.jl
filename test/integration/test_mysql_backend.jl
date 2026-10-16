@@ -1,5 +1,5 @@
 # MySQL backend, phase 1 (#1130): the connection, the pool, statements, transactions, error
-# classification and cancellation, against a live MySQL 8.4.
+# classification, cancellation and advisory locks, against a live MySQL 8.4.
 #
 #   PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_backend.jl
 #
@@ -224,6 +224,59 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
                   time() < deadline
                 sleep(0.5)
             end
+        end
+    end
+
+    # What: `with_advisory_lock` excludes a second pool on the same key, names the holder, honours the
+    # `:block` timeout rounded up to whole seconds, and releases the lock on exit.
+    # SQL: `SELECT GET_LOCK(CONCAT('pormg:', MD5(CONCAT(COALESCE(DATABASE(), ''), ':', ?))), 0)`, then
+    # `RELEASE_LOCK(…)`; `IS_USED_LOCK(…)` for the holder.
+    # Why: #1269 — `migrate` and the suite lock serialize on it, so a second process must fail or
+    # queue, never run alongside; MySQL rounds a fractional GET_LOCK timeout to the nearest second, so
+    # a 300 ms wait would not wait at all.
+    @testset "with_advisory_lock excludes another session on GET_LOCK (#1269)" begin
+        other = PormG.ConnectionPool.MySQLConnectionPool(pool.connection_string; pool_size = 1)
+        key = "pormg-test-1130-$(time_ns())"
+        try
+            @test PormG.with_advisory_lock(() -> :ran, pool, key) === :ran
+            holding = Channel{Bool}(1)
+            done = Channel{Bool}(1)
+            t = Threads.@spawn PormG.with_advisory_lock(pool, key) do
+                put!(holding, true)
+                take!(done)
+                :held
+            end
+            take!(holding)
+            e = try PormG.with_advisory_lock(() -> :nope, other, key); nothing catch err; err end
+            @test e isa PormG.OperationalError
+            @test occursin("held by connection", msg(e))
+            t0 = time()
+            e = try
+                PormG.with_advisory_lock(() -> :nope, other, key; wait = true, strategy = :block, timeout_ms = 300)
+                nothing
+            catch err
+                err
+            end
+            @test e isa PormG.OperationalError
+            @test 0.9 <= time() - t0 < 5     # 300 ms, rounded UP to one second
+            put!(done, true)
+            @test fetch(t) === :held
+            @test PormG.with_advisory_lock(() -> :after, other, key; wait = true, strategy = :block, timeout_ms = 1000) === :after
+        finally
+            PormG.ConnectionPool.close_pool!(other)
+        end
+    end
+
+    # What: this run holds the MySQL suite lock on its own connection.
+    # SQL: `SELECT IS_USED_LOCK(<the suite lock's name>)`.
+    # Why: the suite is destructive; a second run on `db_my` must queue behind this one (#1269).
+    @testset "this run holds the MySQL integration-suite lock" begin
+        if get(ENV, "PORMG_TEST_LOCK", "1") ∉ ("0", "false", "off")
+            id = rows("SELECT IS_USED_LOCK($(PormG.AdvisoryLock.MYSQL_LOCK_NAME_EXPR)) AS id";
+                      params = Any[_SUITE_LOCK_KEY]).id[1]
+            @test id !== missing
+            mine = DataFrame(PormG.fetch(_SUITE_LOCK_POOL[], "SELECT CONNECTION_ID() AS id")).id[1]
+            @test id == mine
         end
     end
 

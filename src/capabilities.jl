@@ -76,8 +76,8 @@ for f in (:window_functions, :nulls_order, :table_list, :schema_introspection, :
   @eval _has_feature(::Type{<:PormGSQLite}, ::Val{$(QuoteNode(f))}) = true
 end
 # MySQL (#1130, in progress) gains each row in the phase that delivers it. Phase 1 delivers the
-# connection: the server floor (#1264).
-for f in (:supported_server,)
+# connection: the server floor (#1264) and `GET_LOCK` advisory locks (#1269).
+for f in (:supported_server, :advisory_locks)
   @eval _has_feature(::Type{<:PormGMySQL}, ::Val{$(QuoteNode(f))}) = true
 end
 

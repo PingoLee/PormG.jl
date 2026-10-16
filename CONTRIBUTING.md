@@ -115,9 +115,10 @@ PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_my
 **A single integration file is a valid target.** Most `test/integration/test_*.jl` open with
 `if !isdefined(Main, :PormG) include("common_setup.jl") end`, so naming one file runs it against the
 already-seeded database and skips the DDL bootstrap and fixture reseed `runtests.jl` repeats every
-time. Concurrent runs against `db_2` queue on a PostgreSQL advisory lock taken in `common_setup.jl`
-(`PORMG_TEST_LOCK_WAIT=<secs>` bounds the wait, default 900; `PORMG_TEST_LOCK=0` opts out); SQLite is
-exempt because `f1.sqlite` is per checkout.
+time. Concurrent runs against `db_2` queue on a PostgreSQL advisory lock taken in `common_setup.jl`,
+and runs against `db_my` on a MySQL `GET_LOCK` taken there too (`PORMG_TEST_LOCK_WAIT=<secs>` bounds
+the wait, default 900; `PORMG_TEST_LOCK=0` opts out); SQLite is exempt because `f1.sqlite` is per
+checkout.
 
 **Compat floors.** CI's `floor-resolve` job resolves every `[compat]` range at its minimum (#574).
 `test/unit/test_compat_guards.jl` records why some floors are load-bearing and must not be raised;

@@ -204,8 +204,10 @@ end
   # PostgreSQL body needs a live connection.
   # ───────────────────────────────────────────────────────────────────────────
   @testset "the PostgreSQL method accepts on_missing_lock" begin
+    # The method PostgreSQL resolves to — since #1130 one method typed on PostgreSQL and MySQL.
+    serves_pg(T) = T === PormG.PormGPostgres || (T isa Union && PormG.PormGPostgres in Base.uniontypes(T))
     pg_methods = [m for m in methods(PormG.with_advisory_lock)
-                  if PormG.PormGPostgres in Base.unwrap_unionall(m.sig).parameters]
+                  if any(serves_pg, Base.unwrap_unionall(m.sig).parameters)]
     @test !isempty(pg_methods)
     @test all(m -> :on_missing_lock in Base.kwarg_decl(m), pg_methods)
   end
@@ -244,22 +246,29 @@ end
   # assertion, which is the actual invariant, is untouched: the method must never
   # call the shadowed `wait`. It is now stronger by construction, since the method
   # no longer calls `wait` in any form.
+  #
+  # #1130 moved the PostgreSQL restore into `_restore_block_timeout!` (the method now
+  # serves MySQL too, which sets nothing on the session), so the restore anchors
+  # read that function's body, and the method must still call it.
   # ───────────────────────────────────────────────────────────────────────────
   @testset "the PostgreSQL method never calls the shadowed `wait`" begin
     src = replace(read(ADVLOCK_SRC, String), "\r\n" => "\n")
-
-    start_idx = findfirst("function with_advisory_lock(f::Function, pool::PormGPostgres", src)
-    @test start_idx !== nothing
-    rest = src[first(start_idx):end]
-    stop_idx = findfirst("\nend\n", rest)
-    @test stop_idx !== nothing
-    body = rest[1:first(stop_idx)]
+    function_body(signature) = begin
+      start_idx = findfirst(signature, src)
+      @test start_idx !== nothing
+      rest = src[first(start_idx):end]
+      stop_idx = findfirst("\nend\n", rest)
+      @test stop_idx !== nothing
+      rest[1:first(stop_idx)]
+    end
+    body = function_body("function with_advisory_lock(f::Function, pool::Union{PormGPostgres, PormGMySQL}")
 
     # Strip comments before scanning — the comment ABOVE the fix quotes `wait(...)`
     # while explaining the bug, and prose must not be able to fail a code guard.
     # (Line-based, which is sound here: no string literal in this method contains
     # a `#`.)
     code = replace(body, r"(?m)#.*$" => "")
+    @test occursin("_restore_block_timeout!(", code)
 
     # Guard the guard: if the restore block were removed, or went back to
     # fire-and-forget, the negative assertion below would pass vacuously.
@@ -271,9 +280,7 @@ end
     # that has nothing to do with the restore, and a fire-and-forget restore passes.
     # That is not hypothetical: it was demonstrated on this file (#322 review).
     # #1024 moved the restore from `statement_timeout` to `lock_timeout`; the anchors follow it.
-    restore_idx = findfirst("Restore lock_timeout", body)
-    @test restore_idx !== nothing
-    restore = replace(body[first(restore_idx):end], r"(?m)#.*$" => "")
+    restore = replace(function_body("function _restore_block_timeout!(pool::PormGPostgres"), r"(?m)#.*$" => "")
     @test occursin("SET lock_timeout TO DEFAULT", restore)
     # EVERY statement issued from here on is awaited — the actual invariant, rather than "there are
     # two of them". A fixed count is both too weak and too strong once `restore` runs to the end of

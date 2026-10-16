@@ -274,8 +274,8 @@ end
 
 # Engine mechanics (#1179): the lock below is PostgreSQL's own SQL, so a backend added later decides
 # its row here rather than inheriting either answer — not `requires(:advisory_locks)`, which would
-# hand it PostgreSQL's `pg_try_advisory_lock` the day it declares advisory locks. MySQL (#1130) has
-# no suite lock yet, so a MySQL run is asked for first.
+# hand it PostgreSQL's `pg_try_advisory_lock` the day it declares advisory locks. MySQL's lock is the
+# block after this one.
 if get(ENV, "PORMG_TEST_LOCK", "1") ∉ ("0", "false", "off") &&
    by_engine(postgres = true, sqlite = false, mysql = false)
   let s = PormG.config[PORMG_DB_FOLDER]
@@ -342,6 +342,58 @@ if get(ENV, "PORMG_TEST_LOCK", "1") ∉ ("0", "false", "off") &&
 
       if time() - last_report > 30
         @info "Queued — another integration run holds database \"$(dbname)\"" holder=holders() waited_s=round(Int, wait_s - (deadline - time())) giving_up_in_s=round(Int, deadline - time())
+        last_report = time()
+      end
+      sleep(2)
+    end
+  end
+end
+
+# MySQL (#1130, #1269): the same queue, on `GET_LOCK`. A named lock is session-level and released
+# when the session ends, like PostgreSQL's, so the 1-slot process-lifetime pool above is the shape
+# here too, and a crash releases it. The name is hashed with the database exactly as
+# `with_advisory_lock` hashes it (`AdvisoryLock.MYSQL_LOCK_NAME_EXPR`), because a MySQL lock name is
+# server-wide: two databases on one server do not queue behind each other. The holder is named by its
+# connection id (`IS_USED_LOCK`); reading more of it needs the `PROCESS` privilege.
+if get(ENV, "PORMG_TEST_LOCK", "1") ∉ ("0", "false", "off") &&
+   by_engine(postgres = false, sqlite = false, mysql = true)
+  let s = PormG.config[PORMG_DB_FOLDER]
+    dbname = string(s.db_config_settings["database"])
+    wait_s = parse(Float64, get(ENV, "PORMG_TEST_LOCK_WAIT", "900"))
+
+    cfg = copy(s.db_config_settings)
+    cfg["pool_size"] = 1
+    lock_settings = PormG.Configuration.Settings(app_env = s.app_env, db_config_settings = cfg)
+    PormG.Configuration._build_connection_pool!(lock_settings, "pormg_test::suite_lock")
+    lock_pool = lock_settings.connections
+    _SUITE_LOCK_POOL[] = lock_pool
+
+    name_expr = PormG.AdvisoryLock.MYSQL_LOCK_NAME_EXPR
+    holder() = try
+      id = DataFrame(PormG.ConnectionPool.fetch(lock_pool, "SELECT IS_USED_LOCK($(name_expr)) AS id";
+                                                params = Any[_SUITE_LOCK_KEY])).id[1]
+      id === missing ? "unknown (the lock was released meanwhile)" : "MySQL connection $(id)"
+    catch
+      "unknown (IS_USED_LOCK failed)"
+    end
+
+    deadline    = time() + wait_s
+    last_report = 0.0
+    while true
+      got = DataFrame(PormG.ConnectionPool.fetch(lock_pool, "SELECT GET_LOCK($(name_expr), 0) AS ok";
+                                                 params = Any[_SUITE_LOCK_KEY])).ok[1]
+      got === 1 && break
+
+      if time() > deadline
+        release_suite_lock!()
+        error("Timed out after $(wait_s)s waiting for the integration-suite lock on database " *
+              "\"$(dbname)\" — another run is holding it ($(holder())). Wait for it to finish, " *
+              "raise PORMG_TEST_LOCK_WAIT, or set PORMG_TEST_LOCK=0 to run anyway (destructive: " *
+              "the two runs will interleave schema and fixture phases).")
+      end
+
+      if time() - last_report > 30
+        @info "Queued — another integration run holds database \"$(dbname)\"" holder=holder() waited_s=round(Int, wait_s - (deadline - time())) giving_up_in_s=round(Int, deadline - time())
         last_report = time()
       end
       sleep(2)

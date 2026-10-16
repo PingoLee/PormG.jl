@@ -74,7 +74,7 @@ MySQL support is being built in phases ([#1130](https://github.com/PingoLee/Porm
 
 - `adapter: MySQL` in `connection.yml` ([connection.yml](configuration/connection_yml.md)), with `using MySQL` (MySQL.jl 2.0) loading the extension.
 - **MySQL 8.4 or newer.** A connection to an older server is refused when it opens, with a `BackendCapabilityError` naming both versions. A MariaDB server is refused with an `InvalidConfigurationError`: it is planned as a separate backend.
-- The connection pool, raw `fetch` with `?` placeholders, and `run_in_transaction` / `atomic`.
+- The connection pool, raw `fetch` with `?` placeholders, `run_in_transaction` / `atomic`, and `with_advisory_lock` (`GET_LOCK`).
 - Server errors arrive as `IntegrityError`, `OperationalError` or `StatementError`, classified by MySQL's error number.
 
 Not yet: model queries and writes (`M.Driver.objects…`), migrations and `inspectdb`. A query built on a MySQL pool raises a `MethodError` naming the first engine decision MySQL has not made yet.

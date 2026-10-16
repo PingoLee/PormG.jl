@@ -83,6 +83,7 @@ _driver_hint(driver::Symbol)::String =
 #   backend_execute_async(pool, conn, sql, params)     -> async handle (PG: LibPQ.AsyncResult)
 #   backend_is_connection_error(pool, e)               -> Bool: is `e` a dropped-connection error
 #   backend_is_retry_safe(pool, e)                     -> Bool: did the statement provably never run (#1042; below, not in the loop)
+#   backend_is_cancellation(e)                         -> Bool: was the statement cancelled (#1277; below, not in the loop)
 #   backend_is_permanent_connect_error(pool, e)        -> Bool: is `e` a permanent connect failure (auth/cantopen) vs transient
 #   backend_cancel_query!(pool, conn)                  -> best-effort: stop the statement running on `conn` (#315)
 #   backend_drain_connection!(pool, conn)              -> Bool: is `conn` back to a clean, reusable state (#315)
@@ -199,6 +200,33 @@ function backend_is_retry_safe end
 function backend_is_retry_safe(pool::PormGBackend, e)
   # A multi-result failure: one coded "never ran" among them is the server's own answer.
   e isa CompositeException && return any(inner -> backend_is_retry_safe(pool, inner), e.exceptions)
+  return false
+end
+
+"""
+    backend_is_cancellation(e) -> Bool
+
+Does the driver exception `e` say the statement was **cancelled** — stopped on request, while the
+session stays alive? A timeout the session set (`statement_timeout`, `max_execution_time`), an
+explicit cancel, and PormG's own cancel of an abandoned await (#315) all count. Neither retry runs a
+cancelled statement again, since that would defeat the cancel: [`with_read_retry`](@ref) asks this,
+and so does `fetch`'s lost-connection retry (#1277).
+
+Each engine answers in its own terms, so core never compares one engine's code: SQLSTATE `57014` on
+both PostgreSQL drivers, error numbers 1317 (`KILL QUERY`) and 3024 (`max_execution_time`) on MySQL.
+
+Keyed on the **exception type alone**, as `backend_error_fields` is: `with_read_retry` has no pool in
+hand, and with no pool argument no extension method can shadow this default for the unit suite's mock
+pools. Not in the missing-driver loop above, for `backend_classify_error`'s reason: it is asked
+mid-`catch`, and a throw would replace the failure being reported. The default answers `false`.
+Extensions add one method per driver exception type:
+
+    PormG.backend_is_cancellation(e::LibPQ.Errors.QueryCanceled) = true
+"""
+function backend_is_cancellation end
+
+function backend_is_cancellation(e)
+  e isa CompositeException && return any(backend_is_cancellation, e.exceptions)
   return false
 end
 

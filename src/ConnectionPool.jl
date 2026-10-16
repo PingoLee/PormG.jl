@@ -31,6 +31,7 @@ import PormG: backend_connect, backend_renew_connection, backend_is_alive, backe
               backend_execute_async, backend_is_connection_error, backend_is_permanent_connect_error,
               backend_cancel_query!, backend_drain_connection!,
               backend_copy_in!, backend_classify_error, backend_error_fields, backend_is_retry_safe,
+              backend_is_cancellation,
               _NO_ERROR_FIELDS
 # Which PostgreSQL driver a pool uses (#785).
 import PormG: postgres_driver, _PG_DRIVER_PACKAGES
@@ -2543,7 +2544,10 @@ function fetch(connection::_SQLEngine, sql::String;
     # statement is re-run. Everything else propagates as the `OperationalError` it already is.
     if conn === nothing && !fetch_task.in_transaction &&
        backend_is_connection_error(connection, _driver_cause(root))
-      never_ran = backend_is_retry_safe(connection, _driver_cause(root))
+      # A cancelled statement is never re-run, whatever else the driver says about it (#1277): the
+      # cancel was a request to stop it.
+      never_ran = !backend_is_cancellation(_driver_cause(root)) &&
+                  backend_is_retry_safe(connection, _driver_cause(root))
       # Renew the dead handle in its slot, then retry through NORMAL pool acquisition — never by
       # pinning `conn=new_conn`, which would run the retry on a connection whose lease `await_result`
       # would then release a second time. The claim below is not a substitute for that: it holds the
@@ -3357,10 +3361,12 @@ the reads you know are.
 
 - Only `OperationalError` is retried: a dropped connection, after which the pool has already
   recovered, and the other transient refusals it covers — a deadlock, a lock or advisory-lock
-  timeout, SQLite's `database is locked`. A cancelled statement (SQLSTATE `57014`: a
-  `statement_timeout`, a `pg_cancel_backend`) is not retried: running it again would defeat the
-  cancel. `IntegrityError`, `InvalidValueError`, a query-build error or any other exception
-  propagates on the first raise.
+  timeout, SQLite's `database is locked`. A cancelled statement is not retried, on any engine:
+  running it again would defeat the cancel. On PostgreSQL that is SQLSTATE `57014` (a
+  `statement_timeout`, a `pg_cancel_backend`); on MySQL, error 1317 (a `KILL QUERY`, which is also
+  how PormG cancels an abandoned statement there) and error 3024 (`max_execution_time`).
+  `IntegrityError`, `InvalidValueError`, a query-build error or any other exception propagates on
+  the first raise.
 - `f` must raise the `OperationalError` itself. One raised inside a task `f` spawns arrives wrapped
   (`TaskFailedException`, `CompositeException`) and is not retried; PormG's own terminals unwrap.
 - Inside an open transaction it raises `TransactionError` without running `f`: a lost connection
@@ -3387,10 +3393,11 @@ function with_read_retry(f::Function; attempts::Integer = 1, backoff::Real = 0)
     try
       return f()
     catch e
-      # 57014 query_canceled is not retried, as `fetch`'s own retry leaves it out (the note above
-      # `_PG_LOST_CONNECTION_ERRORS` in the LibPQ extension): the session is alive and someone asked the
-      # statement to stop.
-      (e isa OperationalError && e.sqlstate != "57014" && retries < attempts) || rethrow()
+      # A cancelled statement is not retried, as `fetch`'s own retry does not re-run one: the session
+      # is alive and someone asked the statement to stop. Each engine says what a cancel is, in its own
+      # codes (`backend_is_cancellation`, #1277); core compares none of them.
+      (e isa OperationalError && !backend_is_cancellation(_driver_cause(e)) && retries < attempts) ||
+        rethrow()
       retries += 1
       @warn "with_read_retry: the read raised OperationalError; running it again" exception = e retry = retries attempts = attempts
       backoff > 0 && sleep(backoff)

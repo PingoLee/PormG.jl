@@ -10,7 +10,8 @@
 #   PostgreSQL-only keys are refused rather than dropped. Errors classify by MySQL's error number
 #   (SQLSTATE `HY000` covers both statements and connections), the server's text survives only for
 #   numbers whose text names objects, no failure is retry-safe (2006 is raised whether or not the
-#   statement ran), and an interrupt a wrapper carries in `.cause` is rethrown bare. The capability
+#   statement ran), a cancelled statement (1317, 3024) is not re-run by `with_read_retry` (#1277), and
+#   an interrupt a wrapper carries in `.cause` is rethrown bare. The capability
 #   table refuses a server older than 8.4 (#1264) in its own words. A DATETIME(6) value with digits
 #   below the millisecond is refused, never truncated to a `DateTime` (#1270 decides what it reads as).
 #
@@ -63,6 +64,7 @@ end
     (PormG.backend_num_rows, (_MyPool, _MyExt.MySQLResult)),
     (PormG.backend_mysql_version, (_MyPool,)),
     (PormG.backend_error_fields, (MySQL.Error,)),
+    (PormG.backend_is_cancellation, (MySQL.Error,)),
   ]
   for (f, types) in rows
     @test which(f, Tuple{types...}).module === _MyExt
@@ -217,6 +219,47 @@ end
   e = _MyCP._as_database_error(pool, _my_err(1062, "23000"; msg = "Duplicate entry 'Senna' for key 'driver.surname'"))
   @test e isa PormG.IntegrityError && e.adapter == "MySQL"
   @test !occursin("Senna", sprint(showerror, e))
+end
+
+# What: the #1277 repro on a MySQL pool object (built, never connected). 1317 (`KILL QUERY`,
+#   SQLSTATE 70100) and 3024 (`max_execution_time`, HY000) become `OperationalError`s through
+#   `_as_database_error`, as a failed statement's error does, and `with_read_retry(; attempts = 1)`
+#   runs the block that raises them once. 1205 (lock wait timeout) and 1213 (deadlock) are
+#   `OperationalError`s too, and are run twice.
+# Expected: `backend_is_cancellation` is true for 1317 and 3024 only; the run counts are 1, 1, 2, 2.
+# Why: neither number carries PostgreSQL's 57014, so the old core comparison ran a cancelled or
+#   timed-out read a second time (2 runs measured on main) — a slow query took `max_execution_time`
+#   once per attempt, and a `KILL QUERY` was undone by the retry.
+@testset "a cancelled MySQL statement is not retried by with_read_retry (#1277)" begin
+  pool = _my_pool()
+  @test PormG.backend_is_cancellation(_my_err(1317, "70100"))
+  @test PormG.backend_is_cancellation(_my_err(3024))
+  @test PormG.backend_is_cancellation(MySQL.StmtError(3024, "x", "HY000"))
+  for errno in (1205, 1213, 2006, 2013, 1062)
+    @test !PormG.backend_is_cancellation(_my_err(errno))
+  end
+  @test !PormG.backend_is_cancellation(_MyP.TimeoutError("read timed out"))   # a client timeout closes the connection
+
+  function runs_of(cause)
+    err = _MyCP._as_database_error(pool, cause)
+    @test err isa PormG.OperationalError
+    runs = Ref(0)
+    caught = try
+      with_read_retry(; attempts = 1) do
+        runs[] += 1
+        throw(err)
+      end
+      nothing
+    catch e
+      e
+    end
+    @test caught === err   # the block's own error, never one the cancel check raised
+    return runs[]
+  end
+  @test runs_of(_my_err(1317, "70100")) == 1
+  @test runs_of(_my_err(3024)) == 1
+  @test_logs (:warn, r"with_read_retry") @test runs_of(_my_err(1205)) == 2
+  @test_logs (:warn, r"with_read_retry") @test runs_of(_my_err(1213, "40001")) == 2
 end
 
 # What: an `InterruptException` a wrapper carries in `.cause` is rethrown bare; any other failure

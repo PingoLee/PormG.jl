@@ -754,6 +754,10 @@ function PormG.backend_is_retry_safe(pool::_Pool, e::Union{Postgres.Error, Postg
   return startswith(e.msg, _CLOSED_CONNECTION_PREFIX)
 end
 
+# A cancelled statement (#1277): 57014 `query_canceled`, as on the LibPQ extension. Neither `fetch`
+# nor `with_read_retry` runs it again.
+PormG.backend_is_cancellation(e::Postgres.Error) = e.code == "57014"
+
 # Permanent: the same configuration fails the same way on every retry.
 const _PERMANENT_CONNECT_CODES = ("28P01", "28000", "3D000")  # bad password, no such role, no such database
 

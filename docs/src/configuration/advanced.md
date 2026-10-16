@@ -74,7 +74,7 @@ dev:
   end
   ```
 
-  You vouch that the block is safe to run twice; PormG does not check. Only `OperationalError` is retried, except a cancelled statement (SQLSTATE `57014`: a `statement_timeout`, a `pg_cancel_backend`), and each retry is logged as a warning. Inside a transaction `with_read_retry` raises `TransactionError` without running the block: retry the whole `atomic` block instead (see [Error types](../errors.md)).
+  You vouch that the block is safe to run twice; PormG does not check. Only `OperationalError` is retried, except a cancelled statement, on any engine (on PostgreSQL SQLSTATE `57014`: a `statement_timeout`, a `pg_cancel_backend`; on MySQL error 1317, a `KILL QUERY`, and 3024, `max_execution_time`), and each retry is logged as a warning. Inside a transaction `with_read_retry` raises `TransactionError` without running the block: retry the whole `atomic` block instead (see [Error types](../errors.md)).
 
   The remaining case is a connection dropped with no bytes delivered at all — a silently broken network path rather than a server that announced itself. Nothing can see that without a round trip, so it surfaces on first use as a socket failure: the pool recovers as above and the statement raises. Bound how long a connection can sit in that state with the `max_lifetime` reaper.
 - **Health snapshot (`pool_stats`):** `pool_stats` (exported) returns a `NamedTuple` for debugging saturation — pass a pool object or a connection key/path:

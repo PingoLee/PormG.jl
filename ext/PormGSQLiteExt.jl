@@ -168,6 +168,10 @@ end
 # libsqlite3 produces, "disk I/O error", can come from a commit whose outcome is unknown. Neither
 # "closed" phrase appears in libsqlite3's string table or in SQLite.jl, so no "never ran" signal
 # exists to recognize.
+#
+# No `backend_is_cancellation` method either (#1277): SQLite has no statement timeout, and its one
+# cancel, PormG's own `sqlite3_interrupt` below, classifies as `:unknown` → `StatementError`, never
+# as the `OperationalError` a retry would consider.
 function PormG.backend_is_connection_error(pool::PormGSQLite, e)
   msg = lowercase(string(e))
   # server-text-match-ok: SQLite has no SQLSTATE here and never localizes its messages

@@ -41,6 +41,11 @@ Base.showerror(io::IO, ::MockCodelessDrop1042) = print(io, "mock: socket closed 
 # The server said the backend is gone (57P01), or the driver refused before sending. It never ran.
 struct MockNeverRan1042 <: Exception end
 Base.showerror(io::IO, ::MockNeverRan1042) = print(io, "mock: backend gone before the statement ran")
+# A drop its "driver" calls lost, never-ran AND cancelled (#1277). No real driver reports all three;
+# it isolates `fetch`'s cancel gate, the one thing that keeps it from being re-run.
+struct MockCancelledNeverRan1277 <: Exception end
+Base.showerror(io::IO, ::MockCancelledNeverRan1277) = print(io, "mock: statement cancelled")
+PormG.backend_is_cancellation(::MockCancelledNeverRan1277) = true
 
 # ── PG-shaped mock: PostgresConnectionPool's exact fields + failure knobs ──
 mutable struct MockPGPool1042 <: PormG.PormGPostgres
@@ -51,7 +56,7 @@ mutable struct MockPGPool1042 <: PormG.PormGPostgres
   lock::ReentrantLock
   fail_prefix::Union{Nothing, String}  # statements with this prefix fail while fail_times > 0
   fail_times::Int                      # one-shot budget: a re-run would succeed
-  fail_kind::Symbol                    # :codeless (ran, then dropped) or :never_ran
+  fail_kind::Symbol                    # :codeless (ran, then dropped), :never_ran, or :cancelled (#1277)
   next_id::Int
   executed::Vector{String}             # every statement the "driver" received, in order
   committed::Vector{String}            # every statement that took effect on the "server"
@@ -76,6 +81,7 @@ function _mock_server_1042!(pool, sql::String)
   push!(pool.executed, sql)
   if pool.fail_prefix !== nothing && pool.fail_times > 0 && startswith(sql, pool.fail_prefix)
     pool.fail_times -= 1
+    pool.fail_kind === :cancelled && throw(MockCancelledNeverRan1277())
     pool.fail_kind === :codeless || throw(MockNeverRan1042())
     push!(pool.committed, sql)
     throw(MockCodelessDrop1042())
@@ -87,10 +93,11 @@ end
 # Fail INSIDE the task, like a real async driver failure, so fetch's catch unwraps it.
 PormG.backend_execute_async(pool::MockPGPool1042, conn, sql::String, params) =
   @async _mock_server_1042!(pool, sql)
-PormG.backend_is_connection_error(::MockPGPool1042, e) = e isa Union{MockCodelessDrop1042, MockNeverRan1042}
+PormG.backend_is_connection_error(::MockPGPool1042, e) =
+  e isa Union{MockCodelessDrop1042, MockNeverRan1042, MockCancelledNeverRan1277}
 # Typed on the sentinel, as the real drivers type theirs on their exception types; any other
 # exception reaches core's default, `false`.
-PormG.backend_is_retry_safe(::MockPGPool1042, ::MockNeverRan1042) = true
+PormG.backend_is_retry_safe(::MockPGPool1042, ::Union{MockNeverRan1042, MockCancelledNeverRan1277}) = true
 
 # ── SQLite-shaped mock: the same knobs through the REAL global worker → backend_execute ──
 mutable struct MockSQLitePool1042 <: PormG.PormGSQLite
@@ -185,6 +192,23 @@ end
   @test count(==(INSERT_1042), pool.committed) == 1  # and took effect once: the first never ran
   @test pool.renewals == 1
   @test pool.connections[2] === nothing && sibling2.closed === true
+  @test count(!, pool.available) == 0
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (2b) A cancelled statement is never re-run by `fetch`, even when the driver also calls it a
+# never-ran drop (#1277). The cancel was a request to stop the statement; `backend_is_cancellation`
+# is asked before `backend_is_retry_safe`, so the drop is renewed and swept but not re-sent.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PG: a cancelled statement is not re-run, whatever else the driver says (#1277)" begin
+  pool = MockPGPool1042(3; fail_prefix = "INSERT", fail_times = 1, fail_kind = :cancelled)
+
+  err = @test_logs (:warn, NOT_RETRIED_1042) fetch_or_error_1042(pool, INSERT_1042)
+
+  @test err isa PormG.OperationalError
+  @test err.cause isa MockCancelledNeverRan1277
+  @test count(==(INSERT_1042), pool.executed) == 1   # sent once, never again
+  @test pool.renewals == 1                           # still a lost connection: renewed and swept
   @test count(!, pool.available) == 0
 end
 
@@ -338,9 +362,15 @@ end
   @test count(==(SELECT_1148), pool0.executed) == 1
 end
 
+# A driver exception its "extension" calls a cancellation, so core's cancel gate runs with no driver
+# loaded (#1277). Each real extension answers for its own codes; test_postgres_ext.jl and
+# test_mysql_ext.jl hold those.
+struct MockCancel1277 <: Exception end
+PormG.backend_is_cancellation(::MockCancel1277) = true
+
 @testset "with_read_retry: an error other than OperationalError is never retried (#1148)" begin
   # What: blocks that raise `InvalidValueError`, `IntegrityError`, a plain `ErrorException`, and an
-  # `OperationalError` with SQLSTATE 57014 (a `statement_timeout` or `pg_cancel_backend`). Expected:
+  # `OperationalError` whose driver cause its extension calls a cancellation (#1277). Expected:
   # each propagates on the first raise, the block runs once, nothing is logged. Why: re-running a
   # refused value or a broken query repeats the failure, and re-running a cancelled statement defeats
   # the cancel.
@@ -348,7 +378,7 @@ end
                () -> PormG.IntegrityError("PostgreSQL", ErrorException("duplicate key")),
                () -> ErrorException("not a database error"),
                # A cancelled statement is an OperationalError, but someone asked it to stop.
-               () -> PormG.OperationalError("PostgreSQL", ErrorException("canceling statement"); sqlstate = "57014"))
+               () -> PormG.OperationalError("MySQL", MockCancel1277()))
     runs = 0
     expected = typeof(make())
     @test_logs @test_throws expected with_read_retry(; attempts = 3) do
@@ -357,6 +387,30 @@ end
     end
     @test runs == 1
   end
+end
+
+@testset "with_read_retry: the cancel is the engine's fact, not a SQLSTATE core compares (#1277)" begin
+  # What: an `OperationalError` that carries SQLSTATE 57014 over a cause no extension calls a
+  # cancellation, and one with no SQLSTATE over a cause that is one. Expected: the first is retried
+  # (two runs, one retry warning), the second runs once. Why: core used to compare PostgreSQL's code,
+  # which a MySQL cancel (1317 `70100`, 3024 `HY000`) never carries, so a cancelled MySQL read ran
+  # twice. Each engine now answers through `backend_is_cancellation`, and core reads no code.
+  runs = 0
+  coded = PormG.OperationalError("PostgreSQL", ErrorException("canceling statement"); sqlstate = "57014")
+  @test_logs (:warn, READ_RETRIED_1148) @test_throws PormG.OperationalError with_read_retry(; attempts = 1) do
+    runs += 1
+    throw(coded)
+  end
+  @test runs == 2
+
+  runs = 0
+  @test_logs @test_throws PormG.OperationalError with_read_retry(; attempts = 1) do
+    runs += 1
+    throw(PormG.OperationalError("MySQL", MockCancel1277()))
+  end
+  @test runs == 1
+  @test PormG.backend_is_cancellation(CompositeException([ErrorException("x"), MockCancel1277()]))
+  @test !PormG.backend_is_cancellation(ErrorException("canceling statement due to statement timeout"))
 end
 
 @testset "with_read_retry: inside atomic it raises TransactionError without running the block (#1148)" begin

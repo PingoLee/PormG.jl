@@ -53,6 +53,39 @@ PormG.Configuration.unregister_connection("db")
 Do not write a mock backend type into `PormG.config` by hand: `register_offline` is the public
 form of that, and `Configuration.loaded_keys()` answers "what is loaded?".
 
+### A test double that refuses what a write refuses
+
+A test double that stands in for `M.Model.objects` is only useful if it refuses what PormG would
+refuse. Do not copy PormG's rules into it. Call `validate_value(model, field, value)` for each
+value: it runs exactly the checks `create` runs on a field (an unknown name, NULL, type and range,
+`max_length`, a decimal's width, a malformed date or UUID, a collection, a NUL character, a value
+the model's engine cannot bind). It throws the same error, and returns the value as PormG formats
+it for binding. It sends nothing, so an offline key is enough. A rule added in a
+later release reaches the double with no edit:
+
+```julia
+struct FakeDrivers
+    rows::Vector{Dict{String, Any}}
+end
+
+function create(fake::FakeDrivers, pairs::Pair...)
+    row = Dict{String, Any}(String(k) => validate_value(M.Driver, String(k), v) for (k, v) in pairs)
+    push!(fake.rows, row)
+    return row
+end
+
+fake = FakeDrivers([])
+@test_throws InvalidValueError create(fake, "surname" => "Se\0nna")   # the NUL PormG refuses
+```
+
+Give the double's `update` the same loop, but pass an `F` expression or a SQL function through
+without calling `validate_value`: a real `update` writes it as SQL, and `validate_value`, like
+`create`, does not accept it. The double then does not check the names inside the expression,
+which a real `update` resolves when it builds the statement. A real `update` also refuses a primary key, which `validate_value` allows, as
+`create` does. It checks one field at a time and sends nothing, so it
+cannot see what only the database or the whole row decides: uniqueness, foreign keys, `CHECK`
+constraints, or a required field left out.
+
 ## See the plan the database chooses
 
 `show_query` shows what PormG sends; `.explain()` asks the database how it would run the `SELECT`:

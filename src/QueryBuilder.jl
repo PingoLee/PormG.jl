@@ -194,6 +194,7 @@ export PormGError, FieldAccessError, UnknownFieldError, AmbiguousFieldError, Laz
 # _count and _exists are un-exported (#202); the public form is the fluent query.count() /
 # query.exists(). They still have internal callers — deletion.jl uses both.
 export bulk_insert, bulk_update, bulk_copy, allocate_primary_keys, resync_sequences
+export validate_value  # #1239: the write path's per-field checks, for test doubles
 
 # ---
 # `public` (Julia 1.11+) — user-facing but deliberately NOT exported (#289).

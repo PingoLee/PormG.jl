@@ -52,6 +52,11 @@ task needs.
    lists, per backend, are on the
    [Backend Capabilities](https://pingolee.github.io/PormG.jl/dev/backends/) page; the
    [PostgreSQL guide](https://pingolee.github.io/PormG.jl/stable/postgres/) has the details.
+10. **Use only public names, in tests too.** A name is public when its module exports it or
+    declares it `public`, so that `Base.ispublic(PormG.Configuration, :register_offline)` is true.
+    Anything else is internal, including the unlisted parts of `PormG.Configuration.*` and every
+    `_`-prefixed name. An internal name can change in any release with no `upgrade_guide` entry.
+    To pin a behavior, call the public API that produces it.
 
 ## One end-to-end example
 
@@ -93,7 +98,7 @@ non-aggregate columns. Never write it yourself.
 | Correlated subqueries, CTEs, custom joins, window functions, multiple databases, advisory locks | [`advanced.md`](advanced.md) |
 | Concurrency, `fetch_async`, what spawned tasks see inside a transaction | [`async.md`](async.md) |
 | Catching and reporting errors, which call raises what | [`errors.md`](errors.md) |
-| Inspecting generated SQL, pool health, a query that returns the wrong thing | [`debugging.md`](debugging.md) |
+| Inspecting generated SQL, testing without a database, pool health, a query that returns the wrong thing | [`debugging.md`](debugging.md) |
 
 The exhaustive reference is the PormG documentation, <https://pingolee.github.io/PormG.jl/stable/>.
 These files are the working patterns and the gotchas. Each links to the page with the full detail.

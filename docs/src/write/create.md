@@ -191,6 +191,28 @@ A column holds a single value. A `Vector` or a tuple given to a text-like field 
 `BinaryField` values are unaffected: each is serialized to one value first. To *match* several
 values, use a lookup such as `"surname__@in" => ["Senna", "Prost"]` in `filter(...)`.
 
+#### Checking a value without writing it
+
+`validate_value(model, field, value)` runs a write's per-field checks without writing anything. It
+returns the value as PormG formats it for binding, or throws the same error `create` would throw
+for that field. That covers an unknown field name, NULL in a NOT NULL column, a wrong type or range,
+`max_length`, a decimal's width, a malformed date or UUID, a collection, a NUL character, and a value
+the model's engine cannot bind (an `ArrayField` value on SQLite, say). It sends nothing and needs no
+live database: the model's key can be one registered with `Configuration.register_offline`:
+
+```julia
+validate_value(M.Driver, "dob", Date(1960, 3, 21))   # "1960-03-21"
+validate_value(M.Driver, "number", "twelve")         # InvalidValueError, kind :type
+validate_value(M.Driver, "surname", nothing)         # InvalidValueError: null values are not allowed
+validate_value(M.Driver, "surname", "Se\0nna")       # InvalidValueError, kind :nul
+```
+
+It checks one field, so it cannot see what only the database or the whole row decides: uniqueness,
+foreign keys, `CHECK` constraints (a `PositiveIntegerField`'s sign among them), and a required field
+left out of the row. It checks values, not expressions: like `create`, it does not accept an `F` expression or a SQL
+function, which only `update` writes, as SQL. Its main use is a test double that stands in for `objects`: built on
+`validate_value`, the double refuses what PormG refuses, including checks added in later releases.
+
 ### Default Values
 
 Fields with default values don't need to be specified:

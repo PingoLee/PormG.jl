@@ -48,6 +48,8 @@ const EXPECTED_TOPLEVEL = Set([
     :DatabaseError, :IntegrityError, :OperationalError, :StatementError, :TransactionError,
     # Bulk operations
     :bulk_insert, :bulk_update, :bulk_copy, :allocate_primary_keys, :resync_sequences,
+    # #1239: the write path's per-field checks, callable without writing
+    :validate_value,
     # Async API
     :fetch_async, :await_result, :FetchTask,
     # Transactions

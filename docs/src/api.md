@@ -1126,6 +1126,9 @@ end
 ### Bulk Operations
 `bulk_insert`, `bulk_update`, `bulk_copy`, `allocate_primary_keys`, `resync_sequences`
 
+### Validation
+`validate_value` — a write's per-field checks without writing, for test doubles; see [Checking a value without writing it](write/create.md#Checking-a-value-without-writing-it)
+
 ### Async API
 `fetch_async`, `await_result`, `FetchTask` — see [Async & Concurrency](async.md)
 

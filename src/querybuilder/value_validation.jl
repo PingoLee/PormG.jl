@@ -510,6 +510,56 @@ function validate_field_data(model::PormGModel, field::String, value::Any, opera
     return _validate_field_value(model, field, f_meta, value, operation)
 end
 
+"""
+    validate_value(model, field::AbstractString, value) -> the value as PormG formats it for binding
+
+Check `value` for `model`'s `field` exactly as a write checks it, without writing anything, and
+return the value as PormG formats it for binding (`validate_value(M.Driver, "dob", Date(1960, 3, 21))`
+returns `"1960-03-21"`). Otherwise it raises the same error that
+`M.Model.objects.create(field => value)` raises for that field: the same type, with the same `kind`
+and the field named.
+
+The checks are the write path's own, run in its order:
+
+1. The field-name and value checks of `validate_field_data`.
+2. The bind-time formatting that `create`, `update` and the bulk writers run on every value.
+3. The parameter bind of the engine the model is bound to, which has refusals of its own (an
+   integer wider than 64 bits, or an `ArrayField` value on SQLite). This step runs the engine's
+   parameter encoding (PostgreSQL's text for a byte string, for example) and discards its output.
+
+So a check added to the write path is in this one too. This includes:
+
+- an unknown field name (`UnknownFieldError`) or a many-to-many relation;
+- NULL in a NOT NULL field;
+- a value of the wrong type, out of range, or over `max_length` or a decimal's width;
+- a malformed UUID, date or time;
+- a collection where a column holds one value;
+- a NUL character in text;
+- a value the engine cannot bind.
+
+`create`'s rules apply: a primary key may be given, and a generated column may not. `update`
+also refuses a primary key. It checks values, not expressions: `update` writes an `F` expression
+or a SQL function into the statement as SQL and resolves the names inside it when the statement is
+built, so a double's `update` passes such a value through without calling this. `create` does not
+accept one, and neither does this. Into a text field that is an `InvalidValueError`; into a numeric
+field `create` currently raises a raw `MethodError` (#1283), and this raises the same.
+
+What it does **not** check is what only the database knows: uniqueness, foreign keys, `CHECK`
+constraints, and a row's other fields. It sends nothing. It needs the model's connection key to be
+registered, as every query does, but not a live database: a key registered with
+`Configuration.register_offline` is enough. Use it in a test double that stands in for `objects`,
+so the double refuses what PormG refuses (#1239).
+"""
+function validate_value(model::PormGModel, field::AbstractString, value)
+  name = String(field)
+  validate_field_data(model, name, value, "validate_value"; allow_primary_key = true)
+  formatted = _format_single(model.fields[name], name, value, "validate_value")
+  # The engine's bind, as `create` runs it, for the refusals that live there; its output is discarded.
+  _, connection, _ = get_settings(object(model))
+  add_parameter!(get_parameter(connection), formatted)
+  return formatted
+end
+
 # `validate_field_data`, split at the seam between what depends on the field alone and what depends
 # on the value (#704). The bulk writers run the name half once per column and the value half once per
 # cell: repeating the name half per cell cost a linear `field_names` scan and two dict lookups for

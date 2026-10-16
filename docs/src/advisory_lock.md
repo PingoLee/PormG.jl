@@ -1,6 +1,6 @@
 # Advisory Locks
 
-Advisory locks are a unique feature of PostgreSQL that allows applications to define their own locking semantics. Unlike row-level or table-level locks, advisory locks have no inherent meaning to the database; they are simply a mechanism for application-level synchronization.
+Advisory locks are a database feature that lets applications define their own locking semantics: PostgreSQL's advisory locks, and MySQL's named locks (`GET_LOCK`). Unlike row-level or table-level locks, advisory locks have no inherent meaning to the database; they are simply a mechanism for application-level synchronization.
 
 PormG provides high-level support for advisory locks through the `with_advisory_lock` function.
 
@@ -15,7 +15,7 @@ Common use cases include:
 
 ## Usage
 
-The `with_advisory_lock` function requires a **connection key** (pointing to a PostgreSQL database) and a **key string**.
+The `with_advisory_lock` function requires a **connection key** (pointing to a PostgreSQL or MySQL database) and a **key string**.
 
 ```julia
 # Load the configuration, then your models (preferred: hot-reload-friendly, self-registering)
@@ -54,10 +54,13 @@ The `timeout_ms` parameter ensures your application doesn't hang indefinitely.
 - In `:poll` strategy, the timeout is managed by Julia.
 - In `:block` strategy, PormG temporarily sets the PostgreSQL `lock_timeout` for that specific acquisition and restores it when the call returns. `lock_timeout` bounds only the wait for the lock, so a `statement_timeout` you set on the session is left alone. When the wait runs out, the server reports it as a lock timeout, and PormG raises the same `OperationalError` as `:poll`, naming the session that holds the lock.
 - If the session's `statement_timeout` is shorter than `timeout_ms`, it ends the `:block` wait first. That surfaces as a query-canceled `OperationalError` (SQLSTATE `57014`) without the lock-holder detail, because PostgreSQL cancelled the statement rather than the lock wait.
+- On MySQL, the `:block` wait is `GET_LOCK`'s own timeout, so nothing is set on the session. It is a `SELECT`, so a session `max_execution_time` shorter than `timeout_ms` ends the wait first, as an `OperationalError` without the lock-holder detail. MySQL takes whole seconds and rounds a fraction to the nearest one, so PormG rounds `timeout_ms` **up** to the next second: the wait is never shorter than asked, and at most a second longer.
+- On both, `timeout_ms = 0` with `strategy = :block` waits with no bound.
 
 ## Implementation Details
 
 - **PostgreSQL**: Implementation uses `pg_try_advisory_lock` (non-blocking) or `pg_advisory_lock` (blocking).
+- **MySQL** (in progress, [#1130](https://github.com/PingoLee/PormG.jl/issues/1130)): `GET_LOCK` and `RELEASE_LOCK`, session-level like PostgreSQL's, so a dropped connection releases the lock. A MySQL lock name is server-wide, where a PostgreSQL advisory lock is scoped to its database, so PormG hashes the database name in with the key: two databases on one server do not block each other, as on PostgreSQL. A contention error names the holder by its MySQL connection id.
 - **SQLite**: `with_advisory_lock` is a **no-op** — see the warning below.
 - **Async Safety**: `with_advisory_lock` uses `LibPQ.async_execute` and `fetch()` to ensure that the Julia task yields while waiting for the database, keeping the event loop unblocked.
 
@@ -105,9 +108,10 @@ PormG.with_advisory_lock(connection_key, "season_points_recalc"; on_missing_lock
 end
 ```
 
-On PostgreSQL `on_missing_lock` is accepted and ignored: a real lock is always taken, so there is
-no missing-lock case to have a policy about. An unrecognised value raises `InvalidValueError` on
-**both** backends, so a typo cannot lie in wait until you happen to run on SQLite.
+On PostgreSQL and MySQL `on_missing_lock` is accepted and ignored: a real lock is always taken, so
+there is no missing-lock case to have a policy about. An unrecognised value raises
+`InvalidValueError` on **every** backend, so a typo cannot lie in wait until you happen to run on
+SQLite.
 
 The warning fires once per distinct lock key, tracked in-process and independently of the logger in
 use, so a scheduled job taking the same lock in a loop logs one line rather than one per iteration.

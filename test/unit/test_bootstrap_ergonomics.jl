@@ -35,16 +35,20 @@ end
     write(yml, "lite:\n  adapter: SQLite\n  database: \":memory:\"\n" *
                "pq:\n  adapter: PostgreSQL\n  host: localhost\n" *
                "pg:\n  adapter: PostgreSQL\n  host: localhost\n  postgres_driver: Postgres\n" *
+               "my:\n  adapter: MySQL\n  host: localhost\n" *
                "odd:\n  adapter: Oracle\n")
     withenv("PORMG_POSTGRES_DRIVER" => nothing) do
       @test Configuration._peek_driver(yml, "lite") === :sqlite
       @test Configuration._peek_driver(yml, "pq") === :libpq
       @test Configuration._peek_driver(yml, "pg") === :postgres
+      @test Configuration._peek_driver(yml, "my") === :mysql
       @test Configuration._peek_driver(yml, "odd") === nothing        # refused later, by its reader
       @test Configuration._peek_driver(yml, "absent") === nothing
     end
   end
-  @test PormG._DRIVER_EXTENSIONS == (sqlite = :PormGSQLiteExt, libpq = :PormGLibPQExt, postgres = :PormGPostgresExt)
+  @test PormG._DRIVER_EXTENSIONS == (sqlite = :PormGSQLiteExt, libpq = :PormGLibPQExt, postgres = :PormGPostgresExt,
+                                     mysql = :PormGMySQLExt)
+  @test occursin("using MySQL", PormG._driver_hint(:mysql))
   @test occursin("using Postgres", PormG._driver_hint(:postgres))
   @test occursin("using LibPQ", PormG._driver_hint(:libpq))
   @test occursin("using SQLite", PormG._driver_hint(:sqlite))

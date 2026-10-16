@@ -125,9 +125,9 @@ end
 
 # Every engine key PormG ships. A backend added later adds its key here when it adds `_engine_key`;
 # until then `engine_key` throws a `MethodError` for it, which is the point.
-const ENGINE_KEYS = (:postgres, :sqlite)
+const ENGINE_KEYS = (:postgres, :sqlite, :mysql)
 
-"""`engine_key(conn = <this run's pool>)` — this run's engine as a key (`:postgres`, `:sqlite`)."""
+"""`engine_key(conn = <this run's pool>)` — this run's engine as a key (`:postgres`, `:sqlite`, `:mysql`)."""
 engine_key(conn = PormG.config[PORMG_DB_FOLDER].connections)::Symbol = PormG.Kernel._engine_key(conn)
 
 function _check_engine_keys(ks)
@@ -195,12 +195,12 @@ split_statements(sql::AbstractString; conn = PormG.config[PORMG_DB_FOLDER].conne
     by_engine(conn; postgres = PormG.Migrations._split_pg_statements,
                     sqlite = PormG.Migrations._split_sqlite_statements)(sql)
 placeholder(i::Integer; conn = PormG.config[PORMG_DB_FOLDER].connections)::String =
-    by_engine(conn; postgres = "\$$(i)", sqlite = "?")
+    by_engine(conn; postgres = "\$$(i)", sqlite = "?", mysql = "?")
 binds_column_arrays(; conn = PormG.config[PORMG_DB_FOLDER].connections)::Bool =
     by_engine(conn; postgres = true, sqlite = false)
 marker_count(sql::AbstractString; conn = PormG.config[PORMG_DB_FOLDER].connections)::Int =
     by_engine(conn; postgres = length(unique(m.match for m in eachmatch(r"\$\d+", sql))),
-                    sqlite = count(==('?'), sql))
+                    sqlite = count(==('?'), sql), mysql = count(==('?'), sql))
 
 # #37: the async integration suite (`-t auto`, heavy fan-out) saturates a small PostgreSQL pool
 # against a possibly-remote DB. Size the pool to the run's concurrency for this run only
@@ -211,7 +211,7 @@ marker_count(sql::AbstractString; conn = PormG.config[PORMG_DB_FOLDER].connectio
 # peak (~20-30) but a high value could exhaust the PostgreSQL server's max_connections.
 # Engine mechanics (#1179): only a server pool is sized; SQLite serializes through one writer.
 let s = PormG.config[PORMG_DB_FOLDER]
-    if by_engine(postgres = true, sqlite = false)
+    if by_engine(postgres = true, sqlite = false, mysql = true)
         pool_n = parse(Int, get(ENV, "PORMG_TEST_POOL_SIZE", "20"))
         if pool_n != s.connections.pool_size
             s.db_config_settings["pool_size"] = pool_n
@@ -274,9 +274,10 @@ end
 
 # Engine mechanics (#1179): the lock below is PostgreSQL's own SQL, so a backend added later decides
 # its row here rather than inheriting either answer — not `requires(:advisory_locks)`, which would
-# hand it PostgreSQL's `pg_try_advisory_lock` the day it declares advisory locks.
+# hand it PostgreSQL's `pg_try_advisory_lock` the day it declares advisory locks. MySQL's lock is the
+# block after this one.
 if get(ENV, "PORMG_TEST_LOCK", "1") ∉ ("0", "false", "off") &&
-   by_engine(postgres = true, sqlite = false)
+   by_engine(postgres = true, sqlite = false, mysql = false)
   let s = PormG.config[PORMG_DB_FOLDER]
     dbname = string(s.db_config_settings["database"])
     wait_s = parse(Float64, get(ENV, "PORMG_TEST_LOCK_WAIT", "900"))
@@ -348,6 +349,58 @@ if get(ENV, "PORMG_TEST_LOCK", "1") ∉ ("0", "false", "off") &&
   end
 end
 
+# MySQL (#1130, #1269): the same queue, on `GET_LOCK`. A named lock is session-level and released
+# when the session ends, like PostgreSQL's, so the 1-slot process-lifetime pool above is the shape
+# here too, and a crash releases it. The name is hashed with the database exactly as
+# `with_advisory_lock` hashes it (`AdvisoryLock.MYSQL_LOCK_NAME_EXPR`), because a MySQL lock name is
+# server-wide: two databases on one server do not queue behind each other. The holder is named by its
+# connection id (`IS_USED_LOCK`); reading more of it needs the `PROCESS` privilege.
+if get(ENV, "PORMG_TEST_LOCK", "1") ∉ ("0", "false", "off") &&
+   by_engine(postgres = false, sqlite = false, mysql = true)
+  let s = PormG.config[PORMG_DB_FOLDER]
+    dbname = string(s.db_config_settings["database"])
+    wait_s = parse(Float64, get(ENV, "PORMG_TEST_LOCK_WAIT", "900"))
+
+    cfg = copy(s.db_config_settings)
+    cfg["pool_size"] = 1
+    lock_settings = PormG.Configuration.Settings(app_env = s.app_env, db_config_settings = cfg)
+    PormG.Configuration._build_connection_pool!(lock_settings, "pormg_test::suite_lock")
+    lock_pool = lock_settings.connections
+    _SUITE_LOCK_POOL[] = lock_pool
+
+    name_expr = PormG.AdvisoryLock.MYSQL_LOCK_NAME_EXPR
+    holder() = try
+      id = DataFrame(PormG.ConnectionPool.fetch(lock_pool, "SELECT IS_USED_LOCK($(name_expr)) AS id";
+                                                params = Any[_SUITE_LOCK_KEY])).id[1]
+      id === missing ? "unknown (the lock was released meanwhile)" : "MySQL connection $(id)"
+    catch
+      "unknown (IS_USED_LOCK failed)"
+    end
+
+    deadline    = time() + wait_s
+    last_report = 0.0
+    while true
+      got = DataFrame(PormG.ConnectionPool.fetch(lock_pool, "SELECT GET_LOCK($(name_expr), 0) AS ok";
+                                                 params = Any[_SUITE_LOCK_KEY])).ok[1]
+      got === 1 && break
+
+      if time() > deadline
+        release_suite_lock!()
+        error("Timed out after $(wait_s)s waiting for the integration-suite lock on database " *
+              "\"$(dbname)\" — another run is holding it ($(holder())). Wait for it to finish, " *
+              "raise PORMG_TEST_LOCK_WAIT, or set PORMG_TEST_LOCK=0 to run anyway (destructive: " *
+              "the two runs will interleave schema and fixture phases).")
+      end
+
+      if time() - last_report > 30
+        @info "Queued — another integration run holds database \"$(dbname)\"" holder=holder() waited_s=round(Int, wait_s - (deadline - time())) giving_up_in_s=round(Int, deadline - time())
+        last_report = time()
+      end
+      sleep(2)
+    end
+  end
+end
+
 # Load the models and expose the alias `M`
 # Using the new @import_models macro which handles registration automatically
 # Each test database folder ships its own models file; `@import_models` takes a literal path, so
@@ -356,6 +409,8 @@ if PORMG_DB_FOLDER == "db_sl"
     PormG.@import_models "db_sl/models.jl" models
 elseif PORMG_DB_FOLDER == "db_2"
     PormG.@import_models "db_2/models.jl" models
+elseif PORMG_DB_FOLDER == "db_my"
+    PormG.@import_models "db_my/models.jl" models
 else
     error("no models file for PORMG_DB=$(PORMG_DB_FOLDER); add its folder here")
 end

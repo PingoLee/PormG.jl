@@ -51,6 +51,9 @@ const _BACKEND_FEATURES = (
   :generated_columns      => "generated columns (`GENERATED ALWAYS AS (…) STORED`)",
   :drop_expression        => "removing a column's generation expression (`ALTER COLUMN … DROP EXPRESSION`)",
   :input_validity         => "testing a value against a type's input function (`pg_input_is_valid`)",
+  # #1264: a server PormG is verified against. Every backend has it; a backend with a version row
+  # refuses an older server once, when a connection opens, rather than serving it SQL no one ran there.
+  :supported_server       => "a server version PormG is verified against",
 )
 const _FEATURE_NAMES = Tuple(first.(_BACKEND_FEATURES))
 
@@ -68,8 +71,14 @@ for f in _FEATURE_NAMES
   f === :table_list && continue   # SQLite's own catalog; PostgreSQL has no virtual tables to label
   @eval _has_feature(::Type{<:PormGPostgres}, ::Val{$(QuoteNode(f))}) = true
 end
-for f in (:window_functions, :nulls_order, :table_list, :schema_introspection, :migration_plans)
+for f in (:window_functions, :nulls_order, :table_list, :schema_introspection, :migration_plans,
+          :supported_server)
   @eval _has_feature(::Type{<:PormGSQLite}, ::Val{$(QuoteNode(f))}) = true
+end
+# MySQL (#1130, in progress) gains each row in the phase that delivers it. Phase 1 delivers the
+# connection: the server floor (#1264) and `GET_LOCK` advisory locks (#1269).
+for f in (:supported_server, :advisory_locks)
+  @eval _has_feature(::Type{<:PormGMySQL}, ::Val{$(QuoteNode(f))}) = true
 end
 
 # The version rows (#1163): the oldest server that has the feature, on a backend that has it at all.
@@ -89,14 +98,17 @@ _feature_since(::Type{<:PormGPostgres}, ::Val{:include_columns}) = 110_000      
 _feature_since(::Type{<:PormGPostgres}, ::Val{:generated_columns}) = 120_000       # 12 (#1032)
 _feature_since(::Type{<:PormGPostgres}, ::Val{:drop_expression}) = 130_000         # 13 (#1108)
 _feature_since(::Type{<:PormGPostgres}, ::Val{:input_validity}) = 160_000          # 16 (#828)
+_feature_since(::Type{<:PormGMySQL}, ::Val{:supported_server}) = 80_400            # MySQL 8.4 (#1264)
 
 """
     _server_version(conn) -> Int
 
 The server version `conn` runs, in its backend's own number: `server_version_num` on PostgreSQL, the
-packed library version on SQLite. Asked by `_supports` for a version row. A backend's method lives
-where it can ask: SQLite's beside `backend_sqlite_version` (`Backend.jl`), PostgreSQL's beside the
-schema readers (`Migrations`), which ask it most. Not cached: a pool outlives a server upgrade, and a
+packed library version on SQLite, `major * 10000 + minor * 100 + patch` on MySQL (`80411` for 8.4.11,
+the number `mysql_get_server_version` reports). Asked by `_supports` for a version row. A backend's
+method lives where it can ask: SQLite's and MySQL's beside `backend_sqlite_version` /
+`backend_mysql_version` (`Backend.jl`), PostgreSQL's beside the schema readers (`Migrations`), which
+ask it most. Not cached: a pool outlives a server upgrade, and a
 stale version would read a newer server's schema with an older one's stand-ins. A caller with several
 questions asks once and passes `server_version`.
 """
@@ -107,12 +119,17 @@ function _server_version end
 _version_text(::Type{<:PormGPostgres}, v::Integer)::String =
   v >= 100_000 ? string(v ÷ 10_000) : "$(v ÷ 10_000).$((v ÷ 100) % 100)"
 _version_text(::Type{<:PormGSQLite}, v::Integer)::String = "$(v ÷ 1_000_000).$((v ÷ 1_000) % 1_000).$(v % 1_000)"
+# MySQL: `80400` is 8.4 — a row names the release line; a server's patch is in `_version_at_hand`.
+_version_text(::Type{<:PormGMySQL}, v::Integer)::String =
+  v % 100 == 0 ? "$(v ÷ 10_000).$((v ÷ 100) % 100)" : "$(v ÷ 10_000).$((v ÷ 100) % 100).$(v % 100)"
 # What this server is, in a refusal: the backend's name for the thing that has a version, and the raw
 # number where the backend has one users look up.
 _version_at_hand(T::Type{<:PormGPostgres}, v::Integer)::String =
   "this server is $(_version_text(T, v)) (server_version_num $(v))"
 _version_at_hand(T::Type{<:PormGSQLite}, v::Integer)::String =
   "the SQLite library PormG loads is $(_version_text(T, v))"
+_version_at_hand(::Type{<:PormGMySQL}, v::Integer)::String =
+  "this server is $(v ÷ 10_000).$((v ÷ 100) % 100).$(v % 100)"
 
 """
     _feature_at(T, feature, server_version) -> Bool
@@ -144,17 +161,24 @@ end
 
 # The engines PormG ships, by the name a message uses. A backend added later adds its row here and
 # its `_has_feature` methods above; the refusals then offer it wherever it has the feature.
+#
+# MySQL is not a row yet (#1130). Its row comes with phase 2, the phase that decides what a query MEANS
+# there: every `_MEANING_DEPARTURES` row must place each backend listed here
+# (`test/unit/test_meaning_departures.jl`), and `docs/src/backends.md` must carry its column. Until
+# then MySQL is named by the method below, so a message says "MySQL" rather than the pool's type.
 const _BACKENDS = ("PostgreSQL" => PormGPostgres, "SQLite" => PormGSQLite)
 _backend_name(conn) = begin
   i = findfirst(p -> conn isa last(p), _BACKENDS)
   i === nothing ? string(nameof(typeof(conn))) : first(_BACKENDS[i])
 end
+_backend_name(::PormGMySQL) = "MySQL"   # → a `_BACKENDS` row in phase 2
 # The engine as a key — the `NamedTuple` key a pinned `db_default` is spelled under. One method per
 # engine and NO fallback (#1129 item 2): a new backend gets a `MethodError` here rather than SQLite's
 # key, which `db_default_sql`'s `conn isa PormGPostgres ? :postgres : :sqlite` handed it silently.
 # Not a capability — an engine FACT, kept here because Dialect and Migrations both use it.
 _engine_key(::PormGPostgres) = :postgres
 _engine_key(::PormGSQLite) = :sqlite
+_engine_key(::PormGMySQL) = :mysql
 # The engines that have `feature`, by name — what a refusal offers instead.
 _supporting_backends(feature::Symbol) = [name for (name, T) in _BACKENDS if _has_feature(T, Val(feature))]
 

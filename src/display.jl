@@ -802,12 +802,10 @@ function _d_slot(x, slot::Symbol, default)
   end
 end
 
-# The backend family a value belongs to. `PormGBackend` has exactly two children today, but a
-# downstream pool type is a supported shape, so the fallback names the struct rather than guessing
-# one of the two — a mislabelled engine is a worse answer than an unfamiliar one.
-_d_backend_label(x) =
-  x isa Kernel.PormGPostgres ? "PostgreSQL" :
-  x isa Kernel.PormGSQLite   ? "SQLite"     : String(nameof(typeof(x)))
+# The backend family a value belongs to: the capability table's name for its engine. A downstream
+# pool type is a supported shape, so a value of no engine is named by its struct rather than given
+# an engine's name — a mislabelled engine is a worse answer than an unfamiliar one. Never throws.
+_d_backend_label(x) = String(Kernel._backend_name(x))
 
 # A DSN is wider than `_d_trunc`'s 40-column leaf bound and stays useful to the end — `dbname` sits
 # at the tail of the libpq form — so the card gets its own, wider bound. Still bounded: the input is

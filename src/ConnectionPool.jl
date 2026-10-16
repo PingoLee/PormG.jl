@@ -6,6 +6,7 @@ import Logging
 # first-argument types (PormGPostgres/PormGSQLite/PormGSettings), so this is not type piracy.
 import Base: fetch
 import PormG: PormGSettings, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGSQLiteParam, AbstractPormGParam, config, PormGModel, DEFAULT_POOL_TIMEOUT
+import PormG: PormGMySQL, _SQLEngine  # #1130: the MySQL marker, and every engine for the shared funnels
 import PormG: _backend_name  # #1129: an engine's name for a message, falling back to its type's name
 import PormG: @pormg_debug
 # #721: `PormG.sqlite_bind_value` (`value_repr.jl`) is included AFTER this module, so it is named
@@ -72,7 +73,7 @@ _normalize_manual_params(params::ManualParams) = Any[v === nothing ? missing : v
 # bind a literal identically. PostgreSQL is untouched — LibPQ adapts every one of these itself.
 _normalize_manual_params(params::ManualParams, connection::PormGSQLite) =
   Any[PormG.sqlite_bind_value(v, connection) for v in _normalize_manual_params(params)]
-_normalize_manual_params(params::ManualParams, ::PormGPostgres) = _normalize_manual_params(params)
+_normalize_manual_params(params::ManualParams, ::Union{PormGPostgres, PormGMySQL}) = _normalize_manual_params(params)
 
 # #951 — a NUL ('\0') in text is refused before anything is sent, the same way on every backend.
 # Each driver handles it differently, and none of them correctly: LibPQ hands a text parameter to
@@ -197,7 +198,7 @@ Base.showerror(io::IO, e::PoolConnectError) = print(io,
   _redacted_cause(e.cause),
   " (connection=", e.connection, "). Check credentials, host, and database name in connection.yml.")
 
-function _run_before_connect!(pool::Union{PormGPostgres, PormGSQLite})
+function _run_before_connect!(pool::_SQLEngine)
   if !ensure_before_connect!(pool)
     key = something(connection_key_for_pool(pool), "?")
     # PoolConnectError, not ErrorException: a hook refusing the connection is a connect-time
@@ -409,6 +410,27 @@ mutable struct SQLiteConnectionPool <: PormGSQLite
   write_lock::ReentrantLock
 end
 
+# #1130 (in progress): a MySQL pool. Its slots behave like PostgreSQL's — all alike, no read/write
+# split — so it shares PostgreSQL's acquire/release/renew methods (typed on both markers below).
+# `connection_string` is a libpq-style conninfo (`host='…' port='…' user='…' password='…'
+# dbname='…'`), built by `Configuration` with the same quoting as PostgreSQL's: one format means
+# `redact_secret`, the REPL card and every log line mask the password the same way for both. The
+# MySQL extension reads it back (`ext/PormGMySQLExt.jl`); MySQL.jl itself takes keyword arguments.
+mutable struct MySQLConnectionPool <: PormGMySQL
+  connections::Vector{Any}
+  available::Vector{Bool}
+  connection_string::String
+  pool_size::Int
+  pool_timeout::Float64   # default acquire_connection timeout, seconds (connection.yml `pool_timeout`)
+  fail_fast_on_connect::Bool  # fast-fail permanent connect errors instead of waiting pool_timeout (#72)
+  lock::ReentrantLock
+end
+
+function MySQLConnectionPool(connection_string::String; pool_size::Int = 3, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, fail_fast_on_connect::Bool = true)
+  MySQLConnectionPool(Vector{Any}(nothing, pool_size), fill(true, pool_size), connection_string, pool_size,
+                      Float64(pool_timeout), fail_fast_on_connect, ReentrantLock())
+end
+
 function PostgresConnectionPool(connection_string::String; pool_size::Int = 3, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, fail_fast_on_connect::Bool = true, driver::Symbol = :libpq)
   connections = Vector{Any}(nothing, pool_size)
   available = fill(true, pool_size)
@@ -457,12 +479,14 @@ end
 # structs (which don't carry `pool_timeout`) resolve to DEFAULT_POOL_TIMEOUT with zero changes.
 _pool_timeout(pool::PostgresConnectionPool) = pool.pool_timeout
 _pool_timeout(pool::SQLiteConnectionPool)   = pool.pool_timeout
+_pool_timeout(pool::MySQLConnectionPool)    = pool.pool_timeout
 _pool_timeout(pool) = DEFAULT_POOL_TIMEOUT
 
 # Whether to fast-fail a permanently-bad connection instead of waiting the full pool_timeout (#72).
 # Dispatch + generic fallback so pool-shaped mocks (which don't carry the field) default to `true`.
 _fail_fast_on_connect(pool::PostgresConnectionPool) = pool.fail_fast_on_connect
 _fail_fast_on_connect(pool::SQLiteConnectionPool)   = pool.fail_fast_on_connect
+_fail_fast_on_connect(pool::MySQLConnectionPool)    = pool.fail_fast_on_connect
 _fail_fast_on_connect(pool) = true
 
 # Record a failed `backend_connect` and decide whether to fast-fail. Returns true only when the error is
@@ -576,7 +600,7 @@ _waiters_for(pool)::Vector{PoolWaiter} =
 # Can a waiter of `mode` use slot `i`? Mirrors `_sqlite_candidate_slots!` so a freed slot wakes
 # exactly the waiters a scan would have let use it (never strands free capacity behind a
 # compatible waiter). PostgreSQL is homogeneous; SQLite typed only when split_read_write.
-_slot_fits_mode(::PormGPostgres, ::Int, ::Symbol) = true
+_slot_fits_mode(::Union{PormGPostgres, PormGMySQL}, ::Int, ::Symbol) = true
 function _slot_fits_mode(pool::PormGSQLite, i::Int, mode::Symbol)
   (!pool.split_read_write || mode == :any) && return true
   mode == :write && return i == pool.writer_slot
@@ -733,7 +757,7 @@ already idle or over-lifetime may be retired on the very next sweep rather than 
 fresh grace window from the enable instant. (Pre-#127, each call rebuilt the state with fresh
 timestamps; the unified monitor state keeps the honest clocks instead.)
 """
-function enable_reaping!(pool::Union{PormGPostgres, PormGSQLite}; idle_timeout::Real = 0, max_lifetime::Real = 0)
+function enable_reaping!(pool::_SQLEngine; idle_timeout::Real = 0, max_lifetime::Real = 0)
   (idle_timeout <= 0 && max_lifetime <= 0) && return pool
   st = _monitor_state_for!(pool)
   st.config = ReapConfig(Float64(idle_timeout), Float64(max_lifetime))   # merge: leak config (if any) preserved
@@ -751,7 +775,7 @@ whose lease has exceeded `threshold` — pointing at a connection that was acqui
 (e.g. a `fetch_async` that was never awaited). Reuses the shared per-slot checkout timestamps
 (`PoolMonitorState.last_used`); no background task (the scan runs on the next acquire).
 """
-function enable_leak_detection!(pool::Union{PormGPostgres, PormGSQLite}; threshold::Real = 0)
+function enable_leak_detection!(pool::_SQLEngine; threshold::Real = 0)
   threshold <= 0 && return pool
   st = _monitor_state_for!(pool)
   st.leak_threshold = Float64(threshold)   # merge: reaping config (if any) preserved
@@ -875,7 +899,7 @@ section for a coherent snapshot (waiter vectors are only ever mutated under `poo
 `close_pool!(db::String)` — a teardown that tolerates a never-built pool — that overload throws an
 `ArgumentError` for a never-built pool: a zeroed snapshot would read as a healthy empty pool.
 """
-function pool_stats(pool::Union{PormGPostgres, PormGSQLite})
+function pool_stats(pool::_SQLEngine)
   in_use, available, size, waiting = Base.lock(pool.lock) do
     # Dict lookup under _POOL_WAITERS_LOCK (lock order pool.lock → _POOL_WAITERS_LOCK); the waiter
     # Vector itself is only ever mutated under pool.lock, which we hold — so counting it here is
@@ -945,8 +969,10 @@ close_pool!(pool::PostgresConnectionPool; drain_seconds::Real = _CLOSE_POOL_DRAI
   _close_pool_slots!(pool; drain_seconds)
 close_pool!(pool::SQLiteConnectionPool; drain_seconds::Real = _CLOSE_POOL_DRAIN_SECONDS) =
   _close_pool_slots!(pool; drain_seconds)
+close_pool!(pool::MySQLConnectionPool; drain_seconds::Real = _CLOSE_POOL_DRAIN_SECONDS) =
+  _close_pool_slots!(pool; drain_seconds)
 
-function _close_pool_slots!(pool::Union{PormGPostgres, PormGSQLite}; drain_seconds::Real)
+function _close_pool_slots!(pool::_SQLEngine; drain_seconds::Real)
   # 1. Bounded drain, OUTSIDE the lock — a borrower's `release_connection` needs it to come back.
   #    Skipped entirely at 0: `timedwait` would otherwise still burn one poll interval.
   if drain_seconds > 0 && _pool_in_use(pool) > 0
@@ -998,10 +1024,11 @@ end
 # than trip on its missing fields. Without this fallback, `__cleanup__` (which closes every
 # `config` entry) aborts with a `FieldError` the first time it reaches a leaked test mock (#147).
 # Accepts (and ignores) the `drain_seconds` kwarg so `__cleanup__` can pass it uniformly.
-close_pool!(::Union{PormGPostgres, PormGSQLite}; kwargs...) = nothing
+close_pool!(::_SQLEngine; kwargs...) = nothing
 
 """
     acquire_connection(pool::PormGPostgres; timeout_seconds=nothing, max_retries=300)
+    acquire_connection(pool::PormGMySQL; timeout_seconds=nothing, max_retries=300)
     acquire_connection(pool::PormGSQLite; timeout_seconds=nothing, max_retries=300, mode=:any)
 
 Lease a connection from the pool. **You own it until you give it back** — every
@@ -1052,7 +1079,9 @@ catchable and exported.
 See also [`release_connection`](@ref), `pool_stats`, and the
 [Advanced Configuration](@ref) guide for pool tuning and leak detection.
 """
-function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing, Real} = nothing, max_retries::Int = 300)
+function acquire_connection(pool::Union{PormGPostgres, PormGMySQL}; timeout_seconds::Union{Nothing, Real} = nothing, max_retries::Int = 300)
+  # PostgreSQL's and MySQL's slots are all alike, so one method serves both (#1130); the messages
+  # name the engine through `_backend_name`.
   start_time = time()
   # Default acquire timeout comes from the pool (connection.yml `pool_timeout`, #126); an explicit
   # per-call `timeout_seconds` still wins.
@@ -1095,7 +1124,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
         # FIFO and whatever remains of our deadline, and the scan re-parks inside the same locked
         # section as its no-capacity check, so no wakeup is lost.
         if pool.available[i] || conn !== expected
-          @debug "Handed-off PG slot changed before the waiter woke; retrying" slot=i
+          @debug "Handed-off $(_backend_name(pool)) slot changed before the waiter woke; retrying" slot=i
           return (:retry, nothing)
         end
         if conn !== nothing && backend_is_alive(pool, conn)
@@ -1124,7 +1153,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
           fast_fail = _on_connect_failure!(pool, e, last_connect_error)
           _handoff_or_free!(pool, i)                    # pass the slot on / free it
           fast_fail && return (:connect_failed, e)
-          @debug "Failed to materialize handed-off PG connection" slot=i cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
+          @debug "Failed to materialize handed-off $(_backend_name(pool)) connection" slot=i cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
           return (:retry, nothing)
         end
       end
@@ -1152,7 +1181,7 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
             return (:got, new_conn)
           catch e
             _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
-            @debug "Failed to create PG connection" slot=i cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
+            @debug "Failed to create $(_backend_name(pool)) connection" slot=i cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
             pool.available[i] = true
             continue
           end
@@ -1170,14 +1199,14 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
           _monitor_note_create!(pool, length(pool.connections))   # grow monitor vectors in lockstep (#125)
           new_size = length(pool.connections)
           if new_size == ceiling
-            @warn "PG pool reached its maximum size; raise pool_size to add capacity" max_size=new_size pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+            @warn "$(_backend_name(pool)) pool reached its maximum size; raise pool_size to add capacity" max_size=new_size pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
           else
-            @debug "PG pool expanded beyond initial size" current_size=new_size initial_size=pool.pool_size
+            @debug "$(_backend_name(pool)) pool expanded beyond initial size" current_size=new_size initial_size=pool.pool_size
           end
           return (:got, new_conn)
         catch e
           _on_connect_failure!(pool, e, last_connect_error) && return (:connect_failed, e)
-          @debug "Failed to expand PG pool" cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
+          @debug "Failed to expand $(_backend_name(pool)) pool" cause=_redacted_cause(e) connection_string=redact_secret(pool.connection_string)
         end
       end
 
@@ -1211,14 +1240,14 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
     elseif kind === :connect_failed
       # Permanent connect failure (bad password / missing role|db) with fast-fail on: don't wait the
       # full timeout — raise the truthful cause now (#72).
-      throw(PoolConnectError("PostgreSQL", outcome[2], redact_secret(pool.connection_string), attempts, time() - start_time))
+      throw(PoolConnectError(_backend_name(pool), outcome[2], redact_secret(pool.connection_string), attempts, time() - start_time))
     elseif kind === :timeout
-      err = _acquire_terminal_error(pool, "PostgreSQL", last_connect_error[], pool.pool_size, ceiling, attempts, time() - start_time)
+      err = _acquire_terminal_error(pool, _backend_name(pool), last_connect_error[], pool.pool_size, ceiling, attempts, time() - start_time)
       if err isa PoolTimeoutError
         if attempts >= max_retries
-          @warn "Exceeded maximum retry attempts ($max_retries) to acquire PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+          @warn "Exceeded maximum retry attempts ($max_retries) to acquire $(_backend_name(pool)) connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
         else
-          @warn "Timeout after $(to) seconds waiting for available PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+          @warn "Timeout after $(to) seconds waiting for available $(_backend_name(pool)) connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
         end
       end
       throw(err)
@@ -1231,9 +1260,9 @@ function acquire_connection(pool::PormGPostgres; timeout_seconds::Union{Nothing,
         close(timer)
       end
       if handed === _POOL_WAIT_TIMEOUT
-        err = _acquire_terminal_error(pool, "PostgreSQL", last_connect_error[], pool.pool_size, ceiling, attempts, time() - start_time)
+        err = _acquire_terminal_error(pool, _backend_name(pool), last_connect_error[], pool.pool_size, ceiling, attempts, time() - start_time)
         err isa PoolTimeoutError &&
-          @warn "Timeout after $(to) seconds waiting for available PG connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
+          @warn "Timeout after $(to) seconds waiting for available $(_backend_name(pool)) connection" pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
         throw(err)
       end
       owned = handed::Tuple{Int, Any}                    # loop back to materialize the handed slot
@@ -1437,7 +1466,7 @@ reused (#125).
 
 See also [`acquire_connection`](@ref).
 """
-function release_connection(pool::PormGPostgres, conn)
+function release_connection(pool::Union{PormGPostgres, PormGMySQL}, conn)
   retired = nothing
   released = Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
@@ -1454,10 +1483,10 @@ function release_connection(pool::PormGPostgres, conn)
     end
   end
   if retired !== nothing
-    try; Base.invokelatest(close, retired); catch e; @debug "Error closing retired PG connection" exception=e; end
+    try; Base.invokelatest(close, retired); catch e; @debug "Error closing retired $(_backend_name(pool)) connection" exception=e; end
   end
   released !== nothing && return released
-  @warn "PG Connection not found in the pool - it was replaced after a failure or the pool was closed; after a renewal, release the renewed handle (see release_connection)"
+  @warn "$(_backend_name(pool)) connection not found in the pool - it was replaced after a failure or the pool was closed; after a renewal, release the renewed handle (see release_connection)"
   return false
 end
 
@@ -1532,12 +1561,12 @@ end
 #
 # So the re-check makes the SLOT safe for both, and both callers hold the lease for the window;
 # leasing is what makes the HANDLE safe for the one caller that frees it.
-function reconnect_db(pool::PormGPostgres, conn)
+function reconnect_db(pool::Union{PormGPostgres, PormGMySQL}, conn)
   _run_before_connect!(pool)
 
   i = _slot_index_of(pool, conn)
   if i === nothing
-    @error "PG Connection not found in the pool for reconnection"
+    @error "$(_backend_name(pool)) connection not found in the pool for reconnection"
     return nothing
   end
 
@@ -1545,7 +1574,7 @@ function reconnect_db(pool::PormGPostgres, conn)
     # Reset in place, or recreate if the reset fails (handled in the extension).
     backend_renew_connection(pool, conn)
   catch e
-    @error "Failed to renew PG connection" slot=i cause=_redacted_cause(e)
+    @error "Failed to renew $(_backend_name(pool)) connection" slot=i cause=_redacted_cause(e)
     nothing
   end
   new_conn === nothing && return nothing
@@ -1554,7 +1583,7 @@ function reconnect_db(pool::PormGPostgres, conn)
   # is a no-op — but it still has to go through the re-check, or a renewal racing a discard would
   # resurrect a slot that was deliberately emptied.
   if !_swap_slot!(pool, i, conn, new_conn)
-    @debug "PG slot changed during renewal; discarding the freshly renewed connection"
+    @debug "$(_backend_name(pool)) slot changed during renewal; discarding the freshly renewed connection"
     new_conn === conn || _close_driver_handle!(pool, new_conn)
     return nothing
   end
@@ -1621,7 +1650,7 @@ ordinary failed-`ROLLBACK` case (#71), and it does.
 budget is deliberately long (see `_ABANDON_CLOSE_SECONDS`), because the cost of waiting is one
 parked task and the cost of closing early is a use-after-free.
 """
-function _close_driver_handle!(pool::Union{PormGPostgres, PormGSQLite}, conn;
+function _close_driver_handle!(pool::_SQLEngine, conn;
                                close_seconds::Real = _ABANDON_CLOSE_SECONDS)
   if pool isa PormGSQLite && _sqlite_outstanding(conn) > 0
     Threads.@spawn begin
@@ -1679,7 +1708,7 @@ driver is still on the connection — and closing there would free a SQLite hand
 may be inside `sqlite3_step` on. That caller takes the slot out of circulation now and closes the
 doomed handle later, once the driver has let go — again only if this discard found the slot.
 """
-function _discard_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn; close_handle::Bool = true)::Bool
+function _discard_connection!(pool::_SQLEngine, conn; close_handle::Bool = true)::Bool
   found = Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
       if pool.connections[i] === conn
@@ -1728,7 +1757,7 @@ handed the slot to (#124) — holds the lease, which shields the handle from bot
 as a claim would. The caller then leaves the slot entirely alone: renewing under a waiter would
 install a handle the waiter's identity re-check (#584) refuses, stranding the slot leased.
 """
-function _claim_idle_slot!(pool::Union{PormGPostgres, PormGSQLite}, conn)::Bool
+function _claim_idle_slot!(pool::_SQLEngine, conn)::Bool
   Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
       if pool.connections[i] === conn
@@ -1765,7 +1794,7 @@ reason as [`_reap_pool!`](@ref): a slot that was ALREADY available has no compat
 would have taken it. The next `acquire_connection` materializes a fresh connection through the
 empty-slot path.
 """
-function _sweep_stale_idle!(pool::Union{PormGPostgres, PormGSQLite}, keep)::Int
+function _sweep_stale_idle!(pool::_SQLEngine, keep)::Int
   stale = Any[]
   Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
@@ -1799,7 +1828,7 @@ a throw — the slot is discarded instead so the next borrower opens a fresh con
 Never throws: the transaction's original error must keep propagating through the caller's
 `finally`.
 """
-function _renew_or_discard_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn)
+function _renew_or_discard_connection!(pool::_SQLEngine, conn)
   new_conn = try
     reconnect_db(pool, conn)  # replaces the slot in place; does NOT flip `available`
   catch renew_error
@@ -1842,7 +1871,7 @@ have to see through a [`DatabaseError`](@ref) wrapper though: `finalize_transact
 is handed `rollback_error` values that already crossed a seam (`migrations/runner.jl`,
 `querybuilder/deletion.jl`), so `_driver_cause` is load-bearing here (#268).
 """
-_is_benign_rollback_error(pool::Union{PormGPostgres, PormGSQLite}, e) =
+_is_benign_rollback_error(pool::_SQLEngine, e) =
   pool isa PormGSQLite &&   # server-text-match-ok: SQLite only; it attaches no code here and never localizes
   occursin("no transaction is active", string(_driver_cause(_unwrap_async_exception(e))))
 
@@ -1868,7 +1897,7 @@ Ordered by severity, and the order is load-bearing:
 branch. Never throws — every branch is itself guarded, and callers run this while an original error
 is propagating.
 """
-function _finish_statement_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn, handle;
+function _finish_statement_connection!(pool::_SQLEngine, conn, handle;
                                        abandoned::Bool = false, rollback_failed::Bool = false)
   if abandoned
     # Detached: cancel, wait for the driver to let go, then renew — never touching the connection
@@ -1905,7 +1934,7 @@ returns to the slot; the suspended one is closed. Restoring the pragma with a st
 would be unsound: `PRAGMA foreign_keys` is silently ignored while a transaction is open, so a failed
 COMMIT *and* failed ROLLBACK would leave enforcement off with the restore reporting success.
 """
-function finalize_transaction_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn;
+function finalize_transaction_connection!(pool::_SQLEngine, conn;
                                           rollback_error = nothing, renew::Bool = false)
   if renew || (rollback_error !== nothing && !_is_benign_rollback_error(pool, rollback_error))
     _renew_or_discard_connection!(pool, conn)
@@ -2082,7 +2111,7 @@ Use `await_result(task)` to get the result and properly release the connection.
 
 # Fields
 - `async_result`: The underlying async handle (the LibPQ extension's wrapper around a `LibPQ.AsyncResult`, the Postgres.jl extension's handle, or a `Task` for SQLite)
-- `pool::Union{PormGPostgres, PormGSQLite}`: The connection pool to release the connection to
+- `pool::_SQLEngine`: The connection pool to release the connection to
 - `conn`: The driver connection being used for this query
 - `completed::Bool`: Whether the async result has been awaited
 - `result_cache::Union{Nothing, Any}`: Cached result for multiple `await_result` calls
@@ -2099,7 +2128,7 @@ Use `await_result(task)` to get the result and properly release the connection.
 """
 mutable struct FetchTask
   async_result::Any  # the PG extension's handle, or Task (SQLite) — `fetch` and `wait` are all core uses
-  pool::Union{PormGPostgres, PormGSQLite}
+  pool::_SQLEngine
   conn::Any
   completed::Bool
   result_cache::Union{Nothing, Any}
@@ -2107,12 +2136,12 @@ mutable struct FetchTask
   abandoned::Bool       # Await cut short by a cancellation — connection is NOT returnable as-is (#315)
   borrowed::Bool        # The caller passed `conn` in: it is theirs, never released here (#970)
 
-  FetchTask(async_result, pool::Union{PormGPostgres, PormGSQLite}, conn, in_transaction::Bool;
+  FetchTask(async_result, pool::_SQLEngine, conn, in_transaction::Bool;
             borrowed::Bool = false) =
     new(async_result, pool, conn, false, nothing, in_transaction, false, borrowed)
 
   # Legacy constructor (defaults to not in transaction)
-  FetchTask(async_result, pool::Union{PormGPostgres, PormGSQLite}, conn) =
+  FetchTask(async_result, pool::_SQLEngine, conn) =
     new(async_result, pool, conn, false, nothing, false, false, false)
 end
 
@@ -2213,7 +2242,7 @@ This is the same shape Go's `pgxpool` uses (`Conn.Release` destroys a connection
 not idle, and does it off the caller's goroutine) and psycopg's pool (state is verified on return;
 a broken connection is discarded and replaced).
 """
-function _recover_abandoned_connection!(pool::Union{PormGPostgres, PormGSQLite}, conn, handle;
+function _recover_abandoned_connection!(pool::_SQLEngine, conn, handle;
                                         settle_seconds::Real = _ABANDON_SETTLE_SECONDS,
                                         close_seconds::Real = _ABANDON_CLOSE_SECONDS,
                                         force_renew::Bool = false)
@@ -2405,7 +2434,7 @@ users = await_result(task1)
 orders = await_result(task2)
 ```
 """
-function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
+function fetch_async(connection::_SQLEngine, sql::String;
   conn = nothing,
   params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing,
   ignore_tx::Bool = false)
@@ -2460,10 +2489,10 @@ function fetch_async(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
 end
 fetch_async(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 fetch_async(settings::PormGSettings, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
-fetch_async(settings::Union{PormGPostgres, PormGSQLite}, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch_async(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch_async(settings::_SQLEngine, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch_async(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 
 """
-    fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String; params=nothing, ignore_tx=false) -> Tables.rowtable
+    fetch(connection::_SQLEngine, sql::String; params=nothing, ignore_tx=false) -> Tables.rowtable
 
 Execute a database query synchronously (blocking).
 Internally uses async execution but immediately awaits the result.
@@ -2477,7 +2506,7 @@ server reported the backend gone with an error code, or the driver refused befor
 other drop raises [`OperationalError`](@ref), because the statement may already have run (#1042).
 Wrap a read you know is safe to run twice in [`with_read_retry`](@ref) to retry it.
 """
-function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
+function fetch(connection::_SQLEngine, sql::String;
   conn = nothing,
   params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing,
   ignore_tx::Bool = false)
@@ -2575,7 +2604,7 @@ function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
 end
 fetch(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 fetch(settings::PormGSettings, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
-fetch(settings::Union{PormGPostgres, PormGSQLite}, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch(settings::_SQLEngine, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 
 """
     fetch_copy(connection::PormGPostgres, sql::String, data_itr)
@@ -2628,7 +2657,7 @@ call acquired is released only when it throws before returning it — see
 
 For transactions, you typically want to keep the connection for multiple queries.
 """
-function with_transaction_async(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
+function with_transaction_async(pool::_SQLEngine, sql::String;
   conn = nothing,
   params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing)
 
@@ -2700,7 +2729,7 @@ driver to let go, then renew — which runs detached and returns the slot only o
 See also [`acquire_connection`](@ref), `with_transaction_async`, and the
 [Transactions and `run_in_transaction`](@ref) guide.
 """
-function with_transaction(pool::Union{PormGPostgres, PormGSQLite}, sql::String;
+function with_transaction(pool::_SQLEngine, sql::String;
   conn = nothing,
   release_conn::Bool = false,
   params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing)
@@ -2826,7 +2855,7 @@ write transaction) may re-enter without self-deadlock.
     opening its own).
 """
 with_sqlite_write_lock(f::Function, pool::PormGSQLite) = Base.lock(f, pool.write_lock)
-with_sqlite_write_lock(f::Function, pool::PormGPostgres) = f()
+with_sqlite_write_lock(f::Function, pool::Union{PormGPostgres, PormGMySQL}) = f()
 with_sqlite_write_lock(f::Function, settings::PormGSettings) = with_sqlite_write_lock(f, settings.connections)
 
 # #1129 item 2 — how a write transaction opens, per engine, with no fallback: a new backend gets a
@@ -2838,18 +2867,25 @@ _begin_write_sql(::PormGPostgres) = "BEGIN;"
 _begin_write_sql(::PormGSQLite) = "BEGIN IMMEDIATE TRANSACTION;"
 _after_begin_sql(::PormGPostgres) = String[]
 _after_begin_sql(::PormGSQLite) = ["PRAGMA defer_foreign_keys = ON;"]
+# MySQL (#1130): `START TRANSACTION` is the standard spelling. InnoDB has no deferrable foreign keys,
+# so nothing follows it; what the deferred-foreign-keys promise means on MySQL is #1272 (phase 3).
+_begin_write_sql(::PormGMySQL) = "START TRANSACTION;"
+_after_begin_sql(::PormGMySQL) = String[]
 
 # #1129 item 2 — which driver path a statement executes through, and how a connection is leased for
 # it, per engine and with no fallback. SQLite's pool keeps separate read and write slots
 # (`_slot_fits_mode`), so a lease says which it needs; PostgreSQL's slots are all alike.
 _execute_async(pool::PormGPostgres, conn, sql, params) = backend_execute_async(pool, conn, sql, params)
 _execute_async(pool::PormGSQLite, conn, sql, params) = sqlite_execute_async(pool, conn, String(sql), params)
+_execute_async(pool::PormGMySQL, conn, sql, params) = backend_execute_async(pool, conn, sql, params)
 _acquire_in_mode(pool::PormGPostgres, ::Symbol; kwargs...) = acquire_connection(pool; kwargs...)
 _acquire_in_mode(pool::PormGSQLite, mode::Symbol; kwargs...) = acquire_connection(pool; mode = mode, kwargs...)
+_acquire_in_mode(pool::PormGMySQL, ::Symbol; kwargs...) = acquire_connection(pool; kwargs...)
 # The lease for one statement: on SQLite a read takes a read slot, anything else the write slot.
 _acquire_for_statement(pool::PormGPostgres, ::AbstractString) = acquire_connection(pool)
 _acquire_for_statement(pool::PormGSQLite, sql::AbstractString) =
   acquire_connection(pool; mode = _sqlite_is_read_query(String(sql)) ? :read : :write)
+_acquire_for_statement(pool::PormGMySQL, ::AbstractString) = acquire_connection(pool)
 
 # Read `PRAGMA foreign_keys` back off a specific connection. Returns the *actual* session state, not
 # what was requested — the distinction matters because SQLite silently ignores `PRAGMA foreign_keys`
@@ -3082,7 +3118,7 @@ end
 Every column above is one the F1 models declare `null = false`; omitting any of them raises at
 `create()` before the statement is built.
 """
-function run_in_transaction(f::Function, pool::Union{PormGPostgres, PormGSQLite})
+function run_in_transaction(f::Function, pool::_SQLEngine)
   # Reentrancy (#26): a nested run_in_transaction / atomic on the SAME pool becomes a
   # SAVEPOINT on the already-pinned connection instead of a second independent BEGIN.
   # A nested call targeting a DIFFERENT pool (e.g. a second database) still opens its own
@@ -3110,7 +3146,7 @@ _savepoint_name(depth::Integer) = "pormg_sp_$(depth)"
 
 # Resolve the registered PormGSettings for a pool so the reentrant savepoint path (which needs
 # `settings` for `with_savepoint`/`fetch`) can route through the pinned connection.
-function _settings_for_pool(pool::Union{PormGPostgres, PormGSQLite})::PormGSettings
+function _settings_for_pool(pool::_SQLEngine)::PormGSettings
   key = connection_key_for_pool(pool)
   key === nothing && throw(InvalidConfigurationError("Cannot resolve connection settings for the active transaction pool"))
   return get_settings(key)
@@ -3130,7 +3166,7 @@ function _nested_savepoint(f::Function, settings::PormGSettings)
   end
 end
 
-function _run_in_transaction_impl(f::Function, pool::Union{PormGPostgres, PormGSQLite})
+function _run_in_transaction_impl(f::Function, pool::_SQLEngine)
   conn = _acquire_in_mode(pool, :write)
   tx_started = false
   local rollback_error = nothing
@@ -3284,7 +3320,7 @@ Pass `durable=true` to require this block be the outermost transaction on its da
 if a transaction is already active on the **same** database (mirrors Django's `atomic(durable=True)`,
 which is checked per connection). A transaction open on a different database does not count.
 """
-function atomic(f::Function, pool::Union{PormGPostgres, PormGSQLite}; durable::Bool=false)
+function atomic(f::Function, pool::_SQLEngine; durable::Bool=false)
   # Same pool only (#831), like `_refuse_nested_without_foreign_keys` (#686): a transaction on
   # another database is a separate transaction, and this block still opens the outermost one here.
   # Enclosing blocks count, so a block on another database in between does not hide this pool's.

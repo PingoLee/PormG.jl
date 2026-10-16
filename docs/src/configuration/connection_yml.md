@@ -18,7 +18,7 @@ Or you can manually create the `connection.yml` file and populate it using the s
 
 ## Adapters & Environments
 
-Each top-level block (`dev`, `prod`, `test`, …) describes one environment, and PormG loads whichever one is active. The active environment is chosen by the `env=` argument to `load(...)`, the `PORMG_ENV` variable, or — in an interactive session only — an optional top-level `default_env:` key; see [Multi-environment Routing](#Multi-environment-Routing) below. The supported adapters are `PostgreSQL` and `SQLite`; any other is refused when the file is loaded. MySQL is planned ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)).
+Each top-level block (`dev`, `prod`, `test`, …) describes one environment, and PormG loads whichever one is active. The active environment is chosen by the `env=` argument to `load(...)`, the `PORMG_ENV` variable, or — in an interactive session only — an optional top-level `default_env:` key; see [Multi-environment Routing](#Multi-environment-Routing) below. The supported adapters are `PostgreSQL`, `SQLite` and `MySQL` (in progress, see [Using MySQL](@ref)); any other is refused when the file is loaded.
 
 ### Using PostgreSQL
 
@@ -97,6 +97,31 @@ PormG does not leave you to discover that on your own:
 | `:memory:` with `sqlite_split_read_write: true` | **`InvalidConfigurationError` on load** |
 
 The last one is refused rather than warned about because it cannot work at all: split mode sends writes to one fixed connection and reads to the others, so with a per-connection database every read would look in an empty one. Use the shared-cache URI, or `pool_size: 1`.
+
+### Using MySQL
+
+MySQL is in progress ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)). A MySQL pool connects, runs raw SQL and transactions, and takes advisory locks; model queries and migrations are not available on it yet ([Backend Capabilities](../backends.md)). It needs MySQL **8.4 or newer**, and MySQL.jl 2.0 loaded with `using MySQL`.
+
+```yaml
+default_env: dev
+
+dev:
+  adapter: MySQL
+  host: 127.0.0.1
+  port: 3306
+  username: f1_app
+  password: "your-password"
+  database: f1
+  sslmode: required          # disabled, preferred (the default), required, verify_ca, verify_identity
+  config:
+    change_db: true
+    change_data: true
+    time_zone: 'UTC'
+```
+
+A MySQL connection is configured by these keys, not by a URL. `connect_timeout`, `sslrootcert`, `sslcert` and `sslkey` are read as on PostgreSQL, and `sslmode` takes MySQL's modes listed above. The PostgreSQL-only keys `url`, `hostaddr`, `passfile`, `client_encoding`, `postgres_driver` and `extensions` raise `InvalidConfigurationError` instead of being dropped. For the same reason, `register_connection` does not take `adapter = "MySQL"` yet.
+
+The server's default account plugin, `caching_sha2_password`, sends the password in full only over TLS, so with `sslmode: disabled` MySQL.jl refuses to authenticate unless the server already has the account's credentials cached. Keep TLS on.
 
 ## Environment-block Keys
 

@@ -43,10 +43,16 @@ abstract type PormGSettings <: PormGAbstractType end
 
 The backend/dialect marker — the dispatch key for SQL rendering and driver selection.
 
-Its two subtypes, `PormGPostgres` and `PormGSQLite`, are what every dialect method dispatches
-on, so a function that renders SQL differently per backend is written as a pair of methods on
-them rather than as a runtime branch. The values you actually hold are the concrete connection
-pools: `PostgresConnectionPool <: PormGPostgres` and `SQLiteConnectionPool <: PormGSQLite`.
+Its subtypes, `PormGPostgres`, `PormGSQLite` and `PormGMySQL`, are what every dialect method
+dispatches on, so a function that renders SQL differently per backend is written as one method per
+engine rather than as a runtime branch. The values you actually hold are the concrete connection
+pools: `PostgresConnectionPool <: PormGPostgres`, `SQLiteConnectionPool <: PormGSQLite` and
+`MySQLConnectionPool <: PormGMySQL`.
+
+`PormGMySQL` is in progress (#1130): its pool connects, runs statements and transactions and takes
+advisory locks, but no query is rendered for it yet, so a fluent query on a MySQL pool fails before
+any SQL is sent, at the first part of the query builder MySQL has no method for (a `MethodError`
+naming it, or a `TypeError` where a signature lists the engines).
 
 Deliberately **not** `<: PormGSettings`: that is the configuration/`Settings` type, and a pool
 carries none of its fields (#186).
@@ -57,6 +63,12 @@ Adding a backend means defining `PormG.backend_*` methods in a package extension
 abstract type PormGBackend <: PormGAbstractType end
 abstract type PormGPostgres <: PormGBackend end
 abstract type PormGSQLite <: PormGBackend end
+abstract type PormGMySQL <: PormGBackend end    # #1130, in progress: MySQL 8.4+
+# Every engine PormG ships, as one name for a signature that accepts any of them (#1130). Written
+# where a method is the same for every engine — the pool's funnels, the transaction context — so a
+# backend added later widens one line rather than every `Union{PormGPostgres, PormGSQLite}` it
+# reaches. A per-engine DECISION is still one method per engine (`engine_facts.jl`), never this.
+const _SQLEngine = Union{PormGPostgres, PormGSQLite, PormGMySQL}
 abstract type AbstractPormGParam <: PormGAbstractType end  # Base type for all parameterized queries
 abstract type PormGPostgresParam <: AbstractPormGParam end  # PostgreSQL numbered params ($1, $2...)
 abstract type PormGSQLiteParam <: AbstractPormGParam end    # SQLite positional params with contextual buckets
@@ -462,7 +474,7 @@ include("column_ir.jl")
 #═══════════════════════════════════════════════════════════════════════════════
 
 # Type hierarchy
-export PormGAbstractType, PormGSettings, PormGBackend, PormGPostgres, PormGSQLite,
+export PormGAbstractType, PormGSettings, PormGBackend, PormGPostgres, PormGSQLite, PormGMySQL,
        AbstractPormGParam, PormGPostgresParam, PormGSQLiteParam, PormGBytes, PormGArrayLiteral,
        SQLObject, SQLObjectHandler, SQLTableAlias, SQLInstruction,
        SQLType, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeFunction, SQLTypeOper,
@@ -514,7 +526,7 @@ export LIKE_CONTAINS_OPERATORS, LIKE_PREFIX_OPERATORS, LIKE_SUFFIX_OPERATORS,
 
 # Type maps and introspection ignore lists
 export sqlite_type_map_reverse, postgres_type_map_reverse,
-       date_format_map, sqlite_ignore_schema, postgres_ignore_table
+       date_format_map, sqlite_ignore_schema, postgres_ignore_table, mysql_ignore_table
 
 # on_delete handlers
 export CASCADE, RESTRICT, PROTECT, SET_NULL, SET_DEFAULT, DO_NOTHING

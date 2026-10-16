@@ -26,23 +26,25 @@ using Test
 using PormG
 
 # `x isa PormGSQLite`, `x isa Union{PormGPostgres, …}`, `isa(x, PormGSQLite)`, and an adapter string compare.
-const _EB_PATTERN = r"isa\s+(PormG\.)?PormG(Postgres|SQLite)\b|isa\s+Union\{[^}]*PormG(Postgres|SQLite)|isa\([^,()]+,\s*(PormG\.)?PormG(Postgres|SQLite)\b|adapter == \"(SQLite|PostgreSQL)\""
+# MySQL (#1130) counts like the other two: a branch naming it is one more engine decided by name.
+const _EB_PATTERN = r"isa\s+(PormG\.)?PormG(Postgres|SQLite|MySQL)\b|isa\s+Union\{[^}]*PormG(Postgres|SQLite|MySQL)|isa\([^,()]+,\s*(PormG\.)?PormG(Postgres|SQLite|MySQL)\b|adapter == \"(SQLite|PostgreSQL|MySQL)\""
 
 const _EB_REVIEWED = Dict(
   # #1129 item 2 (PR B): ConnectionPool, Configuration and migrations ask engine facts too
   # (`migrations/engine_facts.jl`, and the lease/execute/transaction helpers in ConnectionPool.jl).
   # What remains:
-  #   - Configuration: `_builtin_ignores_for_adapter` and `register_connection` name both adapters
-  #     and refuse any other (two each); the `url:` / `postgres_driver:` warnings are SQLite-only
-  #     advice that fires only for `adapter: SQLite`; `_peek_driver` (#1232) names both adapters to
-  #     pick the driver extension `load` checks, and leaves any other adapter to the reader that
-  #     refuses it (two);
+  #   - Configuration: `_builtin_ignores_for_adapter` names each adapter and refuses any other (three);
+  #     `register_connection` names PostgreSQL and SQLite and refuses MySQL (#1130: no connection URL
+  #     yet) and any other (three); the `url:` / `postgres_driver:` warnings are SQLite-only advice
+  #     that fires only for `adapter: SQLite`; `_peek_driver` (#1232) names each adapter to pick the
+  #     driver extension `load` checks, and leaves any other adapter to the reader that refuses it
+  #     (three);
   #   - ConnectionPool: waiting for the SQLite worker before closing a handle, and SQLite's benign
   #     "no transaction is active" rollback — quirks whose other arm is the engine-neutral path;
   #   - planner: SQLite's reserved `sqlite_` index prefix, and its three `ADD COLUMN` limits, whose
   #     other arm is the plain `ADD COLUMN` every engine has;
   #   - importers: the SQLite-only importer's capability refusal; tools: the setup wizard's choice.
-  "src/Configuration.jl" => 8,
+  "src/Configuration.jl" => 11,
   "src/ConnectionPool.jl" => 2,
   "src/migrations/importers.jl" => 1,
   "src/migrations/planner.jl" => 4,
@@ -108,7 +110,7 @@ end
 # spelled `local x = …` / `x::Bool = …`, slips past, and a `'?'` later on a guard's line is a false
 # positive to reword. A two-way `if … else … end` is the reviewed-count testset's job above.
 # ─────────────────────────────────────────────────────────────────────────────
-const _EB_TERNARY = r"isa\s+(PormG\.)?PormG(Postgres|SQLite)\b[^\n?]*\?|isa\([^,()]+,\s*(PormG\.)?PormG(Postgres|SQLite)\)[^\n?]*\?|^\s*\w+\s*=\s*[\w.]+\s+isa\s+(PormG\.)?PormG(Postgres|SQLite)\s*(#.*)?$"
+const _EB_TERNARY = r"isa\s+(PormG\.)?PormG(Postgres|SQLite|MySQL)\b[^\n?]*\?|isa\([^,()]+,\s*(PormG\.)?PormG(Postgres|SQLite|MySQL)\)[^\n?]*\?|^\s*\w+\s*=\s*[\w.]+\s+isa\s+(PormG\.)?PormG(Postgres|SQLite|MySQL)\s*(#.*)?$"
 @testset "#1129: no two-way engine ternary in src/ or ext/" begin
   root = pkgdir(PormG)
   found = String[]
@@ -152,7 +154,8 @@ const _EB_INTEGRATION_PATTERN = Regex(_EB_PATTERN.pattern *
 const _EB_INTEGRATION_REVIEWED = Dict(
   # Each test database folder ships its own models file and `@import_models` takes a literal path,
   # so the loader names each folder (a folder, not an engine) and errors on any other.
-  "test/integration/common_setup.jl" => 2,
+  # Three folders: db_2 (PostgreSQL), db_sl (SQLite), db_my (MySQL, #1130).
+  "test/integration/common_setup.jl" => 3,
   # Not in runtests.jl: a run against another folder is a usage error it refuses, not a skip.
   "test/integration/test_allocate_primary_keys_sqlite.jl" => 1,
 )

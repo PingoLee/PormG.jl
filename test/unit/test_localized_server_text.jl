@@ -135,6 +135,9 @@ end
   @test !ran
   @test pool.available[1] === true
   @test pool.renewals[] == 0
+  # The wait threw, and the `lock_timeout` read before it is still what the `finally` restores (#1130
+  # moved the save into `_block_lock!`, which hands it back through a `Ref` for exactly this case).
+  @test pool.sqls[end] == "SET lock_timeout = '0'"
 end
 
 @testset "#1010: an abandoned await is never read as a timeout" begin

@@ -35,6 +35,7 @@ referenced it.
 | `src/column_ir.jl` | Layer 1 (included from `Kernel`): the canonical column IR's **nouns** — `ColumnSpec`, `ColumnDelta`, `CanonicalType`, `ForeignKeyRef`, `COLUMN_DELTA_SLOTS` and the diff over them. Here rather than beside its compiler because `Dialect.alter_field` renders an ALTER from a `ColumnDelta` (#507 phase 2) and `Dialect` is include step 10 while `Migrations` is step 11 — the #239 shape exactly. **Kernel holds the nouns; the submodules keep the verbs**, so the compiler stays at layer 3 |
 | `src/capabilities.jl` | Layer 1 (included from `Kernel`): the **backend capability table** (#1129) — which optional features each backend has (`_supports(conn, :feature)`, rows on the abstract backend types, never in a driver extension) and the one refusal for a feature a backend lacks (`_capability_error`), which names the feature, the backend at hand and the backends that have it. PormG refuses a missing feature; it never emulates one. A row can carry the server version a backend has the feature from (`_feature_since`, #1163), and every server-version gate reads it, a refusal or an exact fallback alike; `test_capability_table.jl` also fails on a version comparison written outside the table. Also `_engine_key` (#1129 item 2), an engine fact here because Dialect and Migrations both use it; the query builder's facts are in `src/querybuilder/engine_facts.jl`. `docs/src/backends.md` is the table's page, and `test/unit/test_capability_table.jl` fails when the two disagree or when a `BackendCapabilityError` is built by hand outside its reviewed list. `test/unit/test_engine_branches.jl` holds the reviewed count of `isa PormGPostgres`/`isa PormGSQLite` branches, each a default a third backend (#1130) would inherit |
 | `src/Backend.jl`, `ext/PormGLibPQExt.jl`, `ext/PormGPostgresExt.jl`, `ext/PormGSQLiteExt.jl` | Layer 2: backend interface: `backend_*` generics + friendly fallbacks; driver bodies live in the weakdep extensions (`LibPQ`/`Postgres`/`SQLite`). Core never names a concrete driver type; a PostgreSQL pool names its driver (`PostgresConnectionPool{D}`, #785), so the two PostgreSQL extensions coexist |
+| `ext/PormGMySQLExt.jl` | Layer 2: the MySQL driver extension (MySQL.jl 2.0; #1130, in progress) for `MySQLConnectionPool`. Phase 1: connect (the 8.4 floor, a UTC session under 8.4's `sql_mode`), statements, error classification by MySQL's error number, `KILL QUERY` cancellation. The pool carries a conninfo built by `Configuration._mysql_conninfo`, so `redact_secret` masks it like a PostgreSQL DSN. No query renders for MySQL yet: the engine facts it has not decided are `MethodError`s, and `test/unit/test_engine_facts.jl` lists the ones it has |
 | `src/Generator.jl` | Model file generation (`generate_models_from_db`): module envelope, `import` lines, and sentinel imports for every generated model file |
 | `src/Configuration.jl` | Config, `DB_PATH`, `PORMG_ENV`, transactions |
 | `src/ConnectionPool.jl` | `fetch`, pool lock, transaction context (driver-agnostic; untyped connection storage) |
@@ -55,7 +56,7 @@ referenced it.
 | `src/display.jl` | Layer 4: every `Base.show` for a model-bearing type (#534). One file because the three rules are shared and break one method at a time: a display never throws, never reaches `get_settings`, and reads slots with `getfield` (`Model_Type`/`ObjectHandler`/`PormGRow` all overload `getproperty`). Julia's `show_default` walks slots with the **2-arg** `show`, and the model graph is cyclic (`fields` → `sForeignKey.to` → `Model_Type` → `related_objects` → …), so before this every handle serialized the whole schema — 1.6 MB for one `PormGRow`. That is also why it is cheap: a 2-arg method on `Model_Type` and on `PormGField` bounds every container holding one. `test/unit/test_repl_display.jl` asserts a **size ceiling**, not an appearance — the defect is quantitative |
 | `src/json_lower.jl` | Layer 4: every `StructUtils.lower` for a model-bearing type (#643) — `display.jl`'s problem one hop over, serialization instead of display, and one file for the same reason: the rules are shared and break one method at a time. Every lowered value is a **leaf** (no PormG type inside it), which is what removes the *edge* the path explosion needs rather than shrinking the output; and the content is model/field-type/relation names only — never a `default=`, never rendered SQL, never the `connection`. Deliberately **not** `sprint(show, x)`: `show(::PormGField)` renders the constructor call the user typed, so it would put `repr`-escaped, 40-column-truncated user data into a wire format. The `InstructionObject` arm is a **credential** fix, not a size one — that type holds a live `connection`, and the reflected document contained `password`. `PormGRow`'s hook stays in `src/querybuilder/execution_read.jl` beside `_json_row`: it shapes data, this bounds the schema. `test/unit/test_json_serialization.jl` asserts **exact marker documents** plus a ceiling — the small cases (an unfixed `sCharField` is 244 chars) are invisible to a ceiling alone |
 | `src/precompile.jl` | Last in the include chain: the `PrecompileTools` workload, built on mock connections so it needs no database. Not a lever for test-suite speed (#819) |
-| `test/integration/` | DB integration tests (`db_2` = PostgreSQL, `db_sl` = SQLite via `PORMG_DB`) |
+| `test/integration/` | DB integration tests (`db_2` = PostgreSQL, `db_sl` = SQLite, `db_my` = MySQL via `PORMG_DB`; MySQL runs `test_mysql_backend.jl` only until #1130's later phases) |
 | `docs/src/` | User documentation |
 | `upgrading/` | The change log `upgrade_guide` reads — **one file per breaking/behavior entry**, `YYYY-MM-DD-<slug>.md`. Every `.md` here is an entry; nothing else belongs in it, and `UPGRADING.md` beside it is the authoring contract, not a log |
 
@@ -93,20 +94,31 @@ that is a rescue for a wrong invocation, not a spelling to use or document —
 julia --project=test/integration -e 'using Pkg; Pkg.instantiate()'
 ```
 
-**Threads per engine.** `db_2` (PostgreSQL) under `-t auto`; `db_sl` (SQLite) **always `-t 1`** —
-SQLite does not tolerate `-t auto` (see `test/integration/common_setup.jl`). Julia's one-thread
-default hides an omitted `-t 1` until `JULIA_NUM_THREADS` is set, so write it explicitly every time:
+**Threads per engine.** `db_2` (PostgreSQL) and `db_my` (MySQL) under `-t auto`; `db_sl` (SQLite)
+**always `-t 1`** — SQLite does not tolerate `-t auto` (see `test/integration/common_setup.jl`).
+Julia's one-thread default hides an omitted `-t 1` until `JULIA_NUM_THREADS` is set, so write it
+explicitly every time:
 
 ```
 PORMG_DB=db_sl julia -t 1 --project=test/integration test/integration/runtests.jl
 ```
 
+**MySQL (#1130, in progress).** `db_my` points at a local MySQL 8.4 — a Docker `mysql:8.4` container
+is enough — through its own gitignored `test/integration/db_my/connection.yml` (`adapter: MySQL`;
+see `docs/src/configuration/connection_yml.md`). Until the later phases land, the full suite refuses
+`db_my`, and the one file that runs there is:
+
+```
+PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_backend.jl
+```
+
 **A single integration file is a valid target.** Most `test/integration/test_*.jl` open with
 `if !isdefined(Main, :PormG) include("common_setup.jl") end`, so naming one file runs it against the
 already-seeded database and skips the DDL bootstrap and fixture reseed `runtests.jl` repeats every
-time. Concurrent runs against `db_2` queue on a PostgreSQL advisory lock taken in `common_setup.jl`
-(`PORMG_TEST_LOCK_WAIT=<secs>` bounds the wait, default 900; `PORMG_TEST_LOCK=0` opts out); SQLite is
-exempt because `f1.sqlite` is per checkout.
+time. Concurrent runs against `db_2` queue on a PostgreSQL advisory lock taken in `common_setup.jl`,
+and runs against `db_my` on a MySQL `GET_LOCK` taken there too (`PORMG_TEST_LOCK_WAIT=<secs>` bounds
+the wait, default 900; `PORMG_TEST_LOCK=0` opts out); SQLite is exempt because `f1.sqlite` is per
+checkout.
 
 **Compat floors.** CI's `floor-resolve` job resolves every `[compat]` range at its minimum (#574).
 `test/unit/test_compat_guards.jl` records why some floors are load-bearing and must not be raised;

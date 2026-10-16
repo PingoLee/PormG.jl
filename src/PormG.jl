@@ -49,6 +49,7 @@ using .Kernel
 # submodules or pinned by tests (e.g. `PormG._emsg`, `PormG._EXTRA_IGNORE_TABLES`, `PormG._suggest_name`).
 import .Kernel: _emsg, _EXTRA_IGNORE_TABLES, _levenshtein, _suggest_name, with_location
 # #1129: the backend capability table, refused through by every submodule that meets a feature.
+import .Kernel: _SQLEngine  # #1130: every engine, for a signature that is the same on each
 import .Kernel: _supports, _require_feature, _capability_error, _backend_name, _engine_key, _BACKEND_FEATURES, _BACKENDS,
                _feature_at, _feature_since, _feature_description, _server_version, _version_text
 # Models-folder identity (#550) — shared by `Configuration._resolve_loaded_key` and

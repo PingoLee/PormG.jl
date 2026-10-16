@@ -936,7 +936,7 @@ PormG's type hierarchy provides the foundation for the query builder and model s
 | :--- | :--- |
 | `PormGAbstractType` | Base abstract type for all PormG types. |
 | `PormGSettings` | The connection-settings/config type (`Configuration.Settings` is a subtype). *Renamed from `SQLConn`.* |
-| `PormGBackend` | Base for the database backend/dialect markers (subtypes: `PormGPostgres`, `PormGSQLite`), the dispatch key for SQL rendering and driver selection. |
+| `PormGBackend` | Base for the database backend/dialect markers (subtypes: `PormGPostgres`, `PormGSQLite`, `PormGMySQL`; MySQL is in progress, #1130), the dispatch key for SQL rendering and driver selection. |
 | `SQLObject` | Base for objects that can be stored in the database. |
 | `SQLObjectHandler` | Handles operations on SQL objects (the query builder). |
 | `SQLTableAlias` | Manages table aliases in SQL queries. |

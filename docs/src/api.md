@@ -1139,7 +1139,8 @@ plus `PormG.ConnectionPool.with_transaction` for hand-rolled lifecycles
 ### Connection pool
 `pool_stats`, `PoolTimeoutError`, `PoolConnectError` — manual checkout via
 `PormG.ConnectionPool.acquire_connection` / `release_connection` (pair them in a `finally`;
-on SQLite a write needs `mode = :write`)
+on SQLite a write needs `mode = :write`) — and `with_read_retry`, which runs a read again after a
+dropped connection when you vouch it is safe to repeat
 
 ### Utilities & lifecycle
 `upgrade_guide`, `register_ignore_tables!`, `@import_models`, `@models_module`, `@pormg_debug`

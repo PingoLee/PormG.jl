@@ -36,6 +36,7 @@ import PormG: postgres_driver, _PG_DRIVER_PACKAGES
 
 export fetch, fetch_async, await_result, FetchTask, fetch_copy
 export with_transaction, with_transaction_async, run_in_transaction, atomic, with_savepoint
+export with_read_retry
 # #276. Exported HERE as well as from PormG: `src/PormG.jl` reaches this module via a bare
 # `using .ConnectionPool`, which imports only exported names — so a top-level `export` of a name this
 # module keeps to itself produces a public-but-undefined binding (Aqua's undefined_exports).
@@ -2474,6 +2475,7 @@ Without `conn` and outside a transaction, a dropped connection renews the failed
 retires the pool's idle ones. The statement is retried once only when it provably never ran: the
 server reported the backend gone with an error code, or the driver refused before sending it. Any
 other drop raises [`OperationalError`](@ref), because the statement may already have run (#1042).
+Wrap a read you know is safe to run twice in [`with_read_retry`](@ref) to retry it.
 """
 function fetch(connection::Union{PormGPostgres, PormGSQLite}, sql::String;
   conn = nothing,
@@ -3297,5 +3299,67 @@ function atomic(f::Function, pool::Union{PormGPostgres, PormGSQLite}; durable::B
 end
 atomic(f::Function, db::String; durable::Bool=false) = atomic(f, get_settings(db).connections; durable=durable)
 atomic(f::Function, settings::PormGSettings; durable::Bool=false) = atomic(f, settings.connections; durable=durable)
+
+"""
+    with_read_retry(f::Function; attempts::Integer = 1, backoff::Real = 0) -> result
+
+Run `f()` and, when it raises [`OperationalError`](@ref), run it again — at most `attempts` more
+times, sleeping `backoff` seconds before each retry. With the default `attempts = 1`, `f` runs at
+most twice. Each retry is logged as a `@warn` carrying the error, the retry number and `attempts`.
+
+```julia
+rows = with_read_retry() do
+  M.Result.objects.filter("raceid" => 1120).list()
+end
+```
+
+**You vouch that `f` is safe to run twice.** PormG does not retry a statement after a connection
+drops mid-flight, because the statement may already have run (#1042), and it does not try to tell a
+safe statement from an unsafe one: the SQL text cannot prove it. A `SELECT` that calls `nextval()` or
+a function with side effects, or a `WITH` query that inserts rows, is not safe to repeat. Wrap only
+the reads you know are.
+
+- Only `OperationalError` is retried: a dropped connection, after which the pool has already
+  recovered, and the other transient refusals it covers — a deadlock, a lock or advisory-lock
+  timeout, SQLite's `database is locked`. A cancelled statement (SQLSTATE `57014`: a
+  `statement_timeout`, a `pg_cancel_backend`) is not retried: running it again would defeat the
+  cancel. `IntegrityError`, `InvalidValueError`, a query-build error or any other exception
+  propagates on the first raise.
+- `f` must raise the `OperationalError` itself. One raised inside a task `f` spawns arrives wrapped
+  (`TaskFailedException`, `CompositeException`) and is not retried; PormG's own terminals unwrap.
+- Inside an open transaction it raises `TransactionError` without running `f`: a lost connection
+  loses the whole transaction, so retry the transaction — the `atomic` block — not one statement
+  in it (#138).
+- When every attempt fails, the last `OperationalError` propagates.
+
+See also [`atomic`](@ref).
+"""
+function with_read_retry(f::Function; attempts::Integer = 1, backoff::Real = 0)
+  attempts >= 0 || throw(InvalidValueError("with_read_retry: `attempts` must be zero or more"))
+  (backoff >= 0 && isfinite(backoff)) ||
+    throw(InvalidValueError("with_read_retry: `backoff` must be a finite number of seconds, zero or more"))
+  # Refused before `f` runs, not when a drop happens: the misuse surfaces on the first call instead of
+  # during an outage. Any open transaction counts: one on the same database would retry half a
+  # transaction, and an ORM read on another database is already refused by the transaction scope check.
+  # A raw `fetch` on another pool is allowed there and refused here too — `f` is opaque, so the helper
+  # cannot tell which pools it reaches.
+  in_transaction_context() && throw(TransactionError(
+    "with_read_retry cannot run inside a transaction: a lost connection loses the whole transaction, " *
+    "so retry the transaction, not the statement"))
+  retries = 0
+  while true
+    try
+      return f()
+    catch e
+      # 57014 query_canceled is not retried, as `fetch`'s own retry leaves it out (the note above
+      # `_PG_LOST_CONNECTION_ERRORS` in the LibPQ extension): the session is alive and someone asked the
+      # statement to stop.
+      (e isa OperationalError && e.sqlstate != "57014" && retries < attempts) || rethrow()
+      retries += 1
+      @warn "with_read_retry: the read raised OperationalError; running it again" exception = e retry = retries attempts = attempts
+      backoff > 0 && sleep(backoff)
+    end
+  end
+end
 
 end # module

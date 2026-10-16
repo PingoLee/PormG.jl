@@ -511,17 +511,15 @@ end
 # agree on one decimal, declared as that decimal, is a value SQLite stored, not one it computed: it keeps
 # the columns' width and #648's exact parser (#824's agreement rule). Any operand of another kind — a
 # literal, a column of another width — makes it the computed number its declaration means. The
-# declaration is compared by its type NAME's field (`_sql_type_field`, which drops the size, so any
-# `numeric` is `DecimalField()`'s `(10, 2)`), as the agreement rule always compared it: reading the
-# declared width (`_declared_kind`) instead would change which parser a declared column of another
-# width gets, a behavior change of its own.
+# declaration is compared at the width it declares (`_declared_kind`, #1276): `numeric(12,4)` over
+# `DecimalField(12, 4)` columns reads exactly, while `numeric(12,4)` over `(10, 2)` columns and a bare
+# `numeric`, which declares no width, read as the computed number. Before #1276 it was compared by its
+# type name's field, which drops the size, so any `numeric` counted as `DecimalField()`'s `(10, 2)`.
 function _declared_stored_decimal(x, instruc::SQLInstruction)
   (x isa FObject && _result_rule(x) === :one_of) || return nothing
   declared = _declared_cast(x)
   (declared isa AbstractString && !isempty(declared)) || return nothing
-  declared_field = _sql_type_field(declared)
-  declared_field === nothing && return nothing
-  k = field_canonical_kind(declared_field)
+  k = _declared_kind(declared, instruc.connection)
   (k isa CDecimal && k.precision !== nothing) || return nothing
   for operand in (x.column isa AbstractVector ? x.column : (x.column,))
     _is_null_literal(operand isa SQLText ? operand.field : operand) && continue

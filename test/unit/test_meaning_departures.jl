@@ -49,11 +49,13 @@ const _MD_CONN = Dict{Type,Any}(PormG.PormGPostgres => _MdPg(), PormG.PormGSQLit
   @test all(row -> !isempty(row.departs), rows)
   @test _md_unclassified(rows, PormG._BACKENDS) == []
   # The decisions themselves, stated rather than recomputed: every row is SQLite's departure
-  # (#1028, #1040, #1087, #1215, #1259), as the single `engine` field said before #1170.
+  # (#1028, #1040, #1087, #1215, #1259, #1260), as the single `engine` field said before #1170.
   @test [(row.issue, row.targets, row.departs, row.keeps) for row in rows] == [
     ("#1028", (:text,), (PormG.PormGSQLite,), (PormG.PormGPostgres,)),
     ("#1028", (:integer,), (PormG.PormGSQLite,), (PormG.PormGPostgres,)),
     ("#1259", (:integer, :number), (PormG.PormGSQLite,), (PormG.PormGPostgres,)),
+    ("#1260", (:integer, :number), (PormG.PormGSQLite,), (PormG.PormGPostgres,)),
+    ("#1260", (:integer, :number), (PormG.PormGSQLite,), (PormG.PormGPostgres,)),
     ("#1040", (:scale,), (PormG.PormGSQLite,), (PormG.PormGPostgres,)),
     ("#1087", (:precision,), (PormG.PormGSQLite,), (PormG.PormGPostgres,)),
     ("#1215", (:single_precision,), (PormG.PormGSQLite,), (PormG.PormGPostgres,)),

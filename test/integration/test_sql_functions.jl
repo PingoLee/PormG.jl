@@ -2128,6 +2128,84 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Cast a date, a timestamp or a time to a number: refused on SQLite, rejected by PostgreSQL (#1260)
+# The same meaning as #1259's interval: none of them has a numeric value, so PostgreSQL rejects the
+# cast when the query runs. SQLite stores each as text and its cast read the leading digits (the
+# year of `2009-03-29`, the hour of `06:00:00`), so it refuses the cast when the query is built. The
+# part the message names is a number on every engine. Expected SQL, PostgreSQL: ("Tb"."date")::integer,
+# which the server rejects with `cannot cast type date to integer`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1260: a date, a timestamp or a time cast to a number is refused on SQLite and rejected by PostgreSQL" begin
+    engine = engine_key()   # `departs[engine]` has no fallback: a backend added later states its row (#1179)
+    departs = (sqlite = true, postgres = false)
+    refusal(f) = try f(); nothing catch e; e end
+    proj(expr) = () -> (q = M.Race.objects; q.filter("raceid" => 2); q.values("raceid", "x" => expr); q |> DataFrame)
+    for (expr, pg_type) in ((Cast("date", PormG.Models.IntegerField()), "date"), (Cast("date", "numeric(10,2)"), "date"),
+                            (Cast("start_at", PormG.Models.IntegerField()), "timestamp"),
+                            (Cast("start_at", PormG.Models.FloatField()), "timestamp"),
+                            (Cast("time", PormG.Models.IntegerField()), "time"))
+        e = refusal(proj(expr))
+        if departs[engine]
+            @test e isa PormG.QueryBuildError && occursin("#1260", sprint(showerror, e))
+        else
+            # Built, and the server's own error when it runs: the meaning, not a PormG refusal.
+            @test e !== nothing && !(e isa PormG.QueryBuildError)
+            @test occursin("cannot cast type $(pg_type)", sprint(showerror, e))
+        end
+    end
+    # The spellings the message names: the year of race 2 (2009-04-05 in the F1 fixture).
+    df = proj(Cast("date__@year", PormG.Models.IntegerField()))()
+    @test df.x == [2009]
+    df = proj(Cast(Extract("date", "year"), PormG.Models.IntegerField()))()
+    @test df.x == [2009]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A declared Case's literal default beside a typed branch (#1222)
+# The `output_field` casts the CASE; the default used to bind as that type too, so PostgreSQL saw
+# `THEN boolean ELSE $2::text` and rejected the query when it ran. It binds as the branches' type
+# now: the boolean's text on each row, `'true'` from the branch and `'false'` from the default. An
+# integer branch with a fractional default under `integer` runs too, the default (a `numeric`, as
+# PostgreSQL types a written fraction) widening the CASE to `numeric` before the outer cast rounds it. SQLite refuses both shapes when the query is
+# built (#1217's checks, #1028), which this does not change. A text default beside an integer branch
+# has no shared type, so its bind keeps the `output_field` type and PostgreSQL rejects it as before;
+# the explicit spelling is `Cast(F("result"), "text")` in the branch.
+# Expected SQL, PostgreSQL: (CASE WHEN "Tb"."result" = $1 THEN "Tb"."boolean_field" ELSE $2::boolean END)::text
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1222: a declared Case's literal default binds as its branches' type" begin
+    engine = engine_key()   # `departs[engine]` has no fallback: a backend added later states its row (#1179)
+    departs = (sqlite = true, postgres = false)   # #1217/#1028 refuse the boolean and the float default
+    marker = "case1222"
+    purge() = (p = M.New_join_position.objects; p.filter("description" => marker); p.exists() && p.delete())
+    refusal(f) = try f(); nothing catch e; e end
+    rows(expr) = () -> (q = M.New_join_position.objects; q.filter("description" => marker);
+                        q.values("result", "x" => expr); q.order_by("result"); q |> DataFrame)
+    try
+        purge()
+        M.New_join_position.objects.create("description" => marker, "boolean_field" => true, "result" => 1)
+        M.New_join_position.objects.create("description" => marker, "boolean_field" => false, "result" => 2)
+        bool_text = Case(When("result" => 1, then = F("boolean_field")), default = false, output_field = "text")
+        int_float = Case(When("result" => 1, then = F("result")), default = 1.5, output_field = "integer")
+        int_text = Case(When("result" => 1, then = F("result")), default = "none", output_field = "text")
+        if departs[engine]
+            for expr in (bool_text, int_float)
+                @test refusal(rows(expr)) isa PormG.QueryBuildError
+            end
+        else
+            @test rows(bool_text)().x == ["true", "false"]
+            @test rows(int_float)().x == [1, 2]
+        end
+        # No shared type: PostgreSQL's server rejects the CASE (its own message), SQLite builds it.
+        e = refusal(rows(int_text))
+        @test by_engine(postgres = () -> e !== nothing && !(e isa PormG.QueryBuildError) &&
+                                         occursin(r"CASE types \w+ and \w+ cannot be matched", sprint(showerror, e)),
+                        sqlite = () -> e === nothing && rows(int_text)().x == ["1", "none"])()
+    finally
+        purge()
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # `Sum` over a `bigint` is an integer on every engine (#1147)
 # PostgreSQL widens `sum(bigint)` to `numeric`, which read as a `Decimal` and kept the half once divided
 # (`Sum("resultid") / 2` over results 1 and 2 was 1.5 there and 1 on SQLite). PormG renders

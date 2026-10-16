@@ -34,7 +34,7 @@ PormG.config["cn_pg"] = PormG.Configuration.Settings(connections = CnMockPostgre
 PormG.config["cn_sl"] = PormG.Configuration.Settings(connections = CnMockSQLite(), change_data = true, db_def_folder = "cn_sl")
 
 # The F1 columns the shapes need: a float (`Result.points`), integers (`grid`, `laps`) and a
-# `DecimalField` (`Constructor_results.points`), one model set per engine.
+# `DecimalField` (`Constructor_results.points`, and `wide` at another width), one model set per engine.
 for (modname, key) in ((:CnPGModels, "cn_pg"), (:CnSLModels, "cn_sl"))
   @eval module $modname
   import PormG
@@ -44,6 +44,7 @@ for (modname, key) in ((:CnPGModels, "cn_pg"), (:CnSLModels, "cn_sl"))
     constructorresultsid = Models.IDField(),
     raceid = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"),
     points = Models.DecimalField(),
+    wide = Models.DecimalField(max_digits = 12, decimal_places = 4),   # another width (#1276)
   )
   Result = Models.Model(
     resultid = Models.IDField(),
@@ -250,6 +251,42 @@ end
   # never the width-bound one, and PostgreSQL's `Decimal` passes through.
   @test PormG.value_parser(_CN_DECIMAL, CnMockSQLite()) === PormG.Dialect._parse_sqlite_computed_decimal
   @test PormG.value_parser(_CN_DECIMAL, CnMockPostgres()) === nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1276: a declared decimal over columns that agree is compared at the width it declares
+# `Coalesce`, `Greatest` and `Least` hold one of their operands' own values, so a declaration that names
+# the columns' own width reads what SQLite stored, with #648's exact parser: `CDecimal(12, 4)` over two
+# `DecimalField(12, 4)` columns. A declaration of another width, or a bare `numeric`, which declares
+# none, is the computed number it means: `CDecimal(nothing, nothing)`, the 15-digit parser. Expected
+# SQL, PostgreSQL: (COALESCE("Tb"."wide", "Tb"."wide"))::numeric(12,4)
+# Why: before #1276 the declaration was compared by its type name's field, which drops the size, so
+# `numeric(12,4)` over `(12, 4)` columns read as computed and over `(10, 2)` columns as `(10, 2)`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1276: a declared decimal is compared at its declared width" begin
+  cases = [
+    # the columns' own width: stored, exact
+    (() -> _CN_QB.Coalesce("wide", "wide"; output_field = "numeric(12,4)"),                         PormG.CDecimal(12, 4)),
+    (() -> _CN_QB.Greatest("wide", "wide"; output_field = Models.DecimalField(max_digits = 12, decimal_places = 4)), PormG.CDecimal(12, 4)),
+    (() -> _CN_QB.Coalesce("points", "points"; output_field = "numeric(10,2)"),                     PormG.CDecimal(10, 2)),
+    (() -> _CN_QB.Least("points", "points"; output_field = Models.DecimalField()),                  PormG.CDecimal(10, 2)),
+    # another width, or none: computed
+    (() -> _CN_QB.Coalesce("points", "points"; output_field = "numeric(12,4)"),                     _CN_DECIMAL),
+    (() -> _CN_QB.Coalesce("wide", "wide"; output_field = "numeric(14,4)"),                         _CN_DECIMAL),   # another precision
+    (() -> _CN_QB.Coalesce("points", "points"; output_field = "numeric"),                           _CN_DECIMAL),
+    (() -> _CN_QB.Least("wide", "wide"; output_field = "decimal"),                                  _CN_DECIMAL),
+    # columns of two widths never agree
+    (() -> _CN_QB.Coalesce("points", "wide"; output_field = "numeric(12,4)"),                       _CN_DECIMAL),
+  ]
+  for (engine, mod) in _CN_ENGINES, (shape, expected) in cases
+    node = shape()
+    @testset "$engine: $(sprint(show, node; context = :compact => true) |> s -> first(s, 60))" begin
+      @test _cn_read_kind(mod.Constructor_results, node) == expected
+    end
+  end
+  # The two kinds select the two parsers on SQLite.
+  @test PormG.value_parser(PormG.CDecimal(12, 4), CnMockSQLite()) !== PormG.Dialect._parse_sqlite_computed_decimal
+  @test PormG.value_parser(_CN_DECIMAL, CnMockSQLite()) === PormG.Dialect._parse_sqlite_computed_decimal
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

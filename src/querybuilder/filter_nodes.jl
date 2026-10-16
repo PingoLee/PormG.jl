@@ -761,11 +761,23 @@ end
 # `@nrange`): the stored text orders wrongly at 100 hours and for negative values, while equality and
 # membership are exact on the canonical text the writer stores (#891) and stay sargable on the column.
 # A value that is not a duration keeps the text path, so the formatter raises what it always raised.
+#
+# #1219: a CTE column holding a duration too (`"r__fast__@gt"`, resolved to a `CTEReference` before
+# this runs). Its field is the one the join walk filed for it, and the CTE body always leaves a SQLite
+# duration as its text (`Dialect._sqlite_interval_text` over a computed one), so the column converts
+# once, as a model column does. A path on through a CTE key column (`"c__team__best"`) ends at the
+# related model's stored column, which converts the same way; a transform (`__@…`) is no duration.
 const _INTERVAL_ORDERING_LOOKUPS = (">", ">=", "<", "<=", "BETWEEN", "NOT BETWEEN")
 function _is_sqlite_duration_column(v::SQLTypeOper, instruc::SQLInstruction)::Bool
   (_interval_as_ms(instruc.connection) && v.operator in _INTERVAL_ORDERING_LOOKUPS) || return false
-  (v.column isa SQLField && v.column.field isa String && _is_bare_column(v.column.field)) || return false
-  field = get(instruc.object.model.fields, v.column.field, nothing)
+  v.column isa SQLField || return false
+  column = v.column.field
+  if column isa CTEReference
+    occursin("__@", column.path) && return false
+    return memo_field(instruc, memo_key(column)) isa Models.sDurationField
+  end
+  (column isa String && _is_bare_column(column)) || return false
+  field = get(instruc.object.model.fields, column, nothing)
   if field === nothing
     key = memo_key(v.column)   # a joined path's terminal field (#474); `nothing` for no name
     key === nothing || (field = memo_field(instruc, key))

@@ -686,7 +686,8 @@ end
 # `2` on PostgreSQL and `1` on SQLite (#1028), `text` over a boolean is `true` / `1` (#1028): refused
 # on SQLite only. A branch with nothing to round builds on both, and so does a `Cast` over a declared
 # `Case` whose scale the cast's covers (the `Case` is checked itself). Expected SQL, PostgreSQL:
-#   (CASE WHEN "Tb"."number" = $1 THEN "Tb"."points" ELSE $2::numeric(10,1) END)::numeric(10,1)
+#   (CASE WHEN "Tb"."number" = $1 THEN "Tb"."points" ELSE $2::double precision END)::numeric(10,1)
+# (the default binds as its float branch's type since #1222; the `output_field` casts the CASE)
 # Why: before #1217 every one of these built, a silent different value on SQLite.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1217: a Case output_field is checked against its branches, refused on SQLite only" begin
@@ -705,7 +706,7 @@ end
     errs = _ccd_expect(expr; departs = _SL_ONLY, issue = issue, named = named)
     @test occursin("Case(…; output_field = ", _ccd_msg(errs.sqlite))
   end
-  @test occursin("(CASE WHEN \"Tb\".\"number\" = \$1 THEN \"Tb\".\"points\" ELSE \$2::numeric(10,1) END)::numeric(10,1) as \"x\"",
+  @test occursin("(CASE WHEN \"Tb\".\"number\" = \$1 THEN \"Tb\".\"points\" ELSE \$2::double precision END)::numeric(10,1) as \"x\"",
                  _ccd_render(case(_CF("points"); output_field = "numeric(10,1)"); conn = _CCD_PG))
   for expr in (case(Fn.Round("points", 1); output_field = "numeric(10,1)"),
                case(_CF("number"); output_field = "numeric(10,1)"),
@@ -721,6 +722,48 @@ end
   # The nested declaration is read for its scale: one place under a cast to none still rounds.
   _ccd_expect(Fn.Cast(case(Fn.Round("points", 1); output_field = "numeric(10,1)"), "numeric(10,0)");
               departs = _SL_ONLY, issue = "#1040", named = "a value cast to numeric(10,1)")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1222: a declared Case's literal default binds as its branches' type, not the output_field's
+# The `output_field` casts the CASE's value, `(CASE … END)::T`. Its literal default bound as `T` too,
+# so beside a typed branch PostgreSQL saw two branch types it could not resolve: `THEN boolean ELSE
+# $2::text` builds and the server rejects it. The default now binds as the type the server resolves
+# the branches and the default to (integers widen, integer < numeric < double precision). Where they
+# do not resolve (a text default beside an integer or a date branch), or every branch is a literal,
+# it keeps the `output_field` type, as before. SQLite binds no cast, so its SQL is unchanged.
+# Expected SQL, PostgreSQL:
+#   (CASE WHEN "Tb"."number" = $1 THEN "Tb"."active" ELSE $2::boolean END)::text
+# Why: before #1222 that query failed when it ran, though the build accepted it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1222: a declared Case's literal default binds as its branches' type on PostgreSQL" begin
+  case(then; default, output_field) = Fn.Case(Fn.When("number" => 1, then = then), default = default, output_field = output_field)
+  for (expr, bind, cast) in (
+      (case(_CF("active"); default = false, output_field = "text"), "boolean", "text"),            # the issue's shape
+      # a fraction is a `numeric`, as PostgreSQL types a written `1.5`: only a float branch makes a double
+      (case(_CF("number"); default = 1.5, output_field = "integer"), "numeric", "integer"),
+      (case(_CF("price"); default = 1.5, output_field = "numeric(20,6)"), "numeric", "numeric(20,6)"),
+      (case(_CF("points"); default = 1.5, output_field = "numeric"), "double precision", "decimal"),
+      # under a float `output_field` a fraction stays a float: `-0.0` and `Inf` have no `numeric`
+      (case(_CF("number"); default = -0.0, output_field = "float8"), "double precision", "float8"),
+      (case(_CF("number"); default = Inf, output_field = Models.FloatField()), "double precision", "float"),
+      (case(_CF("points"); default = 0, output_field = "numeric(10,1)"), "double precision", "numeric(10,1)"),
+      (case(_CF("price"); default = 0, output_field = "numeric(12,2)"), "numeric", "numeric(12,2)"),
+      (case(_CF("number"); default = 0, output_field = "text"), "bigint", "text"),
+      # no shared type: the output_field's, as before
+      (case(_CF("number"); default = "none", output_field = "text"), "text", "text"),
+      (case(_CF("born"); default = "2009-01-01", output_field = "date"), "date", "date"))
+    sql = _ccd_render(expr; conn = _CCD_PG)
+    @test occursin("ELSE \$2::$(bind) END)::$(cast) as \"x\"", sql)
+  end
+  # Every branch a literal: the output_field's, as before (#696); the `then` literal binds `$2`.
+  @test occursin("THEN \$2::bigint ELSE \$3::integer END)::integer",
+                 _ccd_render(case(1; default = 0, output_field = "integer"); conn = _CCD_PG))
+  # A `then` literal is the `When`'s own, typed by its value, as before.
+  @test occursin("THEN \$2::boolean ELSE \"Tb\".\"active\" END)::text",
+                 _ccd_render(case(false; default = _CF("active"), output_field = "text"); conn = _CCD_PG))
+  # SQLite binds no cast: the CASE is cast as a whole, as before.
+  @test occursin("ELSE ? END AS INTEGER)", _ccd_render(case(_CF("number"); default = 0, output_field = "integer"); conn = _CCD_SL))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -793,6 +836,61 @@ end
   avg_sub() = (s = CCD.Ccd_driver.objects; s.filter("id" => PormG.OuterRef("id")); s.values("t" => Fn.Avg("laptime")); PormG.Subquery(s))
   _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1259", run = conn -> _ccd_render(Fn.Cast(avg_sub(), Models.FloatField()); conn = conn))
   for expr in (Fn.Cast("laptime", "text"), Fn.Cast("laptime", Models.CharField()))
+    @test _ccd_builds(expr)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1260: a date, a timestamp or a time cast to a number is refused on SQLite, which reads its text
+# MEANING: a date has no numeric value, so PostgreSQL rejects the cast when the query runs
+# (`cannot cast type date to integer`), the meaning by the #1087 tie-breaker, as for #1259's interval.
+# SQLite stores each as text and its cast reads the leading digits: `2009-03-29` and
+# `2009-03-29T06:00:00.000+00:00` are `2009`, `06:00:00` is `6`. A column, a CTE column, `Max`, a
+# nested `Cast(x, "date")`, date arithmetic the render types, a literal, and each `output_field` site,
+# to an integer, a float or a `numeric`. The message names the part that is the number
+# (`"born__@year"`, `"clock__@hour"`). A part and a day count are numbers, and build on both.
+# Expected SQL, PostgreSQL: ("Tb"."born")::integer
+# Why: before #1260 SQLite answered the year where PostgreSQL raised.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1260: a date, a timestamp or a time cast to a number is refused on SQLite only" begin
+  case(then; output_field = "integer") = Fn.Case(Fn.When("number" => 1, then = then), output_field = output_field)
+  for (expr, named) in (
+      (Fn.Cast("born", Models.IntegerField()), "the DateField `born`"),
+      (Fn.Cast("born", Models.BigIntegerField()), "the DateField `born`"),
+      (Fn.Cast("born", "numeric(10,2)"), "the DateField `born`"),
+      (Fn.Cast("start_at", Models.IntegerField()), "the DateTimeField `start_at`"),
+      (Fn.Cast("start_at", Models.FloatField()), "the DateTimeField `start_at`"),
+      (Fn.Cast("start_at", "numeric"), "the DateTimeField `start_at`"),
+      (Fn.Cast("clock", Models.IntegerField()), "the TimeField `clock`"),
+      (Fn.Cast("clock", "float8"), "the TimeField `clock`"),
+      (Fn.Cast(Fn.Max("born"), Models.IntegerField()), "a date expression"),
+      (Fn.Cast(Fn.Cast("start_at", "date"), Models.IntegerField()), "a date expression"),
+      (Fn.Cast(_CF("born") + Day(1), Models.IntegerField()), "a date expression"),
+      (Fn.Cast(Fn.Value(Date(2009, 3, 29)), Models.IntegerField()), "a Date literal"),
+      (Fn.Cast(Fn.Value(Time(6)), Models.IntegerField()), "a Time literal"),
+      (Fn.Coalesce("born", Fn.Value(Date(2009, 3, 29)); output_field = "integer"), "the DateField `born`"),
+      (Fn.Greatest("start_at", "start_at"; output_field = "numeric(10,2)"), "the DateTimeField `start_at`"),
+      (case(_CF("clock")), "the TimeField `clock`"))
+    errs = _ccd_expect(expr; departs = _SL_ONLY, issue = "#1260", named = named)
+    @test occursin("Name the number you mean with a part", _ccd_msg(errs.sqlite))
+  end
+  @test occursin("an error, since a date or a timestamp has no numeric value",
+                 _ccd_msg(_ccd_refusal(Fn.Cast("start_at", Models.IntegerField()); conn = _CCD_SL)))
+  # An operand that is no path is offered `Extract`, since a transform applies to a path.
+  max_msg = _ccd_msg(_ccd_refusal(Fn.Cast(Fn.Max("born"), Models.IntegerField()); conn = _CCD_SL))
+  @test occursin("Extract(x, \"year\")", max_msg) && !occursin("__@year", max_msg)
+  @test occursin("\"born__@year\"", _ccd_msg(_ccd_refusal(Fn.Cast("born", Models.IntegerField()); conn = _CCD_SL)))
+  @test occursin("\"clock__@hour\"", _ccd_msg(_ccd_refusal(Fn.Cast("clock", Models.IntegerField()); conn = _CCD_SL)))
+  @test occursin("(\"Tb\".\"born\")::integer as \"x\"", _ccd_render(Fn.Cast("born", Models.IntegerField()); conn = _CCD_PG))
+  # A CTE column holding a date is the date.
+  cte_cast(conn) = (q = CCD.Ccd_driver.objects;
+                    q.with("c" => CCD.Ccd_driver.objects.values("id", "b" => "born"), join_field = "id" => "id");
+                    q.values("x" => Fn.Cast(PormG.CTE("c", "b"), Models.IntegerField())); _ccd_sql(q; conn = conn))
+  _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1260", run = cte_cast)
+  # The number the message names, a day count, and a text cast build on both engines.
+  for expr in (Fn.Cast("born__@year", Models.IntegerField()), Fn.Cast(Fn.Extract("born", "year"), Models.IntegerField()),
+               Fn.Cast("clock__@hour", Models.IntegerField()), Fn.Cast(_CF("born") - _CF("born"), Models.IntegerField()),
+               Fn.Cast("born", "text"), Fn.Cast("clock", Models.CharField()))
     @test _ccd_builds(expr)
   end
 end

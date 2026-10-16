@@ -127,14 +127,16 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # CTE column filter: a value compared with a computed column is bound as that column's type
 # Expected SQL, PostgreSQL: `WHERE "R1_1"."fast" > $1` with `["00:01:00"]` — a duration, where the
-# number formatter raised `MethodError` on a `Period` — and `WHERE "R1_1"."ahead" = $1` with `[true]`,
+# number formatter raised `MethodError` on a `Period`; on SQLite the column's milliseconds against
+# `[60000]`, as a model `DurationField` compares (#1219) — and `WHERE "R1_1"."ahead" = $1` with `[true]`,
 # where it bound `1`. A value that is not one of the column's type is refused as it is on a model
 # column of that type: `60` against the duration (it bound `60`), `2` against the boolean (it bound `2`).
 # Number columns bind as before: every number field formats through the same formatter.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1034: a filter on a computed CTE column binds the column's type" begin
   for conn in _CCF_ENGINES
-    @test _ccf_params("r__fast__@gt" => Minute(1); conn = conn) == Any["00:01:00"]
+    # #1219: SQLite stores a duration as text and orders it by milliseconds, as for a model column.
+    @test _ccf_params("r__fast__@gt" => Minute(1); conn = conn) == (conn === _CCF_SL ? Any[60000] : Any["00:01:00"])
     @test _ccf_params("r__ahead" => true; conn = conn) == Any[true]
     @test _ccf_params("r__ahead" => 1; conn = conn) == Any[true]
     # Refused by the column type's own validator, which names it — not by some other check.

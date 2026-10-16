@@ -444,7 +444,9 @@ temporal arithmetic (`_set_update_query_typed`) and an interval aggregate SQLite
 - a literal is its Julia value's kind (#721), and a `Bool` a boolean (#1122);
 - a `Subquery` or a CTE column reads as its own build recorded it, by this same view (#888, #824);
 - anything else is what the walk says it means (`_MeaningKinds`), through the view: a computed number is
-  the float or the width-less decimal it means (#1121, #1212), and a stored value keeps its kind.
+  the float or the width-less decimal it means (#1121, #1212), and a stored value keeps its kind. A
+  `Case` with no `output_field` is one of its branch values on each row, so it has the kind its values
+  agree on, as `Coalesce` has (#824, #1262), and none when they disagree.
 
 Read after `x` renders, as every kind lookup here is: resolving a path fills the memo the walk reads.
 """
@@ -453,9 +455,6 @@ function _read_kind(x, instruc::SQLInstruction; rendered = nothing)
   x isa SQLText && return _literal_read_kind(x.field)
   recorded = _recorded_read_kind(x, instruc)
   recorded === false || return recorded
-  # TRANSITIONAL (#1262): an undeclared `Case` keeps the read kind the per-shape assembly gave it, so
-  # this view lands as a refactor. The next commit lifts it.
-  _undeclared_case(x) && return _undeclared_case_read_kind(x, instruc)
   # A window value function (`Lag`, `Lead`) returns a row's value of its operand, and its `default` only
   # stands in on the rows that have none: Django gives it its expression's `output_field`. So a stored
   # value reads as its operand's — `Lag("points", default = 0)` keeps the column's decimal width (#648) —
@@ -463,11 +462,6 @@ function _read_kind(x, instruc::SQLInstruction; rendered = nothing)
   x isa WindowFunction && haskey(x.kwargs, "default") && _result_rule(x) === :operand &&
     !_computes_number(x, instruc) && return _read_kind(x.column, instruc)
   return _read_view(_infer_kind(x, instruc, _MeaningKinds()), x, instruc)
-end
-# TRANSITIONAL (#1262): an undeclared `Case` read as a boolean or a computed number only.
-function _undeclared_case_read_kind(x, instruc::SQLInstruction)
-  k = _read_view(_infer_kind(x, instruc, _MeaningKinds()), x, instruc)
-  return k isa CBool || _computes_number(x, instruc) ? k : nothing
 end
 
 function _literal_read_kind(x)

@@ -86,6 +86,12 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Case untyped bool",       :Result,              m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = true)], default = false)),
   ("Case untyped int",        :Result,              m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1)], default = 0)),
   ("Case untyped float col",  :Result,              m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_Q.F("points"))], default = _EKM_Q.F("points"))),
+  # #1262: a `Case` with no `output_field` over one stored kind has that kind, as `Coalesce` over it has
+  ("Case untyped interval col", :Result,            m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_Q.F("fastestlaptime"))])),
+  ("Case untyped date col",   :Race,                m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("date"))])),
+  ("Case untyped zoned col",  :Race,                m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("start_at"))])),
+  ("Case untyped time col",   :Race,                m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("time"))])),
+  ("Case untyped decimal col", :Constructor_results, m -> _EKM_FN.Case([_EKM_FN.When("constructorresultsid" => 3835, then = _EKM_Q.F("points"))])),
   # ── aggregates ─────────────────────────────────────────────────────────────────────────────────
   ("Sum int",                 :Result,              m -> _EKM_FN.Sum("grid")),
   ("Sum float",               :Result,              m -> _EKM_FN.Sum("points")),
@@ -111,6 +117,8 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   # ── window functions ───────────────────────────────────────────────────────────────────────────
   ("Lag hop date",            :Result,              m -> _EKM_FN.Lag("raceid__date", over = _ekm_over(:Result))),
   ("Lag bool",                :New_join_position,   m -> _EKM_FN.Lag("boolean_field", over = _ekm_over(:New_join_position))),
+  # a `default` stands in for the rows with no previous value; the window keeps its operand's kind
+  ("Lag date default date",   :Race,                m -> _EKM_FN.Lag("date", default = _EKM_Q.F("date"), over = _ekm_over(:Race))),
   ("FirstValue float",        :Result,              m -> _EKM_FN.FirstValue("points", over = _ekm_over(:Result))),
   ("FirstValue decimal",      :Constructor_results, m -> _EKM_FN.FirstValue("points", over = _ekm_over(:Constructor_results))),
   ("Lead hop date",           :Result,              m -> _EKM_FN.Lead("raceid__date", over = _ekm_over(:Result))),

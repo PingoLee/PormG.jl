@@ -746,6 +746,38 @@ end
     end
   end
 
+  # #1262: a `Case` with no `output_field` is one of its branches' values on each row, as `Coalesce` is
+  # one of its operands', so it records the kind its `then` values and its default agree on — a NULL
+  # default (none written) is never the value. It recorded none before, so SQLite read a `DurationField`
+  # branch back as its stored `"00:01:27.452"` text while PostgreSQL's driver delivered the interval.
+  # (A `Lag`/`Lead` `default` is not such a value: it only stands in for missing rows, #800's testset.)
+  @testset "an undeclared Case records the kind its values agree on (#1262)" begin
+    F_ = PormG.Functions
+    when(v) = [F_.When("id" => 1, then = PormG.F(v))]
+    for conn in (_RVC_SL, _RVC_PG)
+      kinds = _rvc_kinds(q -> q.values(
+        "i"  => F_.Case(when("dur")),
+        "d"  => F_.Case(when("d")),
+        "ts" => F_.Case(when("ts")),
+        "t"  => F_.Case(when("t")),
+        "a"  => F_.Case(when("amount")),
+        "dd" => F_.Case(when("d"); default = PormG.F("d")),
+        # disagreeing values: two decimal widths, a decimal beside a number literal (text beside a date
+        # is refused before any kind is recorded, #1200)
+        "w"  => F_.Case(when("amount"); default = PormG.F("cost")),
+        "n"  => F_.Case(when("amount"); default = 0)); connection = conn)
+      @test kinds[:i] == PormG.CInterval()
+      @test kinds[:d] == PormG.CDate()
+      @test kinds[:dd] == PormG.CDate()
+      @test kinds[:ts] == PormG.CDateTime(true)
+      @test kinds[:t] == PormG.CTime()
+      @test kinds[:a] == PormG.CDecimal(12, 2)
+      for alias in (:w, :n)
+        @test !haskey(kinds, alias)
+      end
+    end
+  end
+
   # #1200: the temporal disagreements above recorded no kind, and the value came back as each engine
   # delivered it — a timestamp on PostgreSQL, each row's own text on SQLite. They are refused when the
   # query is built now, on every engine (`test_temporal_mix_refusal.jl` holds the rule): text beside a

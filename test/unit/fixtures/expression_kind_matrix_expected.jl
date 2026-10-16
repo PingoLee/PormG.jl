@@ -554,6 +554,66 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case untyped float col | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Case untyped interval col | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Case untyped interval col | alone", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Case untyped interval col | cte", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+  ("Case untyped interval col | cte", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+  ("Case untyped interval col | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Case untyped interval col | subquery", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Case untyped date col | alone", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case untyped date col | alone", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case untyped date col | cte", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Case untyped date col | cte", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Case untyped date col | subquery", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case untyped date col | subquery", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case untyped zoned col | alone", :postgres) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Case untyped zoned col | alone", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Case untyped zoned col | cte", :postgres) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Case untyped zoned col | cte", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Case untyped zoned col | subquery", :postgres) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Case untyped zoned col | subquery", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Case untyped time col | alone", :postgres) =>
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CTime()", whole_numeric = nothing),
+  ("Case untyped time col | alone", :sqlite) =>
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CTime()", whole_numeric = nothing),
+  ("Case untyped time col | cte", :postgres) =>
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
+  ("Case untyped time col | cte", :sqlite) =>
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
+  ("Case untyped time col | subquery", :postgres) =>
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CTime()", whole_numeric = nothing),
+  ("Case untyped time col | subquery", :sqlite) =>
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CTime()", whole_numeric = nothing),
+  ("Case untyped decimal col | alone", :postgres) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Case untyped decimal col | alone", :sqlite) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Case untyped decimal col | cte", :postgres) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Case untyped decimal col | cte", :sqlite) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Case untyped decimal col | subquery", :postgres) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = nothing, textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Case untyped decimal col | subquery", :sqlite) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = nothing, textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Sum int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum int | alone", :sqlite) =>
@@ -818,6 +878,18 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Lag bool | subquery", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Lag date default date | alone", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Lag date default date | alone", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Lag date default date | cte", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Lag date default date | cte", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Lag date default date | subquery", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Lag date default date | subquery", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("FirstValue float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("FirstValue float | alone", :sqlite) =>
@@ -2583,6 +2655,26 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
     ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Case untyped float col", :sqlite) =>
     ["drops formatter: alone=none, cte=number, subquery=none"],
+  ("Case untyped interval col", :postgres) =>
+    ["drops formatter: alone=none, cte=interval, subquery=none"],
+  ("Case untyped interval col", :sqlite) =>
+    ["drops formatter: alone=none, cte=interval, subquery=none"],
+  ("Case untyped date col", :postgres) =>
+    ["drops formatter: alone=none, cte=date, subquery=none"],
+  ("Case untyped date col", :sqlite) =>
+    ["drops formatter: alone=none, cte=date, subquery=none"],
+  ("Case untyped zoned col", :postgres) =>
+    ["drops formatter: alone=none, cte=datetime, subquery=none"],
+  ("Case untyped zoned col", :sqlite) =>
+    ["drops formatter: alone=none, cte=datetime, subquery=none"],
+  ("Case untyped time col", :postgres) =>
+    ["drops formatter: alone=none, cte=text_or_time, subquery=none"],
+  ("Case untyped time col", :sqlite) =>
+    ["drops formatter: alone=none, cte=text_or_time, subquery=none"],
+  ("Case untyped decimal col", :postgres) =>
+    ["drops formatter: alone=none, cte=number, subquery=none"],
+  ("Case untyped decimal col", :sqlite) =>
+    ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Sum interval", :postgres) =>
     ["conflict formatter: alone=number, cte=interval, subquery=number"],
   ("Sum interval", :sqlite) =>
@@ -2599,6 +2691,10 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
     ["drops formatter: alone=none, cte=bool, subquery=none"],
   ("Lag bool", :sqlite) =>
     ["drops formatter: alone=none, cte=bool, subquery=none"],
+  ("Lag date default date", :postgres) =>
+    ["drops formatter: alone=none, cte=date, subquery=none"],
+  ("Lag date default date", :sqlite) =>
+    ["drops formatter: alone=none, cte=date, subquery=none"],
   ("FirstValue float", :postgres) =>
     ["drops formatter: alone=none, cte=number, subquery=none"],
   ("FirstValue float", :sqlite) =>

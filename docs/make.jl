@@ -61,6 +61,7 @@ makedocs(
             "Custom Joins" => "read/custom_joins.md",
             "Filters and Aggregates" => "read/filters_and_aggregates.md",
             "Functions and Dates" => "read/functions_and_dates.md",
+            "Rounding" => "read/rounding.md",
             "Subqueries and CTEs" => "read/subqueries_and_ctes.md",
             "Field Expressions" => "read/field_expressions.md",
             "Window Functions" => "read/window_functions.md",

@@ -762,7 +762,7 @@ M.Result.objects.values("resultid", "points_int" => Cast(Round("points"), Intege
 M.Result.objects.values("resultid", "points_num" => Cast("points", "numeric"))
 ```
 
-See also [Functions and Dates](@ref).
+See also [Functions and Dates](@ref) and [Rounding](@ref).
 """
 function Cast(x::_ScalarOperand, type::AbstractString)
   return FObject(function_name = "CAST", column = _norm_fn_arg(x), aggregate = _any_agg(x), kwargs = Dict{String, Any}("type" => Dialect.cast_type_name(type)))
@@ -1428,6 +1428,8 @@ SQLite reads it as 0. Cast it first: `Round(Cast(x, FloatField()), d)`.
 
 A negative `precision` raises `InvalidValueError` when the expression is built: PostgreSQL rounds
 `Round(125, -1)` to `130` and SQLite takes a negative precision as 0.
+
+See also [Rounding](@ref).
 """
 function Round(x::_ScalarOperand, precision::Integer = 0)
   # #1044: SQLite reads a negative precision as 0, PostgreSQL rounds to tens, hundreds, … — an

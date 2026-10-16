@@ -685,7 +685,9 @@ whose double sits just below it. Measured on PostgreSQL 16.15 and SQLite 3.45.1:
 
 PostgreSQL's is the exact answer. On SQLite, which PormG supports for development and tests, the last
 digit of such a tie can differ, so a test that pins a rounded tie value is engine-specific (#1061).
-`Round(x)`, to a whole number, gives the same value on both engines.
+`Round(x)`, to a whole number, gives the same value on both engines. [Rounding](rounding.md) states
+the rules this follows: a value is rounded by the engine, only where the query asks, and PormG
+refuses where an engine would not honor a declared scale.
 
 Two cases change the value rather than its last digit, and raise when the query is built:
 
@@ -913,7 +915,8 @@ scale, and a `COLLATE` clause. The same rules apply to the `output_field=` strin
 A cast to text, to an integer, to a scaled `numeric(p, s)` or to a single-precision float goes
 through each engine's own conversion. PormG checks each engine against what the cast **means**, never against the other
 engine (#1147). The engine that departs raises `QueryBuildError` when the query is built, and the
-other builds the query as written. Measured on PostgreSQL 16 and SQLite 3.45:
+other builds the query as written. For the scale and integer rows, [Rounding](rounding.md) shows the
+explicit spelling that builds on every engine. Measured on PostgreSQL 16 and SQLite 3.45:
 
 | Cast | It means | PostgreSQL | SQLite |
 |---|---|---|---|

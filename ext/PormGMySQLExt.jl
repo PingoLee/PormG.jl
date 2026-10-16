@@ -401,6 +401,14 @@ const _INTEGRITY_ERRNOS = (1062, 1022, 1586, 1557, 1169, 1761, 1762, 1451, 1452,
 # resource limit, 1053 server shutdown.
 const _OPERATIONAL_ERRNOS = (1205, 1213, 3024, 1317, 1040, 1203, 1226, 1053)
 
+# The operational numbers that mean the statement was CANCELLED (#1277): 1317 `KILL QUERY`, which is
+# also PormG's own cancel here (`backend_cancel_query!` below), and 3024 `max_execution_time`. The
+# session is alive, and neither `fetch` nor `with_read_retry` runs the statement again. The SQLSTATE
+# cannot say it: 1317 carries `70100`, and 3024 shares `HY000` with most other errors.
+const _CANCELLED_ERRNOS = (1317, 3024)
+
+PormG.backend_is_cancellation(e::MySQL.Protocol.ServerError) = Int(e.errno) in _CANCELLED_ERRNOS
+
 function PormG.backend_classify_error(pool::_Pool,
                                       e::Union{MySQL.MySQLError, ErrorException, EOFError, Base.IOError, SystemError})
   _is_lost_connection(e) && return :operational

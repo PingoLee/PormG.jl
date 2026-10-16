@@ -74,6 +74,8 @@ struct NetClosingError <: Exception end
     # Keyed on the exception alone (#987) — no pool to fall back on, but Postgres.jl's reader is
     # still the extension's own.
     (PormG.backend_error_fields, (Postgres.Error,)),
+    # Keyed on the exception alone too (#1277): the cancel code is the extension's to read.
+    (PormG.backend_is_cancellation, (Postgres.Error,)),
   ]
   for (f, types) in rows
     @test which(f, Tuple{types...}).module === PGExt
@@ -92,6 +94,7 @@ struct NetClosingError <: Exception end
   @test which(PormG.backend_connect, Tuple{LibPQPool}).module === LibPQExtMod
   @test which(PormG.backend_is_connection_error, Tuple{LibPQPool, Any}).module === LibPQExtMod
   @test which(PormG.backend_num_rows, Tuple{LibPQPool, Any}).module === LibPQExtMod
+  @test which(PormG.backend_is_cancellation, Tuple{LibPQ.Errors.QueryCanceled}).module === LibPQExtMod
 end
 
 @testset "no method ambiguity with both PostgreSQL extensions loaded (#788)" begin
@@ -669,6 +672,49 @@ end
   # A multi-result failure is retry-safe when the server named one of its errors.
   @test safe(CompositeException([EOFError(), _pg_error("57P01")]))
   @test !safe(CompositeException([EOFError()]))
+end
+
+# What: SQLSTATE 57014 is a cancelled statement on both PostgreSQL drivers, and no other code is;
+#   `with_read_retry` runs a cancelled read once and a deadlocked read twice. The pools are built,
+#   never connected; each error goes through `_as_database_error` as a failed statement's does.
+# Expected: `backend_is_cancellation` answers true for 57014 (Postgres.jl's `Error`, LibPQ's
+#   `QueryCanceled`) and false for 40P01 / 55P03 / 57P01; a 57014 block runs 1 time, a 40P01 block 2.
+# Why: core asks each engine what a cancel is (#1277) instead of comparing PostgreSQL's code, so
+#   the PostgreSQL answer has to be stated here, by the extensions, or a timed-out read would run twice.
+@testset "a cancelled statement is 57014 on both PostgreSQL drivers, and is not retried (#1277)" begin
+  E = LibPQ.Errors
+  @test PormG.backend_is_cancellation(_pg_error("57014"))
+  @test PormG.backend_is_cancellation(E.QueryCanceled("", nothing))
+  for code in ("40P01", "55P03", "57P01", "08006")
+    @test !PormG.backend_is_cancellation(_pg_error(code))
+  end
+  @test !PormG.backend_is_cancellation(E.DeadlockDetected("", nothing))
+  @test !PormG.backend_is_cancellation(E.LockNotAvailable("", nothing))
+  @test !PormG.backend_is_cancellation(EOFError())
+  @test PormG.backend_is_cancellation(CompositeException([EOFError(), _pg_error("57014")]))
+
+  runs_of(pool, cause) = begin
+    err = CP._as_database_error(pool, cause)
+    @test err isa PormG.OperationalError
+    runs = Ref(0)
+    caught = try
+      with_read_retry(; attempts = 1) do
+        runs[] += 1
+        throw(err)
+      end
+      nothing
+    catch e
+      e
+    end
+    @test caught === err   # the block's own error, never one the cancel check raised
+    runs[]
+  end
+  pg = CP.PostgresConnectionPool("host=h"; driver = :postgres)
+  lpq = CP.PostgresConnectionPool("host=h"; driver = :libpq)
+  @test runs_of(pg, _pg_error("57014")) == 1
+  @test runs_of(lpq, E.QueryCanceled("", nothing)) == 1
+  @test_logs (:warn, r"with_read_retry") @test runs_of(pg, _pg_error("40P01")) == 2
+  @test_logs (:warn, r"with_read_retry") @test runs_of(lpq, E.DeadlockDetected("", nothing)) == 2
 end
 
 @testset "an interrupt wrapped by the TLS layer is an abandoned await (#788)" begin

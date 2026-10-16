@@ -393,7 +393,8 @@ end
 #   08P01 protocol_violation            — the wire is broken, but the statement may well have run.
 # And from class 57:
 #   57014 query_canceled  — the session is alive; retrying defeats statement_timeout / an explicit
-#                           pg_cancel_backend, and #315 already owns that path.
+#                           pg_cancel_backend, and #315 already owns that path. `fetch` also asks
+#                           `backend_is_cancellation` (below) before any retry (#1277).
 #   57P04 database_dropped — retrying is futile.
 # Elsewhere:
 #   40001 / 40P01 serialization_failure / deadlock_detected — the caller must retry the whole
@@ -538,6 +539,11 @@ function PormG.backend_is_retry_safe(pool::PormGPostgres, e::LibPQ.Errors.LibPQE
   # server-text-match-ok: libpq's own client text (untranslated in LibPQ_jll); a refusal to send carries no SQLSTATE (#1010)
   return e isa LibPQ.Errors.PQConnectionError && startswith(lowercase(e.msg), "no connection to the server")
 end
+
+# A cancelled statement (#1277): 57014 `query_canceled`, raised by `statement_timeout`,
+# `pg_cancel_backend` and PormG's own cancel of an abandoned await (#315). The session is alive, and
+# neither `fetch` nor `with_read_retry` runs the statement again. LibPQ names the code in the type.
+PormG.backend_is_cancellation(e::LibPQ.Errors.QueryCanceled) = true
 
 # Is `e` a *permanent* connect failure (won't succeed on retry) rather than transient? Scoped to
 # high-confidence config/auth classes only — bad password, missing role/database, no pg_hba.conf entry.

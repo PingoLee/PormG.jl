@@ -2776,11 +2776,11 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Case float output text default text | subquery", :sqlite, "w__@gt", "text pole") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CASE\nWHEN \"R2\".\"grid\" = ? THEN \"R2\".\"points\"\nELSE ?\nEND\n AS TEXT) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"none\"", "String"), ("1", "Int64"), ("\"pole\"", "String")]),
   ("Case int output integer default float | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$3 THEN \"Tb\".\"laps\"\nELSE \$4::double precision\nEND)::integer\n > \$5", params = [("1", "Int64"), ("1.5", "Float64"), ("1", "Int64"), ("1.5", "Float64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$3 THEN \"Tb\".\"laps\"\nELSE \$4::numeric\nEND)::integer\n > \$5", params = [("1", "Int64"), ("1.5", "Float64"), ("1", "Int64"), ("1.5", "Float64"), ("10", "Int64")]),
   ("Case int output integer default float | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$3", params = [("1", "Int64"), ("1.5", "Float64"), ("10", "Int64")]),
   ("Case int output integer default float | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$4 THEN \"R2\".\"laps\"\nELSE \$5::double precision\nEND)::integer\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("1.5", "Float64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$4 THEN \"R2\".\"laps\"\nELSE \$5::numeric\nEND)::integer\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("1.5", "Float64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("1", "Int64"), ("10", "Int64")]),
   ("Case date output date default text | alone", :postgres, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Case date output date default text | alone", :postgres, "v__@gt", "date 2009-03-29") =>

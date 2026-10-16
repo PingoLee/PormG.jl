@@ -2165,8 +2165,8 @@ end
 # The `output_field` casts the CASE; the default used to bind as that type too, so PostgreSQL saw
 # `THEN boolean ELSE $2::text` and rejected the query when it ran. It binds as the branches' type
 # now: the boolean's text on each row, `'true'` from the branch and `'false'` from the default. An
-# integer branch with a fractional default under `integer` runs too, the default widening the CASE to
-# `double precision` before the outer cast rounds it. SQLite refuses both shapes when the query is
+# integer branch with a fractional default under `integer` runs too, the default (a `numeric`, as
+# PostgreSQL types a written fraction) widening the CASE to `numeric` before the outer cast rounds it. SQLite refuses both shapes when the query is
 # built (#1217's checks, #1028), which this does not change. A text default beside an integer branch
 # has no shared type, so its bind keeps the `output_field` type and PostgreSQL rejects it as before;
 # the explicit spelling is `Cast(F("result"), "text")` in the branch.

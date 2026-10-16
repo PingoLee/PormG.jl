@@ -740,7 +740,10 @@ end
   case(then; default, output_field) = Fn.Case(Fn.When("number" => 1, then = then), default = default, output_field = output_field)
   for (expr, bind, cast) in (
       (case(_CF("active"); default = false, output_field = "text"), "boolean", "text"),            # the issue's shape
-      (case(_CF("number"); default = 1.5, output_field = "integer"), "double precision", "integer"),
+      # a fraction is a `numeric`, as PostgreSQL types a written `1.5`: only a float branch makes a double
+      (case(_CF("number"); default = 1.5, output_field = "integer"), "numeric", "integer"),
+      (case(_CF("price"); default = 1.5, output_field = "numeric(20,6)"), "numeric", "numeric(20,6)"),
+      (case(_CF("points"); default = 1.5, output_field = "numeric"), "double precision", "decimal"),
       (case(_CF("points"); default = 0, output_field = "numeric(10,1)"), "double precision", "numeric(10,1)"),
       (case(_CF("price"); default = 0, output_field = "numeric(12,2)"), "numeric", "numeric(12,2)"),
       (case(_CF("number"); default = 0, output_field = "text"), "bigint", "text"),

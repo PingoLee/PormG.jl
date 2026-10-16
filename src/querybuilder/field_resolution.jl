@@ -368,9 +368,14 @@ end
 # branch names no kind, or when the kinds do not unify (`then = F("date")` beside a text default
 # under `date`, which the server reads as a date). A `then` literal is a `When`'s own, never cast to
 # the `output_field`, so it needs nothing here.
+#
+# A fractional default is a `numeric` here, as PostgreSQL types a written `1.5`: bound as a `double
+# precision` it would make the whole `CASE` one beside an integer or a decimal branch, and a double
+# keeps 15 significant digits where the `numeric` the `output_field` gave kept every one. Beside a
+# float branch the `CASE` is a double either way.
 function _case_default_bind_type(v::SQLTypeFunction, value, instruc::SQLInstruction)
   (v isa FObject && v.function_name == "CASE") || return nothing
-  kind = _literal_kind(value, _AllKinds())
+  kind = value isa Base.IEEEFloat ? CDecimal(nothing, nothing) : _literal_kind(value, _AllKinds())
   kind === nothing && return nothing
   typed_branch = false
   for branch in (v.column isa AbstractVector ? v.column : (v.column,))

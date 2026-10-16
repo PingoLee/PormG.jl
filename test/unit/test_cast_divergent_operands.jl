@@ -868,8 +868,11 @@ end
     errs = _ccd_expect(expr; departs = _SL_ONLY, issue = "#1260", named = named)
     @test occursin("Name the number you mean with a part", _ccd_msg(errs.sqlite))
   end
-  @test occursin("an error, since a date has no numeric value",
+  @test occursin("an error, since a date or a timestamp has no numeric value",
                  _ccd_msg(_ccd_refusal(Fn.Cast("start_at", Models.IntegerField()); conn = _CCD_SL)))
+  # An operand that is no path is offered `Extract`, since a transform applies to a path.
+  max_msg = _ccd_msg(_ccd_refusal(Fn.Cast(Fn.Max("born"), Models.IntegerField()); conn = _CCD_SL))
+  @test occursin("Extract(x, \"year\")", max_msg) && !occursin("__@year", max_msg)
   @test occursin("\"born__@year\"", _ccd_msg(_ccd_refusal(Fn.Cast("born", Models.IntegerField()); conn = _CCD_SL)))
   @test occursin("\"clock__@hour\"", _ccd_msg(_ccd_refusal(Fn.Cast("clock", Models.IntegerField()); conn = _CCD_SL)))
   @test occursin("(\"Tb\".\"born\")::integer as \"x\"", _ccd_render(Fn.Cast("born", Models.IntegerField()); conn = _CCD_PG))

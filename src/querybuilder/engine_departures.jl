@@ -53,13 +53,13 @@ const _MEANING_DEPARTURES = (
   # tie-breaker. SQLite casts the stored text (`2009-03-29`, `2009-03-29T06:00:00.000+00:00`,
   # `06:00:00`) and reads its leading digits: the year, or a time's hour. A part names the number.
   (targets = (:integer, :number), kinds = (:date, :timestamp), departs = (PormGSQLite,), keeps = (PormGPostgres,), issue = "#1260",
-   meaning = _ -> "an error, since a date has no numeric value",
+   meaning = _ -> "an error, since a date or a timestamp has no numeric value",
    computes = _ -> "the leading digits of its text, the year",
-   fix = (flag, _) -> "Name the number you mean with a part: its year, \e[32m\"$(flag)__@year\"\e[0m or \e[32mExtract(\"$(flag)\", \"year\")\e[0m, or another part \e[32mExtract\e[0m names."),
+   fix = (flag, _) -> "Name the number you mean with a part: its year, $(_temporal_part_spelling(flag, "year")), or another part \e[32mExtract\e[0m names."),
   (targets = (:integer, :number), kinds = (:time,), departs = (PormGSQLite,), keeps = (PormGPostgres,), issue = "#1260",
    meaning = _ -> "an error, since a time has no numeric value",
    computes = _ -> "the leading digits of its `HH:MM:SS` text, the hour",
-   fix = (flag, _) -> "Name the number you mean with a part: its hour, \e[32m\"$(flag)__@hour\"\e[0m or \e[32mExtract(\"$(flag)\", \"hour\")\e[0m, or another part \e[32mExtract\e[0m names."),
+   fix = (flag, _) -> "Name the number you mean with a part: its hour, $(_temporal_part_spelling(flag, "hour")), or another part \e[32mExtract\e[0m names."),
   # #1040: a cast to `numeric(p, s)` rounds to `s` places. SQLite reads the type name as NUMERIC
   # affinity and keeps every digit; text is parsed and rounded by PostgreSQL, kept by SQLite.
   (targets = (:scale,), kinds = (:float, :decimal, :numeric, :text), departs = (PormGSQLite,), keeps = (PormGPostgres,), issue = "#1040",
@@ -82,6 +82,13 @@ const _MEANING_DEPARTURES = (
    computes = _ -> "the 8-byte double, every digit of it",
    fix = (_, _) -> "Cast to a double, which is a `Float64` on every engine: \e[32mCast(x, \"float8\")\e[0m or \e[32mCast(x, FloatField())\e[0m."),
 )
+
+# #1260 — the spelling of a temporal part for the operand a refusal names: a path takes the transform
+# or `Extract` over it; any other operand (`Max("born")`, a `Case`, a literal) only `Extract`, since a
+# transform applies to a path.
+_temporal_part_spelling(flag::AbstractString, part::AbstractString) =
+  flag == "<flag>" ? "\e[32mExtract(x, \"$(part)\")\e[0m" :
+  "\e[32m\"$(flag)__@$(part)\"\e[0m or \e[32mExtract(\"$(flag)\", \"$(part)\")\e[0m"
 
 # #1111 — an integer quotient over a `Sum` the type walk cannot name (`_DIVISION_KINDS`, classified by
 # `_whole_numeric_operand`). Not a row of the table above: which engine departs is not a fixed type

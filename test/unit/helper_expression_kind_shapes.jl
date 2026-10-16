@@ -287,6 +287,15 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Cast interval int",       :Result,              m -> _EKM_FN.Cast("fastestlaptime", "integer")),
   ("Cast Sum interval int",   :Result,              m -> _EKM_FN.Cast(_EKM_FN.Sum("fastestlaptime"), "integer")),
   ("Cast Avg interval int",   :Result,              m -> _EKM_FN.Cast(_EKM_FN.Avg("fastestlaptime"), "integer")),
+  # #1260: a date, a timestamp and a time cast to a number; the day count and a part stay numbers
+  ("Cast date int",           :Race,                m -> _EKM_FN.Cast("date", "integer")),
+  ("Cast datetime int",       :Race,                m -> _EKM_FN.Cast("start_at", "integer")),
+  ("Cast time int",           :Race,                m -> _EKM_FN.Cast("time", "integer")),
+  ("Cast date numeric(10,2)", :Race,                m -> _EKM_FN.Cast("date", "numeric(10,2)")),
+  ("Cast datetime float",     :Race,                m -> _EKM_FN.Cast("start_at", "float8")),
+  ("Cast F date + Day(1) int", :Race,               m -> _EKM_FN.Cast(_EKM_Q.F("date") + Day(1), "integer")),
+  ("Cast F date - date int",  :Race,                m -> _EKM_FN.Cast(_EKM_Q.F("date") - _EKM_Q.F("date"), "integer")),
+  ("Cast transform @year int", :Race,               m -> _EKM_FN.Cast("start_at__@year", "integer")),
   # ── subqueries ─────────────────────────────────────────────────────────────────────────────────
   ("Subquery Max hop date",   :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Max("raceid__date")))),
   ("Subquery Avg float",      :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Avg("points")))),

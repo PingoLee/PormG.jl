@@ -280,3 +280,137 @@ end
   @test PormG.backend_is_retry_safe(pool, CompositeException(Exception[])) === false
   @test PormG.backend_is_retry_safe(MockSQLitePool1042(1), ErrorException("disk I/O error")) === false
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (6) `with_read_retry` (#1148): the retry a caller writes around a read it knows is safe to repeat.
+#
+# `fetch` never re-runs a codeless drop (above), so the caller decides. The helper retries only
+# `OperationalError`, at most `attempts` times, and refuses inside a transaction before the block runs:
+# a lost connection there lost the whole transaction, and #138's rule is to retry that, not a
+# statement. The mocks drop a SELECT the same way they drop the INSERT above.
+# ─────────────────────────────────────────────────────────────────────────────
+const SELECT_1148 = "SELECT * FROM results WHERE raceid = 1120;"
+const READ_RETRIED_1148 = r"with_read_retry: the read raised OperationalError; running it again"
+
+@testset "with_read_retry: a codeless drop on the first attempt returns the second attempt's rows (#1148)" begin
+  # What: one codeless drop on a SELECT, inside `with_read_retry()`. Expected: the block runs twice and
+  # its second result is returned; the logs are fetch's "not retried" warn, then the helper's retry
+  # warn. Why: this is the wrapper every caller wrote by hand; dropping the retry raises instead.
+  for pool in (MockPGPool1042(1; fail_prefix = "SELECT", fail_times = 1),
+               MockSQLitePool1042(1; fail_prefix = "SELECT", fail_times = 1))
+    k = 0
+    result = @test_logs (:warn, NOT_RETRIED_1042) (:warn, READ_RETRIED_1148) with_read_retry() do
+      k += 1
+      (rows = CP.fetch(pool, SELECT_1148), attempt = k)
+    end
+    @test result.attempt == 2                         # the second attempt's result reaches the caller
+    @test result.rows == NamedTuple[]
+    @test count(==(SELECT_1148), pool.executed) == 2
+    @test count(!, pool.available) == 0
+  end
+end
+
+@testset "with_read_retry: two drops with attempts = 1 raise OperationalError (#1148)" begin
+  # What: the SELECT drops on both runs. Expected: the second drop's `OperationalError` propagates,
+  # after exactly two runs. Why: `attempts` bounds the retries; an unbounded loop would hammer a dead
+  # network path.
+  pool = MockPGPool1042(1; fail_prefix = "SELECT", fail_times = 2)
+  err = @test_logs (:warn, NOT_RETRIED_1042) (:warn, READ_RETRIED_1148) (:warn, NOT_RETRIED_1042) begin
+    try
+      with_read_retry(; attempts = 1) do
+        CP.fetch(pool, SELECT_1148)
+      end
+      nothing
+    catch e
+      e
+    end
+  end
+  @test err isa PormG.OperationalError
+  @test err.cause isa MockCodelessDrop1042
+  @test count(==(SELECT_1148), pool.executed) == 2
+  @test count(!, pool.available) == 0
+
+  # `attempts = 0` runs the block once and never retries.
+  pool0 = MockPGPool1042(1; fail_prefix = "SELECT", fail_times = 1)
+  @test_logs (:warn, NOT_RETRIED_1042) @test_throws PormG.OperationalError with_read_retry(; attempts = 0) do
+    CP.fetch(pool0, SELECT_1148)
+  end
+  @test count(==(SELECT_1148), pool0.executed) == 1
+end
+
+@testset "with_read_retry: an error other than OperationalError is never retried (#1148)" begin
+  # What: blocks that raise `InvalidValueError`, `IntegrityError`, a plain `ErrorException`, and an
+  # `OperationalError` with SQLSTATE 57014 (a `statement_timeout` or `pg_cancel_backend`). Expected:
+  # each propagates on the first raise, the block runs once, nothing is logged. Why: re-running a
+  # refused value or a broken query repeats the failure, and re-running a cancelled statement defeats
+  # the cancel.
+  for make in (() -> PormG.InvalidValueError("the value was refused"),
+               () -> PormG.IntegrityError("PostgreSQL", ErrorException("duplicate key")),
+               () -> ErrorException("not a database error"),
+               # A cancelled statement is an OperationalError, but someone asked it to stop.
+               () -> PormG.OperationalError("PostgreSQL", ErrorException("canceling statement"); sqlstate = "57014"))
+    runs = 0
+    expected = typeof(make())
+    @test_logs @test_throws expected with_read_retry(; attempts = 3) do
+      runs += 1
+      throw(make())
+    end
+    @test runs == 1
+  end
+end
+
+@testset "with_read_retry: inside atomic it raises TransactionError without running the block (#1148)" begin
+  # What: `with_read_retry` called inside `atomic` on the mock pool. Expected: `TransactionError`
+  # before the block runs, so no SELECT reaches the driver, and the transaction rolls back and returns
+  # its connection. Why: a lost connection inside a transaction lost the whole transaction (#138);
+  # retrying one read in it would continue a transaction that no longer exists.
+  pool = MockPGPool1042(1)
+  runs = 0
+  err = try
+    CP.atomic(pool) do
+      with_read_retry() do
+        runs += 1
+        CP.fetch(pool, SELECT_1148)
+      end
+    end
+    nothing
+  catch e
+    e
+  end
+  @test err isa PormG.TransactionError
+  @test occursin("retry the transaction, not the statement", PormG.error_message(err))
+  @test runs == 0
+  @test SELECT_1148 ∉ pool.executed
+  @test count(!, pool.available) == 0
+end
+
+@testset "with_read_retry: a negative attempts or backoff is refused (#1148)" begin
+  # What: `attempts = -1`, `backoff = -1`. Expected: `InvalidValueError` before the block runs. Why: a
+  # negative count or sleep has no meaning, and silently treating it as zero would hide a typo.
+  runs = 0
+  @test_throws PormG.InvalidValueError with_read_retry(() -> (runs += 1); attempts = -1)
+  @test_throws PormG.InvalidValueError with_read_retry(() -> (runs += 1); backoff = -1)
+  @test_throws PormG.InvalidValueError with_read_retry(() -> (runs += 1); backoff = Inf)
+  @test runs == 0
+end
+
+@testset "with_read_retry: a retry sleeps `backoff` and logs the error with its count (#1148)" begin
+  # What: one codeless drop under `backoff = 0.2`, with the log captured. Expected: the call takes at
+  # least the backoff, and the retry's warn carries the `OperationalError` as `exception`, `retry = 1`
+  # and `attempts = 1`. Why: the structured fields are what a log pipeline keys on, and a backoff that
+  # never sleeps hammers the database the moment it is struggling.
+  pool = MockPGPool1042(1; fail_prefix = "SELECT", fail_times = 1)
+  logger = Test.TestLogger(; min_level = Base.CoreLogging.Warn)
+  elapsed = Base.CoreLogging.with_logger(logger) do
+    @elapsed with_read_retry(; backoff = 0.2) do
+      CP.fetch(pool, SELECT_1148)
+    end
+  end
+  @test elapsed >= 0.2
+  retry_logs = filter(r -> occursin(READ_RETRIED_1148, string(r.message)), logger.logs)
+  @test length(retry_logs) == 1
+  rec = only(retry_logs)
+  @test rec.kwargs[:exception] isa PormG.OperationalError
+  @test rec.kwargs[:retry] == 1
+  @test rec.kwargs[:attempts] == 1
+end

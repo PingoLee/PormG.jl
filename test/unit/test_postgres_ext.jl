@@ -340,6 +340,10 @@ end
   # the value; the accepted values pass in any case. Why: the driver checks these only after opening
   # the socket, and its `invalid sslmode: <value>` echoes the value — the tail of a password when an
   # unencoded `?` spilled it into the query with no `@` for the #662 check to catch.
+  # The accepted set is `_CONNECT_TIME_VALUES`, a copy pinned to the Postgres.jl versions its comment
+  # names (#1257). The parity fuzz below cannot cover it: it compares against `Postgres.parse_dsn`, which
+  # takes any `sslmode`/`gssencmode`, while the driver checks the value only inside `connect` —
+  # `gssencmode` before dialling, `sslmode` once a socket is open — and exposes no constant to compare.
   refusal(dsn) = (try PGExt._checked_params(dsn); "" catch e; e isa PormG.InvalidConfigurationError ? PormG.error_message(e) : rethrow() end)
   withenv("PGSSLMODE" => nothing, "PGGSSENCMODE" => nothing) do
     for (dsn, field) in (("host=h sslmode=allow dbname=f1", "sslmode"),
@@ -433,7 +437,8 @@ end
   # on grammar rows (quoting, `\` escapes, `;`, upper-case keys, spaces around `=`, URL `+`/`%xx`, and
   # `%xx` before the query, #1243) and on a seeded fuzz. Why: a tokenizer that disagreed would refuse a valid string — a behavior change
   # for a working app — or name the wrong key. Compared through the public `Postgres.parse_dsn` only,
-  # so a renamed driver internal cannot turn this red.
+  # so a renamed driver internal cannot turn this red. Not covered here: the `sslmode`/`gssencmode`
+  # values the driver accepts only in `connect` — see the #1242 testset above (#1257).
   string_fields = ("host", "user", "password", "dbname", "application_name", "options", "sslrootcert",
                    "sslcert", "sslkey", "sslcapath", "sslservername", "krbsrvname")
   problems = String[]

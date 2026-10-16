@@ -27,6 +27,8 @@ const EXPECTED_TOPLEVEL = Set([
     :object, :get, :Q, :Qor, :F, :Exists, :OuterRef, :Subquery, :CTE, :Joined, :Interval, :show_query, :inspect_query, :explain_query,
     # Rows & exceptions
     :PormGRow, :pk, :DoesNotExist, :MultipleObjectsReturned, :PoolTimeoutError, :PoolConnectError, :pool_stats,
+    # #1148: the explicit retry for a read the caller vouches is safe to repeat.
+    :with_read_retry,
     # Semantic error taxonomy (#231): PormGError root + query-builder subtypes
     :PormGError, :FieldAccessError, :UnknownFieldError, :AmbiguousFieldError, :LazyTraversalError, :FilterError,
     :QueryBuildError, :UnsafeMutationError, :InvalidValueError, :WritesDisabledError, :UnsupportedConnectionError,

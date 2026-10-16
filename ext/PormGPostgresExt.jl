@@ -387,10 +387,17 @@ end
 # Case-insensitive, as `Postgres.parse_dsn` decides it: `POSTGRESQL://…` is parsed as a URL too.
 _is_url(s::AbstractString) = (l = lowercase(s); startswith(l, "postgresql://") || startswith(l, "postgres://"))
 
-# The values Postgres.jl accepts when it CONNECTS (the same in 2.2.2 and 2.3.0), compared lower-cased
-# as it compares them. Read off the params the driver parsed — PormG's policy on the driver's own
-# result, like `reconnect`, not a table run before it (#1247). A release that accepts `allow` or
-# `verify-ca` needs its row here. In the driver's order: `gssencmode` is checked before dialling.
+# The values Postgres.jl accepts when it CONNECTS, compared lower-cased as it compares them. Read off
+# the params the driver parsed — PormG's policy on the driver's own result, like `reconnect`, not a
+# table run before it (#1247). In the driver's order: `gssencmode` is checked before dialling.
+#
+# A COPY, pinned to Postgres.jl 2.2.2 and 2.3.0 (#1257): the driver has no constant to read. Its
+# `connect` compares inline, in `src/api/API.jl` — the `invalid gssencmode` and `invalid sslmode`
+# checks — and both releases accept exactly these. `[compat]` admits any 2.x, so a new release reaches
+# CI with no bump: re-read those two checks when one appears. A value it starts accepting (libpq's
+# `allow`, `verify-ca`) needs its row here, or PormG refuses a configuration the driver would connect
+# with — the #1247 break. The parity fuzz in `test_postgres_ext.jl` cannot see the drift: it compares
+# with `Postgres.parse_dsn`, which takes any value for both.
 const _CONNECT_TIME_VALUES = (
   :gssencmode => ("disable", "prefer", "require"),
   :sslmode => ("disable", "prefer", "require", "verify-full"),

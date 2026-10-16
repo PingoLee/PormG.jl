@@ -91,6 +91,9 @@ end
 - Around `migrate()`, catch `DatabaseError` as well as `MigrationError`: a failing `ALTER` arrives
   as a `StatementError`, not re-wrapped.
 - On `OperationalError` inside a transaction, retry the **whole transaction**, never one statement.
+- Outside a transaction, wrap a read you know is safe to run twice in `with_read_retry() do … end`:
+  it runs the block again on `OperationalError` (once by default; `attempts`, `backoff` seconds) and
+  raises `TransactionError` inside a transaction. PormG never retries a dropped read on its own.
 
 ## What raises what
 

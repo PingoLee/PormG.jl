@@ -1216,8 +1216,14 @@ agrees with PostgreSQL:
 - a filter on a `CTE(...)` column holding a duration, stored or computed (`"laps__t__@gt" => Hour(100)`
   over a body projecting `"t" => Sum("time")`, #1219), or on a path through a CTE key column to a
   related model's `DurationField`, with the same lookups as the column
+- `order_by` on such a `CTE(...)` column, projected or not (`order_by("laps__t")`,
+  `CTE("laps", "t"; desc = true)`, or a path through a CTE key column), and `Max`/`Min`, `Sum`/`Avg`
+  and `Greatest`/`Least`/`Coalesce` over one (`Max(CTE("laps", "t"))`, #1285), which read back as a
+  `CompoundPeriod`, as over the column, along with a filter on such an aggregate's alias and
+  arithmetic on it (`Max(CTE("laps", "t")) - Min(CTE("laps", "t"))`, `Sum(CTE("laps", "t")) / Count("lap")`)
 
-An aggregate or arithmetic over a `CTE(...)` duration column, and ordering by one, still use its text.
+`F(...)` arithmetic on a `CTE(...)` column is not written that way: `F` takes a model path, and
+`F("laps__t")` is refused.
 
 That reading rounds each side to the nearest **millisecond**, the precision of a timestamp there,
 while PostgreSQL keeps microseconds. So two durations less than a millisecond apart can order the

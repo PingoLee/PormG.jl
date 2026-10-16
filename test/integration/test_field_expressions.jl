@@ -881,6 +881,29 @@ end
           sort(totals.driverid[50 * 3_600_000 .<= totals.ms .<= hours100])
   end
 
+  # #1285 — ordering and aggregating the same CTE column. On SQLite `order_by("c__t")` sorted the
+  # text and `Max(CTE("c", "t"))` returned the text's maximum, so a driver at 99 h ranked above one past
+  # 100 h. The oracle is #1219's: the summed `milliseconds` beside the summed duration. Expected SQL,
+  # SQLite: `ORDER BY <ms of "R1_1"."t">` and `MAX(<ms of "R1_1"."t">)` as the interval's text;
+  # PostgreSQL: `ORDER BY "R1_1"."t"` and `MAX("R1_1"."t")`, unchanged.
+  @testset "ordering and aggregating a duration CTE column use its length (#1285)" begin
+    seasons() = (b = M.Lap_times.objects;
+                 b.filter("raceid__year__@range" => [2009, 2012]);
+                 b.values("driverid", "t" => PormG.Functions.Sum("time"), "ms" => PormG.Functions.Sum("milliseconds"));
+                 b)
+    totals = seasons() |> DataFrame
+    @test any(>(100 * 3_600_000), totals.ms) && any(<(100 * 3_600_000), totals.ms)
+    by_ms(sign) = [r.driverid for r in sort(eachrow(totals); by = r -> (sign * r.ms, r.driverid))]
+    run(build!) = (q = M.Driver.objects; q.with("c" => seasons(), join_field = "driverid" => "driverid", join_type = "INNER");
+                   build!(q); q |> DataFrame)
+    @test run(q -> (q.values("driverid"); q.order_by("c__t", "driverid"))).driverid == by_ms(1)
+    @test run(q -> (q.values("driverid", "c__t"); q.order_by("-c__t", "driverid"))).driverid == by_ms(-1)
+    ext = run(q -> q.values("mx" => PormG.Functions.Max(PormG.CTE("c", "t")), "mn" => PormG.Functions.Min(PormG.CTE("c", "t"))))
+    @test ext[1, :mx] isa Dates.CompoundPeriod
+    @test Dates.toms(ext[1, :mx]) == maximum(totals.ms)
+    @test Dates.toms(ext[1, :mn]) == minimum(totals.ms)
+  end
+
   # #900 — the functions #894 left on the text. On SQLite `Sum`/`Avg` added up the text's leading hours,
   # `Greatest`/`Least` compared the text, and `Coalesce` sorted it. The rows and the oracle are #894's;
   # a lap time's `milliseconds` column is the oracle for its `time`.

@@ -382,9 +382,10 @@ function _refuse_order_alias_collision(path::String, projection)
 end
 
 # #894 — an ORDER BY term that is a bare `DurationField` column path, on SQLite. Typed after the term
-# has been rendered, so the memo the kind lookup reads is populated.
+# has been rendered, so the memo the kind lookup reads is populated. #1285: or a CTE column holding a
+# duration, which the body left as its text.
 _orders_as_sqlite_interval(term::SQLField, instruc::SQLInstruction) =
-  _interval_as_ms(instruc.connection) && term.field isa String && _is_bare_column(term.field) &&
+  _interval_as_ms(instruc.connection) && term.field isa Union{String,CTEReference} && _is_bare_column(term.field) &&
   _expression_kind(term.field, instruc) isa CInterval
 _orders_as_sqlite_interval(::Any, ::SQLInstruction) = false
 

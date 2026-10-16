@@ -341,8 +341,8 @@ value_parser(::CDate,     ::PormGSQLite) = Dialect._parse_sqlite_date
 value_parser(::CTime,     ::PormGSQLite) = Dialect._parse_sqlite_time
 value_parser(::CInterval, ::PormGSQLite) = Dialect._parse_sqlite_interval
 # #953, #965: SQLite hands back a boolean, column or expression, as the 0/1 it stores, where
-# PostgreSQL delivers a `Bool`. Recorded for a boolean read by `_field_read_kind` and
-# `_function_projection_kind`.
+# PostgreSQL delivers a `Bool`. Recorded for a boolean read by the read view (`_read_kind`, which
+# `_field_read_kind` shares for a wildcard).
 value_parser(::CBool,     ::PormGSQLite) = Dialect._parse_sqlite_bool
 # #648: exact only for a column narrow enough that SQLite stored every accepted value exactly — the
 # width `Dialect.field_to_column` refuses to exceed. A wider kind (a column created outside PormG, or

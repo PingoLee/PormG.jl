@@ -1318,7 +1318,8 @@ _textless_number(::Any, ::SQLInstruction) = nothing
 # projection with no kind — answers `nothing`, the fail-open default, and the value stays as the
 # driver delivered it.
 # #1121: a computed number's numeric read kind is the read path's alone (`_without_numeric_read`);
-# the projection reads it through `_numeric_read_kind`.
+# the projection reads the whole record through `_read_kind` (#1034 step 3). This view is the binder's
+# and the render's, until #1034 steps 4 and 5 move them.
 _subquery_kind(p::SubqueryObject, instruc::SQLInstruction)::Union{CanonicalType,Nothing} =
   _without_numeric_read(instruc.subquery_kinds === nothing ? nothing : get(instruc.subquery_kinds, p, nothing))
 

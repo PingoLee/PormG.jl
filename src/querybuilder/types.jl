@@ -590,7 +590,7 @@ end
   # #888 — the read kind of each `Subquery(...)` this build RENDERED, keyed by the node itself. The
   # inner build records its one projection's kind (`projection_kinds` above, written back onto the
   # rendered copy of the handler); `_get_select_query(::SubqueryObject)` files it here, and
-  # `_operand_kind(::SubqueryObject)` reads it AFTER the render — the order every other kind
+  # `_read_kind` (and `_subquery_kind`) read it AFTER the render — the order every other kind
   # lookup keeps (#564). Not a memo, for the reason `projection_kinds` gives: it describes a result,
   # it has no `MemoKey` namespace, and nothing reads it to skip a render. Keyed by IDENTITY because
   # the kind is a function of the node's own query, so a node projected twice answers the same, and

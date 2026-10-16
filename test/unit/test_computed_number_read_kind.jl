@@ -8,7 +8,7 @@ PostgreSQL computes `Avg` over an integer, and every function PormG renders over
 SQLite. The type a call means is Django's `output_field`: a decimal over a `DecimalField`, a float for
 `Avg`/`Mod`/`Sqrt`/`Exp`/`Ln`/`Power` over an integer, and the operand's type for `Sum`, `Abs`,
 `Floor`, `Ceil` and `Round`. The build records that type as the projection's read kind
-(`_numeric_read_kind`), and the read parsers turn either engine's answer into it. A declared decimal
+(`_read_kind`), and the read parsers turn either engine's answer into it. A declared decimal
 (`Cast(x, "numeric(10,2)")`, a decimal `output_field`) is one too (#1212): its read kind is the
 width-less decimal, never the declared width.
 

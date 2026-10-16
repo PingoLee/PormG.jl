@@ -7,9 +7,12 @@
 # constructor (`_result_rule`, `functions.jl`) — and the policies differ only where one of them
 # declines to answer ON PURPOSE, or (`_MeaningKinds`) answers what a computed number means:
 #
-# - `_ReadKinds` — the #564 READ kind: the representation the read path must undo. It is what
-#   `_operand_kind` and `_function_projection_kind` answer, exactly as before this file existed (the
-#   expression-kind matrix pins every cell). A column has a kind only when the representation table
+# - `_ReadKinds` — the #564 READ kind, as the per-shape readers answered it before this file existed:
+#   what `_operand_kind` and `_function_projection_kind` answer (the expression-kind matrix pins every
+#   cell). The read path itself no longer asks it — it reads `_read_kind`, a view of `_MeaningKinds`
+#   (#1034 step 3, below) — and its remaining readers are the comparison binder (step 4), and the
+#   render's arithmetic and interval typing (`_side_kind`, `_side_function_kind`, the function arm of
+#   `_render_interval_operand`) and `Concat`'s temporal check (`_textless_temporal`), which step 5 moves. A column has a kind only when the representation table
 #   owns one (`field_canonical_kind`: temporal, decimal, array — no integer, float, text or boolean,
 #   because the table also feeds the comparison binder, #882); a literal only a temporal one
 #   (`literal_canonical_kind`, #721); a computed number none (`Sum`/`Avg` went through a double,
@@ -21,8 +24,9 @@
 # - `_MeaningKinds` — what a value MEANS, on every engine (#1121): `_AllKinds` in every arm but a
 #   computed number, which is its function's `_output_kind` (Django's `output_field`) rather than the
 #   type one engine happens to compute it as (`_computed_kind`). `Avg("grid")` is a `numeric` on
-#   PostgreSQL and a REAL on SQLite, and it means a float on both. Its reader is the numeric read view
-#   (`_numeric_read_kind`), which turns either engine's answer into that type.
+#   PostgreSQL and a REAL on SQLite, and it means a float on both. Its reader is the read view
+#   (`_read_kind`), which records a computed number as that type so the read path turns either engine's
+#   answer into it, and records every other kind a read parser undoes.
 #
 # All three are asked AFTER the render, as every reader here is: resolving a joined path is what fills the
 # field memo `_alias_column_field` reads, and a `Subquery` files its kind when it renders.
@@ -392,7 +396,7 @@ end
 
 # #1121 — what a computed number MEANS, from its operands' kinds `ks`: Django's `output_field`, the
 # same on every engine. PostgreSQL's `numeric` and SQLite's REAL are two engines computing it; the
-# read path turns either into this (`_numeric_read_kind`).
+# read path turns either into this (`_read_kind`).
 #
 # - `:promoting` (`Sum`, `Abs`, `Floor`, `Ceil`) — its operand's type, as a Django `Transform` or `Sum`
 #   is. A decimal's width is dropped: the operation may change it;
@@ -411,41 +415,137 @@ _operand_meaning(k::Union{CInt16,CInt32,CInt64,CFloat64,CInterval}) = k
 _operand_meaning(::CDecimal) = CDecimal(nothing, nothing)
 _operand_meaning(::Any) = nothing
 
-# ── #1121: the numeric read view ─────────────────────────────────────────────────────────────────────
-# The kinds the read path records for a computed number and no other projection: a float, and a
-# decimal with no width. A column's decimal keeps its width (#648's parser), and an integer or a date
-# is the read kind's own business.
+# ── #1034 phase 3 step 3: the read view ──────────────────────────────────────────────────────────────
+# The read path records a kind per projection (`projection_kinds`, #564) so that a read parser can undo
+# what one engine did to the value: SQLite's stored text for a date, a time, a timestamp or an interval,
+# its 0/1 for a boolean, its REAL for a decimal (`value_parser`, `value_repr.jl`). That kind used to be
+# assembled at each projection site from five sources — the `_ReadKinds` walk, the column lookup, the
+# formatter's boolean, the record of a `Subquery`, and the numeric read kind (#1121) — each written for
+# one shape (#564, #800, #824, #888, #965, #979, #1121). It is now one view of the walk.
+#
+# The view keeps the kinds a parser undoes and drops the rest: an integer, a float column, text, JSON or
+# a uuid reads as the driver delivers it (#882's reason, now a filter rather than a gap in the walk).
+
+# The kinds a STORED value is read as: one a column holds, or one of its operands' own values (`Max`,
+# `Coalesce` over columns that agree, #824). A decimal keeps its declared width for #648's exact parser;
+# one with no width is never a column.
+_stored_read_view(k::Union{CDate,CDateTime,CTime,CInterval,CBool,CArray}) = k
+_stored_read_view(k::CDecimal) = k.precision === nothing ? nothing : k
+_stored_read_view(::Any) = nothing
+
+"""
+    _read_kind(x, instruc; rendered = nothing) -> Union{CanonicalType, Nothing}
+
+The kind the read path records for the projection `x` (#564), or `nothing` when no read parser has
+anything to undo. `rendered` is the kind the render itself computed, which the walk does not name yet:
+temporal arithmetic (`_set_update_query_typed`) and an interval aggregate SQLite held in milliseconds
+(`_render_function_typed`). It answers first. Otherwise:
+
+- a literal is its Julia value's kind (#721), and a `Bool` a boolean (#1122);
+- a `Subquery` or a CTE column reads as its own build recorded it, by this same view (#888, #824);
+- anything else is what the walk says it means (`_MeaningKinds`), through the view: a computed number is
+  the float or the width-less decimal it means (#1121, #1212), and a stored value keeps its kind.
+
+Read after `x` renders, as every kind lookup here is: resolving a path fills the memo the walk reads.
+"""
+function _read_kind(x, instruc::SQLInstruction; rendered = nothing)
+  rendered === nothing || return rendered
+  x isa SQLText && return _literal_read_kind(x.field)
+  recorded = _recorded_read_kind(x, instruc)
+  recorded === false || return recorded
+  # TRANSITIONAL (#1262): an undeclared `Case` keeps the read kind the per-shape assembly gave it, so
+  # this view lands as a refactor. The next commit lifts it.
+  _undeclared_case(x) && return _undeclared_case_read_kind(x, instruc)
+  # A window value function (`Lag`, `Lead`) returns a row's value of its operand, and its `default` only
+  # stands in on the rows that have none: Django gives it its expression's `output_field`. So a stored
+  # value reads as its operand's — `Lag("points", default = 0)` keeps the column's decimal width (#648) —
+  # and only a computed number reads as what the whole call means, default included (#1121).
+  x isa WindowFunction && haskey(x.kwargs, "default") && _result_rule(x) === :operand &&
+    !_computes_number(x, instruc) && return _read_kind(x.column, instruc)
+  return _read_view(_infer_kind(x, instruc, _MeaningKinds()), x, instruc)
+end
+# TRANSITIONAL (#1262): an undeclared `Case` read as a boolean or a computed number only.
+function _undeclared_case_read_kind(x, instruc::SQLInstruction)
+  k = _read_view(_infer_kind(x, instruc, _MeaningKinds()), x, instruc)
+  return k isa CBool || _computes_number(x, instruc) ? k : nothing
+end
+
+function _literal_read_kind(x)
+  k = literal_canonical_kind(x)
+  k === nothing && x isa Bool && return CBool()
+  return k
+end
+
+# The record a `Subquery`'s inner build or a CTE body made for its one column: that build's own read
+# kind, by this view, so the two compose by construction. `false` for every other node. A CTE path that
+# hops on through the column (`CTE("ev", "parent__x")`) ends at a real model field, and the walk reads it.
+_recorded_read_kind(::Any, ::SQLInstruction) = false
+_recorded_read_kind(p::SubqueryObject, instruc::SQLInstruction) =
+  instruc.subquery_kinds === nothing ? nothing : get(instruc.subquery_kinds, p, nothing)
+function _recorded_read_kind(ref::CTEReference, instruc::SQLInstruction)
+  occursin("__", ref.path) && return false
+  cte = get(instruc.object.ctes, ref.name, nothing)
+  body = cte === nothing ? nothing : get(cte, "query", nothing)
+  body isa SQLObjectHandler || return nothing
+  return get(body.object.projection_kinds, Symbol(ref.path), nothing)
+end
+
+function _read_view(k, x, instruc::SQLInstruction)
+  if k isa Union{CFloat64,CDecimal} && _computes_number(x, instruc)
+    stored = _declared_stored_decimal(x, instruc)
+    return stored === nothing ? _computed_meaning(k) : stored
+  end
+  if x isa Union{FObject,WindowFunction}
+    # #965: a function's boolean is the one its FORMATTER names (`_is_boolean_valued`), as the render's
+    # is: #953 renders PostgreSQL's `BOOL_OR` for an extremum only over a boolean-formatted operand, and
+    # the formatter types no bare `Q(…)` operand (`Max(Q(…))`, `Coalesce(Q(…), false)` render as
+    # numbers there). The read kind follows that render until #1034 step 4 moves the formatter onto
+    # the walk, and the render with it.
+    _is_boolean_valued(x, instruc) && return CBool()
+    k isa CBool && return nothing
+  end
+  return _stored_read_view(k)
+end
+
+# #1212: a value that is one of its operands' own (`Coalesce`, `Greatest`, `Least`) over columns that
+# agree on one decimal, declared as that decimal, is a value SQLite stored, not one it computed: it keeps
+# the columns' width and #648's exact parser (#824's agreement rule). Any operand of another kind — a
+# literal, a column of another width — makes it the computed number its declaration means. The
+# declaration is compared by its type NAME's field (`_sql_type_field`, which drops the size, so any
+# `numeric` is `DecimalField()`'s `(10, 2)`), as the agreement rule always compared it: reading the
+# declared width (`_declared_kind`) instead would change which parser a declared column of another
+# width gets, a behavior change of its own.
+function _declared_stored_decimal(x, instruc::SQLInstruction)
+  (x isa FObject && _result_rule(x) === :one_of) || return nothing
+  declared = _declared_cast(x)
+  (declared isa AbstractString && !isempty(declared)) || return nothing
+  declared_field = _sql_type_field(declared)
+  declared_field === nothing && return nothing
+  k = field_canonical_kind(declared_field)
+  (k isa CDecimal && k.precision !== nothing) || return nothing
+  for operand in (x.column isa AbstractVector ? x.column : (x.column,))
+    _is_null_literal(operand isa SQLText ? operand.field : operand) && continue
+    _infer_kind(operand, instruc, _AllKinds()) == k || return nothing
+  end
+  return k
+end
+
+# The numeric read view (#1121): the kinds the read path records for a computed number.
 _numeric_view(k::CFloat64) = k
 _numeric_view(k::CDecimal) = k.precision === nothing && k.scale === nothing ? k : nothing
 _numeric_view(::Any) = nothing
-
-"""
-    _numeric_read_kind(x, instruc) -> Union{CFloat64, CDecimal, Nothing}
-
-The read kind of a projected COMPUTED number (#1121): what it means (`_MeaningKinds`), when that is a
-float or a decimal, or `nothing`. Recorded where the read kind is `nothing` (`get_select_query`), so
-the read path turns PostgreSQL's `numeric` and SQLite's REAL into the one Julia type the call means,
-as Django's `convert_value` turns them by `output_field`. A computed number is arithmetic, a
-`:promoting`/`:numeric` function, a function whose value is one of those (`Max(F("points") * 2)`,
-`Coalesce(Avg("grid"), 0)`, `NullIf`, a `Case` with no `output_field`), a declared decimal
-(`Cast(x, "numeric(10,2)")`, an `output_field` naming one, #1212), or a CTE column or `Subquery` whose
-own build recorded one. A column, a literal, or a `Coalesce`/`Case` over columns is not: each row is a
-value an operand already has, as the driver delivers it. A decimal records no width (`_computed_meaning`).
-Read after `x` renders.
-"""
-_numeric_read_kind(p::FExpression, instruc::SQLInstruction) =
-  p.operation === nothing ? nothing : _numeric_view(_infer_kind(p, instruc, _MeaningKinds()))
-_numeric_read_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction) =
-  _computes_number(p, instruc) ? _numeric_view(_computed_meaning(_infer_kind(p, instruc, _MeaningKinds()))) : nothing
 
 # #1212: a computed number's decimal meaning claims no width. Only a declaration names one
 # (`Cast(x, "numeric(10,2)")`, or a value over one, `Max(Cast(…))`), and the read path must not take it
 # to a column's: #648's exact parser is for a value SQLite stored, not a double it computed.
 _computed_meaning(k::CDecimal) = CDecimal(nothing, nothing)
 _computed_meaning(k) = k
-_numeric_read_kind(p::Union{CTEReference,SubqueryObject}, instruc::SQLInstruction) = _numeric_read_record(p, instruc)
-_numeric_read_kind(::Any, ::SQLInstruction) = nothing
 
+# A COMPUTED number (#1121): arithmetic, a `:promoting`/`:numeric` function, a function whose value is
+# one of those (`Max(F("points") * 2)`, `Coalesce(Avg("grid"), 0)`, `NullIf`, a `Case` with no
+# `output_field`), a declared decimal (`Cast(x, "numeric(10,2)")`, an `output_field` naming one, #1212),
+# or a CTE column or `Subquery` whose own build recorded one. A column, a literal, or a `Coalesce`/`Case`
+# over columns is not: each row is a value an operand already has, as the driver delivers it.
 _computes_number(p::FExpression, ::SQLInstruction) = p.operation !== nothing
 function _computes_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   rule = _result_rule(p)
@@ -485,15 +585,10 @@ end
 # `Max(CTE(…)) * 2`). A body value that is not a computed number has no such record, and the walk falls
 # back to its `_AllKinds` record: what the engine computes, which is the column's own type for a column
 # and differs per engine only for a number this view leaves out (`Round` over an integer).
-function _numeric_read_record(ref::CTEReference, instruc::SQLInstruction)
-  occursin("__", ref.path) && return nothing
-  cte = get(instruc.object.ctes, ref.name, nothing)
-  body = cte === nothing ? nothing : get(cte, "query", nothing)
-  body isa SQLObjectHandler || return nothing
-  return _numeric_view(get(body.object.projection_kinds, Symbol(ref.path), nothing))
+function _numeric_read_record(x::Union{CTEReference,SubqueryObject}, instruc::SQLInstruction)
+  recorded = _recorded_read_kind(x, instruc)
+  return recorded === false ? nothing : _numeric_view(recorded)
 end
-_numeric_read_record(p::SubqueryObject, instruc::SQLInstruction) =
-  _numeric_view(instruc.subquery_kinds === nothing ? nothing : get(instruc.subquery_kinds, p, nothing))
 _numeric_meaning_record(x, instruc::SQLInstruction, ::_MeaningKinds) = _numeric_read_record(x, instruc)
 _numeric_meaning_record(x, ::SQLInstruction, ::Union{_ReadKinds,_AllKinds}) = nothing
 

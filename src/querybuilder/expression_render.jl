@@ -693,7 +693,7 @@ function _render_interval_operand(node, instruc::SQLInstruction;
   sql = _get_select_query(node, instruc; _as = _as)
   # Render first, then type: resolving the path is what populates the memo the kind lookup reads.
   bare = node isa SQLField ? node.field : node
-  interval = _operand_kind(bare, instruc) isa CInterval
+  interval = _expression_kind(bare, instruc) isa CInterval
   ms = sqlite && interval && _is_bare_column(bare) ? Dialect._sqlite_interval_ms(sql) : nothing
   return sql, ms, interval
 end

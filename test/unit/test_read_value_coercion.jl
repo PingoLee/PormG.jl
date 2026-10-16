@@ -645,6 +645,20 @@ end
     kinds = _rvc_kinds(q -> q.values("id", "p" => F_.Lag(PormG.Subquery(sub), over = F_.WindowOver(order_by = "id")));
                        connection = _RVC_PG)
     @test kinds[:p] == PormG.CDate()
+
+    # #1034 step 3: a `default` stands in on the rows with no previous value, so it does not change the
+    # kind (Django gives `Lag`/`Lead` their expression's `output_field`): a decimal keeps its width,
+    # under a number literal default too, and a date column stays a date whatever the default is.
+    over = F_.WindowOver(order_by = "id")
+    kinds = _rvc_kinds(q -> q.values("id",
+      "ld" => F_.Lag("amount", default = 0, over = over),
+      "le" => F_.Lead("amount", default = PormG.F("amount"), over = over),
+      "lt" => F_.Lag("d", default = Date(2031, 1, 1), over = over),
+      "li" => F_.Lag("d", default = PormG.F("id"), over = over)); connection = _RVC_PG)
+    @test kinds[:ld] == PormG.CDecimal(12, 2)
+    @test kinds[:le] == PormG.CDecimal(12, 2)
+    @test kinds[:lt] == PormG.CDate()
+    @test kinds[:li] == PormG.CDate()
   end
 
   # #824: the `@date` transform is a date whatever its operand — `(col)::date` on PostgreSQL,

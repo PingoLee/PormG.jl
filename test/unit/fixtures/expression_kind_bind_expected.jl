@@ -78,7 +78,7 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("path interval | cte", :sqlite, "g__v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
   ("path interval | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"00:01:00\"", "String")]),
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("60000", "Int64")]),
   ("path interval | subquery", :postgres, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("path interval | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
@@ -840,7 +840,7 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Case untyped interval col | cte", :sqlite, "g__v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
   ("Case untyped interval col | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("\"00:01:00\"", "String")]),
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("1", "Int64"), ("60000", "Int64")]),
   ("Case untyped interval col | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = \$3 THEN \"R2\".\"fastestlaptime\"\nELSE NULL\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Case untyped interval col | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
@@ -1020,7 +1020,7 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Sum interval | cte", :sqlite, "g__v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
   ("Sum interval | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"00:01:00\"", "String")]),
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("60000", "Int64")]),
   ("Sum interval | subquery", :postgres, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Sum interval | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
@@ -1092,7 +1092,7 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Avg interval | cte", :sqlite, "g__v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
   ("Avg interval | cte", :sqlite, "g__v__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("\"00:01:00\"", "String")]),
+    (stage = :ok, clause = :where, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) > ?", params = [("60000", "Int64")]),
   ("Avg interval | subquery", :postgres, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Avg interval | subquery", :postgres, "w__@gt", "interval Minute(1)") =>

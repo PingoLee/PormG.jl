@@ -859,6 +859,28 @@ end
     @test sort((quick |> DataFrame).milliseconds) == sort(filter(<(120_000), ldf.milliseconds))
   end
 
+  # #1219 — a filter on a CTE column holding a duration. On SQLite the CTE body leaves its `Sum` as
+  # the interval's text, and the filter compared that text with the value's, so a driver past 100 h
+  # sorted below one at 99 h. Each driver's lap time over four seasons is summed in the CTE beside the
+  # summed `milliseconds`, which is the oracle; the filter on the duration must pick the drivers the
+  # milliseconds do, on both engines. Expected SQL, SQLite: `WHERE <ms of "R1_1"."t"> > ?` with
+  # `[360000000]`; PostgreSQL: `WHERE "R1_1"."t" > $1` with `["100:00:00"]`.
+  @testset "a filter on a duration CTE column compares its length (#1219)" begin
+    seasons() = (b = M.Lap_times.objects;
+                 b.filter("raceid__year__@range" => [2009, 2012]);
+                 b.values("driverid", "t" => PormG.Functions.Sum("time"), "ms" => PormG.Functions.Sum("milliseconds"));
+                 b)
+    totals = seasons() |> DataFrame
+    hours100 = 100 * 3_600_000
+    # Non-vacuous: drivers on both sides of 100 hours, so text order and numeric order disagree here.
+    @test any(>(hours100), totals.ms) && any(<(hours100), totals.ms)
+    run(build!) = (q = M.Driver.objects; q.with("c" => seasons(), join_field = "driverid" => "driverid", join_type = "INNER");
+                   q.values("driverid"); build!(q); sort((q |> DataFrame).driverid))
+    @test run(q -> q.filter("c__t__@gt" => Dates.Hour(100))) == sort(totals.driverid[totals.ms .> hours100])
+    @test run(q -> q.filter("c__t__@range" => [Dates.Hour(50), Dates.Hour(100)])) ==
+          sort(totals.driverid[50 * 3_600_000 .<= totals.ms .<= hours100])
+  end
+
   # #900 — the functions #894 left on the text. On SQLite `Sum`/`Avg` added up the text's leading hours,
   # `Greatest`/`Least` compared the text, and `Coalesce` sorted it. The rows and the oracle are #894's;
   # a lap time's `milliseconds` column is the oracle for its `time`.

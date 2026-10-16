@@ -1213,6 +1213,10 @@ agrees with PostgreSQL:
 - `Max`/`Min`, `Sum`/`Avg`, and `Greatest`/`Least`/`Coalesce` over durations, duration literals and
   timestamp differences, also inside arithmetic (`Sum("time") - Max("time")`, #907)
 - inside arithmetic, or against a timestamp difference (`(F("time") * 2) > Minute(3)`)
+- a filter on a `CTE(...)` column holding a duration, stored or computed (`"laps__t__@gt" => Hour(100)`
+  over a body projecting `"t" => Sum("time")`, #1219), with the same lookups as the column
+
+An aggregate or arithmetic over a `CTE(...)` duration column, and ordering by one, still use its text.
 
 That reading rounds each side to the nearest **millisecond**, the precision of a timestamp there,
 while PostgreSQL keeps microseconds. So two durations less than a millisecond apart can order the

@@ -951,3 +951,72 @@ end
     close(db)
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1219 — a filter on a CTE column holding a duration compares milliseconds on SQLite
+# A CTE body leaves a SQLite duration as its text, a stored `DurationField` column or a computed
+# `Sum` alike, and a filter on the CTE column (`"c__t__@gt"`) compared that text with the bound text
+# of the value. It now converts the column once and binds the value's milliseconds, as a model
+# `DurationField` does (#894); an `F` right-hand side is a duration too. Equality and membership keep
+# the text. Expected SQL, SQLite: `WHERE <ms of "R1_1"."t"> > ?` with `[356400000]`; PostgreSQL
+# compares the interval, `WHERE "R1_1"."t" > $1` with `["99:00:00"]`, unchanged. The oracle runs each
+# statement on SQLite over the rows above: the text comparison returns another row set on every line.
+# Why: before #1219 the CTE spelling silently disagreed with the column it was built from.
+# ─────────────────────────────────────────────────────────────────────────────
+_io_cte_lap!(q; body = "lap") = q.with("c" => (b = _IOM.Io_lap.objects; b.values("id", "t" => body); b),
+                                         join_field = "id" => "id", join_type = "INNER")
+_io_cte_sum!(q) = q.with("c" => (b = _IOM.Io_lap.objects; b.values("circuit", "t" => _IO_FN.Sum("lap")); b),
+                         join_field = "circuit" => "circuit", join_type = "INNER")
+const _IO_CTE_MS = PormG.Dialect._sqlite_interval_ms("\"R1_1\".\"t\"")
+
+@testset "#1219: a filter on a duration CTE column compares milliseconds on SQLite" begin
+  for (lookup, value, rendered, bound, pg_bound) in (
+      ("c__t__@gt",    Dates.Hour(99),                 "> ?",             Any[356_400_000],         Any["99:00:00"]),
+      ("c__t__@range", [Dates.Hour(-1), Dates.Hour(99)], "BETWEEN ? AND ?", Any[-3_600_000, 356_400_000], Any["-01:00:00", "99:00:00"]),
+    ), cte! in (_io_cte_lap!, _io_cte_sum!)
+    q = _IOM.Io_lap.objects
+    cte!(q); q.values("id"); q.filter(lookup => value)
+    @test occursin("WHERE $(_IO_CTE_MS) $(rendered)", _io_sql(q))
+    @test _io_params(q) == bound
+    q_pg = _IOM.Io_lap.objects
+    cte!(q_pg); q_pg.values("id"); q_pg.filter(lookup => value)
+    pg_sql = _io_sql(q_pg; conn = _IO_PG)
+    @test occursin("WHERE \"R1_1\".\"t\" $(first(split(rendered))) \$1", pg_sql) && !occursin("substr(", pg_sql)
+    @test _io_params(q_pg; conn = _IO_PG) == pg_bound
+  end
+  # Against another DurationField: both sides in milliseconds.
+  q = _IOM.Io_lap.objects
+  _io_cte_lap!(q); q.values("id"); q.filter("c__t__@gt" => F("best"))
+  @test occursin("WHERE $(_IO_CTE_MS) > $(PormG.Dialect._sqlite_interval_ms("\"R1\".\"best\""))", _io_sql(q))
+  # Equality keeps the canonical text; a value that is no duration is refused by the column's type.
+  q = _IOM.Io_lap.objects
+  _io_cte_lap!(q); q.values("id"); q.filter("c__t" => Dates.Hour(99))
+  @test occursin("WHERE \"R1_1\".\"t\" = ?", _io_sql(q))
+  @test _io_params(q) == Any["99:00:00"]
+  q = _IOM.Io_lap.objects
+  _io_cte_lap!(q); q.values("id"); q.filter("c__t__@gt" => 60)
+  @test_throws PormG.InvalidValueError _io_sql(q)
+
+  isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+  db = Main.SQLite.DB()
+  try
+    exe(sql, params = Any[]) = Main.SQLite.DBInterface.execute(db, sql, params)
+    _io_seed!(exe)
+    ids(build!) = begin
+      q = _IOM.Io_lap.objects
+      build!(q)
+      q.values("id")
+      insp = inspect_query(q; connection = _IO_SL)
+      sort([r.id for r in exe(insp[:sql_text], insp[:parameters])])
+    end
+    # Laps 1 → 99 h, 2 → 100 h, 3 → -1 h, 4 → -2 h, 5 → 1:30; `best` swaps each pair.
+    @test ids(q -> (_io_cte_lap!(q); q.filter("c__t__@gt" => Dates.Hour(99)))) == [2]
+    @test ids(q -> (_io_cte_lap!(q); q.filter("c__t__@lt" => Dates.Hour(0)))) == [3, 4]
+    @test ids(q -> (_io_cte_lap!(q); q.filter("c__t__@range" => [Dates.Hour(-1), Dates.Hour(99)]))) == [1, 3, 5]
+    @test ids(q -> (_io_cte_lap!(q); q.filter("c__t__@gt" => F("best")))) == [2, 3, 5]
+    # Sums per circuit: a 98 h, b 98 h, c 1:30, all under 100 h.
+    @test ids(q -> (_io_cte_sum!(q); q.filter("c__t__@lt" => Dates.Hour(100)))) == [1, 2, 3, 4, 5]
+  finally
+    close(db)
+  end
+end

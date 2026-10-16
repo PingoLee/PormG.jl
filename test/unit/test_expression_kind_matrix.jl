@@ -388,7 +388,11 @@ function _ekm_bind_probes(o)
   return probes
 end
 # A bound value as stable text, and its type's name: `("60000", "Int64")`, `("\"00:01:00\"", "String")`.
-_ekm_bind_param(p) = (repr(p), String(nameof(typeof(p))))
+# A string or a plain number by `repr`, which tells `"10"` from `10`; any other value by `string`
+# (`"10.5"`, `"1 minute"`), since `repr` names a type through whatever `Main` imports — a `Decimal`
+# printed `Decimals.Decimal(…)` alone and `Decimal(…)` after a file that does `using Decimals`.
+_ekm_bind_param(p) = (p isa Union{AbstractString,Bool,Integer,Base.IEEEFloat} ? repr(p) : string(p),
+                      String(nameof(typeof(p))))
 
 # One filter on one cell: the predicate it renders and the parameters it binds, or the error.
 function _ekm_bind(mod, label, base, build, ctx, spelling, value)

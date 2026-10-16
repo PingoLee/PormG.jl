@@ -11,6 +11,7 @@ This section covers the read side of PormG — querying, filtering, joining, agg
 | [Values and Joins](values_and_joins.md) | Column selection, `__` join traversal, multi-level joins, reverse joins, wildcard `*`, and aliases. |
 | [Filters and Aggregates](filters_and_aggregates.md) | `filter()`, lookup operators (`@gt`, `@in`, `@contains`, …), grouping, and `HAVING` clauses. |
 | [Functions and Dates](functions_and_dates.md) | SQL functions (`Case`, `Coalesce`, `Concat`, …), date extraction, and math transforms. |
+| [Rounding](rounding.md) | Where a number is rounded and by whom: the three rules, the cast PormG refuses on the engine that would not honor its scale, and what to write instead. |
 | [Subqueries and CTEs](subqueries_and_ctes.md) | `IN` subqueries, scalar `Subquery`/`Exists` columns, `.with(...)` CTEs and their `"<cte>__<column>"` columns, deep join paths, and CTE + cjoin combinations. |
 | [Field Expressions](field_expressions.md) | `F()` for field-to-field comparisons, arithmetic, aggregate ratios, aliasing, and atomic updates. |
 | [Window Functions](window_functions.md) | `Rank`, `RowNumber`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` — per-row analytics without collapsing rows. |
@@ -119,7 +120,8 @@ q.list(:dict)
 The type is the same on both engines. The last digits can differ, as the `Avg` above shows: PostgreSQL
 computes in exact `numeric` and SQLite in a double. The same holds for a float, so `Sqrt(10)` is
 `3.162277660168379` on PostgreSQL and `3.1622776601683795` on SQLite. That is how each engine spells
-the number, not a different meaning, and PormG leaves it alone.
+the number, not a different meaning, and PormG leaves it alone. [Rounding](rounding.md) collects
+where a value is rounded and where PormG refuses instead.
 
 This applies to the value a projection, a `CTE(...)` column or a `Subquery(...)` reads back, and to a
 value that is one of several operands when one of them is a computed number:

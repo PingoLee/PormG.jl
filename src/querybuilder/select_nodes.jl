@@ -679,19 +679,31 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # is refused: PostgreSQL rejects text that is no number while SQLite reads it as 0, a different
   # value rather than a different last digit. The #1040 classifier names it (its `:text` kind, a JSON
   # value included); read here, after the operand renders, for the joined and CTE memos.
+  #
+  # #1044, #1167: a negative precision rounds to tens, hundreds, … — a capability, since SQLite's
+  # `ROUND` has none and reads it as 0 (`Round(125, -1)` would answer `125.0`, not `130`). Refused on a
+  # backend without the row, built on the others, as Django's `Round.as_sqlite` does.
   if v isa FObject && v.function_name == "ROUND"
     digits = get(v.kwargs, "precision", 0)
-    if digits isa Integer && digits > 0
-      # `Round` takes any `Integer` (`Int32`, `BigInt`); the classifier's scale is an `Int`.
-      divergent = _scale_divergent_operand(v.column, Int(digits), instruc)
+    if digits isa Integer && digits < 0 && !_supports(instruc.connection, :negative_round_precision)
+      throw(_capability_error(instruc.connection, :negative_round_precision, "\e[31mRound(…, $(digits))\e[0m";
+        why = "Fetch the value and round it in Julia: \e[32mround(x, RoundNearestTiesAway; digits = $(digits))\e[0m."))
+    end
+    if digits isa Integer && digits != 0
+      # `Round` takes any `Integer` (`Int32`, `BigInt`); the classifier's scale is an `Int`. Only its
+      # `:text` answer is read here: text is no number to round to tens either (#1167, a negative
+      # precision built where the engine has it). It asks at the widest scale, which no number
+      # exceeds, so a decimal or float branch ahead of a text one (`Coalesce("price", "surname")`)
+      # does not answer first; the classifier only compares the scale.
+      divergent = _scale_divergent_operand(v.column, digits > 0 ? Int(digits) : typemax(Int), instruc)
       divergent !== nothing && divergent[1] === :text && throw(_round_text_refusal(digits, divergent[2]))
     end
   end
-  # #953: an aggregate over a boolean, read once its column resolves (as the check above is).
-  # PostgreSQL has none of `max/min/sum/avg(boolean)`, so each failed there when it ran, while SQLite
-  # answered over its stored 0/1. An extremum keeps its meaning — any true, all true — so it renders
-  # PostgreSQL's own aggregate (`Dialect.MAX`). A sum or mean turns a boolean into a number, which
-  # PormG does not do implicitly: refused on both engines, pointing to the explicit count.
+  # #953: an aggregate over a boolean, read once its column resolves (as the check above is). An
+  # extremum keeps its meaning — any true, all true — and each engine spells it (`Dialect.MAX`:
+  # `BOOL_OR` where `max(boolean)` does not exist). A sum or mean turns a boolean into a number, which
+  # the query does not say how to do: EXPLICIT INTENT (#1167), refused on every engine, pointing to the
+  # explicit count.
   if v.function_name in ("MAX", "MIN", "SUM", "AVG") &&
      _expression_formatter(v.column, instruc) === Models.format_bool_sql
     v.function_name in ("SUM", "AVG") && throw(_boolean_sum_refusal(v))
@@ -701,12 +713,15 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # not (PostgreSQL's `::numeric`). Read once the operand renders, as the checks above are; the walk's
   # `_computed_kind` answers the same kind from the same operand walk, so the SQL and the type agree.
   # #1196: so does `Round`, whose places add nothing to an integer: they are not bound, since the
-  # engine that renders the integer itself (SQLite, `Dialect.ROUND`) has no slot for them.
+  # engine that renders the integer itself (SQLite, `Dialect.ROUND`) has no slot for them. A NEGATIVE
+  # precision does change an integer (`125` → `130`), so it stays bound (#1167); only an engine with
+  # `:negative_round_precision` gets this far, and it renders `ROUND(x::numeric, d)` cast back.
   if v isa FObject && v.function_name in _INTEGER_KEEPING_FUNCTIONS && !(v.column isa AbstractVector)
     integer_kind = _integer_operand_kind(v, instruc)
     if integer_kind !== nothing
       resolved_kwargs["integer_kind"] = integer_kind
-      if v.function_name == "ROUND"
+      places = get(v.kwargs, "precision", 0)
+      if v.function_name == "ROUND" && !(places isa Integer && places < 0)
         delete!(deferred_kwargs, "precision")
         resolved_kwargs["precision"] = 0
       end
@@ -856,9 +871,11 @@ end
 #     — wrong rows, no error. It is conditional, not universal: with no earlier parameter to jump,
 #     the same shapes bind correctly, which is why this survived so long.
 #
-# Refusing on BOTH backends rather than only on SQLite is the "keep PostgreSQL and SQLite aligned"
-# rule: a query that builds on one engine and is refused on the other is a worse trap than one
-# refused on both. The removal of the working PostgreSQL shapes is recorded in the upgrade log.
+# The misbind is PormG's, not an engine's: values bind in bucket order, and a backend that binds by
+# position (`?`) reads them in text order. Refused on EVERY engine for now (#1167), as a gap in PormG:
+# firing it only where values bind by position is a follow-up, since the expression-kind matrix pins
+# this refusal on both engines. The removal of the working PostgreSQL shapes is recorded in the
+# upgrade log.
 #
 # NOT guarded, on purpose: a CTE declared inside a CTE **body**. That renders through
 # `build_cte_clause` → `query(…, cte=…)`, so its values bind in `:cte` during the same pass that
@@ -871,10 +888,10 @@ function _guard_no_nested_cte(handler::SQLObjectHandler, what::AbstractString)
   throw(QueryBuildError(
     "$what does not support a subquery that declares its own \e[4m\e[32m.with(...)\e[0m; " *
     "this one declares \e[4m\e[31m$(names)\e[0m.\n  " *
-    "A nested CTE renders inside the subquery's parentheses, but its values bind into the " *
+    "A nested CTE renders inside the subquery's parentheses, but PormG binds its values into the " *
     "\e[4m\e[31m:cte\e[0m parameter bucket, which is flattened ahead of \e[4m\e[31m:select\e[0m " *
-    "and \e[4m\e[31m:where\e[0m — on SQLite that binds them ahead of any value whose text comes " *
-    "first, silently matching the wrong rows.\n  " *
+    "and \e[4m\e[31m:where\e[0m — on a backend that binds parameters by position, ahead of any " *
+    "value whose text comes first, silently matching the wrong rows.\n  " *
     "Fold the CTE's predicate into the subquery's own \e[4m\e[32m.filter(...)\e[0m, or declare " *
     "the CTE on a query that is not nested inside a filter or a projection (#433)."))
 end

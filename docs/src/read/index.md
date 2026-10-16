@@ -435,8 +435,8 @@ top20 = M.Driver.objects.order_by("surname").page(20).list()
 A page size of `0` is a real limit: `.limit(0)` returns no rows, the same as `LIMIT 0` in SQL and
 `qs[:0]` in Django. To remove a limit already on a handler, use `.limit(nothing)`. A negative value
 or a `Bool` (`true` is an `Integer` in Julia) raises `QueryBuildError` for `.limit()`, `.offset()`
-and `.page()` alike: PostgreSQL rejects a negative LIMIT, while SQLite would read it as "no limit"
-and return every row.
+and `.page()` alike, on every engine: a row count is zero or more, and a `Bool` is not one. (Left
+to the engines, one rejects a negative LIMIT and another reads it as "no limit".)
 
 ```julia
 n = 0                                             # e.g. a page size computed from a selection

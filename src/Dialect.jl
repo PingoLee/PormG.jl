@@ -1187,15 +1187,20 @@ function ABS(column::String, format::Dict{String,Any}, conn::PormGSQLite)
 end
 
 # #1196 — over an integer (`integer_kind`, set by the build, which then binds no places: they add
-# nothing to an integer, and a negative precision is refused when the expression is built) `Round` is
-# that integer, as Django's `Round` (a `Transform`) is its operand's type. PostgreSQL rounds through
+# nothing to an integer — except a negative precision, which stays bound and only reaches an engine
+# with `:negative_round_precision`, #1167) `Round` is that integer, as Django's `Round` (a `Transform`) is its operand's type. PostgreSQL rounds through
 # `numeric`, exact for every `bigint`, and casts back to the operand's type, as `FLOOR`/`CEIL` do.
 # SQLite renders the integer itself: its `ROUND` goes through a double, so
 # `CAST(ROUND(9007199254740993) AS INTEGER)` is `9007199254740992`.
 function ROUND(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   kind = get(format, "integer_kind", nothing)
-  kind === nothing || return "ROUND(($(column))::numeric)::$(_pg_integer_type(kind))"
   precision = get(format, "precision", 0)
+  # #1196: over an integer the places add nothing and are not bound — except a negative precision,
+  # which rounds to tens, hundreds, … and stays bound (#1167); the result is cast back either way.
+  if kind !== nothing
+    places = (precision isa AbstractString || precision != 0) ? ", $(precision)" : ""
+    return "ROUND(($(column))::numeric$(places))::$(_pg_integer_type(kind))"
+  end
   # When parameterized, precision is a "?" placeholder string — always include it.
   # When it's the default (0), omit the precision argument.
   if precision isa AbstractString || precision != 0

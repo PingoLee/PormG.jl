@@ -913,28 +913,27 @@ function page(object::SQLObjectHandler, limit::Integer, offset::Integer)
 end
 
 # #1049: the one check every LIMIT / OFFSET entry point goes through, run BEFORE anything is
-# assigned so a refused call leaves the handler as it was. Both values are bound (#46), and the two
-# engines read the same bad value differently — so refusing here is what keeps them aligned:
-# - negative: PostgreSQL rejects it at execution (SQLSTATE 2201W / 2201X), while SQLite reads a
-#   negative LIMIT as "no limit" (every row) and a negative OFFSET as 0 (rows from the start);
-# - `Bool`: `Bool <: Integer` in Julia (the trap #876 / #949 closed for values). SQLite bound `true`
-#   as 1 row; PostgreSQL rejected it as the text "true" where a bigint goes (SQLSTATE 22P02).
+# assigned so a refused call leaves the handler as it was. Both values are bound (#46). Neither shape
+# below is a row count, so neither has a meaning to give: an INVALID VALUE, refused on every engine
+# (#1167), as Django refuses a negative index on every backend. Left to the engines, one rejected it at
+# execution and another read it as some other count (a negative LIMIT as "no limit", `true` as 1):
+# - negative: a row count is zero or more;
+# - `Bool`: `Bool <: Integer` in Julia (the trap #876 / #949 closed for values), but not a count.
 # `0` is accepted and means zero rows, as in SQL and Django (`qs[:0]`); "no limit" is `nothing`.
 # The messages echo `v` on purpose: it is an `Integer` row count (a Bool or a negative) — at worst a
 # page number derived from a request, and no secret can take that shape, so #971's no-value rule does
 # not apply — hence the markers.
 function _check_slice_value(what::String, v::Integer)
   v isa Bool && throw(QueryBuildError(  # refusal-value-ok: a Bool row count; no secret takes that shape
-    "$(what) takes an Integer row count, got the Bool $(v) — a Bool is an Integer in Julia, so it " *
-    "would bind as a row count on SQLite and be rejected by PostgreSQL. Pass a number, e.g. 20."))
+    "$(what) takes an Integer row count, got the Bool $(v) — a Bool is an Integer in Julia, but it " *
+    "is not a row count. Pass a number, e.g. 20."))
   if v < 0
     occursin("offset", what) && throw(QueryBuildError(  # refusal-value-ok: a negative row count; no secret takes that shape
-      "$(what) must not be negative, got $(v) — PostgreSQL rejects a negative OFFSET, while SQLite " *
-      "reads it as 0. For no offset, pass 0."))
+      "$(what) must not be negative, got $(v) — an OFFSET is a count of rows to skip. For no offset, " *
+      "pass 0."))
     throw(QueryBuildError(  # refusal-value-ok: a negative row count; no secret takes that shape
-      "$(what) must not be negative, got $(v) — PostgreSQL rejects a negative LIMIT, while SQLite " *
-      "reads it as \"no limit\" and returns every row. For no limit, use limit(nothing) or leave " *
-      "limit() out."))
+      "$(what) must not be negative, got $(v) — a LIMIT is a count of rows. For no limit, use " *
+      "limit(nothing) or leave limit() out."))
   end
   return v
 end

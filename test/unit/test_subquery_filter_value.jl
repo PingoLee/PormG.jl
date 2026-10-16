@@ -341,6 +341,9 @@ end
       msg = replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
       @test occursin("grouped-correlation guard (#194)", msg)
       @test occursin("Subquery(…) in the HAVING filter on \"best\"", msg)
+      # #1167: explicit intent on every engine — the reason is the query's, not an engine's.
+      @test occursin("does not say which row of the group it means", msg)
+      @test !occursin("PostgreSQL", msg) && !occursin("SQLite", msg)
       @test occursin("correlates on raceid", msg)
     end
     @testset "$backend: grouped on the correlated column, it builds" begin

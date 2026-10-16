@@ -459,6 +459,9 @@ end
       @test occursin("used as a condition", msg)
       @test occursin(hint, msg)
       @test occursin("#931", msg)
+      # #1167: explicit intent, refused on every engine — the message names none (it compared two).
+      @test occursin("does not say which rows it means", msg)
+      @test !occursin("PostgreSQL", msg) && !occursin("SQLite", msg)
     end
     # The legal neighbours: a bare boolean column, a comparison over the refused arithmetic, and the
     # arithmetic where it IS a value — a projection, a `then`, a right-hand side.
@@ -542,6 +545,7 @@ end
       @test occursin("used as a condition", msg)
       @test occursin("When(Lower(\"surname\") == \"senna\")", msg)
       @test occursin("#942", msg)
+      @test !occursin("PostgreSQL", msg) && !occursin("SQLite", msg)   # #1167
     end
 
     # A boolean-valued function, a comparison over the refused one, and a function whose type cannot
@@ -688,6 +692,9 @@ _f953_plain(s) = replace(s, r"\e\[[0-9;]*m" => "")
         msg = _f953_plain(sprint(showerror, err))
         @test occursin("over a boolean is not supported", msg)
         @test occursin("When(\"$(path)\" => true, then = 1, otherwise = 0))", msg)
+        # #1167: explicit intent on every engine — the meaning is named, no engine is.
+        @test occursin("does not say which number a flag counts as (#953)", msg)
+        @test !occursin("PostgreSQL", msg) && !occursin("SQLite", msg)
       end
       err = _f_agg_build_error(Entry_, q -> q.values("grid", "s" => Sum("fnid__finished")))
       @test err isa QueryBuildError

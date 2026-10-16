@@ -51,8 +51,8 @@ answer a CTE column keeps from its body, which records it while it builds (#1127
 reads a zero-scale `DecimalField` like an integer column until it is divided.
 
 `Round(x, d)` renders each engine's own `ROUND`, as Django's does (#1061): the two can round a decimal
-tie apart in its last digit, which is documented rather than refused. A negative `d` is refused when
-the expression is built (#1044).
+tie apart in its last digit, which is documented rather than refused. A negative `d` builds on
+PostgreSQL and raises `BackendCapabilityError` on SQLite, whose `ROUND` has none (#1044, #1167).
 
 Everything renders through mock connections — no live database, no fixture.
 
@@ -1817,13 +1817,50 @@ end
   end
 end
 
-@testset "#1044: a negative precision is refused when the expression is built" begin
-  for operand in ("number", "points", Fn.Value(125)), d in (-1, -2)
-    err = try Fn.Round(operand, d); nothing catch e; e end
-    @test err isa PormG.InvalidValueError
+# ─────────────────────────────────────────────────────────────────────────────
+# #1044, #1167: a negative precision is a capability, refused on SQLite only
+# `Round(125, -1)` means `130`: PostgreSQL's `ROUND(numeric, -1)` computes it, and SQLite's `ROUND` has
+# no negative precision (it reads one as 0 and answers `125.0`). Until #1167 PormG refused it on both
+# engines when the expression was built; now the expression builds anywhere, and the QUERY raises
+# `BackendCapabilityError` on SQLite, naming SQLite and the feature. Expected SQL on PostgreSQL:
+#   float / decimal   ROUND(("Tb"."points")::numeric, $1::integer)            $1 = -1
+#   integer           ROUND(("Tb"."number")::numeric, $1::integer)::integer   (#1196's cast back, places kept)
+# The integer row is the one that matters: #1196 drops the places over an integer, since a positive
+# precision adds nothing to it — a negative one does, so dropping it would answer `125`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1044, #1167: a negative precision builds on PostgreSQL and is a capability error on SQLite" begin
+  for operand in ("number", "points", "price", Fn.Value(125)), d in (-1, -2)
+    expr = Fn.Round(operand, d)          # no longer raises when built
+    err = _ccd_refusal(expr; conn = _CCD_SL)
+    @test err isa PormG.BackendCapabilityError
     msg = _ccd_msg(err)
-    @test occursin("(#1044)", msg) && occursin("Round(…, $(d))", msg) && occursin("round(x, RoundNearestTiesAway; digits = $(d))", msg)
+    @test occursin("Round(…, $(d))", msg) && occursin("rounding to a negative number of places", msg)
+    @test occursin("which SQLite does not support (supported on PostgreSQL)", msg)
+    @test occursin("round(x, RoundNearestTiesAway; digits = $(d))", msg)
+    @test _ccd_refusal(expr; conn = _CCD_PG) === nothing
+    q = (q = CCD.Ccd_driver.objects; q.values("x" => expr); q)
+    @test d in inspect_query(q; connection = _CCD_PG)[:parameters]
   end
+  pg(expr) = _ccd_render(expr; conn = _CCD_PG)
+  @test occursin("ROUND((\"Tb\".\"points\")::numeric, \$1::integer) as \"x\"", pg(Fn.Round("points", -1)))
+  @test occursin("ROUND((\"Tb\".\"price\")::numeric, \$1::integer) as \"x\"", pg(Fn.Round("price", -1)))
+  @test occursin("ROUND((\"Tb\".\"number\")::numeric, \$1::integer)::integer as \"x\"", pg(Fn.Round("number", -1)))
+  # Text is no number to round to tens either: the #1061 refusal, where the engine has the feature
+  # (on SQLite the capability error comes first). Before the re-review fix this built on PostgreSQL as
+  # `ROUND(("Tb"."surname")::numeric, $1::integer)`, reading text as a number.
+  text_err = _ccd_refusal(Fn.Round("surname", -1); conn = _CCD_PG)
+  @test text_err isa QueryBuildError && occursin("#1061", _ccd_msg(text_err))
+  @test _ccd_refusal(Fn.Round("surname", -1); conn = _CCD_SL) isa PormG.BackendCapabilityError
+  # Text behind a decimal branch: a scale-0 ask stopped at `price` and built (review of #1167).
+  mixed_err = _ccd_refusal(Fn.Round(Fn.Coalesce("price", "surname"), -1); conn = _CCD_PG)
+  @test mixed_err isa QueryBuildError && occursin("#1061", _ccd_msg(mixed_err))
+  # An integer literal: its own value binds first, then the places — text order, `[125, -1]`.
+  lit = (q = CCD.Ccd_driver.objects; q.values("x" => Fn.Round(Fn.Value(125), -1)); q)
+  lit_pg = inspect_query(lit; connection = _CCD_PG)
+  @test occursin("ROUND((\$1::bigint)::numeric, \$2::integer)::bigint as \"x\"", lit_pg[:sql_text])
+  @test lit_pg[:parameters] == Any[125, -1]
+  # Zero and positive places over an integer still bind nothing (#1196).
+  @test occursin("ROUND((\"Tb\".\"number\")::numeric)::integer as \"x\"", pg(Fn.Round("number", 2)))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

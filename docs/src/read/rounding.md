@@ -78,9 +78,10 @@ whose double lies just below it (#1061):
 | `1.555` | `1.56` | `1.55` |
 
 A test that pins a rounded tie is therefore engine-specific. `Round(x)`, to a whole number, gives the
-same value on both engines. Two arguments are refused on every engine, because the query does not
-say what it means: a text operand raises `QueryBuildError`, and a negative `d` raises
-`InvalidValueError`.
+same value on both engines. A text operand is refused on every engine, because the query does not
+say what it means: it raises `QueryBuildError`. A negative `d` rounds to tens, hundreds, … where the
+engine has it (`Round(125, -1)` is `130` on PostgreSQL), and raises `BackendCapabilityError` on SQLite,
+whose `ROUND` has no negative precision.
 
 Division keeps the type of its operands, so an integer divided by an integer is an integer quotient
 on both engines (#1147, #1196). Divide by a float to keep the fraction:

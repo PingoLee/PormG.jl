@@ -220,6 +220,10 @@ const _NCG_CONSUMERS = [
         # it replaced was exactly the "internal ... please report it" antipattern (#424's lesson).
         @test !occursin("internal", lowercase(msg))
         @test !occursin("report", lowercase(msg))
+        # #1167: the misbind is PormG's binding order, named as such — refused on every engine, so
+        # the message names the mechanism (positional binding), never an engine.
+        @test occursin("on a backend that binds parameters by position", msg)
+        @test !occursin("PostgreSQL", msg) && !occursin("SQLite", msg)
       end
     end
   end

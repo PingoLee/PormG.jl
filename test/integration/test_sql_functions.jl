@@ -2335,14 +2335,24 @@ end
 # Round(x, d) renders each engine's own ROUND, as Django's does (#1061)
 # Measured on PostgreSQL 16.15 and SQLite 3.45.1: `Round(2.675, 2)` is 2.68 on one and 2.67 on the
 # other (SQLite rounds the stored double), so a decimal tie can differ in its last digit, and by no
-# more. Text and a negative d change the value itself, and are refused on both engines (#1044).
+# more. Text changes the value itself and is refused on every engine (#1061). A negative d rounds to
+# tens: PostgreSQL computes it, `ROUND((x)::numeric, -1)::integer` over an integer column, and SQLite's
+# `ROUND` has none, so there it is a `BackendCapabilityError` (#1044, #1167).
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1061: Round(x, d) renders each engine's ROUND; text and a negative d are refused" begin
+@testset "#1061: Round(x, d) renders each engine's ROUND; text is refused, a negative d where ROUND has none" begin
     refusal(f) = try f(); nothing catch e; e end
     is_1061(e) = e isa PormG.QueryBuildError && occursin("#1061", sprint(showerror, e))
     proj(m, expr) = () -> (q = m.objects; q.filter("raceid" => 2); q.values("x" => expr); q |> DataFrame)
     @test is_1061(refusal(() -> (q = M.Driver.objects; q.filter("driverid" => 1); q.values("x" => Round("driverref", 2)); q |> DataFrame)))
-    @test refusal(() -> Round("number", -1)) isa PormG.InvalidValueError
+    tens() = (q = M.Driver.objects; q.filter("number__@isnull" => false); q.values("number", "x" => Round("number", -1)); q |> DataFrame)
+    if by_engine(sqlite = true, postgres = false)   # SQLite's ROUND has no negative precision
+        err = refusal(tens)
+        @test err isa PormG.BackendCapabilityError && occursin("which SQLite does not support", sprint(showerror, err))
+    else
+        df = tens()
+        @test nrow(df) > 0
+        @test all(r -> r.x isa Integer && r.x == round(r.number, RoundNearestTiesAway; digits = -1), eachrow(df))
+    end
 
     # A float to places, over race 2 (the 2009 Malaysian GP, half points): within one unit of the
     # last place of Julia's half-away rounding, whichever engine served the row.

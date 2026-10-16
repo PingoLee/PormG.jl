@@ -682,11 +682,13 @@ const DOCERR_CASES = [
             list(show_query = :dict),
     ),
     (
-        # #1044. A negative precision is SQLite's 0 and PostgreSQL's tens, so it is refused when the
-        # expression is built, whatever the operand.
-        "read/functions_and_dates.md + Round docstring — a negative Round precision raises (#1044)",
-        InvalidValueError,
-        () -> PormG.Functions.Round("points", -1),
+        # #1044, #1167. A negative precision rounds to tens on PostgreSQL; SQLite's `ROUND` has none,
+        # so on SQLite the query raises when it is built (a capability, `negative_round_precision`).
+        "read/functions_and_dates.md + rounding.md + backends.md + Round docstring — a negative Round precision raises on SQLite (#1044, #1167)",
+        BackendCapabilityError,
+        () -> DOCERR_RESULT_SL.objects.
+            values("x" => PormG.Functions.Round("points", -1)).
+            list(show_query = :dict),
     ),
     (
         # #122. PostgreSQL has no `lpad` over a number; SQLite's UDF would pad its text. Refused when

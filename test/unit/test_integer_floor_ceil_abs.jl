@@ -270,7 +270,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # #1196: `Round` over an integer is that integer, on both engines
 # `Round` means its operand's type (Django's `Round` is a `Transform`), and its places add nothing to an
-# integer (a negative precision is refused when the expression is built, #1044). Before #1196 it
+# integer (a negative precision does, and stays bound: `test_cast_divergent_operands.jl`, #1167). Before #1196 it
 # rendered `ROUND((x)::numeric, d)` on PostgreSQL, read back as a `Decimal`, and `ROUND(x, d)` on
 # SQLite, a REAL read back as a `Float64`. Expected SQL now:
 #   PostgreSQL  ROUND(("Tb"."grid")::numeric)::integer    (the operand's own type: ::smallint, ::bigint)

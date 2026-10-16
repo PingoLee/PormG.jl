@@ -333,6 +333,12 @@ end
     @test occursin("For no offset, pass 0", off)                # an offset's own fix…
     @test !occursin("limit(nothing)", off)                      # …not the limit's
     @test occursin("offset() takes an Integer row count, got the Bool true", _p208_error(() -> q.offset(true)))
+    # #1167: an invalid value on every engine — each message says why it is no row count and names
+    # no engine (they used to say how PostgreSQL and SQLite read it).
+    for msg in (neg, off, _p208_error(() -> q.offset(true)), _p208_error(() -> q.offset(-1)))
+      @test !occursin("PostgreSQL", msg) && !occursin("SQLite", msg)
+    end
+    @test occursin("a LIMIT is a count of rows", neg) && occursin("an OFFSET is a count of rows to skip", off)
   end
 end
 

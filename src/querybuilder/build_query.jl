@@ -526,10 +526,11 @@ end
 
 # #194 grouped-correlation guard -------------------------------------------------------------------
 # A correlated Subquery/Exists projected in a query that AGGREGATES is only meaningful when the outer
-# column it correlates on has one value per output row. When it does not, the backends diverge:
-# PostgreSQL refuses ("subquery uses ungrouped column ... from outer query"), while SQLite runs it
-# against an ARBITRARY row of each group and returns a plausible-looking wrong number. Both measured
-# on PostgreSQL 16 and SQLite 3.45. Same fail-loud stance as the #74 guard above.
+# column it correlates on has one value per output row. When it does not, the query does not say
+# which row of the group to correlate against: EXPLICIT INTENT (#1167), refused on every engine with
+# the fixes that say it. Left to the engines, one raised (PostgreSQL 16: "subquery uses ungrouped
+# column ... from outer query") and another picked an arbitrary row of each group and returned a
+# plausible-looking wrong number (SQLite 3.45). Same fail-loud stance as the #74 guard above.
 #
 # WHY IT RUNS AT THE END OF build() and not where the old #194 warn sat (end of get_select_query):
 # `get_order_query` pushes into `instruct.group` too, for an ORDER BY term the projection does not
@@ -610,17 +611,14 @@ function _ungrouped_correlation_error_msg(c::CorrelatedRef, grouped::Vector{Stri
     "PormG grouped-correlation guard (#194): the projected correlated column \e[4m\e[31m", c.label,
     "\e[0m correlates on \e[4m\e[31m", c.column, "\e[0m, which this query does not GROUP BY.\n",
     "  The outer query aggregates, so each output row stands for many input rows and ", c.column,
-    " has no single value to correlate against. PostgreSQL refuses this (\"subquery uses ungrouped ",
-    "column ... from outer query\"); SQLite runs it against an ARBITRARY row of each group and returns ",
-    "a plausible-looking wrong number, so PormG refuses it on both backends.\n",
+    " has no single value to correlate against: the query does not say which row of the group it means, ",
+    "so PormG refuses it rather than pick one.\n",
     "  Grouped by: \e[33m", groups, "\e[0m.\n",
     "  Correlated on: \e[33m", c.expr, "\e[0m.\n",
     "  Fix one of:\n",
     "    \e[32m1.\e[0m Project the correlated column so it joins the group set — add \e[32m\"", c.column,
     "\"\e[0m to \e[32mvalues(...)\e[0m. This is needed even when the query already groups by the ",
-    "primary key: PostgreSQL would accept that shape (every column is functionally dependent on the ",
-    "key), but PormG does not infer the dependency and refuses it on both backends rather than let ",
-    "the rule differ per engine.\n",
+    "primary key: PormG does not infer functional dependency on a grouped key, so name the column.\n",
     "    \e[32m2.\e[0m Correlate on a column the query already groups by — change \e[32mOuterRef(\"",
     c.ref, "\")\e[0m to name one of them.\n",
     "    \e[32m3.\e[0m Drop the outer aggregate: a scalar \e[32mSubquery(...)\e[0m already returns one ",
@@ -634,8 +632,9 @@ end
 # per group, so every column it reads OUTSIDE its aggregate calls must have one value per group.
 # Nothing grouped them: the projection loop leaves an aggregate-bearing projection out of GROUP BY
 # whole, and `_build_over_clause` leaves a mixed OVER term out whole (#789 — grouping `SUM(…)` is an
-# error on both engines). PostgreSQL then refused the statement (`GroupingError`); SQLite ran it and
-# answered with an ARBITRARY row's value per group — the #776/#789 silent failure mode again.
+# error on both engines). The query then did not say which of a group's values the term reads:
+# EXPLICIT INTENT (#1167), refused on every engine. Left to the engines, one raised `GroupingError` and
+# another answered with an arbitrary row's value per group — the #776/#789 silent failure mode again.
 #
 # Refused rather than grouped (maintainer's call on #798, the "less magic" side of the design stance):
 # Django walks into the term and groups what it finds, which picks the grouping granularity for the
@@ -660,9 +659,10 @@ end
 # before; SQLite reads it correctly. Refusing it would break a correct SQLite query to make the
 # engines agree on an error, so it is left as it was.
 #
-# Like #194, PormG does not infer functional dependency on a grouped primary key: PostgreSQL accepts
-# `values("resultid", "x" => F("raceid") + Sum(…))`, PormG refuses it on both backends rather than let
-# the rule differ per engine. Relaxing that later would only widen what is accepted.
+# Like #194, PormG does not infer functional dependency on a grouped primary key (less magic): an
+# engine may accept `values("resultid", "x" => F("raceid") + Sum(…))` from the key alone, but PormG
+# asks the query to name the column it groups by, on every engine. Relaxing that later would only
+# widen what is accepted.
 function _check_mixed_grouping(instruct::SQLInstruction)
   instruct.aggregate || return nothing
   projections = instruct.object.values
@@ -932,10 +932,9 @@ function _ungrouped_mixed_error_msg(label, clause::String, leaf, grouped::Vector
     "\e[4m\e[31m", leaf.spelled, "\e[0m outside an aggregate (", where_, "), and this query does not ",
     "GROUP BY it.\n",
     "  This query aggregates, so the ", subject, " is computed once per group — beside an aggregate, ",
-    "or over one inside a window — and ", leaf.spelled, " has no single value in a group. ",
-    "PostgreSQL refuses this (\"must appear in the ",
-    "GROUP BY clause or be used in an aggregate function\"); SQLite answers with an ARBITRARY row's ",
-    "value, so PormG refuses it on both backends rather than group a column you did not ask to group.\n",
+    "or over one inside a window — and ", leaf.spelled, " has no single value in a group: the query ",
+    "does not say which one it means, so PormG refuses it rather than pick one, or group a column you ",
+    "did not ask to group.\n",
     "  Grouped by: \e[33m", groups, "\e[0m.\n",
     "  Fix one of:\n",
     "    \e[32m1.\e[0m Project the column so it joins the group set — add \e[32m", leaf.spelled,

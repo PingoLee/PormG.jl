@@ -397,3 +397,32 @@ end
     @test !created_again
     @test again[:v] isa _D648_D.Decimal && again[:v] == kept[:v]
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A declared decimal over a column reads as that column does when it declares the column's width (#1276)
+# `Coalesce("v", "v")` holds the column's own value, so declared at the column's `numeric(15,4)` it
+# reads through #648's exact parser, as `v` alone does: the written Decimal, or SQLite's raw REAL when
+# the stored value does not fit the width (here 1234567.123456789, written past the declared scale).
+# Declared bare `numeric`, which names no width, it is the computed number: 15 significant digits, a
+# Decimal for every row. Measured on SQLite 3.45 through this file's in-memory database. Expected SQL:
+# CAST(COALESCE("Tb"."v", "Tb"."v") AS NUMERIC(15,4))
+# Why: before #1276 the declaration was compared as `DecimalField()`'s (10, 2), so `numeric(15,4)` over
+# this column read as computed, and the out-of-width row came back a rounded Decimal.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a declared decimal at its column's width reads as the column (#1276)" begin
+    fetch(_D648_POOL, "INSERT INTO dec648_amount (label, v) VALUES ('fit1276', '12345678901.2345'), ('unfit1276', 1234567.123456789);")
+    read_back(expr) = Dict(r[:label] => r[:x] for r in
+        D648.Amount.objects.filter("label__@in" => ["fit1276", "unfit1276"]).values("label", "x" => expr).list())
+    column = read_back("v")
+    declared = read_back(PormG.Functions.Coalesce("v", "v"; output_field = "numeric(15,4)"))
+    bare = read_back(PormG.Functions.Coalesce("v", "v"; output_field = "numeric"))
+    # The column itself: the written Decimal, and the raw REAL past its width (#648).
+    @test column["fit1276"] isa _D648_D.Decimal && _d648_parts(column["fit1276"]) == (0, 123456789012345, -4)
+    @test column["unfit1276"] === 1234567.123456789
+    # Declared at the column's width: the same values, by the same parser.
+    @test declared["fit1276"] isa _D648_D.Decimal && declared["fit1276"] == column["fit1276"]
+    @test declared["unfit1276"] === 1234567.123456789
+    # Declared with no width: the computed number, a 15-digit Decimal on every row.
+    @test bare["fit1276"] isa _D648_D.Decimal && _d648_parts(bare["fit1276"]) == (0, 123456789012345, -4)
+    @test bare["unfit1276"] isa _D648_D.Decimal && _d648_parts(bare["unfit1276"]) == (0, 123456712345679, -8)
+end

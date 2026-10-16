@@ -1074,6 +1074,10 @@ An `output_field` naming a decimal type reads back as a `Decimals.Decimal` on ev
 `numeric(10,2)` (#1221), the float arithmetic is held to two places and refused on SQLite; round it
 first, `Coalesce(Round(F("points") * 1.5, 2), 0; output_field = DecimalField())`. The type is the same, and so is the value wherever PormG can
 type the operand: a scale an engine would not round to is refused there, as described just above.
+A `Coalesce`, `Greatest` or `Least` over `DecimalField` columns of one width, declared at that same
+width (`Coalesce("points", "points"; output_field = DecimalField())` over `DecimalField()` columns),
+holds a value SQLite stored, so on SQLite it reads as the column itself does. Declared at another width,
+or as a bare `"numeric"`, it reads as the computed 15-digit `Decimal` (#1276).
 
 `Concat` renders no cast on either engine, because its result is always text. Its `output_field`
 must therefore be a text type (`CharField()`, `TextField()`, `"text"`, `"varchar(20)"`). Any other

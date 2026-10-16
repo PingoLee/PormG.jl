@@ -209,8 +209,9 @@ validate_value(M.Driver, "surname", "Se\0nna")       # InvalidValueError, kind :
 
 It checks one field, so it cannot see what only the database or the whole row decides: uniqueness,
 foreign keys, `CHECK` constraints (a `PositiveIntegerField`'s sign among them), and a required field
-left out of the row. It checks values, not expressions: like `create`, it does not accept an `F` expression or a SQL
-function, which only `update` writes, as SQL. Its main use is a test double that stands in for `objects`: built on
+left out of the row. It checks values, not expressions: like `create` and every other writer but `update`, it
+refuses an `F` expression or a SQL function with an `InvalidValueError` of kind `:type` that names the field,
+because only `update` writes one, as SQL (#1283). Its main use is a test double that stands in for `objects`: built on
 `validate_value`, the double refuses what PormG refuses, including checks added in later releases.
 
 ### Default Values

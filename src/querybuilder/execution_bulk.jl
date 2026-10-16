@@ -2090,8 +2090,10 @@ function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{St
       # in the catch: a collection the formatter maps fine (`["A", "B"]`) must not pre-empt another
       # field's real error — a later cell this pass rejects, or a validation error the caller
       # rethrows once this pass finds nothing.
+      # An SQL expression gets the refusal `create` raises (#1283), for the same reason.
       try
         _refuse_collection(model.fields[field], field, row[col_name], op)
+        _refuse_expression_value(model, field, row[col_name], op)
       catch refusal
         refusal isa InvalidValueError && throw(_bulk_cell_error(refusal, op, model, field, index))
         rethrow()

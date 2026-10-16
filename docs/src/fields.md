@@ -1214,7 +1214,8 @@ agrees with PostgreSQL:
   timestamp differences, also inside arithmetic (`Sum("time") - Max("time")`, #907)
 - inside arithmetic, or against a timestamp difference (`(F("time") * 2) > Minute(3)`)
 - a filter on a `CTE(...)` column holding a duration, stored or computed (`"laps__t__@gt" => Hour(100)`
-  over a body projecting `"t" => Sum("time")`, #1219), with the same lookups as the column
+  over a body projecting `"t" => Sum("time")`, #1219), or on a path through a CTE key column to a
+  related model's `DurationField`, with the same lookups as the column
 
 An aggregate or arithmetic over a `CTE(...)` duration column, and ordering by one, still use its text.
 

@@ -15,7 +15,9 @@ column compared the text with the value's text, so it returned other rows than t
 built from.
 
 It now converts the CTE column to milliseconds and binds the value's milliseconds, as a model column
-does. The lookups are the same: `@gt`, `@gte`, `@lt`, `@lte`, `@range`, `@nrange`, and an `F`
+does. So does a path on through a CTE key column to a related model's `DurationField`
+(`"c__team__best__@gt"`), which compared the related column's text where the direct joined path
+compared milliseconds. The lookups are the same: `@gt`, `@gte`, `@lt`, `@lte`, `@range`, `@nrange`, and an `F`
 right-hand side. Equality and `@in` still compare the stored text, which is exact for a value written
 in the canonical form.
 

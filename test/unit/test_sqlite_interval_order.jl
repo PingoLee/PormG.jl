@@ -996,6 +996,15 @@ const _IO_CTE_MS = PormG.Dialect._sqlite_interval_ms("\"R1_1\".\"t\"")
   q = _IOM.Io_lap.objects
   _io_cte_lap!(q); q.values("id"); q.filter("c__t__@gt" => 60)
   @test_throws PormG.InvalidValueError _io_sql(q)
+  # On through a CTE key column to the related model's stored DurationField: milliseconds, as the
+  # direct joined path (`"lapid__best__@gt"`) compares.
+  hop(filt) = (q = _IOM.Io_stop.objects;
+               q.with("c" => (b = _IOM.Io_stop.objects; b.values("id", "l" => "lapid"); b), join_field = "id" => "id", join_type = "INNER");
+               q.values("id"); q.filter(filt); q)
+  sql = _io_sql(hop("c__l__best__@gt" => Dates.Hour(99)))
+  @test occursin(r"WHERE \(\(CASE WHEN substr\(\"R1_\d+\"\.\"best\", 1, 1\) = '-'", sql)
+  @test _io_params(hop("c__l__best__@gt" => Dates.Hour(99))) == Any[356_400_000]
+  @test _io_params(hop("c__l__best__@gt" => Dates.Hour(99)); conn = _IO_PG) == Any["99:00:00"]
 
   isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
   db = Main.SQLite.DB()

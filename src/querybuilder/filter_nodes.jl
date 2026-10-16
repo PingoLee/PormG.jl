@@ -765,14 +765,15 @@ end
 # #1219: a CTE column holding a duration too (`"r__fast__@gt"`, resolved to a `CTEReference` before
 # this runs). Its field is the one the join walk filed for it, and the CTE body always leaves a SQLite
 # duration as its text (`Dialect._sqlite_interval_text` over a computed one), so the column converts
-# once, as a model column does.
+# once, as a model column does. A path on through a CTE key column (`"c__team__best"`) ends at the
+# related model's stored column, which converts the same way; a transform (`__@…`) is no duration.
 const _INTERVAL_ORDERING_LOOKUPS = (">", ">=", "<", "<=", "BETWEEN", "NOT BETWEEN")
 function _is_sqlite_duration_column(v::SQLTypeOper, instruc::SQLInstruction)::Bool
   (_interval_as_ms(instruc.connection) && v.operator in _INTERVAL_ORDERING_LOOKUPS) || return false
   v.column isa SQLField || return false
   column = v.column.field
   if column isa CTEReference
-    occursin("__", column.path) && return false   # a path on through the CTE column ends elsewhere
+    occursin("__@", column.path) && return false
     return memo_field(instruc, memo_key(column)) isa Models.sDurationField
   end
   (column isa String && _is_bare_column(column)) || return false

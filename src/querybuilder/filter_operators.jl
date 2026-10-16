@@ -24,10 +24,11 @@ function _json_numeric_rhs(value)
   throw(InvalidValueError("A numeric JSON comparison requires a finite number", :range))
 end
 
-# #1091: a non-finite float is not a JSON number, and the two engines answer it differently —
-# PostgreSQL's `numeric` orders `NaN` above every number, while SQLite binds a `NaN` as `NULL` — so
-# `"payload__wins__@gte" => NaN` selected different rows per engine (#1061 case 1: a different row
-# set). Refused on every operator, as `format_number_sql` refuses one for a numeric column.
+# #1091: a non-finite float is not a JSON number, so a comparison against one has no meaning to
+# give: an INVALID VALUE, refused on every engine and every operator (#1167), as `format_number_sql`
+# refuses one for a numeric column. Left to the engines, `"payload__wins__@gte" => NaN` selected
+# different rows on each (a `numeric` `NaN` orders above every number; a `NaN` bound as `NULL` matches
+# nothing).
 _json_finite(value::AbstractFloat) = isfinite(value) ? value :
   throw(InvalidValueError("A numeric JSON comparison requires a finite number", :range))
 
@@ -60,7 +61,7 @@ function _render_json_lookup_comparison(v::SQLTypeOper, column::String, instruc:
     # legitimate SQLite json_extract(...) expression trips.
     return string(column, v.values == true ? " IS NULL" : " IS NOT NULL")
   elseif op in ("=", "!=", "<>")
-    # #1091: `<> NaN` is every row on PostgreSQL (the text `'NaN'`) and none on SQLite (`<> NULL`).
+    # #1091: `<> NaN` is not a JSON comparison either (as text it is every row, as `NULL` none).
     v.values isa AbstractFloat && try
       _json_finite(v.values)
     catch e

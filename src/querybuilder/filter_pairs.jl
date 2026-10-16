@@ -622,8 +622,10 @@ end
 _check_filter_node(v) = v
 
 # #931 — an expression used as a CONDITION must be boolean. A top-level arithmetic or bitwise node
-# (`F("lap") + 1`, `~F("flag")`, `F("a") & 4`) rendered as written: PostgreSQL rejects it ("argument of
-# WHERE/CASE must be type boolean"), SQLite reads the number for truthiness and returns rows. Refused
+# (`F("lap") + 1`, `~F("flag")`, `F("a") & 4`) rendered as written, and a number does not say which
+# rows it means. EXPLICIT INTENT (#1147, #1167): refused on every engine, naming the comparison to
+# write, with no engine named — an engine that reads a number for truthiness answers rows the query
+# never asked for, one that rejects it answers nothing, and neither is the meaning. Refused
 # here, at construction, because every condition position funnels through `_check_filter_node` —
 # `filter`, `Q`/`Qor` and their `push!`, `When(expr)` (via `Q`), `on`/`cjoin`/`cjoin_on` — while a
 # projection or a right-hand side never does. A bare handle (`operation === nothing`) is left alone: it
@@ -645,14 +647,14 @@ function _non_boolean_condition(op::String)
   end
   return _condition_not_boolean(written, "a number", fix, 931)
 end
-# The sentence #931 and #942 share: what was written, why the engines disagree, and how to fix it.
+# The sentence #931 and #942 share: what was written, why it is not a condition, and how to fix it.
 _condition_not_boolean(written::String, value::String, fix::String, issue::Int) = QueryBuildError(  # refusal-value-ok: `value` here is explanatory text, not a bound value
-  "\e[4m\e[31m$(written) used as a condition\e[0m — a condition must be boolean. PostgreSQL rejects " *
-  "$(value) there and SQLite reads it for truthiness, so the two engines disagree; $(fix) (#$(issue)).")
+  "\e[4m\e[31m$(written) used as a condition\e[0m — a condition must be boolean, and $(value) does " *
+  "not say which rows it means; $(fix) (#$(issue)).")
 
 # #942 — a FUNCTION used as a `When` condition. `When(Lower("chassis"))` rendered
-# `CASE WHEN LOWER(…) THEN …`: PostgreSQL rejects it, SQLite coerces the text to a number and reads it
-# for truthiness, so the query silently took the default on every row. `When` is the only condition
+# `CASE WHEN LOWER(…) THEN …`, a text where a condition goes: an engine that coerces it to a number
+# silently took the default on every row. Explicit intent, refused on every engine as #931 is. `When` is the only condition
 # position that admits a bare function — `filter`/`Q`/`on` refuse one by type (`FilterType`) — but
 # #931's node-type rule cannot decide it, because a function CAN be boolean (`Cast(x, "boolean")`,
 # `output_field = "boolean"`, `Coalesce` over a `BooleanField`). The result type decides instead:
@@ -687,8 +689,8 @@ function _boolean_sum_refusal(v::SQLTypeFunction)
   path = op isa SQLField ? op.field : op
   path = path isa AbstractString ? path : "is_active"
   return QueryBuildError(
-    "`$(written)` over a boolean is not supported: PostgreSQL has no $(lowercase(v.function_name))(boolean), " *
-    "and SQLite would silently compute it over the stored 0/1. Turn the flag into a number explicitly, e.g. " *
+    "`$(written)` over a boolean is not supported: the query does not say which number a flag counts " *
+    "as (#953). Turn the flag into a number explicitly, e.g. " *
     "\e[4m\e[32m$(written)(When(\"$(path)\" => true, then = 1, otherwise = 0))\e[0m" *
     (written == "Avg" ? " for the share of true rows." : " to count the true rows."))
 end

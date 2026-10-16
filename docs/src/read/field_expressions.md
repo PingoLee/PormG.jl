@@ -108,7 +108,7 @@ query.values("driverid__surname", "laps",
              "past_50" => Case([When((F("laps") - 50) > 0, then = 1)], default = 0))
 ```
 
-The refusal is there because the two engines disagree about the bare form: PostgreSQL rejects a number used as a condition, and SQLite reads it as true when it is non-zero, so the same query would return rows on one engine and fail on the other. A bare **boolean column** is a condition already and keeps working, for example `filter(F("is_active"))` or `When(F("is_active"), then = 1)`. Arithmetic stays legal anywhere a value goes: in a projection, in `then`, and on the right of a comparison.
+The refusal is there because a number does not say which rows it means, so it is refused on every engine: the comparison you write is the condition. (Left to the engines, one rejects a number used as a condition and another reads it as true when it is non-zero.) A bare **boolean column** is a condition already and keeps working, for example `filter(F("is_active"))` or `When(F("is_active"), then = 1)`. Arithmetic stays legal anywhere a value goes: in a projection, in `then`, and on the right of a comparison.
 
 A **function** is a `When` condition only when its result is boolean, for the same reason. `When(Lower("surname"), then = 1)` raises `QueryBuildError`, and so do `Length`, `Sum`, `Rank`, a `Cast` to a non-boolean type, and a `Coalesce` or `Max` over a number or text column. Compare the function instead, as in `When(Lower("surname") == "senna", then = 1)`. A function whose result is boolean keeps working:
 

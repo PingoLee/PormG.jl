@@ -1006,7 +1006,7 @@ These aggregates can carry arithmetic too — e.g. `"id_span" => Max("resultid")
 
 Over a `BooleanField`, `Max` answers "is any row true?" and `Min` answers "are all rows true?". Both read back as a `Bool` on either engine. PostgreSQL has no `max(boolean)`, so PormG renders its boolean aggregates there, `BOOL_OR` and `BOOL_AND`. SQLite stores a boolean as `0`/`1`, where `MAX`/`MIN` already give the same answer.
 
-`Sum` and `Avg` over a boolean raise `QueryBuildError` on both engines. PostgreSQL has no `sum(boolean)`, and SQLite would quietly add up the stored `0`/`1`. To count the true rows, turn the flag into a number explicitly with a standalone `When`, one that sets `otherwise`:
+`Sum` and `Avg` over a boolean raise `QueryBuildError` on every engine: the query does not say which number a flag counts as. To count the true rows, turn the flag into a number explicitly with a standalone `When`, one that sets `otherwise`:
 
 ```julia
 using PormG.Functions: Avg, Max, Min, Sum, When

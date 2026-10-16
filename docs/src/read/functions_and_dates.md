@@ -689,12 +689,13 @@ digit of such a tie can differ, so a test that pins a rounded tie value is engin
 the rules this follows: a value is rounded by the engine, only where the query asks, and PormG
 refuses where an engine would not honor a declared scale.
 
-Two cases change the value rather than its last digit, and raise when the query is built:
+Two cases raise when the query is built:
 
-- **Text** (a text column, a string, a JSON value) raises `QueryBuildError`: PostgreSQL rejects text
-  that is not a number and SQLite reads it as 0. Cast it first: `Round(Cast(x, FloatField()), n)`.
-- **A negative `n`** raises `InvalidValueError`: SQLite takes it as 0 (`Round(125, -1)` is `125.0`)
-  and PostgreSQL rounds to tens (`130`).
+- **Text** (a text column, a string, a JSON value) raises `QueryBuildError` on every engine: text is
+  not a number, so say it holds one. Cast it first: `Round(Cast(x, FloatField()), n)`.
+- **A negative `n`** rounds to tens, hundreds, … on PostgreSQL (`Round(125, -1)` is `130`). SQLite's
+  `ROUND` has no negative precision (it reads one as 0), so on SQLite it raises
+  `BackendCapabilityError` (see [Backend Capabilities](@ref)).
 
 ```julia
 using PormG.Functions: Round

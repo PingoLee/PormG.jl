@@ -148,8 +148,8 @@ A sum of a `DecimalField` reads back as a `Decimal`, and of a `FloatField` as a 
 engines (#1121): SQLite computes a decimal sum as a double, which PormG reads as the `Decimal` it
 means, to 15 significant digits.
 
-A `Sum` over a `BooleanField` is refused with a `QueryBuildError` (#953): PostgreSQL has no
-`sum(boolean)`, and SQLite would add up the stored 0/1. Count the true rows explicitly —
+A `Sum` over a `BooleanField` is refused with a `QueryBuildError` on every engine (#953): the query
+does not say which number a flag counts as. Count the true rows explicitly —
 `Sum(When("is_active" => true, then = 1, otherwise = 0))`.
 """
 function Sum(x; distinct::Bool = false)
@@ -1422,22 +1422,20 @@ integer it is that integer, whatever the places (#1196): PostgreSQL renders `ROU
 back to the operand's type and SQLite the integer itself, so it reads back as an integer (its width
 follows the engine, as an integer column's does) and `Round("grid") / 2` divides as integers.
 
-Text is not a number to round: `Round(x, d)` over a text column, a string or a JSON value raises
-`QueryBuildError` when the query is built, because PostgreSQL rejects text that is not a number and
-SQLite reads it as 0. Cast it first: `Round(Cast(x, FloatField()), d)`.
+Text is not a number to round: `Round(x, d)` with `d ≠ 0` over a text column, a string or a JSON
+value raises `QueryBuildError` when the query is built (on SQLite a negative `d` meets the capability
+error first), because the query does not say the text holds a number. Cast it first: `Round(Cast(x, FloatField()), d)`.
 
-A negative `precision` raises `InvalidValueError` when the expression is built: PostgreSQL rounds
-`Round(125, -1)` to `130` and SQLite takes a negative precision as 0.
+A negative `precision` rounds to tens, hundreds, …: `Round(125, -1)` is `130` on PostgreSQL. SQLite's
+`ROUND` has no negative precision (it reads one as 0), so there the query raises
+`BackendCapabilityError` when it is built (#1044, #1167). Over an integer the result stays that
+integer type.
 
 See also [Rounding](@ref).
 """
 function Round(x::_ScalarOperand, precision::Integer = 0)
-  # #1044: SQLite reads a negative precision as 0, PostgreSQL rounds to tens, hundreds, … — an
-  # integer operand diverges too, so it is refused before any operand is typed.
-  precision < 0 && throw(InvalidValueError(
-    "\e[31mRound(…, $(precision))\e[0m: SQLite takes a negative precision as 0 (`Round(125, -1)` is " *
-    "`125.0`) and PostgreSQL rounds to it (`130`), so the two engines disagree (#1044). Fetch the value " *
-    "and round it in Julia: \e[32mround(x, RoundNearestTiesAway; digits = $(precision))\e[0m.", :range))
+  # #1044, #1167: a negative precision is a capability (`:negative_round_precision`), read when the
+  # query is built and the engine is known (`_render_function_body`), not here.
   return FObject(function_name = "ROUND", column = _norm_fn_arg(x), aggregate = _any_agg(x), kwargs = Dict{String, Any}("precision" => precision), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:ROUND}) = :numeric

@@ -193,6 +193,9 @@ end
       msg = _oag_refusal(_oag_best(Result).order_by(_oag_term(PormG.F("grid") + Max("points"))))
       @test occursin("mixed-grouping guard (#798): the order_by term o reads the column \"grid\"", msg)
       @test occursin("(in its expression)", msg)
+      # #1167: explicit intent on every engine — no engine is named.
+      @test occursin("does not say which one it means", msg)
+      @test !occursin("PostgreSQL", msg) && !occursin("SQLite", msg)
     end
     @testset "$backend — builds over a projected column" begin
       sql = _oag_sql(_oag_best(Result).order_by(_oag_term(PormG.F("constructorid") + Max("points"))))

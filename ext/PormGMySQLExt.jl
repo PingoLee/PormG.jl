@@ -87,10 +87,12 @@ end
 
 const _SSL_MODES = ("disabled", "preferred", "required", "verify_ca", "verify_identity")
 
+# A whole, non-negative number, as libpq reads `port` and `connect_timeout`. Never echoes the value.
 _conninfo_int(key::String, v::String)::Int = begin
-  parsed = tryparse(Float64, strip(v))
-  parsed === nothing && throw(InvalidConfigurationError("connection.yml: `$(key):` must be a number for `adapter: MySQL`"))
-  round(Int, parsed)
+  parsed = tryparse(Int, strip(v))
+  (parsed === nothing || parsed < 0) &&
+    throw(InvalidConfigurationError("connection.yml: `$(key):` must be a whole, non-negative number for `adapter: MySQL`"))
+  parsed
 end
 
 # The arguments `DBInterface.connect(MySQL.Connection, host, user, password; kw...)` takes. `reconnect`
@@ -105,7 +107,11 @@ function _connect_args(info::Dict{String, String})
   kw = Pair{Symbol, Any}[:reconnect => false, :found_rows => true]
   haskey(info, "dbname") && push!(kw, :db => info["dbname"])
   haskey(info, "port") && push!(kw, :port => _conninfo_int("port", info["port"]))
-  haskey(info, "connect_timeout") && push!(kw, :connect_timeout => _conninfo_int("connect_timeout", info["connect_timeout"]))
+  # `connect_timeout: 0` is libpq's "no timeout"; MySQL.jl takes no timeout as the keyword left out.
+  if haskey(info, "connect_timeout")
+    t = _conninfo_int("connect_timeout", info["connect_timeout"])
+    t > 0 && push!(kw, :connect_timeout => t)
+  end
   if haskey(info, "sslmode")
     mode = lowercase(strip(info["sslmode"]))
     mode in _SSL_MODES || throw(InvalidConfigurationError(
@@ -182,14 +188,14 @@ function PormG.backend_is_alive(pool::_Pool, conn::MySQL.Connection)
   end
 end
 
+# Asked through `fetch`, never by leasing a connection here: inside a transaction `fetch` uses the
+# transaction's own connection, where a lease would wait for a second slot (and time out on a pool of
+# one). `VERSION()` can carry a suffix (`8.4.11-log`); the three numbers lead it.
 function PormG.backend_mysql_version(pool::_Pool)::Int
-  CP = PormG.ConnectionPool
-  conn = CP.acquire_connection(pool)
-  try
-    return _version_number(MySQL.server_version(conn))
-  finally
-    CP.release_connection(pool, conn)
-  end
+  text = only(collect(PormG.ConnectionPool.fetch(pool, "SELECT VERSION() AS v")))[1]
+  m = match(r"^(\d+)\.(\d+)\.(\d+)", String(text))
+  m === nothing && throw(InvalidConfigurationError("the MySQL server reported a version PormG cannot read"))
+  return _version_number(VersionNumber(parse(Int, m[1]), parse(Int, m[2]), parse(Int, m[3])))
 end
 
 # ── Execution ────────────────────────────────────────────────────────────────
@@ -359,8 +365,10 @@ PormG.backend_is_connection_error(pool::_Pool, e) = _is_lost_connection(e)
 # MySQL.jl raises proves the statement never ran (the header). No method is defined, on purpose.
 
 # Permanent: the same configuration fails the same way on every retry. 1045 access denied, 1044 access
-# denied to the database, 1049 unknown database. A refused server (#1264) and a bad option are too.
-const _PERMANENT_CONNECT_ERRNOS = (1044, 1045, 1049)
+# denied to the database, 1049 unknown database, 1130 host not allowed, 3159 an insecure transport the
+# account refuses, 1251 / 1524 an authentication plugin the client or server lacks. A refused server
+# (#1264) and a bad option are too.
+const _PERMANENT_CONNECT_ERRNOS = (1044, 1045, 1049, 1130, 3159, 1251, 1524)
 
 function PormG.backend_is_permanent_connect_error(pool::_Pool, e)
   e isa InvalidConfigurationError && return true
@@ -370,9 +378,12 @@ function PormG.backend_is_permanent_connect_error(pool::_Pool, e)
   return e isa MySQL.Protocol.ServerError && Int(e.errno) in _PERMANENT_CONNECT_ERRNOS
 end
 
-# Constraint violations. 1062 duplicate key, 1451 / 1452 foreign key (parent / child row), 1048 NOT NULL,
-# 1216 / 1217 the older foreign-key numbers, 1557 / 1586 duplicate key on a named index, 3819 CHECK.
-const _INTEGRITY_ERRNOS = (1062, 1451, 1452, 1048, 1216, 1217, 1557, 1586, 3819)
+# Constraint violations, by number only. SQLSTATE `23000` is not a fallback: MySQL files 1052 (an
+# ambiguous column, a broken query) under it too, and an `IntegrityError` for it would send a caller's
+# duplicate-key retry after a statement that can never succeed. 1062 / 1022 / 1586 / 1557 duplicate key,
+# 1169 duplicate on a unique constraint, 1761 / 1762 duplicate key through a foreign key, 1451 / 1452
+# foreign key (parent / child row), 1216 / 1217 the older foreign-key numbers, 1048 NOT NULL, 3819 CHECK.
+const _INTEGRITY_ERRNOS = (1062, 1022, 1586, 1557, 1169, 1761, 1762, 1451, 1452, 1216, 1217, 1048, 3819)
 # The server or the session, not the statement: 1205 lock wait timeout, 1213 deadlock, 3024 statement
 # timeout, 1317 interrupted (`KILL QUERY`), 1040 too many connections, 1203 / 1226 a user's connection or
 # resource limit, 1053 server shutdown.
@@ -386,7 +397,7 @@ function PormG.backend_classify_error(pool::_Pool,
    e isa MySQL.Protocol.TLSNegotiationError) && return :operational
   e isa MySQL.Protocol.ServerError || return :unknown
   errno = Int(e.errno)
-  (errno in _INTEGRITY_ERRNOS || e.sqlstate == "23000") && return :integrity
+  errno in _INTEGRITY_ERRNOS && return :integrity
   (errno in _OPERATIONAL_ERRNOS || e.sqlstate == "40001") && return :operational
   return :statement
 end

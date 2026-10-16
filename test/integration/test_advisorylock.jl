@@ -45,6 +45,9 @@ else
     @test final_count == 5
   end
 
+  # PostgreSQL's own mechanics: its `lock_timeout` log line and its `pg_locks` holder text. MySQL's
+  # `GET_LOCK` wait is covered by `test_mysql_backend.jl` (#1269).
+  only_on(:postgres, "asserts PostgreSQL's lock_timeout warning and pg_locks holder text") &&
   @testset "AdvisoryLock: blocking with timeout" begin
     dbname = PORMG_DB_FOLDER
     key = "test_advisory_lock_timeout_$(uuid4())"
@@ -173,6 +176,9 @@ else
   # `Migrations._migration_lock_key`, so against the unpatched folder-derived key the two keys
   # differ, the second acquisition SUCCEEDS, and `@test blocked` fails.
   # ───────────────────────────────────────────────────────────────────────────────────────────
+  # Reads PostgreSQL's catalog (`pg_locks`, `pg_database`) and the migration key (`migrate` on MySQL
+  # is phase 4 of #1130).
+  only_on(:postgres, "reads pg_locks for the migration lock's database tag") &&
   @testset "AdvisoryLock: migration lock identity is the database, not the folder (#90)" begin
     base = PormG.config[PORMG_DB_FOLDER]
 

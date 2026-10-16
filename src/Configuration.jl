@@ -811,7 +811,7 @@ end
 function _conninfo_value(key::AbstractString, v)
   s = string(v)
   '\0' in s && throw(InvalidConfigurationError(
-    "connection.yml: `$key` contains a NUL character, which a PostgreSQL connection string cannot carry"))
+    "connection.yml: `$key` contains a NUL character, which a connection string cannot carry"))
   return "'" * replace(s, "\\" => "\\\\", "'" => "\\'") * "'"
 end
 

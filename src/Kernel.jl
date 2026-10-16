@@ -50,8 +50,9 @@ pools: `PostgresConnectionPool <: PormGPostgres`, `SQLiteConnectionPool <: PormG
 `MySQLConnectionPool <: PormGMySQL`.
 
 `PormGMySQL` is in progress (#1130): its pool connects, runs statements and transactions and takes
-advisory locks, but no query is rendered for it yet, so a fluent query on a MySQL pool stops at the
-first engine fact MySQL has not decided (a `MethodError` naming it).
+advisory locks, but no query is rendered for it yet, so a fluent query on a MySQL pool fails before
+any SQL is sent, at the first part of the query builder MySQL has no method for (a `MethodError`
+naming it, or a `TypeError` where a signature lists the engines).
 
 Deliberately **not** `<: PormGSettings`: that is the configuration/`Settings` type, and a pool
 carries none of its fields (#186).

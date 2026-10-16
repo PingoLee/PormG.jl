@@ -77,9 +77,9 @@ MySQL support is being built in phases ([#1130](https://github.com/PingoLee/Porm
 - The connection pool, raw `fetch` with `?` placeholders, `run_in_transaction` / `atomic`, and `with_advisory_lock` (`GET_LOCK`).
 - Server errors arrive as `IntegrityError`, `OperationalError` or `StatementError`, classified by MySQL's error number.
 
-Not yet: model queries and writes (`M.Driver.objects…`), migrations and `inspectdb`. A query built on a MySQL pool raises a `MethodError` naming the first engine decision MySQL has not made yet.
+Not yet: model queries and writes (`M.Driver.objects…`), migrations and `inspectdb`. A model query or write on a MySQL pool fails before any SQL is sent, with a `MethodError` (or a `TypeError`) at the first part of the query builder that MySQL does not have yet.
 
-Each connection runs in UTC (`time_zone = '+00:00'`), with `utf8mb4` and MySQL 8.4's default `sql_mode`, so neither the server's global settings nor a DBA's change to them alters what a statement means. A statement whose connection is lost is never retried: MySQL reports the same error whether or not the statement ran ([MySQL.jl#248](https://github.com/JuliaDatabases/MySQL.jl/issues/248)).
+Each connection runs in UTC (`time_zone = '+00:00'`), with `utf8mb4` and MySQL 8.4's default `sql_mode`, so neither the server's global settings nor a DBA's change to them alters what a statement means. A statement whose connection is lost is never retried: MySQL reports the same error whether or not the statement ran ([MySQL.jl#248](https://github.com/JuliaDatabases/MySQL.jl/issues/248)). That includes a connection the server closed while it sat idle in the pool past the server's `wait_timeout` (8 hours by default, often less on a hosted server): its next statement raises `OperationalError`, and the pool renews the connection after it. Set `idle_timeout:` in `connection.yml` below the server's `wait_timeout`, and PormG closes idle connections first.
 
 ## What the capability table leaves out
 

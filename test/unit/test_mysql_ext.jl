@@ -99,15 +99,20 @@ end
   @test kw.ssl_mode === :verify_ca && kw.ssl_ca == "/etc/ca.pem"
   @test kw.reconnect === false && kw.found_rows === true   # never a driver reconnect; matched-row counts
 
-  for key in ("url", "hostaddr", "passfile", "client_encoding", "postgres_driver")
+  for key in ("url", "hostaddr", "passfile", "client_encoding", "postgres_driver", "extensions")
     e = try PormG.Configuration._mysql_conninfo(Dict{String, Any}("adapter" => "MySQL", key => "SECRETVALUE")); nothing catch err; err end
     @test e isa PormG.InvalidConfigurationError
     @test occursin("`$(key):`", sprint(showerror, e)) && !occursin("SECRETVALUE", sprint(showerror, e))
   end
   e = try _MyExt._connect_args(Dict("sslmode" => "allow")); nothing catch err; err end
   @test e isa PormG.InvalidConfigurationError && occursin("verify_identity", sprint(showerror, e))
-  e = try _MyExt._connect_args(Dict("port" => "SECRET")); nothing catch err; err end
-  @test e isa PormG.InvalidConfigurationError && !occursin("SECRET", sprint(showerror, e))
+  for bad in ("SECRET", "3306.5", "-1", "99999999999999999999")
+    e = try _MyExt._connect_args(Dict("port" => bad)); nothing catch err; err end
+    @test e isa PormG.InvalidConfigurationError && !occursin(bad, sprint(showerror, e))
+  end
+  # `connect_timeout: 0` is libpq's "no timeout": the keyword is left out, as MySQL.jl spells it.
+  @test !haskey(_MyExt._connect_args(Dict("connect_timeout" => "0"))[4], :connect_timeout)
+  @test _MyExt._connect_args(Dict("connect_timeout" => "7"))[4].connect_timeout == 7
   @test_throws PormG.InvalidConfigurationError _MyExt._parse_conninfo("host='unterminated")
 end
 
@@ -158,6 +163,10 @@ end
   @test classify(_my_err(1317, "70100")) === :operational   # KILL QUERY
   @test classify(_my_err(2006)) === :operational
   @test classify(_my_err(1064, "42000")) === :statement
+  # 1052 (an ambiguous column) is filed under SQLSTATE 23000 (measured on 8.4): a broken query, not a
+  # constraint, so the class is not a fallback.
+  @test classify(_my_err(1052, "23000")) === :statement
+  @test classify(_my_err(1022, "23000")) === :integrity
   @test classify(_my_err(1146, "42S02")) === :statement
   @test classify(MySQL.StmtError(1062, "dup", "23000")) === :integrity
   @test classify(_MyP.AuthError("denied")) === :operational
@@ -181,6 +190,7 @@ end
 
   permanent(e) = PormG.backend_is_permanent_connect_error(pool, e)
   @test permanent(_my_err(1045, "28000")) && permanent(_my_err(1049, "42000"))
+  @test permanent(_my_err(1130)) && permanent(_my_err(3159))   # host not allowed; TLS required
   @test permanent(_MyP.AuthError("caching_sha2_password requires a secure connection"))
   @test permanent(PormG.BackendCapabilityError("old server"))
   @test permanent(PormG.InvalidConfigurationError("bad"))
@@ -257,4 +267,43 @@ PormG.backend_mysql_version(c::_MyAt1130) = c.v
                                "for a server version PormG is verified against; this server is 8.0.36."
   @test PormG._supports(_MyAt1130(80_411), :advisory_locks)
   @test !PormG._supports(_MyAt1130(80_411), :jsonb_operators)   # every other row waits for its phase
+end
+
+# What: `with_advisory_lock` on a MySQL pool sends `GET_LOCK` with its key and the `:block` timeout in
+#   whole seconds, rounded UP, `-1` for `timeout_ms = 0`, and releases the lock it took.
+# Why: MySQL rounds a fractional timeout to the NEAREST second (measured: 0.3 does not wait at all),
+#   so a millisecond timeout passed through would shorten or remove the wait; `0` must mean no bound,
+#   as `lock_timeout = 0` does on PostgreSQL (#1269).
+struct _MyLockConn1130
+  closed::Bool
+end
+mutable struct _MyLockPool1130 <: PormG.PormGMySQL
+  connections::Vector{Any}
+  available::Vector{Bool}
+  connection_string::String
+  pool_size::Int
+  lock::ReentrantLock
+  calls::Vector{Tuple{String, Vector{Any}}}
+end
+_MyLockPool1130() = _MyLockPool1130(Any[_MyLockConn1130(false)], [true], "mock://my", 1, ReentrantLock(), [])
+PormG.backend_is_alive(::_MyLockPool1130, conn) = conn isa _MyLockConn1130
+PormG.backend_connect(::_MyLockPool1130; kwargs...) = _MyLockConn1130(false)
+function PormG.backend_execute_async(pool::_MyLockPool1130, conn, sql::String, params)
+  push!(pool.calls, (sql, collect(Any, something(params, Any[]))))
+  return @async Any[(1,)]
+end
+@testset "GET_LOCK takes whole seconds, rounded up (#1269)" begin
+  for (ms, seconds) in ((300, 1), (1_000, 1), (2_001, 3), (0, -1))
+    pool = _MyLockPool1130()
+    @test PormG.with_advisory_lock(() -> :ran, pool, "k1130"; wait = true, strategy = :block, timeout_ms = ms) === :ran
+    sql, params = pool.calls[1]
+    @test occursin("GET_LOCK(", sql) && occursin("DATABASE()", sql)
+    @test params == Any["k1130", seconds]
+    @test occursin("RELEASE_LOCK(", pool.calls[end][1]) && pool.calls[end][2] == Any["k1130"]
+    @test length(pool.calls) == 2      # nothing set on the session, nothing to restore
+    @test pool.available[1]
+  end
+  pool = _MyLockPool1130()
+  @test PormG.with_advisory_lock(() -> :ran, pool, "k1130") === :ran   # wait = false: GET_LOCK(…, 0)
+  @test occursin("GET_LOCK(", pool.calls[1][1]) && occursin(", 0)", pool.calls[1][1])
 end

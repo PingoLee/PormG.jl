@@ -84,6 +84,33 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
         @test PormG.backend_num_affected_rows(pool, r) == 1
     end
 
+    # What: the server's version is asked on the transaction's own connection when one is open.
+    # SQL: `SELECT VERSION()` inside `run_in_transaction` on a pool of ONE slot.
+    # Why: a version row read mid-transaction must not lease a second connection — on a pool of one
+    # it would wait `pool_timeout` and raise `PoolTimeoutError` (found in review of #1130).
+    @testset "the server version is read on a transaction's own connection" begin
+        one = PormG.ConnectionPool.MySQLConnectionPool(pool.connection_string; pool_size = 1, pool_timeout = 2)
+        try
+            v = PormG.run_in_transaction(() -> PormG._server_version(one), one)
+            @test v == PormG._server_version(pool)
+        finally
+            PormG.ConnectionPool.close_pool!(one)
+        end
+    end
+
+    # What: a model query or write on a MySQL pool fails before any SQL is sent.
+    # SQL: none — `list`, `count` and `create` on `M.Status`, whose table this database does not have.
+    # Why: no query renders for MySQL until phase 2; it must stop loudly at the first piece of the
+    # query builder MySQL has no method for, never render another engine's SQL and send it.
+    @testset "a fluent query on a MySQL pool fails before sending SQL" begin
+        for q in (() -> M.Status.objects.filter("statusid" => 1).list(),
+                  () -> M.Status.objects.count(),
+                  () -> M.Status.objects.create("status" => "x"))
+            e = try q(); nothing catch err; err end
+            @test e isa Union{MethodError, TypeError}
+        end
+    end
+
     # What: the pool serves concurrent tasks, each with its own parameters.
     # SQL: `SELECT SLEEP(0.05) AS s, ? AS v` from 40 spawned tasks.
     # Why: MySQL.jl's I/O yields, so a pool of connections overlaps waits; a slot handed to two tasks

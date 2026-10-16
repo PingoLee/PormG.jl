@@ -23,6 +23,8 @@ const _PG_DRIVER_HINT = "PormG: the PostgreSQL backend requires LibPQ. Run `usin
                         "(or `using PormG, LibPQ`) so the PostgreSQL extension loads."
 const _SQLITE_DRIVER_HINT = "PormG: the SQLite backend requires SQLite. Run `using SQLite` " *
                             "(or `using PormG, SQLite`) so the SQLite extension loads."
+const _MYSQL_DRIVER_HINT = "PormG: the MySQL backend requires MySQL. Run `using MySQL` " *
+                           "(or `using PormG, MySQL`) so the MySQL extension loads."
 
 # PostgreSQL has more than one candidate driver (#785), so the driver is a property of the POOL —
 # `PostgresConnectionPool{D}` in ConnectionPool.jl — not only of the `PormGPostgres` marker. Several
@@ -38,10 +40,11 @@ const _SQLITE_DRIVER_HINT = "PormG: the SQLite backend requires SQLite. Run `usi
 # Keyed by driver; the value is the package the user must load for it.
 const _PG_DRIVER_PACKAGES = (libpq = "LibPQ", postgres = "Postgres")
 
-# #1232: the weakdep extension that implements each driver — `:sqlite` and the keys of
+# #1232: the weakdep extension that implements each driver — `:sqlite`, `:mysql` and the keys of
 # `_PG_DRIVER_PACKAGES`. `Configuration.load` asks before it replaces anything, so a missing
 # `using LibPQ` fails at boot instead of on the first query.
-const _DRIVER_EXTENSIONS = (sqlite = :PormGSQLiteExt, libpq = :PormGLibPQExt, postgres = :PormGPostgresExt)
+const _DRIVER_EXTENSIONS = (sqlite = :PormGSQLiteExt, libpq = :PormGLibPQExt, postgres = :PormGPostgresExt,
+                            mysql = :PormGMySQLExt)
 
 """
     postgres_driver(pool::PormGPostgres) -> Symbol
@@ -67,7 +70,8 @@ function _pg_driver_hint(driver::Symbol)::String
 end
 
 # #1232: a driver (`_DRIVER_EXTENSIONS`' keys) → the message naming the package to load for it.
-_driver_hint(driver::Symbol)::String = driver === :sqlite ? _SQLITE_DRIVER_HINT : _pg_driver_hint(driver)
+_driver_hint(driver::Symbol)::String =
+  driver === :sqlite ? _SQLITE_DRIVER_HINT : driver === :mysql ? _MYSQL_DRIVER_HINT : _pg_driver_hint(driver)
 
 # Backend generics. Real methods are added by the driver extensions; the fallbacks
 # below fire when the matching driver has not been loaded.
@@ -86,6 +90,7 @@ _driver_hint(driver::Symbol)::String = driver === :sqlite ? _SQLITE_DRIVER_HINT 
 #   backend_num_rows(pool, result)                     -> Int row count (PG)
 #   backend_copy_in!(pool, conn, sql, data_itr)        -> Int rows copied: PostgreSQL COPY FROM STDIN (#670)
 #   backend_sqlite_version(pool)                        -> Int SQLite library version number
+#   backend_mysql_version(pool)                         -> Int MySQL server version (`80411` for 8.4.11)
 #
 # `backend_cancel_query!` and `backend_drain_connection!` are the abandoned-await pair (#315) —
 # named rather than positioned, because this list grows. A Ctrl-C leaves the driver mid-operation, and
@@ -99,7 +104,7 @@ for fn in (:backend_connect, :backend_renew_connection, :backend_is_alive,
            :backend_is_permanent_connect_error,
            :backend_cancel_query!, :backend_drain_connection!,
            :backend_num_affected_rows, :backend_num_rows, :backend_copy_in!,
-           :backend_sqlite_version)
+           :backend_sqlite_version, :backend_mysql_version)
   @eval begin
     function $fn end
     # InvalidConfigurationError, not ErrorException: forgetting `using LibPQ`/`using SQLite` is a
@@ -107,12 +112,15 @@ for fn in (:backend_connect, :backend_renew_connection, :backend_is_alive,
     # ALL backend generics, i.e. the first thing a consumer hits with a missing driver).
     $fn(pool::PormGPostgres, args...; kwargs...) = throw(InvalidConfigurationError(_pg_driver_hint(pool)))
     $fn(pool::PormGSQLite, args...; kwargs...) = throw(InvalidConfigurationError(_SQLITE_DRIVER_HINT))
+    $fn(pool::PormGMySQL, args...; kwargs...) = throw(InvalidConfigurationError(_MYSQL_DRIVER_HINT))
   end
 end
 
 # #1163: the version the capability table's SQLite rows are read against (window functions from 3.25,
 # …) is the library's. PostgreSQL's method asks the server, so it lives with its probe in `Migrations`.
 Kernel._server_version(pool::PormGSQLite)::Int = backend_sqlite_version(pool)
+# MySQL's is the server's, as announced in its greeting; the extension asks a pooled connection.
+Kernel._server_version(pool::PormGMySQL)::Int = backend_mysql_version(pool)
 
 """
     backend_classify_error(pool, e) -> Symbol

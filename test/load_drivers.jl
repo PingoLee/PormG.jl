@@ -40,7 +40,8 @@
 let failures = Pair{String,String}[]
     for (name, uuid) in (("LibPQ",    "194296ae-ab2e-5f79-8cd4-7183a0a5a0d1"),
                          ("Postgres", "8f23287e-300e-4f50-bc2b-9f1dfe95da84"),
-                         ("SQLite",   "0aa819cd-b072-5ff4-a722-6bc24af294d9"))
+                         ("SQLite",   "0aa819cd-b072-5ff4-a722-6bc24af294d9"),
+                         ("MySQL",    "39abe10b-433b-5dbd-92d4-e302a9df00cd"))
         sym = Symbol(name)
         try
             # Direct dep of the active env (Pkg.test, test/integration): `using` both loads

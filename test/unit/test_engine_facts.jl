@@ -18,6 +18,7 @@ using PormG
 const _EF_QB = PormG.QueryBuilder
 struct _EfPg <: PormG.PormGPostgres end
 struct _EfSl <: PormG.PormGSQLite end
+struct _EfMy <: PormG.PormGMySQL end
 struct _EfOther <: PormG.PormGBackend end   # a backend that has decided nothing yet, as #1130 starts
 
 # Every top-level `name(…) =` / `function name(` in a facts file: the registry is the file itself.
@@ -53,9 +54,17 @@ const _EF_FACTS = vcat(
    (_EF_QB, :_computed_kind)],                      # the type a function computes (#1034, beside each constructor)
 )
 
-# The engine a method parameter names: `:postgres`, `:sqlite`, or `nothing` for a non-engine one.
+# The engine a method parameter names: `:postgres`, `:sqlite`, `:mysql`, or `nothing` for a non-engine one.
 _ef_engine(T) = T isa Type && T <: PormG.PormGPostgres ? :postgres :
-                T isa Type && T <: PormG.PormGSQLite ? :sqlite : nothing
+                T isa Type && T <: PormG.PormGSQLite ? :sqlite :
+                T isa Type && T <: PormG.PormGMySQL ? :mysql : nothing
+
+# The facts MySQL (#1130) has decided so far, each in the phase that needs it. Phase 1 decides the
+# connection's: its key, how its transactions open, and how its statements run and lease. Every other
+# fact stays undecided — a `MethodError` naming it — until its phase adds it here, so a MySQL method
+# that appears without being listed (or a listed one that disappears) fails below.
+const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sql, :_execute_async,
+                               :_acquire_in_mode, :_acquire_for_statement])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions
@@ -76,9 +85,10 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: one method per engine, and no method a third backend could fall into
-# Every method of every fact names PostgreSQL or SQLite in its signature, and together they cover
-# both. A method on `PormGBackend`, `Any` or an untyped argument would be a default — exactly the
-# silent arm the facts replaced — so its absence is the point.
+# Every method of every fact names an engine in its signature, and together they cover PostgreSQL and
+# SQLite — and MySQL exactly for the facts it has decided. A method on `PormGBackend`, `Any` or an
+# untyped argument would be a default — exactly the silent arm the facts replaced — so its absence is
+# the point.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1129: every engine fact has a PostgreSQL and a SQLite method and no fallback" begin
   for (mod, name) in _EF_FACTS
@@ -91,8 +101,11 @@ end
       @test (name, m.line, !isempty(engines)) == (name, m.line, true)
       union!(covered, engines)
     end
-    @test (name, sort!(collect(covered))) == (name, [:postgres, :sqlite])
+    expected = name in _EF_MYSQL_DECIDED ? [:mysql, :postgres, :sqlite] : [:postgres, :sqlite]
+    @test (name, sort!(collect(covered))) == (name, expected)
   end
+  # Guards the guard: every name MySQL is said to have decided is a registered fact.
+  @test _EF_MYSQL_DECIDED ⊆ Set(last.(_EF_FACTS))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -120,4 +133,9 @@ end
   # Sanity on the two engines: the facts answer, and answer differently where they should.
   @test _EF_QB._interval_as_ms(_EfSl()) && !_EF_QB._interval_as_ms(_EfPg())
   @test PormG.Kernel._engine_key(_EfPg()) === :postgres && PormG.Kernel._engine_key(_EfSl()) === :sqlite
+  # MySQL (#1130): the facts phase 1 decided answer; an undecided one is still a MethodError.
+  @test PormG.Kernel._engine_key(_EfMy()) === :mysql
+  @test PormG.ConnectionPool._begin_write_sql(_EfMy()) == "START TRANSACTION;"
+  @test PormG.ConnectionPool._after_begin_sql(_EfMy()) == String[]
+  @test_throws MethodError _EF_QB._interval_as_ms(_EfMy())
 end

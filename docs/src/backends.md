@@ -1,6 +1,6 @@
 # Backend Capabilities
 
-PormG runs on PostgreSQL and SQLite; MySQL is planned for the first registered release ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)). Most of what it does means the same on both. Some features exist on one backend only, and PormG does not emulate a feature a backend lacks. It raises `BackendCapabilityError` instead, and the message names the feature, the backend you are on, and the backends that support it:
+PormG runs on PostgreSQL and SQLite. MySQL is in progress for the first registered release ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)); see [MySQL (in progress)](@ref) for what works today. Most of what it does means the same on both. Some features exist on one backend only, and PormG does not emulate a feature a backend lacks. It raises `BackendCapabilityError` instead, and the message names the feature, the backend you are on, and the backends that support it:
 
 ```text
 The @jcontains lookup (JSONB @>) needs JSONB containment and key operators (`@>`, `?`, `?|`, `?&`),
@@ -41,6 +41,7 @@ Where PormG reads the schema, an older server is not refused: the feature reads 
 | `generated_columns` | a plan adding `SearchVectorField(generated_from = …)` (refused below the version); reading the schema: below the version, no column is generated | from 12 | no |
 | `drop_expression` | a plan removing `generated_from` (refused below the version) | from 13 | no |
 | `input_validity` | `migrate`'s count of the rows a column retype would reject; below the version it matches the new type's input grammar instead | from 16 | no |
+| `supported_server` | opening a connection: a backend with a version here refuses an older server when a connection opens | yes | yes |
 
 `with_advisory_lock` on SQLite without `on_missing_lock = :error` runs the body with no lock, and warns unless you pass `on_missing_lock = :ignore` ([Advisory Locks](advisory_lock.md)).
 
@@ -66,6 +67,19 @@ Two promises are PormG's own meaning rather than an engine's, and hold on every 
 construction: `F("grid") / 2` divides integers as integers, and a NULL `Concat` operand is skipped.
 A backend whose operator computes something else gets a different rendering, not a different answer
 ([Functions and Dates](read/functions_and_dates.md)).
+
+## MySQL (in progress)
+
+MySQL support is being built in phases ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)), and it is not in the tables above until each phase decides its rows. What works today:
+
+- `adapter: MySQL` in `connection.yml` ([connection.yml](configuration/connection_yml.md)), with `using MySQL` (MySQL.jl 2.0) loading the extension.
+- **MySQL 8.4 or newer.** A connection to an older server is refused when it opens, with a `BackendCapabilityError` naming both versions. A MariaDB server is refused with an `InvalidConfigurationError`: it is planned as a separate backend.
+- The connection pool, raw `fetch` with `?` placeholders, and `run_in_transaction` / `atomic`.
+- Server errors arrive as `IntegrityError`, `OperationalError` or `StatementError`, classified by MySQL's error number.
+
+Not yet: model queries and writes (`M.Driver.objects…`), migrations and `inspectdb`. A query built on a MySQL pool raises a `MethodError` naming the first engine decision MySQL has not made yet.
+
+Each connection runs in UTC (`time_zone = '+00:00'`), with `utf8mb4` and MySQL 8.4's default `sql_mode`, so neither the server's global settings nor a DBA's change to them alters what a statement means. A statement whose connection is lost is never retried: MySQL reports the same error whether or not the statement ran ([MySQL.jl#248](https://github.com/JuliaDatabases/MySQL.jl/issues/248)).
 
 ## What the capability table leaves out
 

@@ -125,9 +125,9 @@ end
 
 # Every engine key PormG ships. A backend added later adds its key here when it adds `_engine_key`;
 # until then `engine_key` throws a `MethodError` for it, which is the point.
-const ENGINE_KEYS = (:postgres, :sqlite)
+const ENGINE_KEYS = (:postgres, :sqlite, :mysql)
 
-"""`engine_key(conn = <this run's pool>)` — this run's engine as a key (`:postgres`, `:sqlite`)."""
+"""`engine_key(conn = <this run's pool>)` — this run's engine as a key (`:postgres`, `:sqlite`, `:mysql`)."""
 engine_key(conn = PormG.config[PORMG_DB_FOLDER].connections)::Symbol = PormG.Kernel._engine_key(conn)
 
 function _check_engine_keys(ks)
@@ -195,12 +195,12 @@ split_statements(sql::AbstractString; conn = PormG.config[PORMG_DB_FOLDER].conne
     by_engine(conn; postgres = PormG.Migrations._split_pg_statements,
                     sqlite = PormG.Migrations._split_sqlite_statements)(sql)
 placeholder(i::Integer; conn = PormG.config[PORMG_DB_FOLDER].connections)::String =
-    by_engine(conn; postgres = "\$$(i)", sqlite = "?")
+    by_engine(conn; postgres = "\$$(i)", sqlite = "?", mysql = "?")
 binds_column_arrays(; conn = PormG.config[PORMG_DB_FOLDER].connections)::Bool =
     by_engine(conn; postgres = true, sqlite = false)
 marker_count(sql::AbstractString; conn = PormG.config[PORMG_DB_FOLDER].connections)::Int =
     by_engine(conn; postgres = length(unique(m.match for m in eachmatch(r"\$\d+", sql))),
-                    sqlite = count(==('?'), sql))
+                    sqlite = count(==('?'), sql), mysql = count(==('?'), sql))
 
 # #37: the async integration suite (`-t auto`, heavy fan-out) saturates a small PostgreSQL pool
 # against a possibly-remote DB. Size the pool to the run's concurrency for this run only
@@ -211,7 +211,7 @@ marker_count(sql::AbstractString; conn = PormG.config[PORMG_DB_FOLDER].connectio
 # peak (~20-30) but a high value could exhaust the PostgreSQL server's max_connections.
 # Engine mechanics (#1179): only a server pool is sized; SQLite serializes through one writer.
 let s = PormG.config[PORMG_DB_FOLDER]
-    if by_engine(postgres = true, sqlite = false)
+    if by_engine(postgres = true, sqlite = false, mysql = true)
         pool_n = parse(Int, get(ENV, "PORMG_TEST_POOL_SIZE", "20"))
         if pool_n != s.connections.pool_size
             s.db_config_settings["pool_size"] = pool_n
@@ -274,9 +274,10 @@ end
 
 # Engine mechanics (#1179): the lock below is PostgreSQL's own SQL, so a backend added later decides
 # its row here rather than inheriting either answer — not `requires(:advisory_locks)`, which would
-# hand it PostgreSQL's `pg_try_advisory_lock` the day it declares advisory locks.
+# hand it PostgreSQL's `pg_try_advisory_lock` the day it declares advisory locks. MySQL (#1130) has
+# no suite lock yet, so a MySQL run is asked for first.
 if get(ENV, "PORMG_TEST_LOCK", "1") ∉ ("0", "false", "off") &&
-   by_engine(postgres = true, sqlite = false)
+   by_engine(postgres = true, sqlite = false, mysql = false)
   let s = PormG.config[PORMG_DB_FOLDER]
     dbname = string(s.db_config_settings["database"])
     wait_s = parse(Float64, get(ENV, "PORMG_TEST_LOCK_WAIT", "900"))
@@ -356,6 +357,8 @@ if PORMG_DB_FOLDER == "db_sl"
     PormG.@import_models "db_sl/models.jl" models
 elseif PORMG_DB_FOLDER == "db_2"
     PormG.@import_models "db_2/models.jl" models
+elseif PORMG_DB_FOLDER == "db_my"
+    PormG.@import_models "db_my/models.jl" models
 else
     error("no models file for PORMG_DB=$(PORMG_DB_FOLDER); add its folder here")
 end

@@ -83,7 +83,8 @@ struct NetClosingError <: Exception end
   pg_generics = Set(nameof(f) for (f, _) in rows)
   for name in names(PormG; all = true)
     s = string(name)
-    (startswith(s, "backend_") && name !== :backend_sqlite_version && getfield(PormG, name) isa Function) || continue
+    (startswith(s, "backend_") && name ∉ (:backend_sqlite_version, :backend_mysql_version) &&
+     getfield(PormG, name) isa Function) || continue
     @test name in pg_generics
   end
 

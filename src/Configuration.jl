@@ -1,13 +1,14 @@
 module Configuration
 
 import YAML
-import PormG: PormGSettings, PormGBackend, PormGPostgres, PormGPostgresParam, PormGSQLite, config, PormGModel
+import PormG: PormGSettings, PormGBackend, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGMySQL, config, PormGModel
+import PormG: _SQLEngine  # every engine (#1130): the pool a Settings holds, the transaction context's pool
 import PormG: model_table_name  # physical table name (db_table when set, #59) — defined in Kernel
 import PormG: ConfigurationError, InvalidConfigurationError  # semantic error taxonomy (#239); defined in Kernel
 import PormG: TransactionError  # cross-connection transaction misuse (#268); the config is valid, the call pattern is not
 import PormG: PORMG_DB_CONFIG_FILE_NAME, DB_PATH, MODEL_FILE, DATETIME_FORMAT, UTC_TIMEZONE, DEFAULT_POOL_TIMEOUT
 import PormG: _suggest_name  # typo suggestion helper (Kernel)
-import PormG: sqlite_ignore_schema, postgres_ignore_table  # built-in ignore lists `unignore_defaults:` is checked against (#818, Kernel)
+import PormG: sqlite_ignore_schema, postgres_ignore_table, mysql_ignore_table  # built-in ignore lists `unignore_defaults:` is checked against (#818, Kernel)
 import PormG: _canonical_folder_path  # models-folder identity, shared with Models (#550, Kernel)
 import PormG: Generator
 import PormG: @pormg_debug
@@ -373,7 +374,7 @@ issued just before then may still run on the block's connection, before or after
 """
 mutable struct TransactionContext
   conn::Any  # driver connection handle (untyped: core never names LibPQ.Connection / SQLite.DB)
-  pool::Union{Nothing, PormGPostgres, PormGSQLite}
+  pool::Union{Nothing, _SQLEngine}
   depth::Int  # Track nested transaction contexts
   sqlite_reserved_primary_keys::Dict{Tuple{String, String}, Int64}
   parent::Union{Nothing, TransactionContext}  # the enclosing block's context, or `nothing` at the outermost
@@ -437,7 +438,7 @@ function get_tx_connection()
 end
 
 """
-    get_tx_pool() -> Union{Nothing, PormGPostgres, PormGSQLite}
+    get_tx_pool() -> Union{Nothing, _SQLEngine}
 
 Get the connection pool associated with the current (innermost) transaction context. To ask
 whether a transaction is open on a given pool, enclosing blocks included, use `in_transaction_on`.
@@ -461,7 +462,7 @@ end
 # enough: in `atomic(a) do; atomic(b) do; …`, it names only B, while A's transaction is still open.
 # A closed context is stepped over wherever it sits in the chain (#839): a block can end while a
 # block opened under it by another task is still running.
-function _tx_context_for(pool::Union{PormGPostgres, PormGSQLite})
+function _tx_context_for(pool::_SQLEngine)
   ctx = _tx_context[]
   while ctx !== nothing && ctx.depth > 0
     if _is_closed(ctx)
@@ -480,7 +481,7 @@ end
 Whether a transaction is open on `pool`, in this block or any enclosing one. Unlike
 `in_transaction_context()`, a transaction on a different database does not count (#831).
 """
-in_transaction_on(pool::Union{PormGPostgres, PormGSQLite}) = _tx_context_for(pool) !== nothing
+in_transaction_on(pool::_SQLEngine) = _tx_context_for(pool) !== nothing
 
 """
     current_transaction_depth() -> Int
@@ -526,7 +527,7 @@ starts a fresh table, because the reservations are keyed by table name only (#83
 including on a throw. A spawned task that is still running after the block ends no longer sees it
 as open: its statements run in autocommit on a connection of their own (#839).
 """
-function with_tx_context(f::Function, pool::Union{PormGPostgres, PormGSQLite}, conn)
+function with_tx_context(f::Function, pool::_SQLEngine, conn)
   # The enclosing block still running, not merely the one in scope (#839): a task that outlived
   # its block and opens one of its own starts a fresh chain at depth 1.
   old_ctx = _open_tx_context()
@@ -555,7 +556,7 @@ function with_tx_context(f::Function, pool::Union{PormGPostgres, PormGSQLite}, c
   end
 end
 
-function connection_key_for_pool(pool::Union{PormGPostgres, PormGSQLite})::Union{String, Nothing}
+function connection_key_for_pool(pool::_SQLEngine)::Union{String, Nothing}
   for (key, settings) in config
     if settings.connections === pool
       return key
@@ -570,7 +571,7 @@ end
 # `get_settings` resolved from `.db(...)`, a `connection =` override or the model's binding — not
 # the model's binding alone, which a `.db()` call overrides (#838). Raw `fetch` is deliberately
 # looser: it runs in autocommit on a pool with no open transaction, as Django does per connection.
-function ensure_transaction_scope(model::PormGModel, pool::Union{PormGPostgres, PormGSQLite})
+function ensure_transaction_scope(model::PormGModel, pool::_SQLEngine)
   in_transaction_context() || return
   in_transaction_on(pool) && return
   active_key = connection_key_for_pool(get_tx_pool())
@@ -591,7 +592,7 @@ end
 # The connection of the open transaction on `pool`, or `nothing`. Every path that reuses the
 # ambient connection must go through here rather than `get_tx_connection()`, which does not say
 # which pool the connection came from (#831).
-function transaction_connection_for(pool::Union{PormGPostgres, PormGSQLite})
+function transaction_connection_for(pool::_SQLEngine)
   ctx = _tx_context_for(pool)
   return ctx === nothing ? nothing : ctx.conn
 end
@@ -599,7 +600,7 @@ transaction_connection_for(settings::PormGSettings) = transaction_connection_for
 
 # The reservations live in the transaction context on `pool`, the pool the insert runs on — not the
 # innermost context, which names another database when the call is nested in a block on it (#838).
-function get_sqlite_reserved_primary_key_max(model::PormGModel, pk_field::String, pool::Union{PormGPostgres, PormGSQLite})
+function get_sqlite_reserved_primary_key_max(model::PormGModel, pk_field::String, pool::_SQLEngine)
   ctx = _tx_context_for(pool)
   ctx === nothing && return nothing
   # Keyed on the PHYSICAL table (#59): the reservation is about that table's PK sequence, and two
@@ -607,7 +608,7 @@ function get_sqlite_reserved_primary_key_max(model::PormGModel, pk_field::String
   return get(ctx.sqlite_reserved_primary_keys, (model_table_name(model), pk_field), nothing)
 end
 
-function register_sqlite_reserved_primary_key_max!(model::PormGModel, pk_field::String, max_id::Integer, pool::Union{PormGPostgres, PormGSQLite})
+function register_sqlite_reserved_primary_key_max!(model::PormGModel, pk_field::String, max_id::Integer, pool::_SQLEngine)
   ctx = _tx_context_for(pool)
   ctx === nothing && return Int64(max_id)
 
@@ -814,6 +815,35 @@ function _conninfo_value(key::AbstractString, v)
   return "'" * replace(s, "\\" => "\\\\", "'" => "\\'") * "'"
 end
 
+# #1130: the connection keys a MySQL pool reads, in the order its conninfo carries them. The names are
+# connection.yml's own (and libpq's): `sslmode` takes MySQL's modes (`disabled`, `preferred`,
+# `required`, `verify_ca`, `verify_identity`), and the extension maps each key to MySQL.jl's keyword.
+const _MYSQL_CONNINFO_KEYS = ("host", "port", "connect_timeout", "sslmode", "sslrootcert", "sslcert", "sslkey")
+# PostgreSQL-only keys a MySQL pool cannot honour. Refused, not ignored: dropping `passfile:` would
+# connect without the password it names, a silent loss of the kind #348 refuses everywhere else.
+const _MYSQL_REFUSED_KEYS = ("url", "hostaddr", "passfile", "client_encoding", "postgres_driver", "extensions")
+
+# The conninfo a `MySQLConnectionPool` carries (see the pool's comment in ConnectionPool.jl): the same
+# `key='value'` quoting as a PostgreSQL DSN, so `redact_secret` masks the password in every message.
+function _mysql_conninfo(db::AbstractDict)::String
+  for key in _MYSQL_REFUSED_KEYS
+    _is_unset(get(db, key, nothing)) && continue
+    remedy = key == "url" ? "Set `host:`, `port:`, `username:`, `password:` and `database:` instead." :
+                            "It applies to PostgreSQL only."
+    throw(InvalidConfigurationError("connection.yml: `$(key):` is not supported with `adapter: MySQL`. $(remedy)"))
+  end
+  parts = String[]
+  for key in _MYSQL_CONNINFO_KEYS
+    v = get(db, key, nothing)
+    _is_unset(v) || push!(parts, string(key, "=", _conninfo_value(key, v)))
+  end
+  for (yml, conninfo) in (("username", "user"), ("password", "password"), ("database", "dbname"))
+    v = get(db, yml, nothing)
+    v === nothing || push!(parts, string(conninfo, "=", _conninfo_value(yml, v)))
+  end
+  return join(parts, " ")
+end
+
 function _build_connection_pool!(settings::PormGSettings, path::String)
   # Extract pool size from config (defaults to 3)
   pool_size = haskey(settings.db_config_settings, "pool_size") ?
@@ -912,6 +942,12 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
     # Use parent module reference to avoid circular dependency during module loading
     CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
     settings.connections = CP.PostgresConnectionPool(dns_str; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=driver)
+
+  elseif settings.db_config_settings["adapter"] == "MySQL"
+    CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
+    settings.connections = CP.MySQLConnectionPool(_mysql_conninfo(settings.db_config_settings);
+                                                  pool_size=pool_size, pool_timeout=pool_timeout,
+                                                  fail_fast_on_connect=fail_fast_on_connect)
 
   else
     adapter = settings.db_config_settings["adapter"]
@@ -1048,12 +1084,13 @@ end
 
 # The built-in list `unignore_defaults:` is checked against at load(), picked by the `adapter:` key.
 # The migration code picks it from the connection type instead (`_backend_ignore_tables`), and checks
-# again there, so a connection built without load() is still validated. Names both engines and
+# again there, so a connection built without load() is still validated. Names each engine and
 # refuses any other (#1129 item 2) — with the refusal `_build_connection_pool!` gives an unknown
-# adapter, so an `adapter: MySQL` is refused here rather than checked against PostgreSQL's list.
+# adapter, so an unknown adapter is refused here rather than checked against another engine's list.
 function _builtin_ignores_for_adapter(adapter)::Vector{String}
   adapter == "PostgreSQL" && return postgres_ignore_table
   adapter == "SQLite" && return sqlite_ignore_schema
+  adapter == "MySQL" && return mysql_ignore_table
   throw(InvalidConfigurationError("Unsupported adapter: $(adapter)"))
 end
 
@@ -1379,7 +1416,7 @@ function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{
     if _is_unset(adapter)
       throw(InvalidConfigurationError(
         "environment \"$(settings.app_env)\" in $(db_settings_file) has no `adapter:`. " *
-        "Set `adapter: PostgreSQL` or `adapter: SQLite`."))
+        "Set `adapter: PostgreSQL`, `adapter: SQLite` or `adapter: MySQL`."))
     end
 
     # `url:` is honoured only by the PostgreSQL branch of `_build_connection_pool!`. Under SQLite
@@ -1749,6 +1786,7 @@ function _peek_driver(db_settings_file::String, env::String)::Union{Nothing, Sym
   block isa AbstractDict || return nothing
   adapter = get(block, "adapter", nothing)
   adapter == "SQLite" && return :sqlite
+  adapter == "MySQL" && return :mysql
   adapter == "PostgreSQL" || return nothing
   return _resolve_postgres_driver(get(block, "postgres_driver", nothing); source = "connection.yml")
 end
@@ -1887,6 +1925,10 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
   end
   # Every refusal comes before the existing entry is closed below, so a refused re-registration
   # leaves its pool serving (#1256): the adapter, then the environment.
+  # MySQL takes no connection URL yet (#1130): it is configured by keys, through `load`.
+  adapter == "MySQL" && throw(InvalidConfigurationError(
+    "register_connection does not take `adapter = \"MySQL\"` yet: a MySQL connection is configured by " *
+    "its keys (`host:`, `port:`, `username:`, `password:`, `database:`) in connection.yml, through `load`."))
   adapter in ("PostgreSQL", "SQLite") || throw(InvalidConfigurationError("Unsupported adapter: $adapter"))
   app_env = _registered_env(env, key)
 
@@ -2059,7 +2101,7 @@ process exit; a script or a test calls it to release its connections early.
 close_all!()::Nothing = (__cleanup__(); nothing)
 
 """
-    close_pool!(pool::Union{PormGPostgres, PormGSQLite}; drain_seconds = 5.0)
+    close_pool!(pool::_SQLEngine; drain_seconds = 5.0)
     close_pool!(db::String; drain_seconds = 5.0)
 
 Close all connections in the database pool. Never throws; the pool stays usable afterwards.
@@ -2071,7 +2113,7 @@ to skip the wait (the `atexit` hook does, since nobody releases at exit). The st
 a never-built pool. The full contract, including how a SQLite handle the async worker is still on
 is deferred rather than freed under it, is on `ConnectionPool.close_pool!`.
 """
-function close_pool!(pool::Union{PormGPostgres, PormGSQLite}; kwargs...)
+function close_pool!(pool::_SQLEngine; kwargs...)
   # `kwargs...`, not a named default: Configuration is included BEFORE ConnectionPool, so the
   # default (`_CLOSE_POOL_DRAIN_SECONDS`) lives there and is not nameable here at definition time.
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
@@ -2171,7 +2213,7 @@ mutable struct Settings <: PormGSettings
   db_config_settings::Dict{String,Any}
   change_db::Bool # Enable makemigrations and migrations functionality in the app
   change_data::Bool # Enable the change of the database (upgrade, delete) in the app
-  connections::Union{Nothing, PormGPostgres, PormGSQLite}
+  connections::Union{Nothing, _SQLEngine}
   time_zone::String
   django_prefix::Union{Nothing, String}
   # #553: `true` only for an entry `Models.set_models` minted through its implicit load, recorded
@@ -2233,7 +2275,7 @@ Run the `before_connect` hook before opening a physical connection: the key's ow
 `load(key; before_connect = f)` (#1232), else the one registered with `set_before_connect_hook`.
 When no hook is registered, connection setup proceeds normally.
 """
-function ensure_before_connect!(pool::Union{PormGPostgres, PormGSQLite})::Bool
+function ensure_before_connect!(pool::_SQLEngine)::Bool
   key = connection_key_for_pool(pool)
   # #1229: an offline entry renders SQL and never connects. Refused here, before the hook and before
   # any driver sees its placeholder connection string.

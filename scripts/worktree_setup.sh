@@ -54,6 +54,7 @@ echo "provisioning gitignored local state (idempotent; .worktreeinclude may have
 # 2) Always-safe, tiny fixtures. (db_2/migrations is TRACKED — already present, not copied.)
 for f in test/integration/db_sl/connection.yml \
          test/integration/db_2/connection.yml \
+         test/integration/db_my/connection.yml \
          test/integration/Manifest.toml \
          test/integration/db_sl/migrations; do
   copy "$MAIN/$f" "$WT/$f"
@@ -126,4 +127,6 @@ echo "PostgreSQL (db_2) is a SHARED live database — the copied connection.yml 
 echo "at the same pormg_teste. You do not have to coordinate that by hand: the suite takes an"
 echo "advisory lock on it, so a run started here QUEUES behind another session instead of"
 echo "corrupting it (PORMG_TEST_LOCK_WAIT bounds the wait, default 900s). SQLite needs nothing —"
-echo "f1.sqlite is copied per worktree above."
+echo "f1.sqlite is copied per worktree above. MySQL (db_my, #1130) is shared like db_2 and has no"
+echo "suite lock yet."
+

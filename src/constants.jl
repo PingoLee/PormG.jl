@@ -386,6 +386,11 @@ const sqlite_ignore_schema::Vector{String} = ["sqlite_sequence", "sqlite_autoind
 
 const postgres_ignore_table::Vector{String} = ["auth_", "django_", "social_", "account_", "allauth_", "admin_", "celery_", "django_celery_", "djcelery_", "kombu_", "pormg_migrations"]
 
+# MySQL (#1130): the same framework tables as PostgreSQL — a Django project runs on either — and
+# PormG's own history table. MySQL's system schemas need no entry: the schema readers are scoped to
+# the configured database (`DATABASE()`), so `mysql`, `sys` and `information_schema` never appear.
+const mysql_ignore_table::Vector{String} = ["auth_", "django_", "social_", "account_", "allauth_", "admin_", "celery_", "django_celery_", "djcelery_", "kombu_", "pormg_migrations"]
+
 # Consumer-extensible ignore list. Downstream packages (e.g. Nitro) register their OWN
 # framework/infrastructure tables here — typically from a package extension's `__init__` —
 # so introspection / makemigrations skips them without those app-specific table names being

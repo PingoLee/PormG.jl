@@ -132,7 +132,7 @@ using PormG
                    :backend_is_permanent_connect_error,
                    :backend_cancel_query!, :backend_drain_connection!,
                    :backend_num_affected_rows, :backend_num_rows, :backend_copy_in!,
-                   :backend_sqlite_version, :postgres_driver)
+                   :backend_sqlite_version, :backend_mysql_version, :postgres_driver)
             @test parentmodule(getfield(PormG, fn)) === PormG
         end
     end

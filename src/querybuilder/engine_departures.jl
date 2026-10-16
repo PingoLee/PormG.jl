@@ -26,7 +26,7 @@
 # decision nobody made; `test/unit/test_meaning_departures.jl` fails on it, so a new backend (#1130)
 # gets one failing line per row instead of inheriting "keeps the meaning". `targets` are the sites
 # that ask: `:text` and `:integer`
-# (a declared cast to one), `:number` (a cast to any number type, #1259), `:scale` (`numeric(p, s)`), `:precision` (a literal `numeric(p, s)` cannot
+# (a declared cast to one), `:number` (a cast to any number type, #1259, #1260), `:scale` (`numeric(p, s)`), `:precision` (a literal `numeric(p, s)` cannot
 # hold), `:single_precision` (`real`, #1215) and `:concat` (a `Concat` operand). `kinds` are the
 # operand classes the classifiers in `projection_types.jl` name. `meaning`, `computes` and `fix` take the declared type, and `fix` also
 # the operand's flag, the path a suggestion can name.
@@ -49,6 +49,17 @@ const _MEANING_DEPARTURES = (
    meaning = _ -> "an error, since an interval has no numeric value",
    computes = _ -> "the leading digits of its `HH:MM:SS` text, the hours",
    fix = (flag, _) -> "Fetch the duration and take the number you mean in Julia, or ask for its text, \e[32mCast(\"$(flag)\", \"text\")\e[0m, which each engine writes in its own form."),
+  # #1260: a date, a timestamp or a time is no number either, so its cast is an error by the same
+  # tie-breaker. SQLite casts the stored text (`2009-03-29`, `2009-03-29T06:00:00.000+00:00`,
+  # `06:00:00`) and reads its leading digits: the year, or a time's hour. A part names the number.
+  (targets = (:integer, :number), kinds = (:date, :timestamp), departs = (PormGSQLite,), keeps = (PormGPostgres,), issue = "#1260",
+   meaning = _ -> "an error, since a date has no numeric value",
+   computes = _ -> "the leading digits of its text, the year",
+   fix = (flag, _) -> "Name the number you mean with a part: its year, \e[32m\"$(flag)__@year\"\e[0m or \e[32mExtract(\"$(flag)\", \"year\")\e[0m, or another part \e[32mExtract\e[0m names."),
+  (targets = (:integer, :number), kinds = (:time,), departs = (PormGSQLite,), keeps = (PormGPostgres,), issue = "#1260",
+   meaning = _ -> "an error, since a time has no numeric value",
+   computes = _ -> "the leading digits of its `HH:MM:SS` text, the hour",
+   fix = (flag, _) -> "Name the number you mean with a part: its hour, \e[32m\"$(flag)__@hour\"\e[0m or \e[32mExtract(\"$(flag)\", \"hour\")\e[0m, or another part \e[32mExtract\e[0m names."),
   # #1040: a cast to `numeric(p, s)` rounds to `s` places. SQLite reads the type name as NUMERIC
   # affinity and keeps every digit; text is parsed and rounded by PostgreSQL, kept by SQLite.
   (targets = (:scale,), kinds = (:float, :decimal, :numeric, :text), departs = (PormGSQLite,), keeps = (PormGPostgres,), issue = "#1040",

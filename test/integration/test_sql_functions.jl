@@ -2128,6 +2128,39 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Cast a date, a timestamp or a time to a number: refused on SQLite, rejected by PostgreSQL (#1260)
+# The same meaning as #1259's interval: none of them has a numeric value, so PostgreSQL rejects the
+# cast when the query runs. SQLite stores each as text and its cast read the leading digits (the
+# year of `2009-03-29`, the hour of `06:00:00`), so it refuses the cast when the query is built. The
+# part the message names is a number on every engine. Expected SQL, PostgreSQL: ("Tb"."date")::integer,
+# which the server rejects with `cannot cast type date to integer`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1260: a date, a timestamp or a time cast to a number is refused on SQLite and rejected by PostgreSQL" begin
+    engine = engine_key()   # `departs[engine]` has no fallback: a backend added later states its row (#1179)
+    departs = (sqlite = true, postgres = false)
+    refusal(f) = try f(); nothing catch e; e end
+    proj(expr) = () -> (q = M.Race.objects; q.filter("raceid" => 2); q.values("raceid", "x" => expr); q |> DataFrame)
+    for (expr, pg_type) in ((Cast("date", PormG.Models.IntegerField()), "date"), (Cast("date", "numeric(10,2)"), "date"),
+                            (Cast("start_at", PormG.Models.IntegerField()), "timestamp"),
+                            (Cast("start_at", PormG.Models.FloatField()), "timestamp"),
+                            (Cast("time", PormG.Models.IntegerField()), "time"))
+        e = refusal(proj(expr))
+        if departs[engine]
+            @test e isa PormG.QueryBuildError && occursin("#1260", sprint(showerror, e))
+        else
+            # Built, and the server's own error when it runs: the meaning, not a PormG refusal.
+            @test e !== nothing && !(e isa PormG.QueryBuildError)
+            @test occursin("cannot cast type $(pg_type)", sprint(showerror, e))
+        end
+    end
+    # The spellings the message names: the year of race 2 (2009-04-05 in the F1 fixture).
+    df = proj(Cast("date__@year", PormG.Models.IntegerField()))()
+    @test df.x == [2009]
+    df = proj(Cast(Extract("date", "year"), PormG.Models.IntegerField()))()
+    @test df.x == [2009]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # `Sum` over a `bigint` is an integer on every engine (#1147)
 # PostgreSQL widens `sum(bigint)` to `numeric`, which read as a `Decimal` and kept the half once divided
 # (`Sum("resultid") / 2` over results 1 and 2 was 1.5 there and 1 on SQLite). PormG renders

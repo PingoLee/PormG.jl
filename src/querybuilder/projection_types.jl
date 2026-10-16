@@ -1009,11 +1009,12 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::
   size = _numeric_cast_size(declared)
   target = _sql_type_field(declared)
   # #1259: an interval is no number, whatever number the target is: an integer, a float, a `numeric`,
-  # scaled or not. Checked ahead of the number rules, which read a fraction, not a duration.
+  # scaled or not; nor is a date, a time or a timestamp (#1260). Checked ahead of the number rules,
+  # which read a fraction, not a duration or a date.
   if size !== nothing || target isa Union{Models.sIntegerField,Models.sBigIntegerField,Models.sFloatField,Models.sDecimalField}
     numeric_target = target isa Union{Models.sIntegerField,Models.sBigIntegerField} ? :integer : :number
     for (i, operand) in enumerate(operands)
-      side = _interval_operand(operand, get(rendered, i, nothing), instruc)
+      side = _temporal_number_operand(operand, get(rendered, i, nothing), instruc)
       side === nothing || (d = departs(side[1], side[2], numeric_target, _concat_flag(operand)); d === nothing || return d)
     end
   end
@@ -1067,6 +1068,27 @@ function _interval_operand(operand, rendered, instruc::SQLInstruction)
   end
   side === nothing && (side = _rendered_kind_textless(rendered))
   return side !== nothing && side[1] === :interval ? side : nothing
+end
+# #1260 — an operand cast to a number that is an interval (`_interval_operand`) or a date, a time or a
+# timestamp, as `(kind, what)`, or `nothing`. SQLite stores each as text, and its cast reads the
+# text's leading digits: a date's year, a time's hour. The kind comes from the type walk (a column, a
+# CTE column, `Max("date")`, `Cast(x, "date")`, a literal), or from the render where the walk names
+# none (`F("date") + Day(1)`). A part (`@year`, `Extract`) and a day count (`F("date") - F("date")`)
+# are numbers, and pass.
+function _temporal_number_operand(operand, rendered, instruc::SQLInstruction)
+  side = _interval_operand(operand, rendered, instruc)
+  side === nothing || return side
+  kind = operand isa Union{Dates.TimeType,ZonedDateTime} ? literal_canonical_kind(operand) :
+         _infer_kind(operand, instruc, _MeaningKinds())
+  kind === nothing && (kind = rendered)
+  tag = kind isa CDate ? :date : kind isa CTime ? :time : kind isa CDateTime ? :timestamp : nothing
+  tag === nothing && return nothing
+  literal = operand isa SQLText ? operand.field : operand
+  literal isa Union{Dates.TimeType,ZonedDateTime} && return (tag, "a $(nameof(typeof(literal))) literal")
+  label = _concat_operand_label(operand)
+  label === nothing && return (tag, "a $(tag === :timestamp ? "timestamp" : String(tag)) expression")
+  field = tag === :date ? "DateField" : tag === :time ? "TimeField" : "DateTimeField"
+  return (tag, "the $(field) `$(label)`")
 end
 # A rendered kind no type reader gave (`_render_operand_kind`), as a `_concat_textless_operand` answer.
 _rendered_kind_textless(kind) =

@@ -798,6 +798,58 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# #1260: a date, a timestamp or a time cast to a number is refused on SQLite, which reads its text
+# MEANING: a date has no numeric value, so PostgreSQL rejects the cast when the query runs
+# (`cannot cast type date to integer`), the meaning by the #1087 tie-breaker, as for #1259's interval.
+# SQLite stores each as text and its cast reads the leading digits: `2009-03-29` and
+# `2009-03-29T06:00:00.000+00:00` are `2009`, `06:00:00` is `6`. A column, a CTE column, `Max`, a
+# nested `Cast(x, "date")`, date arithmetic the render types, a literal, and each `output_field` site,
+# to an integer, a float or a `numeric`. The message names the part that is the number
+# (`"born__@year"`, `"clock__@hour"`). A part and a day count are numbers, and build on both.
+# Expected SQL, PostgreSQL: ("Tb"."born")::integer
+# Why: before #1260 SQLite answered the year where PostgreSQL raised.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1260: a date, a timestamp or a time cast to a number is refused on SQLite only" begin
+  case(then; output_field = "integer") = Fn.Case(Fn.When("number" => 1, then = then), output_field = output_field)
+  for (expr, named) in (
+      (Fn.Cast("born", Models.IntegerField()), "the DateField `born`"),
+      (Fn.Cast("born", Models.BigIntegerField()), "the DateField `born`"),
+      (Fn.Cast("born", "numeric(10,2)"), "the DateField `born`"),
+      (Fn.Cast("start_at", Models.IntegerField()), "the DateTimeField `start_at`"),
+      (Fn.Cast("start_at", Models.FloatField()), "the DateTimeField `start_at`"),
+      (Fn.Cast("start_at", "numeric"), "the DateTimeField `start_at`"),
+      (Fn.Cast("clock", Models.IntegerField()), "the TimeField `clock`"),
+      (Fn.Cast("clock", "float8"), "the TimeField `clock`"),
+      (Fn.Cast(Fn.Max("born"), Models.IntegerField()), "a date expression"),
+      (Fn.Cast(Fn.Cast("start_at", "date"), Models.IntegerField()), "a date expression"),
+      (Fn.Cast(_CF("born") + Day(1), Models.IntegerField()), "a date expression"),
+      (Fn.Cast(Fn.Value(Date(2009, 3, 29)), Models.IntegerField()), "a Date literal"),
+      (Fn.Cast(Fn.Value(Time(6)), Models.IntegerField()), "a Time literal"),
+      (Fn.Coalesce("born", Fn.Value(Date(2009, 3, 29)); output_field = "integer"), "the DateField `born`"),
+      (Fn.Greatest("start_at", "start_at"; output_field = "numeric(10,2)"), "the DateTimeField `start_at`"),
+      (case(_CF("clock")), "the TimeField `clock`"))
+    errs = _ccd_expect(expr; departs = _SL_ONLY, issue = "#1260", named = named)
+    @test occursin("Name the number you mean with a part", _ccd_msg(errs.sqlite))
+  end
+  @test occursin("an error, since a date has no numeric value",
+                 _ccd_msg(_ccd_refusal(Fn.Cast("start_at", Models.IntegerField()); conn = _CCD_SL)))
+  @test occursin("\"born__@year\"", _ccd_msg(_ccd_refusal(Fn.Cast("born", Models.IntegerField()); conn = _CCD_SL)))
+  @test occursin("\"clock__@hour\"", _ccd_msg(_ccd_refusal(Fn.Cast("clock", Models.IntegerField()); conn = _CCD_SL)))
+  @test occursin("(\"Tb\".\"born\")::integer as \"x\"", _ccd_render(Fn.Cast("born", Models.IntegerField()); conn = _CCD_PG))
+  # A CTE column holding a date is the date.
+  cte_cast(conn) = (q = CCD.Ccd_driver.objects;
+                    q.with("c" => CCD.Ccd_driver.objects.values("id", "b" => "born"), join_field = "id" => "id");
+                    q.values("x" => Fn.Cast(PormG.CTE("c", "b"), Models.IntegerField())); _ccd_sql(q; conn = conn))
+  _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1260", run = cte_cast)
+  # The number the message names, a day count, and a text cast build on both engines.
+  for expr in (Fn.Cast("born__@year", Models.IntegerField()), Fn.Cast(Fn.Extract("born", "year"), Models.IntegerField()),
+               Fn.Cast("clock__@hour", Models.IntegerField()), Fn.Cast(_CF("born") - _CF("born"), Models.IntegerField()),
+               Fn.Cast("born", "text"), Fn.Cast("clock", Models.CharField()))
+    @test _ccd_builds(expr)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # #1221: a DecimalField declaration is its numeric(max_digits, decimal_places), as the string is
 # `Cast(x, DecimalField(max_digits = 10, decimal_places = 1))` and the same `output_field` used to keep
 # only the field's `"DECIMAL"` and render an unscaled `decimal`, so neither engine applied the scale the

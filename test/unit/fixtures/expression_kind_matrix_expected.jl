@@ -2537,75 +2537,75 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast date int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast date int | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateField `date` means an error, since a date has no numeric value; SQLite computes the leadin"),
   ("Cast date int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast date int | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateField `date` means an error, since a date has no numeric value; SQLite computes the leadin"),
   ("Cast date int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast date int | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateField `date` means an error, since a date has no numeric value; SQLite computes the leadin"),
   ("Cast datetime int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast datetime int | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateTimeField `start_at` means an error, since a date has no numeric value; SQLite computes th"),
   ("Cast datetime int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast datetime int | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateTimeField `start_at` means an error, since a date has no numeric value; SQLite computes th"),
   ("Cast datetime int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast datetime int | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateTimeField `start_at` means an error, since a date has no numeric value; SQLite computes th"),
   ("Cast time int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast time int | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the TimeField `time` means an error, since a time has no numeric value; SQLite computes the leadin"),
   ("Cast time int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast time int | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the TimeField `time` means an error, since a time has no numeric value; SQLite computes the leadin"),
   ("Cast time int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast time int | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the TimeField `time` means an error, since a time has no numeric value; SQLite computes the leadin"),
   ("Cast date numeric(10,2) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast date numeric(10,2) | alone", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DateField `date` means an error, since a date has no numeric value; SQLite computes the "),
   ("Cast date numeric(10,2) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast date numeric(10,2) | cte", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DateField `date` means an error, since a date has no numeric value; SQLite computes the "),
   ("Cast date numeric(10,2) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast date numeric(10,2) | subquery", :sqlite) =>
-    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DateField `date` means an error, since a date has no numeric value; SQLite computes the "),
   ("Cast datetime float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast datetime float | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the DateTimeField `start_at` means an error, since a date has no numeric value; SQLite computes the"),
   ("Cast datetime float | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast datetime float | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the DateTimeField `start_at` means an error, since a date has no numeric value; SQLite computes the"),
   ("Cast datetime float | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast datetime float | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the DateTimeField `start_at` means an error, since a date has no numeric value; SQLite computes the"),
   ("Cast F date + Day(1) int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date + Day(1) int | alone", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of a date expression means an error, since a date has no numeric value; SQLite computes the leading d"),
   ("Cast F date + Day(1) int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date + Day(1) int | cte", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of a date expression means an error, since a date has no numeric value; SQLite computes the leading d"),
   ("Cast F date + Day(1) int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date + Day(1) int | subquery", :sqlite) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of a date expression means an error, since a date has no numeric value; SQLite computes the leading d"),
   ("Cast F date - date int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date - date int | alone", :sqlite) =>

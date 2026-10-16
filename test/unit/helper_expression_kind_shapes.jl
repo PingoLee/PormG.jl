@@ -287,6 +287,13 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Cast interval int",       :Result,              m -> _EKM_FN.Cast("fastestlaptime", "integer")),
   ("Cast Sum interval int",   :Result,              m -> _EKM_FN.Cast(_EKM_FN.Sum("fastestlaptime"), "integer")),
   ("Cast Avg interval int",   :Result,              m -> _EKM_FN.Cast(_EKM_FN.Avg("fastestlaptime"), "integer")),
+  # #1276: a declared decimal over `DecimalField()` (10, 2) columns, at their width and at others
+  ("Coalesce decimal output numeric(10,2)", :Constructor_results, m -> _EKM_FN.Coalesce("points", "points"; output_field = "numeric(10,2)")),
+  ("Coalesce decimal output DecimalField()", :Constructor_results, m -> _EKM_FN.Coalesce("points", "points"; output_field = PormG.Models.DecimalField())),
+  ("Coalesce decimal output numeric(12,4)", :Constructor_results, m -> _EKM_FN.Coalesce("points", "points"; output_field = "numeric(12,4)")),
+  ("Coalesce decimal output numeric", :Constructor_results, m -> _EKM_FN.Coalesce("points", "points"; output_field = "numeric")),
+  ("Greatest decimal output numeric(12,4)", :Constructor_results, m -> _EKM_FN.Greatest("points", "points"; output_field = "numeric(12,4)")),
+  ("Least decimal output numeric", :Constructor_results, m -> _EKM_FN.Least("points", "points"; output_field = "numeric")),
   # #1260: a date, a timestamp and a time cast to a number; the day count and a part stay numbers
   ("Cast date int",           :Race,                m -> _EKM_FN.Cast("date", "integer")),
   ("Cast datetime int",       :Race,                m -> _EKM_FN.Cast("start_at", "integer")),

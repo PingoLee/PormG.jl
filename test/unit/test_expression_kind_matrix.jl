@@ -31,6 +31,11 @@
 #                 answers, which pins phase 3 step 1 (#1034) moving the CTE's records. (A `bigint`
 #                 channel beside it recorded the classifier #1034 phase 3 step 2a deleted.)
 #
+# The BIND CHANNEL is recorded beside the cells, in its own fixture (`fixtures/expression_kind_bind_expected.jl`):
+# each `:ok` cell built again with a filter on its column, and what that build renders (the WHERE or
+# HAVING predicate) and binds (every parameter and its Julia type). It is the oracle for #1034 phase 3
+# step 4, which moves the formatter the binder reads onto the walk; see "The bind channel" below.
+#
 # A limit of the probe, by construction: every channel but `read` is asked AFTER the build, of the node
 # as the build saw it, and not at its own call site mid-build, so a channel whose answer depends on the
 # render scope it runs in is seen from the outside. The node is rendered again on the built instruction
@@ -56,7 +61,7 @@
 # F1 fixture and records what it actually reads back as, on both engines.
 #
 # Regenerating: `PORMG_EKM_RECORD=1 julia --project=test/integration test/unit/test_expression_kind_matrix.jl`
-# rewrites the fixture from the current code. Only do that for a change you intend, and read the diff:
+# rewrites both fixtures from the current code. Only do that for a change you intend, and read the diff:
 # it IS the review of that change.
 # DB-free: mock connections.
 # ==============================================================================
@@ -347,6 +352,84 @@ function _ekm_observations()
   return obs
 end
 
+# ── The bind channel (#1034 phase 3, recorded before step 4) ──────────────────────────────────────
+# The `formatter` channel names the formatter `_expression_formatter` picks, which is not what a filter
+# on the column binds: the alias binder asks a memo first (`_having_alias_formatter`), overrides an
+# interval sum (#900), drops a range for an operator other than `=`, keeps a raw number or Bool on SQLite
+# (`_sqlite_preserve_native_parameter`), and SQLite compares an interval as milliseconds before any
+# formatter runs; a CTE column filtered by its own path takes the #474 memo arm instead. So each `:ok`
+# cell is built AGAIN, with a filter on its column, and the channel records what that build renders and
+# binds: the WHERE or HAVING predicate (from the built instruction, never grepped from the SQL text, in
+# which a `Subquery`'s inner WHERE also appears) and every parameter with its Julia type, or the error.
+# The query the other channels probe never carries the filter, so they cannot move with it.
+#
+# Spellings: alone and in a `Subquery` the projection's alias (`v__@gt`, `w__@gt`); under a CTE the CTE
+# column's own path (`g__v__@gt`). The outer `w` there renames that path, and a filter cannot name a
+# renamed path (it raises `UnknownFieldError`, as `v__@gt` does over a path shape alone, which is
+# recorded). The `When` context projects a path, so a filter there is a column filter, which no channel
+# here is about: skipped. Probes, both `@gt`: a
+# universal `10`, which shows which formatter acts (a raw value, its text, or a refusal), and a value of
+# the cell's own `kind` family, which shows the bind a caller writes. `kind` is the walk, which step 4
+# reads and does not change, so a probe moves only with a cell the matrix above already flags.
+const _EKM_BIND_FIXTURE = joinpath(@__DIR__, "fixtures", "expression_kind_bind_expected.jl")
+const _EKM_BIND_PROBES = Dict(
+  :int => ("int 10", 10), :float => ("float 10.5", 10.5),
+  :decimal => ("decimal 10.50", parse(_EKM_QB.Decimals.Decimal, "10.50")), :text => ("text pole", "pole"),
+  :bool => ("bool true", true), :date => ("date 2009-03-29", Date(2009, 3, 29)),
+  :datetime => ("datetime 2009-03-29T06:00", DateTime(2009, 3, 29, 6)), :time => ("time 06:00", Time(6)),
+  :interval => ("interval Minute(1)", Minute(1)))
+_ekm_bind_spellings(ctx::Symbol, name::Symbol) =
+  ctx === :after_when ? () : ctx === :cte ? ("g__v__@gt",) : ("$(name)__@gt",)
+function _ekm_bind_probes(o)
+  probes = Tuple{String,Any}[("10", 10)]
+  family = o.kind isa String && !startswith(o.kind, "error: ") ? _ekm_kind_family(o.kind) : nothing
+  fitting = get(_EKM_BIND_PROBES, family, nothing)
+  fitting === nothing || family === :int || push!(probes, fitting)
+  return probes
+end
+# A bound value as stable text, and its type's name: `("60000", "Int64")`, `("\"00:01:00\"", "String")`.
+_ekm_bind_param(p) = (repr(p), String(nameof(typeof(p))))
+
+# One filter on one cell: the predicate it renders and the parameters it binds, or the error.
+function _ekm_bind(mod, label, base, build, ctx, spelling, value)
+  q, _ = ekm_query(mod, base, build, ctx; prep! = get(EKM_PREP, label, nothing))
+  clauses = Ref{Any}(nothing)
+  try
+    q.filter(spelling => value)
+  catch e
+    return (stage = :call, error = string(nameof(typeof(e))), message = _ekm_message(e))
+  end
+  insp = try
+    _EKM_QB.query(q; show_query = :inspection,
+                  built = i -> (clauses[] = (where = copy(i._where), having = copy(i.having))))
+  catch e
+    return (stage = :build, error = string(nameof(typeof(e))), message = _ekm_message(e))
+  end
+  c = clauses[]
+  clause = !isempty(c.having) ? :having : :where
+  return (stage = :ok, clause = clause, sql = join(clause === :having ? c.having : c.where, " AND "),
+          params = [_ekm_bind_param(p) for p in insp[:parameters]])
+end
+
+# Every bind observation, keyed `(cell id, engine, spelling, probe)`, over the cells `obs` built.
+function _ekm_bind_observations(obs)
+  out = Dict{Tuple{String,Symbol,String,String},Any}()
+  for (id, label, base, build, ctx) in _EKM_CELLS, (backend, mod) in _EKM_MODELS
+    o = get(obs, (id, backend), nothing)
+    (o === nothing || o.stage !== :ok) && continue
+    name = ctx === :alone ? :v : :w
+    for spelling in _ekm_bind_spellings(ctx, name), (plabel, value) in _ekm_bind_probes(o)
+      out[(id, backend, spelling, plabel)] = _ekm_bind(mod, label, base, build, ctx, spelling, value)
+    end
+  end
+  return out
+end
+# The bind keys in the matrix's own order: cell, engine, spelling, probe.
+function _ekm_bind_ids(binds)
+  order = Dict(id => i for (i, (id, _, _, _, _)) in enumerate(_EKM_CELLS))
+  return sort!(collect(keys(binds)); by = k -> (order[k[1]], k[2], k[3], k[4] == "10" ? "" : k[4]))
+end
+
 if get(ENV, "PORMG_EKM_RECORD", "") == "1"
   # Record mode: write the fixture from the current code and stop. Not a test run.
   obs = _ekm_observations()
@@ -381,9 +464,22 @@ if get(ENV, "PORMG_EKM_RECORD", "") == "1"
     end
     println(io, ")")
   end
-  @info "expression-kind matrix recorded" path = _EKM_FIXTURE cells = length(ids) disagreeing = length(disagreeing) cross_context = length(cross_ids)
+  binds = _ekm_bind_observations(obs)
+  open(_EKM_BIND_FIXTURE, "w") do io
+    println(io, "# GENERATED by test/unit/test_expression_kind_matrix.jl with PORMG_EKM_RECORD=1 — do not edit by hand.")
+    println(io, "# The bind channel (#1034): per (cell, engine, filter spelling, probe), what a filter on the cell's")
+    println(io, "# column renders (the WHERE or HAVING predicate) and binds (each parameter and its Julia type).")
+    println(io, "# A diff here is a change in what a filter binds.")
+    println(io, "const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(")
+    for k in _ekm_bind_ids(binds)
+      println(io, "  ", repr(k), " =>\n    ", repr(binds[k]), ",")
+    end
+    println(io, ")")
+  end
+  @info "expression-kind matrix recorded" path = _EKM_FIXTURE cells = length(ids) disagreeing = length(disagreeing) cross_context = length(cross_ids) binds = length(binds)
 else
   include(_EKM_FIXTURE)
+  include(_EKM_BIND_FIXTURE)
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Expression-kind matrix: every channel answers what it was recorded answering
@@ -391,8 +487,11 @@ else
   # answer for the projected column. The fixture holds exactly the cells this file defines — no stale
   # rows, none missing — so a deleted cell cannot leave its expectation behind unchecked.
   # ─────────────────────────────────────────────────────────────────────────────
+  # Built once: the bind channel's cells and probes are read from the same observations.
+  const _EKM_OBS = _ekm_observations()
+
   @testset "#1034: expression-kind matrix" begin
-    obs = _ekm_observations()
+    obs = _EKM_OBS
     @test Set(keys(obs)) == Set(keys(_EKM_EXPECTED))
     for (id, _, _, _, _) in _EKM_CELLS, (backend, _) in _EKM_MODELS
       haskey(obs, (id, backend)) || continue
@@ -405,6 +504,30 @@ else
         @test keys(got) == keys(expected)
         for k in keys(expected)
           @test get(got, k, missing) == expected[k]
+        end
+      end
+    end
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Expression-kind matrix, bind channel: every filter renders and binds what it was recorded binding
+  # Each `:ok` cell filtered by each spelling and probe (see the bind channel above). Expected, e.g. a
+  # duration CTE column on SQLite: `"R1_1"."v" > ?` with `("\"00:01:00\"", "String")` today, the #1219
+  # text comparison. The fixture holds exactly these keys, so a cell that stops building or a spelling
+  # that is added cannot leave a stale expectation. Why: step 4 moves the formatter the binder reads onto
+  # the walk, and this is the oracle that the move keeps every bind byte-identical.
+  # ─────────────────────────────────────────────────────────────────────────────
+  @testset "#1034: expression-kind matrix, bind channel" begin
+    binds = _ekm_bind_observations(_EKM_OBS)
+    @test Set(keys(binds)) == Set(keys(_EKM_BINDS))
+    for k in _ekm_bind_ids(binds)
+      expected = get(_EKM_BINDS, k, nothing)
+      expected === nothing && continue
+      got = binds[k]
+      @testset "$(k[2]): $(k[1]) | $(k[3]) | $(k[4])" begin
+        @test keys(got) == keys(expected)
+        for f in keys(expected)
+          @test get(got, f, missing) == expected[f]
         end
       end
     end

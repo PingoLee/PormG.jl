@@ -238,13 +238,25 @@ end
 # A read value as PormG hands it on. MySQL.jl returns zero-copy views into its receive buffer
 # (`DataString`, `DataBytes`), which stay valid only as long as the cursor; a row leaves this extension
 # as owned Julia values. DECIMAL becomes `Decimals.Decimal` through its exact text, as on PostgreSQL. A
-# DATETIME becomes a `DateTime`, which holds milliseconds: a `DATETIME(6)` column loses its last three
-# digits here, and what PormG declares for a `DateTimeField` on MySQL is #1270's decision.
-_read_value(v::MySQL.DataString) = String(v)
-_read_value(v::MySQL.DataBytes) = Vector{UInt8}(v)
-_read_value(v::MySQL.DataDecimals.AbstractDecimal) = _mysql_decimal(string(v))
-_read_value(v::MySQL.Timestamp) = DateTime(v)
-_read_value(v) = v
+# DATETIME becomes a `DateTime`, which holds milliseconds. A value with 4 to 6 fractional digits (a
+# `DATETIME(6)` column, `NOW(6)`) decodes to a `Timestamp{Microsecond}`; one with digits below the
+# millisecond is refused rather than truncated, until #1270 decides what a `DateTimeField` declares on
+# MySQL. The refusal names its precision and carries the column as `field`, never the value (#971).
+# The column name is query text: an un-aliased expression is named after its own SQL.
+_read_value(v::MySQL.DataString, column = nothing) = String(v)
+_read_value(v::MySQL.DataBytes, column = nothing) = Vector{UInt8}(v)
+_read_value(v::MySQL.DataDecimals.AbstractDecimal, column = nothing) = _mysql_decimal(string(v))
+_read_value(v::MySQL.Timestamp, column = nothing) = DateTime(v)
+_read_value(v, column = nothing) = v
+function _read_value(v::MySQL.Timestamp{Dates.Microsecond}, column = nothing)
+  iszero(Dates.microsecond(v)) && return DateTime(v)
+  throw(PormG.InvalidValueError(
+    "a MySQL DATETIME or TIMESTAMP value with microsecond precision (4 to 6 fractional digits, such as " *
+    "a DATETIME(6) column) has digits below the millisecond, and PormG reads it as a `DateTime`, which " *
+    "holds milliseconds. What PormG reads for such a value is #1270's decision; until then, select it " *
+    "at millisecond precision, e.g. `CAST(col AS DATETIME(3))`, which rounds to the millisecond (#1130).",
+    :range; op = "a MySQL read", field = column))
+end
 
 # A materialized result: the column table core reads through Tables.jl, and the counts the OK packet
 # carried. `last_insert_id` is the FIRST id of a multi-row INSERT (measured); what `create` and
@@ -273,7 +285,7 @@ function _materialize(cursor)::MySQLResult
   names = schema === nothing ? Symbol[] : collect(Symbol, schema.names)
   raw = [Any[] for _ in names]
   for row in cursor, (j, name) in enumerate(names)
-    push!(raw[j], _read_value(Tables.getcolumn(row, j)))
+    push!(raw[j], _read_value(Tables.getcolumn(row, j), name))
   end
   # Narrow each column to the types it holds (`String`, `Union{Missing, Int64}`, …), as a driver
   # result would be, so `DataFrame(result)` gets typed columns.

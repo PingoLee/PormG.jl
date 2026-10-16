@@ -2161,6 +2161,51 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# A declared Case's literal default beside a typed branch (#1222)
+# The `output_field` casts the CASE; the default used to bind as that type too, so PostgreSQL saw
+# `THEN boolean ELSE $2::text` and rejected the query when it ran. It binds as the branches' type
+# now: the boolean's text on each row, `'true'` from the branch and `'false'` from the default. An
+# integer branch with a fractional default under `integer` runs too, the default widening the CASE to
+# `double precision` before the outer cast rounds it. SQLite refuses both shapes when the query is
+# built (#1217's checks, #1028), which this does not change. A text default beside an integer branch
+# has no shared type, so its bind keeps the `output_field` type and PostgreSQL rejects it as before;
+# the explicit spelling is `Cast(F("result"), "text")` in the branch.
+# Expected SQL, PostgreSQL: (CASE WHEN "Tb"."result" = $1 THEN "Tb"."boolean_field" ELSE $2::boolean END)::text
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1222: a declared Case's literal default binds as its branches' type" begin
+    engine = engine_key()   # `departs[engine]` has no fallback: a backend added later states its row (#1179)
+    departs = (sqlite = true, postgres = false)   # #1217/#1028 refuse the boolean and the float default
+    marker = "case1222"
+    purge() = (p = M.New_join_position.objects; p.filter("description" => marker); p.exists() && p.delete())
+    refusal(f) = try f(); nothing catch e; e end
+    rows(expr) = () -> (q = M.New_join_position.objects; q.filter("description" => marker);
+                        q.values("result", "x" => expr); q.order_by("result"); q |> DataFrame)
+    try
+        purge()
+        M.New_join_position.objects.create("description" => marker, "boolean_field" => true, "result" => 1)
+        M.New_join_position.objects.create("description" => marker, "boolean_field" => false, "result" => 2)
+        bool_text = Case(When("result" => 1, then = F("boolean_field")), default = false, output_field = "text")
+        int_float = Case(When("result" => 1, then = F("result")), default = 1.5, output_field = "integer")
+        int_text = Case(When("result" => 1, then = F("result")), default = "none", output_field = "text")
+        if departs[engine]
+            for expr in (bool_text, int_float)
+                @test refusal(rows(expr)) isa PormG.QueryBuildError
+            end
+        else
+            @test rows(bool_text)().x == ["true", "false"]
+            @test rows(int_float)().x == [1, 2]
+        end
+        # No shared type: PostgreSQL's server rejects the CASE (its own message), SQLite builds it.
+        e = refusal(rows(int_text))
+        @test by_engine(postgres = () -> e !== nothing && !(e isa PormG.QueryBuildError) &&
+                                         occursin(r"CASE types \w+ and \w+ cannot be matched", sprint(showerror, e)),
+                        sqlite = () -> e === nothing && rows(int_text)().x == ["1", "none"])()
+    finally
+        purge()
+    end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # `Sum` over a `bigint` is an integer on every engine (#1147)
 # PostgreSQL widens `sum(bigint)` to `numeric`, which read as a `Decimal` and kept the half once divided
 # (`Sum("resultid") / 2` over results 1 and 2 was 1.5 there and 1 on SQLite). PormG renders

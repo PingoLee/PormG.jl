@@ -686,7 +686,8 @@ end
 # `2` on PostgreSQL and `1` on SQLite (#1028), `text` over a boolean is `true` / `1` (#1028): refused
 # on SQLite only. A branch with nothing to round builds on both, and so does a `Cast` over a declared
 # `Case` whose scale the cast's covers (the `Case` is checked itself). Expected SQL, PostgreSQL:
-#   (CASE WHEN "Tb"."number" = $1 THEN "Tb"."points" ELSE $2::numeric(10,1) END)::numeric(10,1)
+#   (CASE WHEN "Tb"."number" = $1 THEN "Tb"."points" ELSE $2::double precision END)::numeric(10,1)
+# (the default binds as its float branch's type since #1222; the `output_field` casts the CASE)
 # Why: before #1217 every one of these built, a silent different value on SQLite.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1217: a Case output_field is checked against its branches, refused on SQLite only" begin
@@ -705,7 +706,7 @@ end
     errs = _ccd_expect(expr; departs = _SL_ONLY, issue = issue, named = named)
     @test occursin("Case(…; output_field = ", _ccd_msg(errs.sqlite))
   end
-  @test occursin("(CASE WHEN \"Tb\".\"number\" = \$1 THEN \"Tb\".\"points\" ELSE \$2::numeric(10,1) END)::numeric(10,1) as \"x\"",
+  @test occursin("(CASE WHEN \"Tb\".\"number\" = \$1 THEN \"Tb\".\"points\" ELSE \$2::double precision END)::numeric(10,1) as \"x\"",
                  _ccd_render(case(_CF("points"); output_field = "numeric(10,1)"); conn = _CCD_PG))
   for expr in (case(Fn.Round("points", 1); output_field = "numeric(10,1)"),
                case(_CF("number"); output_field = "numeric(10,1)"),
@@ -721,6 +722,42 @@ end
   # The nested declaration is read for its scale: one place under a cast to none still rounds.
   _ccd_expect(Fn.Cast(case(Fn.Round("points", 1); output_field = "numeric(10,1)"), "numeric(10,0)");
               departs = _SL_ONLY, issue = "#1040", named = "a value cast to numeric(10,1)")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1222: a declared Case's literal default binds as its branches' type, not the output_field's
+# The `output_field` casts the CASE's value, `(CASE … END)::T`. Its literal default bound as `T` too,
+# so beside a typed branch PostgreSQL saw two branch types it could not resolve: `THEN boolean ELSE
+# $2::text` builds and the server rejects it. The default now binds as the type the server resolves
+# the branches and the default to (integers widen, integer < numeric < double precision). Where they
+# do not resolve (a text default beside an integer or a date branch), or every branch is a literal,
+# it keeps the `output_field` type, as before. SQLite binds no cast, so its SQL is unchanged.
+# Expected SQL, PostgreSQL:
+#   (CASE WHEN "Tb"."number" = $1 THEN "Tb"."active" ELSE $2::boolean END)::text
+# Why: before #1222 that query failed when it ran, though the build accepted it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1222: a declared Case's literal default binds as its branches' type on PostgreSQL" begin
+  case(then; default, output_field) = Fn.Case(Fn.When("number" => 1, then = then), default = default, output_field = output_field)
+  for (expr, bind, cast) in (
+      (case(_CF("active"); default = false, output_field = "text"), "boolean", "text"),            # the issue's shape
+      (case(_CF("number"); default = 1.5, output_field = "integer"), "double precision", "integer"),
+      (case(_CF("points"); default = 0, output_field = "numeric(10,1)"), "double precision", "numeric(10,1)"),
+      (case(_CF("price"); default = 0, output_field = "numeric(12,2)"), "numeric", "numeric(12,2)"),
+      (case(_CF("number"); default = 0, output_field = "text"), "bigint", "text"),
+      # no shared type: the output_field's, as before
+      (case(_CF("number"); default = "none", output_field = "text"), "text", "text"),
+      (case(_CF("born"); default = "2009-01-01", output_field = "date"), "date", "date"))
+    sql = _ccd_render(expr; conn = _CCD_PG)
+    @test occursin("ELSE \$2::$(bind) END)::$(cast) as \"x\"", sql)
+  end
+  # Every branch a literal: the output_field's, as before (#696); the `then` literal binds `$2`.
+  @test occursin("THEN \$2::bigint ELSE \$3::integer END)::integer",
+                 _ccd_render(case(1; default = 0, output_field = "integer"); conn = _CCD_PG))
+  # A `then` literal is the `When`'s own, typed by its value, as before.
+  @test occursin("THEN \$2::boolean ELSE \"Tb\".\"active\" END)::text",
+                 _ccd_render(case(false; default = _CF("active"), output_field = "text"); conn = _CCD_PG))
+  # SQLite binds no cast: the CASE is cast as a whole, as before.
+  @test occursin("ELSE ? END AS INTEGER)", _ccd_render(case(_CF("number"); default = 0, output_field = "integer"); conn = _CCD_SL))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

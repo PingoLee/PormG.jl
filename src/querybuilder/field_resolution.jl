@@ -346,9 +346,58 @@ function _deferred_kwarg_sql_type(v::SQLTypeFunction, key::String, resolved_kwar
     # #696: `output_field` becomes the bind cast `$n::<type>` here — a fourth place the type string
     # reaches the SQL text. The dialect helper validates it and gives the engine's spelling.
     _casts_bind_parameters(instruc.connection) || return nothing
-    return _infer_parameter_sql_type(value, instruc;
-      fallback=Dialect.cast_type_sql(output_field, instruc.connection; context="output_field"))
+    declared = Dialect.cast_type_sql(output_field, instruc.connection; context="output_field")
+    # #1222: a `Case`'s literal default binds as the type of its branches, not of the cast.
+    if key == "else"
+      branch_type = _case_default_bind_type(v, value, instruc)
+      branch_type === nothing || return branch_type
+    end
+    return _infer_parameter_sql_type(value, instruc; fallback=declared)
   end
 
   return _infer_parameter_sql_type(value, instruc)
 end
+
+# #1222 — the bind type of a declared `Case`'s literal default: the type the server resolves its
+# branches and the default to, PostgreSQL's `CASE` rule (`_unify_kinds`: integers widen,
+# integer < numeric < double precision, text is text), when a branch is a column or an expression.
+# The `output_field` casts the `CASE`'s value, `(CASE … END)::T`, as Django's `output_field` names
+# the expression's type. Binding the default as `T` as well made it disagree with a typed branch:
+# `THEN "Tb"."boolean_field" ELSE $2::text` builds, and the server rejects it. `nothing` keeps the
+# `output_field` type, as before: when every branch is a literal (each binds as its own type), when a
+# branch names no kind, or when the kinds do not unify (`then = F("date")` beside a text default
+# under `date`, which the server reads as a date). A `then` literal is a `When`'s own, never cast to
+# the `output_field`, so it needs nothing here.
+function _case_default_bind_type(v::SQLTypeFunction, value, instruc::SQLInstruction)
+  (v isa FObject && v.function_name == "CASE") || return nothing
+  kind = _literal_kind(value, _AllKinds())
+  kind === nothing && return nothing
+  typed_branch = false
+  for branch in (v.column isa AbstractVector ? v.column : (v.column,))
+    (branch isa SQLTypeFunction && branch.function_name == "WHEN") || continue
+    then = get(branch.kwargs, "then", nothing)
+    literal = !(then isa Union{SQLObject,SQLType}) || then isa SQLText
+    raw = then isa SQLText ? then.field : then
+    _is_null_literal(raw) && continue
+    k = literal ? _literal_kind(raw, _AllKinds()) : _infer_kind(then, instruc, _AllKinds())
+    k === nothing && return nothing
+    typed_branch |= !literal
+    kind = _unify_kinds(kind, k, _AllKinds())
+    kind === nothing && return nothing
+  end
+  return typed_branch ? _bind_cast_type(kind) : nothing
+end
+# The bind cast for a kind, in the spelling of `_infer_parameter_sql_type`'s engine (the one that
+# casts its parameters); `nothing` for a kind with no literal to bind.
+_bind_cast_type(::CBool) = "boolean"
+_bind_cast_type(::CInt16) = "smallint"
+_bind_cast_type(::CInt32) = "integer"
+_bind_cast_type(::CInt64) = "bigint"
+_bind_cast_type(::CFloat64) = "double precision"
+_bind_cast_type(k::CDecimal) = k.precision === nothing ? "numeric" : "numeric($(k.precision),$(something(k.scale, 0)))"
+_bind_cast_type(::Union{CText,CVarChar}) = "text"
+_bind_cast_type(::CDate) = "date"
+_bind_cast_type(::CTime) = "time"
+_bind_cast_type(k::CDateTime) = k.with_timezone ? "timestamptz" : "timestamp"
+_bind_cast_type(::CInterval) = "interval"
+_bind_cast_type(::Any) = nothing

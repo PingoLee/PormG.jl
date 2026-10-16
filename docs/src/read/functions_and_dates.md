@@ -1049,9 +1049,12 @@ M.Result.objects.filter("resultid" => 1).values(
 `Case`, `Coalesce`, `Greatest` and `Least` cast their result to the `output_field` they are given, on
 both engines, as `Cast` does. The SQLite date rule above applies to them too: a `date` renders
 `date(…)`, and a timestamp, time, interval or array type raises `BackendCapabilityError` on SQLite.
-The value, a filter on it, and a CTE column typed by it therefore all agree. Before the #852 fix,
-`Coalesce`, `Greatest` and `Least` rendered no cast on SQLite, and `Greatest` and `Least` rendered
-none on PostgreSQL either:
+The value, a filter on it, and a CTE column typed by it therefore all agree. The cast applies to the
+result only: a `Case`'s literal `default` beside a column branch binds as that branch's type on
+PostgreSQL, so `Case(When("result" => 1, then = F("boolean_field")), default = false;
+output_field = "text")` renders `THEN "boolean_field" ELSE $2::boolean END)::text` and runs (#1222).
+Before the #852 fix, `Coalesce`, `Greatest` and `Least` rendered no cast on SQLite, and `Greatest`
+and `Least` rendered none on PostgreSQL either:
 
 ```julia
 # The best of a result's grid slot and one, as a bigint on both engines:

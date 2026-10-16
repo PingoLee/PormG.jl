@@ -1,6 +1,7 @@
 if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
+import Decimals   # #1279: the Decimal a DecimalField reads back as
 
 @testset "Single and Bulk Insert/Update" begin
   query = M.Just_a_test_deletion.objects;
@@ -1476,39 +1477,64 @@ end
 # Django_contract_scratch.price is a DecimalField(max_digits=10, decimal_places=2),
 # which maps to NUMERIC(10,2) on both PostgreSQL and SQLite.
 #
-# The key assertion is that F-expression arithmetic on a NUMERIC column does NOT
-# introduce floating-point drift: 10.50 * 2 must come back as exactly 21.0
-# (or the string equivalent), not 20.999999... or 21.000000001.
-#
-# The comparison is done by parsing the stored value via string to avoid any
-# implicit float widening in the Julia comparison layer.
+# Assigning an expression to it means the value rounded to 2 places (#1279). PostgreSQL's
+# column rounds it; SQLite's keeps every digit of its double arithmetic (`1.10 - 1` is
+# stored as 0.10000000000000009 and read back as a Float64), so SQLite refuses any
+# expression that can carry more places, `F("price") * 2` included — it is exact only
+# because doubling a float is. `Round(expr, 2)` stores the same Decimal on both engines.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "Decimal Precision in F-expressions" begin
+@testset "Decimal Precision in F-expressions (#1279)" begin
+    # What: an expression update into a 2-place DecimalField. PostgreSQL rounds it on assignment
+    # (`SET "price" = ("price" * $1)`); SQLite refuses it with a QueryBuildError naming
+    # `Round(x, 2)` and leaves the row alone; `Round(F("price") * 2, 2)` and `Round(F("price") / 3, 2)`
+    # store the same Decimal on both. Why: before #1279 SQLite stored `F("price") / 3` as
+    # 0.3333333333333333, so a filter on "0.33" matched the row on PostgreSQL and missed it on SQLite.
     label = "decimal-f-expr-9902"
+    q() = M.Django_contract_scratch.objects.filter("label" => label)
+    price() = (q().values("price").list() |> first)[:price]
+    reset!(start) = (q().exists() && q().delete(); M.Django_contract_scratch.objects.create("label" => label, "price" => start))
+    # The refusal on SQLite, or `nothing` where the update ran.
+    attempt(expr) = try q().update("price" => expr); nothing catch e; e end
 
-    M.Django_contract_scratch.objects.filter("label" => label).exists() &&
-        M.Django_contract_scratch.objects.filter("label" => label).delete()
-
+    reset!("0")
     try
-        M.Django_contract_scratch.objects.create("label" => label, "price" => "10.50")
+        for (start, expr, rounded) in (("10.50", F("price") * 2, "21"), ("1.00", F("price") / 3, "0.33"),
+                                       ("1.10", F("price") - 1, "0.1"))
+            reset!(start)
+            err = attempt(expr)
+            by_engine(
+                postgres = () -> begin   # the column rounds the value to 2 places
+                    @test err === nothing
+                    @test price() == Decimals.decimal(rounded)
+                end,
+                sqlite = () -> begin
+                    @test err isa PormG.QueryBuildError
+                    msg = replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
+                    @test occursin("so PormG refuses it on SQLite (#1279)", msg)
+                    @test occursin("Round(x, 2)", msg)
+                    @test price() == Decimals.decimal(start)   # nothing was written
+                end)()
+        end
 
-        # Multiply the stored NUMERIC value by 2 using an F-expression.
-        # Integer multiplier avoids introducing a floating-point literal into the SQL.
-        # Expected result: 10.50 * 2 = 21.00 exactly.
-        M.Django_contract_scratch.objects.filter("label" => label).update(
-            "price" => F("price") * 2
-        )
+        # PostgreSQL's column rounded `1.00 / 3` to the scale, so the row matches "0.33".
+        reset!("1.00")
+        by_engine(postgres = () -> begin
+                      q().update("price" => F("price") / 3)
+                      @test price() == Decimals.decimal("0.33")
+                      @test q().filter("price" => "0.33").count() == 1
+                  end,
+                  sqlite = () -> nothing)()
 
-        row = M.Django_contract_scratch.objects.filter(
-            "label" => label
-        ).values(
-            "price"
-        ).list() |> first
-
-        # parse via string → Float64 to avoid adapter-specific Decimal/String types.
-        # 21.0 is exactly representable in Float64, so == is appropriate here.
-        stored = parse(Float64, string(row[:price]))
-        @test stored == 21.0
+        # The explicit spelling stores the same Decimal on every engine.
+        for (start, expr, expected) in (("10.50", Round(F("price") * 2, 2), "21"),
+                                        ("1.00", Round(F("price") / 3, 2), "0.33"))
+            reset!(start)
+            q().update("price" => expr)
+            stored = price()
+            @test stored isa Decimals.Decimal
+            @test stored == Decimals.decimal(expected)
+            @test q().filter("price" => expected).count() == 1
+        end
 
     finally
         M.Django_contract_scratch.objects.filter("label" => label).exists() &&

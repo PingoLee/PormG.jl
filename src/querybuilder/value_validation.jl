@@ -478,6 +478,19 @@ function _format_single(f_meta, field::AbstractString, value, op::AbstractString
   return formatted
 end
 
+# #1283 — the refusal of an SQL expression where a value is written: every writer but `update`, which
+# writes one into its SET clause as SQL. One text for `_validate_field_value` (step 4) and the bulk
+# writers' depuration pass, which runs the bare formatter first and would otherwise report its
+# `MethodError` instead. Names the expression's type, never the expression.
+function _refuse_expression_value(model::PormGModel, field::AbstractString, value, operation::AbstractString)
+  (value isa SQLTypeF || value isa SQLTypeFunction) || return nothing
+  expr_type = nameof(typeof(value))
+  _validation_error(String(operation), model, String(field),
+    "an F expression or a SQL function ($(expr_type)) is not a value: `update` writes one into the column as SQL, and $(operation) takes values only";
+    suggestion = "write the value itself, or write the row and then set the column with filter(…).update(\"$(field)\" => expression)",
+    kind = :type)
+end
+
 # The raw-value half on its own, for a caller that runs the bare formatter to find the failing cell
 # (the bulk writers' `_depuration_values_bulk_insert`), so it raises this refusal rather than its own.
 function _refuse_collection(f_meta, field::AbstractString, value, op::AbstractString)
@@ -501,7 +514,9 @@ Checks:
 Returns `true` if valid. An unknown field **name** throws an `UnknownFieldError` (#462); every
 other rejection — a bad **value**, a protected primary key, a many-to-many relation, a generated
 column (#1032) — throws an `InvalidValueError` (#231; was `ErrorException`).
-SQL expressions (SQLTypeF, SQLTypeFunction) skip data validation as they are evaluated by the DB.
+An SQL expression (`SQLTypeF`, `SQLTypeFunction`) skips the value checks under `update`, which writes
+it into the statement as SQL; under any other operation it is refused as an `InvalidValueError` of
+kind `:type` (#1283).
 """
 function validate_field_data(model::PormGModel, field::String, value::Any, operation::String; allow_primary_key::Bool = true,
                              allow_generated::Bool = false)
@@ -541,8 +556,8 @@ So a check added to the write path is in this one too. This includes:
 also refuses a primary key. It checks values, not expressions: `update` writes an `F` expression
 or a SQL function into the statement as SQL and resolves the names inside it when the statement is
 built, so a double's `update` passes such a value through without calling this. `create` does not
-accept one, and neither does this. Into a text field that is an `InvalidValueError`; into a numeric
-field `create` currently raises a raw `MethodError` (#1283), and this raises the same.
+accept one, and neither does this: for any field, both raise an `InvalidValueError` of kind `:type`
+that names the field and says `update` writes expressions (#1283).
 
 What it does **not** check is what only the database knows: uniqueness, foreign keys, `CHECK`
 constraints, and a row's other fields. It sends nothing. It needs the model's connection key to be
@@ -614,9 +629,14 @@ function _validate_field_value(model::PormGModel, field::String, f_meta, value::
         return true
     end
 
-    # 4. Skip further validation for SQL expressions (F-expressions, Functions)
+    # 4. An SQL expression (an `F` expression, a function) is not a value. `update` writes one into
+    #    its SET clause as SQL, so its check ends here; every other writer binds values only, where it
+    #    reached the field's formatter and raised a raw `MethodError` naming no field (#1283). Django
+    #    refuses an `F()` the same way ("F() expressions can only be used to update, not to insert");
+    #    PormG refuses every function too, a column reference or not.
     if value isa SQLTypeF || value isa SQLTypeFunction
-        return true
+        operation == "update" && return true
+        _refuse_expression_value(model, field, value, operation)
     end
 
     # 5. Type validation for numeric fields.

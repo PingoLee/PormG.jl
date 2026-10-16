@@ -1099,6 +1099,34 @@ function _projection_alias_in_filter(f, names::Set{String}, depth::Int = 0)::Uni
   return nothing
 end
 
+# #1279 — an expression written into a `DecimalField(p, s)` is assigned to a `numeric(p, s)` column,
+# which means the value rounded to `s` places: PostgreSQL's assignment cast rounds it, and SQLite's
+# NUMERIC affinity keeps every digit its double arithmetic produced (`1.10 - 1` is stored as
+# `0.10000000000000009` and read back as a `Float64`). That is the #1040 cast's meaning exactly, so
+# the operand is classified by the cast's own `_scale_divergent_operand` and the engine is decided by
+# its `:scale` row; only the message is the write's, naming the `Round` that gives the same value on
+# every engine. A literal never reaches here: `DecimalValidator`'s width check refuses it everywhere
+# (#761). Called after the SET value renders, so a joined path's column is resolved.
+function _refuse_update_scale_departure(f_meta, field::AbstractString, value, instruction::SQLInstruction)
+  f_meta isa Models.sDecimalField || return nothing
+  side = _scale_divergent_operand(value, f_meta.decimal_places, instruction)
+  side === nothing && return nothing
+  row = _departure(instruction.connection, :scale, side[1])
+  row === nothing && return nothing
+  places = f_meta.decimal_places
+  # `Round(x)` for a scale of 0, the whole-number spelling #1061 documents. Text (a text or JSON
+  # column, a text function) is no number to round: #1061 refuses `Round` over it, so the spelling
+  # names the cast to a number that its own refusal names.
+  x = side[1] === :text ? "Cast(x, FloatField())" : "x"
+  spelling = places == 0 ? "Round($(x))" : "Round($(x), $(places))"
+  # The #1111 integer-quotient row keeps its own fix, which names the division to write.
+  row.issue == "#1040" && (row = merge(row, (issue = "#1279", fix = (_, _) ->
+    "Round it to the field's $(places == 1 ? "1 decimal place" : "$(places) decimal places") first: " *
+    "\e[32mupdate(\"$(field)\" => $(spelling))\e[0m, which stores the same value on every engine.")))
+  throw(_meaning_refusal("update(\"$(field)\" => …)", side[2], row, instruction.connection;
+    declared = "DecimalField(max_digits = $(f_meta.max_digits), decimal_places = $(places))"))
+end
+
 function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Symbol = :execute)
   real_obj = objct isa SQLObjectHandler ? objct.object : objct
   model = real_obj.model
@@ -1181,6 +1209,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     elseif isa(objct.insert[field], SQLTypeF) || isa(objct.insert[field], SQLTypeFunction) ||
        isa(objct.insert[field], SQLTypeCTE) || isa(objct.insert[field], SQLTypeJoined)
       f_value = _set_update_query(objct.insert[field], instruction)
+      _refuse_update_scale_departure(model.fields[field], field, objct.insert[field], instruction)
       push!(set_clause_parts, "$(quoted_field) = $(f_value)")
     else
       formatted_value = _format_single(model.fields[field], field, objct.insert[field], "update")

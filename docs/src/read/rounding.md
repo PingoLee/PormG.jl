@@ -189,12 +189,27 @@ A `Float64` has its own ties: `round(1.005, RoundNearestTiesAway; digits = 2)` i
 double nearest `1.005` lies just below it. Where a tie matters, keep the amount in an exact form,
 such as an integer count of hundredths.
 
-An expression written by `update`, such as `"price" => F("price") / 3` on a
-`DecimalField(max_digits = 10, decimal_places = 2)`, is not checked yet. PostgreSQL's column rounds it
-to the scale (`0.33`). SQLite stores every digit and reads it back as a `Float64`
-(`0.3333333333333333`), so the engines then hold different values. That is tracked as #1279. Until it
-is fixed, round the expression to the field's scale yourself, `"price" => Round(F("price") / 3, 2)`,
-which stores the same `Decimal` on both engines.
+An expression written by `update` is held to the field's scale too, by the rule a cast to
+`numeric(p, s)` follows (#1279). On a `DecimalField(max_digits = 10, decimal_places = 2)`,
+PostgreSQL's column rounds `F("points") / 3` over `1.00` to `0.33`. SQLite would store every digit of
+its double arithmetic and read it back as a `Float64` (`0.3333333333333333`), so it refuses the
+expression. That includes plain arithmetic: SQLite stores `1.10 - 1` as `0.10000000000000009`. Round
+the expression to the field's places, which stores the same `Decimal` on both engines:
+
+```julia
+# Constructor_results.points is a DecimalField(max_digits = 10, decimal_places = 2)
+q = M.Constructor_results.objects.filter("constructorresultsid" => 1)
+q.update("points" => F("points") / 3)              # the row holds 14.00
+#   PostgreSQL: stores 4.67
+#   SQLite:     QueryBuildError: update("points" => …) of arithmetic over the DecimalField `points`
+#               means the value rounded to the scale of DecimalField(max_digits = 10, decimal_places = 2);
+#               SQLite computes every digit of it, so PormG refuses it on SQLite (#1279). …
+q.update("points" => Round(F("points") / 3, 2))   # 4.67 on both engines
+```
+
+An expression with nothing to round builds on both engines: the column itself, an integer column,
+`Round(x, d)` with `d` at most the field's places, or a `DecimalField` with fewer places. A
+`FloatField` or an `IntegerField` takes any expression.
 
 ## How this compares
 
@@ -202,6 +217,6 @@ which stores the same `Decimal` on both engines.
 |---|---|
 | Rails (ActiveModel) | rounds the value in Ruby when it casts it, to the column's scale |
 | Django | PostgreSQL's column rounds on write. On SQLite, a converter quantizes a decimal column on read. `DecimalValidator` refuses extra places only in `full_clean()`, not on `save()` |
-| **PormG** | **refuses on the engine that would not honor it**, refuses a value with extra places on every write (an expression is not checked yet, #1279), and names the explicit spelling |
+| **PormG** | **refuses on the engine that would not honor it**, refuses a value with extra places on every write, refuses an expression `update` writes with extra places on that engine (#1279), and names the explicit spelling |
 
 MySQL (#1130) is in progress, and no query renders there yet. Its rows join these rules as it lands.

@@ -55,6 +55,9 @@ Safety guards (each raises; see [`errors.md`](errors.md)):
 - `delete` with `limit`/`offset`/`order_by`/`distinct`/aggregates → `UnsafeMutationError`.
 - Deleting a row a `PROTECT`/`RESTRICT` key still references → `ProtectedError`.
 - A connection with `change_data: false` refuses every write → `WritesDisabledError`.
+- On SQLite, an expression into a `DecimalField` that can carry more than its `decimal_places`
+  (`F("x") / 3`, `F("x") - 1`) → `QueryBuildError`; write `Round(expr, decimal_places)`, which stores
+  the same value on every engine (#1279).
 
 ## Many-to-many
 

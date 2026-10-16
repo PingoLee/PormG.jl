@@ -52,6 +52,11 @@ task needs.
    lists, per backend, are on the
    [Backend Capabilities](https://pingolee.github.io/PormG.jl/dev/backends/) page; the
    [PostgreSQL guide](https://pingolee.github.io/PormG.jl/stable/postgres/) has the details.
+10. **Use only public names, in tests too.** A name is public when its module exports it or
+    declares it `public`, so that `Base.ispublic(PormG.Configuration, :register_offline)` is true.
+    Anything else is internal, including the unlisted parts of `PormG.Configuration.*` and every
+    `_`-prefixed name. An internal name can change in any release with no `upgrade_guide` entry.
+    To pin a behavior, call the public API that produces it.
 
 ## One end-to-end example
 

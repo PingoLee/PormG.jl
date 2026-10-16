@@ -152,6 +152,27 @@ end
 - `in_transaction_context()` reports whether the current task is inside one. Tasks spawned
   inside a transaction join it — see [`async.md`](async.md).
 
+**Testing transaction behavior.** The supported seams are `with_tx_context(f, pool, conn)`, which
+installs `conn` as the ambient transaction on `pool` without a live driver, and
+`in_transaction_context()`. Test the **behavior**, not the guard. To pin "an ORM call inside a
+transaction on another database is refused", issue the call under `with_tx_context` on the other
+pool and expect `TransactionError`. Never call the check itself: it is internal (rule 10 in
+[`SKILL.md`](SKILL.md)). With two offline keys, nothing reaches a database:
+
+```julia
+using Test, PormG
+PormG.Configuration.register_offline("db"; adapter = :postgres)
+PormG.Configuration.register_offline("db_2"; adapter = :postgres)
+PormG.@import_models "db/models.jl" models
+import .models as M
+
+pool_db = PormG.Configuration.get_settings("db").connections
+with_tx_context(pool_db, :no_connection) do        # a transaction "open" on db; nothing is sent
+    @test in_transaction_context()
+    @test_throws TransactionError M.Driver.objects.db("db_2").filter("driverid" => 1).list()
+end
+```
+
 **Row locking** (PostgreSQL; no lock clause on SQLite, where the transaction serializes writers).
 Inside a transaction, `select_for_update()` locks the matched rows until `COMMIT`. Outside one it
 raises `QueryBuildError` on both engines:

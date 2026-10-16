@@ -2138,6 +2138,66 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Case bool output text | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1"),
+  ("Case bool output text default false | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Case bool output text default false | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1"),
+  ("Case bool output text default false | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Case bool output text default false | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1"),
+  ("Case bool output text default false | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Case bool output text default false | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1"),
+  ("Case int output text default text | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Case int output text default text | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Case int output text default text | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Case int output text default text | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Case int output text default text | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Case int output text default text | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Case float output text default text | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Case float output text default text | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Case float output text default text | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Case float output text default text | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Case float output text default text | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Case float output text default text | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Case int output integer default float | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Case int output integer default float | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"integer\") of a Float64 literal means the nearest integer (`1.5` → `2`); SQLite computes the trun"),
+  ("Case int output integer default float | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Case int output integer default float | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"integer\") of a Float64 literal means the nearest integer (`1.5` → `2`); SQLite computes the trun"),
+  ("Case int output integer default float | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Case int output integer default float | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"integer\") of a Float64 literal means the nearest integer (`1.5` → `2`); SQLite computes the trun"),
+  ("Case date output date default text | alone", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case date output date default text | alone", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case date output date default text | cte", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Case date output date default text | cte", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Case date output date default text | subquery", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case date output date default text | subquery", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output scale 1 | alone", :sqlite) =>

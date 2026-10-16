@@ -249,6 +249,12 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Case decimal output scale 1", :Constructor_results, m -> _EKM_FN.Case([_EKM_FN.When("status" => "x", then = _EKM_Q.F("points"))], default = 0, output_field = "numeric(10,1)")),
   ("Case float literal output integer", :Result,    m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = 1.5)], default = 0, output_field = "integer")),
   ("Case bool output text",   :New_join_position,   m -> _EKM_FN.Case([_EKM_FN.When("result" => 1, then = _EKM_Q.F("boolean_field"))], output_field = "text")),
+  # #1222: a literal default beside a typed branch under an `output_field`; the date one is a control
+  ("Case bool output text default false", :New_join_position, m -> _EKM_FN.Case([_EKM_FN.When("result" => 1, then = _EKM_Q.F("boolean_field"))], default = false, output_field = "text")),
+  ("Case int output text default text", :Result,    m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_Q.F("laps"))], default = "none", output_field = "text")),
+  ("Case float output text default text", :Result,  m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_Q.F("points"))], default = "none", output_field = "text")),
+  ("Case int output integer default float", :Result, m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_Q.F("laps"))], default = 1.5, output_field = "integer")),
+  ("Case date output date default text", :Race,     m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("date"))], default = "2009-01-01", output_field = "date")),
   ("Coalesce F float * 1.5 output scale 1", :Result, m -> _EKM_FN.Coalesce(_EKM_Q.F("points") * 1.5, 0; output_field = "numeric(10,1)")),
   ("Greatest float int output scale 1", :Result,    m -> _EKM_FN.Greatest("points", "grid"; output_field = "numeric(10,1)")),
   ("Least float int output scale 1", :Result,       m -> _EKM_FN.Least("points", "grid"; output_field = "numeric(10,1)")),

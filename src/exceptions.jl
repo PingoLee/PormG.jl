@@ -40,17 +40,66 @@
 # ── Query-builder errors (#231) ─────────────────────────────────────────────
 
 """
-    FieldAccessError <: PormGError  (abstract)
+    UsageError <: PormGError  (abstract)
+
+Umbrella for "PormG refused the call for what it asked" — `catch` it to answer a bad request
+without naming the concrete refusal. Its members:
+
+- [`FieldAccessError`](@ref) — no such field, an ambiguous name, an unprojected relation;
+- [`FilterError`](@ref) — an invalid filter shape;
+- [`InvalidValueError`](@ref) — a value PormG refused;
+- [`QueryBuildError`](@ref) — a malformed query;
+- [`UnsafeMutationError`](@ref) — an UPDATE or DELETE in an unsafe shape.
+
+**What it promises:** PormG refused the call for what it asked, not because the database failed,
+and the remedy is to change the call — retrying it unchanged is not one. Catching the umbrella
+keeps working when a refusal moves between its members, which has happened on more than one train
+(#576, #971, #988).
+
+```julia
+try
+    M.Result.objects.filter("points__@gte" => user_supplied).list()
+catch e
+    e isa UsageError || rethrow()
+    return bad_request(error_message(e))
+end
+```
+
+It does **not** promise that nothing reached the database. Most refusals are raised while the
+query is built, but a few come after statements of the same call ran:
+
+- a bulk write validates each row as it goes, so a later row is refused after earlier chunks were
+  sent (and, with `allocate_pk`, after ids were drawn);
+- `delete()` probes the related tables, and may already have run its cascade `UPDATE`s and
+  `DELETE`s;
+- `get_or_create` reports a missing UNIQUE constraint on its lookup fields when the database
+  rejects the `ON CONFLICT`.
+
+Without a transaction of the caller's, the call's own transaction rolls those statements back.
+**Inside** `run_in_transaction` they are the caller's to roll back: a block that catches a bulk's
+or a `delete()`'s `UsageError` and returns normally commits what they ran (after a `get_or_create`
+refusal, PostgreSQL has already aborted the transaction), so rethrow it, or catch it outside the
+block.
+
+Deliberately **not** members, because a bad request is the wrong answer to them:
+[`BackendCapabilityError`](@ref) (the remedy is the backend), [`ProtectedError`](@ref) (the
+*data* forbids the delete), [`UnsupportedConnectionError`](@ref) (a PormG bug), and the
+[`DatabaseError`](@ref) family (the database itself said no).
+"""
+abstract type UsageError <: PormGError end
+
+"""
+    FieldAccessError <: UsageError <: PormGError  (abstract)
 
 Umbrella for field/accessor lookup failures — `catch` it to get
 [`UnknownFieldError`](@ref) ("no such field"), [`AmbiguousFieldError`](@ref)
 ("that name has two meanings here") and [`LazyTraversalError`](@ref)
 ("unsupported lazy traversal").
 """
-abstract type FieldAccessError <: PormGError end
+abstract type FieldAccessError <: UsageError end
 
 """
-    UnknownFieldError(msg) <: FieldAccessError <: PormGError
+    UnknownFieldError(msg) <: FieldAccessError <: UsageError <: PormGError
 
 A field, alias, column, or `__` lookup path does not exist on the model or the projected row.
 """
@@ -60,7 +109,7 @@ struct UnknownFieldError <: FieldAccessError
 end
 
 """
-    AmbiguousFieldError(msg) <: FieldAccessError <: PormGError
+    AmbiguousFieldError(msg) <: FieldAccessError <: UsageError <: PormGError
 
 A name on this query means **two** things at once, so it has no single meaning and PormG refuses to
 guess. Two cases raise it:
@@ -82,7 +131,7 @@ struct AmbiguousFieldError <: FieldAccessError
 end
 
 """
-    LazyTraversalError(msg) <: FieldAccessError <: PormGError
+    LazyTraversalError(msg) <: FieldAccessError <: UsageError <: PormGError
 
 An unprojected `ForeignKey` was read off a fetched row. PormG has no lazy FK traversal; the
 message steers the caller to up-front `values(...)` projection (#204).
@@ -93,42 +142,42 @@ struct LazyTraversalError <: FieldAccessError
 end
 
 """
-    FilterError(msg) <: PormGError
+    FilterError(msg) <: UsageError <: PormGError
 
 An invalid filter shape — an unknown lookup, a list where one value belongs, an argument that shapes
 the SQL (an `isnull` flag) — or an operator misused on a JSON/subquery column. A bound value the
 filter refuses is an [`InvalidValueError`](@ref) instead (#988).
 """
-struct FilterError <: PormGError
+struct FilterError <: UsageError
   msg::String
   FilterError(msg::AbstractString) = new(_emsg(msg))
 end
 
 """
-    QueryBuildError(msg) <: PormGError
+    QueryBuildError(msg) <: UsageError <: PormGError
 
 Structural/API misuse while building a query — joins, CTEs, projection, ordering, window and
 bulk configuration, and the like. The default bucket for query-builder misuse that isn't one of
 the sharper categories below.
 """
-struct QueryBuildError <: PormGError
+struct QueryBuildError <: UsageError
   msg::String
   QueryBuildError(msg::AbstractString) = new(_emsg(msg))
 end
 
 """
-    UnsafeMutationError(msg) <: PormGError
+    UnsafeMutationError(msg) <: UsageError <: PormGError
 
 An UPDATE or DELETE was requested without a filter (or in another unsafe shape) and refused.
 """
-struct UnsafeMutationError <: PormGError
+struct UnsafeMutationError <: UsageError
   msg::String
   UnsafeMutationError(msg::AbstractString) = new(_emsg(msg))
 end
 
 """
-    InvalidValueError(msg) <: PormGError
-    InvalidValueError(reason, kind; op, model, field, field_type, row) <: PormGError
+    InvalidValueError(msg) <: UsageError <: PormGError
+    InvalidValueError(reason, kind; op, model, field, field_type, row) <: UsageError <: PormGError
 
 A value was refused: it failed coercion/type validation on a filter, insert or update, an
 identifier failed the fail-closed safety check, or an interval/duration literal could not be
@@ -149,7 +198,7 @@ Fields, beyond the rendered `msg`:
   A formatter raises with the reason alone; the funnel that knows the field and row attaches them
   once (`with_location`).
 """
-struct InvalidValueError <: PormGError
+struct InvalidValueError <: UsageError
   msg::String
   kind::Symbol
   reason::String
@@ -305,9 +354,11 @@ abstract type PoolError <: PormGError end
 
 # ── Database errors (#268) ──────────────────────────────────────────────────
 #
-# The boundary this taxonomy could not previously describe: everything above is *misuse of PormG*,
-# raised before a statement leaves the process. These four are the other half — the database
-# accepted a connection, ran something, and said no.
+# The boundary this taxonomy could not previously describe: the `UsageError` family above is PormG
+# refusing the call — almost always before a statement leaves the process, though a bulk write,
+# a `delete()` and a `get_or_create` can refuse after one of their own statements ran (see the
+# `UsageError` docstring). These four are the other half — the database accepted a connection, ran
+# something, and said no.
 #
 # Before #268 those failures propagated as the driver's own exception types, so an app that wanted
 # to handle a UNIQUE violation had to `catch SQLite.SQLiteException` / `LibPQ.Errors.*` — taking a
@@ -325,7 +376,7 @@ abstract type PoolError <: PormGError end
     DatabaseError <: PormGError  (abstract)
 
 Umbrella for failures raised *by the database itself*, once a statement has reached it — as opposed
-to the rest of the taxonomy, which reports misuse of PormG before anything is sent.
+to [`UsageError`](@ref), which reports PormG refusing the call.
 `catch DatabaseError` covers every case below without naming a driver package.
 
 Subtypes: [`IntegrityError`](@ref) (a constraint said no), [`OperationalError`](@ref) (transient —

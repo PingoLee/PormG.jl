@@ -970,14 +970,15 @@ scope — the SQL function constructors are *not* among them (see
 ### Error taxonomy
 Every PormG misuse raises a subtype of `PormGError` (`<: Exception`) so callers can `catch` a
 **type** instead of matching on a message string. Catch `PormGError` for any PormG failure, or a
-specific subtype for a specific reaction (#231, completed in #239):
+specific subtype for a specific reaction (#231, completed in #239). To answer a bad request,
+catch the `UsageError` umbrella rather than the concrete refusal (#1238):
 
-`PormGError`, `FieldAccessError`, `UnknownFieldError`, `AmbiguousFieldError`, `LazyTraversalError`, `FilterError`, `QueryBuildError`, `UnsafeMutationError`, `InvalidValueError`, `WritesDisabledError`, `UnsupportedConnectionError`, `BackendCapabilityError`, `ProtectedError`, `DefinitionError`, `FieldValidationError`, `ModelDefinitionError`, `ConfigurationError`, `InvalidConfigurationError`, `MigrationError`, `InvalidMigrationError`, `PoolError`, `DatabaseError`, `IntegrityError`, `OperationalError`, `StatementError`, `TransactionError`, `error_message`
+`PormGError`, `UsageError`, `FieldAccessError`, `UnknownFieldError`, `AmbiguousFieldError`, `LazyTraversalError`, `FilterError`, `QueryBuildError`, `UnsafeMutationError`, `InvalidValueError`, `WritesDisabledError`, `UnsupportedConnectionError`, `BackendCapabilityError`, `ProtectedError`, `DefinitionError`, `FieldValidationError`, `ModelDefinitionError`, `ConfigurationError`, `InvalidConfigurationError`, `MigrationError`, `InvalidMigrationError`, `PoolError`, `DatabaseError`, `IntegrityError`, `OperationalError`, `StatementError`, `TransactionError`, `error_message`
 
 !!! note "Database failures are wrapped too"
-    The taxonomy has two halves. Most of it reports **misuse of PormG**, caught before anything is
-    sent. [`DatabaseError`](#database-errors) reports what the **database itself** refused once a
-    statement got there — a constraint violation, SQL the backend rejects, a connection dropped
+    The taxonomy has two halves. [`UsageError`](@ref) reports **PormG refusing the call** — almost
+    always before anything is sent. [`DatabaseError`](#database-errors) reports what the
+    **database itself** refused once a statement got there — a constraint violation, SQL the backend rejects, a connection dropped
     mid-query — so `catch PormGError` really does cover both, and an app never has to name
     `SQLite.SQLiteException` / `LibPQ.Errors.*` (which would mean depending on the driver package
     just to spell the type). The driver's own exception stays reachable on `.cause` (#268).
@@ -1013,7 +1014,8 @@ field, and for the few with their own `showerror` it returns the richer renderin
 
 | Type | Raised when |
 | :--- | :--- |
-| `FieldAccessError` *(abstract)* | Umbrella for field/accessor lookup failures — `catch` it to get all three cases below. |
+| `UsageError` *(abstract)* | Umbrella for "PormG refused the call for what it asked", not because the database failed — `FieldAccessError` and its three cases, `FilterError`, `QueryBuildError`, `UnsafeMutationError` and `InvalidValueError`. The remedy is to change the call. Catch it to answer a bad request: it keeps matching when a refusal moves between its members, which a concrete `catch` does not (#1238). Not members: `ProtectedError`, `BackendCapabilityError`, `UnsupportedConnectionError`, and the `DatabaseError` family. |
+| `FieldAccessError` *(abstract)* | Umbrella for field/accessor lookup failures, under `UsageError` — `catch` it to get all three cases below. |
 | `UnknownFieldError` | A field, alias, column, or `__` lookup path does not exist on the model or projected row — or the path ends at a relation (a reverse accessor or a `ManyToManyField`) instead of a column, the message names the relation and asks for a column after it (#1134). |
 | `AmbiguousFieldError` | A name has two meanings on this query. Either a `__` path's first segment names both a declared CTE and something on the model: spell the CTE side `CTE("<name>", "<path>")`, or rename the CTE to reach the model side (#492). Or a `filter(...)` key, or a condition inside another projection (a `When` or a `Q` in a `Case`), names both a model field and a projection alias that projects something else: rename the alias (#703, #706). Or an `order_by(...)` path reaches a related column and is also the name PormG generated for a transform projection (`values("weekend__@year")` over a date-keyed foreign key is named `weekend__year`): order by `"weekend__@year"` for the projection, or name it (#1004). A filter or condition on a transform's generated name whose path reaches no column (`"date__day"` beside `values("date__@day")`) raises it too: a generated name is not a filter key, so filter `"date__@day"`. |
 | `LazyTraversalError` | An unprojected `ForeignKey` or `OneToOneField` was read off a fetched row — project it in `values(...)` first. |
@@ -1055,10 +1057,11 @@ field, and for the few with their own `showerror` it returns the richer renderin
 
 **Database errors**
 
-Everything above reports *misuse of PormG*, raised before a statement leaves the process. These
-report what the **database** refused once it got there. Each carries `adapter` (`"PostgreSQL"` /
-`"SQLite"`) and `cause` — the driver's own exception, kept so SQLSTATE-level detail stays reachable
-— instead of a `msg`, so read them with `error_message`.
+`UsageError` above reports PormG refusing the call — almost always before a statement leaves the
+process (its docstring names the calls that refuse later). These report what the **database**
+refused once a statement got there. Each carries `adapter` (`"PostgreSQL"` / `"SQLite"`) and
+`cause` — the driver's own exception, kept so SQLSTATE-level detail stays reachable — instead of a
+`msg`, so read them with `error_message`.
 
 | Type | Raised when |
 | :--- | :--- |

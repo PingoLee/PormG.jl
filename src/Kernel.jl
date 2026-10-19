@@ -271,8 +271,10 @@ Use [`error_message`](@ref) to read a caught error: the structured subtypes carr
 rather than a `.msg` string.
 
 Catch a narrower type when you want to act on one failure — `DoesNotExist`, `IntegrityError`,
-`PoolTimeoutError` — and the umbrellas (`FieldAccessError`, `PoolError`, `DatabaseError`,
-`ConfigurationError`, `MigrationError`, `DefinitionError`) to group a family.
+`PoolTimeoutError` — and the umbrellas (`UsageError`, `FieldAccessError`, `PoolError`,
+`DatabaseError`, `ConfigurationError`, `MigrationError`, `DefinitionError`) to group a family.
+`UsageError` is the one to catch for "PormG refused what I passed in": it is narrower than this
+root, and it keeps matching when a refusal moves between its members.
 
 These are deliberately **not** `<: ArgumentError`: a clean break so callers match a type instead
 of string-matching a message. Plain Julia-level misuse (a missing kwarg, a missing path) still
@@ -490,7 +492,7 @@ export PormGAbstractType, PormGSettings, PormGBackend, PormGPostgres, PormGSQLit
 # Error taxonomy (#231, #239) — root, the query-builder subtypes, and the schema/config/migration
 # subtypes. `PormGError` first so `catch PormGError` is the one name a caller has to remember.
 export PormGError,
-       FieldAccessError, UnknownFieldError, AmbiguousFieldError, LazyTraversalError,
+       UsageError, FieldAccessError, UnknownFieldError, AmbiguousFieldError, LazyTraversalError,
        FilterError, QueryBuildError, UnsafeMutationError, InvalidValueError,
        WritesDisabledError, UnsupportedConnectionError,
        DoesNotExist, MultipleObjectsReturned,
@@ -501,8 +503,8 @@ export PormGError,
        # Pre-publish naming pass (#268-era audit): narrowed/added members (WritesDisabledError
        # replaces PermissionError on the taxonomy line above).
        BackendCapabilityError, ProtectedError, DefinitionError,
-       # The database-error boundary (#268): everything above reports misuse of PormG; these report
-       # what the database itself refused, with the driver exception kept in `.cause`.
+       # The database-error boundary (#268): `UsageError` above reports PormG refusing the call;
+       # these report what the database itself refused, with the driver exception kept in `.cause`.
        DatabaseError, IntegrityError, OperationalError, StatementError,
        TransactionError
 

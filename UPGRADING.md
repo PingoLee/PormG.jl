@@ -67,6 +67,13 @@ Consequences worth knowing before you add one:
   the caller needs no warning: an app may depend on the old value, and a new refusal breaks code that
   ran. Only a purely additive change owes none — a new opt-in capability (operator, kwarg, function),
   or a call that used to raise and now succeeds → document it in `docs/`, not here.
+- **A refusal that changes exception type owes an entry, even inside one umbrella.** Moving a
+  refusal between members of `UsageError` (a `FilterError` becoming an `InvalidValueError`, as
+  #971 and #988 did) leaves a `catch e isa UsageError` working, but breaks every caller who catches
+  the concrete type — so the entry is owed, and its *after* points them at the umbrella (#1238).
+  Moving a type **into or out of** an existing umbrella owes one too: it widens or narrows what
+  every `catch` of that umbrella matches. A new umbrella over existing types owes none — no
+  `catch` of it exists yet.
 - **One train, one statement.** When a later change in the same train alters what an `Unreleased`
   entry says, amend that entry in the same PR instead of adding a second one that contradicts it. A
   released entry is never edited; a new entry supersedes it.

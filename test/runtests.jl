@@ -172,6 +172,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "default= Converter Return Contract (#631)" include("unit/test_default_converter_contract.jl")
     @testset "Typed Exceptions on Query Surface (#197)" include("unit/test_typed_exceptions.jl")
     @testset "Semantic Error Taxonomy (#231)" include("unit/test_error_taxonomy.jl")
+    @testset "UsageError: the Umbrella for a Refused Call (#1238)" include("unit/test_usage_error.jl")
     @testset "Database-error Boundary (#268)" include("unit/test_database_error_boundary.jl")
     @testset "Error-contract Drift Guard (#239)" include("unit/test_docs_error_type_drift.jl")
     @testset "Documented Error Types (#239)" include("unit/test_docs_error_types.jl")

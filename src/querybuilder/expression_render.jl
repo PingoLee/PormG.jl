@@ -699,7 +699,11 @@ function _render_interval_operand(node, instruc::SQLInstruction;
   # Render first, then type: resolving the path is what populates the memo the kind lookup reads.
   bare = node isa SQLField ? node.field : node
   interval = _expression_kind(bare, instruc) isa CInterval
-  ms = sqlite && interval && _is_bare_column(bare) ? Dialect._sqlite_interval_ms(sql) : nothing
+  # #1287: a `Subquery` binds its correlation and filters, so its text is parsed once, in a scalar
+  # subquery around it, where a column's millisecond form repeats the column reference.
+  ms = !(sqlite && interval) ? nothing :
+       _is_bare_column(bare) ? Dialect._sqlite_interval_ms(sql) :
+       bare isa SubqueryObject ? Dialect._sqlite_interval_text_ms(sql) : nothing
   return sql, ms, interval
 end
 
@@ -712,6 +716,7 @@ _interval_ms_candidate(p::String) = _is_bare_column(p)
 _interval_ms_candidate(p::SQLField) = _interval_ms_candidate(p.field)
 _interval_ms_candidate(::JoinedReference) = true
 _interval_ms_candidate(r::CTEReference) = _is_bare_column(r)   # #1285: ordering or aggregating one
+_interval_ms_candidate(::SubqueryObject) = true                 # #1287: its text, parsed once
 function _interval_ms_candidate(p::FObject)
   if p.function_name in _INTERVAL_MS_AGGREGATES
     return !(p.column isa AbstractVector) && _interval_ms_candidate(p.column)
@@ -960,6 +965,22 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
         lms !== nothing && rms !== nothing && return "($(lms) $(op) $(rms))", nothing
       end
       return "($(_as_interval_text(left_side, left_kind)) $(op) $(_as_interval_text(right_side, right_kind)))", nothing
+    end
+    # #1287: a CTE column or a `Subquery` holding a duration, ORDERED against an interval, compares
+    # milliseconds, as a `DurationField` column does: both leave SQLite as their text. The right side
+    # renders once (a `Subquery` binds), to the SQL `_set_update_query_operand` gives it, so a right
+    # side that is not a duration keeps the comparison it had.
+    if sqlite && op in _ORDERING_OPERATIONS && left_kind isa Union{CInterval,_IntervalMs} &&
+       v.operand isa Union{CTEReference,SubqueryObject}
+      # #985: on a join condition the right side renders on the right, as `_set_update_query_operand`'s does.
+      right_side, right_ms, right_interval = _on_join_right(() -> _render_interval_operand(v.operand, instruc), instruc)
+      if right_interval
+        lms = _interval_ms_sql(left_side, v.field_name, left_kind)
+        lms !== nothing && right_ms !== nothing && return "($(lms) $(op) $(right_ms))", nothing
+      end
+      left_kind isa _IntervalMs &&
+        throw(_sqlite_interval_error("Ordering (`$(op)`) an interval against a value with no millisecond form"))
+      return "($(left_side) $(op) $(right_side))", nothing
     end
     if sqlite && left_kind isa _IntervalMs
       if v.operand isa Union{Dates.Period,Dates.CompoundPeriod}

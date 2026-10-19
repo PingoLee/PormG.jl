@@ -904,6 +904,46 @@ end
     @test Dates.toms(ext[1, :mn]) == minimum(totals.ms)
   end
 
+  # #1287 — a `Subquery` holding a duration, and a CTE column on the RIGHT of a comparison. On SQLite
+  # both are the interval's text, so ordering by the subquery's alias, or comparing a CTE column with
+  # one, compared text and put a driver past 100 h below one at 99 h. The oracle is #1219's: each
+  # driver's summed `milliseconds` beside the summed duration, over 2009–2012 and over 2009–2011.
+  # Expected SQL, SQLite: `ORDER BY (SELECT <ms of _pormg_v> FROM (SELECT (<subquery>) AS _pormg_v))`
+  # and `<ms of "R1_1"."t"> > <ms of the subquery>` / `> <ms of "R1_2"."t">`; PostgreSQL compares and
+  # orders the `interval`, unchanged.
+  @testset "a duration Subquery, or a CTE column on the right, compares its length (#1287)" begin
+    FN = PormG.Functions
+    span(last_year) = (b = M.Lap_times.objects;
+                       b.filter("raceid__year__@range" => [2009, last_year]);
+                       b.values("driverid", "t" => FN.Sum("time"), "ms" => FN.Sum("milliseconds"));
+                       b)
+    four, three = span(2012) |> DataFrame, span(2011) |> DataFrame
+    hours100 = 100 * 3_600_000
+    @test any(>(hours100), four.ms) && any(<(hours100), four.ms)
+    ms3 = Dict(zip(three.driverid, three.ms))
+    # Non-vacuous: a driver under 100 h over three seasons and past it over four, where text order and
+    # length order disagree.
+    @test any(r -> get(ms3, r.driverid, 0) < hours100 < r.ms, eachrow(four))
+    sub(last_year) = (s = M.Lap_times.objects;
+                      s.filter("driverid" => PormG.QueryBuilder.OuterRef("driverid"), "raceid__year__@range" => [2009, last_year]);
+                      s.values("t" => FN.Sum("time"));
+                      PormG.QueryBuilder.Subquery(s))
+    # Ordered by the subquery's alias.
+    q = M.Driver.objects
+    q.filter("driverid__@in" => collect(four.driverid))
+    q.values("driverid", "b" => sub(2012)); q.order_by("b", "driverid")
+    @test (q |> DataFrame).driverid == [r.driverid for r in sort(eachrow(four); by = r -> (r.ms, r.driverid))]
+    # A CTE column compared with a `Subquery`, and with another CTE column on the right.
+    want = sort([r.driverid for r in eachrow(four) if haskey(ms3, r.driverid) && r.ms > ms3[r.driverid]])
+    with_four(q) = q.with("c" => span(2012), join_field = "driverid" => "driverid", join_type = "INNER")
+    q = M.Driver.objects; with_four(q); q.values("driverid"); q.filter("c__t__@gt" => sub(2011))
+    @test sort((q |> DataFrame).driverid) == want
+    q = M.Driver.objects; with_four(q)
+    q.with("d" => span(2011), join_field = "driverid" => "driverid", join_type = "INNER")
+    q.values("driverid"); q.filter("c__t__@gt" => PormG.CTE("d", "t"))
+    @test sort((q |> DataFrame).driverid) == want
+  end
+
   # #900 — the functions #894 left on the text. On SQLite `Sum`/`Avg` added up the text's leading hours,
   # `Greatest`/`Least` compared the text, and `Coalesce` sorted it. The rows and the oracle are #894's;
   # a lap time's `milliseconds` column is the oracle for its `time`.

@@ -1091,7 +1091,9 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # difference — compares milliseconds on SQLite, as `F("time") < F(...)` does. The right side is
     # rendered once either way, to the same SQL `_get_filter_query` gives it when it has no
     # millisecond form, so the fallback keeps the text comparison with the same bindings.
-    if v.values isa FExpression && v.operator in _ORDERING_OPERATIONS && _is_sqlite_duration_column(v, instruc)
+    # #1287: so is a CTE column on the right, which leaves the CTE body as its text.
+    if v.values isa Union{FExpression,CTEReference} && v.operator in _ORDERING_OPERATIONS &&
+       _is_sqlite_duration_column(v, instruc)
       rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)
       return _render_column_rhs(rhs_ms ? Dialect._sqlite_interval_ms(column) : column, v.operator, rhs, instruc)
     end
@@ -1107,6 +1109,12 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   elseif isa(v.values, SubqueryObject)
     # #926: a scalar subquery, `"grid" => Subquery(…)`. `column` rendered first, so its markers number
     # ahead of the subquery's — the text order (#586). The filter-position render: no #194 recording.
+    # #1287: a `DurationField` ordered against a `Subquery` that holds a duration compares
+    # milliseconds, as against an `F` interval above; the subquery renders once either way.
+    if v.operator in _ORDERING_OPERATIONS && _is_sqlite_duration_column(v, instruc)
+      rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)
+      return _render_column_rhs(rhs_ms ? Dialect._sqlite_interval_ms(column) : column, v.operator, rhs, instruc)
+    end
     return _render_column_rhs(column, v.operator,
                               _on_join_right(() -> _get_filter_query(v.values, instruc), instruc), instruc)
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && v.column.field.formatter !== nothing

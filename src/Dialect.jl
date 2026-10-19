@@ -333,6 +333,16 @@ _sqlite_interval_ms(col::AbstractString) =
   "CAST(round(CAST(substr($(col), instr($(col), ':') + 4) AS REAL) * 1000) AS INTEGER)))"
 
 """
+    _sqlite_interval_text_ms(text) -> String
+
+`_sqlite_interval_ms` over an expression that may carry bound parameters, such as a scalar subquery
+(#1287): the text is evaluated once, in a correlated scalar subquery, and named there, as
+`_sqlite_interval_text` names its milliseconds. NULL in is NULL out.
+"""
+_sqlite_interval_text_ms(text::AbstractString) =
+  "(SELECT $(_sqlite_interval_ms("_pormg_v")) FROM (SELECT $(text) AS _pormg_v))"
+
+"""
     _parse_postgres_interval(v) -> Union{Dates.CompoundPeriod, typeof(v)}
 
 The PostgreSQL half of the INTERVAL read-back pin (#581): a PostgreSQL driver's value, normalized to

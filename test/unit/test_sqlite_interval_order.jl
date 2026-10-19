@@ -1211,3 +1211,96 @@ end
     close(db)
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1287 — a Subquery holding a duration, and a CTE column on the right, compare milliseconds on SQLite
+# A `Subquery` that projects a duration returns its `HH:MM:SS` text, and so does a CTE column, and the
+# outer query compared and ordered that text: `"lap__@gt" => Subquery(<best>)`, `F("lap") >
+# Subquery(…)`, `order_by` on a `Subquery` alias, and a CTE column on the RIGHT of a comparison
+# (`"best__@gt" => CTE("c", "t")`, `F("best") > CTE(…)`; #1219 converted it on the left only).
+# Expected SQL, SQLite: each side in milliseconds. A `Subquery` binds its correlation and limit, so
+# its text is parsed once in a scalar subquery around it, `(SELECT <ms of _pormg_v> FROM (SELECT
+# (<subquery>) AS _pormg_v))`, binding what it bound before (the `LIMIT 1`, once per render); a CTE
+# column repeats its reference, `<ms of "R1_1"."t">`, and binds nothing. Equality keeps the text.
+# PostgreSQL compares and orders the `interval`, unchanged. Why: the text order put `"100:00:00"`
+# before `"99:00:00"` and `"-01:00:00"` before `"-02:00:00"`, so these returned other rows, in another
+# order, than the same comparison on the model column (the oracle below runs each statement).
+# ─────────────────────────────────────────────────────────────────────────────
+_io_best_sub() = (s = _IOM.Io_lap.objects; s.filter("id" => QB.OuterRef("id")); s.values("t" => "best"); s.limit(1); QB.Subquery(s))
+const _IO_SUB_MS = "(SELECT $(PormG.Dialect._sqlite_interval_ms("_pormg_v")) FROM (SELECT (SELECT"
+const _IO_R1_BEST_MS = PormG.Dialect._sqlite_interval_ms("\"R1\".\"best\"")
+
+@testset "#1287: a duration Subquery, or a CTE column on the right, compares milliseconds on SQLite" begin
+  for build! in (q -> q.filter("lap__@gt" => _io_best_sub()), q -> q.filter(F("lap") > _io_best_sub()))
+    q = _IOM.Io_lap.objects; q.values("id"); build!(q)
+    sql = _io_sql(q)
+    @test occursin("WHERE $(_IO_LAP_MS) > $(_IO_SUB_MS)", sql) || occursin("WHERE ($(_IO_LAP_MS) > $(_IO_SUB_MS)", sql)
+    @test count("FROM \"io_lap\"", sql) == 2   # the subquery renders once
+    @test _io_params(q) == Any[1]
+    q_pg = _IOM.Io_lap.objects; q_pg.values("id"); build!(q_pg)
+    pg_sql = _io_sql(q_pg; conn = _IO_PG)
+    @test occursin(r"\"Tb\"\.\"lap\" > \(SELECT", pg_sql) && !occursin("substr(", pg_sql)
+  end
+  # Equality keeps the canonical text on both sides.
+  q = _IOM.Io_lap.objects; q.values("id"); q.filter("lap" => _io_best_sub())
+  @test occursin(r"WHERE \"Tb\"\.\"lap\" = \(SELECT", _io_sql(q))
+  # Ordered by the alias: the subquery re-rendered in milliseconds, as #894 re-renders an alias.
+  q = _IOM.Io_lap.objects; q.values("id", "s" => _io_best_sub()); q.order_by("s")
+  @test occursin("ORDER BY $(_IO_SUB_MS)", _io_sql(q))
+  @test _io_params(q) == Any[1, 1]
+  q_pg = _IOM.Io_lap.objects; q_pg.values("id", "s" => _io_best_sub()); q_pg.order_by("s")
+  @test occursin("ORDER BY \"s\" ASC NULLS LAST", _io_sql(q_pg; conn = _IO_PG))
+  # A CTE column on the right: both columns in milliseconds, nothing bound.
+  for build! in (q -> q.filter("best__@gt" => PormG.CTE("c", "t")), q -> q.filter(F("best") > PormG.CTE("c", "t")))
+    q = _IOM.Io_lap.objects; _io_cte_lap!(q); q.values("id"); build!(q)
+    sql = _io_sql(q)
+    @test occursin("$(_IO_R1_BEST_MS) > $(_IO_CTE_MS)", sql)
+    @test isempty(_io_params(q))
+    q_pg = _IOM.Io_lap.objects; _io_cte_lap!(q_pg); q_pg.values("id"); build!(q_pg)
+    @test occursin("\"R1\".\"best\" > \"R1_1\".\"t\"", _io_sql(q_pg; conn = _IO_PG))
+  end
+  q = _IOM.Io_lap.objects; _io_cte_lap!(q); q.values("id"); q.filter("best" => PormG.CTE("c", "t"))
+  @test occursin("\"R1\".\"best\" = \"R1_1\".\"t\"", _io_sql(q))
+
+  isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+  db = Main.SQLite.DB()
+  try
+    exe(sql, params = Any[]) = Main.SQLite.DBInterface.execute(db, sql, params)
+    _io_seed!(exe)
+    ids(build!) = begin
+      q = _IOM.Io_lap.objects
+      build!(q)
+      insp = inspect_query(q; connection = _IO_SL)
+      [r.id for r in exe(insp[:sql_text], insp[:parameters])]
+    end
+    # Laps 1 → 99 h, 2 → 100 h, 3 → -1 h, 4 → -2 h, 5 → 1:30; `best` swaps each pair (5 → 1:00).
+    # `lap > best` holds for 2, 3 and 5; in text order it held for 1, 4 and 5.
+    @test sort(ids(q -> (q.values("id"); q.filter("lap__@gt" => _io_best_sub())))) == [2, 3, 5]
+    @test sort(ids(q -> (q.values("id"); q.filter(F("lap") > _io_best_sub())))) == [2, 3, 5]
+    @test ids(q -> (q.values("id", "s" => _io_best_sub()); q.order_by("s"))) == [3, 4, 5, 2, 1]
+    @test ids(q -> (q.values("id", "s" => _io_best_sub()); q.order_by("-s"))) == [1, 2, 5, 4, 3]
+    # `best > lap` holds for 1 and 4.
+    @test sort(ids(q -> (_io_cte_lap!(q); q.values("id"); q.filter("best__@gt" => PormG.CTE("c", "t"))))) == [1, 4]
+    @test sort(ids(q -> (_io_cte_lap!(q); q.values("id"); q.filter(F("best") > PormG.CTE("c", "t"))))) == [1, 4]
+    # `Greatest` over a duration `Subquery` picks by length (the text picked `"99:00:00"` over
+    # `"100:00:00"`), and returns the text of the one it picked.
+    greatest = (q = _IOM.Io_lap.objects; q.values("id", "g" => _IO_FN.Greatest(_io_best_sub(), "lap")); q.order_by("id");
+                insp = inspect_query(q; connection = _IO_SL); [r.g for r in exe(insp[:sql_text], insp[:parameters])])
+    @test greatest == ["100:00:00", "100:00:00", "-01:00:00", "-01:00:00", "00:01:30"]
+    # A timestamp difference ordered against a duration `Subquery`: it raised before, as an ordering
+    # against a value with no millisecond form. Races 1..5 are 99 h, 100 h, -1 h, -2 h and 6 h long;
+    # each is compared with the lap of the same id's `best` (100 h, 99 h, -2 h, -1 h, 1:00).
+    race_best() = (s = _IOM.Io_lap.objects; s.filter("id" => QB.OuterRef("id")); s.values("t" => "best"); s.limit(1); QB.Subquery(s))
+    gap_ids = (q = _IOM.Io_race.objects; q.values("id"); q.filter(_io_gap() > race_best());
+               insp = inspect_query(q; connection = _IO_SL); sort([r.id for r in exe(insp[:sql_text], insp[:parameters])]))
+    @test gap_ids == [2, 3, 5]
+    # And against a CTE column holding the same `best`.
+    gap_cte = (q = _IOM.Io_race.objects;
+               q.with("c" => (b = _IOM.Io_lap.objects; b.values("id", "t" => "best"); b), join_field = "id" => "id", join_type = "INNER");
+               q.values("id"); q.filter(_io_gap() > PormG.CTE("c", "t"));
+               insp = inspect_query(q; connection = _IO_SL); sort([r.id for r in exe(insp[:sql_text], insp[:parameters])]))
+    @test gap_cte == [2, 3, 5]
+  finally
+    close(db)
+  end
+end

@@ -1221,6 +1221,11 @@ agrees with PostgreSQL:
   and `Greatest`/`Least`/`Coalesce` over one (`Max(CTE("laps", "t"))`, #1285), which read back as a
   `CompoundPeriod`, as over the column, along with a filter on such an aggregate's alias and
   arithmetic on it (`Max(CTE("laps", "t")) - Min(CTE("laps", "t"))`, `Sum(CTE("laps", "t")) / Count("lap")`)
+- such a `CTE(...)` column on the right of an ordering (`"time__@gt" => CTE("laps", "t")`,
+  `F("time") > CTE("laps", "t")`), and a `Subquery(...)` that projects a duration, compared with the
+  column (`"time__@gt" => Subquery(best)`, `F("time") > Subquery(best)`) or ordered as an alias
+  (`values("b" => Subquery(best)); order_by("b")`, #1287). A `Subquery` binds its correlation, so
+  its text is read once, in a scalar subquery around it
 
 `F(...)` arithmetic on a `CTE(...)` column is not written that way: `F` takes a model path, and
 `F("laps__t")` is refused.

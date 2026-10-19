@@ -388,7 +388,7 @@ function _expression_formatter(p::FExpression, instruc::SQLInstruction)
   formatter = _kind_formatter(_expression_kind(p, instruc), instruc)
   formatter === nothing || return formatter
   # #1070: `Extract("start_at", "HOUR") + 1` is a plain number — it was one while `Extract` carried no
-  # formatter. See `_unranged`. Step 5: the walk does not type this arithmetic yet.
+  # formatter. See `_unranged`. Only what the walk does not type reaches here (`Extract(…, "EPOCH")`).
   return _unranged(_expression_formatter(p.field_name, instruc)) === Models.format_number_sql ?
     Models.format_number_sql : nothing
 end
@@ -1344,7 +1344,7 @@ _textless_number(::Any, ::SQLInstruction) = nothing
 # driver delivered it.
 # #1121: a computed number's numeric read kind is the read path's alone (`_without_numeric_read`);
 # the projection reads the whole record through `_read_kind` (#1034 step 3). This view is the binder's
-# and the render's, until #1034 steps 4 and 5 move them.
+# and the render's side typing (`_render_side_kind`, kept narrow on purpose, #1034 step 5b).
 _subquery_kind(p::SubqueryObject, instruc::SQLInstruction)::Union{CanonicalType,Nothing} =
   _without_numeric_read(instruc.subquery_kinds === nothing ? nothing : get(instruc.subquery_kinds, p, nothing))
 

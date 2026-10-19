@@ -166,3 +166,33 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The render takes its kind from the walk's one copy of the rule, at every level (#1034 step 5b).
+# Expected: a thirty-two-level chain of interval arithmetic (`(… * 2) + F("laptime")`) and of date
+# shifts (`… + Day(1)`) builds in well under a second on both engines, and the kind the render gives
+# the whole is the walk's: an interval, and a date. Each render level asks the walk once its sides
+# have rendered (`_arith_result_kind`), so a regression to a walk per path per level would show here;
+# measured at 0.2 ms on SQLite at depth 32, the same as before step 5b.
+# Why it matters: one copy of the rule must not cost what two copies did not.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1034 step 5b: the render's kind is the walk's, at every depth, at no extra cost" begin
+  QB = PormG.QueryBuilder
+  for (backend, Model_) in _TAK_MODELS
+    @testset "$backend" begin
+      for (seed, wrap, expected) in ((F("laptime"), e -> e * 2 + F("laptime"), PormG.CInterval()),
+                                     (F("date"), e -> e + Day(1), PormG.CDate()))
+        e = seed
+        for _ in 1:32
+          e = wrap(e)
+        end
+        build() = (q = Model_.objects; q.values("v" => e); QB.build(q.object))
+        build()                                                    # compile
+        @test (@elapsed build()) < 0.05
+        rendered, walked = _tak_kinds(Model_, e)
+        @test rendered == expected
+        @test walked == expected
+      end
+    end
+  end
+end

@@ -68,7 +68,10 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                # Phase 2a (plain-column reads): what every filter, ordering, list
                                # membership and `inspect_query` asks.
                                :_interval_as_ms, :_casts_bind_parameters, :_emulates_nulls_order,
-                               :_binds_list_as_array, :_inspection_dialect])
+                               :_binds_list_as_array, :_inspection_dialect,
+                               # ... row locks, aggregates, and what a function render asks first.
+                               :_locks_rows, :_sums_integers_as_decimal, :_greatest_skips_nulls,
+                               :_computed_kind])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions

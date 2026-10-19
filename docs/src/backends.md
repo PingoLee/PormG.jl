@@ -30,6 +30,7 @@ Where PormG reads the schema, an older server is not refused: the feature reads 
 | `explain_options` | `explain(analyze = true)`, `buffers`, `verbose` | yes | no |
 | `copy` | `bulk_copy` | yes | no |
 | `advisory_locks` | `with_advisory_lock(…; on_missing_lock = :error)` | yes | no |
+| `no_key_locks` | `select_for_update(no_key = true)` (SQLite takes no row lock at all, so it renders no clause, as for every `select_for_update`) | yes | no |
 | `negative_round_precision` | `Round(x, d)` with a negative `d` (SQLite's `ROUND` reads it as 0) | yes | no |
 | `window_functions` | `RowNumber`, `Rank`, `DenseRank`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` (refused below the version) | yes | from 3.25.0 |
 | `nulls_order` | `order_by` NULL placement; below the version SQLite sorts on an `(expr IS NULL)` key instead | yes | from 3.30.0 |

@@ -82,6 +82,7 @@ _locks_cascade_parents(::PormGSQLite) = false
 # requirement is not one of these: it holds on both engines (#1237).
 _locks_rows(::PormGPostgres) = true
 _locks_rows(::PormGSQLite) = false
+_locks_rows(::PormGMySQL) = true   # InnoDB row locks (#1269)
 
 # #1111, #1034 phase 3 step 2a — a `Sum` over an operand the type walk cannot name may not be the
 # integer the operands add up to, so its quotient may keep a fraction an integer quotient drops. Over
@@ -91,10 +92,20 @@ _locks_rows(::PormGSQLite) = false
 _untyped_sum_departs(::PormGPostgres) = true
 _untyped_sum_departs(::PormGSQLite) = false
 
+# `SUM` over an integer is a DECIMAL (MySQL: `SUM(INT)` and `SUM(BIGINT)` alike), so `Dialect.SUM` casts
+# it back to the integer the sum of integers means. PostgreSQL widens only `sum(bigint)` to `numeric`,
+# which `_sums_bigint` handles; SQLite's sum of integers is an integer.
+_sums_integers_as_decimal(::PormGPostgres) = false
+_sums_integers_as_decimal(::PormGSQLite) = false
+_sums_integers_as_decimal(::PormGMySQL) = true
+
 # `Greatest`/`Least` skip a NULL argument natively. SQLite renders the scalar `MAX`/`MIN`, which
 # return NULL when any argument is, so PormG rewrites the operands (#844).
 _greatest_skips_nulls(::PormGPostgres) = true
 _greatest_skips_nulls(::PormGSQLite) = false
+# MySQL's `GREATEST`/`LEAST` return NULL when any argument is NULL (its documented rule), so the operands
+# are rewritten there too; the `GREATEST` renderer itself is phase 2b's.
+_greatest_skips_nulls(::PormGMySQL) = false
 
 # NULL placement is emulated with an `(expr IS NULL)` sort key, because the engine has no
 # `NULLS FIRST`/`NULLS LAST` (SQLite before 3.30, #75). The version is the capability table's

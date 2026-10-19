@@ -165,6 +165,13 @@ _computed_kind(::Val{:SUM}, ::Symbol, ::CDecimal, ::PormGPostgres) = CDecimal(no
 _computed_kind(::Val{:SUM}, ::Symbol, k::Union{CFloat64,CInterval}, ::PormGPostgres) = k
 _computed_kind(::Val{:SUM}, ::Symbol, ::Any, ::PormGPostgres) = nothing
 _computed_kind(::Val{:SUM}, ::Symbol, k::CInterval, ::PormGSQLite) = k
+# MySQL (#1130): the sum of integers is a DECIMAL there, cast back to a `SIGNED` (a `BIGINT`) by the
+# build (`_sums_integers_as_decimal`); a DECIMAL sums to a DECIMAL and a DOUBLE to a DOUBLE. No other
+# operand is a number MySQL sums here: a duration is phase 2b's.
+_computed_kind(::Val{:SUM}, ::Symbol, ::Union{CInt16,CInt32,CInt64}, ::PormGMySQL) = CInt64()
+_computed_kind(::Val{:SUM}, ::Symbol, ::CDecimal, ::PormGMySQL) = CDecimal(nothing, nothing)
+_computed_kind(::Val{:SUM}, ::Symbol, ::CFloat64, ::PormGMySQL) = CFloat64()
+_computed_kind(::Val{:SUM}, ::Symbol, ::Any, ::PormGMySQL) = nothing
 
 """
     Avg(x; distinct::Bool = false)
@@ -199,6 +206,11 @@ _computed_kind(::Val{:AVG}, ::Symbol, k::Union{CFloat64,CInterval}, ::PormGPostg
 _computed_kind(::Val{:AVG}, ::Symbol, ::Union{CInt16,CInt32,CInt64,CDecimal}, ::PormGPostgres) = CDecimal(nothing, nothing)
 _computed_kind(::Val{:AVG}, ::Symbol, ::Any, ::PormGPostgres) = nothing
 _computed_kind(::Val{:AVG}, ::Symbol, k::CInterval, ::PormGSQLite) = k
+# MySQL (#1130) averages a DOUBLE to a DOUBLE and an integer or a DECIMAL to a DECIMAL, which the read
+# parser turns into the float or decimal the call means (#1121).
+_computed_kind(::Val{:AVG}, ::Symbol, ::CFloat64, ::PormGMySQL) = CFloat64()
+_computed_kind(::Val{:AVG}, ::Symbol, ::Union{CInt16,CInt32,CInt64,CDecimal}, ::PormGMySQL) = CDecimal(nothing, nothing)
+_computed_kind(::Val{:AVG}, ::Symbol, ::Any, ::PormGMySQL) = nothing
 """
   Count(x; distinct::Bool = false)
 

@@ -98,6 +98,22 @@ end
 # `_order_term_sql` is the same renderer the top-level clause uses, so the SQLite < 3.30 emulation
 # (`(expr IS NULL) DESC, expr ASC`, legal inside `OVER (...)` too) and its placeholder guard come
 # along for free instead of being restated.
+# #1130: MySQL has no `NULLS FIRST`/`NULLS LAST`, so every ordering term is emulated with the
+# `(expr IS NULL)` key, and the shared renderer's one exit from it — a term holding a `?` with no
+# separate flag render, printed bare so the value is not bound twice — would leave NULLs where MySQL
+# puts them (first in ascending order), not where PormG's placement says. On SQLite that exit is only
+# taken before 3.30; on MySQL it would be every such term, so it is refused here, before the shared
+# arm. A projection ordered by its alias renders no `?` and keeps the placement.
+function _order_term_sql(expr, orientation::AbstractString, placement::Symbol, conn::PormGMySQL;
+                         null_flag::Union{Nothing,AbstractString} = nothing)
+  null_flag === nothing && occursin('?', string(expr)) && throw(_capability_error(conn, :nulls_order,
+    "Ordering by an expression that binds a value";
+    why = "Project it under a name and order by that name instead, e.g. \e[32mvalues(\"key\" => <expression>)\e[0m " *
+          "and \e[32morder_by(\"key\")\e[0m, which places NULLs with an `(key IS NULL)` sort key."))
+  return invoke(_order_term_sql, Tuple{Any,AbstractString,Symbol,Any}, expr, orientation, placement, conn;
+                null_flag = null_flag)
+end
+
 function _resolve_window_order(v::SQLTypeOrder, instruc::SQLInstruction)::Tuple{String,String}
   expr = string(_resolve_window_expression(v.field, instruc))
   orientation = _normalize_window_orientation(v.orientation)
@@ -747,6 +763,12 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # its `_computed_kind` answers, so the SQL and the type agree.
   if v isa FObject && v.function_name == "SUM" && _sums_bigint(v, instruc)
     resolved_kwargs["bigint"] = true
+  end
+  # #1130: on an engine whose sum of integers is a DECIMAL (MySQL), a `Sum` over an integer of any width
+  # is cast back to the integer (`Dialect.SUM`), and its `_computed_kind` answers that integer.
+  if v isa FObject && v.function_name == "SUM" && _sums_integers_as_decimal(instruc.connection) &&
+     _integer_operand_kind(v, instruc) !== nothing
+    resolved_kwargs["integer"] = true
   end
 
   # #74 fan-out guard: record COUNT/SUM/AVG and the source alias of their column so build() can

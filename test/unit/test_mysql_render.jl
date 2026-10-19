@@ -20,6 +20,7 @@ using Test
 using PormG
 using PormG.Models
 using Dates, UUIDs, Decimals
+import PormG.QueryBuilder: Sum, Avg, Count, Max, Min
 
 include(joinpath(@__DIR__, "helper_marker_alignment.jl"))
 
@@ -233,4 +234,130 @@ const _MR_QUOTE_SHAPES = [
   # The derived-table aliases are quoted the engine's way, on every engine.
   @test occursin("as `__pormg_distinct_count`", _MR_QUOTE_SHAPES[3].second(_MR_MY))
   @test occursin("as \"__pormg_distinct_count\"", _MR_QUOTE_SHAPES[3].second(_MR_PG))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL pattern lookups: LIKE keeps case, the i* lookups fold with LOWER
+# #1265: a column PormG creates compares code points, so `LIKE` keeps case; MySQL has no ILIKE, and a
+# `_ci` collation would also drop accents, so the case-insensitive lookups fold both sides with LOWER.
+# MySQL reads `\` in a literal as an escape, so the escape clause is `ESCAPE '\\'`. Expected: the SQL
+# below, the escaped value bound, and the PostgreSQL-only lookups refused with MySQL named.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL pattern lookups: LIKE keeps case, the i* lookups fold with LOWER" begin
+  where_of(pair) = (i = _mr_inspect(_MR_MY.Driver.objects.filter(pair)); (i[:sql_text], i[:parameters]))
+  sql, params = where_of("surname__@contains" => "en%n")
+  @test occursin("WHERE `Tb`.`surname` LIKE ? ESCAPE '\\\\'", sql) && params == ["%en\\%n%"]
+  sql, params = where_of("surname__@icontains" => "SEN")
+  @test occursin("WHERE LOWER(`Tb`.`surname`) LIKE LOWER(?) ESCAPE '\\\\'", sql) && params == ["%SEN%"]
+  sql, _ = where_of("surname__@istartswith" => "se")
+  @test occursin("LOWER(`Tb`.`surname`) LIKE LOWER(?)", sql)
+  sql, _ = where_of("surname__@nendswith" => "na")
+  @test occursin("`Tb`.`surname` NOT LIKE ? ESCAPE '\\\\'", sql)
+  sql, _ = where_of("surname__@niendswith" => "NA")
+  @test occursin("LOWER(`Tb`.`surname`) NOT LIKE LOWER(?)", sql)
+  # #634: case-insensitive equality binds its value verbatim, so a `%` is a character, not a wildcard.
+  sql, params = where_of("surname__@iexact" => "SEN%NA")
+  @test occursin("WHERE LOWER(`Tb`.`surname`) = LOWER(?)", sql) && params == ["SEN%NA"]
+  sql, _ = where_of("surname__@niexact" => "senna")
+  @test occursin("LOWER(`Tb`.`surname`) <> LOWER(?)", sql)
+  # The lookups the capability table says MySQL lacks are refused, naming MySQL.
+  for pair in ("surname__@iunaccent_contains" => "raik", "surname__@regex" => "^S")
+    err = try; _mr_inspect(_MR_MY.Driver.objects.filter(pair)); nothing; catch e; e; end
+    @test err isa PormG.BackendCapabilityError && occursin("which MySQL does not support", sprint(showerror, err))
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL LIMIT / OFFSET: bound values, and the no-limit spelling an OFFSET needs
+# MySQL has no standalone OFFSET and no negative "no limit" (#1271): an offset alone renders
+# `LIMIT 18446744073709551615 OFFSET ?`, the largest BIGINT UNSIGNED. Expected: that tail, the user's
+# values bound last (`:limit`), and `first()` / a sliced `count()` building on the same tail.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL LIMIT / OFFSET: bound values, and the no-limit spelling" begin
+  i = _mr_inspect(_MR_MY.Result.objects.filter("grid__@gt" => 3).values("points").offset(5))
+  @test occursin("LIMIT 18446744073709551615 \nOFFSET ?", i[:sql_text]) && i[:parameters] == Any[3, 5]
+  i = _mr_inspect(_MR_MY.Result.objects.values("points").limit(10).offset(20))
+  @test occursin("LIMIT ? \nOFFSET ?", i[:sql_text]) && i[:parameters] == Any[10, 20]
+  @test occursin("LIMIT ?", _MR_MY.Result.objects.order_by("points").first(show_query = :sql))
+  sliced = _MR_MY.Result.objects.filter("grid__@gt" => 3).limit(5).count(show_query = :sql)
+  @test occursin("LIMIT ?", sliced) && occursin("as `__pormg_sliced_count`", sliced)
+  # The other engines keep their own tails.
+  @test occursin("LIMIT -1", _mr_inspect(_MR_SL.Result.objects.values("points").offset(5))[:sql_text])
+  @test !occursin("LIMIT", _mr_inspect(_MR_PG.Result.objects.values("points").offset(5))[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL select_for_update: InnoDB row locks, and no_key refused
+# #1269: `FOR UPDATE [OF …] [NOWAIT | SKIP LOCKED]` as on PostgreSQL. MySQL has no lock that leaves
+# foreign-key checks free, so `no_key = true` raises BackendCapabilityError (`:no_key_locks`) instead
+# of silently taking the stronger lock. Expected: the clauses below; PostgreSQL still renders
+# `FOR NO KEY UPDATE`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL select_for_update: InnoDB row locks, and no_key refused" begin
+  lock_sql(M; kw...) = _mr_inspect(M.Result.objects.filter("grid" => 1).select_for_update(; kw...))[:sql_text]
+  @test occursin("FOR UPDATE", lock_sql(_MR_MY))
+  @test occursin("FOR UPDATE NOWAIT", lock_sql(_MR_MY; nowait = true))
+  @test occursin("FOR UPDATE SKIP LOCKED", lock_sql(_MR_MY; skip_locked = true))
+  err = try; lock_sql(_MR_MY; no_key = true); nothing; catch e; e; end
+  @test err isa PormG.BackendCapabilityError
+  @test occursin("select_for_update(no_key = true)", sprint(showerror, err)) &&
+        occursin("which MySQL does not support (supported on PostgreSQL)", sprint(showerror, err))
+  @test occursin("FOR NO KEY UPDATE", lock_sql(_MR_PG; no_key = true))
+  @test PormG._supports(MrMockPostgres(), :no_key_locks) && !PormG._supports(MrMockMySQL(), :no_key_locks)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL aggregates: a sum of integers is cast back to the integer it means
+# MySQL's SUM over an integer column is a DECIMAL (`SUM(INT)` and `SUM(BIGINT)` alike); the sum of
+# integers means an integer (Django's `Sum` of an integer field), so it renders
+# `CAST(SUM(x) AS SIGNED)`, and the type walk names the same `CInt64`. Expected: the cast on integer
+# operands only, in the SELECT and in a HAVING that filters on it; AVG/COUNT/MAX/MIN bare; the
+# PostgreSQL and SQLite renders unchanged.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL aggregates: a sum of integers is cast back to the integer it means" begin
+  sel(M, f) = _mr_inspect(M.Result.objects.values("driverid", "agg" => f))[:sql_text]
+  @test occursin("CAST(SUM(`Tb`.`grid`) AS SIGNED) as `agg`", sel(_MR_MY, Sum("grid")))
+  @test occursin("CAST(SUM(DISTINCT `Tb`.`laps`) AS SIGNED)", sel(_MR_MY, Sum("laps"; distinct = true)))
+  @test occursin("SUM(`Tb`.`points`) as `agg`", sel(_MR_MY, Sum("points")))
+  @test !occursin("CAST", sel(_MR_MY, Sum("points")))
+  @test occursin("AVG(`Tb`.`grid`) as `agg`", sel(_MR_MY, Avg("grid")))
+  @test occursin("COUNT(DISTINCT `Tb`.`grid`)", sel(_MR_MY, Count("grid"; distinct = true)))
+  @test occursin("MAX(`Tb`.`points`)", sel(_MR_MY, Max("points"))) && occursin("MIN(`Tb`.`grid`)", sel(_MR_MY, Min("grid")))
+  having = _mr_inspect(_MR_MY.Result.objects.values("driverid", "total" => Sum("grid")).filter("total__@gt" => 10))
+  @test occursin("HAVING CAST(SUM(`Tb`.`grid`) AS SIGNED) > ?", having[:sql_text]) && having[:parameters] == Any[10]
+  # The other engines never see the MySQL flag.
+  @test occursin("SUM(\"Tb\".\"grid\") as \"agg\"", sel(_MR_PG, Sum("grid"))) && !occursin("CAST", sel(_MR_PG, Sum("grid")))
+  @test occursin("SUM(\"Tb\".\"grid\") as \"agg\"", sel(_MR_SL, Sum("grid")))
+  # What MySQL computes, per operand, as the type walk reads it.
+  my = MrMockMySQL()
+  @test _MR_QB._computed_kind(Val(:SUM), :promoting, PormG.CInt32(), my) == PormG.CInt64()
+  @test _MR_QB._computed_kind(Val(:SUM), :promoting, PormG.CFloat64(), my) == PormG.CFloat64()
+  @test _MR_QB._computed_kind(Val(:AVG), :numeric, PormG.CInt64(), my) == PormG.CDecimal(nothing, nothing)
+  @test _MR_QB._computed_kind(Val(:AVG), :numeric, PormG.CDate(), my) === nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL NULL placement: always the sort key, never a silent native order
+# MySQL has no NULLS FIRST / NULLS LAST, so every term is emulated (`_emulates_nulls_order`). A term
+# that binds a value would have to be printed twice to be emulated, and the shared renderer prints it
+# bare there — MySQL's own NULL order — so MySQL refuses it instead (`:nulls_order`). Expected: the
+# key on a plain term, the key with a separate flag render, the refusal on a bare bound term, and the
+# clause renderer still calling the shared function the MySQL method extends.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL NULL placement: always the sort key, never a silent native order" begin
+  my = MrMockMySQL()
+  @test _MR_QB._order_term_sql("`Tb`.`position`", "DESC", :first, my) ==
+        "(`Tb`.`position` IS NULL) DESC, `Tb`.`position` DESC"
+  @test _MR_QB._order_term_sql("(`Tb`.`grid` + ?)", "ASC", :last, my; null_flag = "(`Tb`.`grid` + ?)") ==
+        "((`Tb`.`grid` + ?) IS NULL) ASC, (`Tb`.`grid` + ?) ASC"
+  err = try; _MR_QB._order_term_sql("(`Tb`.`grid` + ?)", "ASC", :last, my); nothing; catch e; e; end
+  @test err isa PormG.BackendCapabilityError && occursin("Ordering by an expression that binds a value", sprint(showerror, err))
+  # PostgreSQL keeps the native clause; the MySQL method is only MySQL's.
+  @test _MR_QB._order_term_sql("\"Tb\".\"grid\"", "ASC", :last, MrMockPostgres()) == "\"Tb\".\"grid\" ASC NULLS LAST"
+  # The clause renderer (`build_select.jl`, which this method does not live in) still calls the shared
+  # function, so a rename there cannot route MySQL past the refusal.
+  build_select = read(joinpath(pkgdir(PormG), "src", "querybuilder", "build_select.jl"), String)
+  @test occursin("_order_term_sql(order_expr, orientation, placement, instruc.connection", build_select)
+  @test occursin("ORDER BY (`position` IS NULL) DESC, `position` DESC",
+                 _mr_inspect(_MR_MY.Result.objects.values("position").order_by("-position"))[:sql_text])
 end

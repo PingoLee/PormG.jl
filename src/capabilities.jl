@@ -39,6 +39,8 @@ const _BACKEND_FEATURES = (
   :explain_options   => "an `EXPLAIN` option beyond the plain plan (`ANALYZE`, `BUFFERS`, `VERBOSE`)",
   :copy              => "`COPY` bulk loading",
   :advisory_locks    => "advisory locks",
+  # #1269: a row lock that still lets another transaction check a foreign key against the row.
+  :no_key_locks      => "a row lock weaker than `FOR UPDATE` that leaves foreign-key checks free (`FOR NO KEY UPDATE`)",
   # #1167: SQLite's `ROUND` has no negative precision — it reads one as 0, so `Round(125, -1)` would
   # answer `125.0` where it means `130`. Django's `Round` refuses it on SQLite the same way.
   :negative_round_precision => "rounding to a negative number of places (`Round(x, -1)`: tens, hundreds, …)",

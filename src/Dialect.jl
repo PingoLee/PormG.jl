@@ -5,7 +5,7 @@ import Tables
 # #648: `_parse_sqlite_decimal` builds a `Decimals.Decimal` through the three-argument constructor.
 import Decimals
 import Printf   # #1121: `_parse_sqlite_computed_decimal` rounds a double to 15 significant digits
-import PormG: PormGSettings, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, PormGModel, PormGField, PormGBackend, PormGPostgres, PormGSQLite, PormGAbstractType
+import PormG: PormGSettings, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeOper, SQLObject, PormGModel, PormGField, PormGBackend, PormGPostgres, PormGSQLite, PormGMySQL, PormGAbstractType
 # Semantic error taxonomy (#239). Dialect raises three categories:
 #   InvalidValueError          — a rendered value has the wrong Julia type ("must be a String"),
 #                                or SQL grammar PormG writes itself is outside what it parses
@@ -598,6 +598,22 @@ end
 function MIN(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return "MIN($(column))"
 end
+
+# MySQL (#1130). `SUM` over an integer is a DECIMAL there (`SUM(INT)` and `SUM(BIGINT)` alike), where
+# the sum of integers means an integer, so it is cast back (`integer`, set by the build from
+# `_sums_integers_as_decimal`). `AVG` over an integer or a decimal is a DECIMAL too, which the read
+# parser turns into the float or decimal it means (#1121). A boolean is a `TINYINT(1)`, so `MAX`/`MIN`
+# give "any true" / "all true" as they are. `COUNT` is a `BIGINT`.
+function SUM(column::String, format::Dict{String,Any}, conn::PormGMySQL)
+  sql = get(format, "distinct", false) ? "SUM(DISTINCT $(column))" : "SUM($(column))"
+  return get(format, "integer", false) === true ? "CAST($(sql) AS SIGNED)" : sql
+end
+AVG(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
+  get(format, "distinct", false) ? "AVG(DISTINCT $(column))" : "AVG($(column))"
+COUNT(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
+  get(format, "distinct", false) ? "COUNT(DISTINCT $(column))" : "COUNT($(column))"
+MAX(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "MAX($(column))"
+MIN(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "MIN($(column))"
 
 # SQLite has window functions from 3.25.0: a version row of the capability table (#1163), checked
 # against the library PormG loads, and refused below it with the version the table states.
@@ -2290,6 +2306,16 @@ end
 function for_update_clause(nowait::Bool, skip_locked::Bool, no_key::Bool, of_aliases::Vector{String}, conn::PormGSQLite)::String
   return ""  # SQLite: no row-level locking — silent no-op (documented divergence, #26)
 end
+# MySQL (#1269): InnoDB row locks, `OF` naming the aliases as on PostgreSQL (measured on 8.4: `OF`
+# takes the alias of an aliased table). It has no lock weaker than `FOR UPDATE` that still lets a
+# foreign key be checked against the row, so `no_key = true` asks for a lock MySQL cannot take, and is
+# refused: a plain `FOR UPDATE` would silently take the stronger one.
+function for_update_clause(nowait::Bool, skip_locked::Bool, no_key::Bool, of_aliases::Vector{String}, conn::PormGMySQL)::String
+  no_key && throw(_capability_error(conn, :no_key_locks, "select_for_update(no_key = true)"))
+  of_sql = isempty(of_aliases) ? "" : " OF " * join(of_aliases, ", ")
+  wait_sql = nowait ? " NOWAIT" : (skip_locked ? " SKIP LOCKED" : "")
+  return "FOR UPDATE$(of_sql)$(wait_sql) \n"
+end
 
 """
     limit_offset_clause(limit_sql, offset_sql, conn) -> String
@@ -2310,6 +2336,13 @@ end
 function limit_offset_clause(limit_sql::Union{Nothing,AbstractString},
                              offset_sql::Union{Nothing,AbstractString}, conn::PormGSQLite)::String
   (limit_sql === nothing && offset_sql !== nothing) && (limit_sql = "-1")
+  return _limit_offset_tail(limit_sql, offset_sql)
+end
+# MySQL's grammar has no standalone `OFFSET` either, and no negative "no limit": its documentation
+# spells one as the largest `BIGINT UNSIGNED` (#1271), as Django's MySQL backend does.
+function limit_offset_clause(limit_sql::Union{Nothing,AbstractString},
+                             offset_sql::Union{Nothing,AbstractString}, conn::PormGMySQL)::String
+  (limit_sql === nothing && offset_sql !== nothing) && (limit_sql = "18446744073709551615")
   return _limit_offset_tail(limit_sql, offset_sql)
 end
 _limit_offset_tail(limit_sql::Union{Nothing,AbstractString}, offset_sql::Union{Nothing,AbstractString})::String =
@@ -3844,6 +3877,37 @@ function niendswith(conn::PormGAbstractType, column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
+
+# ------------------------------------------------------------------------------
+# MySQL (#1130, #1265): the pattern lookups. What a comparison means rests on the column's collation:
+# a column PormG creates is `utf8mb4_0900_bin` (code points, no padding), so `LIKE` respects case as on
+# the other engines, and the session pins the same collation for a parameter compared with a parameter.
+# The case-insensitive lookups say so explicitly, `LOWER(col) LIKE LOWER(?)`, rather than leaning on a
+# collation: MySQL has no `ILIKE`, and a `_ci` collation would also ignore accents. MySQL reads a
+# backslash in a string literal as an escape (no `NO_BACKSLASH_ESCAPES` in the session), so the
+# escape character is written `'\\'`, the one-character string `\`; `'\'` would never terminate.
+# ------------------------------------------------------------------------------
+const _MYSQL_LIKE_ESCAPE = " ESCAPE '\\\\'"
+_mysql_like(column, value, negated::Bool) =
+  "$(column) $(negated ? "NOT LIKE" : "LIKE") $(value)$(_MYSQL_LIKE_ESCAPE)"
+_mysql_ilike(column, value, negated::Bool) =
+  "LOWER($(column)) $(negated ? "NOT LIKE" : "LIKE") LOWER($(value))$(_MYSQL_LIKE_ESCAPE)"
+
+contains(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, false)
+startswith(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, false)
+endswith(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, false)
+ncontains(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, true)
+nstartswith(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, true)
+nendswith(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, true)
+icontains(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, false)
+istartswith(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, false)
+iendswith(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, false)
+nicontains(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, true)
+nistartswith(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, true)
+niendswith(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, true)
+# #634's verbatim equality: `=` over folded text, so a user's `%` or `_` stays a character.
+iexact(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = "LOWER($(column)) = LOWER($(value))"
+niexact(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = "LOWER($(column)) <> LOWER($(value))"
 
 # ==============================================================================
 # MIGRATION HISTORY TABLE DDL

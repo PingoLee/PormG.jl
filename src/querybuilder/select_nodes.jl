@@ -146,25 +146,42 @@ function _refuse_shadowed_null_key_alias(object::SQLObject, instruc::SQLInstruct
   return nothing
 end
 
-# The column names of the tables in this statement's FROM clause: the base model's, each joined model's
-# (found by its table among the models of the base model's module), and each joined CTE's projections.
+# The column names of the tables in this statement's FROM clause: the base model's, each joined model's,
+# and each joined CTE's projections. A joined model is found by its table among the models the base
+# model reaches through its relations (forward and reverse, any depth, whatever module defines them),
+# the `cjoin_on` targets, and the models of the base model's module.
 function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{String}
   tables = Set{String}([Models.model_table_name(object.model)])
   for rj in instruc.row_join
     hasproperty(rj, :b) && push!(tables, String(getproperty(rj, :b)))
   end
+  candidates = PormGModel[object.model]
   for aj in values(object.alias_join)
     push!(tables, Models.model_table_name(aj.target))
+    push!(candidates, aj.target)
   end
-  cols = Set{String}()
   mod = isdefined(object.model, :_module) ? object.model._module : nothing
   if mod isa Module
     for n in names(mod; all = true)
-      isdefined(mod, n) || continue
-      m = getfield(mod, n)
-      m isa PormGModel && Models.model_table_name(m) in tables || continue
-      for (k, fld) in m.fields
-        push!(cols, Models.field_db_column(fld, k))
+      isdefined(mod, n) && (m = getfield(mod, n)) isa PormGModel && push!(candidates, m)
+    end
+  end
+  cols = Set{String}()
+  seen = Base.IdSet{PormGModel}()
+  while !isempty(candidates)
+    m = pop!(candidates)
+    m in seen && continue
+    push!(seen, m)
+    in_from = Models.model_table_name(m) in tables
+    for (k, fld) in m.fields
+      in_from && push!(cols, Models.field_db_column(fld, k))
+      to = hasproperty(fld, :to) ? getproperty(fld, :to) : nothing
+      to isa PormGModel && push!(candidates, to)
+    end
+    for rel in values(m.related_objects)
+      for name in propertynames(rel)
+        target = getproperty(rel, name)
+        target isa PormGModel && push!(candidates, target)
       end
     end
   end

@@ -217,7 +217,7 @@ if only_on(:mysql, "reads through the MySQL query builder (phase 2a)")
         end
 
         # What: aggregates read as the type their call means (Django's `output_field`, #1121).
-        # SQL: CAST(SUM(`grid`) AS SIGNED); SUM(`points`); AVG(`grid`); COUNT; MAX; MIN.
+        # SQL: (SUM(`grid`) DIV 1); SUM(`points`); AVG(`grid`); COUNT; MAX; MIN.
         # Why: MySQL sums integers to a DECIMAL and averages them to a DECIMAL with 4 decimals by default.
         @testset "aggregates read as the type their call means" begin
             row = M.Result.objects.values("g" => Sum("grid"), "p" => Sum("points"), "a" => Avg("grid"),
@@ -297,11 +297,27 @@ if only_on(:mysql, "reads through the MySQL query builder (phase 2a)")
         # SQL: none — division (phase 2b's `DIV`) and `create` (phase 3) fail before a statement is sent.
         # Why: a silent wrong answer is the failure #1130 exists to prevent.
         @testset "what 2a does not render fails before any SQL is sent" begin
+            # Each names the piece of the query builder MySQL does not have yet.
             e = try; M.Result.objects.values("half" => F("grid") / 2).list(); nothing; catch err; err; end
-            @test e isa MethodError
+            @test e isa MethodError && e.f === PormG.QueryBuilder._division_sql
             e = try; M.New_join_position.objects.create("description" => "x"); nothing; catch err; err; end
-            @test e isa MethodError
+            @test e isa MethodError && e.f === PormG.QueryBuilder._insert_returns_rows
             @test M.New_join_position.objects.count() == 3
+        end
+
+        # What: a DurationField compared, ordered or summed reaches the server and is rejected there.
+        # SQL: the millisecond form PormG writes for an engine with no interval type, which MySQL cannot
+        #      parse (`CAST(… AS INTEGER)`), so the statement fails whatever the rows hold.
+        # Why: what a DurationField stores on MySQL is phase 4's decision; until then a duration read
+        # must fail rather than answer.
+        @testset "a DurationField read is rejected by the server, not answered" begin
+            run("UPDATE `result` SET `fastestlaptime` = '00:01:20.500' WHERE `resultid` IN (1, 2)")
+            for q in (() -> M.Result.objects.order_by("fastestlaptime").values("resultid").list(),
+                      () -> M.Result.objects.filter("fastestlaptime__@gt" => Dates.Second(70)).values("resultid").list(),
+                      () -> M.Result.objects.values("t" => Sum("fastestlaptime")).list())
+                e = try; q(); nothing; catch err; err; end
+                @test e isa PormG.StatementError
+            end
         end
     finally
         for t in _MYR_TABLES

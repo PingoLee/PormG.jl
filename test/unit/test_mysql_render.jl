@@ -20,7 +20,7 @@ using Test
 using PormG
 using PormG.Models
 using Dates, UUIDs, Decimals, TimeZones
-import PormG.QueryBuilder: Sum, Avg, Count, Max, Min
+import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, Joined, F, CTE
 
 include(joinpath(@__DIR__, "helper_marker_alignment.jl"))
 
@@ -65,6 +65,26 @@ for (modname, key) in ((:MrMyModels, "mr_my"), (:MrPGModels, "mr_pg"), (:MrSLMod
   )
   PormG.Models.set_models(@__MODULE__, $key)
   end
+end
+
+# Two modules on their own MySQL key: `Lap`'s ForeignKey targets a model the base module does not
+# define, so the shadowed-alias guard must find `driver`'s columns through the relation.
+PormG.config["mr_my_cross"] = PormG.Configuration.Settings(connections = MrMockMySQL(), change_data = true,
+                                                           db_def_folder = "mr_my_cross")
+module MrMyCrossA
+import PormG
+import PormG.Models
+Driver = Models.Model(driverid = Models.IDField(), surname = Models.CharField(), nationality = Models.CharField())
+PormG.Models.set_models(@__MODULE__, "mr_my_cross")
+end
+module MrMyCrossB
+import PormG
+import PormG.Models
+import ..MrMyCrossA
+Lap = Models.Model(lapid = Models.IDField(),
+  driverid = Models.ForeignKey(MrMyCrossA.Driver, pk_field = "driverid", on_delete = "RESTRICT"),
+  position = Models.IntegerField(null = true))
+PormG.Models.set_models(@__MODULE__, "mr_my_cross")
 end
 
 const _MR_MY = MrMyModels
@@ -381,10 +401,27 @@ end
   @test !refused(_MR_MY.Result.objects.values("position").order_by("-position"))
   @test !refused(_MR_MY.Result.objects.values("surname" => "driverid__surname").order_by("surname"))
   @test !refused(_MR_MY.Result.objects.values("laps" => "position").order_by("resultid"))
+  # A CTE's projection and a `cjoin_on` table's column shadow the same way.
+  q = _MR_MY.Result.objects
+  q.with("br" => _MR_MY.Driver.objects.values("driverid", "surname"), join_field = "driverid" => "driverid")
+  @test refused(q.values("surname" => "position", "br_driver" => CTE("br", "driverid")).order_by("-surname"))
+  # Declared but not joined (nothing projects it), the CTE is not in FROM, so its names collide with nothing.
+  q = _MR_MY.Result.objects
+  q.with("br" => _MR_MY.Driver.objects.values("driverid", "surname"), join_field = "driverid" => "driverid")
+  @test !refused(q.values("surname" => "position", "resultid").order_by("-surname"))
+  q = _MR_MY.Result.objects.values("surname" => "position", "d_name" => Joined("d", "forename"))
+  q.cjoin_on("Driver", alias = "d", on = [Joined("d", "driverid") == F("driverid")])
+  @test refused(q.order_by("-surname"))
+  # A joined model defined in another module is found through the relation itself.
+  @test refused(MrMyCrossB.Lap.objects.values("surname" => "position", "driverid__nationality").order_by("-surname"))
+  @test !refused(MrMyCrossB.Lap.objects.values("pos2" => "position", "driverid__nationality").order_by("-pos2"))
   # The other engines build the shadowing shape: PostgreSQL places NULLs natively, and SQLite only
   # emulates below 3.30.
   @test !refused(_MR_PG.Result.objects.values("laps" => "position").order_by("-laps"))
   @test !refused(_MR_SL.Result.objects.values("laps" => "position").order_by("-laps"))
+  # A path MySQL does not render yet says so, rather than reporting a PormG bug.
+  msg = sprint(showerror, _MR_QB._unsupported_conn("date/interval arithmetic", MrMockMySQL()))
+  @test occursin("not rendered for MySQL yet", msg) && !occursin("PormG bug", msg)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

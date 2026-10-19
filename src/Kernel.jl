@@ -71,7 +71,12 @@ abstract type PormGMySQL <: PormGBackend end    # #1130, in progress: MySQL 8.4+
 const _SQLEngine = Union{PormGPostgres, PormGSQLite, PormGMySQL}
 abstract type AbstractPormGParam <: PormGAbstractType end  # Base type for all parameterized queries
 abstract type PormGPostgresParam <: AbstractPormGParam end  # PostgreSQL numbered params ($1, $2...)
-abstract type PormGSQLiteParam <: AbstractPormGParam end    # SQLite positional params with contextual buckets
+# Positional `?` markers, which bind in text order, so the values are collected per clause and
+# flattened in clause order (`_BUCKET_ORDER`). The buckets are the same on every positional engine;
+# what a value becomes on the wire is each engine's own (`add_parameter!`).
+abstract type PormGPositionalParam <: AbstractPormGParam end
+abstract type PormGSQLiteParam <: PormGPositionalParam end  # SQLite positional params with contextual buckets
+abstract type PormGMySQLParam <: PormGPositionalParam end   # MySQL positional params (#1130), the same buckets
 
 """
     PormGBytes(bytes::Vector{UInt8})
@@ -475,7 +480,8 @@ include("column_ir.jl")
 
 # Type hierarchy
 export PormGAbstractType, PormGSettings, PormGBackend, PormGPostgres, PormGSQLite, PormGMySQL,
-       AbstractPormGParam, PormGPostgresParam, PormGSQLiteParam, PormGBytes, PormGArrayLiteral,
+       AbstractPormGParam, PormGPostgresParam, PormGPositionalParam, PormGSQLiteParam, PormGMySQLParam,
+       PormGBytes, PormGArrayLiteral,
        SQLObject, SQLObjectHandler, SQLTableAlias, SQLInstruction,
        SQLType, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeFunction, SQLTypeOper,
        SQLTypeText, SQLTypeArrays, SQLTypeField, SQLTypeOrder, SQLTypeCTE, SQLTypeJoined,

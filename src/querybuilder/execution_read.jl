@@ -3,7 +3,7 @@
 # `last` / `earliest` / `latest` and `get`. Writes are in `execution_write.jl`, bulk writes in
 # `execution_bulk.jl`, and rendering an `F(...)` expression in `expression_render.jl`.
 
-function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing, PormGPostgres, PormGSQLite}, model::Union{PormGModel, String}, operation::Symbol;
+function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing, _SQLEngine}, model::Union{PormGModel, String}, operation::Symbol;
                           parameters::Union{Nothing, AbstractPormGParam} = nothing)
   
   if mode === :none
@@ -38,7 +38,7 @@ function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing
     dialect, bucketing = _inspection_dialect(connection)
     
     bucket_breakdown = Dict{Symbol, Vector{Any}}()
-    if parameters isa PormGSQLiteParam
+    if parameters isa PormGPositionalParam
       # Every slot `_BUCKET_ORDER` names, so a bucket added there is reported here without a second
       # list. This was a hand-written copy, and #46's `:limit` would have been missing from it.
       for ctx in _BUCKET_ORDER
@@ -104,7 +104,7 @@ inspection = q |> inspect_query()
 # :bucketing => :numbered
 ```
 """
-function inspect_query(q::SQLObjectHandler; connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, operation::Union{Nothing, Symbol} = nothing)
+function inspect_query(q::SQLObjectHandler; connection::Union{Nothing, _SQLEngine} = nothing, operation::Union{Nothing, Symbol} = nothing)
   # #43: inspection must not mutate the caller. The dry-runs below (query/insert/update)
   # write back onto the handler they build — q.object.parameters, the transient CTE "model"
   # into q.object.ctes, and update()'s auto-now fields into q.object.insert. Build on a copy
@@ -157,7 +157,7 @@ inspect_query(; kwargs...) = (objct) -> inspect_query(objct; kwargs...)
 # Django's meaning (#1049; it used to be the no-limit sentinel and returned every row). An offset of
 # `0` binds nothing because OFFSET 0 is a no-op anyway.
 function _limit_offset_sql(limit::Union{Nothing,Integer}, offset::Integer, parameters::AbstractPormGParam,
-                           connection::Union{PormGPostgres,PormGSQLite})::String
+                           connection::_SQLEngine)::String
   (limit === nothing && offset == 0) && return ""
   return with_bucket(parameters, :limit) do
     limit_sql = limit === nothing ? nothing : add_parameter!(parameters, limit)
@@ -324,7 +324,7 @@ end
 
 function query(q::SQLObjectHandler; 
   table_alias::Union{Nothing, SQLTableAlias} = nothing,
-  connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing,
+  connection::Union{Nothing, _SQLEngine} = nothing,
   parameters::Union{Nothing, AbstractPormGParam} = nothing,
   cte::Union{Nothing, CTEDict} = nothing,
   outer::Union{Nothing, SQLInstruction} = nothing,

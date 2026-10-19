@@ -214,7 +214,7 @@ const WindowColumnArg = Union{WindowColumnPart,AbstractString}
 const OptionalString = Union{String,Nothing}
 
 """Database connections."""
-const ConnType = Union{PormGSQLite,PormGPostgres,Nothing}
+const ConnType = Union{_SQLEngine,Nothing}
 
 # #1034 phase 3 step 2c — what the integer-division view (#1111) answers for a computed CTE column,
 # asked while the body could still resolve its paths: `divided`, the column divided

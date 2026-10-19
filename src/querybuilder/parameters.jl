@@ -37,8 +37,13 @@ end
 # pushes into the *active* bucket and always returns "?".  After all sections
 # are built, `get_final_parameters` concatenates the buckets in standard SQL
 # clause order so that the positional `?` markers line up with their values.
+#
+# MySQL (#1130) binds `?` positionally too, so it shares the buckets: the two collectors are one field
+# list under two names, and every bucket verb below is written once, on `PormGPositionalParam`. Only
+# `add_parameter!` — what a value becomes on the wire — is each engine's own.
 # ─────────────────────────────────────────────────────────────────────────────
-mutable struct SQLiteParameterizedQuery <: PormGSQLiteParam
+for (T, S) in ((:SQLiteParameterizedQuery, :PormGSQLiteParam), (:MySQLParameterizedQuery, :PormGMySQLParam))
+@eval mutable struct $T <: $S
   sql::String
   # Separate buckets for each SQL section — one per clause that can carry a `?`, in no particular
   # order here; `_BUCKET_ORDER` below is the clause order and the only list that must match the
@@ -64,16 +69,19 @@ mutable struct SQLiteParameterizedQuery <: PormGSQLiteParam
   # Active bucket selector
   current_context::Symbol
 
-  function SQLiteParameterizedQuery(sql::String="", current_context::Symbol=:where)
+  function $T(sql::String="", current_context::Symbol=:where)
     new(sql, Any[], Any[], Any[], Any[], Any[], Any[], Any[], Any[], Any[], current_context)
   end
 end
+end
+const _BucketedQuery = Union{SQLiteParameterizedQuery, MySQLParameterizedQuery}
 get_parameter(connection::PormGSQLite) = SQLiteParameterizedQuery()
+get_parameter(connection::PormGMySQL) = MySQLParameterizedQuery()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Bucket accessor helper – returns the vector for the current context
 # ─────────────────────────────────────────────────────────────────────────────
-function _current_bucket(sq::SQLiteParameterizedQuery)::Vector{Any}
+function _current_bucket(sq::_BucketedQuery)::Vector{Any}
   ctx = sq.current_context
   ctx === :cte && return sq.cte_params
   ctx === :select && return sq.select_params
@@ -102,7 +110,7 @@ Valid contexts: `:cte`, `:select`, `:update`, `:join`, `:where`, `:group`, `:hav
 For numbered-parameter backends (PostgreSQL) this is a no-op.
 """
 set_context!(::PormGPostgresParam, ::Symbol) = nothing   # no-op for Postgres
-function set_context!(sq::PormGSQLiteParam, context::Symbol)
+function set_context!(sq::PormGPositionalParam, context::Symbol)
   sq.current_context = context
   return nothing
 end
@@ -167,7 +175,7 @@ and every nested one, while a scope belongs to one instruction. And several stat
 with no instruction at all (the CTE clause, bulk, many-to-many, delete). A no-op on PostgreSQL.
 """
 with_bucket(f, ::PormGPostgresParam, ::Symbol) = f()
-function with_bucket(f, sq::PormGSQLiteParam, context::Symbol)
+function with_bucket(f, sq::PormGPositionalParam, context::Symbol)
   prev = sq.current_context
   sq.current_context = context
   try
@@ -196,7 +204,7 @@ with_bucket(f, instruc::SQLInstruction, context::Symbol) =
 const ParameterMark = Tuple{Union{Nothing,Vector{Any}},Int}
 
 _positional_bucket(::PormGPostgresParam) = nothing
-_positional_bucket(sq::PormGSQLiteParam) = _current_bucket(sq)
+_positional_bucket(sq::PormGPositionalParam) = _current_bucket(sq)
 _positional_bucket(instruc::SQLInstruction) =
   instruc.parameters === nothing ? nothing : _positional_bucket(instruc.parameters)
 
@@ -252,7 +260,7 @@ const _BUCKET_ORDER = (:cte, :select, :update, :join, :where, :group, :having, :
 # Deliberately mirrors `_current_bucket`'s fallback rather than defining its own: an unrecognized
 # context must land in the same bucket and warn the same way from both helpers, or a future bucket
 # added to one and not the other diverges silently.
-function _bucket_for(sq::PormGSQLiteParam, ctx::Symbol)::Vector{Any}
+function _bucket_for(sq::PormGPositionalParam, ctx::Symbol)::Vector{Any}
   ctx === :cte && return sq.cte_params
   ctx === :select && return sq.select_params
   ctx === :update && return sq.update_params
@@ -275,7 +283,7 @@ const NestedMark = Union{Nothing,NTuple{_N_BUCKETS,Int}}
 Record the length of every positional bucket. `nothing` on a numbered backend.
 """
 function nested_parameter_mark(sq)::NestedMark
-  sq isa PormGSQLiteParam || return nothing
+  sq isa PormGPositionalParam || return nothing
   return ntuple(i -> length(_bucket_for(sq, _BUCKET_ORDER[i])), _N_BUCKETS)
 end
 nested_parameter_mark(instruc::SQLInstruction)::NestedMark = nested_parameter_mark(instruc.parameters)
@@ -288,7 +296,7 @@ the order those values' markers actually render in.
 """
 function detach_nested_run!(sq, mark::NestedMark)::Vector{Any}
   mark === nothing && return Any[]
-  sq isa PormGSQLiteParam || return Any[]
+  sq isa PormGPositionalParam || return Any[]
   run = Any[]
   for (i, ctx) in enumerate(_BUCKET_ORDER)
     bucket = _bucket_for(sq, ctx)
@@ -307,7 +315,7 @@ detach_nested_run!(instruc::SQLInstruction, mark::NestedMark)::Vector{Any} =
 # object — it renders a CTE body before any instruction for the outer statement exists.
 function reattach_parameters!(sq::AbstractPormGParam, values::Vector{Any})
   isempty(values) && return nothing
-  sq isa PormGSQLiteParam || return nothing
+  sq isa PormGPositionalParam || return nothing
   append!(_current_bucket(sq), values)
   return nothing
 end
@@ -329,7 +337,7 @@ function bound_since(mark::ParameterMark)::Vector{Any}
 end
 
 copy_parameters_to!(::PormGPostgresParam, ::Symbol, ::Vector{Any}) = nothing
-function copy_parameters_to!(sq::PormGSQLiteParam, ctx::Symbol, values::Vector{Any})
+function copy_parameters_to!(sq::PormGPositionalParam, ctx::Symbol, values::Vector{Any})
   isempty(values) && return nothing
   append!(_bucket_for(sq, ctx), values)
   return nothing
@@ -442,6 +450,37 @@ function add_parameter!(sq::PormGSQLiteParam, value::PormGArrayLiteral; contains
   throw(BackendCapabilityError("An ArrayField value cannot be bound on SQLite: SQLite has no array type, and PormG does not emulate one. Run this model on PostgreSQL."))
 end
 
+# --- MySQL (#1130) – the same buckets, MySQL.jl's own values ---
+# MySQL.jl binds the native Julia types as themselves (measured in the phase-0 spike: integers,
+# floats, Bool, strings, bytes, Date, DateTime, Time, `missing`); the two it cannot bind, a
+# `Decimals.Decimal` and a `ZonedDateTime`, the extension converts at execution (`_bind_value`), so
+# the collector pushes the value it is given. MySQL has no array binding, so a list is one `?` per
+# element, as on SQLite. A UUID binds as its 36-character text, the `CHAR(36)` it is stored as (#1270).
+function add_parameter!(sq::PormGMySQLParam, value::AbstractArray; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)
+  contains && (throw(FilterError("Contains option is not supported for array parameters")))
+  for v in value
+    push!(_current_bucket(sq), _mysql_collect_value(v))
+  end
+  return join(fill("?", length(value)), ", ")
+end
+function add_parameter!(sq::PormGMySQLParam, value; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
+  contains && (value = _apply_like_wildcards(value, operator))
+  push!(_current_bucket(sq), _mysql_collect_value(value))
+  return "?"
+end
+function add_parameter!(sq::PormGMySQLParam, value::PormGBytes; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
+  contains && throw(FilterError("Contains option is not supported for binary parameters"))
+  push!(_current_bucket(sq), value.bytes)
+  return "?"
+end
+# MySQL has no array type either (#1270): refused, as on SQLite, with no connection at hand.
+function add_parameter!(sq::PormGMySQLParam, value::PormGArrayLiteral; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
+  throw(BackendCapabilityError("An ArrayField value cannot be bound on MySQL: MySQL has no array type, and PormG does not emulate one. Run this model on PostgreSQL."))
+end
+_mysql_collect_value(v::PormGBytes) = v.bytes
+_mysql_collect_value(v::UUIDs.UUID) = Models.format_uuid_sql(v)
+_mysql_collect_value(v) = v
+
 # #903: a scalar `Sockets.IPAddr` literal — `Value(ip"…")`, a `Value` operand, a `Case` branch — binds
 # as the text PostgreSQL prints for it (`format_inet_sql`: `::ffff:10.0.0.1`, not `Sockets`'
 # `::ffff:a00:1`), the text every network filter and write already binds. The `::inet` cast comes from
@@ -469,7 +508,7 @@ Return all collected parameter values in the order expected by the final SQL str
 """
 get_final_parameters(p::PormGPostgresParam)::Vector{Any} = p.parameters isa Vector{Any} ? p.parameters : collect(p.parameters)
 
-function get_final_parameters(p::PormGSQLiteParam)::Vector{Any}
+function get_final_parameters(p::PormGPositionalParam)::Vector{Any}
   # Driven from `_BUCKET_ORDER` rather than a second hand-written list. #432 added a consumer of
   # that same order (`detach_nested_run!`, which sorts a nested render's values into the order their
   # markers appear), and two copies of a clause order that must agree is exactly the drift a new
@@ -503,7 +542,7 @@ end
 # For SQLite with buckets, we provide this via `get_final_parameters`.
 # We define a custom `getproperty` so that `sq.parameters` returns the
 # concatenated vector in correct SQL order.
-function Base.getproperty(sq::SQLiteParameterizedQuery, name::Symbol)
+function Base.getproperty(sq::_BucketedQuery, name::Symbol)
   if name === :parameters
     return get_final_parameters(sq)
   elseif name === :parameter_count
@@ -519,7 +558,7 @@ function Base.getproperty(sq::SQLiteParameterizedQuery, name::Symbol)
   end
 end
 
-function Base.hasproperty(::SQLiteParameterizedQuery, name::Symbol)
+function Base.hasproperty(::_BucketedQuery, name::Symbol)
   return name in (:sql, :cte_params, :select_params, :update_params, :join_params, :where_params,
                   :group_params, :having_params, :order_params, :limit_params, :current_context, :parameter_count, :parameters)
 end
@@ -539,8 +578,8 @@ end
 _fork_parameters(pq::PgParameterizedQuery) =
   PgParameterizedQuery(pq.sql, collect(Any, pq.parameters), pq.parameter_count)
 
-function _fork_parameters(sq::SQLiteParameterizedQuery)
-  fork = SQLiteParameterizedQuery(sq.sql, sq.current_context)
+function _fork_parameters(sq::T) where {T<:_BucketedQuery}
+  fork = T(sq.sql, sq.current_context)
   # Every slot `_BUCKET_ORDER` names, so a bucket added there is forked here without a second list.
   for ctx in _BUCKET_ORDER
     slot = Symbol(ctx, :_params)
@@ -551,9 +590,9 @@ end
 
 # Deep copy support – `deepcopy` of a query or an instruction reaches the collector through the
 # generic walk; `test_parameters.jl` pins that the copy's buckets are independent.
-function Base.deepcopy_internal(sq::SQLiteParameterizedQuery, stackdict::IdDict)
-  haskey(stackdict, sq) && return stackdict[sq]::SQLiteParameterizedQuery
-  new_sq = SQLiteParameterizedQuery(sq.sql, sq.current_context)
+function Base.deepcopy_internal(sq::T, stackdict::IdDict) where {T<:_BucketedQuery}
+  haskey(stackdict, sq) && return stackdict[sq]::T
+  new_sq = T(sq.sql, sq.current_context)
   # Copy each bucket — every slot `_BUCKET_ORDER` names, so a bucket added there is copied here.
   for ctx in _BUCKET_ORDER
     slot = Symbol(ctx, :_params)

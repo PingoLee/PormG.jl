@@ -127,8 +127,8 @@ end
     "src/Dialect.jl" => 19,
     # A gap in PormG, not in the engine: SQLite has window frames, PormG does not render them there yet.
     "src/querybuilder/select_nodes.jl" => 1,
-    # SQLite's parameter collector, reached with no connection at hand (an ArrayField value).
-    "src/querybuilder/parameters.jl" => 1,
+    # SQLite's and MySQL's parameter collectors, reached with no connection at hand (an ArrayField value).
+    "src/querybuilder/parameters.jl" => 2,
     # A plan's statements the server cannot run (#1146): one refusal listing each, with its own way out;
     # the features and versions are the table's (#1163).
     "src/migrations/introspection.jl" => 1,

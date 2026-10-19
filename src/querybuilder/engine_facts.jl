@@ -22,6 +22,9 @@
 # on the server.
 _interval_as_ms(::PormGPostgres) = false
 _interval_as_ms(::PormGSQLite) = true
+# MySQL has no interval type either (#1130): until phase 2b spells its millisecond form, a duration in an
+# ordering or a comparison renders SQLite's, which MySQL rejects at the server, never a silent answer.
+_interval_as_ms(::PormGMySQL) = true
 
 # The engine stores a date as text, so `date ± x` with an operand PormG cannot type would do
 # arithmetic on the text — on SQLite, on its year (#882).
@@ -43,6 +46,7 @@ _cast_renders_text(field::PormGField, ::PormGSQLite) = _text_cast_on_sqlite(fiel
 # literal as PormG means it. SQLite's collector ignores a cast (`add_parameter!(::PormGSQLiteParam)`).
 _casts_bind_parameters(::PormGPostgres) = true
 _casts_bind_parameters(::PormGSQLite) = false
+_casts_bind_parameters(::PormGMySQL) = false   # MySQL.jl binds typed values; `?` takes no cast
 
 # An `INSERT` reports the row it wrote (`RETURNING`). SQLite deliberately does not use it: PormG reads
 # the row back out-of-band, because `RETURNING` can hang there for some table shapes (#48).
@@ -97,11 +101,15 @@ _greatest_skips_nulls(::PormGSQLite) = false
 # `:nulls_order` row (#1163); the fact is whether this engine falls back when the row says no.
 _emulates_nulls_order(::PormGPostgres) = false
 _emulates_nulls_order(conn::PormGSQLite) = !_supports(conn, :nulls_order)
+# MySQL has no `NULLS FIRST`/`NULLS LAST` at any version (measured on 8.4: a syntax error), so it always
+# falls back (#1271).
+_emulates_nulls_order(::PormGMySQL) = true
 
 # A list membership (`__@in`) binds the whole list as ONE array parameter (`= ANY($1)`), rather than
 # one placeholder per element.
 _binds_list_as_array(::PormGPostgres) = true
 _binds_list_as_array(::PormGSQLite) = false
+_binds_list_as_array(::PormGMySQL) = false   # no array binding: one `?` per element
 
 # A JSON path lookup extracts TEXT (`#>>`), so a value compared with it binds as text and an ordering
 # casts it to `numeric`. SQLite's `json_extract` keeps the JSON type, so a number stays a number.
@@ -111,3 +119,4 @@ _json_path_extracts_text(::PormGSQLite) = false
 # What `inspect_query` reports as the `:dialect` and the `:bucketing` of the parameters.
 _inspection_dialect(::PormGPostgres) = (:postgresql, :numbered)
 _inspection_dialect(::PormGSQLite) = (:sqlite, :positional)
+_inspection_dialect(::PormGMySQL) = (:mysql, :positional)

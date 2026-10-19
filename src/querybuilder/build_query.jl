@@ -130,7 +130,7 @@ end
 
 function build(object::SQLObject;
   table_alias::Union{Nothing,SQLTableAlias}=nothing,
-  connection::Union{Nothing,PormGPostgres,PormGSQLite}=nothing,
+  connection::Union{Nothing,_SQLEngine}=nothing,
   parameters::Union{Nothing,AbstractPormGParam}=nothing,
   outer::Union{Nothing,SQLInstruction}=nothing,
   # #1002: the statement only asks whether a row matches — an `EXISTS`, an `IN (…)`, a mutation scoped by

@@ -17,6 +17,7 @@ import PormG.Models: CharField, IntegerField, get_model_pk_field, sForeignKey, s
 import PormG: Dialect, Models
 import PormG: config
 import PormG: SQLType, PormGSettings, PormGSQLite, PormGPostgres, PormGSQLiteParam, PormGPostgresParam, AbstractPormGParam, SQLInstruction, SQLTypeF, SQLTypeFunction, SQLTypeOper, SQLTypeQ, SQLTypeQor, SQLObjectHandler, SQLObject, SQLTableAlias, SQLTypeText, SQLTypeOrder, SQLTypeField, SQLTypeArrays, SQLTypeCTE, SQLTypeJoined, PormGModel, PormGField, PormGTypeField, PormGAbstractType
+import PormG: PormGMySQL, PormGMySQLParam, PormGPositionalParam, _SQLEngine  # #1130 phase 2a: MySQL reads
 import PormG: PormGBytes  # binary payloads bind as one blob, not as an array of values (#296)
 import PormG: PormGArrayLiteral  # an ArrayField value binds as one array-literal parameter (#28)
 # Semantic error taxonomy (#231, #239). The types are defined in `src/exceptions.jl`, included by

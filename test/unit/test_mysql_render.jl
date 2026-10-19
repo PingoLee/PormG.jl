@@ -62,6 +62,7 @@ for (modname, key) in ((:MrMyModels, "mr_my"), (:MrPGModels, "mr_pg"), (:MrSLMod
     position = Models.IntegerField(null = true),
     points = Models.FloatField(),
     laps = Models.IntegerField(),
+    fastestlaptime = Models.DurationField(null = true),
   )
   PormG.Models.set_models(@__MODULE__, $key)
   end
@@ -82,7 +83,7 @@ import PormG
 import PormG.Models
 import ..MrMyCrossA
 Lap = Models.Model(lapid = Models.IDField(),
-  driverid = Models.ForeignKey(MrMyCrossA.Driver, pk_field = "driverid", on_delete = "RESTRICT"),
+  driverid = Models.ForeignKey(MrMyCrossA.Driver, pk_field = "driverid", on_delete = "RESTRICT", related_name = "laps"),
   position = Models.IntegerField(null = true))
 PormG.Models.set_models(@__MODULE__, "mr_my_cross")
 end
@@ -415,6 +416,8 @@ end
   # A joined model defined in another module is found through the relation itself.
   @test refused(MrMyCrossB.Lap.objects.values("surname" => "position", "driverid__nationality").order_by("-surname"))
   @test !refused(MrMyCrossB.Lap.objects.values("pos2" => "position", "driverid__nationality").order_by("-pos2"))
+  # … and through a reverse relation: `lap`, defined in the other module, has the `position` column.
+  @test refused(MrMyCrossA.Driver.objects.values("position" => "surname", "laps__lapid").order_by("-position"))
   # The other engines build the shadowing shape: PostgreSQL places NULLs natively, and SQLite only
   # emulates below 3.30.
   @test !refused(_MR_PG.Result.objects.values("laps" => "position").order_by("-laps"))
@@ -422,6 +425,28 @@ end
   # A path MySQL does not render yet says so, rather than reporting a PormG bug.
   msg = sprint(showerror, _MR_QB._unsupported_conn("date/interval arithmetic", MrMockMySQL()))
   @test occursin("not rendered for MySQL yet", msg) && !occursin("PormG bug", msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL DurationField filters: refused until its storage is decided
+# What a `DurationField` stores on MySQL is the migrations phase's decision, so an equality or a
+# membership would bind the `HH:MM:SS` text and the server would answer by whatever the column holds.
+# Expected: every comparison, a membership and a range on a duration column raise
+# UnsupportedConnectionError naming the filter, before any SQL; `IS NULL` builds; PostgreSQL and SQLite
+# build the same filters.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL DurationField filters: refused until its storage is decided" begin
+  refused(q) = try; _mr_inspect(q); false; catch e
+    e isa PormG.UnsupportedConnectionError && occursin("A DurationField filter is not rendered for MySQL yet", sprint(showerror, e))
+  end
+  for pair in ("fastestlaptime" => Second(80), "fastestlaptime__@ne" => Second(80),
+               "fastestlaptime__@in" => [Second(80), Second(90)], "fastestlaptime__@gt" => Minute(1),
+               "fastestlaptime__@range" => [Minute(1), Minute(2)])
+    @test (pair.first, refused(_MR_MY.Result.objects.filter(pair))) == (pair.first, true)
+    @test (pair.first, refused(_MR_PG.Result.objects.filter(pair))) == (pair.first, false)
+    @test (pair.first, refused(_MR_SL.Result.objects.filter(pair))) == (pair.first, false)
+  end
+  @test occursin("IS NULL", _mr_inspect(_MR_MY.Result.objects.filter("fastestlaptime__@isnull" => true))[:sql_text])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

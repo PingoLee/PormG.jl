@@ -34,7 +34,7 @@ _unsupported_conn(op::AbstractString, conn) = UnsupportedConnectionError(
 # #1130: on MySQL these paths are a gap of a backend still being built, not a bug: say which.
 _unsupported_conn(op::AbstractString, conn::PormGMySQL) = UnsupportedConnectionError(
   "$(op) is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query " *
-  "builder arrives in a later phase (#1130). Nothing was sent to the server.")
+  "builder arrives in a later phase (#1130).")
 
 # Standard actionable error for a write blocked by `change_data: false` (#205), typed as
 # `WritesDisabledError` (#231, renamed from `PermissionError` in the pre-publish naming pass). Every DML entry point (insert, update, delete, update_or_create,

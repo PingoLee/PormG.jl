@@ -26,6 +26,13 @@ _interval_as_ms(::PormGSQLite) = true
 # ordering or a comparison renders SQLite's, which MySQL rejects at the server, never a silent answer.
 _interval_as_ms(::PormGMySQL) = true
 
+# A `DurationField` can be filtered: the engine has a decided storage for it (PostgreSQL `interval`,
+# SQLite the `HH:MM:SS` text PormG writes). MySQL's is phase 4's decision (#1130), so every duration
+# filter but `IS NULL` is refused there until then.
+_filters_durations(::PormGPostgres) = true
+_filters_durations(::PormGSQLite) = true
+_filters_durations(::PormGMySQL) = false
+
 # The engine stores a date as text, so `date ± x` with an operand PormG cannot type would do
 # arithmetic on the text — on SQLite, on its year (#882).
 _stores_date_as_text(::PormGPostgres) = false

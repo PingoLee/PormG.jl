@@ -305,19 +305,25 @@ if only_on(:mysql, "reads through the MySQL query builder (phase 2a)")
             @test M.New_join_position.objects.count() == 3
         end
 
-        # What: a DurationField compared, ordered or summed reaches the server and is rejected there.
-        # SQL: the millisecond form PormG writes for an engine with no interval type, which MySQL cannot
-        #      parse (`CAST(… AS INTEGER)`), so the statement fails whatever the rows hold.
+        # What: a DurationField filter is refused before any SQL; an ordering or a sum over one reaches the
+        # server and is rejected there; IS NULL works.
+        # SQL: none for a filter; for an ordering or a sum, the millisecond form PormG writes for an engine
+        #      with no interval type, which MySQL cannot parse (`CAST(… AS INTEGER)`), whatever the rows hold.
         # Why: what a DurationField stores on MySQL is phase 4's decision; until then a duration read
         # must fail rather than answer.
-        @testset "a DurationField read is rejected by the server, not answered" begin
+        @testset "a DurationField read fails rather than answers" begin
             run("UPDATE `result` SET `fastestlaptime` = '00:01:20.500' WHERE `resultid` IN (1, 2)")
+            for pair in ("fastestlaptime" => Dates.Second(80), "fastestlaptime__@in" => [Dates.Second(80)],
+                         "fastestlaptime__@gt" => Dates.Second(70))
+                e = try; M.Result.objects.filter(pair).values("resultid").list(); nothing; catch err; err; end
+                @test e isa PormG.UnsupportedConnectionError && occursin("not rendered for MySQL yet", msg(e))
+            end
             for q in (() -> M.Result.objects.order_by("fastestlaptime").values("resultid").list(),
-                      () -> M.Result.objects.filter("fastestlaptime__@gt" => Dates.Second(70)).values("resultid").list(),
                       () -> M.Result.objects.values("t" => Sum("fastestlaptime")).list())
                 e = try; q(); nothing; catch err; err; end
                 @test e isa PormG.StatementError
             end
+            @test M.Result.objects.filter("fastestlaptime__@isnull" => false).count() == 2
         end
     finally
         for t in _MYR_TABLES

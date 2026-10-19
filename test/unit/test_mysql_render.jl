@@ -19,7 +19,7 @@
 using Test
 using PormG
 using PormG.Models
-using Dates, UUIDs, Decimals
+using Dates, UUIDs, Decimals, TimeZones
 import PormG.QueryBuilder: Sum, Avg, Count, Max, Min
 
 include(joinpath(@__DIR__, "helper_marker_alignment.jl"))
@@ -356,8 +356,33 @@ end
   @test _MR_QB._order_term_sql("\"Tb\".\"grid\"", "ASC", :last, MrMockPostgres()) == "\"Tb\".\"grid\" ASC NULLS LAST"
   # The clause renderer (`build_select.jl`, which this method does not live in) still calls the shared
   # function, so a rename there cannot route MySQL past the refusal.
-  build_select = read(joinpath(pkgdir(PormG), "src", "querybuilder", "build_select.jl"), String)
+  build_select = read(joinpath(@__DIR__, "..", "..", "src", "querybuilder", "build_select.jl"), String)
   @test occursin("_order_term_sql(order_expr, orientation, placement, instruc.connection", build_select)
   @test occursin("ORDER BY (`position` IS NULL) DESC, `position` DESC",
                  _mr_inspect(_MR_MY.Result.objects.values("position").order_by("-position"))[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL read parsers: what MySQL.jl delivers, turned into what the kind means
+# #1270: the wire has no boolean (a `TINYINT(1)` reads as `Int8`, a comparison as `Int64`); a
+# DATETIME has no zone and the session is UTC; `AVG` over an integer is a DECIMAL that means a float
+# (#1121). Expected: those three parsed, every parser fail-open on a value it does not recognize, and
+# no parser for the kinds MySQL.jl already delivers typed (a date, a time, a naive datetime, a decimal
+# column) or that have no MySQL storage yet (an interval).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL read parsers: what MySQL.jl delivers, turned into what the kind means" begin
+  my = MrMockMySQL()
+  parse_bool = PormG.value_parser(PormG.CBool(), my)
+  @test parse_bool(Int8(1)) === true && parse_bool(Int8(0)) === false && parse_bool(Int64(1)) === true
+  @test parse_bool(missing) === missing && parse_bool(Int8(2)) === Int8(2)
+  parse_ts = PormG.value_parser(PormG.CDateTime(true), my)
+  @test parse_ts(DateTime(1991, 3, 10, 14, 0, 0, 125)) == ZonedDateTime(DateTime(1991, 3, 10, 14, 0, 0, 125), tz"UTC")
+  @test parse_ts(missing) === missing
+  @test PormG.value_parser(PormG.CDateTime(false), my) === nothing
+  parse_float = PormG.value_parser(PormG.CFloat64(), my)
+  @test parse_float(Decimal(0, 16666666666666666666666666666667, -31)) === 1.6666666666666667
+  @test parse_float(2.5) === 2.5
+  for kind in (PormG.CDate(), PormG.CTime(), PormG.CInterval(), PormG.CDecimal(10, 2), PormG.CText(), PormG.CInt64())
+    @test (kind, PormG.value_parser(kind, my)) == (kind, nothing)
+  end
 end

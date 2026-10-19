@@ -266,6 +266,11 @@ delivers a `Bool` (#953, #965). Only `0` and `1` are read; any other value is re
 _parse_sqlite_bool(v::Integer) = (v === true || v === false) ? v : v == 1 ? true : v == 0 ? false : v
 _parse_sqlite_bool(v::Any) = v
 
+# MySQL (#1130): a DATETIME carries no zone, and the extension pins every session to UTC (`time_zone =
+# '+00:00'`), which is also the zone a `ZonedDateTime` is bound in. Fail-open like every parser here.
+_parse_mysql_utc_datetime(v::DateTime) = ZonedDateTime(v, tz"UTC")
+_parse_mysql_utc_datetime(v::Any) = v
+
 # `HH:MM:SS` with an optional fraction and an optional leading sign — the shape
 # `Models._duration_nanoseconds_to_string` writes.
 const _SQLITE_INTERVAL = r"^([+-]?)(\d+):(\d{2}):(\d{2})(?:\.(\d{1,9}))?$"

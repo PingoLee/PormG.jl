@@ -59,6 +59,9 @@ const STRUCTURED_TYPES = (
 
 # The abstract mid-nodes. Each groups its concrete leaves so `catch <node>` has no holes.
 const TAXONOMY_ABSTRACT = (
+    # #1238: the refusal umbrella — "PormG refused the call", over FieldAccessError and the four
+    # concrete query-side refusals. Its membership is pinned in test_usage_error.jl.
+    PormG.UsageError,
     PormG.FieldAccessError, PormG.ConfigurationError, PormG.MigrationError,
     # #261: the pool errors were the only concrete subtypes with neither a Kernel home nor an
     # abstract supertype in Kernel. `PoolError` closes that gap.
@@ -144,6 +147,26 @@ end
         # …and the buckets stay disjoint: a config error is not a migration error.
         @test !(PormG.InvalidConfigurationError <: PormG.MigrationError)
         @test !(PormG.InvalidMigrationError <: PormG.ConfigurationError)
+
+        # #1238: the refusal umbrella holds the field-access node and the query-side refusals,
+        # and stays disjoint from every family whose remedy is not "change the call" — an app's
+        # `UsageError → 400` handler must not answer a bad request to the database, the pool,
+        # the configuration, the backend's feature set or the data.
+        @test PormG.FieldAccessError <: PormG.UsageError
+        @test PormG.FilterError <: PormG.UsageError
+        @test PormG.InvalidValueError <: PormG.UsageError
+        @test PormG.QueryBuildError <: PormG.UsageError
+        @test PormG.UnsafeMutationError <: PormG.UsageError
+        for T in (PormG.DatabaseError, PormG.PoolError, PormG.ConfigurationError,
+                  PormG.MigrationError, PormG.DefinitionError)
+            @test !(T <: PormG.UsageError)
+            @test !(PormG.UsageError <: T)
+        end
+        for T in (PormG.BackendCapabilityError, PormG.ProtectedError,
+                  PormG.UnsupportedConnectionError, PormG.TransactionError,
+                  PormG.DoesNotExist, PormG.MultipleObjectsReturned)
+            @test !(T <: PormG.UsageError)
+        end
     end
 
     @testset "clean break — NOT <: ArgumentError" begin
@@ -163,6 +186,7 @@ end
         # the types are defined in `Kernel`, and `QueryBuilder` imports them from `PormG` — so
         # this also pins that there is exactly ONE set of types, not a shadowed second copy.
         @test PormGError === PormG.PormGError
+        @test UsageError === PormG.UsageError
         @test FieldAccessError === PormG.FieldAccessError
         @test UnknownFieldError === PormG.UnknownFieldError
         @test AmbiguousFieldError === PormG.AmbiguousFieldError

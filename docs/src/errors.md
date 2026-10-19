@@ -209,8 +209,45 @@ catch e
 end
 ```
 
-The umbrellas are `FieldAccessError`, `DefinitionError`, `ConfigurationError`, `MigrationError`,
-`PoolError` and `DatabaseError`, all under `PormGError`.
+The umbrellas are `UsageError` (with `FieldAccessError` inside it), `DefinitionError`,
+`ConfigurationError`, `MigrationError`, `PoolError` and `DatabaseError`, all under `PormGError`.
+
+### Refusing a bad request
+
+`UsageError` is the umbrella for "PormG refused the call for what it asked": `FieldAccessError`
+and its three cases, `FilterError`, `QueryBuildError`, `UnsafeMutationError` and
+`InvalidValueError`, not because the database failed. The remedy is to change the call, so it is
+the type a web handler maps to a bad request:
+
+```julia
+function results_from(min_points)
+    try
+        return M.Result.objects.filter("points__@gte" => min_points).values("resultid", "points").list()
+    catch e
+        e isa UsageError || rethrow()
+        return (status = 400, error = error_message(e))
+    end
+end
+
+results_from("lots")   # (status = 400, error = "Error in filter, field `points` …")
+```
+
+Catch the umbrella rather than the concrete type. A value refusal was a `FilterError` until #971
+and #988 made it an `InvalidValueError`: a handler that named `FilterError` stopped matching, and
+one that named `UsageError` did not notice. `PormGError` is too wide for this job — it also catches
+a dropped connection, an exhausted pool and a wrong `connection.yml`, none of which is the
+caller's fault.
+
+What is **not** inside it: `ProtectedError` (the *data* forbids a delete), `BackendCapabilityError`
+(the backend lacks the feature — a deployment problem, not a bad request),
+`UnsupportedConnectionError` (a PormG bug) and the `DatabaseError` family.
+
+Most `UsageError`s are raised while the query is built, before anything is sent, but not all: a
+bulk write checks each row as it goes, so a bad later row is refused after earlier chunks were
+sent, and `delete()` may already have run its cascade statements. Without a transaction of yours,
+the call's own transaction rolls them back. Inside `run_in_transaction` they are yours to roll
+back: a block that catches the `UsageError` and returns normally **commits** them, so rethrow it,
+or catch it outside the block.
 
 `DatabaseError` is the boundary worth understanding: it means the statement **reached** the
 database and was refused there. A value PormG rejects before sending — a null on a non-null field,

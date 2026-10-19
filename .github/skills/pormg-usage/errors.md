@@ -8,9 +8,11 @@ or need to know what a call raises. Full detail:
 ## The one rule
 
 **Every failure PormG raises about your query, data, models, configuration or database is a
-subtype of `PormGError`, and none of them is an `ArgumentError`.** Catch `PormGError`, or a specific
-subtype, and read the text with `error_message(e)`. The exceptions are mistakes in the call itself:
-a wrong argument type, or `upgrade_guide()` without `from =`, or a non-literal
+subtype of `PormGError`, and none of them is an `ArgumentError`.** Catch `PormGError`, an
+umbrella, or a specific subtype, and read the text with `error_message(e)`. To turn a refusal of
+the caller's input into a bad request, catch the `UsageError` umbrella (below), not the concrete
+type: refusals have moved between its members across releases. The exceptions are mistakes in the
+call itself: a wrong argument type, or `upgrade_guide()` without `from =`, or a non-literal
 `@import_models` path. Those raise Julia's own exceptions (`MethodError`, `ArgumentError`,
 `UndefKeywordError`) and should be fixed, not caught.
 
@@ -37,15 +39,16 @@ end
 
 ```
 PormGError
-├── FieldAccessError            (umbrella)
-│   ├── UnknownFieldError       field / alias / __ path does not exist (lookups are case-sensitive)
-│   ├── AmbiguousFieldError     a __ path's first segment names both a CTE and a model field
-│   └── LazyTraversalError      read an unprojected ForeignKey off a row — project it in values()
-├── FilterError                 malformed predicate (e.g. a 2-column __@in subquery)
-├── QueryBuildError             the long-tail "invalid query shape" bucket
-├── UnsafeMutationError         update/delete with no filter, or another shape an UPDATE/DELETE can't express
+├── UsageError                  (umbrella) PormG refused the call for what it asked — change the call
+│   ├── FieldAccessError        (umbrella)
+│   │   ├── UnknownFieldError   field / alias / __ path does not exist (lookups are case-sensitive)
+│   │   ├── AmbiguousFieldError a __ path's first segment names both a CTE and a model field
+│   │   └── LazyTraversalError  read an unprojected ForeignKey off a row — project it in values()
+│   ├── FilterError             malformed predicate (e.g. a 2-column __@in subquery)
+│   ├── QueryBuildError         the long-tail "invalid query shape" bucket
+│   ├── UnsafeMutationError     update/delete with no filter, or another shape an UPDATE/DELETE can't express
+│   └── InvalidValueError       a VALUE was refused (text in a number column, null on non-null, bad alias, bad interval, …)
 ├── ProtectedError              delete refused: rows still reference it through PROTECT/RESTRICT
-├── InvalidValueError           a VALUE failed validation on insert/update (null on non-null, bad alias, …)
 ├── BackendCapabilityError      the backend cannot do it (PostgreSQL-only feature on SQLite)
 ├── UnsupportedConnectionError  internal dispatch bug — report it
 ├── DoesNotExist                get() matched nothing
@@ -72,7 +75,22 @@ PormGError
 └── TransactionError            the transaction API was misused (durable=true nested, wrong connection)
 ```
 
-Catch an umbrella for a category, and a leaf for a specific reaction:
+Catch an umbrella for a category, and a leaf for a specific reaction. `UsageError` is the one for
+"answer a bad request": `ProtectedError` (the data forbids it), `BackendCapabilityError` (a
+deployment problem) and the `DatabaseError` family are deliberately outside it.
+
+```julia
+try
+    M.Result.objects.filter("points__@gte" => user_supplied).list()
+catch e
+    e isa UsageError || rethrow()                      # not FilterError / InvalidValueError by name
+    return bad_request(error_message(e))
+end
+```
+
+Inside `run_in_transaction`, rethrow a `UsageError` or catch it outside the block: a bulk write or a
+`delete()` can refuse after some of its statements ran, and a block that returns normally commits
+them.
 
 ```julia
 try

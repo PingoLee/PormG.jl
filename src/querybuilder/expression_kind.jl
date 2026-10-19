@@ -10,7 +10,8 @@
 # - `_ReadKinds` — the #564 READ kind, as the per-shape readers answered it before this file existed:
 #   what `_operand_kind` and `_function_projection_kind` answer (the expression-kind matrix pins every
 #   cell). The read path itself no longer asks it — it reads `_read_kind`, a view of `_MeaningKinds`
-#   (#1034 step 3, below) — and its remaining readers are the comparison binder (step 4), and the
+#   (#1034 step 3, below), and the binder's formatter is a view of `_AllKinds` (step 4) — and its
+#   remaining readers are the comparison binder's number and interval sides (`_operand_kind`), and the
 #   render's arithmetic and interval typing (`_side_kind`, `_side_function_kind`, the function arm of
 #   `_render_interval_operand`) and `Concat`'s temporal check (`_textless_temporal`), which step 5 moves. A column has a kind only when the representation table
 #   owns one (`field_canonical_kind`: temporal, decimal, array — no integer, float, text or boolean,
@@ -83,7 +84,7 @@ function _infer_kind(p::SubqueryObject, instruc::SQLInstruction, policy::_EveryK
   recorded = instruc.subquery_all_kinds === nothing ? nothing : get(instruc.subquery_all_kinds, p, nothing)
   return recorded === nothing ? _subquery_kind(p, instruc) : recorded
 end
-# A predicate is a boolean. The read kind leaves it to the formatter bridge (#965), as before.
+# A predicate is a boolean. The read kind leaves it to the formatter bridge (#965), which reads it here.
 _infer_kind(::Union{ExistsObject,SQLTypeQ,SQLTypeQor}, ::SQLInstruction, ::_EveryKind) = CBool()
 _infer_kind(::Any, ::SQLInstruction, ::_KindPolicy) = nothing
 
@@ -178,6 +179,19 @@ _kind_field(::CInterval) = Models.DurationField()
 _kind_field(::CUUID) = Models.UUIDField()
 _kind_field(::CJSON) = Models.JSONField()
 _kind_field(::Any) = nothing
+# #1034 step 4 — the formatter view: what a value compared with an expression of kind `k` must
+# satisfy (`_expression_formatter`, `projection_types.jl`). A number of any width takes the number
+# formatter and any text the text one; a date, timestamp, time, interval or decimal takes the
+# representation table's (`value_formatter`, the field formatters themselves). An array names none:
+# its formatter holds the element field's rules, which only a column has. An instruction over a
+# declaration alone has no engine to ask, and names none either.
+_kind_formatter(::CBool, ::SQLInstruction) = Models.format_bool_sql
+_kind_formatter(::Union{CInt16,CInt32,CInt64,CFloat64}, ::SQLInstruction) = Models.format_number_sql
+_kind_formatter(::Union{CText,CVarChar}, ::SQLInstruction) = Models.format_text_sql
+_kind_formatter(::CArray, ::SQLInstruction) = nothing
+_kind_formatter(k::CanonicalType, instruc::SQLInstruction) =
+  instruc.connection === nothing ? nothing : value_formatter(k, instruc.connection)
+_kind_formatter(::Nothing, ::SQLInstruction) = nothing
 # The family a field and a kind agree on: every integer width is one, and so is every text, every
 # decimal width and both timestamps; any other kind is its own.
 _kind_family(::Union{CInt16,CInt32,CInt64}) = CInt64
@@ -497,10 +511,9 @@ function _read_view(k, x, instruc::SQLInstruction)
   end
   if x isa Union{FObject,WindowFunction}
     # #965: a function's boolean is the one its FORMATTER names (`_is_boolean_valued`), as the render's
-    # is: #953 renders PostgreSQL's `BOOL_OR` for an extremum only over a boolean-formatted operand, and
-    # the formatter types no bare `Q(…)` operand (`Max(Q(…))`, `Coalesce(Q(…), false)` render as
-    # numbers there). The read kind follows that render until #1034 step 4 moves the formatter onto
-    # the walk, and the render with it.
+    # is: #953 renders PostgreSQL's `BOOL_OR` for an extremum only over a boolean-formatted operand.
+    # Since #1034 step 4 the formatter is a view of this walk, so a condition as an operand is one
+    # (`Max(Q(…))`, `Coalesce(Q(…), false)`), and the read kind, the render and the binder agree on it.
     _is_boolean_valued(x, instruc) && return CBool()
     k isa CBool && return nothing
   end
@@ -596,7 +609,7 @@ _numeric_meaning_record(x, ::SQLInstruction, ::Union{_ReadKinds,_AllKinds}) = no
 _without_numeric_read(k) = _numeric_view(k) === nothing ? k : nothing
 
 # A `Case` with no `output_field`: its value is a branch's, so it has the kind its `then` values and
-# its default agree on. A branch value that is a string is a literal, not a path (`_boolean_case`).
+# its default agree on. A branch value that is a string is a literal, not a path (#965).
 function _case_kind(p::FObject, instruc::SQLInstruction, policy::_EveryKind)
   values = Any[]
   for branch in (p.column isa AbstractVector ? p.column : (p.column,))

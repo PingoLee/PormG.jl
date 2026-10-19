@@ -160,7 +160,7 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
   end
 
   isempty(instruction.order) || print(io, "ORDER BY ", join(instruction.order, ", "), "\n")
-  keep_values && print(io, ") as \"__pormg_exists\"\n")
+  keep_values && print(io, ") as ", quote_identifier("__pormg_exists", instruction.connection), "\n")
   print(io, probe_limit == 0 ? "LIMIT 0" : "LIMIT 1")
   isempty(offset_clause) || print(io, " ", offset_clause)
   print(io, ")")

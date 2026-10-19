@@ -160,3 +160,77 @@ const _MR_ALIGN_SHAPES = [
     @test (label, count(==('?'), my[:sql_text])) == (label, length(my[:parameters]))
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL quoting: backticks on both axes, with each axis's own rule
+# MySQL reads `"x"` as a string unless the session sets ANSI_QUOTES, which PormG never depends on
+# (#1271). Expected: an alias is backticked and still validated fail-closed (#394), a physical table or
+# column is backticked and only escaped (a backtick doubled, a double quote kept as a character), and
+# PostgreSQL / SQLite keep their double quotes.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL quoting: backticks on both axes, with each axis's own rule" begin
+  my, pg, sl = MrMockMySQL(), MrMockPostgres(), MrMockSQLite()
+  @test _MR_QB.quote_identifier("Tb_1", my) == "`Tb_1`"
+  @test_throws PormG.InvalidValueError _MR_QB.quote_identifier("Tb`; DROP", my)
+  @test _MR_QB.safe_table_identifier("weird`table", my) == "`weird``table`"
+  @test _MR_QB.safe_column_identifier("a\"b", my) == "`a\"b`"
+  @test _MR_QB.quote_identifier("Tb_1", pg) == "\"Tb_1\"" && _MR_QB.quote_identifier("Tb_1", sl) == "\"Tb_1\""
+  @test _MR_QB.safe_table_identifier("weird\"table", sl) == "\"weird\"\"table\""
+  # #74's fan-out guard reads the alias back out of a rendered column, in either quoting.
+  @test _MR_QB._extract_leading_alias("`Tb_1`.`points`") == "Tb_1"
+  @test _MR_QB._extract_leading_alias("`T``b`.*") == "T`b"
+  @test _MR_QB._extract_leading_alias("\"Tb_1\".\"points\"") == "Tb_1"
+  @test _MR_QB._extract_leading_alias("`Tb_1`.`points` + 1") === nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL read: no identifier is double-quoted anywhere in the statement
+# The silent case is an ORDER BY on a projection alias: `ORDER BY "points"` orders every row by the
+# same constant string on MySQL. Expected: for each shape — joins, an alias ordering, the count and
+# exists forms with their derived-table aliases, EXISTS, a CTE, `cjoin_on`, `on()` — the SQL holds no
+# `"` at all, and the ordering names the alias in backticks.
+# ─────────────────────────────────────────────────────────────────────────────
+const _MR_QUOTE_SHAPES = [
+  "a join, projected, ordered by an alias" => M ->
+    _mr_inspect(M.Result.objects.filter("driverid__surname" => "Senna").
+      values("pts" => "points", "driverid__surname").order_by("-pts"))[:sql_text],
+  "count()" => M -> M.Result.objects.filter("grid__@gt" => 3).count(show_query = :sql),
+  "distinct().count(), a derived table" => M ->
+    M.Result.objects.filter("grid__@gt" => 3).distinct().count(show_query = :sql),
+  "a projected count, a derived table" => M ->
+    M.Result.objects.values("driverid").distinct().count(show_query = :sql),
+  "exists()" => M -> M.Result.objects.filter("grid__@gt" => 3).exists(show_query = :sql),
+  "Exists(…) with OuterRef" => M ->
+    _mr_inspect(M.Driver.objects.filter(Exists(M.Result.objects.filter(
+      "driverid" => OuterRef("driverid"), "grid" => 1))))[:sql_text],
+  "a CTE joined on a key" => M -> begin
+    q = M.Result.objects
+    q.with("br" => M.Driver.objects.filter("nationality" => "Brazilian").values("driverid", "surname"),
+           join_field = "driverid" => "driverid")
+    _mr_inspect(q.values("points", "br_surname" => CTE("br", "surname")))[:sql_text]
+  end,
+  "cjoin_on" => M -> begin
+    q = M.Result.objects.values("points", "d_surname" => Joined("d", "surname"))
+    q.cjoin_on("Driver", alias = "d", on = [Joined("d", "driverid") == F("driverid")])
+    _mr_inspect(q)[:sql_text]
+  end,
+  "on() with a condition" => M -> begin
+    q = M.Result.objects.values("points", "driverid__surname")
+    q.on("driverid", "nationality" => "Brazilian")
+    _mr_inspect(q)[:sql_text]
+  end,
+]
+
+@testset "MySQL read: no identifier is double-quoted anywhere in the statement" begin
+  for (label, render) in _MR_QUOTE_SHAPES
+    sql = render(_MR_MY)
+    @test (label, occursin('"', sql)) == (label, false)
+    @test (label, occursin('`', sql)) == (label, true)
+  end
+  ordered = _MR_QUOTE_SHAPES[1].second(_MR_MY)
+  @test occursin("ORDER BY (`pts` IS NULL) DESC, `pts` DESC", ordered)
+  @test occursin("FROM `result` as `Tb`", ordered) && occursin("INNER JOIN `driver` AS `Tb_1`", ordered)
+  # The derived-table aliases are quoted the engine's way, on every engine.
+  @test occursin("as `__pormg_distinct_count`", _MR_QUOTE_SHAPES[3].second(_MR_MY))
+  @test occursin("as \"__pormg_distinct_count\"", _MR_QUOTE_SHAPES[3].second(_MR_PG))
+end

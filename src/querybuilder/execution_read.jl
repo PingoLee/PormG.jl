@@ -470,7 +470,7 @@ function query(q::SQLObjectHandler;
     for rj in instruction.row_join
       rj isa CrossJoin || continue
       cte_alias = rj.alias_b
-      if !occursin("\"$(cte_alias)\"", predicate_text)
+      if !occursin(quote_identifier(cte_alias, instruction.connection), predicate_text)
         @warn _emsg("PormG: CTE \e[31m$(rj.b)\e[0m is CROSS JOINed with no correlating filter — this is a Cartesian product. Add a correlation such as \e[32mfilter(\"main_col\" => F(\"$(rj.b)__col\"))\e[0m, or pass \e[32mjoin_field=\e[0m to .with().")
       end
     end
@@ -778,14 +778,14 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
     # both engines.
     resposta = """$(with_clause)SELECT COUNT(*) FROM (
     SELECT $(is_distinct ? "DISTINCT " : "")$(_query_select(instruction.select, instruction.connection))
-    $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as $(is_distinct ? "\"__pormg_distinct_count\"" : instruction.aggregate ? "\"__pormg_grouped_count\"" : "\"__pormg_projected_count\"")
+    $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as $(quote_identifier(is_distinct ? "__pormg_distinct_count" : instruction.aggregate ? "__pormg_grouped_count" : "__pormg_projected_count", instruction.connection))
     """
   elseif _is_sliced(q.object)
     # #1053: count the rows the slice returns, as Django's `qs[:5].count()` does. The ordering was
     # cleared above, and that is safe: how many rows a slice holds does not depend on which they are.
     resposta = """$(with_clause)SELECT COUNT(*) FROM (
     SELECT 1
-    $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as "__pormg_sliced_count"
+    $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as $(quote_identifier("__pormg_sliced_count", instruction.connection))
     """
   else
     resposta = """$(with_clause)SELECT

@@ -234,11 +234,14 @@ end
 # #74: extract the single source table alias from a fully-resolved bare column reference like
 # `"Tb_1"."points"` or `"Tb".*`. Returns the unquoted alias, or `nothing` for anything that is not a
 # single column (nested aggregate, F-expression, multi-column) — the fan-out guard treats `nothing`
-# as ambiguous and conservatively refuses. Both backends quote identifiers with double quotes.
+# as ambiguous and conservatively refuses. PostgreSQL and SQLite quote identifiers with double quotes,
+# MySQL with backticks (#1130); each doubles its own quote inside a name.
 function _extract_leading_alias(s)
   s isa AbstractString || return nothing
   m = match(r"^\"((?:[^\"]|\"\")+)\"\.(?:\"(?:[^\"]|\"\")+\"|\*)$", s)
-  m === nothing ? nothing : replace(m.captures[1], "\"\"" => "\"")
+  m === nothing || return replace(m.captures[1], "\"\"" => "\"")
+  m = match(r"^`((?:[^`]|``)+)`\.(?:`(?:[^`]|``)+`|\*)$", s)
+  m === nothing ? nothing : replace(m.captures[1], "``" => "`")
 end
 
 # #844 — `Greatest`/`Least` skip a NULL argument on both engines, as PostgreSQL's GREATEST/LEAST do.

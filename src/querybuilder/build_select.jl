@@ -217,7 +217,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
         if original isa FExpression
           # #881: one of the renderer's two doors out — an interval it held in milliseconds on SQLite
           # arrives here as the stored text, typed `CInterval`. Date arithmetic is typed by the render,
-          # which the walk does not do yet (#1034 step 5); everything else by the walk: a bare
+          # which the walk restates since #1034 step 5a; everything else by the walk: a bare
           # `F("ts__@date")` (#824), a comparison or a bare boolean `F` (#965 — the kind is recorded
           # here, never returned by `_render_expr_typed`, whose kind is the comparison binder's
           # `left_kind`), and arithmetic as the number it means (#1121).
@@ -226,8 +226,8 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
         else
           # #894: `Max`/`Min` over an interval are computed on SQLite milliseconds and leave as the
           # interval text — the second door #881 describes, and typed the way a difference is, on
-          # both engines. The walk cannot type `Max(F("start_at") - F("date"))` (temporal arithmetic
-          # answers `nothing`), so the kind is taken from the same call that renders, as above.
+          # both engines. The kind is taken from the same call that renders, as above; the walk names
+          # the same one since #1034 step 5a (`Max(F("start_at") - F("date"))` is an interval to both).
           interval = false
           if _is_fts_node(original, "SEARCH_VECTOR")
             # #1021: a `SearchVector` may be projected under a name — what `"doc__@search"` filters on,

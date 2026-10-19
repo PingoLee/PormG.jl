@@ -33,10 +33,11 @@
 # field memo `_alias_column_field` reads, and a `Subquery` files its kind when it renders.
 #
 # The read kind types no `F` arithmetic, as `_operand_kind` never has; a comparison is a boolean.
-# Every kind types the numeric operators (`_operation_kind`). TEMPORAL arithmetic is still typed by the
-# render (`_render_expr_typed`, which holds an interval as milliseconds on SQLite while it computes),
-# and whether the walk should take that kind from the render — stored with the memo entry, or the
-# #979 reuse path loses it — is a phase-3 decision.
+# Every kind types the numeric operators (`_operation_kind`), and since #1034 step 5a TEMPORAL arithmetic
+# too: the walk computes the kind the render gives it (`_temporal_arith_kind`, through the render's own
+# rules), rather than reading it from the render, so a node asked in another build still has one
+# (decided by the maintainer). It is asked after the render, as every kind is: a joined path's column
+# is found through the memo the render fills.
 struct _ReadKinds end
 # The two policies that name every type: they differ only on a computed number.
 abstract type _EveryKind end
@@ -61,12 +62,33 @@ function _infer_kind(p::String, instruc::SQLInstruction, policy::_KindPolicy)
   return column_field === nothing ? nothing : _column_kind(column_field, policy)
 end
 _infer_kind(p::FExpression, instruc::SQLInstruction, policy::_KindPolicy) =
-  p.operation === nothing ? _infer_kind(p.field_name, instruc, policy) : _operation_kind(p, instruc, policy)
+  p.operation === nothing ? _infer_kind(p.field_name, instruc, policy) :
+  _memo_kind(() -> _operation_kind(p, instruc, policy), p, instruc, policy)
 _infer_kind(p::SQLField, instruc::SQLInstruction, policy::_KindPolicy) = _infer_kind(p.field, instruc, policy)
 _infer_kind(p::SQLText, ::SQLInstruction, policy::_KindPolicy) =
   _is_null_literal(p.field) ? nothing : _literal_kind(p.field, policy)
 _infer_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction, policy::_KindPolicy) =
-  _infer_function_kind(p, instruc, policy)
+  _memo_kind(() -> _infer_function_kind(p, instruc, policy), p, instruc, policy)
+
+# A walk only reads the instruction, so within one question a node has one kind however often it is
+# asked. It is asked more than once: a side of F arithmetic is asked as the render types it and again
+# for the numeric rule, and a function's boolean asks its formatter, which walks it again. Unmemoized,
+# nested arithmetic over functions was walked once per path, exponentially in its depth (review of
+# #1034 step 5a). The memo lives for the outermost question only, so a kind asked after the render
+# has moved on (resolving a path fills the memo the walk reads) is never one from before it. It is
+# keyed by the instruction too: an inner query's walk is another instruction's question.
+function _memo_kind(f, node, instruc::SQLInstruction, tag)
+  tls = task_local_storage()
+  memo = get(tls, :_pormg_kind_memo, nothing)
+  memo === nothing || return get!(f, memo, (node, instruc, tag))
+  memo = IdDict{Any,Any}()
+  tls[:_pormg_kind_memo] = memo
+  try
+    return get!(f, memo, (node, instruc, tag))
+  finally
+    delete!(tls, :_pormg_kind_memo)
+  end
+end
 # #824: a `Joined(...)` handle is the joined column, exactly as `Max(Joined(…))` reads it.
 function _infer_kind(p::JoinedReference, instruc::SQLInstruction, policy::_KindPolicy)
   column_field = _alias_column_field(p, instruc)
@@ -97,7 +119,8 @@ _operation_kind(::FExpression, ::SQLInstruction, ::_ReadKinds) = nothing
 # (`integer < numeric < double precision`), and that is what the expression MEANS: `F("price") / 2`
 # is a decimal quotient. SQLite can compute it otherwise — it stores a whole decimal as INTEGER and
 # divides it as one — so its render casts the dividend (`_division_sql`); the kind is the meaning. A
-# decimal's width is dropped: the operation may change it. A date or an interval stays untyped here.
+# decimal's width is dropped: the operation may change it. A date or an interval side is temporal
+# arithmetic, which `_temporal_arith_kind` answers first.
 #
 # #1153: the bitwise operators resolve their type as arithmetic does (`int4 & int8` is `int8`), and
 # `~` has its operand's. A shift has its LEFT operand's type, whatever it shifts by, and binds an
@@ -106,6 +129,9 @@ _operation_kind(::FExpression, ::SQLInstruction, ::_ReadKinds) = nothing
 # shape on both engines, as it does for `+`, `-`, `*` and `/`.
 function _operation_kind(p::FExpression, instruc::SQLInstruction, policy::_EveryKind)
   p.operation in _COMPARISON_OPERATIONS && return CBool()
+  # #1034 step 5a: temporal arithmetic is the kind its render gives it (below), on every policy.
+  temporal = _memo_kind(() -> _temporal_arith_kind(p, instruc), p, instruc, :render)
+  temporal === nothing || return temporal
   p.operation == "~" && return _integer_side_kind(p.field_name, instruc, policy)
   if p.operation in ("<<", ">>")
     _integer_side_kind(p.operand, instruc, policy) === nothing && return nothing
@@ -130,6 +156,94 @@ _arithmetic_side_kind(x::Union{AbstractFloat,Decimals.Decimal}, ::SQLInstruction
 _arithmetic_side_kind(x, instruc::SQLInstruction, policy::_EveryKind) = _infer_kind(x, instruc, policy)
 _integer_side_kind(x, instruc::SQLInstruction, policy::_EveryKind) =
   (k = _arithmetic_side_kind(x, instruc, policy); k isa Union{CInt16,CInt32,CInt64} ? k : nothing)
+
+# ── #1034 step 5a: F temporal arithmetic ─────────────────────────────────────────────────────────────
+# `date - date`, `timestamp - timestamp`, a date shifted by a duration, a day count or an interval, and
+# interval arithmetic are typed by the render (`_render_expr_typed`, `expression_render.jl`), which
+# computes them as it writes their SQL. The walk answers the same kind without rendering, branch for
+# branch, through the same rules: `_shift_result_kind` and `_difference_result_kind` for the result,
+# and `_side_kind`, `_side_function_kind`, `_day_count_column_kind` and `_is_number_side` for what each
+# side is to the render. Those side readers are narrower than the walk on purpose: a float column or a
+# numeric sub-expression is no kind to them, and it is the render's answer the walk restates here.
+#
+# Every answer is a temporal kind or the `CInt32` day count of `date - date`; everything else is
+# `nothing`, which leaves numeric arithmetic to the rules above it. A shape the render refuses has no
+# answer to agree with, so it is `nothing` too. On SQLite the render holds an interval as milliseconds
+# while it computes (`_IntervalMs`); the value it leaves is the interval, which is the kind here.
+function _temporal_arith_kind(p::FExpression, instruc::SQLInstruction)::Union{CanonicalType,Nothing}
+  op = p.operation
+  if op === nothing
+    f = p.field_name
+    f isa String && return _side_kind(f, instruc)
+    f isa Integer && return nothing
+    return _render_side_kind(f, instruc)
+  end
+  op in ("+", "-", "*", "/") || return nothing
+  # The duration spelling (#25): the left shifted by a Julia period, whatever the left is.
+  if op in ("+", "-") && p.operand isa Union{Dates.Period,Dates.CompoundPeriod,Interval}
+    period = p.operand isa Interval ? p.operand.period : p.operand
+    return _shift_result_kind(_render_side_kind(p.field_name, instruc), _decompose_period(period))
+  end
+  left = _render_side_kind(p.field_name, instruc)
+  # #568: a bare integer beside a date is whole days.
+  if left isa Union{CDate,CDateTime} && op in ("+", "-") && p.operand isa Integer && !(p.operand isa Bool)
+    return _shift_result_kind(left, _decompose_period(Dates.Day(p.operand)))
+  end
+  if left isa Union{CDate,CDateTime}
+    p.operand isa String && !_is_field_path(p.operand, instruc) && return nothing   # refused (#814)
+    right = _render_side_kind(p.operand, instruc; right = true)
+    op in ("+", "-") && (right = _day_count_column_kind(p.operand, right, instruc))   # #882
+    right isa Union{CDate,CDateTime} && return op == "-" ? _difference_result_kind(left, right) : nothing
+    op in ("+", "-") || return nothing
+    right isa Union{CInt32,CInt64} && return left                               # a day count (#814)
+    right isa CInterval && return left isa CDate ? CDateTime(false) : left       # #881
+    return nothing
+  end
+  left isa CInterval && return _interval_left_kind(p, instruc)
+  # #814: a day count on the left, a date on the right, is the date shifted (`count - date` is refused).
+  count = op in ("+", "-") ? _day_count_column_kind(p.field_name, left, instruc) : left
+  if count isa Union{CInt32,CInt64} && op in ("+", "-")
+    right = _render_side_kind(p.operand, instruc; right = true)
+    return right isa Union{CDate,CDateTime} && op == "+" ? right : nothing
+  end
+  # #881: an interval on the right of a value that is neither a date nor an interval.
+  if p.operand isa Union{FExpression,FObject} || (p.operand isa String && _is_field_path(p.operand, instruc))
+    right = _render_side_kind(p.operand, instruc; right = true)
+    right isa CInterval && op == "*" && _is_number_side(p.field_name, left, instruc) && return CInterval()
+  end
+  return nothing
+end
+
+# #881: an interval on the left (`_render_interval_left`). A date on the right of `+` is the date
+# shifted, an interval beside it is an interval, and `*`/`/` by a number side scales it.
+function _interval_left_kind(p::FExpression, instruc::SQLInstruction)
+  right = _render_side_kind(p.operand, instruc; right = true)
+  if p.operation in ("+", "-")
+    right isa Union{CDate,CDateTime} && return p.operation == "+" ? (right isa CDate ? CDateTime(false) : right) : nothing
+    return right isa CInterval ? CInterval() : nothing
+  end
+  return _is_number_side(p.operand, right, instruc) ? CInterval() : nothing
+end
+
+# The kind a side of F arithmetic is to the render: the left as `_render_left_typed` types it, the right
+# as `_render_operand_typed` does. An expression is its own temporal kind. A function is an interval
+# only where the render computes one (`_render_function_body`): a `Max`/`Min`/`Sum`/`Avg` or
+# `Greatest`/`Least`/`Coalesce` over interval candidates (`_interval_ms_candidate`, #894, #900) the
+# walk names an interval. Any other function is `_side_function_kind`, so a `Case` over a duration is
+# untyped here, as it is to the render (review of #1034 step 5a). A column is `_side_kind`. On the
+# right, a temporal literal is its own kind, a field-path string is the column it names, and a bare
+# CTE, `Subquery` or `Joined` handle is untyped, as it is to the render.
+function _render_side_kind(x, instruc::SQLInstruction; right::Bool = false)::Union{CanonicalType,Nothing}
+  x isa FExpression && return _memo_kind(() -> _temporal_arith_kind(x, instruc), x, instruc, :render)
+  if x isa FObject
+    _interval_ms_candidate(x) && _infer_kind(x, instruc, _AllKinds()) isa CInterval && return CInterval()
+    return _side_function_kind(x, instruc)
+  end
+  right || return _side_kind(x, instruc)
+  x isa String && return _is_field_path(x, instruc) ? _side_kind(x, instruc) : nothing
+  x isa _TemporalLiteral && return literal_canonical_kind(x)
+  return x isa SQLTypeFunction ? _side_kind(x, instruc) : nothing
+end
 
 # ── Leaves: a column's field and a literal ───────────────────────────────────────────────────────────
 _column_kind(f, ::_ReadKinds) = field_canonical_kind(f)

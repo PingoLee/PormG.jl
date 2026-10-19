@@ -414,3 +414,30 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Date arithmetic is typed outside its render, on every engine (#1034 step 5a)
+# On race 1: `Greatest("date", F("date") + 1)` agrees on a date, so it reads back as a `Date` equal to
+# the race date plus one day (SQLite's text before); a filter on an alias of `F("date") + Day(1)` binds
+# a `Date` as a date and matches the row it should, and refuses a number. Why: the walk's type reaches
+# the read path and the binder, so both must hold against a live engine, not only in the SQL.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "Date arithmetic reads back and binds as a date (#1034 step 5a)" begin
+  plain = M.Race.objects
+  plain.filter("raceid" => _EKR_ROW[:Race])
+  plain.values("date")
+  day = only(plain.list())[:date]
+  q = M.Race.objects
+  q.filter("raceid" => _EKR_ROW[:Race])
+  q.values("g" => PormG.Functions.Greatest("date", PormG.F("date") + 1))
+  g = only(q.list())[:g]
+  @test g isa Date
+  @test g == day + Day(1)
+  hit(value) = (q = M.Race.objects; q.filter("raceid" => _EKR_ROW[:Race]);
+                q.values("raceid", "next" => PormG.F("date") + Day(1)); q.filter("next__@gt" => value); length(q.list()))
+  @test hit(day) == 1
+  @test hit(day + Day(1)) == 0
+  err = try hit(10); nothing catch e; e end
+  @test err isa PormG.InvalidValueError
+  @test occursin("projection alias (date)", sprint(showerror, err))
+end

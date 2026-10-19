@@ -184,8 +184,9 @@ as its `YYYY-MM-DD` text on both backends, and a date part (`@year`, `@hour`, an
 digits: `"date__@year__@startswith" => "200"` selects the 2000s. An integer column, a relation's
 key included, is matched as its digits too: `"grid__@startswith" => "1"` selects grid slots 1 and
 10–19 on both backends. So is an integer alias, CTE column or `Subquery` (a `Count`, a
-`Max("grid")`), an integer `Case` alias with no `output_field`, a `Value(1)` alias and arithmetic over a
-date part (`F("date__@year") + 1`). A time column is matched as its `HH:MM:SS` text, with a
+`Max("grid")`), an integer `Case` alias with no `output_field`, a `Value(1)` alias, arithmetic over a
+date part (`F("date__@year") + 1`) and a day count (`F("date") - F("date")`), and a date shifted by
+whole days (`F("date") + Day(1)`) is matched as its `YYYY-MM-DD` text. A time column is matched as its `HH:MM:SS` text, with a
 fraction only when the time has one: `"time__@startswith" => "14:"` selects the races that start
 at 14:00 to 14:59 on both backends.
 
@@ -199,7 +200,8 @@ filter("t__@startswith" => "2")`. A `Case` alias with a float `default`, and a `
 raise the same way.
 
 A timestamp, duration, boolean or binary column raises a `FilterError` on both backends, and so
-does an alias PormG types as one (a `Max("start_at")`, a `Value(true)`). Their text differs per engine: a
+does an alias PormG types as one (a `Max("start_at")`, a `Value(true)`, a duration such as
+`F("start_at") - F("start_at")` or `F("fastestlaptime") * 2`, a timestamp such as `F("date") + Hour(1)`). Their text differs per engine: a
 timestamp prints in the session's time zone on PostgreSQL and as PormG's UTC text on SQLite, a
 duration follows PostgreSQL's `IntervalStyle`, and a boolean is `true` on PostgreSQL and `1` on
 SQLite. A binary column holds bytes, not text. Match a part of a timestamp through a transform
@@ -1361,6 +1363,9 @@ same whether the filter is written top-level or inside `Q(...)`/`Qor(...)`:
   `Q(...)`/`Qor(...)`, such as `Max(Q("grid__@gt" => 1))`;
 - a `Subquery(...)` has the type of the one column it projects, so a subquery over a uuid column is a uuid;
 - `Sum`, `Count`, `Avg` and arithmetic on numbers are numbers, and `Sum`/`Avg` of a duration is a duration;
+- date and duration arithmetic has the type its SQL has: `F("date") + Day(1)` is a date,
+  `F("date") + Hour(1)` a timestamp, `F("date") - F("date")` a whole number of days,
+  `F("start_at") - F("start_at")` and `F("fastestlaptime") * 2` durations;
 - `Cast(...)`, or a function given `output_field = ...`, has the type it names when that is a text,
   number (`integer`, `int8`, `float8`, `numeric`, …), boolean or date type. The SQL casts the value
   to that type on both engines, so the filter compares like with like. On PostgreSQL a `uuid`, `inet`
@@ -1373,7 +1378,7 @@ same whether the filter is written top-level or inside `Q(...)`/`Qor(...)`:
 
 A value of the wrong type raises `InvalidValueError`, which names the alias but never the value. When PormG cannot tell what
 type an expression returns, for example a `Case` whose branches have different types, or arithmetic
-over a duration, it binds the value as given. An expression on the right, such as `F("grid")` or `Max("grid")`, is not a value: it is
+over `Extract(x, "EPOCH")`, it binds the value as given. An expression on the right, such as `F("grid")` or `Max("grid")`, is not a value: it is
 compared as SQL, so `filter("total_points__@gt" => F("raceid"))` over
 `"total_points" => Sum("points")` renders `HAVING SUM("Tb"."points") > "Tb"."raceid"`.
 

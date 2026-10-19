@@ -166,16 +166,17 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# What the walk cannot type yet keeps its number (#1034 step 5).
-# Expected: `F("grid") * F("fastestlaptime")`, a number on the left of a duration, and a `Sum` of it,
-# stay `format_number_sql`, as before: the walk names no kind for them, and the formatter's own rule
-# (a number when its left side is one; a `Sum` is a number) answers. `Sum`/`Avg` of the duration
-# column itself is a duration, as the walk names it. A formatter is never lost here: a step that drops
-# one stops checking the value (fail-open).
-# Why it matters: the walk types `F` arithmetic in step 5; until then the formatter's own number rule
-# stays, so no filter that checked its value stops checking it.
+# What the walk cannot type keeps its number; what it types takes its own formatter (#1034 step 5a).
+# Expected: `F("grid") * F("fastestlaptime")`, a number times a duration, and a `Sum` of it, are
+# durations: the walk types temporal arithmetic since step 5a, so the formatter is the duration's,
+# where the step-4 fallback said a number. `Sum`/`Avg` of the duration column itself is a duration too.
+# `F("grid") + Extract("race_date", "EPOCH")` is a number the walk still cannot type (`EPOCH` has no
+# stated type), so the formatter's own rule answers, a number when the left side is one, and a `Sum`
+# of it stays a number: PostgreSQL only, as SQLite has no `EPOCH` part. A formatter is never lost here:
+# a step that drops one stops checking the value (fail-open).
+# Why it matters: the fallback is for what the walk does not type, and only for that.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1034 step 4: arithmetic the walk does not type keeps the number formatter" begin
+@testset "#1034 step 5a: the formatter takes the walk's temporal kind, and the fallback the rest" begin
   QB = PormG.QueryBuilder
   for (backend, Model_) in _FMT_WALK_MODELS
     @testset "$backend" begin
@@ -184,10 +185,17 @@ end
                "total" => Sum("fastestlaptime"), "mean" => QB.Avg("fastestlaptime"))
       instr = PormG.QueryBuilder.build(q.object)   # renders the projection, filling the memos
       f(alias) = QB._expression_formatter(QB._projected_source(QB.memo_key(:base, alias), instr).field, instr)
-      @test f("x") === PormG.Models.format_number_sql
-      @test f("s") === PormG.Models.format_number_sql
+      @test f("x") === PormG.Models.format_duration_sql
+      @test f("s") === PormG.Models.format_duration_sql
       @test f("total") === PormG.Models.format_duration_sql
       @test f("mean") === PormG.Models.format_duration_sql
+      backend === :postgres || continue
+      q = Model_.objects
+      epoch = PormG.Functions.Extract("race_date", "EPOCH")
+      q.values("resultid", "e" => F("grid") + epoch, "se" => Sum(F("grid") + epoch))
+      instr = PormG.QueryBuilder.build(q.object)
+      @test f("e") === PormG.Models.format_number_sql
+      @test f("se") === PormG.Models.format_number_sql
     end
   end
 end

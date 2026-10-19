@@ -351,41 +351,41 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F decimal * 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F date + Day(1) | alone", :postgres) =>
-    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | alone", :sqlite) =>
-    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Day, whose type PormG does not infer. Name the type the column holds b"),
   ("F date + Day(1) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Day, whose type PormG does not infer. Name the type the column holds b"),
   ("F date + Day(1) | subquery", :postgres) =>
-    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | subquery", :sqlite) =>
-    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F datetime - datetime | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
   ("F datetime - datetime | alone", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
   ("F datetime - datetime | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F datetime - datetime | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F datetime - datetime | subquery", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime - datetime | subquery", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F date - date | alone", :postgres) =>
-    (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | alone", :sqlite) =>
-    (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F date - date | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F date - date | subquery", :postgres) =>
-    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, operand = "CInt32()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, operand = "CInt32()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | subquery", :sqlite) =>
-    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, operand = "CInt32()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, operand = "CInt32()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F comparison | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("F comparison | alone", :sqlite) =>
@@ -398,6 +398,186 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("F comparison | subquery", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F date + Hour(1) | alone", :postgres) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = nothing, kind = "CDateTime(false)", whole_numeric = nothing),
+  ("F date + Hour(1) | alone", :sqlite) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = nothing, kind = "CDateTime(false)", whole_numeric = nothing),
+  ("F date + Hour(1) | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
+  ("F date + Hour(1) | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
+  ("F date + Hour(1) | subquery", :postgres) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("F date + Hour(1) | subquery", :sqlite) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("F datetime - Hour(1) | alone", :postgres) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = nothing, kind = "CDateTime(true)", whole_numeric = nothing),
+  ("F datetime - Hour(1) | alone", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = nothing, kind = "CDateTime(true)", whole_numeric = nothing),
+  ("F datetime - Hour(1) | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
+  ("F datetime - Hour(1) | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
+  ("F datetime - Hour(1) | subquery", :postgres) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("F datetime - Hour(1) | subquery", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("F date + 1 | alone", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date + 1 | alone", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date + 1 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F date + 1 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F date + 1 | subquery", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date + 1 | subquery", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date + int col | alone", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date + int col | alone", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date + int col | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F date + int col | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F date + int col | subquery", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date + int col | subquery", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date - int col | alone", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date - int col | alone", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date - int col | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("F date - int col | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("F date - int col | subquery", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date - int col | subquery", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F interval + interval | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+  ("F interval + interval | alone", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+  ("F interval + interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F interval + interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F interval + interval | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval + interval | subquery", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval * 2 | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+  ("F interval * 2 | alone", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+  ("F interval * 2 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("F interval * 2 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("F interval * 2 | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval * 2 | subquery", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval / int col | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+  ("F interval / int col | alone", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+  ("F interval / int col | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+  ("F interval / int col | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+  ("F interval / int col | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval / int col | subquery", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F int col * interval | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+  ("F int col * interval | alone", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+  ("F int col * interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("F int col * interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("F int col * interval | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F int col * interval | subquery", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F hop date + interval | alone", :postgres) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = nothing, kind = "CDateTime(false)", whole_numeric = nothing),
+  ("F hop date + interval | alone", :sqlite) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = nothing, kind = "CDateTime(false)", whole_numeric = nothing),
+  ("F hop date + interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F hop date + interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F hop date + interval | subquery", :postgres) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("F hop date + interval | subquery", :sqlite) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("F hop datetime + interval | alone", :postgres) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = nothing, kind = "CDateTime(true)", whole_numeric = nothing),
+  ("F hop datetime + interval | alone", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = nothing, kind = "CDateTime(true)", whole_numeric = nothing),
+  ("F hop datetime + interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F hop datetime + interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F hop datetime + interval | subquery", :postgres) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("F hop datetime + interval | subquery", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("F @year + 1 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("F @year + 1 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("F @year + 1 | cte", :postgres) =>
+    (stage = :build, error = "UnknownFieldError", message = "Error in _set_field_from_sql_function, the field start_at__@year not found in race"),
+  ("F @year + 1 | cte", :sqlite) =>
+    (stage = :build, error = "UnknownFieldError", message = "Error in _set_field_from_sql_function, the field start_at__@year not found in race"),
+  ("F @year + 1 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("F @year + 1 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Max F datetime - datetime | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+  ("Max F datetime - datetime | alone", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+  ("Max F datetime - datetime | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("Max F datetime - datetime | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("Max F datetime - datetime | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Max F datetime - datetime | subquery", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Abs F date - date | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Abs F date - date | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Abs F date - date | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+  ("Abs F date - date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+  ("Abs F date - date | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Abs F date - date | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Coalesce F date + Hour(1), date | alone", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
+  ("Coalesce F date + Hour(1), date | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
+  ("Coalesce F date + Hour(1), date | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
+  ("Coalesce F date + Hour(1), date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
+  ("Coalesce F date + Hour(1), date | subquery", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
+  ("Coalesce F date + Hour(1), date | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
   ("Value int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Value int | alone", :sqlite) =>
@@ -1623,27 +1803,27 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast Sum F int * interval / 2 text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | alone", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | alone", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | cte", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | subquery", :postgres) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor Subquery int | alone", :postgres) =>
@@ -2910,6 +3090,42 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
   ("F datetime - datetime", :postgres) =>
     ["drops textless: alone=none, subquery=interval"],
   ("F datetime - datetime", :sqlite) =>
+    ["drops textless: alone=none, subquery=interval"],
+  ("F date + Hour(1)", :postgres) =>
+    ["drops textless: alone=none, subquery=datetime"],
+  ("F date + Hour(1)", :sqlite) =>
+    ["drops textless: alone=none, subquery=datetime"],
+  ("F datetime - Hour(1)", :postgres) =>
+    ["drops textless: alone=none, subquery=datetime"],
+  ("F datetime - Hour(1)", :sqlite) =>
+    ["drops textless: alone=none, subquery=datetime"],
+  ("F interval + interval", :postgres) =>
+    ["drops textless: alone=none, subquery=interval"],
+  ("F interval + interval", :sqlite) =>
+    ["drops textless: alone=none, subquery=interval"],
+  ("F interval * 2", :postgres) =>
+    ["drops textless: alone=none, subquery=interval"],
+  ("F interval * 2", :sqlite) =>
+    ["drops textless: alone=none, subquery=interval"],
+  ("F interval / int col", :postgres) =>
+    ["drops textless: alone=none, subquery=interval"],
+  ("F interval / int col", :sqlite) =>
+    ["drops textless: alone=none, subquery=interval"],
+  ("F int col * interval", :postgres) =>
+    ["drops textless: alone=none, subquery=interval"],
+  ("F int col * interval", :sqlite) =>
+    ["drops textless: alone=none, subquery=interval"],
+  ("F hop date + interval", :postgres) =>
+    ["drops textless: alone=none, subquery=datetime"],
+  ("F hop date + interval", :sqlite) =>
+    ["drops textless: alone=none, subquery=datetime"],
+  ("F hop datetime + interval", :postgres) =>
+    ["drops textless: alone=none, subquery=datetime"],
+  ("F hop datetime + interval", :sqlite) =>
+    ["drops textless: alone=none, subquery=datetime"],
+  ("Max F datetime - datetime", :postgres) =>
+    ["drops textless: alone=none, subquery=interval"],
+  ("Max F datetime - datetime", :sqlite) =>
     ["drops textless: alone=none, subquery=interval"],
   ("Value int", :postgres) =>
     ["drops formatter: alone=none, cte=number, subquery=none"],

@@ -1560,11 +1560,21 @@ end
   @test _IN411R.objects.filter("eventid__n" => 5).list(show_query = :dict)[:parameters] == [5]
 
   # ── The guard converts InvalidValueError and NOTHING else ──
-  # `format_bool_sql` has no generic arm, so a wrong-typed value on a BooleanField raises a bare
-  # `MethodError`. `_locate_filter_refusal`'s non-`InvalidValueError` arm is `rethrow(e)`, and
-  # this pins that it stays that way: a guard that converted everything would hide real bugs.
-  @test_throws MethodError _IN411.objects.filter(
-    "ok" => Date("1991-10-01")).list(show_query = :dict)
+  # `_locate_filter_refusal`'s non-`InvalidValueError` arm is `rethrow(e)`, and this pins that it
+  # stays that way: a guard that converted everything would hide real bugs. Called directly, inside
+  # a `catch` as its callers are, because no formatter is left to leak another error type through a
+  # filter: this used a BooleanField, whose `format_bool_sql` had no generic arm until #1290.
+  @test_throws ErrorException try
+    error("not a value refusal")
+  catch e
+    PormG.QueryBuilder._locate_filter_refusal(e, "ok", "BOOLEAN")
+  end
+  # #1290: the BooleanField case is now a refusal the guard locates, field and type named.
+  bool_err = @test_throws PormG.InvalidValueError _IN411.objects.filter(
+    "ok" => 1.5).list(show_query = :dict)
+  @test bool_err.value.kind === :type
+  @test occursin("Error in filter, field `ok` (BOOLEAN): A boolean value must be true, false, 0 or 1. Got a Float64.",
+                 _plain(bool_err.value.msg))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

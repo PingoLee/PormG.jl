@@ -4161,6 +4161,12 @@ end
 function format_bool_sql(value::Bool)
     return value
 end
+# #1290: every other formatter refuses a type it has no method for as a typed `InvalidValueError`,
+# which each funnel locates; this one raised a raw `MethodError` naming no field, from a write and a
+# filter alike. A string is refused too: `"true"`/`"t"` are spellings, not booleans.
+function format_bool_sql(value)
+    throw(InvalidValueError("A boolean value must be true, false, 0 or 1. Got a $(typeof(value)).", :type))
+end
 
 function format_date_sql(value::Date)
     # return string("'", value, "'")    

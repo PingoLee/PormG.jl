@@ -39,6 +39,8 @@ using PormG.Models: DecimalField
 using PormG.Models: GenericIPAddressField, CIDRField
 # #28 — the ArrayField claims on `fields.md` and `postgres.md`, and the element fields they name.
 using PormG.Models: ArrayField
+# #1290 — the BooleanField value claim on `fields.md`.
+using PormG.Models: BooleanField
 # #1033 — the SearchVectorField docstring's literal-db_default claim.
 using PormG.Models: SearchVectorField
 # #632 — the same bullet's `Decimal` rule, which needs the type to state its refusing half.
@@ -2117,6 +2119,24 @@ const DOCERR_CASES = [
         () -> let m = Model("docerr_laps_773f", id = IDField(), laps = IntegerField())
             m.connect_key = "docerr_pg"; m._module = Main
             q = m.objects; q.filter("laps" => "0x10"); q.list(show_query = :dict)
+        end,
+    ),
+    # #1290. `fields.md` → *BooleanField* names the type a non-boolean raises on a write and in a
+    # filter. Every writer and both engines are pinned in `test_boolean_field_value.jl`.
+    (
+        "fields.md — a non-boolean value into a BooleanField raises on a write (#1290)",
+        InvalidValueError,
+        () -> let m = Model("docerr_result_1290", id = IDField(), finished = BooleanField(null = true))
+            m.connect_key = "docerr_pg"; m._module = Main
+            m.objects.create("finished" => "true", show_query = :dict)
+        end,
+    ),
+    (
+        "fields.md — a non-boolean value on a BooleanField raises in a filter (#1290)",
+        InvalidValueError,
+        () -> let m = Model("docerr_result_1290f", id = IDField(), finished = BooleanField(null = true))
+            m.connect_key = "docerr_pg"; m._module = Main
+            q = m.objects; q.filter("finished" => 3.5); q.list(show_query = :dict)
         end,
     ),
     # #860. `fields.md` → *Text Fields* names the type a float or a `Decimal` raises against a text

@@ -1025,7 +1025,8 @@ df = query |> DataFrame
 
 `Sum("is_rookie")` is refused rather than answered differently on the two engines. A `NULL` flag counts as not true in `rookies` and `share`, while `Max`/`Min` skip it.
 
-These boolean values read back as a `Bool` on both engines: the column itself, a comparison projected as a value (`"gained" => F("grid") > F("positionorder")`), `Cast(x, "boolean")`, `Coalesce(Max("is_rookie"), false)`, `Lag`/`Lead`/`FirstValue` over a boolean, a projected `Exists(...)`, a `Value(true)`/`Value(false)` literal (alone, under a CTE or inside a `Subquery`), and a `Case` whose branches are all `true`/`false`. A `Coalesce`, `Greatest` or `Least` is a boolean only when every operand is. SQLite stores each of them as `0`/`1`, and PormG reads that back as a `Bool`. Such a `Case` is a boolean for the rules above too: `Max` of it renders `BOOL_OR` on PostgreSQL, and `Sum`/`Avg` of it raise `QueryBuildError`. A `Case` that mixes `true` with a number is not a boolean, and PostgreSQL rejects it.
+These boolean values read back as a `Bool` on both engines: the column itself, a comparison projected as a value (`"gained" => F("grid") > F("positionorder")`), `Cast(x, "boolean")`, `Coalesce(Max("is_rookie"), false)`, `Lag`/`Lead`/`FirstValue` over a boolean, a projected `Exists(...)`, a `Value(true)`/`Value(false)` literal (alone, under a CTE or inside a `Subquery`), a `Case` whose branches are all `true`/`false`, and a function over a condition (`Max(Q("grid__@gt" => 1))`,
+`Coalesce(Q(…), false)`). A `Coalesce`, `Greatest` or `Least` is a boolean only when every operand is. SQLite stores each of them as `0`/`1`, and PormG reads that back as a `Bool`. Such a `Case`, and a function over a condition, is a boolean for the rules above too: `Max` of it renders `BOOL_OR` on PostgreSQL, and `Sum`/`Avg` of it raise `QueryBuildError`. A `Case` that mixes `true` with a number is not a boolean, and PostgreSQL rejects it.
 
 ### Aggregating Across To-Many Relations (Fan-Out Guard)
 
@@ -1352,21 +1353,27 @@ same whether the filter is written top-level or inside `Q(...)`/`Qor(...)`:
 
 - a column (`F("grid")`, `Max("grid")`, `Coalesce("code", Value("-"))`) has the column's type;
 - a text function (`Lower`, `Upper`, `Trim`, `Replace`, `Concat`) is text;
+- a `Case` with no `output_field` has the type its branches agree on, so `Case(When(…, then = F("fastestlaptime")))`
+  is a duration;
+- a window value function (`Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue`) has its operand's
+  type, and `Rank`, `DenseRank` and `RowNumber` are integers;
+- a condition is a boolean: a comparison (`F("grid") > 1`), `Exists(...)`, and a function over a
+  `Q(...)`/`Qor(...)`, such as `Max(Q("grid__@gt" => 1))`;
 - a `Subquery(...)` has the type of the one column it projects, so a subquery over a uuid column is a uuid;
-- `Sum`, `Count`, `Avg` and arithmetic on numbers are numbers;
+- `Sum`, `Count`, `Avg` and arithmetic on numbers are numbers, and `Sum`/`Avg` of a duration is a duration;
 - `Cast(...)`, or a function given `output_field = ...`, has the type it names when that is a text,
   number (`integer`, `int8`, `float8`, `numeric`, …), boolean or date type. The SQL casts the value
   to that type on both engines, so the filter compares like with like. On PostgreSQL a `uuid`, `inet`
   or `cidr` type counts too, and a pattern lookup (`@startswith`, `@contains`, …) on such an alias
   reads it as text, as it does on a column of that type, because PostgreSQL has no `LIKE` for them.
-  SQLite casts those three to text, so there the value binds as given. For any other type, such as
+  SQLite casts those three to text, so there the value is checked as text. For any other type, such as
   a timestamp on PostgreSQL, `Coalesce`, `Greatest` and `Least` fall back to their operand's type,
   and `Cast` and `Case` bind the value as given. On SQLite the cast itself refuses a timestamp (see
   [Functions and Dates](functions_and_dates.md)).
 
 A value of the wrong type raises `InvalidValueError`, which names the alias but never the value. When PormG cannot tell what
-type an expression returns, for example a `Case` with no `output_field`, it binds the value as
-given. An expression on the right, such as `F("grid")` or `Max("grid")`, is not a value: it is
+type an expression returns, for example a `Case` whose branches have different types, or arithmetic
+over a duration, it binds the value as given. An expression on the right, such as `F("grid")` or `Max("grid")`, is not a value: it is
 compared as SQL, so `filter("total_points__@gt" => F("raceid"))` over
 `"total_points" => Sum("points")` renders `HAVING SUM("Tb"."points") > "Tb"."raceid"`.
 

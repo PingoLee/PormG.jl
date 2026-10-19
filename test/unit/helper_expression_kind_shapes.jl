@@ -314,6 +314,12 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Subquery Avg float",      :Result,              m -> _EKM_Q.Subquery(_ekm_sub(m, :Result, _EKM_FN.Avg("points")))),
   ("Subquery path decimal",   :Constructor_results, m -> _EKM_Q.Subquery(_ekm_sub(m, :Constructor_results, "points"))),
   ("Exists",                  :Result,              m -> _EKM_Q.Exists(_ekm_sub(m, :Result, "resultid"))),
+  # ── a condition as a function's operand (#1034 step 4): a `Q`/`Qor` is a boolean ───────────────
+  ("Max Q",                   :Result,              m -> _EKM_FN.Max(_EKM_Q.Q("grid__@gt" => 1))),
+  ("Min Qor",                 :Result,              m -> _EKM_FN.Min(_EKM_Q.Qor("grid" => 1, "grid" => 2))),
+  ("Coalesce Q false",        :Result,              m -> _EKM_FN.Coalesce(_EKM_Q.Q("grid__@gt" => 1), false)),
+  ("Sum Q",                   :Result,              m -> _EKM_FN.Sum(_EKM_Q.Q("grid__@gt" => 1))),
+  ("Case then Q",             :Result,              m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_Q.Q("points__@gt" => 10))], default = false)),
 ]
 
 # What a shape needs declared on the query that projects it, keyed by label: a `Joined` handle names

@@ -33,8 +33,8 @@
 #
 # The BIND CHANNEL is recorded beside the cells, in its own fixture (`fixtures/expression_kind_bind_expected.jl`):
 # each `:ok` cell built again with a filter on its column, and what that build renders (the WHERE or
-# HAVING predicate) and binds (every parameter and its Julia type). It is the oracle for #1034 phase 3
-# step 4, which moves the formatter the binder reads onto the walk; see "The bind channel" below.
+# HAVING predicate) and binds (every parameter and its Julia type). It was the oracle for #1034 phase 3
+# step 4, which made the formatter the binder reads a view of the walk; see "The bind channel" below.
 # The ORDER CHANNEL beside it (`fixtures/expression_kind_order_expected.jl`, #1285) records what an
 # `order_by` on each `:ok` cell sorts by: SQLite sorts an interval by its milliseconds where the render
 # finds a millisecond form, and by its text elsewhere; see "The order channel" below.
@@ -373,7 +373,7 @@ end
 # here is about: skipped. Probes, both `@gt`: a
 # universal `10`, which shows which formatter acts (a raw value, its text, or a refusal), and a value of
 # the cell's own `kind` family, which shows the bind a caller writes. `kind` is the walk, which step 4
-# reads and does not change, so a probe moves only with a cell the matrix above already flags.
+# reads and does not change, so a probe moves only with a cell whose `formatter` channel moves.
 const _EKM_BIND_FIXTURE = joinpath(@__DIR__, "fixtures", "expression_kind_bind_expected.jl")
 const _EKM_BIND_PROBES = Dict(
   :int => ("int 10", 10), :float => ("float 10.5", 10.5),
@@ -586,8 +586,8 @@ else
   # Each `:ok` cell filtered by each spelling and probe (see the bind channel above). Expected, e.g. a
   # duration CTE column on SQLite: `"R1_1"."v" > ?` with `("\"00:01:00\"", "String")` today, the #1219
   # text comparison. The fixture holds exactly these keys, so a cell that stops building or a spelling
-  # that is added cannot leave a stale expectation. Why: step 4 moves the formatter the binder reads onto
-  # the walk, and this is the oracle that the move keeps every bind byte-identical.
+  # that is added cannot leave a stale expectation. Why: the formatter the binder reads is a view of the
+  # walk (step 4), and every change to what a filter binds must show here as a reviewed fixture diff.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "#1034: expression-kind matrix, bind channel" begin
     binds = _ekm_bind_observations(_EKM_OBS)

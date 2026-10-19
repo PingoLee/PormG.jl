@@ -114,6 +114,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Join Path Ending at a Relation (#1134)" include("unit/test_join_path_relation_terminal.jl")
     @testset "Expression-Kind Matrix (#1034)" include("unit/test_expression_kind_matrix.jl")
     @testset "Function Result Rules (#1034)" include("unit/test_expression_kind_rules.jl")
+    @testset "Formatter From the Type Walk (#1034)" include("unit/test_formatter_from_walk.jl")
     @testset "Computed Number Read Kind (#1121)" include("unit/test_computed_number_read_kind.jl")
     @testset "CTE Column Field From Its Meaning (#1034)" include("unit/test_cte_column_field.jl")
     @testset "One Join-Path Resolver (#977)" include("unit/test_join_resolver_single.jl")

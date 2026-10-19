@@ -322,18 +322,15 @@ function _having_alias_kind(alias::MemoKey, instruc::SQLInstruction)
   return _expression_kind(source, instruc)
 end
 
-# Functions whose result is text whatever their operands are. Checked BEFORE `output_field`: none of
-# them renders a cast, and `Concat` — the one that takes `output_field` — refuses a non-text type when
-# it is built (#835), so whenever a CTE body can type a `Concat` column (it needs an `output_field`
-# there), it types it text too.
+# Functions whose result is text whatever their operands are, for the `When` condition check made at
+# construction (`_function_condition_kind`, `filter_pairs.jl`), which has no instruction to walk. The
+# formatter reads the same fact from their `_result_rule` (`CText()`, `functions.jl`). `Concat` — the
+# one that takes `output_field` — refuses a non-text type when it is built (#835).
 #
 # `ToChar` (`EXTRACT_DATE`) is text too, but it is not listed: `PormGTypeField` types it, and that is
 # checked first. #851 listed it here while the table keyed `TO_CHAR`, a name no node carries; #862
-# keyed the table by the node's name instead, so the type has one home. A `ToChar` built with its own
-# `formatter=` keeps it either way: `p.formatter` is checked before both.
+# keyed the table by the node's name instead, so the type has one home.
 const _TEXT_OUTPUT_FUNCTIONS = ("LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "REPLACE", "CONCAT", "LPAD", "RPAD")
-# Functions whose result has the type of their operands — the first one that names a type decides.
-const _OPERAND_TYPED_FUNCTIONS = ("MAX", "MIN", "COALESCE", "GREATEST", "LEAST", "NULLIF")
 
 # #1070: a date part's formatter holds a value to the part's RANGE — an hour 0–23, a month 1–12, a
 # `"YYYY-MM"` label. The range belongs to the part, not to an expression computed from it: `hour + 1`
@@ -342,48 +339,58 @@ const _OPERAND_TYPED_FUNCTIONS = ("MAX", "MIN", "COALESCE", "GREATEST", "LEAST",
 _unranged(f) = f in Models.PERIOD_FORMATTERS ? Models.format_number_sql :
                f === Models.format_yyyy_mm   ? Models.format_text_sql : f
 
-# The formatter a value compared with this expression must satisfy, or `nothing` when the
-# expression's type cannot be named. Only a type that is KNOWN is returned — see
-# `_having_alias_formatter`.
+# #1034 step 4 — the formatter a value compared with this expression must satisfy, or `nothing` when
+# its type cannot be named. Only a type that is KNOWN is returned — see `_having_alias_formatter`.
+#
+# It is a VIEW of the type walk: the formatter of the kind `_expression_kind` names (`_kind_formatter`,
+# `expression_kind.jl`). Before, it was its own inference, with its own function lists, and it typed
+# less than the walk: a `Case` with no `output_field`, a window value function and `Rank` had no
+# formatter, a `Sum`/`Avg` of a duration was a number (#900 patched the alias binder for it), and a
+# condition as an operand (`Max(Q(…))`) was untyped while the walk named it a boolean. What stays
+# here is what is not a kind:
+#
+# - a node's own `formatter=` (a date part's range, `ToChar`), and a column's field, whose formatter
+#   holds more than its kind (an array's element rules, a full-text vector);
+# - a declared type (`Cast`, `output_field`), through its field: `_declared_type_formatter` knows that
+#   SQLite renders a uuid or network cast as text;
+# - a value that is one of its operands' own (`Max`, `Coalesce`, `Lag`, `NullIf`): the FIRST operand
+#   that names a formatter decides, where the walk demands that every operand agree. A filter value
+#   needs one to be checked by, and `Coalesce("finished", 5)` is checked as the first operand (#1034
+#   proposal 2). A `Coalesce` may be its fallback, so it drops a date part's range (`_unranged`);
+# - arithmetic the walk does not type yet (temporal arithmetic, `Extract(x, "EPOCH")`, an interval
+#   times a number): a number when its left side is one, and a `Sum`/`Avg` of it a number, as before.
+#   #1034 step 5 types `F` arithmetic in the walk, and these two fallbacks go with it.
 function _expression_formatter(p::SQLTypeFunction, instruc::SQLInstruction)
   p.formatter === nothing || return p.formatter
   name = p.function_name
-  name == "AVG" && return Models.format_number_sql
-  haskey(PormGTypeField, name) && return getfield(Models, PormGTypeField[name])
-  name in ("SUM", "COUNT") && return Models.format_number_sql
-  name in _TEXT_OUTPUT_FUNCTIONS && return Models.format_text_sql
-  # `Cast` names its type; `Case`/`Coalesce`/`Greatest`/`Least` may (`output_field=`).
   declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
   if declared isa AbstractString
     formatter = _declared_type_formatter(declared, instruc)
     formatter === nothing || return formatter
   end
-  # #965: an untyped `Case` over booleans is a boolean. PostgreSQL already reads it as one (the render
-  # binds a `Bool` branch `::boolean`), so `Max` of it failed there as `max(boolean)` did before #953,
-  # and `Sum` of it added up SQLite's 0/1.
-  name == "CASE" && declared === nothing && _boolean_case(p, instruc) && return Models.format_bool_sql
-  if name in _OPERAND_TYPED_FUNCTIONS
+  if _result_rule(p) in (:operand, :one_of, :first_operand)
     for operand in (p.column isa AbstractVector ? p.column : (p.column,))
       formatter = _expression_formatter(operand, instruc)
       # `Max`/`Min` of a part is still that part; a `Coalesce` may be its fallback (`0`, `"n/a"`).
       formatter === nothing || return name in ("MAX", "MIN") ? formatter : _unranged(formatter)
     end
+    return nothing
   end
-  return nothing
+  formatter = _kind_formatter(_expression_kind(p, instruc), instruc)
+  formatter === nothing || return formatter
+  return name in ("SUM", "AVG") ? Models.format_number_sql : nothing   # step 5: an untyped operand
 end
 # #576: a bare `F("col")` is the column. #707: arithmetic on a NUMBER stays a number; any other
-# operation (`F("happened") + Day(1)`) keeps no type, rather than get the column's.
+# operation (`F("happened") + Day(1)`) keeps no type, rather than get the column's. #942, #949: a
+# comparison is a boolean, which the walk names.
 function _expression_formatter(p::FExpression, instruc::SQLInstruction)
   p.operation === nothing && return _expression_formatter(p.column, instruc)
-  # #942: a comparison is not a number. It used to fall into the arithmetic rule below, so
-  # `F("lap") > 0` typed as a NUMBER and `When(Coalesce(F("lap") > 0, false))` was refused. #949: it
-  # is a boolean — #942 left it untyped only while `format_bool_sql` read any non-1 integer as
-  # `false`, so an alias filter `"ahead" => 5` now fails loudly instead of binding `false`.
-  p.operation in _COMPARISON_OPERATIONS && return Models.format_bool_sql
-  left = _expression_formatter(p.field_name, instruc)
+  formatter = _kind_formatter(_expression_kind(p, instruc), instruc)
+  formatter === nothing || return formatter
   # #1070: `Extract("start_at", "HOUR") + 1` is a plain number — it was one while `Extract` carried no
-  # formatter. See `_unranged`.
-  return _unranged(left) === Models.format_number_sql ? Models.format_number_sql : nothing
+  # formatter. See `_unranged`. Step 5: the walk does not type this arithmetic yet.
+  return _unranged(_expression_formatter(p.field_name, instruc)) === Models.format_number_sql ?
+    Models.format_number_sql : nothing
 end
 _expression_formatter(p::SQLField, instruc::SQLInstruction) = _expression_formatter(p.field, instruc)
 function _expression_formatter(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction)
@@ -396,35 +403,25 @@ end
 _expression_formatter(p::SubqueryObject, instruc::SQLInstruction) =
   instruc.subquery_formatters === nothing ? nothing : get(instruc.subquery_formatters, p, nothing)
 # #965: `EXISTS (…)` is a boolean on both engines; SQLite evaluates it to 0/1, which a projection reads
-# back as a `Bool` once this types it.
-_expression_formatter(::ExistsObject, ::SQLInstruction) = Models.format_bool_sql
+# back as a `Bool` once this types it. A `Q`/`Qor` condition is one too, as an operand (`Max(Q(…))`,
+# `Coalesce(Q(…), false)`), as the walk names it.
+_expression_formatter(::Union{ExistsObject,SQLTypeQ,SQLTypeQor}, ::SQLInstruction) = Models.format_bool_sql
 _expression_formatter(::Any, ::SQLInstruction) = nothing
 
-# #965 — whether a `Case` is a boolean: every branch value (each `When`'s `then`, and the `ELSE`) is
-# one. A string `then` is a literal, never a column path, so it is not looked up.
-function _boolean_case(p::SQLTypeFunction, instruc::SQLInstruction)::Bool
-  values = Any[]
-  for branch in (p.column isa AbstractVector ? p.column : (p.column,))
-    (branch isa SQLTypeFunction && branch.function_name == "WHEN") || return false
-    push!(values, get(branch.kwargs, "then", nothing))
-  end
-  push!(values, get(p.kwargs, "else", nothing))
-  return _all_boolean(values, instruc; paths = false)
-end
 
 # #965 — whether a value is a boolean only when ALL of its candidate values are: a `Bool` literal, or
 # an expression `_expression_formatter` types as one. A NULL is no value and is skipped; NULLs alone
 # are untyped. Every value must agree, as `_agreeing_kind` requires: PostgreSQL refuses a CASE or
 # COALESCE mixing boolean and integer, and on SQLite the result would be a boolean on some rows and an
-# integer on others, so a mixed one is no boolean to type. `paths`: whether a string is a column path
-# (a `Coalesce` operand) or a literal (a `Case` branch).
-function _all_boolean(values, instruc::SQLInstruction; paths::Bool)::Bool
+# integer on others, so a mixed one is no boolean to type. A string is a column path: the values are a
+# `Coalesce`'s operands. (A `Case`'s branch values are typed by the walk, `_case_kind`.)
+function _all_boolean(values, instruc::SQLInstruction)::Bool
   typed = false
   for value in values
     literal = value isa SQLText ? value.field : value
     _is_null_literal(literal) && continue
     boolean = literal isa Bool ||
-      ((value isa Union{SQLObject,SQLType} || (paths && value isa AbstractString)) && !(value isa SQLText) &&
+      ((value isa Union{SQLObject,SQLType,AbstractString}) && !(value isa SQLText) &&
        _expression_formatter(value, instruc) === Models.format_bool_sql)
     boolean || return false
     typed = true
@@ -466,7 +463,7 @@ function _is_boolean_valued(p::FObject, instruc::SQLInstruction)
   # value but would type `Coalesce("is_active", "points")` a boolean. A declared `output_field` is
   # the cast's type and decides alone.
   if _result_rule(p) === :one_of && !(get(p.kwargs, "output_field", nothing) isa AbstractString)
-    return _all_boolean(p.column isa AbstractVector ? p.column : (p.column,), instruc; paths = true)
+    return _all_boolean(p.column isa AbstractVector ? p.column : (p.column,), instruc)
   end
   return _expression_formatter(p, instruc) === Models.format_bool_sql
 end
@@ -539,7 +536,13 @@ function _concat_textless_operand(p, instruc::SQLInstruction)::Union{Tuple{Symbo
   if p isa Union{SQLObject,SQLType,AbstractString}
     if _expression_formatter(p, instruc) === Models.format_bool_sql
       label = _concat_operand_label(p)
-      return (:bool, label === nothing ? "a boolean expression" : "the BooleanField `$(label)`")
+      label === nothing || return (:bool, "the BooleanField `$(label)`")
+      # A function whose value is its operand's (`Lag`, `Max`) names the operand it is over.
+      if p isa SQLTypeFunction && !(p.column isa AbstractVector) && p.column !== nothing
+        inner = _concat_textless_operand(p.column, instruc)
+        inner !== nothing && inner[1] === :bool && return (:bool, "`$(p.function_name)(…)` over $(inner[2])")
+      end
+      return (:bool, "a boolean expression")
     end
     recorded = _cte_textless_record(p, instruc)
     recorded === nothing || return recorded

@@ -68,6 +68,7 @@ end
 # decimal or an interval, `Avg` of integers, a decimal quotient, a comparison) left the set when #1034
 # phase 3 typed that field from what the column means, and an `Avg` of an interval left it in step 2c,
 # when `Concat` and the casts read the column by the kind it means rather than the body's `:numeric` tag.
+# A `Sum` of an interval left it in step 4, when its formatter became the duration its kind names.
 const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Avg interval | alone", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
   ("Avg interval | alone", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
@@ -77,10 +78,6 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date - date | alone", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
   ("F date - date | subquery", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
   ("F date - date | subquery", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
-  ("Sum interval | alone", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
-  ("Sum interval | alone", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
-  ("Sum interval | subquery", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
-  ("Sum interval | subquery", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
   # #1111: a `Sum` over an operand the walk does not type, divided — PostgreSQL's quotient is a
   # `numeric`, which keeps the half, over an `integer` column as over a `bigint` one; the division
   # view fails closed on it since #1034 phase 3 step 2a. SQLite has no `EPOCH` part, so the shape
@@ -379,6 +376,40 @@ const _EKR_CASE_COLUMN = [
         v = only(q.list())[name]
         @test string(nameof(typeof(v))) == type
         @test v == stored
+      end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A condition as a function's operand reads back as a Bool, on every engine (#1034 step 4)
+# `Max(Q(…))`, `Min(Qor(…))`, `Coalesce(Q(…), false)` and a `Case` branch that is a `Q`, projected alone
+# and inside a `Subquery` on result 1. Each must come back as a `Bool`, equal to the condition worked
+# out in Julia from the row's own `grid` and `points`. Before step 4 the formatter typed no `Q`/`Qor`
+# operand, so the read path recorded no kind: SQLite handed back its 0/1 as an `Int64`, and
+# PostgreSQL could not run `Max(Q(…))` at all (`max(boolean)` does not exist; it is `BOOL_OR` now).
+# Why: the unit matrix records the kind, not what the driver hands back.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "A condition as an operand reads back as a Bool (#1034 step 4)" begin
+  plain = M.Result.objects
+  plain.filter("resultid" => _EKR_ROW[:Result])
+  plain.values("grid", "points")
+  row = only(plain.list())
+  ahead = row[:grid] > 1
+  expected = Dict("Max Q" => ahead, "Min Qor" => row[:grid] in (1, 2), "Coalesce Q false" => ahead,
+                  "Case then Q" => row[:grid] == 1 ? row[:points] > 10 : false)
+  for (label, want) in expected
+    i = findfirst(s -> s[1] == label, EKM_SHAPES)
+    @test i !== nothing
+    i === nothing && continue
+    _, base, build = EKM_SHAPES[i]
+    for ctx in (:alone, :subquery)
+      @testset "$label | $ctx" begin
+        q, name = ekm_query(M, base, build, ctx)
+        q.filter(EKM_PK[base] => _EKR_ROW[base])
+        v = only(q.list())[name]
+        @test v isa Bool
+        @test v == want
       end
     end
   end

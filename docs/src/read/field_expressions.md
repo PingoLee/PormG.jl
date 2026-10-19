@@ -121,7 +121,7 @@ query.values("driverid__surname", "laps",
              "started" => Case([When(Cast("laps", "boolean"), then = 1)], default = 0))
 ```
 
-A boolean result is recognized from a `Cast(…, "boolean")`, an `output_field = "boolean"`, or a `BooleanField` operand (`Coalesce(F("is_active"), false)`). PormG checks the result type when it can name it. A function whose type it cannot name, such as `Lag` over a column or a `Case` with no `output_field`, is not checked and renders as written.
+A boolean result is recognized from a `Cast(…, "boolean")`, an `output_field = "boolean"`, a `BooleanField` operand (`Coalesce(F("is_active"), false)`), or a condition operand (`Max(Q("grid__@gt" => 1))`). PormG checks the result type when it can name it: `Lag` over a column has the column's type, and a `Case` with no `output_field` the type its branches agree on, so `When(Lag("grid", over = …))` is refused as a number. A function whose type it cannot name, such as arithmetic over a duration, is not checked and renders as written.
 
 ### Expressions are values, not builders
 

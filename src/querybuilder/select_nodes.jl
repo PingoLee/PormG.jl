@@ -114,6 +114,72 @@ function _order_term_sql(expr, orientation::AbstractString, placement::Symbol, c
                 null_flag = null_flag)
 end
 
+# #1130: an ordering on a projection is printed as its alias, and on an engine that emulates the NULL
+# placement the alias is also inside the sort key, `(alias IS NULL)`. MySQL reads a name inside an
+# ORDER BY EXPRESSION as a FROM column before a result alias (measured on 8.4; a bare `ORDER BY alias`
+# reads the alias), so when a FROM table has a column of that name the key tests that column, and the
+# NULLs land where MySQL puts them, silently: `values("laps" => "position").order_by("-laps")`. Until
+# the key is rendered over the projection itself (phase 2b, which edits the ordering renderer), such a
+# query is refused. A projection that IS that column (`values("position")`, `"surname" =>
+# "driverid__surname"`) reads the same value under either name, so it builds.
+function _refuse_shadowed_null_key_alias(object::SQLObject, instruc::SQLInstruction)
+  (isempty(object.order) || !_refuses_shadowed_null_key_alias(instruc.connection)) && return nothing
+  outputs = Dict{String,Any}()
+  for p in object.values
+    p isa SQLField && (outputs[something(p.custom_as, p._as)] = p.field)
+  end
+  isempty(outputs) && return nothing
+  columns = nothing   # the FROM tables' column names, read once, on the first term that needs them
+  for o in object.order
+    f = o.field
+    (f isa SQLField && f.field isa String && haskey(outputs, f.field)) || continue
+    name = f.field
+    source = outputs[name]
+    source isa String && last(split(source, "__")) == name && continue
+    columns === nothing && (columns = _from_column_names(object, instruc))
+    name in columns || continue
+    throw(QueryBuildError("order_by(\"$(name)\") orders by the projection named `$(name)`, and a table this " *
+      "query reads has a column with that name. MySQL places NULLs with an `($(name) IS NULL)` sort key, and " *
+      "reads `$(name)` there as that column, not as the projection, so the NULLs would sort in the wrong place. " *
+      "Project it under a name no column has, e.g. \e[32mvalues(\"$(name)_value\" => …)\e[0m, and order by that."))
+  end
+  return nothing
+end
+
+# The column names of the tables in this statement's FROM clause: the base model's, each joined model's
+# (found by its table among the models of the base model's module), and each joined CTE's projections.
+function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{String}
+  tables = Set{String}([Models.model_table_name(object.model)])
+  for rj in instruc.row_join
+    hasproperty(rj, :b) && push!(tables, String(getproperty(rj, :b)))
+  end
+  for aj in values(object.alias_join)
+    push!(tables, Models.model_table_name(aj.target))
+  end
+  cols = Set{String}()
+  mod = isdefined(object.model, :_module) ? object.model._module : nothing
+  if mod isa Module
+    for n in names(mod; all = true)
+      isdefined(mod, n) || continue
+      m = getfield(mod, n)
+      m isa PormGModel && Models.model_table_name(m) in tables || continue
+      for (k, fld) in m.fields
+        push!(cols, Models.field_db_column(fld, k))
+      end
+    end
+  end
+  for (name, cte) in object.ctes
+    name in tables || continue
+    for v in values(cte)
+      v isa SQLObjectHandler || continue
+      for p in v.object.values
+        p isa SQLField && push!(cols, something(p.custom_as, p._as))
+      end
+    end
+  end
+  return cols
+end
+
 function _resolve_window_order(v::SQLTypeOrder, instruc::SQLInstruction)::Tuple{String,String}
   expr = string(_resolve_window_expression(v.field, instruc))
   orientation = _normalize_window_orientation(v.orientation)
@@ -765,7 +831,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     resolved_kwargs["bigint"] = true
   end
   # #1130: on an engine whose sum of integers is a DECIMAL (MySQL), a `Sum` over an integer of any width
-  # is cast back to the integer (`Dialect.SUM`), and its `_computed_kind` answers that integer.
+  # is turned back into the integer (`Dialect.SUM`: `x DIV 1`), and its `_computed_kind` answers it.
   if v isa FObject && v.function_name == "SUM" && _sums_integers_as_decimal(instruc.connection) &&
      _integer_operand_kind(v, instruc) !== nothing
     resolved_kwargs["integer"] = true

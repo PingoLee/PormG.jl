@@ -307,26 +307,26 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MySQL aggregates: a sum of integers is cast back to the integer it means
+# MySQL aggregates: a sum of integers is turned back into the integer it means
 # MySQL's SUM over an integer column is a DECIMAL (`SUM(INT)` and `SUM(BIGINT)` alike); the sum of
 # integers means an integer (Django's `Sum` of an integer field), so it renders
-# `CAST(SUM(x) AS SIGNED)`, and the type walk names the same `CInt64`. Expected: the cast on integer
-# operands only, in the SELECT and in a HAVING that filters on it; AVG/COUNT/MAX/MIN bare; the
-# PostgreSQL and SQLite renders unchanged.
+# `(SUM(x) DIV 1)` (a `BIGINT`, which raises past its range where a cast would clamp), and the type walk
+# names the same `CInt64`. Expected: the `DIV` on integer operands only, in the SELECT and in a HAVING
+# that filters on it; AVG/COUNT/MAX/MIN bare; the PostgreSQL and SQLite renders unchanged.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "MySQL aggregates: a sum of integers is cast back to the integer it means" begin
+@testset "MySQL aggregates: a sum of integers is turned back into the integer it means" begin
   sel(M, f) = _mr_inspect(M.Result.objects.values("driverid", "agg" => f))[:sql_text]
-  @test occursin("CAST(SUM(`Tb`.`grid`) AS SIGNED) as `agg`", sel(_MR_MY, Sum("grid")))
-  @test occursin("CAST(SUM(DISTINCT `Tb`.`laps`) AS SIGNED)", sel(_MR_MY, Sum("laps"; distinct = true)))
+  @test occursin("(SUM(`Tb`.`grid`) DIV 1) as `agg`", sel(_MR_MY, Sum("grid")))
+  @test occursin("(SUM(DISTINCT `Tb`.`laps`) DIV 1)", sel(_MR_MY, Sum("laps"; distinct = true)))
   @test occursin("SUM(`Tb`.`points`) as `agg`", sel(_MR_MY, Sum("points")))
-  @test !occursin("CAST", sel(_MR_MY, Sum("points")))
+  @test !occursin("DIV", sel(_MR_MY, Sum("points")))
   @test occursin("AVG(`Tb`.`grid`) as `agg`", sel(_MR_MY, Avg("grid")))
   @test occursin("COUNT(DISTINCT `Tb`.`grid`)", sel(_MR_MY, Count("grid"; distinct = true)))
   @test occursin("MAX(`Tb`.`points`)", sel(_MR_MY, Max("points"))) && occursin("MIN(`Tb`.`grid`)", sel(_MR_MY, Min("grid")))
   having = _mr_inspect(_MR_MY.Result.objects.values("driverid", "total" => Sum("grid")).filter("total__@gt" => 10))
-  @test occursin("HAVING CAST(SUM(`Tb`.`grid`) AS SIGNED) > ?", having[:sql_text]) && having[:parameters] == Any[10]
+  @test occursin("HAVING (SUM(`Tb`.`grid`) DIV 1) > ?", having[:sql_text]) && having[:parameters] == Any[10]
   # The other engines never see the MySQL flag.
-  @test occursin("SUM(\"Tb\".\"grid\") as \"agg\"", sel(_MR_PG, Sum("grid"))) && !occursin("CAST", sel(_MR_PG, Sum("grid")))
+  @test occursin("SUM(\"Tb\".\"grid\") as \"agg\"", sel(_MR_PG, Sum("grid"))) && !occursin("DIV", sel(_MR_PG, Sum("grid")))
   @test occursin("SUM(\"Tb\".\"grid\") as \"agg\"", sel(_MR_SL, Sum("grid")))
   # What MySQL computes, per operand, as the type walk reads it.
   my = MrMockMySQL()
@@ -360,6 +360,31 @@ end
   @test occursin("_order_term_sql(order_expr, orientation, placement, instruc.connection", build_select)
   @test occursin("ORDER BY (`position` IS NULL) DESC, `position` DESC",
                  _mr_inspect(_MR_MY.Result.objects.values("position").order_by("-position"))[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL NULL placement: an alias that is also a FROM column's name is refused
+# Inside `(alias IS NULL)` MySQL reads a name as a FROM column before a result alias (measured on
+# 8.4), so `values("laps" => "position").order_by("-laps")` would test the never-NULL `laps` column and
+# sort the NULL positions last, silently. Expected: that refused with QueryBuildError before any SQL,
+# on a joined table's column too; a rename no column shares, an aggregate alias, and a projection
+# that IS the column of its name build; PostgreSQL and SQLite build the shadowing shape as before.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL NULL placement: an alias that is also a FROM column's name is refused" begin
+  refused(q) = try; _mr_inspect(q); false; catch e; e isa PormG.QueryBuildError && occursin("has a column with that name", sprint(showerror, e)); end
+  @test refused(_MR_MY.Result.objects.values("laps" => "position").order_by("-laps"))
+  # `surname` is a column of the joined `driver` table, not of `result`.
+  @test refused(_MR_MY.Result.objects.values("surname" => "raceid__name", "driverid__nationality").order_by("surname"))
+  # These name no other column, or are that column under its own name: they build.
+  @test !refused(_MR_MY.Result.objects.values("pos2" => "position").order_by("-pos2"))
+  @test !refused(_MR_MY.Result.objects.values("driverid", "total" => Sum("laps")).order_by("total"))
+  @test !refused(_MR_MY.Result.objects.values("position").order_by("-position"))
+  @test !refused(_MR_MY.Result.objects.values("surname" => "driverid__surname").order_by("surname"))
+  @test !refused(_MR_MY.Result.objects.values("laps" => "position").order_by("resultid"))
+  # The other engines build the shadowing shape: PostgreSQL places NULLs natively, and SQLite only
+  # emulates below 3.30.
+  @test !refused(_MR_PG.Result.objects.values("laps" => "position").order_by("-laps"))
+  @test !refused(_MR_SL.Result.objects.values("laps" => "position").order_by("-laps"))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

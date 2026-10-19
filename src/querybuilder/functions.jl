@@ -165,7 +165,7 @@ _computed_kind(::Val{:SUM}, ::Symbol, ::CDecimal, ::PormGPostgres) = CDecimal(no
 _computed_kind(::Val{:SUM}, ::Symbol, k::Union{CFloat64,CInterval}, ::PormGPostgres) = k
 _computed_kind(::Val{:SUM}, ::Symbol, ::Any, ::PormGPostgres) = nothing
 _computed_kind(::Val{:SUM}, ::Symbol, k::CInterval, ::PormGSQLite) = k
-# MySQL (#1130): the sum of integers is a DECIMAL there, cast back to a `SIGNED` (a `BIGINT`) by the
+# MySQL (#1130): the sum of integers is a DECIMAL there, turned back into a `BIGINT` (`x DIV 1`) by the
 # build (`_sums_integers_as_decimal`); a DECIMAL sums to a DECIMAL and a DOUBLE to a DOUBLE. No other
 # operand is a number MySQL sums here: a duration is phase 2b's.
 _computed_kind(::Val{:SUM}, ::Symbol, ::Union{CInt16,CInt32,CInt64}, ::PormGMySQL) = CInt64()

@@ -115,6 +115,14 @@ _emulates_nulls_order(conn::PormGSQLite) = !_supports(conn, :nulls_order)
 # MySQL has no `NULLS FIRST`/`NULLS LAST` at any version (measured on 8.4: a syntax error), so it always
 # falls back (#1271).
 _emulates_nulls_order(::PormGMySQL) = true
+# An ordering on a projection whose alias a FROM table also has as a column name is refused, because
+# the engine emulates the NULL placement with `(alias IS NULL)` and reads the name inside that key as
+# the column (#1130; `_refuse_shadowed_null_key_alias`). PostgreSQL never builds the key. SQLite reads
+# the name the same way, but builds the key only below 3.30; it is left as it was until phase 2b
+# renders the key over the projection on every engine that builds one.
+_refuses_shadowed_null_key_alias(::PormGPostgres) = false
+_refuses_shadowed_null_key_alias(::PormGSQLite) = false
+_refuses_shadowed_null_key_alias(::PormGMySQL) = true
 
 # A list membership (`__@in`) binds the whole list as ONE array parameter (`= ANY($1)`), rather than
 # one placeholder per element.

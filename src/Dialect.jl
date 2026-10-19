@@ -605,13 +605,16 @@ function MIN(column::String, format::Dict{String,Any}, conn::PormGSQLite)
 end
 
 # MySQL (#1130). `SUM` over an integer is a DECIMAL there (`SUM(INT)` and `SUM(BIGINT)` alike), where
-# the sum of integers means an integer, so it is cast back (`integer`, set by the build from
-# `_sums_integers_as_decimal`). `AVG` over an integer or a decimal is a DECIMAL too, which the read
-# parser turns into the float or decimal it means (#1121). A boolean is a `TINYINT(1)`, so `MAX`/`MIN`
-# give "any true" / "all true" as they are. `COUNT` is a `BIGINT`.
+# the sum of integers means an integer, so it is turned back into one (`integer`, set by the build
+# from `_sums_integers_as_decimal`). `x DIV 1`, not `CAST(x AS SIGNED)`: both give the `BIGINT` exactly
+# inside its range, but past it the cast clamps silently to the largest value, while `DIV` raises
+# (SQLSTATE 22003, measured on 8.4), as PostgreSQL's `sum(bigint)::bigint` does. `AVG` over an integer
+# or a decimal is a DECIMAL too, which the read parser turns into the float or decimal it means
+# (#1121). A boolean is a `TINYINT(1)`, so `MAX`/`MIN` give "any true" / "all true" as they are.
+# `COUNT` is a `BIGINT`.
 function SUM(column::String, format::Dict{String,Any}, conn::PormGMySQL)
   sql = get(format, "distinct", false) ? "SUM(DISTINCT $(column))" : "SUM($(column))"
-  return get(format, "integer", false) === true ? "CAST($(sql) AS SIGNED)" : sql
+  return get(format, "integer", false) === true ? "($(sql) DIV 1)" : sql
 end
 AVG(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
   get(format, "distinct", false) ? "AVG(DISTINCT $(column))" : "AVG($(column))"

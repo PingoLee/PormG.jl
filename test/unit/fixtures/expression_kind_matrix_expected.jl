@@ -2810,6 +2810,66 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Exists | subquery", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Max Q | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Max Q | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Max Q | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is MAX over a QObject, whose type PormG does not infer. Name the type the column ho"),
+  ("Max Q | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is MAX over a QObject, whose type PormG does not infer. Name the type the column ho"),
+  ("Max Q | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Max Q | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Min Qor | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Min Qor | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Min Qor | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is MIN over a QorObject, whose type PormG does not infer. Name the type the column "),
+  ("Min Qor | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is MIN over a QorObject, whose type PormG does not infer. Name the type the column "),
+  ("Min Qor | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Min Qor | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce Q false | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce Q false | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce Q false | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce Q false | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce Q false | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce Q false | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Sum Q | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Sum Q | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Sum Q | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = nothing, whole_numeric = nothing),
+  ("Sum Q | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = nothing, whole_numeric = nothing),
+  ("Sum Q | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Sum Q | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "bool", kind = nothing, whole_numeric = nothing),
+  ("Case then Q | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Case then Q | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Case then Q | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: a branch is a QObject, whose type PormG does not infer. Name t"),
+  ("Case then Q | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: a branch is a QObject, whose type PormG does not infer. Name t"),
+  ("Case then Q | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Case then Q | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
 )
 
 # The cells on which two channels disagree, by `_ekm_disagreements`' rule. Derived from the entries
@@ -2851,6 +2911,46 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:gap, "read=none vs textless=numeric")],
   ("Sum F int + epoch / 2 | subquery", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
+  ("Max Q | alone", :postgres) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Max Q | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Max Q | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Max Q | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Min Qor | alone", :postgres) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Min Qor | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Min Qor | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Min Qor | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Coalesce Q false | alone", :postgres) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Coalesce Q false | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Coalesce Q false | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Coalesce Q false | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Sum Q | alone", :postgres) =>
+    [(:conflict, "formatter=number vs textless=bool"), (:gap, "read=none vs textless=bool")],
+  ("Sum Q | alone", :sqlite) =>
+    [(:conflict, "formatter=number vs textless=bool"), (:gap, "read=none vs textless=bool")],
+  ("Sum Q | subquery", :postgres) =>
+    [(:conflict, "formatter=number vs textless=bool"), (:gap, "read=none vs textless=bool")],
+  ("Sum Q | subquery", :sqlite) =>
+    [(:conflict, "formatter=number vs textless=bool"), (:gap, "read=none vs textless=bool")],
+  ("Case then Q | alone", :postgres) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Case then Q | alone", :sqlite) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Case then Q | subquery", :postgres) =>
+    [(:gap, "read=none vs textless=bool")],
+  ("Case then Q | subquery", :sqlite) =>
+    [(:gap, "read=none vs textless=bool")],
 )
 
 # The shapes whose channels answer differently across contexts, by `_ekm_cross_context`' rule.
@@ -2951,4 +3051,8 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
     ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Lag int default float / 2", :sqlite) =>
     ["drops formatter: alone=none, cte=number, subquery=none"],
+  ("Sum Q", :postgres) =>
+    ["drops textless: alone=bool, cte=none, subquery=bool"],
+  ("Sum Q", :sqlite) =>
+    ["drops textless: alone=bool, cte=none, subquery=bool"],
 )

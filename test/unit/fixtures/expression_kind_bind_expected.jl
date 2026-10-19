@@ -3571,4 +3571,80 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (bool): A boolean value must be true, false, 0 or 1. Got another integer."),
   ("Exists | subquery", :sqlite, "w__@gt", "bool true") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    EXISTS (SELECT 1\nFROM \"result\" as \"R4\"\nWHERE \"R4\".\"resultid\" = \"R3\".\"resultid\"\nLIMIT 1) as \"t\"\nFROM \"result\" as \"R3\"\nWHERE \"R3\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("Max Q | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "MAX((\"Tb\".\"grid\" > \$2)) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Max Q | alone", :postgres, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :having, sql = "MAX((\"Tb\".\"grid\" > \$2)) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("Max Q | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "MAX((\"Tb\".\"grid\" > ?)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Max Q | alone", :sqlite, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :having, sql = "MAX((\"Tb\".\"grid\" > ?)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("Max Q | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MAX((\"R2\".\"grid\" > \$3)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Max Q | subquery", :postgres, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MAX((\"R2\".\"grid\" > \$3)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("Max Q | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MAX((\"R2\".\"grid\" > ?)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Max Q | subquery", :sqlite, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MAX((\"R2\".\"grid\" > ?)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("Min Qor | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "MIN((\"Tb\".\"grid\" = \$3 OR \"Tb\".\"grid\" = \$4)) > \$5", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Min Qor | alone", :postgres, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :having, sql = "MIN((\"Tb\".\"grid\" = \$3 OR \"Tb\".\"grid\" = \$4)) > \$5", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("true", "Bool")]),
+  ("Min Qor | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "MIN((\"Tb\".\"grid\" = ? OR \"Tb\".\"grid\" = ?)) > ?", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Min Qor | alone", :sqlite, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :having, sql = "MIN((\"Tb\".\"grid\" = ? OR \"Tb\".\"grid\" = ?)) > ?", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("true", "Bool")]),
+  ("Min Qor | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MIN((\"R2\".\"grid\" = \$4 OR \"R2\".\"grid\" = \$5)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Min Qor | subquery", :postgres, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MIN((\"R2\".\"grid\" = \$4 OR \"R2\".\"grid\" = \$5)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("Min Qor | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MIN((\"R2\".\"grid\" = ? OR \"R2\".\"grid\" = ?)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Min Qor | subquery", :sqlite, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MIN((\"R2\".\"grid\" = ? OR \"R2\".\"grid\" = ?)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("true", "Bool")]),
+  ("Coalesce Q false | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "COALESCE((\"Tb\".\"grid\" > \$3), \$4::boolean) > \$5", params = [("1", "Int64"), ("false", "Bool"), ("1", "Int64"), ("false", "Bool"), ("10", "Int64")]),
+  ("Coalesce Q false | alone", :postgres, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "COALESCE((\"Tb\".\"grid\" > \$3), \$4::boolean) > \$5", params = [("1", "Int64"), ("false", "Bool"), ("1", "Int64"), ("false", "Bool"), ("true", "Bool")]),
+  ("Coalesce Q false | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "COALESCE((\"Tb\".\"grid\" > ?), ?) > ?", params = [("1", "Int64"), ("false", "Bool"), ("1", "Int64"), ("false", "Bool"), ("10", "Int64")]),
+  ("Coalesce Q false | alone", :sqlite, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "COALESCE((\"Tb\".\"grid\" > ?), ?) > ?", params = [("1", "Int64"), ("false", "Bool"), ("1", "Int64"), ("false", "Bool"), ("true", "Bool")]),
+  ("Coalesce Q false | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE((\"R2\".\"grid\" > \$4), \$5::boolean) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("false", "Bool"), ("1", "Int64"), ("1", "Int64"), ("false", "Bool"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce Q false | subquery", :postgres, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE((\"R2\".\"grid\" > \$4), \$5::boolean) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$6 \n) > \$7", params = [("1", "Int64"), ("false", "Bool"), ("1", "Int64"), ("1", "Int64"), ("false", "Bool"), ("1", "Int64"), ("true", "Bool")]),
+  ("Coalesce Q false | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE((\"R2\".\"grid\" > ?), ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("false", "Bool"), ("1", "Int64"), ("1", "Int64"), ("false", "Bool"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce Q false | subquery", :sqlite, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    COALESCE((\"R2\".\"grid\" > ?), ?) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("false", "Bool"), ("1", "Int64"), ("1", "Int64"), ("false", "Bool"), ("1", "Int64"), ("true", "Bool")]),
+  ("Sum Q | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "SUM((\"Tb\".\"grid\" > \$2)) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum Q | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :having, sql = "SUM((\"Tb\".\"grid\" > ?)) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum Q | cte", :postgres, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$2", params = [("1", "Int64"), ("10", "Int64")]),
+  ("Sum Q | cte", :sqlite, "g__v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("10", "Int64")]),
+  ("Sum Q | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM((\"R2\".\"grid\" > \$3)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Sum Q | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    SUM((\"R2\".\"grid\" > ?)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case then Q | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN (\"Tb\".\"points\" > \$5)\nELSE \$6::boolean\nEND\n > \$7", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("10", "Int64")]),
+  ("Case then Q | alone", :postgres, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN (\"Tb\".\"points\" > \$5)\nELSE \$6::boolean\nEND\n > \$7", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("true", "Bool")]),
+  ("Case then Q | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"grid\" = ? THEN (\"Tb\".\"points\" > ?)\nELSE ?\nEND\n > ?", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("10", "Int64")]),
+  ("Case then Q | alone", :sqlite, "v__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"grid\" = ? THEN (\"Tb\".\"points\" > ?)\nELSE ?\nEND\n > ?", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("true", "Bool")]),
+  ("Case then Q | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = \$5 THEN (\"R2\".\"points\" > \$6)\nELSE \$7::boolean\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case then Q | subquery", :postgres, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = \$5 THEN (\"R2\".\"points\" > \$6)\nELSE \$7::boolean\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("true", "Bool")]),
+  ("Case then Q | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = ? THEN (\"R2\".\"points\" > ?)\nELSE ?\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case then Q | subquery", :sqlite, "w__@gt", "bool true") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = ? THEN (\"R2\".\"points\" > ?)\nELSE ?\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64"), ("false", "Bool"), ("1", "Int64"), ("true", "Bool")]),
 )

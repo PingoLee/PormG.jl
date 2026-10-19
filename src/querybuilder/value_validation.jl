@@ -63,6 +63,10 @@ function _is_uuid_field(f_meta)::Bool
     return getproperty(f_meta, :type) == "UUID"
 end
 
+function _is_boolean_field(f_meta)::Bool
+    return getproperty(f_meta, :type) == "BOOLEAN"
+end
+
 function _is_json_field(f_meta)::Bool
     return getproperty(f_meta, :type) in ("JSON", "JSONB")
 end
@@ -326,6 +330,13 @@ function _validate_uuid_value(model::PormGModel, field::String, value::Any, oper
     else
         _type_mismatch_error(operation, model, field, value, "a UUID or UUID-formatted string"; suggestion="use UUIDs.uuid4() or a string like \"550e8400-e29b-41d4-a716-446655440000\"")
     end
+end
+
+# #1290: what `format_bool_sql` takes. An integer other than 0 or 1 is left to its `:range` refusal
+# (#949), which the bind step reports with the field.
+function _validate_boolean_value(model::PormGModel, field::String, value::Any, operation::String)
+    value isa Integer && return true
+    _type_mismatch_error(operation, model, field, value, "true, false, 0 or 1"; suggestion="pass a Bool")
 end
 
 # The family check lives here rather than in the formatter: `protocol` is a slot of the field, and the
@@ -658,6 +669,8 @@ function _validate_field_value(model::PormGModel, field::String, f_meta, value::
         _validate_decimal_value(model, field, value, operation)
     elseif _is_uuid_field(f_meta)
         _validate_uuid_value(model, field, value, operation)
+    elseif _is_boolean_field(f_meta)
+        _validate_boolean_value(model, field, value, operation)
     elseif _is_json_field(f_meta)
         _validate_json_value(model, field, value, operation)
     elseif _is_network_field(f_meta)

@@ -1250,6 +1250,10 @@ holds a vector, so two equal reads are not `===` even from the same engine.
 
 **Database Type**: `BOOLEAN`
 
+**Values**: `true` and `false`, or the integers `0` and `1`. A write or a filter given anything
+else raises `InvalidValueError` naming the field: kind `:range` for another integer, kind `:type`
+for any other value, a string such as `"true"` included (#1290).
+
 ```julia
 # Team member preferences and flags
 Team_member = Models.Model(

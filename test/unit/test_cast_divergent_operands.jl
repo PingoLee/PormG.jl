@@ -1373,14 +1373,16 @@ end
   # times an interval is an interval at the top, but the half reaches its value, so it stays refused.
   _ccd_expect(Fn.Cast(Fn.Sum(_CF("laps_total") + _CF("payload__n")) / 2 * Fn.Max(_CF("laptime")), "text");
               departs = _PG_ONLY, issue = "#1111", named = "`SUM(…)` over a value PormG cannot type")
-  # A date difference is a day count, a NUMBER, though it roots in a date: summed with a `bigint` it
-  # is a `sum(bigint)` on PostgreSQL, refused. Alone it is an integer sum, but the walk does not type
-  # a day count yet (F-arithmetic typing is #1034 phase 3 step 5), so it fails closed too; a typed
-  # dividend says which quotient is meant and builds.
+  # A date difference is a day count, a NUMBER, though it roots in a date. Since #1034 step 5a the walk
+  # types it (`integer`), so its sum is an integer sum the walk can name: alone a `sum(integer)`, a
+  # `bigint` on PostgreSQL; with a `bigint` added, a `sum(bigint)`, which `Dialect.SUM` renders
+  # `::bigint` there (#1147). Either way the quotient is the integer one on both engines, and builds.
+  # Before step 5a both failed closed on PostgreSQL as a sum the walk could not type.
   for x in (Fn.Sum(_CF("born") - _CF("born") + _CF("laps_total")) / 2, Fn.Sum(_CF("born") - _CF("born")) / 2)
-    _ccd_expect(Fn.Cast(x, Models.IntegerField()); departs = _PG_ONLY, issue = "#1111",
-                named = "`SUM(…)` over a value PormG cannot type")
+    _ccd_expect(Fn.Cast(x, Models.IntegerField()); departs = (postgres = false, sqlite = false), issue = "#1111")
   end
+  @test occursin(")::bigint", _ccd_render(Fn.Cast(Fn.Sum(_CF("born") - _CF("born") + _CF("laps_total")) / 2,
+                                                  Models.IntegerField()); conn = _CCD_PG))
   @test _ccd_builds(Fn.Cast(Fn.Cast(Fn.Sum(_CF("born") - _CF("born")), Models.BigIntegerField()) / 2, Models.IntegerField()))
   # The escape the message and the docs name: a dividend given a type divides as that type.
   @test _ccd_builds(Fn.Cast(Fn.Cast(Fn.Sum(_CF("number") + _CF("payload__n")), Models.BigIntegerField()) / 2, Models.IntegerField()))

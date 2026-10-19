@@ -737,13 +737,17 @@ end
       "c" => F_.Coalesce("amount", 0),
       "e" => F_.Coalesce(F_.Value(nothing), F_.Value(nothing)),
       "f" => F_.Coalesce("d", "d"; output_field = "text"),
-      "g" => F_.Greatest("d", PormG.F("d") + 1),
+      # An operand PormG cannot type: a date times a number has no kind on either engine.
+      "g" => F_.Greatest("d", PormG.F("d") * 2),
       # Agreement is exact equality: two DecimalFields of different widths name two representations
       # (SQLite's parser checks the value against the width).
       "w" => F_.Coalesce("amount", "cost")))
     for alias in (:c, :e, :f, :g, :w)
       @test !haskey(kinds, alias)
     end
+    # #1034 step 5a: a date shifted by a day count is a date to the walk, so beside the date column it
+    # agrees and reads back as one; before, the walk typed no F arithmetic and it read as SQLite's text.
+    @test _rvc_kinds(q -> q.values("g" => F_.Greatest("d", PormG.F("d") + 1)))[:g] == PormG.CDate()
   end
 
   # #1262: a `Case` with no `output_field` is one of its branches' values on each row, as `Coalesce` is

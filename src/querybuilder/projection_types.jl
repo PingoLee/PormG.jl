@@ -357,9 +357,9 @@ _unranged(f) = f in Models.PERIOD_FORMATTERS ? Models.format_number_sql :
 #   that names a formatter decides, where the walk demands that every operand agree. A filter value
 #   needs one to be checked by, and `Coalesce("finished", 5)` is checked as the first operand (#1034
 #   proposal 2). A `Coalesce` may be its fallback, so it drops a date part's range (`_unranged`);
-# - arithmetic the walk does not type yet (temporal arithmetic, `Extract(x, "EPOCH")`, an interval
-#   times a number): a number when its left side is one, and a `Sum`/`Avg` of it a number, as before.
-#   #1034 step 5 types `F` arithmetic in the walk, and these two fallbacks go with it.
+# - arithmetic the walk does not type (`Extract(x, "EPOCH")`, whose type is not stated, #1034 step
+#   5a typed the temporal arithmetic): a number when its left side is one, and a `Sum`/`Avg` of it a
+#   number, as before. A fallback, so no filter that checked its value stops checking it.
 function _expression_formatter(p::SQLTypeFunction, instruc::SQLInstruction)
   p.formatter === nothing || return p.formatter
   name = p.function_name
@@ -378,7 +378,7 @@ function _expression_formatter(p::SQLTypeFunction, instruc::SQLInstruction)
   end
   formatter = _kind_formatter(_expression_kind(p, instruc), instruc)
   formatter === nothing || return formatter
-  return name in ("SUM", "AVG") ? Models.format_number_sql : nothing   # step 5: an untyped operand
+  return name in ("SUM", "AVG") ? Models.format_number_sql : nothing   # an operand the walk cannot type
 end
 # #576: a bare `F("col")` is the column. #707: arithmetic on a NUMBER stays a number; any other
 # operation (`F("happened") + Day(1)`) keeps no type, rather than get the column's. #942, #949: a

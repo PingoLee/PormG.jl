@@ -172,9 +172,14 @@ end
                "text (a String literal)", _DATE; fix = _TMX_TEXT, julia = false)
   _tmx_refused(Fn.Lag("date"; default = "2021-01-01", over = _tmx_over()), "Lag", _DATE, "text (a String literal)";
                fix = _TMX_TEXT, julia = false)
-  # A third, untyped operand does not hide the conflict between the two typed ones.
-  _tmx_refused(Fn.Coalesce(F("start_at") - Day(1), "date", zdt), "Coalesce", _DATE, _ZONED_LIT;
+  # A third, untyped operand (a timestamp times a number) does not hide the conflict between the two
+  # typed ones.
+  _tmx_refused(Fn.Coalesce(F("start_at") * 2, "date", zdt), "Coalesce", _DATE, _ZONED_LIT;
                fix = _TMX_DECLARE, julia = true)
+  # #1034 step 5a: timestamp arithmetic is typed by the walk, as its render types it, so a shifted
+  # timestamp beside a date is the same mix as the column beside it. It built before as untyped.
+  _tmx_refused(Fn.Coalesce(F("start_at") - Day(1), "date"), "Coalesce",
+               "a timestamp with time zone (an expression)", _DATE; fix = _TMX_DECLARE, julia = false)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -218,7 +223,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # #1200: same-type operands, an untyped operand, and numbers are left as they were
 # Two dates (one across the join), two zoned values, two times; a date beside an operand PormG cannot
-# type (timestamp arithmetic) or a NULL default; and a number beside a number, which #1150 normalizes — the
+# type (a timestamp times a number) or a NULL default; and a number beside a number, which #1150 normalizes — the
 # rule is temporal mixes only (the issue's scope). Expected SQL: as before, not pinned here.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1200: same-type, untyped and numeric operands build as before" begin
@@ -228,7 +233,7 @@ end
                Fn.Greatest(zdt, zdt),
                Fn.Least("fp1_time", Time(12)),
                Fn.Coalesce("local_at", DateTime(2021, 1, 1)),
-               Fn.Coalesce(F("start_at") - Day(1), "date"),
+               Fn.Coalesce(F("start_at") * 2, "date"),
                Fn.Case(Fn.When("number" => 1, then = F("date")), default = nothing),
                Fn.Lag("start_at"; default = zdt, over = _tmx_over()),
                Fn.Coalesce("number", 1.5),

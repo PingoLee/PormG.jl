@@ -161,7 +161,9 @@ end
   q_pg.values("circuit", "span" => span)
   q_pg.filter("span__@gt" => Dates.Hour(1))
   @test occursin("HAVING (MAX(\"Tb\".\"starts_at\") - MIN(\"Tb\".\"starts_at\")) > \$1", _io_sql(q_pg; conn = _IO_PG))
-  @test _io_params(q_pg; conn = _IO_PG) == Any[Dates.Hour(1)]
+  # #1034 step 5a: the walk types the timestamp difference as a duration, so the value binds as a
+  # `DurationField` filter binds it, its text; it bound the `Hour(1)` itself before.
+  @test _io_params(q_pg; conn = _IO_PG) == Any["01:00:00"]
 
   # A row alias filters in WHERE, through the same path.
   for (lookup, value, rendered, bound) in (
@@ -178,12 +180,17 @@ end
     @test _io_params(q) == bound
   end
 
-  # Not a comparison: a pattern lookup reads the text, as before.
-  q = _IOM.Io_race.objects
-  q.values("id", "gap" => _io_gap())
-  q.filter("gap__@icontains" => "06")
-  @test occursin("pormg_lower((SELECT CASE WHEN _pormg_ms IS NULL", _io_sql(q))
-  @test _io_params(q) == Any["%06%"]
+  # Not a comparison: a pattern lookup on a duration is refused, on every engine, as on a
+  # `DurationField` (#1183): its text differs per engine. It read the SQLite text until the walk typed
+  # the timestamp difference (#1194, #1034 step 5a).
+  for conn in (_IO_SL, _IO_PG)
+    q = _IOM.Io_race.objects
+    q.values("id", "gap" => _io_gap())
+    q.filter("gap__@icontains" => "06")
+    err = try _io_sql(q; conn = conn); nothing catch e; e end
+    @test err isa PormG.FilterError
+    @test occursin("this is a duration, whose text differs per database engine", sprint(showerror, err))
+  end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

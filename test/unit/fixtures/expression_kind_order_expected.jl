@@ -515,14 +515,6 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Abs F date - date | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Coalesce F date + Hour(1), date | alone", :postgres, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Coalesce F date + Hour(1), date | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Coalesce F date + Hour(1), date | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
-  ("Coalesce F date + Hour(1), date | subquery", :sqlite, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
   ("Value int | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Value int | alone", :sqlite, "v") =>
@@ -1707,20 +1699,36 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F int * interval / 2 text | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
+  ("Cast Sum F date - date + bigint / 2 int | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Cast Sum F date - date + bigint / 2 int | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Cast Sum F date - date + bigint / 2 int | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | cte", :sqlite, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | cte", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Cast Sum F date - date + bigint / 2 int | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
+  ("Cast Sum F date - date / 2 int | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date / 2 int | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Cast Sum F date - date / 2 int | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Cast Sum F date - date / 2 int | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date / 2 int | cte", :sqlite, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date / 2 int | cte", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Cast Sum F date - date / 2 int | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F date - date / 2 int | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("Floor Subquery int | alone", :postgres, "v") =>

@@ -98,17 +98,20 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
         end
     end
 
-    # What: a model query or write on a MySQL pool fails before any SQL is sent.
-    # SQL: none — `list`, `count` and `create` on `M.Status`, whose table this database does not have.
-    # Why: no query renders for MySQL until phase 2; it must stop loudly at the first piece of the
-    # query builder MySQL has no method for, never render another engine's SQL and send it.
-    @testset "a fluent query on a MySQL pool fails before sending SQL" begin
+    # What: a model read reaches the server; a model write still fails before any SQL is sent.
+    # SQL: `SELECT … FROM \`status\` …` and `COUNT(*)`, which the server refuses (this database has no
+    # `status` table); none for `create`.
+    # Why: reads render for MySQL since phase 2a (`test_mysql_reads.jl` runs them on real tables). No
+    # write renders until phase 3; it must stop loudly at the first piece of the query builder MySQL has
+    # no method for, never render another engine's SQL and send it.
+    @testset "a model read reaches the server; a write fails before sending SQL" begin
         for q in (() -> M.Status.objects.filter("statusid" => 1).list(),
-                  () -> M.Status.objects.count(),
-                  () -> M.Status.objects.create("status" => "x"))
+                  () -> M.Status.objects.count())
             e = try q(); nothing catch err; err end
-            @test e isa Union{MethodError, TypeError}
+            @test e isa PormG.PormGError && occursin("status", msg(e))
         end
+        e = try M.Status.objects.create("status" => "x"); nothing catch err; err end
+        @test e isa MethodError
     end
 
     # What: the pool serves concurrent tasks, each with its own parameters.

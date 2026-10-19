@@ -291,3 +291,34 @@ end
   @test QB._pattern_text_kind(nothing; kind = QB.CDate()) === :date
   @test QB._pattern_text_kind(nothing; kind = nothing) === nothing
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1194 (its arithmetic half): a pattern lookup on an alias of date or duration arithmetic is decided
+# by its kind, as on a column of that kind (#1183). The type walk types the arithmetic since #1034
+# step 5a, as its render does, so the rule the column takes now reaches the alias:
+# - `timestamp - timestamp` and a duration times a number are durations, and `date + Hour(1)` a
+#   timestamp: refused with `FilterError` on both engines, their text differing per engine;
+# - `date - date` is a whole number of days: it reads as its digits, `CAST(… AS text)` on PostgreSQL;
+# - `date + Day(1)` is a date: it reads as its `YYYY-MM-DD` text, `to_char(…)` on PostgreSQL.
+# Before, each was untyped: PostgreSQL got a bare `LIKE` over an interval, a timestamp, an integer or a
+# date, a server error, and SQLite matched whatever text it computed. On SQLite the day count and the
+# shifted date render the SQL they rendered untyped, which already reads as digits and as the date's
+# text; those two lines pin that it still builds, and the PostgreSQL lines are what the kind changes.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1194: a pattern lookup on date or duration arithmetic is decided by its kind" begin
+  for (backend, conn) in _PTC_BACKENDS
+    @testset "$backend" begin
+      for (alias, expr) in (("d", F("start_at") - F("start_at")), ("s", F("duration") * 2), ("h", F("date") + Hour(1)))
+        e = _ptc_refusal(q -> (q.values("raceid", alias => expr); q.filter("$(alias)__@startswith" => "1")), conn)
+        @test e isa PormG.FilterError
+        @test occursin("'$(alias)'", sprint(showerror, e))
+        @test occursin("#1183", sprint(showerror, e))
+      end
+      days = _ptc_sql(q -> (q.values("raceid", "n" => F("date") - F("date")); q.filter("n__@startswith" => "1")), conn)
+      @test occursin(conn isa PormG.PormGPostgres ? "CAST((\"Tb\".\"date\" - \"Tb\".\"date\") AS text) LIKE" :
+                                                    "CAST(julianday(\"Tb\".\"date\") - julianday(\"Tb\".\"date\") AS INTEGER) LIKE", days)
+      shifted = _ptc_sql(q -> (q.values("raceid", "nd" => F("date") + Day(1)); q.filter("nd__@startswith" => "2009")), conn)
+      @test occursin(conn isa PormG.PormGPostgres ? "'YYYY-MM-DD') LIKE" : "' days') LIKE", shifted)
+    end
+  end
+end

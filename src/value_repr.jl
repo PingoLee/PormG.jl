@@ -369,4 +369,17 @@ end
 # names no float), so this never runs on a stored float.
 value_parser(::CFloat64, ::PormGPostgres) = Dialect._parse_computed_float
 value_parser(::CFloat64, ::PormGSQLite) = Dialect._parse_computed_float
+# MySQL (#1130, #1270). MySQL.jl delivers typed values: `Date`, `Time`, a `Decimal` for a DECIMAL
+# (the extension's exact conversion), a `DateTime` for a DATETIME, with no zone. Three kinds need
+# undoing:
+# - a boolean is a `TINYINT(1)`, and the wire has no boolean, so it arrives as the 0/1 it stores
+#   (`Int8`; a comparison as an `Int64`), as on SQLite;
+# - a `DateTimeField` is a DATETIME read in the session's pinned UTC, so a time-zone-aware one becomes
+#   that `ZonedDateTime`, as PostgreSQL's `timestamptz` is;
+# - a computed number that means a float (`Avg` over an integer, #1121) arrives as MySQL's DECIMAL.
+# An interval has no MySQL type yet: what a `DurationField` stores there is phase 4's (#1268), so it
+# reads raw until then.
+value_parser(::CBool, ::PormGMySQL) = Dialect._parse_sqlite_bool
+value_parser(k::CDateTime, ::PormGMySQL) = k.with_timezone ? Dialect._parse_mysql_utc_datetime : nothing
+value_parser(::CFloat64, ::PormGMySQL) = Dialect._parse_computed_float
 value_parser(::CanonicalType, ::PormGBackend) = nothing

@@ -49,10 +49,10 @@ engine rather than as a runtime branch. The values you actually hold are the con
 pools: `PostgresConnectionPool <: PormGPostgres`, `SQLiteConnectionPool <: PormGSQLite` and
 `MySQLConnectionPool <: PormGMySQL`.
 
-`PormGMySQL` is in progress (#1130): its pool connects, runs statements and transactions and takes
-advisory locks, but no query is rendered for it yet, so a fluent query on a MySQL pool fails before
-any SQL is sent, at the first part of the query builder MySQL has no method for (a `MethodError`
-naming it, or a `TypeError` where a signature lists the engines).
+`PormGMySQL` is in progress (#1130): its pool connects, runs statements and transactions, takes
+advisory locks, and renders plain-column reads. What the query builder does not render for it yet
+(writes, date arithmetic, casts, most functions) fails before any SQL is sent, at the first part of
+the query builder MySQL has no method for (a `MethodError` naming it).
 
 Deliberately **not** `<: PormGSettings`: that is the configuration/`Settings` type, and a pool
 carries none of its fields (#186).
@@ -71,7 +71,12 @@ abstract type PormGMySQL <: PormGBackend end    # #1130, in progress: MySQL 8.4+
 const _SQLEngine = Union{PormGPostgres, PormGSQLite, PormGMySQL}
 abstract type AbstractPormGParam <: PormGAbstractType end  # Base type for all parameterized queries
 abstract type PormGPostgresParam <: AbstractPormGParam end  # PostgreSQL numbered params ($1, $2...)
-abstract type PormGSQLiteParam <: AbstractPormGParam end    # SQLite positional params with contextual buckets
+# Positional `?` markers, which bind in text order, so the values are collected per clause and
+# flattened in clause order (`_BUCKET_ORDER`). The buckets are the same on every positional engine;
+# what a value becomes on the wire is each engine's own (`add_parameter!`).
+abstract type PormGPositionalParam <: AbstractPormGParam end
+abstract type PormGSQLiteParam <: PormGPositionalParam end  # SQLite positional params with contextual buckets
+abstract type PormGMySQLParam <: PormGPositionalParam end   # MySQL positional params (#1130), the same buckets
 
 """
     PormGBytes(bytes::Vector{UInt8})
@@ -475,7 +480,8 @@ include("column_ir.jl")
 
 # Type hierarchy
 export PormGAbstractType, PormGSettings, PormGBackend, PormGPostgres, PormGSQLite, PormGMySQL,
-       AbstractPormGParam, PormGPostgresParam, PormGSQLiteParam, PormGBytes, PormGArrayLiteral,
+       AbstractPormGParam, PormGPostgresParam, PormGPositionalParam, PormGSQLiteParam, PormGMySQLParam,
+       PormGBytes, PormGArrayLiteral,
        SQLObject, SQLObjectHandler, SQLTableAlias, SQLInstruction,
        SQLType, SQLTypeQ, SQLTypeQor, SQLTypeF, SQLTypeFunction, SQLTypeOper,
        SQLTypeText, SQLTypeArrays, SQLTypeField, SQLTypeOrder, SQLTypeCTE, SQLTypeJoined,

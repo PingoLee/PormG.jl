@@ -130,10 +130,20 @@ end
 # statement means. UTC for the reason the PostgreSQL extensions use it: a `TIMESTAMP` column shifts
 # with the session `time_zone` (measured: `14:30` at `+00:00` reads `11:30` at `-03:00`). `sql_mode`
 # is MySQL 8.4's default, written out: it keeps `||` a logical OR and `"x"` a string (no `ANSI_QUOTES`,
-# no `PIPES_AS_CONCAT`), which the MySQL dialect (#1271) will render against. The collation stays the
-# server's: what a text comparison means on MySQL is #1265's decision.
+# no `PIPES_AS_CONCAT`), which the MySQL dialect (#1271) renders against: backticks, `CONCAT`.
+#
+# #1265: a text comparison compares code points. A column PormG creates declares `utf8mb4_0900_bin`
+# (`NO PAD`, so `'Senna'` and `'Senna '` differ, as on PostgreSQL; `utf8mb4_bin` would pad), and the
+# connection collation is the same, so a parameter compared with a parameter or a literal does not
+# fall back to the server default `utf8mb4_0900_ai_ci`, where `'senna' = 'Senna'`. A column's own
+# collation still decides a comparison with it (MySQL's coercibility rule).
+#
+# `div_precision_increment = 30`, its maximum: a DECIMAL quotient or `AVG` keeps the operands' scale
+# plus this many digits, and the default 4 makes `AVG` of `1, 2, 2` read `1.6667`. Thirty digits are
+# more than a `Float64` holds, so the mean reads as the nearest double, as on PostgreSQL (#1121).
 const _SESSION_SQL = "SET time_zone = '+00:00', sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES," *
-                     "NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION'"
+                     "NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION', " *
+                     "collation_connection = 'utf8mb4_0900_bin', div_precision_increment = 30"
 
 # `major * 10000 + minor * 100 + patch`, the number the capability table's MySQL rows use.
 _version_number(v::VersionNumber)::Int = Int(v.major) * 10_000 + Int(v.minor) * 100 + Int(v.patch)
@@ -166,7 +176,7 @@ function _open_connection(pool::_Pool)::MySQL.Connection
     try; close(conn); catch; end
     rethrow()
   end
-  @info "PormG: the MySQL backend is in progress (#1130): connections, transactions and raw SQL work; model queries do not yet" maxlog = 1
+  @info "PormG: the MySQL backend is in progress (#1130): connections, transactions, raw SQL and plain-column model reads work; writes and migrations do not yet" maxlog = 1
   return conn
 end
 

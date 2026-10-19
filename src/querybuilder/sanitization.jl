@@ -88,6 +88,15 @@ function safe_column_identifier(column_name::String, conn)::String
     return "\"$(_escape_identifier(column_name))\""
 end
 
+# MySQL (#1130, #1271) quotes an identifier with backticks, and doubles a backtick inside one. A `"`
+# names a string there unless the session sets `ANSI_QUOTES`, which PormG never depends on: a column
+# written `"points"` in an ORDER BY would order by a constant string, silently. The two axes are the
+# same as on the other engines — an alias is validated, a physical name only escaped.
+_escape_identifier_mysql(name::AbstractString)::String = replace(String(name), "`" => "``")
+quote_identifier(identifier::String, ::PormGMySQL)::String = "`$(_validate_identifier(identifier))`"
+safe_table_identifier(table_name::String, ::PormGMySQL)::String = "`$(_escape_identifier_mysql(table_name))`"
+safe_column_identifier(column_name::String, ::PormGMySQL)::String = "`$(_escape_identifier_mysql(column_name))`"
+
 # Escape-only and WITHOUT a `conn`, for interpolation into a SQL string literal that PostgreSQL then
 # re-parses as an identifier — `setval`'s `regclass` argument, `to_regclass`. See
 # `_table_ident_literal` in execution_write.jl, which composes this with `_sql_literal`. Lives here so the

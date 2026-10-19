@@ -64,7 +64,14 @@ _ef_engine(T) = T isa Type && T <: PormG.PormGPostgres ? :postgres :
 # fact stays undecided — a `MethodError` naming it — until its phase adds it here, so a MySQL method
 # that appears without being listed (or a listed one that disappears) fails below.
 const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sql, :_execute_async,
-                               :_acquire_in_mode, :_acquire_for_statement])
+                               :_acquire_in_mode, :_acquire_for_statement,
+                               # Phase 2a (plain-column reads): what every filter, ordering, list
+                               # membership and `inspect_query` asks.
+                               :_interval_as_ms, :_casts_bind_parameters, :_emulates_nulls_order,
+                               :_binds_list_as_array, :_inspection_dialect,
+                               # ... row locks, aggregates, and what a function render asks first.
+                               :_locks_rows, :_sums_integers_as_decimal, :_greatest_skips_nulls,
+                               :_computed_kind, :_refuses_shadowed_null_key_alias, :_filters_durations])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions
@@ -133,9 +140,14 @@ end
   # Sanity on the two engines: the facts answer, and answer differently where they should.
   @test _EF_QB._interval_as_ms(_EfSl()) && !_EF_QB._interval_as_ms(_EfPg())
   @test PormG.Kernel._engine_key(_EfPg()) === :postgres && PormG.Kernel._engine_key(_EfSl()) === :sqlite
-  # MySQL (#1130): the facts phase 1 decided answer; an undecided one is still a MethodError.
+  # MySQL (#1130): the facts phases 1 and 2a decided answer; an undecided one is still a MethodError.
   @test PormG.Kernel._engine_key(_EfMy()) === :mysql
   @test PormG.ConnectionPool._begin_write_sql(_EfMy()) == "START TRANSACTION;"
   @test PormG.ConnectionPool._after_begin_sql(_EfMy()) == String[]
-  @test_throws MethodError _EF_QB._interval_as_ms(_EfMy())
+  @test _EF_QB._interval_as_ms(_EfMy()) && _EF_QB._emulates_nulls_order(_EfMy())
+  @test !_EF_QB._casts_bind_parameters(_EfMy()) && !_EF_QB._binds_list_as_array(_EfMy())
+  @test _EF_QB._inspection_dialect(_EfMy()) == (:mysql, :positional)
+  # Date arithmetic is phase 2b's (`_stores_date_as_text`), and writes are phase 3's.
+  @test_throws MethodError _EF_QB._stores_date_as_text(_EfMy())
+  @test_throws MethodError _EF_QB._insert_returns_rows(_EfMy())
 end

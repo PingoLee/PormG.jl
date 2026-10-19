@@ -3,7 +3,7 @@
 # `last` / `earliest` / `latest` and `get`. Writes are in `execution_write.jl`, bulk writes in
 # `execution_bulk.jl`, and rendering an `F(...)` expression in `expression_render.jl`.
 
-function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing, PormGPostgres, PormGSQLite}, model::Union{PormGModel, String}, operation::Symbol;
+function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing, _SQLEngine}, model::Union{PormGModel, String}, operation::Symbol;
                           parameters::Union{Nothing, AbstractPormGParam} = nothing)
   
   if mode === :none
@@ -38,7 +38,7 @@ function _show_query_result(mode::Symbol, sql::String, connection::Union{Nothing
     dialect, bucketing = _inspection_dialect(connection)
     
     bucket_breakdown = Dict{Symbol, Vector{Any}}()
-    if parameters isa PormGSQLiteParam
+    if parameters isa PormGPositionalParam
       # Every slot `_BUCKET_ORDER` names, so a bucket added there is reported here without a second
       # list. This was a hand-written copy, and #46's `:limit` would have been missing from it.
       for ctx in _BUCKET_ORDER
@@ -79,12 +79,12 @@ and generated SQL without ambiguity.
 - `Dict`: A dictionary containing:
   - `:sql_text` (String): The generated SQL query
   - `:parameters` (Vector): The parameterized values in bucket order
-  - `:dialect` (Symbol): The database dialect (`:postgresql` or `:sqlite`)
+  - `:dialect` (Symbol): The database dialect (`:postgresql`, `:sqlite` or `:mysql`)
   - `:model` (String): The model/table name
   - `:operation` (Symbol): The query operation type (`:select`, `:insert`, `:update`, `:delete`).
     A cascading `:delete` returns a Vector of steps; on PostgreSQL that Vector starts with one
     `:lock` step (`SELECT … FOR UPDATE`) per parent model (#770)
-  - `:bucketing` (Symbol): The parameter bucketing strategy (`:numbered` for PostgreSQL, `:positional` for SQLite)
+  - `:bucketing` (Symbol): The parameter bucketing strategy (`:numbered` for PostgreSQL, `:positional` for SQLite and MySQL)
   - `:parameter_count` (Int): Number of parameters
   - `:parameter_buckets` (Dict): Breakdown of parameters by bucket (for positional strategies)
 
@@ -104,7 +104,7 @@ inspection = q |> inspect_query()
 # :bucketing => :numbered
 ```
 """
-function inspect_query(q::SQLObjectHandler; connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, operation::Union{Nothing, Symbol} = nothing)
+function inspect_query(q::SQLObjectHandler; connection::Union{Nothing, _SQLEngine} = nothing, operation::Union{Nothing, Symbol} = nothing)
   # #43: inspection must not mutate the caller. The dry-runs below (query/insert/update)
   # write back onto the handler they build — q.object.parameters, the transient CTE "model"
   # into q.object.ctes, and update()'s auto-now fields into q.object.insert. Build on a copy
@@ -157,7 +157,7 @@ inspect_query(; kwargs...) = (objct) -> inspect_query(objct; kwargs...)
 # Django's meaning (#1049; it used to be the no-limit sentinel and returned every row). An offset of
 # `0` binds nothing because OFFSET 0 is a no-op anyway.
 function _limit_offset_sql(limit::Union{Nothing,Integer}, offset::Integer, parameters::AbstractPormGParam,
-                           connection::Union{PormGPostgres,PormGSQLite})::String
+                           connection::_SQLEngine)::String
   (limit === nothing && offset == 0) && return ""
   return with_bucket(parameters, :limit) do
     limit_sql = limit === nothing ? nothing : add_parameter!(parameters, limit)
@@ -324,7 +324,7 @@ end
 
 function query(q::SQLObjectHandler; 
   table_alias::Union{Nothing, SQLTableAlias} = nothing,
-  connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing,
+  connection::Union{Nothing, _SQLEngine} = nothing,
   parameters::Union{Nothing, AbstractPormGParam} = nothing,
   cte::Union{Nothing, CTEDict} = nothing,
   outer::Union{Nothing, SQLInstruction} = nothing,
@@ -470,7 +470,7 @@ function query(q::SQLObjectHandler;
     for rj in instruction.row_join
       rj isa CrossJoin || continue
       cte_alias = rj.alias_b
-      if !occursin("\"$(cte_alias)\"", predicate_text)
+      if !occursin(quote_identifier(cte_alias, instruction.connection), predicate_text)
         @warn _emsg("PormG: CTE \e[31m$(rj.b)\e[0m is CROSS JOINed with no correlating filter — this is a Cartesian product. Add a correlation such as \e[32mfilter(\"main_col\" => F(\"$(rj.b)__col\"))\e[0m, or pass \e[32mjoin_field=\e[0m to .with().")
       end
     end
@@ -778,14 +778,14 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
     # both engines.
     resposta = """$(with_clause)SELECT COUNT(*) FROM (
     SELECT $(is_distinct ? "DISTINCT " : "")$(_query_select(instruction.select, instruction.connection))
-    $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as $(is_distinct ? "\"__pormg_distinct_count\"" : instruction.aggregate ? "\"__pormg_grouped_count\"" : "\"__pormg_projected_count\"")
+    $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as $(quote_identifier(is_distinct ? "__pormg_distinct_count" : instruction.aggregate ? "__pormg_grouped_count" : "__pormg_projected_count", instruction.connection))
     """
   elseif _is_sliced(q.object)
     # #1053: count the rows the slice returns, as Django's `qs[:5].count()` does. The ordering was
     # cleared above, and that is safe: how many rows a slice holds does not depend on which they are.
     resposta = """$(with_clause)SELECT COUNT(*) FROM (
     SELECT 1
-    $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as "__pormg_sliced_count"
+    $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as $(quote_identifier("__pormg_sliced_count", instruction.connection))
     """
   else
     resposta = """$(with_clause)SELECT

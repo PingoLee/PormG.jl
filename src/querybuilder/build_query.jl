@@ -130,7 +130,7 @@ end
 
 function build(object::SQLObject;
   table_alias::Union{Nothing,SQLTableAlias}=nothing,
-  connection::Union{Nothing,PormGPostgres,PormGSQLite}=nothing,
+  connection::Union{Nothing,_SQLEngine}=nothing,
   parameters::Union{Nothing,AbstractPormGParam}=nothing,
   outer::Union{Nothing,SQLInstruction}=nothing,
   # #1002: the statement only asks whether a row matches — an `EXISTS`, an `IN (…)`, a mutation scoped by
@@ -295,6 +295,7 @@ function build(object::SQLObject;
   _check_aggregate_fanout(instruct)      # #74: refuse silently-inflated aggregates over to-many joins
   _check_grouped_correlation(instruct)   # #194: refuse a correlated projection on an ungrouped column
   _check_mixed_grouping(instruct)        # #798: refuse a mixed column+aggregate term on an ungrouped column
+  _refuse_shadowed_null_key_alias(object, instruct)   # #1130: a NULL sort key MySQL would read as a column
 
   return instruct
 end

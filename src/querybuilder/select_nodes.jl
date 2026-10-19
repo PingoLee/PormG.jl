@@ -98,6 +98,105 @@ end
 # `_order_term_sql` is the same renderer the top-level clause uses, so the SQLite < 3.30 emulation
 # (`(expr IS NULL) DESC, expr ASC`, legal inside `OVER (...)` too) and its placeholder guard come
 # along for free instead of being restated.
+# #1130: MySQL has no `NULLS FIRST`/`NULLS LAST`, so every ordering term is emulated with the
+# `(expr IS NULL)` key, and the shared renderer's one exit from it — a term holding a `?` with no
+# separate flag render, printed bare so the value is not bound twice — would leave NULLs where MySQL
+# puts them (first in ascending order), not where PormG's placement says. On SQLite that exit is only
+# taken before 3.30; on MySQL it would be every such term, so it is refused here, before the shared
+# arm. A projection ordered by its alias renders no `?` and keeps the placement.
+function _order_term_sql(expr, orientation::AbstractString, placement::Symbol, conn::PormGMySQL;
+                         null_flag::Union{Nothing,AbstractString} = nothing)
+  null_flag === nothing && occursin('?', string(expr)) && throw(_capability_error(conn, :nulls_order,
+    "Ordering by an expression that binds a value";
+    why = "Project it under a name and order by that name instead, e.g. \e[32mvalues(\"key\" => <expression>)\e[0m " *
+          "and \e[32morder_by(\"key\")\e[0m, which places NULLs with an `(key IS NULL)` sort key."))
+  return invoke(_order_term_sql, Tuple{Any,AbstractString,Symbol,Any}, expr, orientation, placement, conn;
+                null_flag = null_flag)
+end
+
+# #1130: an ordering on a projection is printed as its alias, and on an engine that emulates the NULL
+# placement the alias is also inside the sort key, `(alias IS NULL)`. MySQL reads a name inside an
+# ORDER BY EXPRESSION as a FROM column before a result alias (measured on 8.4; a bare `ORDER BY alias`
+# reads the alias), so when a FROM table has a column of that name the key tests that column, and the
+# NULLs land where MySQL puts them, silently: `values("laps" => "position").order_by("-laps")`. Until
+# the key is rendered over the projection itself (phase 2b, which edits the ordering renderer), such a
+# query is refused. A projection that IS that column (`values("position")`, `"surname" =>
+# "driverid__surname"`) reads the same value under either name, so it builds.
+function _refuse_shadowed_null_key_alias(object::SQLObject, instruc::SQLInstruction)
+  (isempty(object.order) || !_refuses_shadowed_null_key_alias(instruc.connection)) && return nothing
+  outputs = Dict{String,Any}()
+  for p in object.values
+    p isa SQLField && (outputs[something(p.custom_as, p._as)] = p.field)
+  end
+  isempty(outputs) && return nothing
+  columns = nothing   # the FROM tables' column names, read once, on the first term that needs them
+  for o in object.order
+    f = o.field
+    (f isa SQLField && f.field isa String && haskey(outputs, f.field)) || continue
+    name = f.field
+    source = outputs[name]
+    source isa String && last(split(source, "__")) == name && continue
+    columns === nothing && (columns = _from_column_names(object, instruc))
+    name in columns || continue
+    throw(QueryBuildError("order_by(\"$(name)\") orders by the projection named `$(name)`, and a table this " *
+      "query reads has a column with that name. MySQL places NULLs with an `($(name) IS NULL)` sort key, and " *
+      "reads `$(name)` there as that column, not as the projection, so the NULLs would sort in the wrong place. " *
+      "Project it under a name no column has, e.g. \e[32mvalues(\"$(name)_value\" => …)\e[0m, and order by that."))
+  end
+  return nothing
+end
+
+# The column names of the tables in this statement's FROM clause: the base model's, each joined model's,
+# and each joined CTE's projections. A joined model is found by its table among the models the base
+# model reaches through its relations (forward and reverse, any depth, whatever module defines them),
+# the `cjoin_on` targets, and the models of the base model's module.
+function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{String}
+  tables = Set{String}([Models.model_table_name(object.model)])
+  for rj in instruc.row_join
+    hasproperty(rj, :b) && push!(tables, String(getproperty(rj, :b)))
+  end
+  candidates = PormGModel[object.model]
+  for aj in values(object.alias_join)
+    push!(tables, Models.model_table_name(aj.target))
+    push!(candidates, aj.target)
+  end
+  mod = isdefined(object.model, :_module) ? object.model._module : nothing
+  if mod isa Module
+    for n in names(mod; all = true)
+      isdefined(mod, n) && (m = getfield(mod, n)) isa PormGModel && push!(candidates, m)
+    end
+  end
+  cols = Set{String}()
+  seen = Base.IdSet{PormGModel}()
+  while !isempty(candidates)
+    m = pop!(candidates)
+    m in seen && continue
+    push!(seen, m)
+    in_from = Models.model_table_name(m) in tables
+    for (k, fld) in m.fields
+      in_from && push!(cols, Models.field_db_column(fld, k))
+      to = hasproperty(fld, :to) ? getproperty(fld, :to) : nothing
+      to isa PormGModel && push!(candidates, to)
+    end
+    for rel in values(m.related_objects)
+      for name in propertynames(rel)
+        target = getproperty(rel, name)
+        target isa PormGModel && push!(candidates, target)
+      end
+    end
+  end
+  for (name, cte) in object.ctes
+    name in tables || continue
+    for v in values(cte)
+      v isa SQLObjectHandler || continue
+      for p in v.object.values
+        p isa SQLField && push!(cols, something(p.custom_as, p._as))
+      end
+    end
+  end
+  return cols
+end
+
 function _resolve_window_order(v::SQLTypeOrder, instruc::SQLInstruction)::Tuple{String,String}
   expr = string(_resolve_window_expression(v.field, instruc))
   orientation = _normalize_window_orientation(v.orientation)
@@ -234,11 +333,14 @@ end
 # #74: extract the single source table alias from a fully-resolved bare column reference like
 # `"Tb_1"."points"` or `"Tb".*`. Returns the unquoted alias, or `nothing` for anything that is not a
 # single column (nested aggregate, F-expression, multi-column) — the fan-out guard treats `nothing`
-# as ambiguous and conservatively refuses. Both backends quote identifiers with double quotes.
+# as ambiguous and conservatively refuses. PostgreSQL and SQLite quote identifiers with double quotes,
+# MySQL with backticks (#1130); each doubles its own quote inside a name.
 function _extract_leading_alias(s)
   s isa AbstractString || return nothing
   m = match(r"^\"((?:[^\"]|\"\")+)\"\.(?:\"(?:[^\"]|\"\")+\"|\*)$", s)
-  m === nothing ? nothing : replace(m.captures[1], "\"\"" => "\"")
+  m === nothing || return replace(m.captures[1], "\"\"" => "\"")
+  m = match(r"^`((?:[^`]|``)+)`\.(?:`(?:[^`]|``)+`|\*)$", s)
+  m === nothing ? nothing : replace(m.captures[1], "``" => "`")
 end
 
 # #844 — `Greatest`/`Least` skip a NULL argument on both engines, as PostgreSQL's GREATEST/LEAST do.
@@ -744,6 +846,12 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # its `_computed_kind` answers, so the SQL and the type agree.
   if v isa FObject && v.function_name == "SUM" && _sums_bigint(v, instruc)
     resolved_kwargs["bigint"] = true
+  end
+  # #1130: on an engine whose sum of integers is a DECIMAL (MySQL), a `Sum` over an integer of any width
+  # is turned back into the integer (`Dialect.SUM`: `x DIV 1`), and its `_computed_kind` answers it.
+  if v isa FObject && v.function_name == "SUM" && _sums_integers_as_decimal(instruc.connection) &&
+     _integer_operand_kind(v, instruc) !== nothing
+    resolved_kwargs["integer"] = true
   end
 
   # #74 fan-out guard: record COUNT/SUM/AVG and the source alias of their column so build() can

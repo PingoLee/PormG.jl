@@ -22,6 +22,16 @@
 # on the server.
 _interval_as_ms(::PormGPostgres) = false
 _interval_as_ms(::PormGSQLite) = true
+# MySQL has no interval type either (#1130): until phase 2b spells its millisecond form, a duration in an
+# ordering or a comparison renders SQLite's, which MySQL rejects at the server, never a silent answer.
+_interval_as_ms(::PormGMySQL) = true
+
+# A `DurationField` can be filtered: the engine has a decided storage for it (PostgreSQL `interval`,
+# SQLite the `HH:MM:SS` text PormG writes). MySQL's is phase 4's decision (#1130), so every duration
+# filter but `IS NULL` is refused there until then.
+_filters_durations(::PormGPostgres) = true
+_filters_durations(::PormGSQLite) = true
+_filters_durations(::PormGMySQL) = false
 
 # The engine stores a date as text, so `date ± x` with an operand PormG cannot type would do
 # arithmetic on the text — on SQLite, on its year (#882).
@@ -43,6 +53,7 @@ _cast_renders_text(field::PormGField, ::PormGSQLite) = _text_cast_on_sqlite(fiel
 # literal as PormG means it. SQLite's collector ignores a cast (`add_parameter!(::PormGSQLiteParam)`).
 _casts_bind_parameters(::PormGPostgres) = true
 _casts_bind_parameters(::PormGSQLite) = false
+_casts_bind_parameters(::PormGMySQL) = false   # MySQL.jl binds typed values; `?` takes no cast
 
 # An `INSERT` reports the row it wrote (`RETURNING`). SQLite deliberately does not use it: PormG reads
 # the row back out-of-band, because `RETURNING` can hang there for some table shapes (#48).
@@ -78,6 +89,7 @@ _locks_cascade_parents(::PormGSQLite) = false
 # requirement is not one of these: it holds on both engines (#1237).
 _locks_rows(::PormGPostgres) = true
 _locks_rows(::PormGSQLite) = false
+_locks_rows(::PormGMySQL) = true   # InnoDB row locks (#1269)
 
 # #1111, #1034 phase 3 step 2a — a `Sum` over an operand the type walk cannot name may not be the
 # integer the operands add up to, so its quotient may keep a fraction an integer quotient drops. Over
@@ -87,21 +99,43 @@ _locks_rows(::PormGSQLite) = false
 _untyped_sum_departs(::PormGPostgres) = true
 _untyped_sum_departs(::PormGSQLite) = false
 
+# `SUM` over an integer is a DECIMAL (MySQL: `SUM(INT)` and `SUM(BIGINT)` alike), so `Dialect.SUM` casts
+# it back to the integer the sum of integers means. PostgreSQL widens only `sum(bigint)` to `numeric`,
+# which `_sums_bigint` handles; SQLite's sum of integers is an integer.
+_sums_integers_as_decimal(::PormGPostgres) = false
+_sums_integers_as_decimal(::PormGSQLite) = false
+_sums_integers_as_decimal(::PormGMySQL) = true
+
 # `Greatest`/`Least` skip a NULL argument natively. SQLite renders the scalar `MAX`/`MIN`, which
 # return NULL when any argument is, so PormG rewrites the operands (#844).
 _greatest_skips_nulls(::PormGPostgres) = true
 _greatest_skips_nulls(::PormGSQLite) = false
+# MySQL's `GREATEST`/`LEAST` return NULL when any argument is NULL (its documented rule), so the operands
+# are rewritten there too; the `GREATEST` renderer itself is phase 2b's.
+_greatest_skips_nulls(::PormGMySQL) = false
 
 # NULL placement is emulated with an `(expr IS NULL)` sort key, because the engine has no
 # `NULLS FIRST`/`NULLS LAST` (SQLite before 3.30, #75). The version is the capability table's
 # `:nulls_order` row (#1163); the fact is whether this engine falls back when the row says no.
 _emulates_nulls_order(::PormGPostgres) = false
 _emulates_nulls_order(conn::PormGSQLite) = !_supports(conn, :nulls_order)
+# MySQL has no `NULLS FIRST`/`NULLS LAST` at any version (measured on 8.4: a syntax error), so it always
+# falls back (#1271).
+_emulates_nulls_order(::PormGMySQL) = true
+# An ordering on a projection whose alias a FROM table also has as a column name is refused, because
+# the engine emulates the NULL placement with `(alias IS NULL)` and reads the name inside that key as
+# the column (#1130; `_refuse_shadowed_null_key_alias`). PostgreSQL never builds the key. SQLite reads
+# the name the same way, but builds the key only below 3.30; it is left as it was until phase 2b
+# renders the key over the projection on every engine that builds one.
+_refuses_shadowed_null_key_alias(::PormGPostgres) = false
+_refuses_shadowed_null_key_alias(::PormGSQLite) = false
+_refuses_shadowed_null_key_alias(::PormGMySQL) = true
 
 # A list membership (`__@in`) binds the whole list as ONE array parameter (`= ANY($1)`), rather than
 # one placeholder per element.
 _binds_list_as_array(::PormGPostgres) = true
 _binds_list_as_array(::PormGSQLite) = false
+_binds_list_as_array(::PormGMySQL) = false   # no array binding: one `?` per element
 
 # A JSON path lookup extracts TEXT (`#>>`), so a value compared with it binds as text and an ordering
 # casts it to `numeric`. SQLite's `json_extract` keeps the JSON type, so a number stays a number.
@@ -111,3 +145,4 @@ _json_path_extracts_text(::PormGSQLite) = false
 # What `inspect_query` reports as the `:dialect` and the `:bucketing` of the parameters.
 _inspection_dialect(::PormGPostgres) = (:postgresql, :numbered)
 _inspection_dialect(::PormGSQLite) = (:sqlite, :positional)
+_inspection_dialect(::PormGMySQL) = (:mysql, :positional)

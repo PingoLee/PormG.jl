@@ -376,3 +376,18 @@ end
   @test PormG.with_advisory_lock(() -> :ran, pool, "k1130") === :ran   # wait = false: GET_LOCK(…, 0)
   @test occursin("GET_LOCK(", pool.calls[1][1]) && occursin(", 0)", pool.calls[1][1])
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL session pins: the collation and the decimal precision a statement reads with (#1265, #1270)
+# A comparison of two parameters takes the connection collation, so it is pinned to the code-point,
+# no-pad `utf8mb4_0900_bin` a PormG column declares; `div_precision_increment` is pinned to its
+# maximum so `AVG` of integers is not cut to 4 decimals. Expected: both in the one SET statement every
+# connection runs, beside the UTC zone and 8.4's sql_mode. The live values are read back in
+# `test/integration/test_mysql_reads.jl`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the MySQL session pins its collation and decimal precision (#1265, #1270)" begin
+  sql = _MyExt._SESSION_SQL
+  @test occursin("collation_connection = 'utf8mb4_0900_bin'", sql)
+  @test occursin("div_precision_increment = 30", sql)
+  @test occursin("time_zone = '+00:00'", sql) && !occursin("ANSI_QUOTES", sql) && !occursin("PIPES_AS_CONCAT", sql)
+end

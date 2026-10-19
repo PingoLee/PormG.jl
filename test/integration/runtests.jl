@@ -2,11 +2,12 @@
 # julia -t auto --project=test/integration test/integration/runtests.jl
 include("common_setup.jl")
 
-# MySQL (#1130) is in progress: phase 1 delivers the connection, not migrations or model queries, so
-# this suite's bootstrap cannot run there yet. Its one file runs on its own.
+# MySQL (#1130) is in progress: phases 1 and 2a deliver the connection and plain-column reads, not
+# migrations or writes, so this suite's bootstrap cannot run there yet. Its two files run on their own.
 by_engine(postgres = true, sqlite = true, mysql = false) || error(
-    "the full integration suite does not run on MySQL yet (#1130, phase 1); run " *
-    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_backend.jl`")
+    "the full integration suite does not run on MySQL yet (#1130, phase 2a); run " *
+    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_backend.jl` and " *
+    "`PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_reads.jl`")
 
 # 1b. Load delete scratch modules at top level (module expressions are forbidden
 #     inside @testset / macro-wrapped bodies in Julia).

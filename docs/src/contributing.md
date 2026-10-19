@@ -151,9 +151,10 @@ expression that reflects the specific scenario you are investigating:
    ```
    MySQL is in progress ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)). With a local
    MySQL 8.4 (a Docker `mysql:8.4` container is enough) and a `test/integration/db_my/connection.yml`
-   using `adapter: MySQL`, its one integration file runs on its own:
+   using `adapter: MySQL`, its integration files run on their own:
    ```
    PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_backend.jl
+   PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_reads.jl
    ```
 6. Submit a pull request against `main`.
 

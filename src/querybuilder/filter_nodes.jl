@@ -160,7 +160,7 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
   end
 
   isempty(instruction.order) || print(io, "ORDER BY ", join(instruction.order, ", "), "\n")
-  keep_values && print(io, ") as \"__pormg_exists\"\n")
+  keep_values && print(io, ") as ", quote_identifier("__pormg_exists", instruction.connection), "\n")
   print(io, probe_limit == 0 ? "LIMIT 0" : "LIMIT 1")
   isempty(offset_clause) || print(io, " ", offset_clause)
   print(io, ")")
@@ -770,6 +770,11 @@ end
 const _INTERVAL_ORDERING_LOOKUPS = (">", ">=", "<", "<=", "BETWEEN", "NOT BETWEEN")
 function _is_sqlite_duration_column(v::SQLTypeOper, instruc::SQLInstruction)::Bool
   (_interval_as_ms(instruc.connection) && v.operator in _INTERVAL_ORDERING_LOOKUPS) || return false
+  return _is_duration_column(v, instruc)
+end
+# Whether the filter's column is a `DurationField`: a model column, a joined path's terminal field, or
+# a CTE column holding one. Read after the column renders, which fills the memo a path is read from.
+function _is_duration_column(v::SQLTypeOper, instruc::SQLInstruction)::Bool
   v.column isa SQLField || return false
   column = v.column.field
   if column isa CTEReference
@@ -1085,6 +1090,12 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   column = _pattern_operand(column, operand_formatter, v.operator, instruc;
                             label = refuses ? _pattern_refusal_label(v, column) : column,
                             operand_kind = operand_kind)
+  # #1130: what a `DurationField` stores on MySQL is the migrations phase's decision, so no comparison
+  # can know what it compares there yet: an equality or a membership would bind the `HH:MM:SS` text
+  # and the server would answer by whatever the column holds. Refused before any SQL; `IS NULL` asks
+  # nothing of the stored form.
+  v.operator == "ISNULL" || _filters_durations(instruc.connection) || !_is_duration_column(v, instruc) ||
+    throw(_unsupported_conn("A DurationField filter", instruc.connection))
   if isa(v.values, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
     @pormg_debug false
     # #894: a `DurationField` ordered against an `F` interval — another `DurationField`, a timestamp

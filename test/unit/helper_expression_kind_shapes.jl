@@ -108,6 +108,14 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Case untyped zoned col",  :Race,                m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("start_at"))])),
   ("Case untyped time col",   :Race,                m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("time"))])),
   ("Case untyped decimal col", :Constructor_results, m -> _EKM_FN.Case([_EKM_FN.When("constructorresultsid" => 3835, then = _EKM_Q.F("points"))])),
+  # #1194: the temporal and binary cast names, which `_sql_type_field` maps to no field yet
+  ("Cast datetime to timestamp", :Race,             m -> _EKM_FN.Cast("start_at", "timestamp")),
+  ("Cast datetime to timestamptz", :Race,           m -> _EKM_FN.Cast("start_at", "timestamptz")),
+  ("Cast datetime to time",   :Race,                m -> _EKM_FN.Cast("start_at", "time")),
+  ("Cast interval to interval", :Result,            m -> _EKM_FN.Cast("fastestlaptime", "interval")),
+  ("Cast text to bytea",      :Result,              m -> _EKM_FN.Cast("positiontext", "bytea")),
+  ("Cast text to blob",       :Result,              m -> _EKM_FN.Cast("positiontext", "blob")),
+  ("Coalesce declared timestamp", :Race,            m -> _EKM_FN.Coalesce("start_at", "start_at"; output_field = "timestamp")),
   # #1311: intervals SQLite holds only as their text, with no millisecond form, ordered or filtered by alias
   ("Lag interval",            :Result,              m -> _EKM_FN.Lag("fastestlaptime", over = _ekm_over(:Result))),
   ("NullIf interval",         :Result,              m -> _EKM_FN.NullIf("fastestlaptime", _EKM_Q.F("fastestlaptime"))),

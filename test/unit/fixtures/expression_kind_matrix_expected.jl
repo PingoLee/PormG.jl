@@ -794,6 +794,90 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case untyped decimal col | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast datetime to timestamp | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast datetime to timestamp | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:12' into"),
+  ("Cast datetime to timestamp | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type timestamp on CAST(…). Name a text, integer, bigint, float, numeric, boole"),
+  ("Cast datetime to timestamp | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:12' into"),
+  ("Cast datetime to timestamp | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast datetime to timestamp | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:12' into"),
+  ("Cast datetime to timestamptz | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast datetime to timestamptz | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamptz\". It has no time types, and CAST(… AS TIMESTAMPTZ) turns '2020-03-29 10:11:12' "),
+  ("Cast datetime to timestamptz | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type timestamptz on CAST(…). Name a text, integer, bigint, float, numeric, boo"),
+  ("Cast datetime to timestamptz | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamptz\". It has no time types, and CAST(… AS TIMESTAMPTZ) turns '2020-03-29 10:11:12' "),
+  ("Cast datetime to timestamptz | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast datetime to timestamptz | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamptz\". It has no time types, and CAST(… AS TIMESTAMPTZ) turns '2020-03-29 10:11:12' "),
+  ("Cast datetime to time | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast datetime to time | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("Cast datetime to time | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type time on CAST(…). Name a text, integer, bigint, float, numeric, boolean or"),
+  ("Cast datetime to time | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("Cast datetime to time | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast datetime to time | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("Cast interval to interval | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast interval to interval | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"interval\". It has no time types, and CAST(… AS INTERVAL) turns '2020-03-29 10:11:12' into t"),
+  ("Cast interval to interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type interval on CAST(…). Name a text, integer, bigint, float, numeric, boolea"),
+  ("Cast interval to interval | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"interval\". It has no time types, and CAST(… AS INTERVAL) turns '2020-03-29 10:11:12' into t"),
+  ("Cast interval to interval | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast interval to interval | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"interval\". It has no time types, and CAST(… AS INTERVAL) turns '2020-03-29 10:11:12' into t"),
+  ("Cast text to bytea | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text to bytea | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text to bytea | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type bytea on CAST(…). Name a text, integer, bigint, float, numeric, boolean o"),
+  ("Cast text to bytea | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type bytea on CAST(…). Name a text, integer, bigint, float, numeric, boolean o"),
+  ("Cast text to bytea | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text to bytea | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text to blob | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text to blob | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text to blob | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type blob on CAST(…). Name a text, integer, bigint, float, numeric, boolean or"),
+  ("Cast text to blob | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type blob on CAST(…). Name a text, integer, bigint, float, numeric, boolean or"),
+  ("Cast text to blob | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Cast text to blob | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Coalesce declared timestamp | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Coalesce declared timestamp | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "output_field: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:"),
+  ("Coalesce declared timestamp | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "A CTE column cannot be typed from the SQL type timestamp on COALESCE(…). Name a text, integer, bigint, float, numeric, b"),
+  ("Coalesce declared timestamp | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "output_field: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:"),
+  ("Coalesce declared timestamp | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Coalesce declared timestamp | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "output_field: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:"),
   ("Lag interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag interval | alone", :sqlite) =>
@@ -3135,6 +3219,10 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | subquery", :sqlite) =>
     [(:unparsed, "read=int has no SQLite read parser")],
+  ("Coalesce declared timestamp | alone", :postgres) =>
+    [(:gap, "read=none vs formatter=datetime")],
+  ("Coalesce declared timestamp | subquery", :postgres) =>
+    [(:gap, "read=none vs formatter=datetime")],
   ("Case untyped date col - date | alone", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("Case untyped date col - date | alone", :sqlite) =>

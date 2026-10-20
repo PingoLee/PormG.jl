@@ -1161,6 +1161,42 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"constructorresultsid\" = ? THEN \"R2\".\"points\"\nELSE NULL\nEND\n as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT ? \n) > ?", params = [("3835", "Int64"), ("1", "Int64"), ("3835", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Case untyped decimal col | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"constructorresultsid\" = ? THEN \"R2\".\"points\"\nELSE NULL\nEND\n as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT ? \n) > ?", params = [("3835", "Int64"), ("1", "Int64"), ("3835", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
+  ("Cast datetime to timestamp | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"start_at\")::timestamp > \$1", params = [("10", "Int64")]),
+  ("Cast datetime to timestamp | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"start_at\")::timestamp as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast datetime to timestamptz | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"start_at\")::timestamptz > \$1", params = [("10", "Int64")]),
+  ("Cast datetime to timestamptz | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"start_at\")::timestamptz as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast datetime to time | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"start_at\")::time > \$1", params = [("10", "Int64")]),
+  ("Cast datetime to time | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"start_at\")::time as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast interval to interval | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"fastestlaptime\")::interval > \$1", params = [("10", "Int64")]),
+  ("Cast interval to interval | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"fastestlaptime\")::interval as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast text to bytea | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"positiontext\")::bytea > \$1", params = [("10", "Int64")]),
+  ("Cast text to bytea | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"positiontext\" AS BYTEA) > ?", params = [("10", "Int64")]),
+  ("Cast text to bytea | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"positiontext\")::bytea as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast text to bytea | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"positiontext\" AS BYTEA) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast text to blob | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(\"Tb\".\"positiontext\")::bytea > \$1", params = [("10", "Int64")]),
+  ("Cast text to blob | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(\"Tb\".\"positiontext\" AS BLOB) > ?", params = [("10", "Int64")]),
+  ("Cast text to blob | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (\"R2\".\"positiontext\")::bytea as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Cast text to blob | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(\"R2\".\"positiontext\" AS BLOB) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Coalesce declared timestamp | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
+  ("Coalesce declared timestamp | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
   ("Lag interval | alone", :postgres, "v__@gt", "10") =>
     (stage = :build, error = "QueryBuildError", message = "filter(\"v\" => …) — v projects a window function, and a window cannot be filtered in the query that computes it: SQL eval"),
   ("Lag interval | alone", :postgres, "v__@gt", "interval Minute(1)") =>

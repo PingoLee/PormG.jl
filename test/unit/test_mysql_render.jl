@@ -473,3 +473,29 @@ end
     @test (kind, PormG.value_parser(kind, my)) == (kind, nothing)
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL division: the operator states which division the operands mean (#1130 phase 2b)
+# MySQL's `/` keeps the fraction whatever its operands (`7 / 2` is `3.5`), so the walk's kinds pick
+# the operator. Expected: `DIV` between two integer sides (columns, literals, an integer `Sum`), `/`
+# beside a float or a decimal side, and a refusal on MySQL for a side the walk cannot type (a text
+# column), naming the casts that state the meaning; PostgreSQL's `/` unchanged.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL division: DIV between integers, / beside a fraction, refused when untyped" begin
+  sel(M, f) = _mr_inspect(M.Result.objects.values("h" => f))[:sql_text]
+  @test occursin("(`Tb`.`grid` DIV ?) as `h`", sel(_MR_MY, F("grid") / 2))
+  @test occursin("(`Tb`.`laps` DIV `Tb`.`grid`) as `h`", sel(_MR_MY, F("laps") / F("grid")))
+  @test occursin("((SUM(`Tb`.`grid`) DIV 1) DIV ?)", _mr_inspect(_MR_MY.Result.objects.values("driverid", "h" => Sum("grid") / 2))[:sql_text])
+  # A float side keeps the fraction, as the meaning says (`F("points") / 4` is `1.5` for 6 points).
+  @test occursin("(`Tb`.`points` / ?) as `h`", sel(_MR_MY, F("points") / 4))
+  @test occursin("(`Tb`.`grid` / ?) as `h`", sel(_MR_MY, F("grid") / 2.0))
+  # PostgreSQL's integer `/` is already integer division: no DIV there.
+  @test occursin("(\"Tb\".\"grid\" / \$1::bigint) as \"h\"", sel(_MR_PG, F("grid") / 2))
+  # A side the walk cannot type: MySQL has no operator for "whichever division the type at run time
+  # means", so it refuses, naming both casts. A text column along a relation is such a side.
+  err = try; sel(_MR_MY, F("driverid__forename") / 2); nothing; catch e; e; end
+  @test err isa PormG.QueryBuildError
+  msg = replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
+  @test occursin("MySQL's / always keeps the fraction, so PormG refuses it on MySQL", msg)
+  @test occursin("Cast(x, IntegerField())", msg) && occursin("Cast(x, \"numeric\")", msg)
+end

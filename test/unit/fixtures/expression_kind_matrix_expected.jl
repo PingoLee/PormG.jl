@@ -2311,37 +2311,37 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum bigint / 2 | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint / 2 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching _division_sql(::EkmMockMySQL, ::PormG.QueryBuilder.FExpression, ::String, ::String, ::Po"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint / 2 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint / 2 | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint / 2 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching _division_sql(::EkmMockMySQL, ::PormG.QueryBuilder.FExpression, ::String, ::String, ::Po"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint / 2 | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint / 2 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching _division_sql(::EkmMockMySQL, ::PormG.QueryBuilder.FExpression, ::String, ::String, ::Po"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching _division_sql(::EkmMockMySQL, ::PormG.QueryBuilder.FExpression, ::String, ::String, ::Po"),
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Sum bigint / 2 int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching _division_sql(::EkmMockMySQL, ::PormG.QueryBuilder.FExpression, ::String, ::String, ::Po"),
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Sum bigint / 2 int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching _division_sql(::EkmMockMySQL, ::PormG.QueryBuilder.FExpression, ::String, ::String, ::Po"),
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sum Case int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum Case int | alone", :sqlite) =>
@@ -2383,19 +2383,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F int / int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F int / int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching _division_sql(::EkmMockMySQL, ::PormG.QueryBuilder.FExpression, ::String, ::String, ::Po"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F int / int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F int / int | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F int / int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching _division_sql(::EkmMockMySQL, ::PormG.QueryBuilder.FExpression, ::String, ::String, ::Po"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F int / int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F int / int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F int / int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching _division_sql(::EkmMockMySQL, ::PormG.QueryBuilder.FExpression, ::String, ::String, ::Po"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor F int + 1 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int + 1 | alone", :sqlite) =>
@@ -2761,37 +2761,37 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F decimal / 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching _division_sql(::EkmMockMySQL, ::PormG.QueryBuilder.FExpression, ::String, ::String, ::Po"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching _division_sql(::EkmMockMySQL, ::PormG.QueryBuilder.FExpression, ::String, ::String, ::Po"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching _division_sql(::EkmMockMySQL, ::PormG.QueryBuilder.FExpression, ::String, ::String, ::Po"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F float / 2 | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F float / 2 | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F float / 2 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching _division_sql(::EkmMockMySQL, ::PormG.QueryBuilder.FExpression, ::String, ::String, ::Po"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F float / 2 | cte", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("F float / 2 | cte", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("F float / 2 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching _division_sql(::EkmMockMySQL, ::PormG.QueryBuilder.FExpression, ::String, ::String, ::Po"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("F float / 2 | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F float / 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F float / 2 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching _division_sql(::EkmMockMySQL, ::PormG.QueryBuilder.FExpression, ::String, ::String, ::Po"),
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce int float / 2 | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce int float / 2 | alone", :sqlite) =>
@@ -4719,6 +4719,12 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:gap, "read=none vs textless=numeric")],
   ("Sum F int + epoch / 2 | subquery", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
+  ("F decimal / 2 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("F decimal / 2 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("F decimal / 2 | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Subquery Max hop date | alone", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
   ("Subquery Max hop date | subquery", :mysql) =>

@@ -1590,6 +1590,24 @@ function _division_sql(::PormGSQLite, v::FExpression, left::AbstractString, righ
   (_real_on_every_row(v.field_name, instruc) || _real_on_every_row(v.operand, instruc)) && return "($(left) / $(right))"
   return "(CAST($(left) AS REAL) / $(right))"
 end
+# MySQL's `/` keeps the fraction whatever its operands are (`7 / 2` is `3.5`, measured on 8.4), so the
+# OPERATOR, not the operands' types at run time, decides which division runs. Two sides the walk types
+# as integers divide with `DIV`, which truncates toward zero as PostgreSQL's integer `/` does
+# (`-7 DIV 2` is `-3`) and raises past the BIGINT range as it does. A decimal or a float side keeps `/`,
+# a `DECIMAL` (under the session's `div_precision_increment = 30`) or a `DOUBLE` quotient. A side the
+# walk cannot type leaves the meaning to run time, which MySQL has no operator for: refused on MySQL
+# only, naming the spelling that states it (#1130 phase 2b).
+function _division_sql(::PormGMySQL, v::FExpression, left::AbstractString, right::AbstractString, instruc::SQLInstruction)
+  whole(x) = _integer_side_kind(x, instruc, _AllKinds()) !== nothing
+  whole(v.field_name) && whole(v.operand) && return "($(left) DIV $(right))"
+  fractional(x) = _arithmetic_side_kind(x, instruc, _AllKinds()) isa Union{CDecimal,CFloat64}
+  (fractional(v.field_name) || fractional(v.operand)) && return "($(left) / $(right))"
+  throw(QueryBuildError(
+    "\e[31m/\e[0m over a side whose type PormG cannot name divides as integers or keeps the fraction " *
+    "depending on that type; MySQL's \e[31m/\e[0m always keeps the fraction, so PormG refuses it on MySQL " *
+    "(#1130). Say which division you mean: cast the side to an integer, \e[32mCast(x, IntegerField())\e[0m, " *
+    "or to a decimal, \e[32mCast(x, \"numeric\")\e[0m."))
+end
 _real_on_every_row(x::AbstractFloat, ::SQLInstruction) = true
 _real_on_every_row(x::SQLText, ::SQLInstruction) = x.field isa AbstractFloat
 _real_on_every_row(x::SQLField, instruc::SQLInstruction) = _real_on_every_row(x.field, instruc)

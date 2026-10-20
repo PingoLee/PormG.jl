@@ -1811,10 +1811,16 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Sum bigint | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Sum bigint / 2 | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64")]),
   ("Sum bigint / 2 | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Sum bigint / 2 | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Sum bigint / 2 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+  ("Sum bigint / 2 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
   ("Sum bigint / 2 | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Sum bigint / 2 | cte", :postgres, "w") =>
@@ -1823,6 +1829,8 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Sum bigint / 2 | cte", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Sum bigint / 2 | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
   ("Sum bigint / 2 | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("Sum bigint / 2 | subquery", :sqlite, "w") =>
@@ -1883,10 +1891,16 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
   ("Sum F int + 1 | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("F int / int | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("F int / int | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F int / int | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F int / int | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("F int / int | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
   ("F int / int | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F int / int | cte", :postgres, "w") =>
@@ -1895,6 +1909,8 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F int / int | cte", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F int / int | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("F int / int | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F int / int | subquery", :sqlite, "w") =>
@@ -2115,10 +2131,16 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
   ("Floor Subquery int | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("F decimal / 2 | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64")]),
   ("F decimal / 2 | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("F decimal / 2 | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("F decimal / 2 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+  ("F decimal / 2 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
   ("F decimal / 2 | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("F decimal / 2 | cte", :postgres, "w") =>
@@ -2127,14 +2149,22 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("F decimal / 2 | cte", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("F decimal / 2 | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
   ("F decimal / 2 | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("F decimal / 2 | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
+  ("F float / 2 | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64")]),
   ("F float / 2 | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("F float / 2 | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("F float / 2 | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+  ("F float / 2 | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
   ("F float / 2 | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("F float / 2 | cte", :postgres, "w") =>
@@ -2143,6 +2173,8 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("F float / 2 | cte", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("F float / 2 | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
   ("F float / 2 | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("F float / 2 | subquery", :sqlite, "w") =>

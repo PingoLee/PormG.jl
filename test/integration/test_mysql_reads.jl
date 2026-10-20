@@ -1,4 +1,5 @@
-# MySQL backend, phase 2a (#1130): plain-column fluent reads against a live MySQL 8.4.
+# MySQL backend, phases 2a and 2b (#1130): fluent reads against a live MySQL 8.4 — plain columns (2a),
+# and the expressions 2b renders: division, casts, `Concat`, date arithmetic.
 #
 #   PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_reads.jl
 #
@@ -11,13 +12,13 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 using Test, Dates, TimeZones, Decimals, DataFrames
-import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, F
+import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, F, Coalesce
 
 # The model tables this file creates, in drop order (children first).
 const _MYR_TABLES = ("result", "new_join_position", "race", "circuit", "driver")
 
-@testset "MySQL backend, phase 2a: plain-column reads (#1130)" begin
-if only_on(:mysql, "reads through the MySQL query builder (phase 2a)")
+@testset "MySQL backend, phases 2a and 2b: reads (#1130)" begin
+if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
     pool = PormG.config[PORMG_DB_FOLDER].connections
     run(sql; params = nothing) = PormG.fetch(pool, sql; params = params)
     sql_rows(sql; params = nothing) = DataFrame(run(sql; params = params))
@@ -293,16 +294,36 @@ if only_on(:mysql, "reads through the MySQL query builder (phase 2a)")
             @test_throws PormG.PormGError M.Driver.objects.filter("driverref" => "senna").select_for_update().list()
         end
 
-        # What: what phase 2a does not render stays loud, never another engine's SQL.
-        # SQL: none — division (phase 2b's `DIV`) and `create` (phase 3) fail before a statement is sent.
+        # What: what MySQL does not render yet stays loud, never another engine's SQL.
+        # SQL: none — `Coalesce` (phase 2c) and `create` (phase 3) fail before a statement is sent.
         # Why: a silent wrong answer is the failure #1130 exists to prevent.
-        @testset "what 2a does not render fails before any SQL is sent" begin
+        @testset "what is not rendered yet fails before any SQL is sent" begin
             # Each names the piece of the query builder MySQL does not have yet.
-            e = try; M.Result.objects.values("half" => F("grid") / 2).list(); nothing; catch err; err; end
-            @test e isa MethodError && e.f === PormG.QueryBuilder._division_sql
+            e = try; M.Result.objects.values("c" => Coalesce("position", 0)).list(); nothing; catch err; err; end
+            @test e isa MethodError && e.f === PormG.Dialect.COALESCE
             e = try; M.New_join_position.objects.create("description" => "x"); nothing; catch err; err; end
             @test e isa MethodError && e.f === PormG.QueryBuilder._insert_returns_rows
             @test M.New_join_position.objects.count() == 3
+        end
+
+        # What: `/` divides as its operands mean: integers as integers, a float side keeping the fraction.
+        # SQL: `(`Tb`.`grid` DIV ?)` between integers, `(`Tb`.`points` / ?)` beside a DOUBLE.
+        # Why: MySQL's own `/` keeps the fraction of `7 / 2`, which `F("grid") / 2` does not mean (#1130
+        # phase 2b): each value is checked against Julia's own division, never against another engine.
+        @testset "division divides integers as integers, and keeps a float's fraction" begin
+            rows = M.Result.objects.values("resultid", "grid", "laps", "points", "h" => F("grid") / 2,
+                                           "q" => F("laps") / F("grid"), "n" => (F("grid") - 10) / 4,
+                                           "f" => F("points") / 4).order_by("resultid").list()
+            @test length(rows) == 7
+            for r in rows
+                @test r[:h] isa Integer && r[:h] == div(r[:grid], 2)
+                @test r[:q] isa Integer && r[:q] == div(r[:laps], r[:grid])
+                # truncation toward zero, as an integer `/` means: (1 - 10) / 4 is -2, not -3
+                @test r[:n] == div(r[:grid] - 10, 4)
+                @test r[:f] isa Float64 && r[:f] == r[:points] / 4
+            end
+            # Division by zero reads NULL on MySQL (the server warns, 1365); documented per engine.
+            @test only(M.Result.objects.filter("resultid" => 1).values("z" => F("grid") / 0).list())[:z] === missing
         end
 
         # What: a DurationField filter is refused before any SQL; an ordering or a sum over one reaches the

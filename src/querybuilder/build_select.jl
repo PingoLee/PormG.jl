@@ -217,7 +217,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
         if original isa FExpression
           # #881: one of the renderer's two doors out — an interval it held in milliseconds on SQLite
           # arrives here as the stored text, typed `CInterval`. Date arithmetic is typed by the render,
-          # which the walk restates since #1034 step 5a; everything else by the walk: a bare
+          # through the rule the walk shares since #1034 step 5b; everything else by the walk: a bare
           # `F("ts__@date")` (#824), a comparison or a bare boolean `F` (#965 — the kind is recorded
           # here, never returned by `_render_expr_typed`, whose kind is the comparison binder's
           # `left_kind`), and arithmetic as the number it means (#1121).

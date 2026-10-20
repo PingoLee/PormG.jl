@@ -338,7 +338,7 @@ function _render_left_typed(value::Any, operation::String, instruc::SQLInstructi
   value isa FExpression && return _render_expr_typed(value, instruc)
   value isa FObject && return _render_function_operand_typed(value, instruc)
   sql = _set_update_query_left(value, operation, instruc)
-  return sql, _side_kind(value, instruc)
+  return sql, _render_side_kind(value, instruc)   # #1034 step 5b: the one side rule
 end
 
 # #907 — a function as a side of an expression, rendered ONCE by `_render_function_typed`, which is
@@ -347,12 +347,16 @@ end
 # on SQLite `Sum(d)`, `Avg(d)`, `Max("time")` stay `_IntervalMs` inside the tree, so `Sum(d) / Count(…)`
 # and `Sum("time") - Max("time")` are arithmetic on milliseconds rather than on the text's leading
 # hours, and `Max("time") + d` has the millisecond form #881 refused it for. On PostgreSQL the SQL is
-# unchanged and the function is typed `CInterval` wherever its render says it is one, which
+# unchanged. On both engines, a function with no millisecond form is typed `CInterval` wherever the
+# side rule says it is one (an interval candidate over an interval, as `_render_function_body`
+# computes it), which
 # `_function_projection_kind` alone cannot say of a `Sum`. Every other function is typed as before.
 function _render_function_operand_typed(v::FObject, instruc::SQLInstruction)::Tuple{String,_RenderKind}
-  sql, interval_ms, interval = _render_function_typed(v, instruc)
+  sql, interval_ms, _ = _render_function_typed(v, instruc)
   interval_ms && return sql, _IntervalMs()
-  return sql, interval ? CInterval() : _side_function_kind(v, instruc)
+  # #1034 step 5b: the side's kind is the one side rule, shared with the walk (`_render_side_kind`),
+  # which types a function an interval where this render does: an interval candidate over an interval.
+  return sql, _render_side_kind(v, instruc)
 end
 
 # #814 — the kind of an ALREADY-RENDERED side that is not itself an expression: a column, a
@@ -518,7 +522,7 @@ function _render_temporal_shift(left_side::AbstractString, kind::TemporalKind, o
   end
 end
 
-# #801 — THE DIFFERENCE OF TWO TEMPORAL SIDES, `kind` being `_difference_result_kind`'s answer.
+# #801 — THE DIFFERENCE OF TWO TEMPORAL SIDES, `kind` being the rule's answer (`_arith_result_kind`).
 #
 # PostgreSQL types both columns, so its `-` is already the right operator; the text is the one the
 # generic infix arm always emitted. SQLite's `-` on two TEXT dates is the difference of the YEARS, so
@@ -564,6 +568,13 @@ _as_interval_text(sql::AbstractString, kind::_RenderKind) =
   kind isa _IntervalMs ? Dialect._sqlite_interval_text(sql) : String(sql)
 
 _is_interval_kind(kind::_RenderKind) = kind isa Union{CInterval,_IntervalMs}
+# #1034 step 5b — the kind F arithmetic `v` evaluates to, from the sides this render typed: the one
+# copy of the rule, `_temporal_result_kind` (`expression_kind.jl`), which the type walk calls over the
+# same sides. A side SQLite holds in milliseconds is the interval it is. The render keeps only its SQL,
+# its refusals and `_IntervalMs`, which says the SQL is milliseconds, not what the value is.
+_arith_result_kind(v::FExpression, left_kind, right_kind, instruc::SQLInstruction) =
+  _temporal_result_kind(v, _value_kind(left_kind), _value_kind(right_kind), instruc)
+_value_kind(k) = k isa _IntervalMs ? CInterval() : k
 
 # #881 — a side as SQLite milliseconds, or `nothing` when it has no such form. An `_IntervalMs` side
 # is one already. A `DurationField` column is its stored text, parsed in SQL; the column reference is
@@ -855,7 +866,7 @@ function _render_operand_typed(operand::Any, field_name::Any, operation::String,
     return add_parameter!(instruc, value_formatter(kind, instruc.connection)(operand); sql_type = sql_type), kind
   end
   sql = _set_update_query_operand(operand, field_name, operation, instruc; left_kind = left_kind)
-  return sql, operand isa SQLTypeFunction ? _side_kind(operand, instruc) : nothing
+  return sql, _render_side_kind(operand, instruc; right = true)   # #1034 step 5b: the one side rule
 end
 
 # A `String` operand names a FIELD when it is a path or one of the model's own fields; otherwise it
@@ -896,10 +907,10 @@ end
 #
 # PostgreSQL's `date ± interval` is a `timestamp`, so a DATE side becomes `CDateTime(false)`; a
 # timestamp keeps its own kind. Typed on both engines, so both read the result back the same way.
-function _render_interval_shift(date_side::AbstractString, date_kind::Union{CDate,CDateTime},
+# #1034 step 5b: `kind` is that result, from the one copy of the rule (`_arith_result_kind`).
+function _render_interval_shift(date_side::AbstractString, kind::Union{CDate,CDateTime},
                                 interval_side::AbstractString, interval_node, interval_kind::_RenderKind,
                                 operation::String, date_first::Bool, instruc::SQLInstruction)::Tuple{String,_RenderKind}
-  kind = date_kind isa CDate ? CDateTime(false) : date_kind
   if _interval_as_ms(instruc.connection)
     ms = _interval_ms_sql(interval_side, interval_node, interval_kind)
     ms === nothing &&
@@ -1011,10 +1022,11 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
           throw(QueryBuildError("A duration minus a date has no meaning. To move a date back, subtract from " *
                                 "the date instead: F(\"date\") - (F(\"date\") - F(\"dob\")), or " *
                                 "F(\"date\") - Day(30)."))
-        return _render_interval_shift(right_side, right_kind, left_side, v.field_name, left_kind, "+", false, instruc)
+        kind = _arith_result_kind(v, left_kind, right_kind, instruc)
+        return _render_interval_shift(right_side, kind, left_side, v.field_name, left_kind, "+", false, instruc)
       end
       if _is_interval_kind(right_kind)
-        sqlite || return "($(left_side) $(op) $(right_side))", CInterval()
+        sqlite || return "($(left_side) $(op) $(right_side))", _arith_result_kind(v, left_kind, right_kind, instruc)
         lms = _interval_ms_sql(left_side, v.field_name, left_kind)
         rms = _interval_ms_sql(right_side, v.operand, right_kind)
         (lms === nothing || rms === nothing) &&
@@ -1027,7 +1039,7 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
     end
     # `*` and `/`, by a number only.
     if _is_number_side(v.operand, right_kind, instruc)
-      sqlite || return "($(left_side) $(op) $(right_side))", CInterval()
+      sqlite || return "($(left_side) $(op) $(right_side))", _arith_result_kind(v, left_kind, right_kind, instruc)
       lms = _interval_ms_sql(left_side, v.field_name, left_kind)
       lms === nothing &&
         throw(_sqlite_interval_error("`$(op)` on an interval that is not a timestamp difference or a DurationField column"))
@@ -1054,7 +1066,7 @@ function _render_interval_right(v::FExpression, left_side::String, left_kind::_R
   op = v.operation
   sqlite = _interval_as_ms(instruc.connection)
   if op == "*" && _is_number_side(v.field_name, left_kind, instruc)
-    sqlite || return "($(left_side) * $(right_side))", CInterval()
+    sqlite || return "($(left_side) * $(right_side))", _arith_result_kind(v, left_kind, right_kind, instruc)
     rms = _interval_ms_sql(right_side, v.operand, right_kind)
     rms === nothing &&
       throw(_sqlite_interval_error("`*` on an interval that is not a timestamp difference or a DurationField column"))
@@ -1086,7 +1098,7 @@ function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
     isempty(comps) && return left_side, left_kind
     return "($(left_side) $(v.operation) $(add_parameter!(instruc, _duration_ms(period))))", left_kind
   end
-  kind = _shift_result_kind(left_kind, comps)
+  kind = _arith_result_kind(v, left_kind, nothing, instruc)   # #1034 step 5b: the one copy of the rule
 
   # Soft validation (#25, best-effort): a duration only makes sense on a date/time column. Only
   # throw when the field is known AND known to be non-date; stay silent for unresolved/nested lefts.
@@ -1422,7 +1434,7 @@ function _render_expr_typed(v::FExpression, instruc::SQLInstruction)::Tuple{Stri
     if left_kind isa Union{CDate,CDateTime} && v.operation in ("+", "-") &&
        v.operand isa Integer && !(v.operand isa Bool)
       comps = _decompose_period(Dates.Day(v.operand))
-      kind  = _shift_result_kind(left_kind, comps)   # whole days never promote; stated, not assumed
+      kind  = _arith_result_kind(v, left_kind, nothing, instruc)   # whole days never promote (#1034 step 5b: the one copy)
       return _render_temporal_shift(left_side, kind, v.operation, comps, instruc), kind
     end
 
@@ -1444,7 +1456,7 @@ function _render_expr_typed(v::FExpression, instruc::SQLInstruction)::Tuple{Stri
       v.operation in ("+", "-") && (right_kind = _day_count_column_kind(v.operand, right_kind, instruc))
       if right_kind isa Union{CDate,CDateTime}
         if v.operation == "-"
-          kind = _difference_result_kind(left_kind, right_kind)
+          kind = _arith_result_kind(v, left_kind, right_kind, instruc)
           kind isa CInterval && _refuse_window_in_interval(v.field_name, v.operand, instruc)
           return _render_temporal_difference(left_side, right_side, kind, instruc)
         end
@@ -1454,12 +1466,13 @@ function _render_expr_typed(v::FExpression, instruc::SQLInstruction)::Tuple{Stri
       end
       # #814: `date ± count` is a whole-day shift. #881: `date ± interval` is a shift by the interval.
       if v.operation in ("+", "-")
+        kind = _arith_result_kind(v, left_kind, right_kind, instruc)
         if right_kind isa Union{CInt32,CInt64}
           return _render_day_count_shift(left_side, left_kind, _day_count_sql(right_side, right_kind, instruc),
-                                         v.operation, true, instruc), left_kind
+                                         v.operation, true, instruc), kind
         end
         _is_interval_kind(right_kind) &&
-          return _render_interval_shift(left_side, left_kind, right_side, v.operand, right_kind,
+          return _render_interval_shift(left_side, kind, right_side, v.operand, right_kind,
                                         v.operation, true, instruc)
         # #882: anything else beside a date used only the date's year on SQLite.
         _refuse_untyped_date_operand(v.operation, instruc)
@@ -1495,7 +1508,7 @@ function _render_expr_typed(v::FExpression, instruc::SQLInstruction)::Tuple{Stri
                                 "from the date instead: F(\"date\") - (F(\"date\") - F(\"dob\")), or " *
                                 "F(\"date\") - Day(30)."))
         return _render_day_count_shift(right_side, right_kind, _day_count_sql(left_side, count_kind, instruc),
-                                       "+", false, instruc), right_kind
+                                       "+", false, instruc), _arith_result_kind(v, left_kind, right_kind, instruc)
       end
       return "($(left_side) $(v.operation) $(right_side))", nothing
     end

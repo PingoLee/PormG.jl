@@ -172,8 +172,8 @@ end
 if HAS_LOWER
   @testset "JSON.json(row) serializes the row" begin
     # An EXACT match, on a single-key row so no `Dict` iteration order is being asserted. (Julia
-    # 1.13 changed string hashing — #544 — and CI runs 1.12 and 1.13, so an exact multi-key string
-    # is a cross-version flake waiting to happen.)
+    # 1.13 changed string hashing — #544 — so an exact multi-key string is a cross-version flake
+    # waiting to happen, the next time CI's Julia moves.)
     @test J641.json(PormG.PormGRow(Dict{Symbol, Any}(:id => 7), JM.J_driver)) == "{\"id\":7}"
 
     # For the full row, exact equality of the PARSED document — same strictness, no key order.
@@ -554,8 +554,8 @@ if HAS_CONFIG_LOWER
     for (label, (value, expected)) in CONFIG_CASES
       @testset "$label" begin
         # Parsed equality rather than string equality for the multi-key `Settings` document: Julia
-        # 1.13 changed string hashing (#544) and CI runs 1.12 and 1.13, so an exact multi-key
-        # string is a cross-version flake (so is `DatabaseError`'s). The single-key markers are
+        # 1.13 changed string hashing (#544), so an exact multi-key string is a cross-version flake
+        # the next time CI's Julia moves (so is `DatabaseError`'s). The single-key markers are
         # compared as strings.
         if label in ("Settings", "DatabaseError")
           @test J641.parse(J641.json(value)) == J641.parse(expected)

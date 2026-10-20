@@ -17,17 +17,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Minimum supported version (the Project.toml `julia = "1.12"` floor, deliberate
-        # — README → Requirements, #211) and the current stable, 1.13.
+        # The one supported version: the Project.toml `julia = "1.13"` floor, which is
+        # also the current stable (README → Requirements). The floor was 1.12 (#211, the
+        # world-age semantics hot reload needs) and moved to 1.13, so 1.12 is no longer
+        # tested; a second entry belongs here only when a newer minor is supported too.
         #
-        # Both are PINNED rather than spelled `'1'`: the floating alias made the check
-        # name ("Julia 1") not say which version actually ran, and let a new minor change
+        # PINNED rather than spelled `'1'`: the floating alias made the check name
+        # ("Julia 1") not say which version actually ran, and let a new minor change
         # what CI tested with no PR. The cost is that this list needs a bump when a new
         # minor ships — which is the point: the bump is reviewable.
         #
         # Integration tests (test/integration/) require a live PostgreSQL database
         # and are NOT part of this CI job — they run separately in a dev environment.
-        julia-version: ['1.12', '1.13']
+        julia-version: ['1.13']
         os: [ubuntu-latest, windows-latest]
 
     steps:
@@ -99,7 +101,7 @@ jobs:
       fail-fast: false
       matrix:
         # Keep in step with the `test` job's matrix above.
-        julia-version: ['1.12', '1.13']
+        julia-version: ['1.13']
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
@@ -169,11 +171,11 @@ jobs:
 
       - uses: julia-actions/setup-julia@v2
         with:
-          # One Julia, and it is the `julia = "1.12"` compat floor. This job is about
-          # PACKAGE versions — the `test` matrix above already covers 1.12 x 1.13 —
+          # One Julia, and it is the `julia = "1.13"` compat floor. This job is about
+          # PACKAGE versions — the `test` matrix above covers the Julia version —
           # and pairing the oldest Julia with the oldest packages is the true lower
           # end of what PormG claims to support.
-          version: '1.12'
+          version: '1.13'
 
       - uses: julia-actions/cache@v2
 
@@ -185,7 +187,7 @@ jobs:
           # `Dates = "1"` admits 1.11.0 and `SHA = "0.7, 1"` admits 0.7.0 either way. The
           # list is kept so a later switch to `forcedeps` is correct by default.
           #
-          # That also settles `SHA = "0.7, 1"`: SHA is a stdlib, 0.7.0 on both 1.12 and
+          # That also settles `SHA = "0.7, 1"`: SHA is a stdlib, 0.7.0 on 1.12 and
           # 1.13, so the "1" arm is unreachable and there is no second version for this
           # job to try. The entry stays spanning regardless — it costs nothing and keeps
           # PormG resolvable if a Julia ever does ship SHA 1.x.
@@ -209,7 +211,7 @@ jobs:
           mode: alldeps
           # Must match setup-julia above. The default `'1'` already means the runner's
           # Julia, so this is belt-and-braces against the two drifting apart.
-          julia_version: '1.12'
+          julia_version: '1.13'
 
       - uses: julia-actions/julia-buildpkg@v1
 

@@ -275,9 +275,10 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # LPad/RPad: what the text check reads beyond a column's formatter (#122 review)
 # A JSON key lookup and the `@yyyy_mm` label render text and pass; a relation is its target key's
-# type; timestamp arithmetic is caught by the kind its render computed; the fill is checked like the
-# value; and a NULL literal is no type at all. A refused literal is named by its type, never its
-# value (#971).
+# type; a timestamp is named by the type walk, arithmetic and a function over one alike (#1304; until
+# then arithmetic was caught by the kind its render computed, and `Max("seen")` fell to the formatter's
+# "a non-text expression", refused either way); the fill is checked like the value; and a NULL literal
+# is no type at all. A refused literal is named by its type, never its value (#971).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#122: the text check — key lookups, labels, relations, arithmetic, the fill" begin
   refused(models, conn, expr) = try
@@ -304,6 +305,8 @@ end
       # A named time column keeps its name in the message.
       @test occursin("the TimeField `clock`", refused(models, conn, LPad("clock", 9, "0")))
       @test occursin("a timestamp expression", refused(models, conn, LPad(F("seen") + Dates.Day(1), 3, "0")))
+      @test occursin("the DateTimeField `seen`", refused(models, conn, LPad("seen", 30, "0")))
+      @test occursin("a timestamp expression", refused(models, conn, LPad(Max("seen"), 30, "0")))
       # The fill: a column, a date literal, a boolean literal.
       msg = refused(models, conn, LPad("code", 6, F("number")))
       @test occursin("its fill", msg) && occursin("the IntegerField `number`", msg)

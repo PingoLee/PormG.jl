@@ -369,12 +369,12 @@ function _null_skipping_operands(v::SQLTypeFunction, instruc::SQLInstruction)
              for k in 1:length(cols)]
 end
 
-# #1028 — one operand of `Concat` or a declared cast, rendered exactly as `_get_select_query` renders
-# it — the same SQL, the same binds, in the same order — with the kind that render computed:
-# `(sql, kind)`. Only the two shapes whose render knows more than any type reader keep a kind: `F`
-# arithmetic (`_set_update_query_typed` is what `_get_select_query(::SQLTypeF)` renders through), and a
-# function that renders as an interval (`_get_select_query(::SQLTypeFunction)`'s own arm). Everything
-# else, literals included, renders through `_get_select_query` itself and has its kind read by name.
+# #1028 — one operand rendered exactly as `_get_select_query` renders it — the same SQL, the same
+# binds, in the same order — with the kind that render computed: `(sql, kind)`. Only two shapes keep a
+# kind: `F` arithmetic (`_set_update_query_typed` is what `_get_select_query(::SQLTypeF)` renders
+# through), and a function that renders as an interval (`_get_select_query(::SQLTypeFunction)`'s own
+# arm). The `Concat`, `LPad`/`RPad` and declared-cast checks read it until #1304; they read the walk
+# now, and the expression-kind matrix records it as its `render` channel, the render's own answer.
 function _render_operand_kind(node, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   node isa FExpression && return _set_update_query_typed(node, instruc)
   if node isa FObject
@@ -558,17 +558,19 @@ end
 # relation's (`"cc"` over a `CharField` primary key is text).
 const _PAD_TEXT_FORMATTERS = (Models.format_text_sql, Models.format_yyyy_mm)
 
-# The value's description when it is typed and not text, else `nothing`. `kind` is the rendered kind
-# `_render_operand_kind` computed: timestamp or interval arithmetic, which `_operand_kind` does not
-# name (the `Concat` classifier reads it from the walk since #1034 step 5c; the pad reads the render's).
-function _pad_textless(operand, kind, instruc::SQLInstruction)::Union{String,Nothing}
+# The value's description when it is typed and not text, else `nothing`. A timestamp or an interval is
+# named from the walk, as the `Concat` classifier names it (`_textless_temporal`, #1304): a column,
+# temporal arithmetic, and a function over one. (Until #1304 it read the kind the operand's render
+# computed, which named the arithmetic alone and left `Max("start_at")` to the formatter's "a non-text
+# expression".)
+function _pad_textless(operand, instruc::SQLInstruction)::Union{String,Nothing}
   if operand isa SQLText
     x = operand.field
     (_is_null_literal(x) || x isa AbstractString) && return nothing
     return "a literal of type $(nameof(typeof(x)))"   # never the value: it is a bound value (#971, #1057)
   end
-  rendered = _rendered_kind_textless(kind)
-  rendered === nothing || return rendered[2]
+  temporal = _textless_temporal(operand, instruc)
+  temporal !== nothing && temporal[1] in (:timestamp, :interval) && return temporal[2]
   # A time of day formats as text, so the formatter cannot tell it from text; its kind can, through
   # the functions that keep their operand's (`Max("clock")`, `Coalesce`, a `Subquery`).
   time_kind = _expression_kind(operand, instruc) isa CTime
@@ -597,10 +599,10 @@ function _pad_textless(operand, kind, instruc::SQLInstruction)::Union{String,Not
   return isempty(kind_name) ? "`$(label)`" : "the $(kind_name) `$(label)`"
 end
 
-function _check_pad_operands(v::SQLTypeFunction, instruc::SQLInstruction, operand_kinds::AbstractVector)
+function _check_pad_operands(v::SQLTypeFunction, instruc::SQLInstruction)
   name = v.function_name == "LPAD" ? "LPad" : "RPad"
   for (i, slot) in ((1, "the value it pads"), (3, "its fill"))
-    what = _pad_textless(v.column[i], get(operand_kinds, i, nothing), instruc)
+    what = _pad_textless(v.column[i], instruc)
     what === nothing && continue
     advice = v.column[i] isa SQLText ?
       "Write the literal as a string: \e[4m\e[32mstring(x)\e[0m" :
@@ -663,7 +665,6 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # which is exactly what `_get_select_query(::FExpression)` renders, so its SQL is unchanged and
   # only its kind is kept.
   interval_ms = interval = false
-  operand_kinds = Any[]   # #1028: per operand, the rendered kind, set by the `Concat` / declared-cast arm below
   fanout_column = nothing   # the operand as the #74 guard reads it: its column, not the parse of it
   if v isa FObject && v.function_name == "ABS" && _interval_as_ms(instruc.connection) && !(v.column isa AbstractVector)
     resolved_column, ms, operand_interval = _render_interval_operand(v.column, instruc; _as = _as)
@@ -702,17 +703,10 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     # #31: in text order — the vector or document, then the query, then the headline's options.
     # #1021: a sum of vectors renders its two halves the same way, left to right.
     resolved_column = Any[_render_fts_operand(c, instruc; _as = _as) for c in v.column]
-  elseif v.function_name in ("CONCAT", "LPAD", "RPAD") || v.function_name in _DECLARED_CAST_FUNCTIONS
-    # #1028: each operand rendered once, keeping the kind its render computed — arithmetic over a
-    # timestamp or a duration (`F("start_at") + Day(1)`, a difference) and `Sum(duration)` are a
-    # timestamp or an interval, and their text differs per engine. Since #1034 step 5c the classifier
-    # also reads them from the walk, so the rendered kind is a fallback there. #122:
-    # `LPad`/`RPad` read it too — PostgreSQL has no `lpad` over either.
-    operands = _null_skipping_operands(v, instruc)
-    forms = [_render_operand_kind(x, instruc; _as = _as) for x in (operands isa AbstractVector ? operands : (operands,))]
-    resolved_column = operands isa AbstractVector ? Any[f[1] for f in forms] : only(forms)[1]
-    operand_kinds = Any[f[2] for f in forms]
   else
+    # #1304: `Concat`, `LPad`/`RPad` and the declared casts render here too. They kept the kind their
+    # operands' render computed, for the checks below, until #1034 step 5a/5c made the walk name the
+    # same kinds (the render and the walk share one rule since step 5b) — the checks read the walk.
     resolved_column = _get_select_query(_null_skipping_operands(v, instruc), instruc, _as=_as)
   end
   # #942: the half of the `When` condition check construction could not do. Read after the condition
@@ -745,9 +739,8 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # and is refused on every engine, naming the cast that says it. An integer quotient one engine
   # computes with a fraction is a question of meaning instead: refused only on that engine.
   if v.function_name == "CONCAT" && v.column isa AbstractVector
-    for (i, operand) in enumerate(v.column)
+    for operand in v.column
       textless = _concat_textless_operand(operand, instruc)
-      textless === nothing && (textless = _rendered_kind_textless(get(operand_kinds, i, nothing)))
       textless === nothing && continue
       if _meaning_kind(:concat, textless[1])
         row = _departure(instruc.connection, :concat, textless[1])
@@ -758,22 +751,16 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     end
   end
   # #122: `LPad`/`RPad` over a typed operand that is not text, read at the same point.
-  v.function_name in ("LPAD", "RPAD") && _check_pad_operands(v, instruc, operand_kinds)
+  v.function_name in ("LPAD", "RPAD") && _check_pad_operands(v, instruc)
   # #1028: a declared cast — `Cast(x, CharField())`, `Cast(x, IntegerField())`, `Cast(x, "numeric(p,
   # s)")`, and the `output_field` cast `Coalesce`/`Greatest`/`Least` apply — over an operand on which
   # this engine departs from what the cast means (#1147 step 2). Read at the same point, so a `Concat`
-  # over such a cast meets this refusal first, while its operand renders. An
-  # `operand_kinds` entry is set only on the arm above: a `Coalesce` of intervals with no
-  # `output_field` renders through the millisecond arm instead, and has no cast to check.
-  #
-  # `Greatest`/`Least` take no rendered kind: on SQLite their operands render as NULL-skipping
-  # `COALESCE` rotations, whose render reports neither a timestamp nor an interval beside an operand of
-  # another type, so a rendered kind would refuse on PostgreSQL what SQLite renders. Both engines
-  # answering the same comes first; their typed operands (a column, a function) are still read by name.
+  # over such a cast meets this refusal first, while its operand renders. Each operand's type is the
+  # walk's, the same on every engine (#1304), so `Greatest`/`Least`, whose operands render on SQLite as
+  # NULL-skipping `COALESCE` rotations, are read as their operands are written.
   if v.function_name in _DECLARED_CAST_FUNCTIONS && v isa FObject
-    rendered = v.function_name in ("GREATEST", "LEAST") ? Any[] : operand_kinds
     # #1147 step 2: only an operand on which this engine departs from the cast's meaning comes back.
-    d = _cast_divergent_operand(v, instruc; rendered = rendered)
+    d = _cast_divergent_operand(v, instruc)
     d === nothing || throw(_meaning_refusal(_declared_cast_label(v), d.what, d.row, instruc.connection;
                                             flag = d.flag, declared = d.declared))
   end

@@ -412,7 +412,8 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Review of #1028: the shapes only the render can type, and the literals
-# `F("start_at") + Day(1)` is a timestamp no type reader names; its render does (`_render_operand_kind`).
+# `F("start_at") + Day(1)` is a timestamp: its render named it before any type reader did, and since
+# #1034 step 5a the walk names it too (the render's kind is no longer read, #1304).
 # A `DateTime` or duration literal binds `$1::timestamp` / an interval on PostgreSQL and the stored text
 # on SQLite. `Concat` over any of them is explicit intent, refused on every engine — a literal when
 # the `Concat` is built. A cast of one to text is representation and builds on both (#1147 step 2).
@@ -837,6 +838,23 @@ end
   _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1259", run = conn -> _ccd_render(Fn.Cast(avg_sub(), Models.FloatField()); conn = conn))
   for expr in (Fn.Cast("laptime", "text"), Fn.Cast("laptime", Models.CharField()))
     @test _ccd_builds(expr)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1304: a `numeric` function whose meaning is an interval is refused as one
+# The classifier names `Round`/`Sqrt` a `numeric` function's value (`:numeric`), while the type walk's
+# meaning (`_MeaningKinds`) is the interval it is computed over: `Round(Avg("laptime"))`,
+# `Sqrt("laptime")`. Cast to a number, it is refused on SQLite as the interval (#1259), named by the
+# classifier. Expected SQL, PostgreSQL: (ROUND(AVG("Tb"."laptime")))::integer — PostgreSQL rejects it
+# when the query runs, the meaning by the #1087 tie-breaker. Why: this arm of `_interval_operand` is
+# the one #1304 kept (it reads the walk, not the render), and no other test reached it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1304: a numeric function over an interval, cast to a number, is refused on SQLite as the interval" begin
+  for (expr, named) in ((Fn.Cast(Fn.Round(Fn.Avg("laptime")), Models.IntegerField()), "`ROUND(…)`"),
+                        (Fn.Cast(Fn.Sqrt("laptime"), Models.IntegerField()), "`SQRT(…)`"),
+                        (Fn.Cast(Fn.Sqrt("laptime"), "numeric"), "`SQRT(…)`"))
+    _ccd_expect(expr; departs = _SL_ONLY, issue = "#1259", named = named)
   end
 end
 

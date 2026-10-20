@@ -703,7 +703,7 @@ end
 # a joined or CTE handle, a transform, a typed function (`Max("start_at")`, `Max("lap")`), and, since
 # the walk types them (step 5a), `F` arithmetic over a timestamp or a duration and `Sum`/`Avg` of an
 # interval. Before step 5c it came from `_operand_kind`, which names none of the last two, so only the
-# render's kind caught them, at the sites it reaches (`_rendered_kind_textless`).
+# render's kind caught them; that fallback was removed in #1304, once it no longer fired.
 #
 # A JSON operand is refused as the WHOLE document only. A key lookup (`"payload__driver"`) resolves to
 # the same field, but renders `#>>` / `json_extract`, the value at that key. That value has one text
@@ -1033,12 +1033,11 @@ _text_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "a text 
 _declared_cast_label(v::FObject) = v.function_name == "CAST" ? "Cast(…, \"$(v.kwargs["type"])\")" :
   "$(uppercasefirst(lowercase(v.function_name)))(…; output_field = \"$(v.kwargs["output_field"])\")"
 #
-# `rendered` holds each operand's kind as its render computed it (`_render_operand_kind`), read where
-# the classifier names none. Since #1034 step 5c the classifier reads temporal arithmetic and
-# `Sum(duration)` from the walk, so the rendered fallbacks are expected never to fire (a follow-up
-# removes them once the full suite shows they do not).
+# Each operand's type is the walk's. Until #1304 the kind its render computed was read where the
+# classifier named none; since #1034 step 5c the classifier reads temporal arithmetic and
+# `Sum(duration)` from the walk, and that fallback no longer fired over the unit suite.
 # A declared `Case` (#1217) is cast as each row takes a branch, so its operands are its branch values.
-function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::AbstractVector = Any[])
+function _cast_divergent_operand(v::FObject, instruc::SQLInstruction)
   declared = get(v.kwargs, v.function_name == "CAST" ? "type" : "output_field", nothing)
   (declared isa AbstractString && !isempty(declared)) || return nothing
   operands = v.function_name == "CASE" ? _case_values(v) : v.column isa AbstractVector ? v.column : (v.column,)
@@ -1058,8 +1057,8 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::
   # which read a fraction, not a duration or a date.
   if size !== nothing || target isa Union{Models.sIntegerField,Models.sBigIntegerField,Models.sFloatField,Models.sDecimalField}
     numeric_target = target isa Union{Models.sIntegerField,Models.sBigIntegerField} ? :integer : :number
-    for (i, operand) in enumerate(operands)
-      side = _temporal_number_operand(operand, get(rendered, i, nothing), instruc)
+    for operand in operands
+      side = _temporal_number_operand(operand, instruc)
       side === nothing || (d = departs(side[1], side[2], numeric_target, _concat_flag(operand)); d === nothing || return d)
     end
   end
@@ -1080,10 +1079,9 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::
   end
   to_integer = target isa Union{Models.sIntegerField,Models.sBigIntegerField}
   (to_integer || target isa Union{Models.sCharField,Models.sTextField}) || return nothing
-  for (i, operand) in enumerate(operands)
+  for operand in operands
     to_integer && _integral_valued(operand, instruc) && continue
     side = _concat_textless_operand(operand, instruc)
-    side === nothing && !to_integer && (side = _rendered_kind_textless(get(rendered, i, nothing)))
     # #1151: an operand the classifier leaves untyped is read through the type walk, which names a
     # float `float8` on PostgreSQL, whose cast rounds where SQLite's truncates. A `Case` is classified
     # branch by branch above since #1187 (`_case_textless_branch`), which also reads a decimal branch's
@@ -1102,30 +1100,29 @@ end
 # #1259 — an operand that is an interval, as `(kind, what)`, or `nothing`: one the classifier names
 # (a `DurationField` column, its `Sum` and `Avg`, a duration literal, and since #1034 step 5c temporal
 # arithmetic and a `Sum` of it), or one whose meaning is an interval though the classifier tags it
-# otherwise (`_MeaningKinds`). The `rendered` fallback predates step 5c and is expected never to fire.
-# A timestamp is not this rule's.
-function _interval_operand(operand, rendered, instruc::SQLInstruction)
+# otherwise (`_MeaningKinds`): a function PostgreSQL computes as a `numeric` (`:numeric`) whose meaning
+# is an interval, `Round(Avg("laptime"))` or `Sqrt("laptime")`, keeps the classifier's name. A
+# timestamp is not this rule's.
+function _interval_operand(operand, instruc::SQLInstruction)
   side = _concat_textless_operand(operand, instruc)
   side !== nothing && side[1] === :interval && return side
   if side === nothing || side[1] === :numeric
     _infer_kind(operand, instruc, _MeaningKinds()) isa CInterval &&
       return (:interval, side === nothing ? "an interval expression" : side[2])
   end
-  side === nothing && (side = _rendered_kind_textless(rendered))
-  return side !== nothing && side[1] === :interval ? side : nothing
+  return nothing
 end
 # #1260 — an operand cast to a number that is an interval (`_interval_operand`) or a date, a time or a
 # timestamp, as `(kind, what)`, or `nothing`. SQLite stores each as text, and its cast reads the
 # text's leading digits: a date's year, a time's hour. The kind comes from the type walk (a column, a
-# CTE column, `Max("date")`, `Cast(x, "date")`, a literal), or from the render where the walk names
-# none (`F("date") + Day(1)`). A part (`@year`, `Extract`) and a day count (`F("date") - F("date")`)
-# are numbers, and pass.
-function _temporal_number_operand(operand, rendered, instruc::SQLInstruction)
-  side = _interval_operand(operand, rendered, instruc)
+# CTE column, `Max("date")`, `Cast(x, "date")`, a literal, and since #1034 step 5a date arithmetic,
+# `F("date") + Day(1)`). A part (`@year`, `Extract`) and a day count (`F("date") - F("date")`) are
+# numbers, and pass.
+function _temporal_number_operand(operand, instruc::SQLInstruction)
+  side = _interval_operand(operand, instruc)
   side === nothing || return side
   kind = operand isa Union{Dates.TimeType,ZonedDateTime} ? literal_canonical_kind(operand) :
          _infer_kind(operand, instruc, _MeaningKinds())
-  kind === nothing && (kind = rendered)
   tag = kind isa CDate ? :date : kind isa CTime ? :time : kind isa CDateTime ? :timestamp : nothing
   tag === nothing && return nothing
   literal = operand isa SQLText ? operand.field : operand
@@ -1135,11 +1132,6 @@ function _temporal_number_operand(operand, rendered, instruc::SQLInstruction)
   field = tag === :date ? "DateField" : tag === :time ? "TimeField" : "DateTimeField"
   return (tag, "the $(field) `$(label)`")
 end
-# A rendered kind (`_render_operand_kind`), as a `_concat_textless_operand` answer: the fallback for an
-# operand no type reader named, which since #1034 step 5c the walk names.
-_rendered_kind_textless(kind) =
-  kind isa CDateTime ? (:timestamp, "a timestamp expression") :
-  kind isa CInterval ? (:interval, "an interval expression") : nothing
 # A literal is named by its type, never its value: it is a bound value, and a refusal never prints
 # one (#971). Every label built over this one inherits it (`arithmetic over a Float64 literal`), so
 # printing the value here leaked it through `Concat`, `Cast` and `Round` alike (#1057).

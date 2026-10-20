@@ -515,6 +515,8 @@ end
   t(x) = PormG.Dialect.cast_type_sql(x, my)
   @test [t(x) for x in ("text", "varchar", "varchar(20)", "character varying(5)", "TEXT", "VARCHAR")] ==
         ["CHAR", "CHAR", "CHAR(20)", "CHAR(5)", "CHAR", "CHAR"]
+  # PostgreSQL's unsized `char` is `char(1)`: one character, not the whole value.
+  @test [t(x) for x in ("char", "character", "char(3)")] == ["CHAR(1)", "CHAR(1)", "CHAR(3)"]
   @test [t(x) for x in ("integer", "int", "int4", "smallint", "bigint", "int8", "INTEGER UNSIGNED")] == fill("SIGNED", 7)
   @test [t(x) for x in ("numeric", "decimal", "dec", "numeric(10,2)", "numeric(5)")] ==
         ["DECIMAL(65,30)", "DECIMAL(65,30)", "DECIMAL(65,30)", "DECIMAL(10,2)", "DECIMAL(5)"]
@@ -540,6 +542,15 @@ end
   # The departures still refuse first: a date's cast to a number is MySQL's departure (#1260).
   err = try; sel(PormG.QueryBuilder.Cast("raceid__date", "integer")); nothing; catch e; e; end
   @test err isa PormG.QueryBuildError && occursin("MySQL computes its digits read as one number", sprint(showerror, err))
+  # A temporal value cast to a single-precision float is no number either (#1260): MySQL keeps #1215's
+  # single precision, so the operand rule must still run (review of #1130 2b: it returned early, and
+  # `CAST(date AS FLOAT)` read back `20090329`).
+  for target in ("real", "float4", "float(10)")
+    err = try; sel(PormG.QueryBuilder.Cast("raceid__date", target)); nothing; catch e; e; end
+    @test (target, err isa PormG.QueryBuildError) == (target, true)
+    @test occursin("MySQL computes its digits read as one number", sprint(showerror, err))
+  end
+  @test occursin("CAST(`Tb`.`points` AS FLOAT)", sel(PormG.QueryBuilder.Cast("points", "real")))
   # A uuid cast compares as text on MySQL, as on SQLite: the engine fact the walk reads.
   @test PormG.QueryBuilder._cast_renders_text(PormG.Models.UUIDField(), my)
   @test !PormG.QueryBuilder._cast_renders_text(PormG.Models.IntegerField(), my)
@@ -579,8 +590,12 @@ end
   q(f) = _mr_inspect(_MR_MY.Race.objects.values("v" => f))
   r = q(F("date") + Day(3))
   @test occursin("(`Tb`.`date` + INTERVAL ? DAY) as `v`", r[:sql_text]) && r[:parameters] == Any[3]
+  # Years and months are ONE month count, as `make_interval` adds them: a year and then a month would
+  # clamp at a month end first (`2008-02-29` + 1y + 1m: `2009-03-28`, where PostgreSQL says `2009-03-29`).
   r = q(F("date") - (Year(1) + Month(2)))
-  @test occursin("((`Tb`.`date` - INTERVAL ? YEAR) - INTERVAL ? MONTH)", r[:sql_text]) && r[:parameters] == Any[1, 2]
+  @test occursin("(`Tb`.`date` - INTERVAL ? MONTH) as `v`", r[:sql_text]) && r[:parameters] == Any[14]
+  r = q(F("date") + (Year(1) - Month(1) + Day(2)))
+  @test occursin("((`Tb`.`date` + INTERVAL ? MONTH) + INTERVAL ? DAY)", r[:sql_text]) && r[:parameters] == Any[11, 2]
   # A sub-second duration binds its seconds as a Float64, whose fraction MySQL keeps.
   r = _mr_inspect(_MR_MY.Race.objects.values("v" => F("date") + Millisecond(1500)))
   @test occursin("(`Tb`.`date` + INTERVAL ? SECOND)", r[:sql_text]) && r[:parameters] == Any[1.5]
@@ -618,6 +633,11 @@ end
   @test refused(() -> _MR_MY.Result.objects.values("v" => Sum("fastestlaptime")))
   @test refused(() -> _MR_MY.Result.objects.values("v" => F("fastestlaptime") * 2))
   @test refused(() -> _MR_MY.Result.objects.values("v" => F("raceid__date") + F("fastestlaptime")))
+  # Interval arithmetic the SQLite path refuses in its own words is MySQL's refusal too, naming MySQL.
+  @test refused(() -> _MR_MY.Result.objects.values("v" => F("fastestlaptime") + 1))
+  @test refused(() -> _MR_MY.Result.objects.values("v" => F("fastestlaptime") * F("fastestlaptime")))
+  # A duration literal inside a function is the text edge of the millisecond form (`_interval_ms_as_text`).
+  @test refused(() -> _MR_MY.Result.objects.values("v" => Max(PormG.QueryBuilder.Value(Hour(1)))))
   @test occursin("`Tb`.`fastestlaptime` as `v`", _mr_inspect(_MR_MY.Result.objects.values("v" => F("fastestlaptime")))[:sql_text])
   # The per-engine edges: SQLite's are its own Dialect helpers, unchanged.
   @test _MR_QB._interval_text_as_ms("`c`", MrMockSQLite()) == PormG.Dialect._sqlite_interval_ms("`c`")

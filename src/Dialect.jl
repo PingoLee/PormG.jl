@@ -845,6 +845,8 @@ function cast_type_sql(type::AbstractString, conn::PormGMySQL; context::Abstract
       "target that holds its meaning, and PormG passes no type name through unmapped (#1130)."))
   end
   isempty(size) || return target * size
+  # PostgreSQL's unsized `char` is `char(1)`, which keeps one character; MySQL's unsized CHAR keeps all.
+  key in ("char", "character") && return "CHAR(1)"
   target == "DECIMAL" && return "DECIMAL(65,30)"
   target == "DATETIME" && return "DATETIME(3)"
   target == "TIME" && return "TIME(6)"

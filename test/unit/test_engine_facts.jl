@@ -150,7 +150,7 @@ end
   @test !_EF_QB._casts_bind_parameters(_EfMy()) && !_EF_QB._binds_list_as_array(_EfMy())
   @test _EF_QB._inspection_dialect(_EfMy()) == (:mysql, :positional)
   # `_stores_date_as_text` stays SQLite's question: MySQL refuses an untyped date operand by a method of
-  # its own (`_refuse_untyped_date_operand`, phase 2b), since its `+` reads a date's digits, not its text.
+  # its own (`_untyped_date_refusal`, phase 2b), since its `+` reads a date's digits, not its text.
   # Writes are phase 3's.
   @test_throws MethodError _EF_QB._stores_date_as_text(_EfMy())
   @test_throws MethodError _EF_QB._insert_returns_rows(_EfMy())

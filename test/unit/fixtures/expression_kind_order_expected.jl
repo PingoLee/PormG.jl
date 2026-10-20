@@ -781,38 +781,66 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("3835", "Int64"), ("1", "Int64")]),
   ("Cast datetime to timestamp | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast datetime to timestamp | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast datetime to timestamp | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast datetime to timestamp | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast datetime to timestamptz | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast datetime to timestamptz | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast datetime to timestamptz | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast datetime to timestamptz | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast datetime to time | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast datetime to time | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast datetime to time | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast datetime to time | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast interval to interval | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast interval to interval | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast interval to interval | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast interval to interval | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast text to bytea | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Cast text to bytea | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast text to bytea | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast text to bytea | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast text to bytea | subquery", :postgres, "w") =>
-    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Cast text to bytea | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast text to blob | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast text to blob | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast text to blob | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast text to blob | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast text to blob | cte", :sqlite, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast text to blob | cte", :sqlite, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast text to blob | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast text to blob | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Coalesce declared timestamp | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce declared timestamp | cte", :postgres, "g__v") =>
+    (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Coalesce declared timestamp | cte", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Coalesce declared timestamp | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Lag interval | alone", :postgres, "v") =>

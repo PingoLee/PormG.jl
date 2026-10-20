@@ -895,7 +895,16 @@ Julian day (`0` is in 4714 BC). Every other
 time target raises `BackendCapabilityError` on SQLite: `timestamp`, `timestamptz`, `time`,
 `interval` and their spellings, and `DateTimeField()`, `TimeField()`, `DurationField()`. A plain
 SQLite `CAST` to one of them returns a number (`2020` for `'2020-03-29 10:11:12'`), not a
-different spelling of the value. Project the column itself instead.
+different spelling of the value. Project the column itself instead. The same holds for `"bytea"`
+(#1194): SQLite has no type of that name, and `CAST(… AS BYTEA)` turns `'abc'` into `0`. Cast to
+`BinaryField()` (or `"blob"`) instead, which renders `CAST(… AS BLOB)` on SQLite and `::bytea` on
+PostgreSQL.
+
+On PostgreSQL a cast to a time, timestamp, interval or binary type is typed as that type (#1194),
+as a column of it is: it reads back as a `Time`, `DateTime`/`ZonedDateTime`, `Dates.CompoundPeriod`
+or bytes, an equality value on its alias is checked as one, a pattern lookup on the alias follows
+the column's rule (a time reads as its text; the others are refused), and `Concat` over a timestamp
+or interval cast is refused (name its text with `ToChar` or `Cast(…, "text")`).
 
 ```julia
 using PormG.Functions: Cast

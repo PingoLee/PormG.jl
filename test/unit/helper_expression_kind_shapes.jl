@@ -108,6 +108,10 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Case untyped zoned col",  :Race,                m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("start_at"))])),
   ("Case untyped time col",   :Race,                m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("time"))])),
   ("Case untyped decimal col", :Constructor_results, m -> _EKM_FN.Case([_EKM_FN.When("constructorresultsid" => 3835, then = _EKM_Q.F("points"))])),
+  # #1307: such a `Case` as the date side of F temporal arithmetic, as `F("date")` is above
+  ("Case untyped date col + 1", :Race,              m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("date"))]) + 1),
+  ("Case untyped date col - date", :Race,           m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("date"))]) - _EKM_Q.F("date")),
+  ("Case untyped zoned col + interval", :Race,      m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("start_at"))]) + (_EKM_Q.F("start_at") - _EKM_Q.F("start_at"))),
   # ── aggregates ─────────────────────────────────────────────────────────────────────────────────
   ("Sum int",                 :Result,              m -> _EKM_FN.Sum("grid")),
   ("Sum float",               :Result,              m -> _EKM_FN.Sum("points")),

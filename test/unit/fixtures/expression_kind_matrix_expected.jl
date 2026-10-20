@@ -794,6 +794,42 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case untyped decimal col | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Case untyped date col + 1 | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Case untyped date col + 1 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Case untyped date col + 1 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("Case untyped date col + 1 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("Case untyped date col + 1 | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Case untyped date col + 1 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Case untyped date col - date | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Case untyped date col - date | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` between a date and a value PormG cannot type is not supported on SQLite, where a date is text and `-` would use only"),
+  ("Case untyped date col - date | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("Case untyped date col - date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` between a date and a value PormG cannot type is not supported on SQLite, where a date is text and `-` would use only"),
+  ("Case untyped date col - date | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Case untyped date col - date | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`-` between a date and a value PormG cannot type is not supported on SQLite, where a date is text and `-` would use only"),
+  ("Case untyped zoned col + interval | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Case untyped zoned col + interval | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`+` with an interval on the right of a value that is not one is not supported on SQLite. An interval there is a timestam"),
+  ("Case untyped zoned col + interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("Case untyped zoned col + interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`+` with an interval on the right of a value that is not one is not supported on SQLite. An interval there is a timestam"),
+  ("Case untyped zoned col + interval | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = nothing, whole_numeric = nothing),
+  ("Case untyped zoned col + interval | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`+` with an interval on the right of a value that is not one is not supported on SQLite. An interval there is a timestam"),
   ("Sum int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum int | alone", :sqlite) =>

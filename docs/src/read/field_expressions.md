@@ -279,6 +279,10 @@ A bare integer and an explicit `Day(n)` are the same thing: the integer is whole
 through the same path, so they compose identically and at any depth — `(F("date") + 7) + 3` shifts by
 ten days, exactly as `F("date") + Day(7) + Day(3)` does.
 
+The date side can be any expression whose type is a date, not only a column: `Max("date")`,
+`Coalesce("date", …)`, `Lag("date", over = …)`, or a `Case` whose branches are all dates. `Case(When("round" => 1, then = F("date")), default = F("date")) + 1` is the date one day
+later on both engines; a `Case` that mixes a date and a timestamp must say its type (`output_field`).
+
 Generated SQL (PostgreSQL) — both operands are joined columns, so both carry a join alias:
 ```sql
 WHERE ("Tb_1"."date" > "Tb_2"."dob")

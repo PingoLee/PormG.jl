@@ -206,6 +206,68 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# A Case over dates is the date side of F temporal arithmetic (#1307).
+# Expected, on both engines: an untyped `Case` whose branches are one date (or timestamp) column
+# combines as that column does — shifted by a whole number or an integer column it is the date, minus
+# a date it is the `integer` day count, plus an interval it is a timestamp, and a timestamp `Case`
+# minus a timestamp is an interval. The render and the walk agree. The SQL is the date-shift arm's:
+#   PostgreSQL ((CASE WHEN "Tb"."year" = $1 THEN "Tb"."date" ELSE "Tb"."date" END + make_interval(days => $2::integer)))::date
+#   SQLite     date(CASE WHEN "Tb"."year" = ? THEN "Tb"."date" ELSE "Tb"."date" END , '+' || ? || ' days')
+# Before, the side was untyped: SQLite added the number to the date's `YYYY-MM-DD` text
+# (`'2009-03-29' + 1` is `2010`) with no error, and PostgreSQL rendered `date + $2::bigint`, which it
+# has no operator for. A filter on the alias now checks its value as a date, as for `F("date") + 1`.
+# Why it matters: a silent wrong value on SQLite, and on PostgreSQL a statement that failed to run.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1307: a Case over dates in date arithmetic is typed as the date it holds" begin
+  date_case() = Case([When("year" => 2009, then = F("date"))], default = F("date"))
+  zoned_case() = Case([When("year" => 2009, then = F("start_at"))], default = F("start_at"))
+  shapes = (
+    (date_case() + 1,                 PormG.CDate()),
+    (Max(date_case()) + 1,            PormG.CDate()),
+    (date_case() - 1,                 PormG.CDate()),
+    (1 + date_case(),                 PormG.CDate()),
+    (date_case() + F("year"),         PormG.CDate()),
+    (date_case() + F("laps_total"),   PormG.CDate()),
+    (date_case() - F("date"),         PormG.CInt32()),
+    (F("date") - date_case(),         PormG.CInt32()),
+    (date_case() + F("laptime"),      PormG.CDateTime(false)),
+    (zoned_case() + 1,                PormG.CDateTime(true)),
+    (zoned_case() + F("laptime"),     PormG.CDateTime(true)),
+    (zoned_case() - F("start_at"),    PormG.CInterval()),
+  )
+  for (backend, Model_) in _TAK_MODELS, (expr, expected) in shapes
+    @testset "$backend: $(expected)" begin
+      rendered, walked = _tak_kinds(Model_, expr)
+      @test rendered == expected
+      @test walked == expected
+    end
+  end
+  # The exact SQL of the issue's shape, per engine: the date-shift arm over the whole `Case`.
+  sql(Model_, expr) = (q = Model_.objects; q.values("v" => expr); replace(inspect_query(q)[:sql_text], r"\s+" => " "))
+  pg_model, sl_model = _TAK_MODELS[1][2], _TAK_MODELS[2][2]
+  @test occursin("((CASE WHEN \"Tb\".\"year\" = \$1 THEN \"Tb\".\"date\" ELSE \"Tb\".\"date\" END + " *
+                 "make_interval(days => \$2::integer)))::date as \"v\"", sql(pg_model, date_case() + 1))
+  @test occursin("date(CASE WHEN \"Tb\".\"year\" = ? THEN \"Tb\".\"date\" ELSE \"Tb\".\"date\" END , " *
+                 "'+' || ? || ' days') as \"v\"", sql(sl_model, date_case() + 1))
+  # A filter on the alias checks its value as a date, as it does for `F("date") + 1`.
+  for (_, Model_) in _TAK_MODELS
+    q = Model_.objects
+    q.values("v" => date_case() + 1)
+    q.filter("v__@gt" => 10)
+    @test_throws PormG.InvalidValueError inspect_query(q)
+  end
+  # Beside a value PormG cannot type as a day count, the date `Case` is refused on SQLite, as a
+  # `DateField` column is: `'2009-03-29' + 1.5` would be `2010.5`.
+  q = sl_model.objects
+  q.values("v" => date_case() + 1.5)
+  @test_throws PormG.QueryBuildError inspect_query(q)
+  # A `Case` that mixes a date and a timestamp still says nothing about its type, and is refused (#1200).
+  q = sl_model.objects
+  q.values("v" => Case([When("year" => 2009, then = F("date"))], default = F("start_at")) + 1)
+  @test_throws PormG.QueryBuildError inspect_query(q)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Readers that ask the walk see the type now.
 # Expected: `Abs(F("date") - F("date"))` keeps the integer day count (#1147), so PostgreSQL renders a
 # bare `ABS(…)`, not `ABS((…)::numeric)`; `Greatest("date", F("date") + 1)` agrees on a date, so the

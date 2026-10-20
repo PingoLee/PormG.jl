@@ -850,6 +850,26 @@ end
     end
   end
 
+  # #1307 — a `Case` whose value is a date, shifted by a whole number of days. SQLite added the number
+  # to the date's `YYYY-MM-DD` text (`'2009-03-29' + 1` is `2010`), with no error, and PostgreSQL
+  # rendered `date + bigint`, which it has no operator for. The `Case` is now the date side of the
+  # shift, as a `DateField` column is (#568): on both engines the value is the date one day later, read
+  # back as a `Date`. The oracle is each race's own date, plus one day in Julia; a minus-date gives the
+  # day count back.
+  @testset "a Case over dates shifted by a number is the date one day later (#1307)" begin
+    FN = PormG.Functions
+    date_case() = FN.Case(FN.When("round" => 1, then = F("date")), default = F("date"))
+    q = M.Race.objects
+    q.filter("year" => 2009)
+    q.values("raceid", "date", "next" => date_case() + 1, "gap" => date_case() - F("date"))
+    q.order_by("raceid")
+    df = q |> DataFrame
+    @test size(df, 1) > 1
+    @test all(x -> x isa Dates.Date, df.next)
+    @test df.next == [Dates.Date(string(d)) + Dates.Day(1) for d in df.date]
+    @test all(==(0), df.gap)
+  end
+
   # #894 — sorting and filtering an interval's VALUE on both engines. On SQLite a projected interval is
   # its `HH:MM:SS` text, which sorts `"100:00:00"` before `"99:00:00"` and `"-01:00:00"` before
   # `"-02:00:00"`; PormG orders and compares its milliseconds instead. A difference times the round

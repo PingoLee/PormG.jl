@@ -789,11 +789,19 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2009", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Case untyped date col - date | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2009", "Int64")]),
+  ("Case untyped date col - date | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2009", "Int64")]),
   ("Case untyped date col - date | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2009", "Int64"), ("1", "Int64")]),
+  ("Case untyped date col - date | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2009", "Int64"), ("1", "Int64")]),
   ("Case untyped zoned col + interval | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2009", "Int64")]),
+  ("Case untyped zoned col + interval | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2009", "Int64")]),
   ("Case untyped zoned col + interval | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2009", "Int64"), ("1", "Int64")]),
+  ("Case untyped zoned col + interval | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2009", "Int64"), ("1", "Int64")]),
   ("Sum int | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),

@@ -1162,21 +1162,45 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Case untyped decimal col | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"constructorresultsid\" = ? THEN \"R2\".\"points\"\nELSE NULL\nEND\n as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT ? \n) > ?", params = [("3835", "Int64"), ("1", "Int64"), ("3835", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
   ("Case untyped date col + 1 | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"year\" = \$3 THEN \"Tb\".\"date\"\nELSE NULL\nEND\n + \$4::bigint) > \$5", params = [("2009", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Case untyped date col + 1 | alone", :postgres, "v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "((CASE\nWHEN \"Tb\".\"year\" = \$3 THEN \"Tb\".\"date\"\nELSE NULL\nEND\n + make_interval(days => \$4::integer)))::date > \$5", params = [("2009", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
   ("Case untyped date col + 1 | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"year\" = ? THEN \"Tb\".\"date\"\nELSE NULL\nEND\n + ?) > ?", params = [("2009", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Case untyped date col + 1 | alone", :sqlite, "v__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "date(CASE\nWHEN \"Tb\".\"year\" = ? THEN \"Tb\".\"date\"\nELSE NULL\nEND\n, '+' || ? || ' days') > ?", params = [("2009", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
   ("Case untyped date col + 1 | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"year\" = \$4 THEN \"R2\".\"date\"\nELSE NULL\nEND\n + \$5::bigint) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$6 \n) > \$7", params = [("2009", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Case untyped date col + 1 | subquery", :postgres, "w__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ((CASE\nWHEN \"R2\".\"year\" = \$4 THEN \"R2\".\"date\"\nELSE NULL\nEND\n + make_interval(days => \$5::integer)))::date as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$6 \n) > \$7", params = [("2009", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
   ("Case untyped date col + 1 | subquery", :sqlite, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"year\" = ? THEN \"R2\".\"date\"\nELSE NULL\nEND\n + ?) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("2009", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
+  ("Case untyped date col + 1 | subquery", :sqlite, "w__@gt", "date 2009-03-29") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    date(CASE\nWHEN \"R2\".\"year\" = ? THEN \"R2\".\"date\"\nELSE NULL\nEND\n, '+' || ? || ' days') as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("2009", "Int64"), ("1", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("1", "Int64"), ("1", "Int64"), ("\"2009-03-29\"", "String")]),
   ("Case untyped date col - date | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"year\" = \$2 THEN \"Tb\".\"date\"\nELSE NULL\nEND\n - \"Tb\".\"date\") > \$3", params = [("2009", "Int64"), ("2009", "Int64"), ("10", "Int64")]),
+  ("Case untyped date col - date | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CAST(julianday(CASE\nWHEN \"Tb\".\"year\" = ? THEN \"Tb\".\"date\"\nELSE NULL\nEND\n) - julianday(\"Tb\".\"date\") AS INTEGER) > ?", params = [("2009", "Int64"), ("2009", "Int64"), ("10", "Int64")]),
   ("Case untyped date col - date | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"year\" = \$3 THEN \"R2\".\"date\"\nELSE NULL\nEND\n - \"R2\".\"date\") as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2009", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Case untyped date col - date | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(julianday(CASE\nWHEN \"R2\".\"year\" = ? THEN \"R2\".\"date\"\nELSE NULL\nEND\n) - julianday(\"R2\".\"date\") AS INTEGER) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("2009", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Case untyped zoned col + interval | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"year\" = \$2 THEN \"Tb\".\"start_at\"\nELSE NULL\nEND\n + (\"Tb\".\"start_at\" - \"Tb\".\"start_at\")) > \$3", params = [("2009", "Int64"), ("2009", "Int64"), ("10", "Int64")]),
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
+  ("Case untyped zoned col + interval | alone", :postgres, "v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"year\" = \$2 THEN \"Tb\".\"start_at\"\nELSE NULL\nEND\n + (\"Tb\".\"start_at\" - \"Tb\".\"start_at\")) > \$3", params = [("2009", "Int64"), ("2009", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("Case untyped zoned col + interval | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
+  ("Case untyped zoned col + interval | alone", :sqlite, "v__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "strftime('%Y-%m-%dT%H:%M:%f+00:00', julianday(CASE\nWHEN \"Tb\".\"year\" = ? THEN \"Tb\".\"start_at\"\nELSE NULL\nEND\n) + ((CAST(round((julianday(\"Tb\".\"start_at\") - julianday(\"Tb\".\"start_at\")) * 86400000) AS INTEGER)) / 86400000.0)) > ?", params = [("2009", "Int64"), ("2009", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
   ("Case untyped zoned col + interval | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"year\" = \$3 THEN \"R2\".\"start_at\"\nELSE NULL\nEND\n + (\"R2\".\"start_at\" - \"R2\".\"start_at\")) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2009", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
+  ("Case untyped zoned col + interval | subquery", :postgres, "w__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"year\" = \$3 THEN \"R2\".\"start_at\"\nELSE NULL\nEND\n + (\"R2\".\"start_at\" - \"R2\".\"start_at\")) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT \$4 \n) > \$5", params = [("2009", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("Case untyped zoned col + interval | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (timezone): The datetime must be a ZonedDateTime, DateTime, or a string in t"),
+  ("Case untyped zoned col + interval | subquery", :sqlite, "w__@gt", "datetime 2009-03-29T06:00") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    strftime('%Y-%m-%dT%H:%M:%f+00:00', julianday(CASE\nWHEN \"R2\".\"year\" = ? THEN \"R2\".\"start_at\"\nELSE NULL\nEND\n) + ((CAST(round((julianday(\"R2\".\"start_at\") - julianday(\"R2\".\"start_at\")) * 86400000) AS INTEGER)) / 86400000.0)) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) > ?", params = [("2009", "Int64"), ("1", "Int64"), ("2009", "Int64"), ("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
   ("Sum int | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :having, sql = "SUM(\"Tb\".\"grid\") > \$1", params = [("10", "Int64")]),
   ("Sum int | alone", :sqlite, "v__@gt", "10") =>

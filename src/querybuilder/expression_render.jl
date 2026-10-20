@@ -548,7 +548,9 @@ end
 function _temporal_shift_sql(::PormGMySQL, left_side::AbstractString, kind::TemporalKind, operation::String,
                              comps, instruc::SQLInstruction)::String
   sql = String(left_side)
-  months = sum((unit === :year ? 12 * Int(value) : Int(value) for (unit, value) in comps if unit in (:year, :month)); init = 0)
+  # Checked: a year count past `typemax(Int) ÷ 12` must raise, not wrap into a small shift.
+  months = foldl((acc, (unit, value)) -> Base.checked_add(acc, unit === :year ? Base.checked_mul(12, Int(value)) : Int(value)),
+                 ((u, v) for (u, v) in comps if u in (:year, :month)); init = 0)
   if any(c -> first(c) in (:year, :month), comps) && months != 0
     sql = "($(sql) $(operation) INTERVAL $(add_parameter!(instruc, months)) MONTH)"
   end

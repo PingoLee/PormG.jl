@@ -596,6 +596,8 @@ end
   @test occursin("(`Tb`.`date` - INTERVAL ? MONTH) as `v`", r[:sql_text]) && r[:parameters] == Any[14]
   r = q(F("date") + (Year(1) - Month(1) + Day(2)))
   @test occursin("((`Tb`.`date` + INTERVAL ? MONTH) + INTERVAL ? DAY)", r[:sql_text]) && r[:parameters] == Any[11, 2]
+  # A year count too large for a month count raises rather than wrapping into a small shift.
+  @test_throws OverflowError q(F("date") + Year(typemax(Int) ÷ 12 + 1))
   # A sub-second duration binds its seconds as a Float64, whose fraction MySQL keeps.
   r = _mr_inspect(_MR_MY.Race.objects.values("v" => F("date") + Millisecond(1500)))
   @test occursin("(`Tb`.`date` + INTERVAL ? SECOND)", r[:sql_text]) && r[:parameters] == Any[1.5]
@@ -636,6 +638,9 @@ end
   # Interval arithmetic the SQLite path refuses in its own words is MySQL's refusal too, naming MySQL.
   @test refused(() -> _MR_MY.Result.objects.values("v" => F("fastestlaptime") + 1))
   @test refused(() -> _MR_MY.Result.objects.values("v" => F("fastestlaptime") * F("fastestlaptime")))
+  # An interval on the right of a number: the right-side render, and the count-plus-interval arm.
+  @test refused(() -> _MR_MY.Result.objects.values("v" => F("points") + F("fastestlaptime")))
+  @test refused(() -> _MR_MY.Result.objects.values("v" => F("grid") + F("fastestlaptime")))
   # A duration literal inside a function is the text edge of the millisecond form (`_interval_ms_as_text`).
   @test refused(() -> _MR_MY.Result.objects.values("v" => Max(PormG.QueryBuilder.Value(Hour(1)))))
   @test occursin("`Tb`.`fastestlaptime` as `v`", _mr_inspect(_MR_MY.Result.objects.values("v" => F("fastestlaptime")))[:sql_text])

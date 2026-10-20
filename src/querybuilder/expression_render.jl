@@ -826,6 +826,13 @@ _sqlite_interval_error(what::AbstractString) =
   QueryBuildError("$(what) is not supported on SQLite. An interval there is a timestamp difference, a " *
                   "DurationField column or a duration (Hour(1)); it combines with another interval " *
                   "(+, -, comparisons), with a number (* and /), or with a date (date + interval).")
+# #1301 — ordering an interval with no millisecond form: a `Case` whose value is a duration, a function
+# over one (`Max`, `Coalesce`, …), a window value function (`Lag`) or `NullIf`. SQLite holds it as its
+# `HH:MM:SS` text, and text order is the interval's order only below 100 hours and for non-negative
+# values, so the rows a filter keeps would differ from PostgreSQL's. Equality still compares the text.
+_unordered_interval_error(op) = _sqlite_interval_error(
+  "Ordering (`$(op)`) an interval with no millisecond form (a `Case` whose value is a duration, a " *
+  "function over one, or a window function such as `Lag`)")
 
 # #801 — the RIGHT side of a binary expression, rendered AND typed, for the one caller that must know
 # what the right evaluates to: a `-` over a temporal left. Rendered exactly once — a second render
@@ -975,6 +982,10 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
         rms = _interval_ms_sql(right_side, v.operand, right_kind)
         lms !== nothing && rms !== nothing && return "($(lms) $(op) $(rms))", nothing
       end
+      # #1301: past the two arms above, one of two intervals has no millisecond form (a `Case` over
+      # durations, a function over one, `Lag`, `NullIf`), so ordering them would compare text.
+      sqlite && op in _ORDERING_OPERATIONS && _is_interval_kind(left_kind) && _is_interval_kind(right_kind) &&
+        throw(_unordered_interval_error(op))
       return "($(_as_interval_text(left_side, left_kind)) $(op) $(_as_interval_text(right_side, right_kind)))", nothing
     end
     # #1287: a CTE column or a `Subquery` holding a duration, ORDERED against an interval, compares
@@ -988,6 +999,7 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
       if right_interval
         lms = _interval_ms_sql(left_side, v.field_name, left_kind)
         lms !== nothing && right_ms !== nothing && return "($(lms) $(op) $(right_ms))", nothing
+        lms === nothing && throw(_unordered_interval_error(op))   # #1301
       end
       left_kind isa _IntervalMs &&
         throw(_sqlite_interval_error("Ordering (`$(op)`) an interval against a value with no millisecond form"))
@@ -1011,6 +1023,11 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
        (ms = _duration_value_ms(v.operand)) !== nothing
       return "($(lms) $(op) $(add_parameter!(instruc, ms)))", nothing
     end
+    # #1301: an interval with no millisecond form ordered against a duration would compare its
+    # `HH:MM:SS` text, which is numeric order only below 100 hours and for non-negative values.
+    sqlite && left_kind isa CInterval && op in _ORDERING_OPERATIONS &&
+      _interval_ms_sql(left_side, v.field_name, left_kind) === nothing && _duration_value_ms(v.operand) !== nothing &&
+      throw(_unordered_interval_error(op))
     return "($(left_side) $(op) $(_set_update_query_operand(v.operand, v.field_name, op, instruc; left_kind = bind_kind)))", nothing
   end
 

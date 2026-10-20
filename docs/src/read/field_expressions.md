@@ -479,7 +479,13 @@ from it, and both are intentional divergences:
 - **What has no millisecond form is refused on SQLite** with `QueryBuildError`: a month or a year
   (`d + Month(1)`, which has no fixed length), and a window function inside the interval (`F("start_at") - Lag("start_at", over = …)`). The window
   sees a single row in the subquery that formats the text; project its value in a CTE first and use
-  the column. `Max`/`Min` over a timestamp are fine.
+  the column. `Max`/`Min` over a timestamp are fine. A `Case` whose value is a duration, or a
+  function over one (`Sum`, `Max`, `Coalesce`, …), is refused in arithmetic too
+  (`Case(When("lap" => 1, then = F("time")), default = F("time")) * 2`).
+  SQLite holds its value as the `HH:MM:SS` text, and multiplying that text gives `0`. Put the
+  arithmetic inside each branch instead
+  (`Case(When("lap" => 1, then = F("time") * 2), default = F("time") * 2)`). On PostgreSQL the
+  arithmetic over the `Case` builds and reads back as a `Dates.CompoundPeriod`.
 
 Some shapes have no operator on PostgreSQL either, which fails when the statement runs: `d * d`,
 `d / d`, `F("points") / d`, a number plus or minus an interval (`d + 5`, `count + d`), a date
@@ -528,7 +534,9 @@ On SQLite the `ORDER BY` repeats the difference in milliseconds rather than nami
 `since_midnight` text, and it binds that expression's own parameters again.
 
 Three shapes have no millisecond form and still sort the text on SQLite. Ordering or filtering on
-them is text order, which is wrong at 100 hours and above and for negative values:
+their alias is text order, which is wrong at 100 hours and above and for negative values. Ordering
+one inside an expression instead (`filter(Case(…) > Hour(1))`, `When(Lag("time", over = …) > Hour(1))`)
+is refused on SQLite with `QueryBuildError`. Equality there still compares the text.
 
 - `Case` whose value is a duration. Its `When` conditions compare milliseconds (see above). Its
   value reads back as the stored text.

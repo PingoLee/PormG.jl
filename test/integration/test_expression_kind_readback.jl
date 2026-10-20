@@ -148,7 +148,9 @@ end
 # `_EKR_TYPE_DIVERGENT`, and every disagreeing cell must be recorded on every engine that builds it.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Expression-kind matrix: which disagreements change the type read back (#1034)" begin
-  ids = Set(id for (id, _) in keys(_EKM_DISAGREEMENTS))
+  # The engines this file reads back on: MySQL's column (#1130 phase 2b) has no seeded F1 fixture
+  # until phase 4, so a cell that disagrees only there is not read back yet.
+  ids = Set(id for (id, engine) in keys(_EKM_DISAGREEMENTS) if engine in (:postgres, :sqlite))
   @test Set(id for (id, _) in keys(_EKR_EXPECTED)) == ids
   # #1147: a cell the engine that departs from its meaning refuses has nothing to read back there
   # (`Cast(points, "numeric(10,1)")` on SQLite); every engine that builds it is recorded.

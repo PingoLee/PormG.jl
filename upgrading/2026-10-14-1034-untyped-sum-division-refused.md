@@ -1,9 +1,9 @@
 ## A `Sum` PormG cannot type, divided and then cast or concatenated, is refused on PostgreSQL whatever it holds (#1034, #1111)
 
 - **Version**: Unreleased
-- **PormG ref**: #1034 (phase 3, step 2a), #1111 ; `src/querybuilder/projection_types.jl` (`_whole_numeric_operand`), `src/querybuilder/engine_facts.jl` (`_untyped_sum_departs`)
+- **PormG ref**: #1034 (phase 3, step 2a), #1111, amended by #1305 ; `src/querybuilder/projection_types.jl` (`_whole_numeric_operand`, `_division_first`), `src/querybuilder/engine_facts.jl` (`_untyped_sum_departs`)
 - **Recorded**: 2026-10-14
-- **Severity**: behavior change. Some expressions that built on PostgreSQL now raise `QueryBuildError` when the query is built. The #1111 refusal's message changes for the ones it already refused, and one false refusal of a temporal sum is lifted. SQLite is unchanged.
+- **Severity**: behavior change. Some expressions that built on PostgreSQL now raise `QueryBuildError` when the query is built. The #1111 refusal's message changes for the ones it already refused, and one false refusal of a temporal sum is lifted. On SQLite, a cast or `Concat` of such a quotient combined with an interval, a float or a decimal now raises as the interval or fraction it is (#1305, below).
 
 ### What changed
 
@@ -45,8 +45,36 @@ A date difference renders as a day count, a number, so a sum over it stays a div
 `bigint` column (`Sum(F("date") - F("date") + F("raceid"))`) it was refused and still is, and alone it
 is now refused too (the table above) until PormG types a day count.
 
-Unchanged: a `Sum` PormG types (of integers, of a float, of a decimal), every expression on SQLite,
-and a bare quotient that is projected rather than cast or concatenated.
+Unchanged: a `Sum` PormG types (of integers, of a float, of a decimal), on SQLite every expression
+other than the #1305 rows below, and a bare quotient that is projected rather than cast or
+concatenated.
+
+> **Amended by #1305:** the quotient is found wherever it sits in the expression. PormG read only
+> the first side, operand or branch that it could classify, so a quotient behind an interval or a
+> float (`Max(…) * (Sum(…) / 2)`, a later `Coalesce` operand, a later `Case` branch) was not found.
+> PostgreSQL kept the half there, where SQLite drops it. Beside an interval, a float or a decimal the
+> quotient decides on PostgreSQL only. On SQLite, which divides it as an integer, the value is that
+> interval or that fraction, and it is refused as one, on whichever side the quotient is. Before, the
+> side read first decided, so `Max("points") * half` and `half * Max("points")` were refused on
+> different engines. Examples on `Result`, where `half` is
+> `Sum(F("grid") + Extract("raceid__start_at", "EPOCH")) / 2`:
+>
+> | expression | engine | before | now |
+> |---|---|---|---|
+> | `Cast(Max("fastestlaptime") * half, "text")` | PostgreSQL | built | raises `QueryBuildError` (#1111) |
+> | `Cast(Max("fastestlaptime") / half, "text")` | PostgreSQL | built | raises `QueryBuildError` (#1111) |
+> | `Cast(Max("fastestlaptime") * Round(half), "text")` | PostgreSQL | built | raises `QueryBuildError` (#1111) |
+> | `Cast(Coalesce(Max("fastestlaptime"), half * Max("fastestlaptime")), "text")` | PostgreSQL | built | raises `QueryBuildError` (#1111) |
+> | `Cast(Max("fastestlaptime") * half, IntegerField())` | PostgreSQL | built | raises `QueryBuildError` (#1111) |
+> | `Concat(Value("-"), Max("fastestlaptime") * half)` | PostgreSQL | raised (#1028) | raises `QueryBuildError` (#1111) |
+> | `Cast(half * Max("fastestlaptime"), IntegerField())` | SQLite | built | raises `QueryBuildError` (#1259, an interval cast to a number) |
+> | `Concat(Value("-"), half * Max("fastestlaptime"))` | SQLite | built | raises `QueryBuildError` (#1028, an interval is not text) |
+> | `Cast(Max("points") * half, IntegerField())` | PostgreSQL | built | raises `QueryBuildError` (#1111) |
+> | `Cast(half * Max("points"), IntegerField())`, `Cast(half * 1.5, IntegerField())`, `Cast(Coalesce(half, 0.5), IntegerField())` | SQLite | built | raises `QueryBuildError` (#1028, a fraction cast to an integer) |
+> | `Cast(half * 1.5, "numeric(10,1)")` | SQLite | built | raises `QueryBuildError` (#1040, a scale it would round) |
+> | `Concat(Value("-"), half * 1.5)` | SQLite | built | raises `QueryBuildError` (#1027, a float is not text) |
+>
+> Each of these casts to `"text"` still builds on SQLite.
 
 ### Who this affects
 

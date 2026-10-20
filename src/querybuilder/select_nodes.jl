@@ -746,7 +746,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # computes with a fraction is a question of meaning instead: refused only on that engine.
   if v.function_name == "CONCAT" && v.column isa AbstractVector
     for (i, operand) in enumerate(v.column)
-      textless = _division_or_rendered(_concat_textless_operand(operand, instruc), get(operand_kinds, i, nothing), operand)
+      textless = _concat_textless_operand(operand, instruc)
       textless === nothing && (textless = _rendered_kind_textless(get(operand_kinds, i, nothing)))
       textless === nothing && continue
       if _meaning_kind(:concat, textless[1])

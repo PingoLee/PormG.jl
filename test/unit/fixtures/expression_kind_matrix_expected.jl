@@ -529,55 +529,55 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date + Day(1) | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Day, whose type PormG does not infer. Name the type the column holds b"),
   ("F date + Day(1) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Day, whose type PormG does not infer. Name the type the column holds b"),
   ("F date + Day(1) | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Day, whose type PormG does not infer. Name the type the column holds b"),
   ("F date + Day(1) | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F datetime - datetime | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime - datetime | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime - datetime | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F datetime - datetime | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F datetime - datetime | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F datetime - datetime | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F datetime - datetime | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime - datetime | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime - datetime | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F date - date | alone", :postgres) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | alone", :sqlite) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F date - date | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F date - date | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F date - date | subquery", :postgres) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, operand = "CInt32()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | subquery", :sqlite) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, operand = "CInt32()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, operand = "CInt32()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F comparison | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("F comparison | alone", :sqlite) =>
@@ -601,199 +601,199 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date + Hour(1) | alone", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
   ("F date + Hour(1) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
   ("F date + Hour(1) | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
   ("F date + Hour(1) | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F datetime - Hour(1) | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F datetime - Hour(1) | alone", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F datetime - Hour(1) | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F datetime - Hour(1) | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
   ("F datetime - Hour(1) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
   ("F datetime - Hour(1) | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
   ("F datetime - Hour(1) | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F datetime - Hour(1) | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F datetime - Hour(1) | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F date + 1 | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + 1 | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + 1 | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + 1 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F date + 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F date + 1 | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F date + 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + 1 | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + 1 | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date shift by a day count is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bu"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F date + int col | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F date + int col | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date shift by a day count is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bu"),
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F date + int col | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date shift by a day count is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bu"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date shift by a day count is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bu"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F date - int col | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F date - int col | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date shift by a day count is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bu"),
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F date - int col | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date shift by a day count is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bu"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F interval + interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval + interval | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval + interval | alone", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = false, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F interval + interval | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F interval + interval | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F interval + interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F interval + interval | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval + interval | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval + interval | subquery", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = false, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F interval * 2 | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval * 2 | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval * 2 | alone", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = false, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F interval * 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
   ("F interval * 2 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
   ("F interval * 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F interval * 2 | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval * 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval * 2 | subquery", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = false, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F interval / int col | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval / int col | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval / int col | alone", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = false, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F interval / int col | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
   ("F interval / int col | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
   ("F interval / int col | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F interval / int col | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval / int col | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval / int col | subquery", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = false, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F int col * interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * interval | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * interval | alone", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = false, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F int col * interval | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
   ("F int col * interval | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
   ("F int col * interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F int col * interval | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * interval | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * interval | subquery", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = false, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F hop date + interval | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop date + interval | alone", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop date + interval | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date shift by a day count is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bu"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F hop date + interval | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F hop date + interval | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F hop date + interval | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date shift by a day count is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bu"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F hop date + interval | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop date + interval | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop date + interval | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date shift by a day count is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bu"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F hop datetime + interval | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F hop datetime + interval | alone", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F hop datetime + interval | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date shift by a day count is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bu"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F hop datetime + interval | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F hop datetime + interval | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F hop datetime + interval | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date shift by a day count is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bu"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F hop datetime + interval | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F hop datetime + interval | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F hop datetime + interval | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date shift by a day count is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bu"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F @year + 1 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F @year + 1 | alone", :sqlite) =>
@@ -817,55 +817,55 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Max F datetime - datetime | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Max F datetime - datetime | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Max F datetime - datetime | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("Max F datetime - datetime | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("Max F datetime - datetime | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Max F datetime - datetime | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Max F datetime - datetime | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Max F datetime - datetime | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Abs F date - date | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Abs F date - date | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Abs F date - date | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Abs F date - date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs F date - date | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs F date - date | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Abs F date - date | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Abs F date - date | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Abs F date - date | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce F date + Hour(1), date | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
   ("Coalesce F date + Hour(1), date | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
   ("Coalesce F date + Hour(1), date | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
   ("Coalesce F date + Hour(1), date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
   ("Coalesce F date + Hour(1), date | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
   ("Coalesce F date + Hour(1), date | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
   ("Coalesce F date + Hour(1), date | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
   ("Coalesce F date + Hour(1), date | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
   ("Coalesce F date + Hour(1), date | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
   ("Value int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Value int | alone", :sqlite) =>
@@ -1249,19 +1249,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Sum interval | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Sum interval | alone", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = false, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Sum interval | cte", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Sum interval | cte", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Sum interval | cte", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = false, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Sum interval | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Sum interval | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Sum interval | subquery", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = false, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Avg float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Avg float | alone", :sqlite) =>
@@ -1303,19 +1303,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Avg interval | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Avg interval | alone", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = false, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = nothing, whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Avg interval | cte", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Avg interval | cte", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Avg interval | cte", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = false, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Avg interval | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Avg interval | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Avg interval | subquery", :mysql) =>
-    (stage = :ok, read = "CInterval()", read_parsed = false, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Count | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Count | alone", :sqlite) =>
@@ -2617,127 +2617,127 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast Sum F interval + interval / 2 text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F interval + interval / 2 text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F interval + interval / 2 text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Concat Sum F interval + interval / 2 | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
   ("Concat Sum F interval + interval / 2 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
   ("Concat Sum F interval + interval / 2 | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and arithmetic over `SUM(…)` over an interval expression is not text: say which text you mean (#1028)"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Concat Sum F interval + interval / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
   ("Concat Sum F interval + interval / 2 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
   ("Concat Sum F interval + interval / 2 | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and arithmetic over `SUM(…)` over an interval expression is not text: say which text you mean (#1028)"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Concat Sum F interval + interval / 2 | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
   ("Concat Sum F interval + interval / 2 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
   ("Concat Sum F interval + interval / 2 | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and arithmetic over `SUM(…)` over an interval expression is not text: say which text you mean (#1028)"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F interval * 2 / 2 text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval * 2 / 2 text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval * 2 / 2 text | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F interval * 2 / 2 text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval * 2 / 2 text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval * 2 / 2 text | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F interval * 2 / 2 text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval * 2 / 2 text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval * 2 / 2 text | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F datetime - datetime / 2 text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F datetime - datetime / 2 text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F datetime - datetime / 2 text | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F datetime - datetime / 2 text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F datetime - datetime / 2 text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F datetime - datetime / 2 text | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F datetime - datetime / 2 text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F datetime - datetime / 2 text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F datetime - datetime / 2 text | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F int * interval / 2 text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F int * interval / 2 text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F int * interval / 2 text | alone", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F int * interval / 2 text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F int * interval / 2 text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F int * interval / 2 text | cte", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F int * interval / 2 text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F int * interval / 2 text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F int * interval / 2 text | subquery", :mysql) =>
-    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F date - date + bigint / 2 int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor Subquery int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor Subquery int | alone", :sqlite) =>
@@ -3157,19 +3157,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Coalesce time interval | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
   ("Coalesce time interval | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Coalesce time interval | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
   ("Coalesce time interval | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
   ("Coalesce time interval | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Coalesce time interval | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
   ("Coalesce time interval | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
   ("Coalesce time interval | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Coalesce date Date(zoned) | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date Date(zoned) | alone", :sqlite) =>
@@ -4129,37 +4129,37 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast Sum interval int | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
   ("Cast Sum interval int | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum interval int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum interval int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
   ("Cast Sum interval int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum interval int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum interval int | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
   ("Cast Sum interval int | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Avg interval int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Avg interval int | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; SQLite computes the leading digit"),
   ("Cast Avg interval int | alone", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; MySQL computes a number it does n"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Avg interval int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Avg interval int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; SQLite computes the leading digit"),
   ("Cast Avg interval int | cte", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; MySQL computes a number it does n"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Avg interval int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Avg interval int | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; SQLite computes the leading digit"),
   ("Cast Avg interval int | subquery", :mysql) =>
-    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; MySQL computes a number it does n"),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Coalesce decimal output numeric(10,2) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(10,2) | alone", :sqlite) =>
@@ -4363,37 +4363,37 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast F date + Day(1) int | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of a date expression means an error, since a date or a timestamp has no numeric value; SQLite compute"),
   ("Cast F date + Day(1) int | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of a date expression means an error, since a date or a timestamp has no numeric value; MySQL computes"),
   ("Cast F date + Day(1) int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date + Day(1) int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of a date expression means an error, since a date or a timestamp has no numeric value; SQLite compute"),
   ("Cast F date + Day(1) int | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of a date expression means an error, since a date or a timestamp has no numeric value; MySQL computes"),
   ("Cast F date + Day(1) int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date + Day(1) int | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of a date expression means an error, since a date or a timestamp has no numeric value; SQLite compute"),
   ("Cast F date + Day(1) int | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date/interval arithmetic is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query bui"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of a date expression means an error, since a date or a timestamp has no numeric value; MySQL computes"),
   ("Cast F date - date int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date - date int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date - date int | alone", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date - date int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date - date int | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date - date int | cte", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date - date int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date - date int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date - date int | subquery", :mysql) =>
-    (stage = :build, error = "UnsupportedConnectionError", message = "date difference is not rendered for MySQL yet: the MySQL backend is in progress, and this part of the query builder arri"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast transform @year int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast transform @year int | alone", :sqlite) =>
@@ -4639,30 +4639,38 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=decimal has no MySQL read parser")],
   ("F decimal * 2 | subquery", :mysql) =>
     [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("F date + Day(1) | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("F date + Day(1) | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
   ("F date - date | alone", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | alone", :sqlite) =>
     [(:unparsed, "read=int has no SQLite read parser")],
+  ("F date - date | alone", :mysql) =>
+    [(:unparsed, "read=int has no MySQL read parser")],
   ("F date - date | subquery", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | subquery", :sqlite) =>
     [(:unparsed, "read=int has no SQLite read parser")],
-  ("F interval + interval | alone", :mysql) =>
-    [(:unparsed, "read=interval has no MySQL read parser")],
-  ("F interval + interval | subquery", :mysql) =>
-    [(:unparsed, "read=interval has no MySQL read parser")],
-  ("F interval * 2 | alone", :mysql) =>
-    [(:unparsed, "read=interval has no MySQL read parser")],
-  ("F interval * 2 | subquery", :mysql) =>
-    [(:unparsed, "read=interval has no MySQL read parser")],
-  ("F interval / int col | alone", :mysql) =>
-    [(:unparsed, "read=interval has no MySQL read parser")],
-  ("F interval / int col | subquery", :mysql) =>
-    [(:unparsed, "read=interval has no MySQL read parser")],
-  ("F int col * interval | alone", :mysql) =>
-    [(:unparsed, "read=interval has no MySQL read parser")],
-  ("F int col * interval | subquery", :mysql) =>
-    [(:unparsed, "read=interval has no MySQL read parser")],
+  ("F date - date | subquery", :mysql) =>
+    [(:unparsed, "read=int has no MySQL read parser")],
+  ("F date + Hour(1) | alone", :mysql) =>
+    [(:unparsed, "read=datetime has no MySQL read parser")],
+  ("F date + Hour(1) | subquery", :mysql) =>
+    [(:unparsed, "read=datetime has no MySQL read parser")],
+  ("F date + 1 | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("F date + 1 | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("F date + int col | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("F date + int col | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("F date - int col | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("F date - int col | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
   ("Value date | alone", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
   ("Value date | subquery", :mysql) =>
@@ -4683,24 +4691,12 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Sum decimal | subquery", :mysql) =>
     [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Sum interval | alone", :mysql) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "read=interval vs formatter=number"), (:conflict, "render=interval vs formatter=number"), (:unparsed, "read=interval has no MySQL read parser")],
-  ("Sum interval | cte", :mysql) =>
-    [(:unparsed, "read=interval has no MySQL read parser")],
-  ("Sum interval | subquery", :mysql) =>
-    [(:conflict, "formatter=number vs textless=interval"), (:conflict, "operand=interval vs formatter=number"), (:conflict, "read=interval vs formatter=number"), (:unparsed, "read=interval has no MySQL read parser")],
   ("Avg decimal | alone", :mysql) =>
     [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Avg decimal | cte", :mysql) =>
     [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Avg decimal | subquery", :mysql) =>
     [(:unparsed, "read=decimal has no MySQL read parser")],
-  ("Avg interval | alone", :mysql) =>
-    [(:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric"), (:conflict, "render=interval vs formatter=number"), (:conflict, "render=interval vs textless=numeric"), (:unparsed, "read=interval has no MySQL read parser")],
-  ("Avg interval | cte", :mysql) =>
-    [(:unparsed, "read=interval has no MySQL read parser")],
-  ("Avg interval | subquery", :mysql) =>
-    [(:conflict, "operand=interval vs formatter=number"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs formatter=number"), (:conflict, "read=interval vs textless=numeric"), (:unparsed, "read=interval has no MySQL read parser")],
   ("Max hop date | alone", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
   ("Max hop date | cte", :mysql) =>
@@ -4847,8 +4843,4 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
     ["drops formatter: alone=none, cte=bool, subquery=none"],
   ("Value bool", :mysql) =>
     ["drops formatter: alone=none, cte=bool, subquery=none"],
-  ("Sum interval", :mysql) =>
-    ["conflict formatter: alone=number, cte=interval, subquery=number"],
-  ("Avg interval", :mysql) =>
-    ["conflict formatter: alone=number, cte=interval, subquery=number", "conflict textless: alone=numeric, cte=interval, subquery=numeric"],
 )

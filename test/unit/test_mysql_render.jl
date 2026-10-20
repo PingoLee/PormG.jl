@@ -565,3 +565,62 @@ end
   err = try; _mr_inspect(_MR_MY.Result.objects.values("c" => PormG.QueryBuilder.Concat("driverid__surname", "points"))); nothing; catch e; e; end
   @test err isa PormG.QueryBuildError && occursin("Cast(", sprint(showerror, err))
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL date arithmetic: INTERVAL shifts and DATEDIFF, in the text order the binds follow (#1130 2b)
+# MySQL's `+`/`-` on a date read it as the number its digits spell, so date arithmetic renders MySQL's
+# own: a duration as one `± INTERVAL ? <unit>` per component (years first, as PostgreSQL's
+# `make_interval` applies them), a day count as `± INTERVAL (n) DAY` (and `INTERVAL (n) DAY + date`
+# when the count comes first, so its binds stay in text order), a date difference as `DATEDIFF`.
+# Expected: those spellings, the bound values in text order, an untyped operand refused naming the
+# typed spellings, and PostgreSQL's SQL unchanged.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL date arithmetic: INTERVAL shifts and DATEDIFF, in text order" begin
+  q(f) = _mr_inspect(_MR_MY.Race.objects.values("v" => f))
+  r = q(F("date") + Day(3))
+  @test occursin("(`Tb`.`date` + INTERVAL ? DAY) as `v`", r[:sql_text]) && r[:parameters] == Any[3]
+  r = q(F("date") - (Year(1) + Month(2)))
+  @test occursin("((`Tb`.`date` - INTERVAL ? YEAR) - INTERVAL ? MONTH)", r[:sql_text]) && r[:parameters] == Any[1, 2]
+  # A sub-second duration binds its seconds as a Float64, whose fraction MySQL keeps.
+  r = _mr_inspect(_MR_MY.Race.objects.values("v" => F("date") + Millisecond(1500)))
+  @test occursin("(`Tb`.`date` + INTERVAL ? SECOND)", r[:sql_text]) && r[:parameters] == Any[1.5]
+  # A bare integer is a whole number of days; an integer column is a day count, either side.
+  @test occursin("(`Tb`.`date` + INTERVAL ? DAY)", q(F("date") + 7)[:sql_text])
+  @test occursin("(`Tb`.`date` + INTERVAL (`Tb`.`year`) DAY)", q(F("date") + F("year"))[:sql_text])
+  @test occursin("(INTERVAL (`Tb`.`year`) DAY + `Tb`.`date`)", q(F("year") + F("date"))[:sql_text])
+  @test occursin("DATEDIFF(`Tb`.`date`, `Tb`.`date`) as `v`", q(F("date") - F("date"))[:sql_text])
+  # The binds follow the text: a filter value bound after the shift's own.
+  r = _mr_inspect(_MR_MY.Race.objects.filter("year__@gt" => 1990).values("v" => F("date") + Day(3)))
+  @test r[:parameters] == Any[3, 1990]
+  # An operand PormG cannot type: MySQL's `+` would read the date's digits (`20090329 + 1`).
+  err = try; q(F("date") + Sum("year")); nothing; catch e; e; end
+  @test err isa PormG.QueryBuildError
+  @test occursin("MySQL, where `+` reads a date as the number its digits spell", sprint(showerror, err))
+  # PostgreSQL's spelling is unchanged.
+  @test occursin("make_interval(days => \$1::integer)", _mr_inspect(_MR_PG.Race.objects.values("v" => F("date") + Day(3)))[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL intervals: every edge of the millisecond form refuses before any SQL (#1130 phase 2b)
+# MySQL computes an interval in milliseconds, as SQLite does (`_interval_as_ms`), but its millisecond
+# SQL is the follow-up to phase 2b and a DurationField's storage is phase 4's. Expected: a timestamp
+# difference, a DurationField in an ordering, an aggregate or arithmetic, and a date shifted by one,
+# each raise UnsupportedConnectionError before any SQL (never SQLite's millisecond SQL, which MySQL
+# rejects at the server); a projected DurationField still renders its column.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL intervals: every edge of the millisecond form refuses before any SQL" begin
+  refused(build) = (e = try; _mr_inspect(build()); nothing; catch err; err; end;
+                    e isa PormG.UnsupportedConnectionError && occursin("is not rendered for MySQL yet", sprint(showerror, e)))
+  # A timestamp difference is an interval: refused at its render (the mock models have no timestamp).
+  @test_throws PormG.UnsupportedConnectionError _MR_QB._temporal_difference_sql(MrMockMySQL(), "`a`", "`b`", PormG.CInterval())
+  @test _MR_QB._temporal_difference_sql(MrMockMySQL(), "`a`", "`b`", PormG.CInt32()) == ("DATEDIFF(`a`, `b`)", PormG.CInt32())
+  @test refused(() -> _MR_MY.Result.objects.values("resultid").order_by("fastestlaptime"))
+  @test refused(() -> _MR_MY.Result.objects.values("v" => Sum("fastestlaptime")))
+  @test refused(() -> _MR_MY.Result.objects.values("v" => F("fastestlaptime") * 2))
+  @test refused(() -> _MR_MY.Result.objects.values("v" => F("raceid__date") + F("fastestlaptime")))
+  @test occursin("`Tb`.`fastestlaptime` as `v`", _mr_inspect(_MR_MY.Result.objects.values("v" => F("fastestlaptime")))[:sql_text])
+  # The per-engine edges: SQLite's are its own Dialect helpers, unchanged.
+  @test _MR_QB._interval_text_as_ms("`c`", MrMockSQLite()) == PormG.Dialect._sqlite_interval_ms("`c`")
+  @test _MR_QB._interval_ms_as_text("?", MrMockSQLite()) == PormG.Dialect._sqlite_interval_text("?")
+  @test_throws PormG.UnsupportedConnectionError _MR_QB._interval_text_as_ms("`c`", MrMockMySQL())
+end

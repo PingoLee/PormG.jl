@@ -374,12 +374,43 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             @test rows[2][:position] === missing
         end
 
-        # What: a DurationField filter is refused before any SQL; an ordering or a sum over one reaches the
-        # server and is rejected there; IS NULL works.
-        # SQL: none for a filter; for an ordering or a sum, the millisecond form PormG writes for an engine
-        #      with no interval type, which MySQL cannot parse (`CAST(… AS INTEGER)`), whatever the rows hold.
-        # Why: what a DurationField stores on MySQL is phase 4's decision; until then a duration read
-        # must fail rather than answer.
+        # What: date arithmetic answers as Julia's own `Date` arithmetic does.
+        # SQL: `(`Tb`.`date` + INTERVAL ? DAY)`, `((… - INTERVAL ? MONTH) - INTERVAL ? DAY)`,
+        #      `(`Tb`.`date` + INTERVAL (`Tb`.`year`) DAY)`, `DATEDIFF(…)`, `(`Tb`.`start_at` + INTERVAL ? HOUR)`.
+        # Why: MySQL's own `+` on a date reads its digits (`DATE '2009-03-29' + 1` is `20090330`), so each
+        # shape renders MySQL's date functions (#1130 phase 2b); the values are checked against Julia.
+        @testset "date arithmetic answers as Julia's Date arithmetic" begin
+            rows = M.Race.objects.values("raceid", "date", "year", "start_at",
+                "d3" => F("date") + Day(3), "m" => F("date") - (Month(1) + Day(2)), "y" => F("date") + F("year"),
+                "dd" => F("date") - F("date"),
+                "h" => F("start_at") + Hour(2), "ms" => F("start_at") + Millisecond(1500)).order_by("raceid").list()
+            @test length(rows) == 3
+            for r in rows
+                @test r[:d3] isa Date && r[:d3] == r[:date] + Day(3)
+                @test r[:m] == r[:date] - Month(1) - Day(2)
+                @test r[:y] == r[:date] + Day(r[:year])
+                @test r[:dd] == 0
+                if r[:start_at] === missing
+                    # NULL in is NULL out.
+                    @test r[:h] === missing && r[:ms] === missing
+                else
+                    @test r[:h] == r[:start_at] + Hour(2)
+                    @test r[:ms] == r[:start_at] + Millisecond(1500)
+                end
+            end
+            # The difference of two dates is the whole days between them, negative the other way round.
+            @test only(M.Race.objects.filter("raceid" => 3).values("n" => F("date") - Date(1991, 3, 24)).list())[:n] == 210
+            # A value PormG cannot type beside a date is refused before any SQL, naming the typed spellings.
+            e = try; M.Race.objects.values("x" => F("date") + Sum("year")).list(); nothing; catch err; err; end
+            @test e isa PormG.QueryBuildError && occursin("reads a date as the number its digits spell", msg(e))
+        end
+
+        # What: a DurationField filter, ordering or aggregate is refused before any SQL; IS NULL works,
+        # and so does projecting the column.
+        # SQL: none for each refusal; the plain column for a projection.
+        # Why: what a DurationField stores on MySQL is phase 4's decision, and MySQL's interval
+        # millisecond form is the follow-up to phase 2b; until then a duration read must fail rather
+        # than answer, and fail in PormG rather than at the server.
         @testset "a DurationField read fails rather than answers" begin
             run("UPDATE `result` SET `fastestlaptime` = '00:01:20.500' WHERE `resultid` IN (1, 2)")
             for pair in ("fastestlaptime" => Dates.Second(80), "fastestlaptime__@in" => [Dates.Second(80)],
@@ -388,9 +419,10 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
                 @test e isa PormG.UnsupportedConnectionError && occursin("not rendered for MySQL yet", msg(e))
             end
             for q in (() -> M.Result.objects.order_by("fastestlaptime").values("resultid").list(),
-                      () -> M.Result.objects.values("t" => Sum("fastestlaptime")).list())
+                      () -> M.Result.objects.values("t" => Sum("fastestlaptime")).list(),
+                      () -> M.Result.objects.values("t" => F("raceid__start_at") - F("raceid__start_at")).list())
                 e = try; q(); nothing; catch err; err; end
-                @test e isa PormG.StatementError
+                @test e isa PormG.UnsupportedConnectionError && occursin("not rendered for MySQL yet", msg(e))
             end
             @test M.Result.objects.filter("fastestlaptime__@isnull" => false).count() == 2
         end

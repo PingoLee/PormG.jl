@@ -22,8 +22,11 @@
 # on the server.
 _interval_as_ms(::PormGPostgres) = false
 _interval_as_ms(::PormGSQLite) = true
-# MySQL has no interval type either (#1130): until phase 2b spells its millisecond form, a duration in an
-# ordering or a comparison renders SQLite's, which MySQL rejects at the server, never a silent answer.
+# MySQL has no interval type either (#1130), so an interval is computed in milliseconds there too. Its
+# millisecond SQL is the follow-up to phase 2b: until then each edge of that form (a `DurationField`
+# or interval column read as milliseconds, a timestamp difference, a duration inside a function) refuses
+# on MySQL before any SQL (`_interval_text_as_ms` and its siblings in `expression_render.jl`), so no
+# other engine's millisecond SQL reaches the server.
 _interval_as_ms(::PormGMySQL) = true
 
 # A `DurationField` can be filtered: the engine has a decided storage for it (PostgreSQL `interval`,
@@ -42,6 +45,8 @@ _stores_date_as_text(::PormGSQLite) = true
 # `date ± integer` but no `date ± bigint`.
 _casts_bigint_day_count(::PormGPostgres) = true
 _casts_bigint_day_count(::PormGSQLite) = false
+# MySQL's `INTERVAL (n) DAY` takes a BIGINT count as it is (measured on 8.4, #1130 phase 2b).
+_casts_bigint_day_count(::PormGMySQL) = false
 
 # Whether a declared cast type renders as a cast to TEXT on this engine, so a value compared with it
 # is that text, not the type's value: on SQLite `Cast(x, "uuid")` and the network types render

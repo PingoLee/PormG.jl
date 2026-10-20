@@ -76,15 +76,15 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("path text | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("path interval | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(((CASE WHEN substr(`Tb`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`Tb`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER))) IS NULL) ASC, ((CASE WHEN substr(`Tb`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`Tb`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC", params = Tuple{Any, String}[]),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("path interval | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("path interval | alone", :sqlite, "v") =>
     (stage = :ok, sql = "((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("path interval | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(((CASE WHEN substr(`R1_1`.`v`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R1_1`.`v`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 4) AS REAL) * 1000) AS INTEGER))) IS NULL) ASC, ((CASE WHEN substr(`R1_1`.`v`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R1_1`.`v`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC", params = Tuple{Any, String}[]),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("path interval | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(((CASE WHEN substr(`R1_1`.`v`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R1_1`.`v`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 4) AS REAL) * 1000) AS INTEGER))) IS NULL) ASC, ((CASE WHEN substr(`R1_1`.`v`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R1_1`.`v`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC", params = Tuple{Any, String}[]),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("path interval | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("path interval | cte", :postgres, "w") =>
@@ -94,7 +94,7 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("path interval | cte", :sqlite, "w") =>
     (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("path interval | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    `R3`.`fastestlaptime` as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) AS _pormg_v)) IS NULL) ASC, (SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    `R2`.`fastestlaptime` as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) AS _pormg_v)) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("path interval | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("path interval | subquery", :sqlite, "w") =>
@@ -523,10 +523,14 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("F decimal * 2 | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
+  ("F date + Day(1) | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64")]),
   ("F date + Day(1) | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F date + Day(1) | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date + Day(1) | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
   ("F date + Day(1) | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
   ("F date + Day(1) | subquery", :sqlite, "w") =>
@@ -539,10 +543,14 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F datetime - datetime | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((julianday(\"R2\".\"start_at\") - julianday(\"R2\".\"start_at\")) * 86400000) AS INTEGER) AS _pormg_ms)) as \"t\"\nFROM \"race\" as \"R2\"\nWHERE \"R2\".\"raceid\" = \"Tb\".\"raceid\"\nLIMIT ? \n) AS _pormg_v)) ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("F date - date | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("F date - date | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F date - date | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F date - date | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("F date - date | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F date - date | subquery", :sqlite, "w") =>
@@ -571,90 +579,94 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F comparison | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date + Hour(1) | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64")]),
   ("F date + Hour(1) | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F date + Hour(1) | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date + Hour(1) | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
   ("F date + Hour(1) | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
   ("F date + Hour(1) | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("F datetime - Hour(1) | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64")]),
   ("F datetime - Hour(1) | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F datetime - Hour(1) | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F datetime - Hour(1) | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
   ("F datetime - Hour(1) | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
   ("F datetime - Hour(1) | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("F date + 1 | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1", "Int64")]),
   ("F date + 1 | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F date + 1 | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date + 1 | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64"), ("1", "Int64")]),
   ("F date + 1 | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
   ("F date + 1 | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("F date + int col | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("F date + int col | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F date + int col | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F date + int col | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("F date + int col | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F date + int col | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("F date - int col | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("F date - int col | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F date - int col | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("F date - int col | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("F date - int col | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F date - int col | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("F interval + interval | alone", :mysql, "v") =>
-    (stage = :ok, sql = "((((CASE WHEN substr(`Tb`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`Tb`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER))) + ((CASE WHEN substr(`Tb`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`Tb`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER)))) IS NULL) ASC, (((CASE WHEN substr(`Tb`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`Tb`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER))) + ((CASE WHEN substr(`Tb`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`Tb`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER)))) ASC", params = Tuple{Any, String}[]),
   ("F interval + interval | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F interval + interval | alone", :sqlite, "v") =>
     (stage = :ok, sql = "(((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER))) + ((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("F interval + interval | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT (((CASE WHEN substr(`R3`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R3`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R3`.`fastestlaptime`, instr(`R3`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R3`.`fastestlaptime`, instr(`R3`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER))) + ((CASE WHEN substr(`R3`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R3`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R3`.`fastestlaptime`, instr(`R3`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R3`.`fastestlaptime`, instr(`R3`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER)))) AS _pormg_ms)) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) AS _pormg_v)) IS NULL) ASC, (SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT (((CASE WHEN substr(`R2`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R2`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R2`.`fastestlaptime`, instr(`R2`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R2`.`fastestlaptime`, instr(`R2`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER))) + ((CASE WHEN substr(`R2`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R2`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R2`.`fastestlaptime`, instr(`R2`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R2`.`fastestlaptime`, instr(`R2`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER)))) AS _pormg_ms)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) AS _pormg_v)) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("F interval + interval | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F interval + interval | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT (((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER))) + ((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
-  ("F interval * 2 | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(CAST(round((((CASE WHEN substr(`Tb`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`Tb`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (?)) AS INTEGER) IS NULL) ASC, CAST(round((((CASE WHEN substr(`Tb`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`Tb`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (?)) AS INTEGER) ASC", params = [("2", "Int64"), ("2", "Int64"), ("2", "Int64")]),
   ("F interval * 2 | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("F interval * 2 | alone", :sqlite, "v") =>
     (stage = :ok, sql = "CAST(round((((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (?)) AS INTEGER) ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64")]),
-  ("F interval * 2 | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((((CASE WHEN substr(`R3`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R3`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R3`.`fastestlaptime`, instr(`R3`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R3`.`fastestlaptime`, instr(`R3`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (?)) AS INTEGER) AS _pormg_ms)) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) AS _pormg_v)) IS NULL) ASC, (SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((((CASE WHEN substr(`R2`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R2`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R2`.`fastestlaptime`, instr(`R2`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R2`.`fastestlaptime`, instr(`R2`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (?)) AS INTEGER) AS _pormg_ms)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) AS _pormg_v)) ASC", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64")]),
   ("F interval * 2 | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("F interval * 2 | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * (?)) AS INTEGER) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64")]),
-  ("F interval / int col | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(CAST(round((((CASE WHEN substr(`Tb`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`Tb`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER)))) * 1.0 / (`Tb`.`grid`)) AS INTEGER) IS NULL) ASC, CAST(round((((CASE WHEN substr(`Tb`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`Tb`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER)))) * 1.0 / (`Tb`.`grid`)) AS INTEGER) ASC", params = Tuple{Any, String}[]),
   ("F interval / int col | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F interval / int col | alone", :sqlite, "v") =>
     (stage = :ok, sql = "CAST(round((((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * 1.0 / (\"Tb\".\"grid\")) AS INTEGER) ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("F interval / int col | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((((CASE WHEN substr(`R3`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R3`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R3`.`fastestlaptime`, instr(`R3`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R3`.`fastestlaptime`, instr(`R3`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER)))) * 1.0 / (`R3`.`grid`)) AS INTEGER) AS _pormg_ms)) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) AS _pormg_v)) IS NULL) ASC, (SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((((CASE WHEN substr(`R2`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R2`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R2`.`fastestlaptime`, instr(`R2`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R2`.`fastestlaptime`, instr(`R2`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER)))) * 1.0 / (`R2`.`grid`)) AS INTEGER) AS _pormg_ms)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) AS _pormg_v)) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("F interval / int col | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F interval / int col | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((((CASE WHEN substr(\"R2\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R2\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R2\".\"fastestlaptime\", instr(\"R2\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) * 1.0 / (\"R2\".\"grid\")) AS INTEGER) AS _pormg_ms)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
-  ("F int col * interval | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(CAST(round((`Tb`.`grid`) * (((CASE WHEN substr(`Tb`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`Tb`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER))))) AS INTEGER) IS NULL) ASC, CAST(round((`Tb`.`grid`) * (((CASE WHEN substr(`Tb`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`Tb`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER))))) AS INTEGER) ASC", params = Tuple{Any, String}[]),
   ("F int col * interval | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("F int col * interval | alone", :sqlite, "v") =>
     (stage = :ok, sql = "CAST(round((\"Tb\".\"grid\") * (((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER))))) AS INTEGER) ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("F int col * interval | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((`R3`.`grid`) * (((CASE WHEN substr(`R3`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R3`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R3`.`fastestlaptime`, instr(`R3`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R3`.`fastestlaptime`, instr(`R3`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER))))) AS INTEGER) AS _pormg_ms)) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) AS _pormg_v)) IS NULL) ASC, (SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round((`R2`.`grid`) * (((CASE WHEN substr(`R2`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R2`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R2`.`fastestlaptime`, instr(`R2`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R2`.`fastestlaptime`, instr(`R2`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER))))) AS INTEGER) AS _pormg_ms)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) AS _pormg_v)) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("F int col * interval | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("F int col * interval | subquery", :sqlite, "w") =>
@@ -1099,16 +1111,10 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Sum decimal | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Sum interval | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(SUM(((CASE WHEN substr(`Tb`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`Tb`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER)))) IS NULL) ASC, SUM(((CASE WHEN substr(`Tb`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`Tb`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER)))) ASC", params = Tuple{Any, String}[]),
   ("Sum interval | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Sum interval | alone", :sqlite, "v") =>
     (stage = :ok, sql = "SUM(((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER)))) ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Sum interval | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(((CASE WHEN substr(`R1_1`.`v`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R1_1`.`v`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 4) AS REAL) * 1000) AS INTEGER))) IS NULL) ASC, ((CASE WHEN substr(`R1_1`.`v`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R1_1`.`v`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC", params = Tuple{Any, String}[]),
-  ("Sum interval | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(((CASE WHEN substr(`R1_1`.`v`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R1_1`.`v`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 4) AS REAL) * 1000) AS INTEGER))) IS NULL) ASC, ((CASE WHEN substr(`R1_1`.`v`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R1_1`.`v`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC", params = Tuple{Any, String}[]),
   ("Sum interval | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Sum interval | cte", :postgres, "w") =>
@@ -1117,8 +1123,6 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Sum interval | cte", :sqlite, "w") =>
     (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Sum interval | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT SUM(((CASE WHEN substr(`R3`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R3`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R3`.`fastestlaptime`, instr(`R3`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R3`.`fastestlaptime`, instr(`R3`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER)))) AS _pormg_ms)) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) AS _pormg_v)) IS NULL) ASC, (SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT SUM(((CASE WHEN substr(`R2`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R2`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R2`.`fastestlaptime`, instr(`R2`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R2`.`fastestlaptime`, instr(`R2`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER)))) AS _pormg_ms)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) AS _pormg_v)) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Sum interval | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Sum interval | subquery", :sqlite, "w") =>
@@ -1171,16 +1175,10 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Avg decimal | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
-  ("Avg interval | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(CAST(round(AVG(((CASE WHEN substr(`Tb`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`Tb`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER))))) AS INTEGER) IS NULL) ASC, CAST(round(AVG(((CASE WHEN substr(`Tb`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`Tb`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`Tb`.`fastestlaptime`, instr(`Tb`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER))))) AS INTEGER) ASC", params = Tuple{Any, String}[]),
   ("Avg interval | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Avg interval | alone", :sqlite, "v") =>
     (stage = :ok, sql = "CAST(round(AVG(((CASE WHEN substr(\"Tb\".\"fastestlaptime\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"Tb\".\"fastestlaptime\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"Tb\".\"fastestlaptime\", instr(\"Tb\".\"fastestlaptime\", ':') + 4) AS REAL) * 1000) AS INTEGER))))) AS INTEGER) ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Avg interval | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(((CASE WHEN substr(`R1_1`.`v`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R1_1`.`v`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 4) AS REAL) * 1000) AS INTEGER))) IS NULL) ASC, ((CASE WHEN substr(`R1_1`.`v`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R1_1`.`v`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC", params = Tuple{Any, String}[]),
-  ("Avg interval | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(((CASE WHEN substr(`R1_1`.`v`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R1_1`.`v`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 4) AS REAL) * 1000) AS INTEGER))) IS NULL) ASC, ((CASE WHEN substr(`R1_1`.`v`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R1_1`.`v`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R1_1`.`v`, instr(`R1_1`.`v`, ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC", params = Tuple{Any, String}[]),
   ("Avg interval | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Avg interval | cte", :postgres, "w") =>
@@ -1189,8 +1187,6 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Avg interval | cte", :sqlite, "w") =>
     (stage = :ok, sql = "((CASE WHEN substr(\"R1_1\".\"v\", 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(\"R1_1\".\"v\", '+-') AS INTEGER) * 3600000 + CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(\"R1_1\".\"v\", instr(\"R1_1\".\"v\", ':') + 4) AS REAL) * 1000) AS INTEGER))) ASC NULLS LAST", params = Tuple{Any, String}[]),
-  ("Avg interval | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "((SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round(AVG(((CASE WHEN substr(`R3`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R3`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R3`.`fastestlaptime`, instr(`R3`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R3`.`fastestlaptime`, instr(`R3`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER))))) AS INTEGER) AS _pormg_ms)) as `t`\nFROM `result` as `R3`\nWHERE `R3`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) AS _pormg_v)) IS NULL) ASC, (SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    (SELECT CASE WHEN _pormg_ms IS NULL THEN NULL ELSE (CASE WHEN _pormg_ms < 0 THEN '-' ELSE '' END) || printf('%02d:%02d:%02d', abs(_pormg_ms) / 3600000, abs(_pormg_ms) / 60000 % 60, abs(_pormg_ms) / 1000 % 60) || (CASE WHEN abs(_pormg_ms) % 1000 = 0 THEN '' ELSE '.' || rtrim(printf('%03d', abs(_pormg_ms) % 1000), '0') END) END FROM (SELECT CAST(round(AVG(((CASE WHEN substr(`R2`.`fastestlaptime`, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(`R2`.`fastestlaptime`, '+-') AS INTEGER) * 3600000 + CAST(substr(`R2`.`fastestlaptime`, instr(`R2`.`fastestlaptime`, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(`R2`.`fastestlaptime`, instr(`R2`.`fastestlaptime`, ':') + 4) AS REAL) * 1000) AS INTEGER))))) AS INTEGER) AS _pormg_ms)) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) AS _pormg_v)) ASC", params = [("1", "Int64"), ("1", "Int64"), ("1", "Int64")]),
   ("Avg interval | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Avg interval | subquery", :sqlite, "w") =>
@@ -2095,16 +2091,10 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2.0", "Float64")]),
   ("Cast Sum F bigint + epoch / 2.0 int | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2.0", "Float64"), ("1", "Int64")]),
-  ("Cast Sum F interval + interval / 2 text | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64")]),
   ("Cast Sum F interval + interval / 2 text | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F interval + interval / 2 text | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
-  ("Cast Sum F interval + interval / 2 text | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
-  ("Cast Sum F interval + interval / 2 text | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
   ("Cast Sum F interval + interval / 2 text | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F interval + interval / 2 text | cte", :postgres, "w") =>
@@ -2113,22 +2103,14 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F interval + interval / 2 text | cte", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
-  ("Cast Sum F interval + interval / 2 text | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F interval + interval / 2 text | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F interval + interval / 2 text | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
-  ("Cast Sum F interval * 2 / 2 text | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum F interval * 2 / 2 text | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum F interval * 2 / 2 text | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64")]),
-  ("Cast Sum F interval * 2 / 2 text | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64"), ("2", "Int64")]),
-  ("Cast Sum F interval * 2 / 2 text | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum F interval * 2 / 2 text | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum F interval * 2 / 2 text | cte", :postgres, "w") =>
@@ -2137,8 +2119,6 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64")]),
   ("Cast Sum F interval * 2 / 2 text | cte", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64")]),
-  ("Cast Sum F interval * 2 / 2 text | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F interval * 2 / 2 text | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F interval * 2 / 2 text | subquery", :sqlite, "w") =>
@@ -2159,16 +2139,10 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F datetime - datetime / 2 text | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
-  ("Cast Sum F int * interval / 2 text | alone", :mysql, "v") =>
-    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64")]),
   ("Cast Sum F int * interval / 2 text | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F int * interval / 2 text | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
-  ("Cast Sum F int * interval / 2 text | cte", :mysql, "g__v") =>
-    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
-  ("Cast Sum F int * interval / 2 text | cte", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
   ("Cast Sum F int * interval / 2 text | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F int * interval / 2 text | cte", :postgres, "w") =>
@@ -2177,16 +2151,20 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F int * interval / 2 text | cte", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
-  ("Cast Sum F int * interval / 2 text | subquery", :mysql, "w") =>
-    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F int * interval / 2 text | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F int * interval / 2 text | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
+  ("Cast Sum F date - date + bigint / 2 int | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Cast Sum F date - date + bigint / 2 int | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+  ("Cast Sum F date - date + bigint / 2 int | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | cte", :postgres, "w") =>
@@ -2195,14 +2173,22 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | cte", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Cast Sum F date - date + bigint / 2 int | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F date - date + bigint / 2 int | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
+  ("Cast Sum F date - date / 2 int | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("2", "Int64")]),
   ("Cast Sum F date - date / 2 int | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date / 2 int | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Cast Sum F date - date / 2 int | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = [("2", "Int64")]),
+  ("Cast Sum F date - date / 2 int | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64")]),
   ("Cast Sum F date - date / 2 int | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date / 2 int | cte", :postgres, "w") =>
@@ -2211,6 +2197,8 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("2", "Int64")]),
   ("Cast Sum F date - date / 2 int | cte", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64")]),
+  ("Cast Sum F date - date / 2 int | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F date - date / 2 int | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2", "Int64"), ("1", "Int64")]),
   ("Cast Sum F date - date / 2 int | subquery", :sqlite, "w") =>
@@ -3287,10 +3275,16 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast F date + Day(1) int | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("1", "Int64")]),
+  ("Cast F date - date int | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("Cast F date - date int | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast F date - date int | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast F date - date int | cte", :mysql, "g__v") =>
+    (stage = :ok, sql = "(`R1_1`.`v` IS NULL) ASC, `R1_1`.`v` ASC", params = Tuple{Any, String}[]),
+  ("Cast F date - date int | cte", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = Tuple{Any, String}[]),
   ("Cast F date - date int | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast F date - date int | cte", :postgres, "w") =>
@@ -3299,6 +3293,8 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Cast F date - date int | cte", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Cast F date - date int | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Cast F date - date int | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Cast F date - date int | subquery", :sqlite, "w") =>

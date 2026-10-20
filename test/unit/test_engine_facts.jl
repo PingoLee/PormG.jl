@@ -73,7 +73,7 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                :_locks_rows, :_sums_integers_as_decimal, :_greatest_skips_nulls,
                                :_computed_kind, :_refuses_shadowed_null_key_alias, :_filters_durations,
                                # Phase 2b (expressions): a quotient over a `Sum` the walk cannot name.
-                               :_untyped_sum_departs, :_cast_renders_text])
+                               :_untyped_sum_departs, :_cast_renders_text, :_casts_bigint_day_count])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions
@@ -149,7 +149,9 @@ end
   @test _EF_QB._interval_as_ms(_EfMy()) && _EF_QB._emulates_nulls_order(_EfMy())
   @test !_EF_QB._casts_bind_parameters(_EfMy()) && !_EF_QB._binds_list_as_array(_EfMy())
   @test _EF_QB._inspection_dialect(_EfMy()) == (:mysql, :positional)
-  # Date arithmetic is phase 2b's (`_stores_date_as_text`), and writes are phase 3's.
+  # `_stores_date_as_text` stays SQLite's question: MySQL refuses an untyped date operand by a method of
+  # its own (`_refuse_untyped_date_operand`, phase 2b), since its `+` reads a date's digits, not its text.
+  # Writes are phase 3's.
   @test_throws MethodError _EF_QB._stores_date_as_text(_EfMy())
   @test_throws MethodError _EF_QB._insert_returns_rows(_EfMy())
 end

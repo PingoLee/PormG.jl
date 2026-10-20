@@ -615,7 +615,7 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # #894: a `DurationField` column that is not projected orders by its stored text's milliseconds
     # on SQLite. The column reference binds nothing, so repeating it costs no parameter.
     if order_expr === nothing && !found_in_select && _orders_as_sqlite_interval(v.field, instruc)
-      order_expr = Dialect._sqlite_interval_ms(v_field_copy.field)
+      order_expr = _interval_text_as_ms(v_field_copy.field, instruc.connection)
     end
     orientation = v.orientation
     placement = _nulls_placement(orientation, v.nulls)

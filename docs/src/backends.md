@@ -1,13 +1,13 @@
 # Backend Capabilities
 
-PormG runs on PostgreSQL and SQLite. MySQL is in progress for the first registered release ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)); see [MySQL (in progress)](@ref) for what works today. Most of what it does means the same on both. Some features exist on one backend only, and PormG does not emulate a feature a backend lacks. It raises `BackendCapabilityError` instead, and the message names the feature, the backend you are on, and the backends that support it:
+PormG runs on PostgreSQL and SQLite. MySQL is in progress for the first registered release ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)); see [MySQL (in progress)](@ref) for what works today. Most of what PormG does means the same on every backend. Some features exist on one backend only, and PormG does not emulate a feature a backend lacks. It raises `BackendCapabilityError` instead, and the message names the feature, the backend you are on, and the backends that support it:
 
 ```text
 The @jcontains lookup (JSONB @>) needs JSONB containment and key operators (`@>`, `?`, `?|`, `?&`),
 which SQLite does not support (supported on PostgreSQL).
 ```
 
-The table below is the list PormG checks. A unit test fails when this page and the code disagree.
+The table below is the list PormG checks. A unit test fails when this page and the code disagree. MySQL's column says what it has today: a row it gains in a later phase of #1130 reads `no` until then, and is refused with `BackendCapabilityError` like any feature a backend lacks.
 
 Some features exist from a server version on. Their cell says which, as `from 13` (PostgreSQL's `server_version_num` major version) or `from 3.25.0` (the SQLite library PormG loads). PormG asks the server its version where it needs the answer. Where a feature is refused, an older server gets `BackendCapabilityError` naming both versions:
 
@@ -18,32 +18,32 @@ library PormG loads is 3.24.0.
 
 Where PormG reads the schema, an older server is not refused: the feature reads as absent, which is exact there, because a server without the feature has none of it.
 
-| Feature | Used by | PostgreSQL | SQLite |
-|---|---|---|---|
-| `jsonb_operators` | `@jcontains`, `@has_key`, `@has_any_keys`, `@has_keys` | yes | no |
-| `arrays` | `ArrayField`, its lookups (`@acontains`, `@contained_by`, `@overlap`), `@len`, an index or slice, a cast to an array type | yes | no |
-| `network_types` | `GenericIPAddressField`, `CIDRField`, the `@net_*`, `@family` and `@prefixlen` lookups | yes | no |
-| `full_text_search` | `SearchVectorField`, the `@search` lookup, `SearchVector`, `SearchQuery`, `SearchRank`, `SearchHeadline` | yes | no |
-| `regex` | `@regex`, `@iregex` and their negations | yes | no |
-| `unaccent` | `@iunaccent_contains`, `@iunaccent_exact` and their negations | yes | no |
-| `index_methods` | an `Index` with `method` other than `"btree"`, `opclasses`, or `include` | yes | no |
-| `explain_options` | `explain(analyze = true)`, `buffers`, `verbose` | yes | no |
-| `copy` | `bulk_copy` | yes | no |
-| `advisory_locks` | `with_advisory_lock(…; on_missing_lock = :error)` | yes | no |
-| `no_key_locks` | `select_for_update(no_key = true)` (SQLite takes no row lock at all, so it renders no clause, as for every `select_for_update`) | yes | no |
-| `negative_round_precision` | `Round(x, d)` with a negative `d` (SQLite's `ROUND` reads it as 0) | yes | no |
-| `window_functions` | `RowNumber`, `Rank`, `DenseRank`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` (refused below the version) | yes | from 3.25.0 |
-| `nulls_order` | `order_by` NULL placement; below the version SQLite sorts on an `(expr IS NULL)` key instead | yes | from 3.30.0 |
-| `table_list` | reading the schema leaves out virtual and shadow tables; below the version SQLite recognizes them from their DDL and names | no | from 3.37.0 |
-| `schema_introspection` | `inspectdb`, `import_models_from_postgres`, `check` (refused below the version); `status` skips its drift check below it | from 9.6 | yes |
-| `migration_plans` | `makemigrations`, `migrate`, `check(kinds = [:schema_drift])` (refused below the version) | from 11 | yes |
-| `identity_columns` | reading the schema: an identity key; below the version, no column is one | from 10 | no |
-| `declarative_partitions` | reading the schema leaves partitions out; below the version there are none | from 10 | no |
-| `include_columns` | reading the schema: an index's `INCLUDE` columns; below the version every index column is a key column | from 11 | no |
-| `generated_columns` | a plan adding `SearchVectorField(generated_from = …)` (refused below the version); reading the schema: below the version, no column is generated | from 12 | no |
-| `drop_expression` | a plan removing `generated_from` (refused below the version) | from 13 | no |
-| `input_validity` | `migrate`'s count of the rows a column retype would reject; below the version it matches the new type's input grammar instead | from 16 | no |
-| `supported_server` | opening a connection: a backend with a version here refuses an older server when a connection opens | yes | yes |
+| Feature | Used by | PostgreSQL | SQLite | MySQL |
+|---|---|---|---|---|
+| `jsonb_operators` | `@jcontains`, `@has_key`, `@has_any_keys`, `@has_keys` | yes | no | no |
+| `arrays` | `ArrayField`, its lookups (`@acontains`, `@contained_by`, `@overlap`), `@len`, an index or slice, a cast to an array type | yes | no | no |
+| `network_types` | `GenericIPAddressField`, `CIDRField`, the `@net_*`, `@family` and `@prefixlen` lookups | yes | no | no |
+| `full_text_search` | `SearchVectorField`, the `@search` lookup, `SearchVector`, `SearchQuery`, `SearchRank`, `SearchHeadline` | yes | no | no |
+| `regex` | `@regex`, `@iregex` and their negations | yes | no | no |
+| `unaccent` | `@iunaccent_contains`, `@iunaccent_exact` and their negations | yes | no | no |
+| `index_methods` | an `Index` with `method` other than `"btree"`, `opclasses`, or `include` | yes | no | no |
+| `explain_options` | `explain(analyze = true)`, `buffers`, `verbose` | yes | no | no |
+| `copy` | `bulk_copy` | yes | no | no |
+| `advisory_locks` | `with_advisory_lock(…; on_missing_lock = :error)` | yes | no | yes |
+| `no_key_locks` | `select_for_update(no_key = true)` (SQLite takes no row lock at all, so it renders no clause, as for every `select_for_update`) | yes | no | no |
+| `negative_round_precision` | `Round(x, d)` with a negative `d` (SQLite's `ROUND` reads it as 0) | yes | no | no |
+| `window_functions` | `RowNumber`, `Rank`, `DenseRank`, `Lag`, `Lead`, `FirstValue`, `LastValue`, `NthValue` (refused below the version) | yes | from 3.25.0 | no |
+| `nulls_order` | `order_by` NULL placement; below the version SQLite sorts on an `(expr IS NULL)` key instead | yes | from 3.30.0 | no |
+| `table_list` | reading the schema leaves out virtual and shadow tables; below the version SQLite recognizes them from their DDL and names | no | from 3.37.0 | no |
+| `schema_introspection` | `inspectdb`, `import_models_from_postgres`, `check` (refused below the version); `status` skips its drift check below it | from 9.6 | yes | no |
+| `migration_plans` | `makemigrations`, `migrate`, `check(kinds = [:schema_drift])` (refused below the version) | from 11 | yes | no |
+| `identity_columns` | reading the schema: an identity key; below the version, no column is one | from 10 | no | no |
+| `declarative_partitions` | reading the schema leaves partitions out; below the version there are none | from 10 | no | no |
+| `include_columns` | reading the schema: an index's `INCLUDE` columns; below the version every index column is a key column | from 11 | no | no |
+| `generated_columns` | a plan adding `SearchVectorField(generated_from = …)` (refused below the version); reading the schema: below the version, no column is generated | from 12 | no | no |
+| `drop_expression` | a plan removing `generated_from` (refused below the version) | from 13 | no | no |
+| `input_validity` | `migrate`'s count of the rows a column retype would reject; below the version it matches the new type's input grammar instead | from 16 | no | no |
+| `supported_server` | opening a connection: a backend with a version here refuses an older server when a connection opens | yes | yes | from 8.4 |
 
 `with_advisory_lock` on SQLite without `on_missing_lock = :error` runs the body with no lock, and warns unless you pass `on_missing_lock = :ignore` ([Advisory Locks](advisory_lock.md)).
 
@@ -72,7 +72,7 @@ A backend whose operator computes something else gets a different rendering, not
 
 ## MySQL (in progress)
 
-MySQL support is being built in phases ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)), and it is not in the tables above until each phase decides its rows. What works today:
+MySQL support is being built in phases ([#1130](https://github.com/PingoLee/PormG.jl/issues/1130)). The capability table above has its column; the guarantees table gains one when the writes and migrations phases decide its promises. What works today:
 
 - `adapter: MySQL` in `connection.yml` ([connection.yml](configuration/connection_yml.md)), with `using MySQL` (MySQL.jl 2.0) loading the extension.
 - **MySQL 8.4 or newer.** A connection to an older server is refused when it opens, with a `BackendCapabilityError` naming both versions. A MariaDB server is refused with an `InvalidConfigurationError`: it is planned as a separate backend.

@@ -2185,19 +2185,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast bool to text | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1` or `0`, the i"),
   ("Cast bool to text | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; MySQL computes `1` or `0`, the in"),
   ("Cast bool to text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast bool to text | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1` or `0`, the i"),
   ("Cast bool to text | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; MySQL computes `1` or `0`, the in"),
   ("Cast bool to text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast bool to text | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1` or `0`, the i"),
   ("Cast bool to text | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; MySQL computes `1` or `0`, the in"),
   ("Cast float to text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast float to text | alone", :sqlite) =>
@@ -4111,55 +4111,55 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast interval int | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DurationField `fastestlaptime` means an error, since an interval has no numeric value; SQLite "),
   ("Cast interval int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DurationField `fastestlaptime` means an error, since an interval has no numeric value; MySQL c"),
   ("Cast interval int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast interval int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DurationField `fastestlaptime` means an error, since an interval has no numeric value; SQLite "),
   ("Cast interval int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DurationField `fastestlaptime` means an error, since an interval has no numeric value; MySQL c"),
   ("Cast interval int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast interval int | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DurationField `fastestlaptime` means an error, since an interval has no numeric value; SQLite "),
   ("Cast interval int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DurationField `fastestlaptime` means an error, since an interval has no numeric value; MySQL c"),
   ("Cast Sum interval int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum interval int | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
   ("Cast Sum interval int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
   ("Cast Sum interval int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum interval int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
   ("Cast Sum interval int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
   ("Cast Sum interval int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum interval int | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
   ("Cast Sum interval int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
   ("Cast Avg interval int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Avg interval int | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; SQLite computes the leading digit"),
   ("Cast Avg interval int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; MySQL computes a number it does n"),
   ("Cast Avg interval int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Avg interval int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; SQLite computes the leading digit"),
   ("Cast Avg interval int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; MySQL computes a number it does n"),
   ("Cast Avg interval int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Avg interval int | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; SQLite computes the leading digit"),
   ("Cast Avg interval int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; MySQL computes a number it does n"),
   ("Coalesce decimal output numeric(10,2) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(10,2) | alone", :sqlite) =>
@@ -4273,91 +4273,91 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast date int | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; SQLite comp"),
   ("Cast date int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; MySQL compu"),
   ("Cast date int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast date int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; SQLite comp"),
   ("Cast date int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; MySQL compu"),
   ("Cast date int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast date int | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; SQLite comp"),
   ("Cast date int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; MySQL compu"),
   ("Cast datetime int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast datetime int | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; SQL"),
   ("Cast datetime int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; MyS"),
   ("Cast datetime int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast datetime int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; SQL"),
   ("Cast datetime int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; MyS"),
   ("Cast datetime int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast datetime int | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; SQL"),
   ("Cast datetime int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; MyS"),
   ("Cast time int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast time int | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the TimeField `time` means an error, since a time has no numeric value; SQLite computes the leadin"),
   ("Cast time int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the TimeField `time` means an error, since a time has no numeric value; MySQL computes its digits "),
   ("Cast time int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast time int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the TimeField `time` means an error, since a time has no numeric value; SQLite computes the leadin"),
   ("Cast time int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the TimeField `time` means an error, since a time has no numeric value; MySQL computes its digits "),
   ("Cast time int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast time int | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the TimeField `time` means an error, since a time has no numeric value; SQLite computes the leadin"),
   ("Cast time int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the TimeField `time` means an error, since a time has no numeric value; MySQL computes its digits "),
   ("Cast date numeric(10,2) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast date numeric(10,2) | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; SQLit"),
   ("Cast date numeric(10,2) | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; MySQL"),
   ("Cast date numeric(10,2) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast date numeric(10,2) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; SQLit"),
   ("Cast date numeric(10,2) | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; MySQL"),
   ("Cast date numeric(10,2) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast date numeric(10,2) | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; SQLit"),
   ("Cast date numeric(10,2) | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; MySQL"),
   ("Cast datetime float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast datetime float | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; SQLi"),
   ("Cast datetime float | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; MySQ"),
   ("Cast datetime float | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast datetime float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; SQLi"),
   ("Cast datetime float | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; MySQ"),
   ("Cast datetime float | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast datetime float | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; SQLi"),
   ("Cast datetime float | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; MySQ"),
   ("Cast F date + Day(1) int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date + Day(1) int | alone", :sqlite) =>

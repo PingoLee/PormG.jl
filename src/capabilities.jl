@@ -167,16 +167,14 @@ end
 # The engines PormG ships, by the name a message uses. A backend added later adds its row here and
 # its `_has_feature` methods above; the refusals then offer it wherever it has the feature.
 #
-# MySQL is not a row yet (#1130). Its row comes with phase 2, the phase that decides what a query MEANS
-# there: every `_MEANING_DEPARTURES` row must place each backend listed here
-# (`test/unit/test_meaning_departures.jl`), and `docs/src/backends.md` must carry its column. Until
-# then MySQL is named by the method below, so a message says "MySQL" rather than the pool's type.
-const _BACKENDS = ("PostgreSQL" => PormGPostgres, "SQLite" => PormGSQLite)
+# MySQL's row came with phase 2b (#1130), the phase that decides what an expression MEANS there: every
+# `_MEANING_DEPARTURES` row places each backend listed here (`test/unit/test_meaning_departures.jl`),
+# and `docs/src/backends.md` carries a column for each.
+const _BACKENDS = ("PostgreSQL" => PormGPostgres, "SQLite" => PormGSQLite, "MySQL" => PormGMySQL)
 _backend_name(conn) = begin
   i = findfirst(p -> conn isa last(p), _BACKENDS)
   i === nothing ? string(nameof(typeof(conn))) : first(_BACKENDS[i])
 end
-_backend_name(::PormGMySQL) = "MySQL"   # → a `_BACKENDS` row in phase 2
 # The engine as a key — the `NamedTuple` key a pinned `db_default` is spelled under. One method per
 # engine and NO fallback (#1129 item 2): a new backend gets a `MethodError` here rather than SQLite's
 # key, which `db_default_sql`'s `conn isa PormGPostgres ? :postgres : :sqlite` handed it silently.

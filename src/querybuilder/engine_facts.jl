@@ -98,6 +98,10 @@ _locks_rows(::PormGMySQL) = true   # InnoDB row locks (#1269)
 # division refusal (`_INTEGER_QUOTIENT_DEPARTURE`) fires on an engine that answers `true`.
 _untyped_sum_departs(::PormGPostgres) = true
 _untyped_sum_departs(::PormGSQLite) = false
+# MySQL's `SUM` of integers is a `DECIMAL` whatever their width, and its `/` keeps the fraction
+# (measured on 8.4: `SUM(15) / 2` is `7.5`). A sum the walk names is turned back into the integer
+# (`_sums_integers_as_decimal`); one it cannot name is not, so its quotient departs (#1130 phase 2b).
+_untyped_sum_departs(::PormGMySQL) = true
 
 # `SUM` over an integer is a DECIMAL (MySQL: `SUM(INT)` and `SUM(BIGINT)` alike), so `Dialect.SUM` casts
 # it back to the integer the sum of integers means. PostgreSQL widens only `sum(bigint)` to `numeric`,

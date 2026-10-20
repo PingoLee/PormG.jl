@@ -40,7 +40,7 @@ referenced it.
 | `src/Configuration.jl` | Config, `DB_PATH`, `PORMG_ENV`, transactions |
 | `src/ConnectionPool.jl` | `fetch`, pool lock, transaction context (driver-agnostic; untyped connection storage) |
 | `src/Models.jl`, `src/models/` | Models and fields |
-| `src/Utils.jl`, `ext/PormGReviseExt.jl` | Model loader macros (`@import_models`, `@models_module`) and the world-age loading machinery the Julia 1.12 floor exists for (#211); the Revise weakdep extension wires hot reload back into `Utils.reload_module_contents!` / `Models.set_models` |
+| `src/Utils.jl`, `ext/PormGReviseExt.jl` | Model loader macros (`@import_models`, `@models_module`) and the world-age loading machinery behind the Julia floor (#211); the Revise weakdep extension wires hot reload back into `Utils.reload_module_contents!` / `Models.set_models` |
 | `src/Dialect.jl` | Backend SQL rendering |
 | `src/value_repr.jl` | Layer 2.5: the **value-representation** table (#564) — `(CanonicalType, backend)` → the Julia formatter, the SQL canonicalizer, the read parser. Between `Dialect` and `QueryBuilder` because it names `Models` and `Dialect` at definition time and both the render and read paths consult it. A `PormG`-level file rather than a submodule for `Backend.jl`'s reason: its three inputs live in three submodules, so `PormG` is the only module that sees all of them. Multiple dispatch **is** the table — there is no `ValueRepr` noun beside `CanonicalType` to keep aligned |
 | `src/AdvisoryLock.jl` | `with_advisory_lock` — cross-process advisory locking (migrations serialize on it) |

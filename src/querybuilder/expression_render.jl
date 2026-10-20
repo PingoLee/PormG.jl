@@ -338,7 +338,7 @@ function _render_left_typed(value::Any, operation::String, instruc::SQLInstructi
   value isa FExpression && return _render_expr_typed(value, instruc)
   value isa FObject && return _render_function_operand_typed(value, instruc)
   sql = _set_update_query_left(value, operation, instruc)
-  return sql, _render_side_kind(value, instruc)   # #1034 step 5b: the walk's copy of the side rule
+  return sql, _render_side_kind(value, instruc)   # #1034 step 5b: the one side rule
 end
 
 # #907 — a function as a side of an expression, rendered ONCE by `_render_function_typed`, which is
@@ -347,13 +347,15 @@ end
 # on SQLite `Sum(d)`, `Avg(d)`, `Max("time")` stay `_IntervalMs` inside the tree, so `Sum(d) / Count(…)`
 # and `Sum("time") - Max("time")` are arithmetic on milliseconds rather than on the text's leading
 # hours, and `Max("time") + d` has the millisecond form #881 refused it for. On PostgreSQL the SQL is
-# unchanged and the function is typed `CInterval` wherever its render says it is one, which
+# unchanged. On both engines, a function with no millisecond form is typed `CInterval` wherever the
+# side rule says it is one (an interval candidate over an interval, as `_render_function_body`
+# computes it), which
 # `_function_projection_kind` alone cannot say of a `Sum`. Every other function is typed as before.
 function _render_function_operand_typed(v::FObject, instruc::SQLInstruction)::Tuple{String,_RenderKind}
-  sql, interval_ms, interval = _render_function_typed(v, instruc)
+  sql, interval_ms, _ = _render_function_typed(v, instruc)
   interval_ms && return sql, _IntervalMs()
-  # #1034 step 5b: the side's kind is the walk's copy of the rule, which types a function an interval
-  # where this render does (an interval candidate over an interval, `_render_side_kind`).
+  # #1034 step 5b: the side's kind is the one side rule, shared with the walk (`_render_side_kind`),
+  # which types a function an interval where this render does: an interval candidate over an interval.
   return sql, _render_side_kind(v, instruc)
 end
 
@@ -520,7 +522,7 @@ function _render_temporal_shift(left_side::AbstractString, kind::TemporalKind, o
   end
 end
 
-# #801 — THE DIFFERENCE OF TWO TEMPORAL SIDES, `kind` being `_difference_result_kind`'s answer.
+# #801 — THE DIFFERENCE OF TWO TEMPORAL SIDES, `kind` being the rule's answer (`_arith_result_kind`).
 #
 # PostgreSQL types both columns, so its `-` is already the right operator; the text is the one the
 # generic infix arm always emitted. SQLite's `-` on two TEXT dates is the difference of the YEARS, so
@@ -864,7 +866,7 @@ function _render_operand_typed(operand::Any, field_name::Any, operation::String,
     return add_parameter!(instruc, value_formatter(kind, instruc.connection)(operand); sql_type = sql_type), kind
   end
   sql = _set_update_query_operand(operand, field_name, operation, instruc; left_kind = left_kind)
-  return sql, _render_side_kind(operand, instruc; right = true)   # #1034 step 5b: the walk's copy
+  return sql, _render_side_kind(operand, instruc; right = true)   # #1034 step 5b: the one side rule
 end
 
 # A `String` operand names a FIELD when it is a path or one of the model's own fields; otherwise it

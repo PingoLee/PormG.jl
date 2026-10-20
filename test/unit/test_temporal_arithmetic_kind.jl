@@ -13,8 +13,8 @@ using PormG.Functions: Abs, Greatest, Case, When
 # computes for a projection (`projection_kinds`). The walk (`_expression_kind`) answered `nothing` for
 # all of them, so every reader that is not the render — the value formatter, a pattern lookup's
 # refusal, the #1200 temporal mix, the #1111 division leaf, `Abs`/`Round` over an integer — saw no
-# type. The walk now answers each one through the render's own rules (`_shift_result_kind`,
-# `_difference_result_kind`, the day-count and number-side readers), so the two agree by construction.
+# type. The walk now answers each one (step 5a), and since step 5b the walk and the render ask one copy
+# of the rule (`_temporal_result_kind`), so the two agree by construction.
 #
 # Every testset runs on both mock backends: the kinds are the same on both, and SQLite holds an
 # interval as milliseconds only while it computes.
@@ -171,9 +171,11 @@ end
 # The render takes its kind from the walk's one copy of the rule, at every level (#1034 step 5b).
 # Expected: a thirty-two-level chain of interval arithmetic (`(… * 2) + F("laptime")`) and of date
 # shifts (`… + Day(1)`) builds in well under a second on both engines, and the kind the render gives
-# the whole is the walk's: an interval, and a date. Each render level asks the walk once its sides
-# have rendered (`_arith_result_kind`), so a regression to a walk per path per level would show here;
-# measured at 0.2 ms on SQLite at depth 32, the same as before step 5b.
+# the whole is the walk's: an interval, and a date. Each render level asks the rule once its sides have
+# rendered (`_arith_result_kind`), and a side the walk types is memoized (`_memo_kind`); a regression
+# that loses the memo would show here as a cost exponential in the depth. Measured at 0.2 ms on SQLite
+# at depth 32, the same as before step 5b. The bound takes the fastest of three builds, so a GC pause
+# in a long suite is no failure.
 # Why it matters: one copy of the rule must not cost what two copies did not.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1034 step 5b: the render's kind is the walk's, at every depth, at no extra cost" begin
@@ -188,7 +190,7 @@ end
         end
         build() = (q = Model_.objects; q.values("v" => e); QB.build(q.object))
         build()                                                    # compile
-        @test (@elapsed build()) < 0.05
+        @test minimum(@elapsed(build()) for _ in 1:3) < 0.05
         rendered, walked = _tak_kinds(Model_, e)
         @test rendered == expected
         @test walked == expected

@@ -35,10 +35,10 @@
 #
 # The read kind types no `F` arithmetic, as `_operand_kind` never has; a comparison is a boolean.
 # Every kind types the numeric operators (`_operation_kind`), and since #1034 step 5a TEMPORAL arithmetic
-# too: the walk computes the kind the render gives it (`_temporal_arith_kind`, through the render's own
-# rules), rather than reading it from the render, so a node asked in another build still has one
-# (decided by the maintainer). It is asked after the render, as every kind is: a joined path's column
-# is found through the memo the render fills.
+# too: the walk computes the kind the render gives it (`_temporal_arith_kind`), rather than reading it
+# from the render, so a node asked in another build still has one (decided by the maintainer). Since
+# step 5b both ask the one copy of the rule, `_temporal_result_kind`. It is asked after the render, as
+# every kind is: a joined path's column is found through the memo the render fills.
 struct _ReadKinds end
 # The two policies that name every type: they differ only on a computed number.
 abstract type _EveryKind end
@@ -160,12 +160,12 @@ _integer_side_kind(x, instruc::SQLInstruction, policy::_EveryKind) =
 
 # ── #1034 step 5a: F temporal arithmetic ─────────────────────────────────────────────────────────────
 # `date - date`, `timestamp - timestamp`, a date shifted by a duration, a day count or an interval, and
-# interval arithmetic are typed by the render (`_render_expr_typed`, `expression_render.jl`), which
-# computes them as it writes their SQL. The walk answers the same kind without rendering, branch for
-# branch, through the same rules: `_shift_result_kind` and `_difference_result_kind` for the result,
-# and `_side_kind`, `_side_function_kind`, `_day_count_column_kind` and `_is_number_side` for what each
-# side is to the render. Those side readers are narrower than the walk on purpose: a float column or a
-# numeric sub-expression is no kind to them, and it is the render's answer the walk restates here.
+# interval arithmetic are typed by one rule, `_temporal_result_kind` (#1034 step 5b), from what each
+# side is to the render. The render (`_render_expr_typed`, `expression_render.jl`) asks it over the
+# sides it rendered; the walk asks it here, without rendering, over the sides `_render_side_kind` types.
+# The side readers under it (`_side_kind`, `_side_function_kind`, `_day_count_column_kind`,
+# `_is_number_side`) are narrower than the walk on purpose: a float column or a numeric sub-expression
+# is no kind to them (#882, #881, #536).
 #
 # Every answer is a temporal kind or the `CInt32` day count of `date - date`; everything else is
 # `nothing`, which leaves numeric arithmetic to the rules above it. A shape the render refuses has no

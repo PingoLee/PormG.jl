@@ -313,8 +313,8 @@ end
     "laptime"  => "DurationField `laptime`",
     "payload"  => "JSONField `payload`",
     _CF("payload") => "JSONField `payload`",
-    Fn.Max("start_at") => "timestamp",
-    Fn.Max("laptime") => "interval",
+    Fn.Max("start_at") => "`MAX(…)` over the DateTimeField `start_at`",
+    Fn.Max("laptime") => "`MAX(…)` over the DurationField `laptime`",
     _CF("laptime") + _CF("laptime") => "an interval expression",
     _CF("start_at") - _CF("start_at") => "an interval expression",
     Fn.Sum("laptime") => "`SUM(…)` over the DurationField `laptime`",
@@ -2109,4 +2109,42 @@ end
     _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1040", run = cte(col, expr, Fn.Cast(ref(col), "numeric(10,0)")))
   end
   _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1040", run = cte("avg_g", avg_g, Fn.Cast(ref("avg_g"), "numeric(10,2)")))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A wrapper over F temporal arithmetic is refused as the arithmetic is (#1034 step 5c)
+# Expected: `Concat` over a `Case` with no `output_field`, a `Lag`, a `NullIf` or a `Min` whose value
+# is F temporal arithmetic is refused on both engines as explicit intent (#1028), named by the wrapper
+# (`` `CASE(…)` over a timestamp expression ``), as `Concat` over the arithmetic itself already was;
+# a cast to a number of `interval * float` (`Cast`, an `output_field`) is refused on SQLite (#1259), as
+# the `DurationField` column already was, and PostgreSQL builds it (its server raises the error the
+# cast means). Before step 5c the classifier asked `_operand_kind`, which types no F arithmetic: the
+# wrappers built, each engine writing its own text for the same timestamp, and SQLite cast the leading
+# digits of the interval's `HH:MM:SS` text.
+# Why it matters: a wrapper must not hide from a rule the type of the value it carries.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1034 step 5c: a wrapper over F temporal arithmetic is refused as the arithmetic is" begin
+  shifted = _CF("born") + Hour(1)   # a timestamp
+  scaled = _CF("laptime") * 2       # an interval
+  for (operand, named) in ((Fn.Case(Fn.When("active" => true, then = shifted)), "`CASE(…)` over a timestamp expression"),
+                           (Fn.Lag(scaled), "`LAG(…)` over an interval expression"),
+                           (Fn.NullIf(scaled, "points"), "`NULLIF(…)` over an interval expression"),
+                           (Fn.Min(shifted), "`MIN(…)` over a timestamp expression"))
+    _ccd_refused_everywhere(Fn.Concat(Fn.Value("-"), operand); issue = "#1028", named = named)
+  end
+  _ccd_expect(Fn.Cast(_CF("laptime") * 1.5, Models.FloatField()); departs = _SL_ONLY, issue = "#1259",
+              named = "Cast(…, \"FLOAT\") of an interval expression")
+  _ccd_expect(Fn.Coalesce(_CF("laptime") * 1.5, 0; output_field = "numeric"); departs = _SL_ONLY, issue = "#1259",
+              named = "of an interval expression")
+  # Any duration from arithmetic, not only a product by a float literal: by a decimal column, divided
+  # by a float, and under a further step (`Floor(…) / 2`).
+  for x in (_CF("laptime") * _CF("price"), _CF("laptime") / 2.0)
+    _ccd_expect(Fn.Cast(x, "float8"); departs = _SL_ONLY, issue = "#1259", named = "of an interval expression")
+  end
+  _ccd_expect(Fn.Cast(Fn.Floor(_CF("laptime") * 2) / 2, "integer"); departs = _SL_ONLY, issue = "#1259",
+              named = "`FLOOR(…)` over an interval expression")
+  # `Mod` over such arithmetic, cast to an integer, takes the refusal `Mod("laptime", 3)` already had.
+  _ccd_expect(Fn.Cast(Fn.Mod(_CF("start_at") - _CF("start_at"), 3), "integer"); departs = _SL_ONLY, issue = "#1028",
+              named = "`MOD(…)`")
+  _ccd_expect(Fn.Cast(Fn.Mod("laptime", 3), "integer"); departs = _SL_ONLY, issue = "#1028", named = "`MOD(…)`")
 end

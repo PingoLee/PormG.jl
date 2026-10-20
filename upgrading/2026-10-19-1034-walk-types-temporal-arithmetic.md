@@ -1,9 +1,9 @@
 ## Date and duration arithmetic has a type outside its own render: filters, `Coalesce` and division checks see it (#1034)
 
 - **Version**: Unreleased
-- **PormG ref**: #1034 (phase 3, step 5a) ; `src/querybuilder/expression_kind.jl` (`_temporal_arith_kind`)
+- **PormG ref**: #1034 (phase 3, steps 5a and 5c) ; `src/querybuilder/expression_kind.jl` (`_temporal_arith_kind`), `src/querybuilder/projection_types.jl` (`_textless_temporal`)
 - **Recorded**: 2026-10-19
-- **Severity**: behavior change, both engines. A filter on an alias of date or duration arithmetic checks its value and can raise `InvalidValueError` where it built. A `Coalesce`/`Greatest`/`Least` that mixes shifted timestamps with dates raises `QueryBuildError` where it built. A pattern lookup on a duration alias raises `FilterError`. A `Sum` of day counts, divided, builds where PostgreSQL refused it. Some values read back as a `Date` or `DateTime` instead of text on SQLite, and an `Avg` of day counts as a `Float64` instead of a `Decimal` on PostgreSQL.
+- **Severity**: behavior change, both engines. A filter on an alias of date or duration arithmetic checks its value and can raise `InvalidValueError` where it built. A `Coalesce`/`Greatest`/`Least` that mixes shifted timestamps with dates raises `QueryBuildError` where it built. A pattern lookup on a duration alias raises `FilterError`. A `Concat` over a `Case`, `Lag`, `NullIf` or `Min` of such arithmetic raises `QueryBuildError` where it built, and on SQLite so does a cast to a number of a duration from arithmetic, or of `Mod` over one. A `Sum` of day counts, divided, builds where PostgreSQL refused it. Some values read back as a `Date` or `DateTime` instead of text on SQLite, and an `Avg` of day counts as a `Float64` instead of a `Decimal` on PostgreSQL.
 
 ### What changed
 
@@ -30,6 +30,17 @@ Everything that asks for a type sees it now:
   one side is a shifted timestamp, as they already did for the column.
 - **A pattern lookup** (`@contains`, `@startswith`, …) on a duration alias is refused on every engine
   (#1183), as on a `DurationField`. On SQLite it matched the duration's text before.
+- **`Concat` over a value that carries such arithmetic** — a `Case` with no `output_field`, a `Lag`, a
+  `NullIf`, a `Min` — is refused on every engine (#1028), as `Concat` over the arithmetic itself and
+  over a `DateTimeField` already were: each engine writes its own text for a timestamp or a duration.
+  Name the format (`ToChar(…, "YYYY-MM-DD HH:MI:SS")`) or cast it to text (step 5c).
+- **A cast to a number of a duration from arithmetic** — a duration times or divided by a float or a
+  decimal (`Cast(F("fastestlaptime") * 1.5, "float8")`), the same under a further step
+  (`Floor(F("fastestlaptime") * 2) / 2`), or wrapped in `Lag` or `Coalesce` with a number
+  `output_field` — is refused on SQLite (#1259), as the `DurationField` column already was: SQLite
+  cast the leading digits of the duration's text, its hours. PostgreSQL builds it, and its server
+  raises the error such a cast means. A cast to an integer of `Mod` over such arithmetic is refused on
+  SQLite with the #1028 message `Mod("fastestlaptime", 3)` already had (step 5c).
 - **`Abs`/`Round` over a day count** keep the integer (#1147), so PostgreSQL renders a bare `ABS(…)`.
 - **A `Sum` of day counts, divided,** is an integer quotient on both engines and builds. PostgreSQL
   refused it before as a sum PormG could not type (#1111).
@@ -52,6 +63,8 @@ Examples on `Race` (`date` a `DateField`, `start_at` a `DateTimeField`) and `Res
 | `values("g" => Greatest("date", F("date") + 1))` on SQLite | read `"2009-03-30"` | reads `Date(2009, 3, 30)` |
 | `values("a" => Avg(F("date") - F("date")))` on PostgreSQL | read a `Decimal` | reads a `Float64` |
 | `values("t" => F("grid") * F("fastestlaptime")); filter("t__@gt" => 10)` | bound `10` as a number | `InvalidValueError` (a duration) |
+| `values("s" => Concat(Value("-"), Case(When("year" => 2009, then = F("date") + Hour(1)))))` | built; each engine wrote its own timestamp text | `QueryBuildError` (#1028) |
+| `values("h" => Cast(F("fastestlaptime") * 1.5, "float8"))` on SQLite | built; read the hours | `QueryBuildError` (#1259) |
 
 `Extract(x, "EPOCH")` still has no stated type, and arithmetic over it keeps its old rule: a number
 when its left side is one.
@@ -60,8 +73,9 @@ when its left side is one.
 
 Code that filters an alias of date or duration arithmetic with a value of another type, or with a
 pattern lookup; that combines shifted timestamps with dates in `Coalesce`/`Greatest`/`Least`/`Case`;
-or that reads such a `Greatest`/`Coalesce`/`Max` back on SQLite and expects a `String`, or an `Avg` of
-day counts on PostgreSQL and expects a `Decimal`.
+that passes a `Case`/`Lag`/`NullIf`/`Min` of such arithmetic to `Concat`, or on SQLite casts a
+duration from arithmetic (or `Mod` over one) to a number; or that reads such a `Greatest`/`Coalesce`/`Max` back on SQLite and
+expects a `String`, or an `Avg` of day counts on PostgreSQL and expects a `Decimal`.
 
 ### How to find the calls to migrate
 
@@ -69,7 +83,8 @@ day counts on PostgreSQL and expects a `Decimal`.
 grep -rnE 'F\("[a-z_]+"\) *[-+*/] *(F\(|Day|Hour|Minute|Second|Week|Month|[0-9])' --include=*.jl src/ test/
 ```
 
-For each, check the type of the value its alias is filtered with.
+For each, check the type of the value its alias is filtered with, and whether it reaches a `Concat`
+or, on SQLite, a cast to a number.
 
 ### Migrate your app
 
@@ -87,4 +102,10 @@ q.values("first" => Coalesce(F("start_at") - Day(1), "date"))
 
 # ✓ after: combine values of one type (on PostgreSQL, output_field = "timestamptz" also says it)
 q.values("first" => Coalesce(F("start_at") - Day(1), "start_at"))
+
+# ✗ before: Concat over a Case of a shifted date built, and each engine wrote its own text
+q.values("label" => Concat(Value("-"), Case(When("year" => 2009, then = F("date") + Hour(1)))))
+
+# ✓ after: name the format
+q.values("label" => Concat(Value("-"), ToChar(Case(When("year" => 2009, then = F("date") + Hour(1))), "YYYY-MM-DD HH:MI:SS")))
 ```

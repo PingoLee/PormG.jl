@@ -523,10 +523,10 @@ function _concat_textless_operand(p, instruc::SQLInstruction)::Union{Tuple{Symbo
   p isa Union{SQLTypeQ,SQLTypeQor} && return (:bool, "a Q(…) condition")
   # #1124: a `Subquery` answers what its one projected expression answers alone — the inner build
   # recorded it (`_subquery_projection_textless`). Read before the formatter and the kind below, so
-  # the subquery agrees with the expression it wraps: `Avg(duration)` is `:numeric` both ways, as the
-  # `AVG` rule says, not `:interval` from its read kind. A node with no record — an inner projection
-  # with one text, or a build that did not render the node — falls through, and the kind below still
-  # names a timestamp or an interval.
+  # the subquery agrees with the expression it wraps: `Avg(duration)` is `:interval` both ways, the kind
+  # the walk gives it (#1034 step 5c). A node with no record — an inner projection with one text, or a
+  # build that did not render the node — falls through, and the kind below still names a timestamp or
+  # an interval.
   if p isa SubqueryObject
     recorded = _subquery_textless(p, instruc)
     recorded === nothing || return (recorded[1], "a Subquery projecting $(recorded[2])")
@@ -547,10 +547,29 @@ function _concat_textless_operand(p, instruc::SQLInstruction)::Union{Tuple{Symbo
     recorded = _cte_textless_record(p, instruc)
     recorded === nothing || return recorded
     temporal = _textless_temporal(p, instruc)
-    temporal === nothing || return temporal
+    temporal === nothing || return _temporal_textless_named(temporal, p, instruc)
   end
   _undeclared_case(p) && return _case_textless_branch(p, instruc)
   return _textless_number(p, instruc)
+end
+
+# #1034 step 5c — an operand the walk types a timestamp or an interval, as the classifier names it. What
+# the operand's structure answers (its branches, its function's operands, its arithmetic's sides) is
+# read first, for two things the kind at the top cannot say:
+# - an integer quotient the structure answers (`_DIVISION_KINDS`) answers as that division:
+#   `Sum(…) / 2 * Max("laptime")` is an interval at the top, but PostgreSQL's `numeric` quotient keeps
+#   the half its `bigint` sum drops on SQLite, so it stays refused there (#1111), as it was before this
+#   step. The structure answers for the first side it classifies (`_textless_number`), so a quotient
+#   that is not on that side is not found, before or after this step;
+# - a function, or a `Case` with no `output_field`, is named by its structure when that names it
+#   (`` `SUM(…)` over the DurationField `laptime` ``, `` `AVG(…)` ``), with the walk's kind: a column has
+#   its own label, and arithmetic keeps "an interval expression", as the render's kind named it.
+function _temporal_textless_named(temporal::Tuple{Symbol,String}, p, instruc::SQLInstruction)
+  p isa Union{FExpression,FObject,WindowFunction} || return temporal
+  named = _undeclared_case(p) ? _case_textless_branch(p, instruc) : _textless_number(p, instruc)
+  named === nothing && return temporal
+  named[1] in _DIVISION_KINDS && return named
+  return p isa FExpression ? temporal : (temporal[1], named[2])
 end
 
 # #1187 — a `Case` with no `output_field` has one of its branch values on each row, so it has the text
@@ -661,10 +680,11 @@ function _check_temporal_mix(p::Union{FObject,WindowFunction}, instruc::SQLInstr
 end
 
 # #1028 — a timestamp, an interval or a JSON document: each has a text of its own on each engine (the
-# measurements above). The kind comes from `_operand_kind`, which already names it for a column, a
-# joined or CTE handle, a transform and a typed function (`Max("start_at")`, `Max("lap")`). Arithmetic
-# over a timestamp or a duration, and `Sum(duration)`, have no kind there: the renderer says those are
-# intervals (`_render_function_body` passes it to both refusals).
+# measurements above). The kind comes from the type walk (`_expression_kind`, #1034 step 5c): a column,
+# a joined or CTE handle, a transform, a typed function (`Max("start_at")`, `Max("lap")`), and, since
+# the walk types them (step 5a), `F` arithmetic over a timestamp or a duration and `Sum`/`Avg` of an
+# interval. Before step 5c it came from `_operand_kind`, which names none of the last two, so only the
+# render's kind caught them, at the two sites it reaches (`_division_or_rendered`).
 #
 # A JSON operand is refused as the WHOLE document only. A key lookup (`"payload__driver"`) resolves to
 # the same field, but renders `#>>` / `json_extract`, the value at that key. That value has one text
@@ -672,7 +692,7 @@ end
 # know which a key holds, so a lookup is let through, as an operand of unknown type is.
 function _textless_temporal(p, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing}
   label = _concat_operand_label(p)
-  kind = _operand_kind(p, instruc)
+  kind = _expression_kind(p, instruc)
   kind isa CDateTime && return (:timestamp, label === nothing ? "a timestamp expression" : "the DateTimeField `$(label)`")
   kind isa CInterval && return (:interval, label === nothing ? "an interval expression" : "the DurationField `$(label)`")
   _json_document_operand(p, instruc) && return (:json, "the JSONField `$(label)`")
@@ -993,8 +1013,10 @@ _text_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "a text 
 _declared_cast_label(v::FObject) = v.function_name == "CAST" ? "Cast(…, \"$(v.kwargs["type"])\")" :
   "$(uppercasefirst(lowercase(v.function_name)))(…; output_field = \"$(v.kwargs["output_field"])\")"
 #
-# `rendered` holds each operand's kind as its render computed it (`_render_operand_kind`): a timestamp
-# or an interval no type reader names (arithmetic, `Sum(duration)`), which matters to a text target.
+# `rendered` holds each operand's kind as its render computed it (`_render_operand_kind`), read where
+# the classifier names none. Since #1034 step 5c the classifier reads temporal arithmetic and
+# `Sum(duration)` from the walk, so the rendered fallbacks are expected never to fire (a follow-up
+# removes them once the full suite shows they do not).
 # A declared `Case` (#1217) is cast as each row takes a branch, so its operands are its branch values.
 function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::AbstractVector = Any[])
   declared = get(v.kwargs, v.function_name == "CAST" ? "type" : "output_field", nothing)
@@ -1058,10 +1080,10 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::
   return nothing
 end
 # #1259 — an operand that is an interval, as `(kind, what)`, or `nothing`: one the classifier names
-# (a `DurationField` column, its `Sum`, a duration literal), one only its render types (temporal
-# arithmetic, a `Sum` of it, `rendered`), or one whose meaning is an interval though the classifier
-# tags it by its rule (`Avg` of a duration is `:numeric` there, an interval to `_MeaningKinds`). A
-# timestamp is not this rule's.
+# (a `DurationField` column, its `Sum` and `Avg`, a duration literal, and since #1034 step 5c temporal
+# arithmetic and a `Sum` of it), or one whose meaning is an interval though the classifier tags it
+# otherwise (`_MeaningKinds`). The `rendered` fallback predates step 5c and is expected never to fire.
+# A timestamp is not this rule's.
 function _interval_operand(operand, rendered, instruc::SQLInstruction)
   side = _division_or_rendered(_concat_textless_operand(operand, instruc), rendered, operand)
   side !== nothing && side[1] === :interval && return side
@@ -1093,7 +1115,8 @@ function _temporal_number_operand(operand, rendered, instruc::SQLInstruction)
   field = tag === :date ? "DateField" : tag === :time ? "TimeField" : "DateTimeField"
   return (tag, "the $(field) `$(label)`")
 end
-# A rendered kind no type reader gave (`_render_operand_kind`), as a `_concat_textless_operand` answer.
+# A rendered kind (`_render_operand_kind`), as a `_concat_textless_operand` answer: the fallback for an
+# operand no type reader named, which since #1034 step 5c the walk names.
 _rendered_kind_textless(kind) =
   kind isa CDateTime ? (:timestamp, "a timestamp expression") :
   kind isa CInterval ? (:interval, "an interval expression") : nothing
@@ -1232,8 +1255,7 @@ function _whole_numeric_operand(p::Union{FObject,WindowFunction}, instruc::SQLIn
     # `sum(bigint)` there, a `numeric`: unknown, so it fails closed (#1034 phase 3 step 2a, the
     # division row of phase 4) — refused where the engine fact says such a sum departs
     # (`_untyped_sum_departs`), whether or not a `bigint` can be seen inside it. A sum of TEMPORAL
-    # arithmetic is untyped to the walk too; the render types it, and the refusal sites read that
-    # kind first (`_division_or_rendered`), so an interval is no integer quotient.
+    # arithmetic is no such sum: the walk types it since #1034 step 5a, an interval, no integer quotient.
     side = name == "SUM" && _infer_kind(operand, instruc, _AllKinds()) === nothing ?
            (:numeric_whole_division, "a value PormG cannot type") : nothing
     side === nothing && (side = _whole_numeric_operand(operand, instruc))
@@ -1243,8 +1265,10 @@ function _whole_numeric_operand(p::Union{FObject,WindowFunction}, instruc::SQLIn
 end
 # #1034 phase 3 step 2a — an operand's division answer, unless its render typed it a timestamp or an
 # interval (`rendered`, `_render_operand_kind`): then it is temporal arithmetic — `Sum(F("fastestlaptime")
-# * 2) / 2`, `Sum(F("grid") * F("fastestlaptime")) / 2` — which the walk does not type either, so the
-# untyped-`Sum` leaf names it, but no integer quotient. It answers as the rendered kind (its text is a
+# * 2) / 2`, `Sum(F("grid") * F("fastestlaptime")) / 2` — which the walk did not type before step 5a,
+# so the untyped-`Sum` leaf named it, but no integer quotient. Since step 5a the walk types it and the
+# leaf no longer names it, so this is expected never to change its input (a follow-up removes it once
+# the full suite shows it does not). It answers as the rendered kind (its text is a
 # representation; `Concat` refuses it as intent). A day count (`F("date") - F("date")`) renders as a
 # number, so a sum over it stays a division. Only when the operand IS the quotient: its rendered kind
 # is then the quotient's own. A quotient further in (`Sum(…) / 2 * Max("fastestlaptime")`) is an

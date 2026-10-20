@@ -363,9 +363,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date + Day(1) | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F datetime - datetime | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime - datetime | alone", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime - datetime | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F datetime - datetime | cte", :sqlite) =>
@@ -399,9 +399,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F comparison | subquery", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("F date + Hour(1) | alone", :postgres) =>
-    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = nothing, kind = "CDateTime(false)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | alone", :sqlite) =>
-    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = nothing, kind = "CDateTime(false)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
   ("F date + Hour(1) | cte", :sqlite) =>
@@ -411,9 +411,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date + Hour(1) | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F datetime - Hour(1) | alone", :postgres) =>
-    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = nothing, kind = "CDateTime(true)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F datetime - Hour(1) | alone", :sqlite) =>
-    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = nothing, kind = "CDateTime(true)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F datetime - Hour(1) | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
   ("F datetime - Hour(1) | cte", :sqlite) =>
@@ -459,9 +459,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date - int col | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F interval + interval | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval + interval | alone", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval + interval | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F interval + interval | cte", :sqlite) =>
@@ -471,9 +471,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F interval + interval | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval * 2 | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval * 2 | alone", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval * 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
   ("F interval * 2 | cte", :sqlite) =>
@@ -483,9 +483,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F interval * 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval / int col | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval / int col | alone", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval / int col | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
   ("F interval / int col | cte", :sqlite) =>
@@ -495,9 +495,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F interval / int col | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * interval | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * interval | alone", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * interval | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
   ("F int col * interval | cte", :sqlite) =>
@@ -507,9 +507,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F int col * interval | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F hop date + interval | alone", :postgres) =>
-    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = nothing, kind = "CDateTime(false)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop date + interval | alone", :sqlite) =>
-    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = nothing, kind = "CDateTime(false)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop date + interval | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F hop date + interval | cte", :sqlite) =>
@@ -519,9 +519,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F hop date + interval | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop datetime + interval | alone", :postgres) =>
-    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = nothing, kind = "CDateTime(true)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F hop datetime + interval | alone", :sqlite) =>
-    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = nothing, kind = "CDateTime(true)", whole_numeric = nothing),
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F hop datetime + interval | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F hop datetime + interval | cte", :sqlite) =>
@@ -543,9 +543,9 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F @year + 1 | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Max F datetime - datetime | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Max F datetime - datetime | alone", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = nothing, kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Max F datetime - datetime | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("Max F datetime - datetime | cte", :sqlite) =>
@@ -867,17 +867,17 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Avg decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Avg interval | alone", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "numeric", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Avg interval | alone", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "numeric", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Avg interval | cte", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Avg interval | cte", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Avg interval | subquery", :postgres) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "numeric", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Avg interval | subquery", :sqlite) =>
-    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "numeric", kind = "CInterval()", whole_numeric = nothing),
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Count | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Count | alone", :sqlite) =>
@@ -3063,14 +3063,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | subquery", :sqlite) =>
     [(:unparsed, "read=int has no SQLite read parser")],
-  ("Avg interval | alone", :postgres) =>
-    [(:conflict, "formatter=interval vs textless=numeric"), (:conflict, "read=interval vs textless=numeric"), (:conflict, "render=interval vs textless=numeric")],
-  ("Avg interval | alone", :sqlite) =>
-    [(:conflict, "formatter=interval vs textless=numeric"), (:conflict, "read=interval vs textless=numeric"), (:conflict, "render=interval vs textless=numeric")],
-  ("Avg interval | subquery", :postgres) =>
-    [(:conflict, "formatter=interval vs textless=numeric"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs textless=numeric")],
-  ("Avg interval | subquery", :sqlite) =>
-    [(:conflict, "formatter=interval vs textless=numeric"), (:conflict, "operand=interval vs textless=numeric"), (:conflict, "read=interval vs textless=numeric")],
   ("Sum F bigint + epoch / 2 | alone", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
   ("Sum F bigint + epoch / 2 | cte", :postgres) =>
@@ -3087,46 +3079,6 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
 
 # The shapes whose channels answer differently across contexts, by `_ekm_cross_context`' rule.
 const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
-  ("F datetime - datetime", :postgres) =>
-    ["drops textless: alone=none, subquery=interval"],
-  ("F datetime - datetime", :sqlite) =>
-    ["drops textless: alone=none, subquery=interval"],
-  ("F date + Hour(1)", :postgres) =>
-    ["drops textless: alone=none, subquery=datetime"],
-  ("F date + Hour(1)", :sqlite) =>
-    ["drops textless: alone=none, subquery=datetime"],
-  ("F datetime - Hour(1)", :postgres) =>
-    ["drops textless: alone=none, subquery=datetime"],
-  ("F datetime - Hour(1)", :sqlite) =>
-    ["drops textless: alone=none, subquery=datetime"],
-  ("F interval + interval", :postgres) =>
-    ["drops textless: alone=none, subquery=interval"],
-  ("F interval + interval", :sqlite) =>
-    ["drops textless: alone=none, subquery=interval"],
-  ("F interval * 2", :postgres) =>
-    ["drops textless: alone=none, subquery=interval"],
-  ("F interval * 2", :sqlite) =>
-    ["drops textless: alone=none, subquery=interval"],
-  ("F interval / int col", :postgres) =>
-    ["drops textless: alone=none, subquery=interval"],
-  ("F interval / int col", :sqlite) =>
-    ["drops textless: alone=none, subquery=interval"],
-  ("F int col * interval", :postgres) =>
-    ["drops textless: alone=none, subquery=interval"],
-  ("F int col * interval", :sqlite) =>
-    ["drops textless: alone=none, subquery=interval"],
-  ("F hop date + interval", :postgres) =>
-    ["drops textless: alone=none, subquery=datetime"],
-  ("F hop date + interval", :sqlite) =>
-    ["drops textless: alone=none, subquery=datetime"],
-  ("F hop datetime + interval", :postgres) =>
-    ["drops textless: alone=none, subquery=datetime"],
-  ("F hop datetime + interval", :sqlite) =>
-    ["drops textless: alone=none, subquery=datetime"],
-  ("Max F datetime - datetime", :postgres) =>
-    ["drops textless: alone=none, subquery=interval"],
-  ("Max F datetime - datetime", :sqlite) =>
-    ["drops textless: alone=none, subquery=interval"],
   ("Value int", :postgres) =>
     ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Value int", :sqlite) =>
@@ -3143,8 +3095,4 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
     ["drops formatter: alone=none, cte=bool, subquery=none"],
   ("Value bool", :sqlite) =>
     ["drops formatter: alone=none, cte=bool, subquery=none"],
-  ("Avg interval", :postgres) =>
-    ["conflict textless: alone=numeric, cte=interval, subquery=numeric"],
-  ("Avg interval", :sqlite) =>
-    ["conflict textless: alone=numeric, cte=interval, subquery=numeric"],
 )

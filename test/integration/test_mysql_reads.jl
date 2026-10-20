@@ -12,7 +12,7 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 using Test, Dates, TimeZones, Decimals, DataFrames
-import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, F, Coalesce, Cast
+import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, F, Coalesce, Cast, Concat
 
 # The model tables this file creates, in drop order (children first).
 const _MYR_TABLES = ("result", "new_join_position", "race", "circuit", "driver")
@@ -359,6 +359,19 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             # A type with no faithful MySQL target is refused before any SQL, never passed through.
             e = try; M.Result.objects.values("b" => Cast("grid", "boolean")).list(); nothing; catch err; err; end
             @test e isa PormG.UnsupportedConnectionError && occursin("is not rendered for MySQL yet", msg(e))
+        end
+
+        # What: `Concat` joins its operands' text and skips a NULL one, as it means on every engine.
+        # SQL: `CONCAT_WS('', `Tb`.`positiontext`, `Tb`.`grid`)` — never `||`, a logical OR on MySQL.
+        # Why: `'a' || 'b'` is `0` on MySQL; a NULL operand is skipped, not a NULL result (#1006).
+        @testset "Concat joins text and skips a NULL operand" begin
+            rows = M.Result.objects.filter("resultid__@in" => [1, 3]).values(
+                "resultid", "positiontext", "grid", "position", "c" => Concat("positiontext", "grid"),
+                "n" => Concat("raceid__name", "position")).order_by("resultid").list()
+            @test [r[:c] for r in rows] == [string(r[:positiontext], r[:grid]) for r in rows] == ["21", "R3"]
+            # Result 3 has no position: the NULL operand is skipped, so the name stands alone.
+            @test [r[:n] for r in rows] == ["Brazilian Grand Prix2", "Brazilian Grand Prix"]
+            @test rows[2][:position] === missing
         end
 
         # What: a DurationField filter is refused before any SQL; an ordering or a sum over one reaches the

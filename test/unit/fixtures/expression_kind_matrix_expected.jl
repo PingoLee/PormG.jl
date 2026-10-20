@@ -1699,19 +1699,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Concat text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat text | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CONCAT(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat text | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CONCAT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
   ("Concat text | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CONCAT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
   ("Concat text | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CONCAT(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CONCAT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
   ("Concat text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat text | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CONCAT(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Upper text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Upper text | alone", :sqlite) =>

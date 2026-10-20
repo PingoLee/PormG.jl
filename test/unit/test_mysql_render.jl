@@ -544,3 +544,24 @@ end
   @test PormG.QueryBuilder._cast_renders_text(PormG.Models.UUIDField(), my)
   @test !PormG.QueryBuilder._cast_renders_text(PormG.Models.IntegerField(), my)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL Concat: CONCAT_WS('', …), never `||` (#1130 phase 2b, #1271)
+# `||` is a logical OR on MySQL (`'a' || 'b'` is `0`), so a `Concat` never writes it. Expected:
+# `CONCAT_WS('', a, b)`, which skips a NULL operand as PostgreSQL's `CONCAT` does (the public meaning,
+# #1006), for one operand as for several; `CONCAT(a, b)` under `propagate_null` (the `@yyyy_q` label),
+# where a NULL operand means a NULL result; a float operand still refused on MySQL as on every engine
+# (explicit intent: a float's text is each engine's own). Why: a `||` reaching MySQL is a silent 0 or 1, not an error.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL Concat: CONCAT_WS('', …), never ||" begin
+  my = MrMockMySQL()
+  @test PormG.Dialect.CONCAT(Any["`a`", "`b`"], Dict{String,Any}(), my) == "CONCAT_WS('',\n`a`,\n`b`)"
+  @test PormG.Dialect.CONCAT(Any["`a`"], Dict{String,Any}(), my) == "CONCAT_WS('',\n`a`)"
+  @test PormG.Dialect.CONCAT(Any["`a`", "`b`"], Dict{String,Any}("propagate_null" => true), my) == "CONCAT(`a`,\n`b`)"
+  # Through the public `Concat`, over two text paths.
+  sql = _mr_inspect(_MR_MY.Result.objects.values("c" => PormG.QueryBuilder.Concat("driverid__forename", "driverid__surname")))[:sql_text]
+  @test occursin("CONCAT_WS('',", sql) && !occursin("||", sql)
+  # A float operand is explicit intent on every engine (its text is each engine's own): MySQL refuses it too.
+  err = try; _mr_inspect(_MR_MY.Result.objects.values("c" => PormG.QueryBuilder.Concat("driverid__surname", "points"))); nothing; catch e; e; end
+  @test err isa PormG.QueryBuildError && occursin("Cast(", sprint(showerror, err))
+end

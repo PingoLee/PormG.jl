@@ -1071,6 +1071,15 @@ function CONCAT(column::Array{Any,1}, format::Dict{String,Any}, conn::PormGSQLit
   length(parts) == 1 && push!(parts, "''")
   return "($(join(parts, " ||\n")))"
 end
+# MySQL (#1130 phase 2b, #1271): `||` is a logical OR there (`'a' || 'b'` is `0`), so it is never
+# written. `CONCAT_WS('', …)` skips a NULL operand as PostgreSQL's `CONCAT` does, and its result is text
+# for a single operand too (measured: `CONCAT_WS('', 'a', NULL, 'b')` is `'ab'`, `CONCAT_WS('', NULL)`
+# is `''`, `CONCAT_WS('', 7)` is `'7'`). Under `propagate_null` MySQL's own `CONCAT` gives the NULL a
+# NULL operand means (`CONCAT('a', NULL)` is NULL), as `||` does on the other engines.
+function CONCAT(column::Array{Any,1}, format::Dict{String,Any}, conn::PormGMySQL)
+  get(format, "propagate_null", false) === true && return "CONCAT($(join(column, ",\n")))"
+  return "CONCAT_WS('',\n$(join(column, ",\n")))"
+end
 # #691 — the `EXTRACT` field list, PostgreSQL's (the superset: SQLite's eight are all in it).
 # `EXTRACT(<field> FROM x)` takes a keyword, not a value, so it cannot be a bind parameter — the
 # only safe way to let a caller choose it is to render a spelling from THIS table, never theirs.

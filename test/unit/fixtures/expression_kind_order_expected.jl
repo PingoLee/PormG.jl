@@ -1523,10 +1523,14 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Rank | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
+  ("Concat text | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("Concat text | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("Concat text | alone", :sqlite, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+  ("Concat text | subquery", :mysql, "w") =>
+    (stage = :ok, sql = "(`w` IS NULL) ASC, `w` ASC", params = [("1", "Int64")]),
   ("Concat text | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Concat text | subquery", :sqlite, "w") =>

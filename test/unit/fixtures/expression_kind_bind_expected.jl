@@ -2241,6 +2241,10 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    RANK() OVER (ORDER BY \"R2\".\"resultid\" ASC) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Rank | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    RANK() OVER (ORDER BY \"R2\".\"resultid\" ASC) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Concat text | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n`Tb`.`positiontext`,\n`Tb`.`positiontext`) > ?", params = [("\"10\"", "String")]),
+  ("Concat text | alone", :mysql, "v__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "CONCAT_WS('',\n`Tb`.`positiontext`,\n`Tb`.`positiontext`) > ?", params = [("\"pole\"", "String")]),
   ("Concat text | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CONCAT(\"Tb\".\"positiontext\",\n\"Tb\".\"positiontext\") > \$1", params = [("\"10\"", "String")]),
   ("Concat text | alone", :postgres, "v__@gt", "text pole") =>
@@ -2249,6 +2253,10 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(COALESCE(\"Tb\".\"positiontext\", '') ||\nCOALESCE(\"Tb\".\"positiontext\", '')) > ?", params = [("\"10\"", "String")]),
   ("Concat text | alone", :sqlite, "v__@gt", "text pole") =>
     (stage = :ok, clause = :where, sql = "(COALESCE(\"Tb\".\"positiontext\", '') ||\nCOALESCE(\"Tb\".\"positiontext\", '')) > ?", params = [("\"pole\"", "String")]),
+  ("Concat text | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n`R2`.`positiontext`,\n`R2`.`positiontext`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
+  ("Concat text | subquery", :mysql, "w__@gt", "text pole") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT_WS('',\n`R2`.`positiontext`,\n`R2`.`positiontext`) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"pole\"", "String")]),
   ("Concat text | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CONCAT(\"R2\".\"positiontext\",\n\"R2\".\"positiontext\") as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
   ("Concat text | subquery", :postgres, "w__@gt", "text pole") =>

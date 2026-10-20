@@ -13,8 +13,8 @@
 #   (#1034 step 3, below), and the binder's formatter is a view of `_AllKinds` (step 4) — and its
 #   remaining readers are the comparison binder's number and interval sides (`_operand_kind`), and the
 #   render's side typing (`_side_kind` over a transformed path, `_side_function_kind`, the function arm
-#   of `_render_interval_operand`), deliberately narrow (#882), and `Concat`'s temporal check
-#   (`_textless_temporal`), which step 5c moves. A column has a kind only when the representation table
+#   of `_render_interval_operand`), deliberately narrow (#882). `Concat`'s temporal check
+#   (`_textless_temporal`) reads `_AllKinds` since step 5c. A column has a kind only when the representation table
 #   owns one (`field_canonical_kind`: temporal, decimal, array — no integer, float, text or boolean,
 #   because the table also feeds the comparison binder, #882); a literal only a temporal one
 #   (`literal_canonical_kind`, #721); a computed number none (`Sum`/`Avg` went through a double,

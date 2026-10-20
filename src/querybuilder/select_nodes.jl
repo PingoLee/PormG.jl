@@ -559,7 +559,8 @@ end
 const _PAD_TEXT_FORMATTERS = (Models.format_text_sql, Models.format_yyyy_mm)
 
 # The value's description when it is typed and not text, else `nothing`. `kind` is the rendered kind
-# `_render_operand_kind` computed: a timestamp or interval arithmetic that no type reader names.
+# `_render_operand_kind` computed: timestamp or interval arithmetic, which `_operand_kind` does not
+# name (the `Concat` classifier reads it from the walk since #1034 step 5c; the pad reads the render's).
 function _pad_textless(operand, kind, instruc::SQLInstruction)::Union{String,Nothing}
   if operand isa SQLText
     x = operand.field
@@ -704,7 +705,8 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   elseif v.function_name in ("CONCAT", "LPAD", "RPAD") || v.function_name in _DECLARED_CAST_FUNCTIONS
     # #1028: each operand rendered once, keeping the kind its render computed — arithmetic over a
     # timestamp or a duration (`F("start_at") + Day(1)`, a difference) and `Sum(duration)` are a
-    # timestamp or an interval that no type reader names, and their text differs per engine. #122:
+    # timestamp or an interval, and their text differs per engine. Since #1034 step 5c the classifier
+    # also reads them from the walk, so the rendered kind is a fallback there. #122:
     # `LPad`/`RPad` read it too — PostgreSQL has no `lpad` over either.
     operands = _null_skipping_operands(v, instruc)
     forms = [_render_operand_kind(x, instruc; _as = _as) for x in (operands isa AbstractVector ? operands : (operands,))]

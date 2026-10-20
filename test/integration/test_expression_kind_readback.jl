@@ -68,12 +68,11 @@ end
 # decimal or an interval, `Avg` of integers, a decimal quotient, a comparison) left the set when #1034
 # phase 3 typed that field from what the column means, and an `Avg` of an interval left it in step 2c,
 # when `Concat` and the casts read the column by the kind it means rather than the body's `:numeric` tag.
-# A `Sum` of an interval left it in step 4, when its formatter became the duration its kind names.
+# A `Sum` of an interval left it in step 4, when its formatter became the duration its kind names. An
+# `Avg` of an interval projected alone or through a `Subquery` left it in step 5c, when the `Concat`
+# classifier read its kind from the walk (an interval) rather than the `AVG` rule's `:numeric`; it read
+# back the same interval on both engines (`1 minute, 27 seconds, 452 milliseconds`), as before.
 const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
-  ("Avg interval | alone", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
-  ("Avg interval | alone", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
-  ("Avg interval | subquery", :postgres) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452 milliseconds", read = "CInterval()"),
-  ("Avg interval | subquery", :sqlite) => (type = "CompoundPeriod", value = "1 minute, 27 seconds, 452000000 nanoseconds", read = "CInterval()"),
   ("F date - date | alone", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
   ("F date - date | alone", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
   ("F date - date | subquery", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),

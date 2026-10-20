@@ -2,7 +2,7 @@ using Test
 using Dates
 using PormG
 using PormG.Models: Model, IDField, IntegerField, BigIntegerField, DateField, DateTimeField, DurationField
-using PormG.QueryBuilder: inspect_query, F, Max, Sum
+using PormG.QueryBuilder: inspect_query, F, Max, Sum, Avg
 using PormG.Functions: Abs, Greatest, Case, When
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -194,6 +194,44 @@ end
         rendered, walked = _tak_kinds(Model_, e)
         @test rendered == expected
         @test walked == expected
+      end
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The #1027/#1028 classifier reads a temporal operand's kind from the walk (#1034 step 5c).
+# Expected, on both engines: `F` arithmetic that is a timestamp or an interval is classified as one
+# and named "a timestamp expression" / "an interval expression"; `Avg` and `Sum` of a duration are an
+# interval, named by their structure (`` `AVG(…)` ``, `` `SUM(…)` over the DurationField `laptime` ``),
+# and so is a function over interval arithmetic; a date and a day count have one text and pass. Before
+# step 5c the classifier asked `_operand_kind`, which types no `F` arithmetic, so every arithmetic row
+# was `nothing` projected alone (only the render's kind caught it, at the sites it reaches) while the
+# same expression in a `Subquery` was an interval, and `Avg(duration)` was a `numeric`.
+# Why it matters: `Concat`, `Cast` and `Round` must see the type the walk gives every other reader.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1034 step 5c: the Concat classifier reads F temporal arithmetic and interval aggregates from the walk" begin
+  QB = PormG.QueryBuilder
+  shapes = (
+    (F("start_at") - F("start_at"),      (:interval, "an interval expression")),
+    (F("laptime") * 2,                   (:interval, "an interval expression")),
+    (F("date") + Hour(1),                (:timestamp, "a timestamp expression")),
+    (F("start_at") + F("laptime"),       (:timestamp, "a timestamp expression")),
+    (Avg("laptime"),                     (:interval, "`AVG(…)`")),
+    (Sum("laptime"),                     (:interval, "`SUM(…)` over the DurationField `laptime`")),
+    (Max(F("start_at") - F("start_at")), (:interval, "`MAX(…)` over an interval expression")),
+    (Case(When("year" => 2009, then = F("laptime") * 2)), (:interval, "`CASE(…)` over an interval expression")),
+    (F("date") + Day(1),                 nothing),
+    (F("date") - F("date"),              nothing),
+  )
+  for (backend, Model_) in _TAK_MODELS
+    @testset "$backend" begin
+      for (expr, expected) in shapes
+        q = Model_.objects
+        q.values("v" => expr)
+        instr = QB.build(q.object)
+        source = QB._projected_source(QB.memo_key(:base, "v"), instr).field
+        @test QB._concat_textless_operand(source, instr) == expected
       end
     end
   end

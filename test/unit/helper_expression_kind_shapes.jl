@@ -108,6 +108,10 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Case untyped zoned col",  :Race,                m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("start_at"))])),
   ("Case untyped time col",   :Race,                m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("time"))])),
   ("Case untyped decimal col", :Constructor_results, m -> _EKM_FN.Case([_EKM_FN.When("constructorresultsid" => 3835, then = _EKM_Q.F("points"))])),
+  # #1311: intervals SQLite holds only as their text, with no millisecond form, ordered or filtered by alias
+  ("Lag interval",            :Result,              m -> _EKM_FN.Lag("fastestlaptime", over = _ekm_over(:Result))),
+  ("NullIf interval",         :Result,              m -> _EKM_FN.NullIf("fastestlaptime", _EKM_Q.F("fastestlaptime"))),
+  ("Max Case interval col",   :Result,              m -> _EKM_FN.Max(_EKM_FN.Case([_EKM_FN.When("grid" => 1, then = _EKM_Q.F("fastestlaptime"))]))),
   # #1307: such a `Case` as the date side of F temporal arithmetic, as `F("date")` is above
   ("Case untyped date col + 1", :Race,              m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("date"))]) + 1),
   ("Case untyped date col - date", :Race,           m -> _EKM_FN.Case([_EKM_FN.When("year" => 2009, then = _EKM_Q.F("date"))]) - _EKM_Q.F("date")),

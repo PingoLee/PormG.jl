@@ -608,6 +608,16 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
       v_field_copy.field = with_scope(() -> _get_select_query(order_node, instruc), instruc;
                                       group_key = groups_term)
       order_params = bound_since(mark)
+      # #1311 (review): a term rendered here orders by the expression itself (a labelled
+      # `SQLOrder(SQLField(x, "v"))`), so an interval with no millisecond form would sort its text on
+      # SQLite, as its alias did. Refused the same way, naming the term's label and the CTE spelling;
+      # render first, then type.
+      if _interval_as_ms(instruc.connection) && !_interval_ms_candidate(order_node) &&
+         _expression_kind(order_node, instruc) isa CInterval
+        label = v_field_copy._as
+        throw(label isa AbstractString ? _unordered_interval_alias_error("`order_by`", label) :
+                                         _unordered_interval_error("order_by"))
+      end
     end
     # #540: no render-time re-validation. `SQLOrder` is an immutable struct whose inner constructor
     # runs the #77 whitelist, so `v.orientation` is ASC or DESC by construction and nothing can have

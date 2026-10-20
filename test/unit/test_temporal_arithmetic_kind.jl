@@ -206,6 +206,80 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Ordering such an interval through its ALIAS is refused on SQLite too (#1311).
+# Expected on SQLite: an ordering filter (`d__@gt`, `@lte`, `@range`, in `filter`, `Q` or a `When`
+# condition) or an `order_by` on the alias of a `Case` whose value is a duration, a `NullIf` or `Max`
+# over one, or a `Lag` over a duration (`order_by` only: a window alias is refused in any filter, #685)
+# raises `QueryBuildError` naming the alias and the CTE spelling; so does a labelled order term of the
+# expression itself, `order_by(SQLOrder(SQLField(<Case>, "d")))`, which never names the alias. `==` and `@in` still compare the text:
+#   WHERE CASE WHEN "Tb"."year" = ? THEN "Tb"."laptime" ELSE "Tb"."laptime" END = ?   ["01:00:00"]
+# Expected on PostgreSQL: each builds, comparing the `interval` (`ORDER BY "d" DESC`).
+# Before, SQLite compared and sorted the `HH:MM:SS` text — `'99:00:00' > '100:00:00'` — wrong at 100
+# hours and for negative values, while the same comparison written inside an expression was refused
+# (#1301), so the rows kept depended on the spelling.
+# Why it matters: a filter or a sort must keep the same rows on both engines; text order silently does not.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1311: ordering an interval alias with no millisecond form is refused on SQLite" begin
+  pg_model, sl_model = _TAK_MODELS[1][2], _TAK_MODELS[2][2]
+  QB = PormG.QueryBuilder
+  FN = PormG.Functions
+  dc() = Case([When("year" => 2009, then = F("laptime"))], default = F("laptime"))
+  lag() = QB.Lag("laptime"; over = QB.WindowOver(order_by = ["raceid"]))
+  nullif() = FN.NullIf("laptime", F("laptime"))
+  projected(mk) = q -> q.values("raceid", "d" => mk())
+  then(f, g) = q -> (f(q); g(q))
+  build(model, f) = (q = model.objects; f(q); inspect_query(q))
+  refusal(model, f) = try build(model, f); nothing catch e; e end
+  ordered = (
+    then(projected(dc), q -> q.filter("d__@gt" => Hour(1))),
+    then(projected(dc), q -> q.filter("d__@lte" => "100:00:00")),
+    then(projected(dc), q -> q.filter("d__@range" => (Hour(1), Hour(2)))),
+    then(projected(dc), q -> q.filter(PormG.QueryBuilder.Q("d__@gt" => Hour(1)))),
+    q -> q.values("raceid", "d" => dc(),
+                  "f" => Case([When(PormG.QueryBuilder.Q("d__@gt" => Hour(1)), then = 1)], default = 0)),
+    then(projected(nullif), q -> q.filter("d__@gt" => Hour(1))),
+    q -> (q.values("raceid", "d" => Max(dc())); q.filter("d__@gt" => Hour(1))),
+    then(projected(dc), q -> q.order_by("-d")),
+    then(projected(nullif), q -> q.order_by("d")),
+    then(projected(lag), q -> q.order_by("d")),
+  )
+  for f in ordered
+    err = refusal(sl_model, f)
+    @test err isa PormG.QueryBuildError
+    msg = err === nothing ? "" : replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
+    @test occursin("on the `d` alias is not supported on SQLite", msg)
+    @test occursin("project it in a CTE", msg)
+    # PostgreSQL compares and sorts the interval itself.
+    @test build(pg_model, f) isa AbstractDict
+  end
+  # PostgreSQL compares the interval itself: `CASE … END > $3` with the duration's text.
+  r = build(pg_model, then(projected(dc), q -> q.filter("d__@gt" => Hour(1))))
+  @test occursin("ELSE \"Tb\".\"laptime\" END > \$3", replace(r[:sql_text], r"\s+" => " "))
+  @test r[:parameters][end] == "01:00:00"
+  # A labelled order term renders the expression itself rather than the alias (review of #1311): the
+  # same refusal on SQLite, under the projection's own label or another one.
+  for label in ("d", "x")
+    labelled = then(projected(dc), q -> q.order_by(QB.SQLOrder(QB.SQLField(dc(), label))))
+    err = refusal(sl_model, labelled)
+    @test err isa PormG.QueryBuildError
+    msg = err === nothing ? "" : replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
+    @test occursin("`order_by` on the `$(label)` alias is not supported on SQLite", msg)
+    @test occursin("project it in a CTE", msg)
+    @test build(pg_model, labelled) isa AbstractDict
+  end
+  # Equality and membership compare the stored text on SQLite, as for a `DurationField` column.
+  r = build(sl_model, then(projected(dc), q -> q.filter("d" => Hour(1))))
+  @test occursin("ELSE \"Tb\".\"laptime\" END = ?", replace(r[:sql_text], r"\s+" => " "))
+  @test r[:parameters][end] == "01:00:00"
+  @test build(sl_model, then(projected(dc), q -> q.filter("d__@in" => [Hour(1), Hour(2)]))) isa AbstractDict
+  # An interval alias WITH a millisecond form keeps its millisecond order and comparison (#894).
+  r = build(sl_model, q -> (q.values("raceid", "d" => Max("laptime")); q.order_by("d")))
+  @test occursin("ORDER BY MAX(((CASE WHEN substr(\"Tb\".\"laptime\", 1, 1) = '-' THEN -1 ELSE 1 END)",
+                 replace(r[:sql_text], r"\s+" => " "))
+  @test build(sl_model, then(projected(() -> F("laptime")), q -> q.filter("d__@gt" => Hour(1))))[:parameters] == Any[3_600_000]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # A Case over dates is the date side of F temporal arithmetic (#1307).
 # Expected, on both engines: an untyped `Case` whose branches are one date (or timestamp) column
 # combines as that column does — shifted by a whole number or an integer column it is the date, minus

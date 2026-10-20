@@ -1046,9 +1046,9 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Case untyped interval col | alone", :postgres, "v__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"grid\" = \$2 THEN \"Tb\".\"fastestlaptime\"\nELSE NULL\nEND\n > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
   ("Case untyped interval col | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+    (stage = :build, error = "QueryBuildError", message = "An ordering filter (`>`) on the `v` alias is not supported on SQLite: it is an interval with no millisecond form (a `Cas"),
   ("Case untyped interval col | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"grid\" = ? THEN \"Tb\".\"fastestlaptime\"\nELSE NULL\nEND\n > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+    (stage = :build, error = "QueryBuildError", message = "An ordering filter (`>`) on the `v` alias is not supported on SQLite: it is an interval with no millisecond form (a `Cas"),
   ("Case untyped interval col | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
   ("Case untyped interval col | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>
@@ -1190,9 +1190,9 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("NullIf interval | alone", :postgres, "v__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :where, sql = "NULLIF(\"Tb\".\"fastestlaptime\", \"Tb\".\"fastestlaptime\") > \$1", params = [("\"00:01:00\"", "String")]),
   ("NullIf interval | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+    (stage = :build, error = "QueryBuildError", message = "An ordering filter (`>`) on the `v` alias is not supported on SQLite: it is an interval with no millisecond form (a `Cas"),
   ("NullIf interval | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :where, sql = "NULLIF(\"Tb\".\"fastestlaptime\", \"Tb\".\"fastestlaptime\") > ?", params = [("\"00:01:00\"", "String")]),
+    (stage = :build, error = "QueryBuildError", message = "An ordering filter (`>`) on the `v` alias is not supported on SQLite: it is an interval with no millisecond form (a `Cas"),
   ("NullIf interval | subquery", :postgres, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("NullIf interval | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
@@ -1206,9 +1206,9 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Max Case interval col | alone", :postgres, "v__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :having, sql = "MAX(CASE\nWHEN \"Tb\".\"grid\" = \$2 THEN \"Tb\".\"fastestlaptime\"\nELSE NULL\nEND\n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
   ("Max Case interval col | alone", :sqlite, "v__@gt", "10") =>
-    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+    (stage = :build, error = "QueryBuildError", message = "An ordering filter (`>`) on the `v` alias is not supported on SQLite: it is an interval with no millisecond form (a `Cas"),
   ("Max Case interval col | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :having, sql = "MAX(CASE\nWHEN \"Tb\".\"grid\" = ? THEN \"Tb\".\"fastestlaptime\"\nELSE NULL\nEND\n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+    (stage = :build, error = "QueryBuildError", message = "An ordering filter (`>`) on the `v` alias is not supported on SQLite: it is an interval with no millisecond form (a `Cas"),
   ("Max Case interval col | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter, field `g__v` (INTERVAL): The duration must be a Period, CompoundPeriod, or a string in HH:MM:SS(.sss), "),
   ("Max Case interval col | cte", :postgres, "g__v__@gt", "interval Minute(1)") =>

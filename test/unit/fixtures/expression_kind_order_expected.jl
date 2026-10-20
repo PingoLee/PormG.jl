@@ -702,7 +702,7 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("Case untyped interval col | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Case untyped interval col | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+    (stage = :build, error = "QueryBuildError", message = "`order_by` on the `v` alias is not supported on SQLite: it is an interval with no millisecond form (a `Case` whose value"),
   ("Case untyped interval col | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Case untyped interval col | cte", :postgres, "w") =>
@@ -782,7 +782,7 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("Lag interval | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Lag interval | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+    (stage = :build, error = "QueryBuildError", message = "`order_by` on the `v` alias is not supported on SQLite: it is an interval with no millisecond form (a `Case` whose value"),
   ("Lag interval | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Lag interval | cte", :postgres, "w") =>
@@ -798,7 +798,7 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("NullIf interval | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
   ("NullIf interval | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = Tuple{Any, String}[]),
+    (stage = :build, error = "QueryBuildError", message = "`order_by` on the `v` alias is not supported on SQLite: it is an interval with no millisecond form (a `Case` whose value"),
   ("NullIf interval | subquery", :postgres, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("NullIf interval | subquery", :sqlite, "w") =>
@@ -806,7 +806,7 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
   ("Max Case interval col | alone", :postgres, "v") =>
     (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Max Case interval col | alone", :sqlite, "v") =>
-    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
+    (stage = :build, error = "QueryBuildError", message = "`order_by` on the `v` alias is not supported on SQLite: it is an interval with no millisecond form (a `Case` whose value"),
   ("Max Case interval col | cte", :postgres, "g__v") =>
     (stage = :ok, sql = "\"R1_1\".\"v\" ASC NULLS LAST", params = [("1", "Int64")]),
   ("Max Case interval col | cte", :postgres, "w") =>

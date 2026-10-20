@@ -1622,6 +1622,9 @@ end
 # binds as the alias's own formatter binds it — the predicate `_render_alias_predicate` renders below.
 function _render_interval_alias_predicate(v::SQLTypeOper, having_key::MemoKey, instruc::SQLInstruction)::Union{String,Nothing}
   having_key[1] === :base || return nothing
+  # #1311: an interval alias with no millisecond form would be ordered by its text, whatever the value.
+  v.operator in _INTERVAL_ORDERING_LOOKUPS && _projected_unordered_interval(having_key[2], instruc) &&
+    throw(_unordered_interval_alias_error("An ordering filter (`$(v.operator)`)", having_key[2]))
   source = _projected_interval_source(having_key[2], instruc)
   source === nothing && return nothing
   ms_values = _predicate_duration_ms(v.operator, v.values)

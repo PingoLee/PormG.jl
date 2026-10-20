@@ -236,17 +236,19 @@ function _interval_left_kind(p::FExpression, right, instruc::SQLInstruction)
 end
 
 # The kind a side of F arithmetic is to the render: the left as `_render_left_typed` types it, the right
-# as `_render_operand_typed` does. An expression is its own temporal kind. A function is an interval
-# only where the render computes one (`_render_function_body`): a `Max`/`Min`/`Sum`/`Avg` or
-# `Greatest`/`Least`/`Coalesce` over interval candidates (`_interval_ms_candidate`, #894, #900) the
-# walk names an interval. Any other function is `_side_function_kind`, so a `Case` over a duration is
-# untyped here, as it is to the render (review of #1034 step 5a). A column is `_side_kind`. On the
-# right, a temporal literal is its own kind, a field-path string is the column it names, and a bare
-# CTE, `Subquery` or `Joined` handle is untyped, as it is to the render.
+# as `_render_operand_typed` does. An expression is its own temporal kind. A function the walk names an
+# interval is one (#1301): a `Max`/`Min`/`Sum`/`Avg` or `Greatest`/`Least`/`Coalesce` over interval
+# candidates (`_interval_ms_candidate`, #894, #900), which SQLite computes in milliseconds
+# (`_render_function_body`), and also one with no millisecond form — a `Case` over durations, a `Sum`
+# of one. That one is typed so its arithmetic is: PostgreSQL computes `interval * bigint`, and SQLite,
+# which holds it as its `HH:MM:SS` text, refuses it as an interval with no millisecond form (#881)
+# rather than multiply the text (`'00:01:30' * 2` is `0`). Any other function is `_side_function_kind`.
+# A column is `_side_kind`. On the right, a temporal literal is its own kind, a field-path string is
+# the column it names, and a bare CTE, `Subquery` or `Joined` handle is untyped, as it is to the render.
 function _render_side_kind(x, instruc::SQLInstruction; right::Bool = false)::Union{CanonicalType,Nothing}
   x isa FExpression && return _memo_kind(() -> _temporal_arith_kind(x, instruc), x, instruc, :render)
   if x isa FObject
-    _interval_ms_candidate(x) && _infer_kind(x, instruc, _AllKinds()) isa CInterval && return CInterval()
+    _infer_kind(x, instruc, _AllKinds()) isa CInterval && return CInterval()
     return _side_function_kind(x, instruc)
   end
   right || return _side_kind(x, instruc)

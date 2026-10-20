@@ -412,7 +412,8 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Review of #1028: the shapes only the render can type, and the literals
-# `F("start_at") + Day(1)` is a timestamp no type reader names; its render does (`_render_operand_kind`).
+# `F("start_at") + Day(1)` is a timestamp: its render named it before any type reader did, and since
+# #1034 step 5a the walk names it too (the render's kind is no longer read, #1304).
 # A `DateTime` or duration literal binds `$1::timestamp` / an interval on PostgreSQL and the stored text
 # on SQLite. `Concat` over any of them is explicit intent, refused on every engine — a literal when
 # the `Concat` is built. A cast of one to text is representation and builds on both (#1147 step 2).
@@ -837,6 +838,23 @@ end
   _ccd_expect(nothing; departs = _SL_ONLY, issue = "#1259", run = conn -> _ccd_render(Fn.Cast(avg_sub(), Models.FloatField()); conn = conn))
   for expr in (Fn.Cast("laptime", "text"), Fn.Cast("laptime", Models.CharField()))
     @test _ccd_builds(expr)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1304: a `numeric` function whose meaning is an interval is refused as one
+# The classifier names `Round`/`Sqrt` a `numeric` function's value (`:numeric`), while the type walk's
+# meaning (`_MeaningKinds`) is the interval it is computed over: `Round(Avg("laptime"))`,
+# `Sqrt("laptime")`. Cast to a number, it is refused on SQLite as the interval (#1259), named by the
+# classifier. Expected SQL, PostgreSQL: (ROUND(AVG("Tb"."laptime")))::integer — PostgreSQL rejects it
+# when the query runs, the meaning by the #1087 tie-breaker. Why: this arm of `_interval_operand` is
+# the one #1304 kept (it reads the walk, not the render), and no other test reached it.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1304: a numeric function over an interval, cast to a number, is refused on SQLite as the interval" begin
+  for (expr, named) in ((Fn.Cast(Fn.Round(Fn.Avg("laptime")), Models.IntegerField()), "`ROUND(…)`"),
+                        (Fn.Cast(Fn.Sqrt("laptime"), Models.IntegerField()), "`SQRT(…)`"),
+                        (Fn.Cast(Fn.Sqrt("laptime"), "numeric"), "`SQRT(…)`"))
+    _ccd_expect(expr; departs = _SL_ONLY, issue = "#1259", named = named)
   end
 end
 
@@ -1386,6 +1404,78 @@ end
   @test _ccd_builds(Fn.Cast(Fn.Cast(Fn.Sum(_CF("born") - _CF("born")), Models.BigIntegerField()) / 2, Models.IntegerField()))
   # The escape the message and the docs name: a dividend given a type divides as that type.
   @test _ccd_builds(Fn.Cast(Fn.Cast(Fn.Sum(_CF("number") + _CF("payload__n")), Models.BigIntegerField()) / 2, Models.IntegerField()))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# An untyped Sum's quotient is found on whichever side it sits (#1305)
+# The classifier answered for the FIRST side, operand or branch that classified, so a quotient behind
+# a typed one — `Max("laptime") * (Sum(…) / 2)`, the second operand of a `Coalesce`, a `Case` default
+# after a float branch — was not found, and PostgreSQL kept the half SQLite drops: a silent different
+# answer. Expected on PostgreSQL: the #1111 refusal naming the untyped sum, as the left-hand form
+# always got; SQLite builds the cast to text, e.g.
+# `CAST((… * ((SUM(("Tb"."laps_total" + json_extract("Tb"."payload", '$.n'))) / ?))) AS TEXT)`.
+# Beside an interval, a float or a decimal the quotient decides only where it departs: on SQLite the
+# value is that interval or that fraction, refused as one (#1259, #1028, #1040, #1027) on either
+# side — the left-hand form built there before, and the right-hand one on PostgreSQL.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1305: an untyped Sum's quotient is refused on PostgreSQL wherever it sits in the expression" begin
+  q() = Fn.Sum(_CF("laps_total") + _CF("payload__n")) / 2
+  mx() = Fn.Max(_CF("laptime"))
+  untyped_named = "`SUM(…)` over a value PormG cannot type"
+  for expr in (
+      q() * mx(),                                  # the left-hand form, refused before
+      mx() * q(),                                  # the quotient on the right
+      Fn.Max("laptime") + q() * mx(),
+      Fn.Max("laptime") * Fn.Round(q()),
+      mx() / q(),                                  # the quotient is the divisor: the top is a quotient too
+      Fn.Coalesce(Fn.Max("laptime"), q() * mx()))  # a later operand
+    _ccd_expect(Fn.Cast(expr, "text"); departs = _PG_ONLY, issue = "#1111", named = untyped_named)
+  end
+  # A later `Case` branch: the quotient is a CTE column the body divided, so the outer query does not
+  # aggregate and the `Case` condition can read a column.
+  function withcte(outer)
+    t = CCD.Ccd_team.objects
+    body = CCD.Ccd_driver.objects
+    body.values("team", "half" => q())
+    t.with("c" => body, join_field = "id" => "team")
+    t.values("x" => outer)
+    return t
+  end
+  _ccd_expect(nothing; departs = _PG_ONLY, issue = "#1111", named = "the CTE column",
+              run = conn -> _ccd_sql(withcte(Fn.Cast(Fn.Case(Fn.When("rating" => 1.0, then = _CF("rating")),
+                                                             default = PormG.CTE("c", "half")), "text")); conn = conn))
+  # `+` with an interval on the right of a number is SQLite's own refusal; PostgreSQL refuses the half.
+  @test occursin("(#1111)", _ccd_msg(_ccd_refusal(Fn.Cast(q() + Fn.Max("laptime"), "text"); conn = _CCD_PG)))
+  # Where the division does not depart, the value is still the interval it is: cast to an integer it is
+  # refused on SQLite as an interval (#1259), whichever side the quotient is on, and `Concat` refuses it
+  # as an interval (#1028) — while PostgreSQL refuses the half (#1111).
+  for expr in (Fn.Cast(q() * mx(), Models.IntegerField()), Fn.Cast(mx() * q(), Models.IntegerField()),
+               Fn.Cast(mx() / q(), Models.IntegerField()))
+    @test occursin("(#1259)", _ccd_msg(_ccd_refusal(expr; conn = _CCD_SL)))
+    @test occursin("(#1111)", _ccd_msg(_ccd_refusal(expr; conn = _CCD_PG)))
+  end
+  for expr in (Fn.Concat(Fn.Value("|"), q() * mx()), Fn.Concat(Fn.Value("|"), mx() * q()))
+    @test occursin("an interval expression is not text", _ccd_msg(_ccd_refusal(expr; conn = _CCD_SL)))
+    @test occursin("(#1111)", _ccd_msg(_ccd_refusal(expr; conn = _CCD_PG)))
+  end
+  # Beside a float or a decimal the same holds, whichever side the quotient is on: PostgreSQL refuses
+  # the half, and SQLite refuses the fraction its cast would truncate (#1028), round (#1040) or write
+  # as its own text (#1027). Before, the side that came first decided, on each engine.
+  for (expr, sqlite_issue) in ((Fn.Cast(q() * 1.5, Models.IntegerField()), "(#1028)"),
+                               (Fn.Cast(1.5 * q(), Models.IntegerField()), "(#1028)"),
+                               (Fn.Cast(q() * Fn.Max("points"), Models.IntegerField()), "(#1028)"),
+                               (Fn.Cast(Fn.Max("points") * q(), Models.IntegerField()), "(#1028)"),
+                               (Fn.Cast(Fn.Coalesce(q(), 0.5), Models.IntegerField()), "(#1028)"),
+                               (Fn.Cast(q() * Fn.Max("price"), "numeric(10,1)"), "(#1040)"),
+                               (Fn.Concat(Fn.Value("-"), q() * 1.5), "(#1027)"))
+    @test occursin(sqlite_issue, _ccd_msg(_ccd_refusal(expr; conn = _CCD_SL)))
+    @test occursin("(#1111)", _ccd_msg(_ccd_refusal(expr; conn = _CCD_PG)))
+  end
+  # What answered first still names the operand when no side is a quotient: the message is unchanged.
+  @test occursin("`COALESCE(…)` over `MAX(…)` over the DurationField `laptime`",
+                 _ccd_msg(_ccd_refusal(Fn.Cast(Fn.Coalesce(Fn.Max("laptime"), Fn.Max("laptime")), Models.IntegerField()); conn = _CCD_SL)))
+  # A typed dividend divides as its type on every engine, on whichever side.
+  @test _ccd_builds(Fn.Cast(mx() * (Fn.Cast(Fn.Sum(_CF("laps_total") + _CF("payload__n")), Models.BigIntegerField()) / 2), "text"))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

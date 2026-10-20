@@ -805,6 +805,51 @@ end
     @test sort((under |> DataFrame).milliseconds) == sort(filter(<(120_000), df.milliseconds))
   end
 
+  # #1301 — a `Case` whose value is a duration, in arithmetic. SQLite holds the value as its `HH:MM:SS`
+  # text and multiplied that text (`'00:01:30' * 2` is `0`), with no error: it is refused there now, as
+  # an interval with no millisecond form (#881). PostgreSQL computes `interval * bigint`, and the result
+  # is typed an interval, so it reads back as a `Dates.CompoundPeriod`. The arithmetic inside each
+  # branch, the spelling the docs give, builds on both. The oracle is the stored `milliseconds`.
+  @testset "a Case over a duration in arithmetic is an interval; SQLite refuses it (#1301)" begin
+    FN = PormG.Functions
+    function laps(expr)
+      q = M.Lap_times.objects
+      q.filter("raceid__year" => 2009, "raceid__round" => 1, "lap__@lte" => 2)
+      q.values("driverid", "lap", "milliseconds", "d" => expr)
+      q.order_by("driverid", "lap")
+      return q
+    end
+    over_case = FN.Case(FN.When("lap" => 1, then = F("time")), default = F("time")) * 2
+    if by_engine(sqlite = true, postgres = false)
+      err = try laps(over_case) |> DataFrame; nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      @test occursin("not supported on SQLite", sprint(showerror, err))
+    else
+      df = laps(over_case) |> DataFrame
+      @test size(df, 1) > 1
+      @test all(x -> x isa Dates.CompoundPeriod, df.d)
+      @test [Dates.toms(x) for x in df.d] == 2 .* df.milliseconds
+    end
+    in_branches = laps(FN.Case(FN.When("lap" => 1, then = F("time") * 2), default = F("time") * 2)) |> DataFrame
+    @test size(in_branches, 1) > 1
+    @test [Dates.toms(x) for x in in_branches.d] == 2 .* in_branches.milliseconds
+    # Ordered inside a filter: PostgreSQL keeps the laps over two minutes; SQLite would compare the
+    # `HH:MM:SS` text, so it refuses (#1301 review).
+    over = M.Lap_times.objects
+    over.filter("raceid__year" => 2009, "raceid__round" => 1, "lap__@lte" => 2,
+                FN.Case(FN.When("lap" => 1, then = F("time")), default = F("time")) > Dates.Minute(2))
+    over.values("milliseconds")
+    if by_engine(sqlite = true, postgres = false)
+      err = try over |> DataFrame; nothing catch e; e end
+      @test err isa PormG.QueryBuildError
+      @test occursin("no millisecond form", sprint(showerror, err))
+    else
+      kept = (over |> DataFrame).milliseconds
+      @test !isempty(kept)
+      @test sort(kept) == sort(filter(>(120_000), in_branches.milliseconds))
+    end
+  end
+
   # #894 — sorting and filtering an interval's VALUE on both engines. On SQLite a projected interval is
   # its `HH:MM:SS` text, which sorts `"100:00:00"` before `"99:00:00"` and `"-01:00:00"` before
   # `"-02:00:00"`; PormG orders and compares its milliseconds instead. A difference times the round

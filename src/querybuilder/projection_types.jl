@@ -559,8 +559,9 @@ end
 # - an integer quotient the structure answers (`_DIVISION_KINDS`) answers as that division:
 #   `Sum(…) / 2 * Max("laptime")` is an interval at the top, but PostgreSQL's `numeric` quotient keeps
 #   the half its `bigint` sum drops on SQLite, so it stays refused there (#1111), as it was before this
-#   step. The structure answers for the first side it classifies (`_textless_number`), so a quotient
-#   that is not on that side is not found, before or after this step;
+#   step. The structure finds the quotient on whichever side it sits (`_division_first`, #1305):
+#   `Max("laptime") * (Sum(…) / 2)` too. Only where the division departs (`_untyped_sum_departs`):
+#   on another engine the value is the interval, and a cast of it to a number is refused there (#1259);
 # - a function, or a `Case` with no `output_field`, is named by its structure when that names it
 #   (`` `SUM(…)` over the DurationField `laptime` ``, `` `AVG(…)` ``), with the walk's kind: a column has
 #   its own label, and arithmetic keeps "an interval expression", as the render's kind named it.
@@ -568,13 +569,14 @@ function _temporal_textless_named(temporal::Tuple{Symbol,String}, p, instruc::SQ
   p isa Union{FExpression,FObject,WindowFunction} || return temporal
   named = _undeclared_case(p) ? _case_textless_branch(p, instruc) : _textless_number(p, instruc)
   named === nothing && return temporal
-  named[1] in _DIVISION_KINDS && return named
+  named[1] in _DIVISION_KINDS && return _untyped_sum_departs(instruc.connection) ? named : temporal
   return p isa FExpression ? temporal : (temporal[1], named[2])
 end
 
 # #1187 — a `Case` with no `output_field` has one of its branch values on each row, so it has the text
 # of a float, a decimal or a timestamp when one of its branches does: each `then` and the default is
-# classified as an operand of its own, the first such branch answering for the `Case`. A float branch
+# classified as an operand of its own, the first such branch answering for the `Case` (an integer
+# quotient answering wherever it is, `_division_first`). A float branch
 # makes it a `float8` on PostgreSQL (`Cast` to an integer rounds there and truncates on SQLite); a
 # `DecimalField` branch keeps its own places, which the type walk drops (`_unify_kinds`), so a
 # zero-scale one is whole here, as the column is. With an `output_field` the cast it renders decides
@@ -582,11 +584,28 @@ end
 _undeclared_case(p) = p isa FObject && p.function_name == "CASE" && !(get(p.kwargs, "output_field", nothing) isa AbstractString)
 _declared_case(p) = p isa FObject && p.function_name == "CASE" && !_undeclared_case(p) && !isempty(p.kwargs["output_field"])
 function _case_textless_branch(p::FObject, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing}
-  for value in _case_values(p)
-    side = _concat_textless_operand(value, instruc)
-    side === nothing || return (side[1], "`CASE(…)` over $(side[2])")
+  side = _division_first((_concat_textless_operand(value, instruc) for value in _case_values(p)), instruc.connection)
+  return side === nothing ? nothing : (side[1], "`CASE(…)` over $(side[2])")
+end
+# #1305 — the answer of several sides, operands or branches. Every side is asked: before, the first
+# that answered decided, so a quotient on another side was not found. An integer quotient the engines
+# divide differently (`_DIVISION_KINDS`) answers wherever it sits, since its half reaches the value
+# whatever the other sides are (`Max("laptime") * (Sum(…) / 2)` keeps it on PostgreSQL). Beside
+# another answer it decides only where it departs (`_untyped_sum_departs`): elsewhere it divides as
+# the expression means, and the other answer is still what the value is — an interval cast to a
+# number is still refused on SQLite (#1259). Otherwise the first answer, so a message names what it
+# always named.
+function _division_first(answers, conn)::Union{Tuple{Symbol,String},Nothing}
+  found, division = nothing, nothing
+  for answer in answers
+    answer === nothing && continue
+    if answer[1] in _DIVISION_KINDS
+      division === nothing && (division = answer)
+    else
+      found === nothing && (found = answer)
+    end
   end
-  return nothing
+  return division === nothing ? found : found === nothing || _untyped_sum_departs(conn) ? division : found
 end
 # The values a `Case` can take: each branch's `then` and its default, NULLs left out (never the value).
 # A raw value is a literal — a string too, not a path (`_case_kind`) — so it is wrapped as one.
@@ -684,7 +703,7 @@ end
 # a joined or CTE handle, a transform, a typed function (`Max("start_at")`, `Max("lap")`), and, since
 # the walk types them (step 5a), `F` arithmetic over a timestamp or a duration and `Sum`/`Avg` of an
 # interval. Before step 5c it came from `_operand_kind`, which names none of the last two, so only the
-# render's kind caught them, at the two sites it reaches (`_division_or_rendered`).
+# render's kind caught them; that fallback was removed in #1304, once it no longer fired.
 #
 # A JSON operand is refused as the WHOLE document only. A key lookup (`"payload__driver"`) resolves to
 # the same field, but renders `#>>` / `json_extract`, the value at that key. That value has one text
@@ -992,8 +1011,9 @@ _text_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "a text 
 
 # #1028 — a declared cast over an operand on which the connection's engine departs from what the cast
 # means (#1147 step 2, `_MEANING_DEPARTURES`): `(kind, what, target, flag, declared, row)`, or
-# `nothing` — the cast builds as written. The operand is classified once, engine-agnostically; the
-# table decides who departs:
+# `nothing` — the cast builds as written. The operand is classified once, and the table decides who
+# departs. (One fact the classifier reads itself: where an integer quotient sits beside an interval
+# or a fraction, it answers only on an engine whose untyped sum departs, `_division_first`, #1305.)
 # - to text: a boolean's text is `true`/`false`, which SQLite (`1`/`0`) departs from. A float, a
 #   decimal, a timestamp, an interval or a JSON document is written in each engine's own text — the
 #   same value, so no row, and the cast builds everywhere;
@@ -1013,12 +1033,11 @@ _text_operand_label(p) = (l = _concat_operand_label(p); l === nothing ? "a text 
 _declared_cast_label(v::FObject) = v.function_name == "CAST" ? "Cast(…, \"$(v.kwargs["type"])\")" :
   "$(uppercasefirst(lowercase(v.function_name)))(…; output_field = \"$(v.kwargs["output_field"])\")"
 #
-# `rendered` holds each operand's kind as its render computed it (`_render_operand_kind`), read where
-# the classifier names none. Since #1034 step 5c the classifier reads temporal arithmetic and
-# `Sum(duration)` from the walk, so the rendered fallbacks are expected never to fire (a follow-up
-# removes them once the full suite shows they do not).
+# Each operand's type is the walk's. Until #1304 the kind its render computed was read where the
+# classifier named none; since #1034 step 5c the classifier reads temporal arithmetic and
+# `Sum(duration)` from the walk, and that fallback no longer fired over the unit suite.
 # A declared `Case` (#1217) is cast as each row takes a branch, so its operands are its branch values.
-function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::AbstractVector = Any[])
+function _cast_divergent_operand(v::FObject, instruc::SQLInstruction)
   declared = get(v.kwargs, v.function_name == "CAST" ? "type" : "output_field", nothing)
   (declared isa AbstractString && !isempty(declared)) || return nothing
   operands = v.function_name == "CASE" ? _case_values(v) : v.column isa AbstractVector ? v.column : (v.column,)
@@ -1038,8 +1057,8 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::
   # which read a fraction, not a duration or a date.
   if size !== nothing || target isa Union{Models.sIntegerField,Models.sBigIntegerField,Models.sFloatField,Models.sDecimalField}
     numeric_target = target isa Union{Models.sIntegerField,Models.sBigIntegerField} ? :integer : :number
-    for (i, operand) in enumerate(operands)
-      side = _temporal_number_operand(operand, get(rendered, i, nothing), instruc)
+    for operand in operands
+      side = _temporal_number_operand(operand, instruc)
       side === nothing || (d = departs(side[1], side[2], numeric_target, _concat_flag(operand)); d === nothing || return d)
     end
   end
@@ -1060,10 +1079,9 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction; rendered::
   end
   to_integer = target isa Union{Models.sIntegerField,Models.sBigIntegerField}
   (to_integer || target isa Union{Models.sCharField,Models.sTextField}) || return nothing
-  for (i, operand) in enumerate(operands)
+  for operand in operands
     to_integer && _integral_valued(operand, instruc) && continue
-    side = _division_or_rendered(_concat_textless_operand(operand, instruc), get(rendered, i, nothing), operand)
-    side === nothing && !to_integer && (side = _rendered_kind_textless(get(rendered, i, nothing)))
+    side = _concat_textless_operand(operand, instruc)
     # #1151: an operand the classifier leaves untyped is read through the type walk, which names a
     # float `float8` on PostgreSQL, whose cast rounds where SQLite's truncates. A `Case` is classified
     # branch by branch above since #1187 (`_case_textless_branch`), which also reads a decimal branch's
@@ -1082,30 +1100,29 @@ end
 # #1259 — an operand that is an interval, as `(kind, what)`, or `nothing`: one the classifier names
 # (a `DurationField` column, its `Sum` and `Avg`, a duration literal, and since #1034 step 5c temporal
 # arithmetic and a `Sum` of it), or one whose meaning is an interval though the classifier tags it
-# otherwise (`_MeaningKinds`). The `rendered` fallback predates step 5c and is expected never to fire.
-# A timestamp is not this rule's.
-function _interval_operand(operand, rendered, instruc::SQLInstruction)
-  side = _division_or_rendered(_concat_textless_operand(operand, instruc), rendered, operand)
+# otherwise (`_MeaningKinds`): a function PostgreSQL computes as a `numeric` (`:numeric`) whose meaning
+# is an interval, `Round(Avg("laptime"))` or `Sqrt("laptime")`, keeps the classifier's name. A
+# timestamp is not this rule's.
+function _interval_operand(operand, instruc::SQLInstruction)
+  side = _concat_textless_operand(operand, instruc)
   side !== nothing && side[1] === :interval && return side
   if side === nothing || side[1] === :numeric
     _infer_kind(operand, instruc, _MeaningKinds()) isa CInterval &&
       return (:interval, side === nothing ? "an interval expression" : side[2])
   end
-  side === nothing && (side = _rendered_kind_textless(rendered))
-  return side !== nothing && side[1] === :interval ? side : nothing
+  return nothing
 end
 # #1260 — an operand cast to a number that is an interval (`_interval_operand`) or a date, a time or a
 # timestamp, as `(kind, what)`, or `nothing`. SQLite stores each as text, and its cast reads the
 # text's leading digits: a date's year, a time's hour. The kind comes from the type walk (a column, a
-# CTE column, `Max("date")`, `Cast(x, "date")`, a literal), or from the render where the walk names
-# none (`F("date") + Day(1)`). A part (`@year`, `Extract`) and a day count (`F("date") - F("date")`)
-# are numbers, and pass.
-function _temporal_number_operand(operand, rendered, instruc::SQLInstruction)
-  side = _interval_operand(operand, rendered, instruc)
+# CTE column, `Max("date")`, `Cast(x, "date")`, a literal, and since #1034 step 5a date arithmetic,
+# `F("date") + Day(1)`). A part (`@year`, `Extract`) and a day count (`F("date") - F("date")`) are
+# numbers, and pass.
+function _temporal_number_operand(operand, instruc::SQLInstruction)
+  side = _interval_operand(operand, instruc)
   side === nothing || return side
   kind = operand isa Union{Dates.TimeType,ZonedDateTime} ? literal_canonical_kind(operand) :
          _infer_kind(operand, instruc, _MeaningKinds())
-  kind === nothing && (kind = rendered)
   tag = kind isa CDate ? :date : kind isa CTime ? :time : kind isa CDateTime ? :timestamp : nothing
   tag === nothing && return nothing
   literal = operand isa SQLText ? operand.field : operand
@@ -1115,11 +1132,6 @@ function _temporal_number_operand(operand, rendered, instruc::SQLInstruction)
   field = tag === :date ? "DateField" : tag === :time ? "TimeField" : "DateTimeField"
   return (tag, "the $(field) `$(label)`")
 end
-# A rendered kind (`_render_operand_kind`), as a `_concat_textless_operand` answer: the fallback for an
-# operand no type reader named, which since #1034 step 5c the walk names.
-_rendered_kind_textless(kind) =
-  kind isa CDateTime ? (:timestamp, "a timestamp expression") :
-  kind isa CInterval ? (:interval, "an interval expression") : nothing
 # A literal is named by its type, never its value: it is a bound value, and a refusal never prints
 # one (#971). Every label built over this one inherits it (`arithmetic over a Float64 literal`), so
 # printing the value here leaked it through `Concat`, `Cast` and `Round` alike (#1057).
@@ -1155,7 +1167,7 @@ end
 _textless_number(p::SQLField, instruc::SQLInstruction) = _textless_number(p.field, instruc)
 function _textless_number(p::FExpression, instruc::SQLInstruction)
   p.operation === nothing && return _textless_number(p.field_name, instruc)
-  side = something(_textless_number(p.field_name, instruc), _textless_number(p.operand, instruc), Some(nothing))
+  side = _division_first((_textless_number(p.field_name, instruc), _textless_number(p.operand, instruc)), instruc.connection)
   if p.operation == "/" && side === nothing
     # #1111: a whole number that PostgreSQL types `numeric` reads like an integer column until it is
     # divided: PostgreSQL's `numeric / int` is `7.5` where SQLite divides its integer as an integer.
@@ -1263,20 +1275,6 @@ function _whole_numeric_operand(p::Union{FObject,WindowFunction}, instruc::SQLIn
   end
   return nothing
 end
-# #1034 phase 3 step 2a — an operand's division answer, unless its render typed it a timestamp or an
-# interval (`rendered`, `_render_operand_kind`): then it is temporal arithmetic — `Sum(F("fastestlaptime")
-# * 2) / 2`, `Sum(F("grid") * F("fastestlaptime")) / 2` — which the walk did not type before step 5a,
-# so the untyped-`Sum` leaf named it, but no integer quotient. Since step 5a the walk types it and the
-# leaf no longer names it, so this is expected never to change its input (a follow-up removes it once
-# the full suite shows it does not). It answers as the rendered kind (its text is a
-# representation; `Concat` refuses it as intent). A day count (`F("date") - F("date")`) renders as a
-# number, so a sum over it stays a division. Only when the operand IS the quotient: its rendered kind
-# is then the quotient's own. A quotient further in (`Sum(…) / 2 * Max("fastestlaptime")`) is an
-# interval at the top while its half still reaches the value, so it stays a division.
-_division_or_rendered(side, rendered, operand) =
-  side !== nothing && side[1] in _DIVISION_KINDS && _is_quotient(operand) &&
-  _rendered_kind_textless(rendered) !== nothing ? _rendered_kind_textless(rendered) : side
-_is_quotient(x) = (x = x isa SQLField ? x.field : x; x isa FExpression && x.operation == "/")
 
 # #1124's record for a subquery: its projection's answer, asked of the inner build. No operator
 # takes a `Subquery` directly, so this is reached through a function that carries its operand's
@@ -1349,11 +1347,8 @@ function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruct
     literal = default isa SQLText ? default.field : default
     (literal === nothing || literal isa AbstractString || _is_null_literal(literal)) || push!(operands, default)
   end
-  for operand in operands
-    side = _concat_textless_operand(operand, instruc)
-    side === nothing || return (side[1], "`$(name)(…)` over $(side[2])")
-  end
-  return nothing
+  side = _division_first((_concat_textless_operand(operand, instruc) for operand in operands), instruc.connection)
+  return side === nothing ? nothing : (side[1], "`$(name)(…)` over $(side[2])")
 end
 _textless_number(x::Union{Bool,AbstractFloat,Decimals.Decimal}, ::SQLInstruction) = _textless_literal(x)
 _textless_number(p::SQLText, ::SQLInstruction) = _textless_literal(p.field)

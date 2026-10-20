@@ -89,8 +89,7 @@ end
 # What the render leaves untyped, the walk leaves untyped.
 # Expected, on PostgreSQL (SQLite refuses each at build): an interval plus a number, and a date times
 # a number, are `nothing` to both, so no reader is handed a type the SQL does not have; a date part
-# plus a number is the walk's integer, as it was before step 5a. A function side the render does not
-# type an interval (`Case` over a duration) leaves the arithmetic untyped to both, on both engines.
+# plus a number is the walk's integer, as it was before step 5a.
 # Why it matters: the walk must never name a temporal kind the render does not compute.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1034 step 5a: what the render leaves untyped stays untyped to the walk" begin
@@ -100,21 +99,110 @@ end
     @test rendered === nothing
     @test walked === nothing
   end
-  # A function side the render does not compute as an interval (`_render_function_body` does so only
-  # for the interval candidates): a `Case` over a duration, and a `Sum` of one, times a number, and a
-  # date plus one, on both engines where they build (review of #1034 step 5a). That the render leaves
-  # them untyped is #1301; when it types them, these rows become positive ones.
-  dur_case = Case([When("year" => 2009, then = F("laptime"))], default = F("laptime"))
-  for (backend, Model_) in _TAK_MODELS, expr in (dur_case * 2, F("year") * dur_case, Sum(dur_case) * 2)
-    rendered, walked = _tak_kinds(Model_, expr)
-    @test rendered === nothing
-    @test walked === nothing
-  end
-  rendered, walked = _tak_kinds(pg, F("date") + dur_case)
-  @test rendered === nothing
-  @test walked === nothing
   _, walked = _tak_kinds(pg, F("start_at__@year") + 1)
   @test walked isa Union{PormG.CInt32,PormG.CInt64}
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A function side over a duration with no millisecond form is an interval (#1301).
+# Expected on PostgreSQL: a `Case` over durations, and a function over one (`Sum`, `Max`, `Greatest`),
+# times or divided by a number,
+# beside another interval, or shifting a date, are typed by the render and the walk alike — an
+# interval, and a timestamp for the shift — and the SQL is unchanged:
+#   (CASE WHEN "Tb"."year" = $1 THEN "Tb"."laptime" ELSE "Tb"."laptime" END * $2::bigint)
+# Expected on SQLite: each is refused when the query is built, as an interval with no millisecond form
+# (#881). Before, the side was untyped on both engines, so SQLite multiplied the duration's stored
+# text — `'00:01:30' * 2` is `0` — and returned that number, with no error.
+# Why it matters: a silent wrong value on SQLite, and on PostgreSQL an interval no reader could see.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1301: a Case over a duration in arithmetic is an interval; SQLite refuses it" begin
+  pg_model, sl_model = _TAK_MODELS[1][2], _TAK_MODELS[2][2]
+  dur_case() = Case([When("year" => 2009, then = F("laptime"))], default = F("laptime"))
+  shapes = (
+    (dur_case() * 2,                PormG.CInterval()),
+    (F("year") * dur_case(),        PormG.CInterval()),
+    (dur_case() / 2,                PormG.CInterval()),
+    (Sum(dur_case()) * 2,           PormG.CInterval()),
+    (Max(dur_case()) * 2,           PormG.CInterval()),
+    (Greatest("laptime", dur_case()) * 2, PormG.CInterval()),
+    (dur_case() + F("laptime"),     PormG.CInterval()),
+    (F("laptime") - dur_case(),     PormG.CInterval()),
+    (F("date") + dur_case(),        PormG.CDateTime(false)),
+    (F("start_at") + dur_case(),    PormG.CDateTime(true)),
+  )
+  for (expr, expected) in shapes
+    rendered, walked = _tak_kinds(pg_model, expr)
+    @test rendered == expected
+    @test walked == expected
+    q = sl_model.objects
+    q.values("v" => expr)
+    err = try inspect_query(q); nothing catch e; e end
+    @test err isa PormG.QueryBuildError
+    @test occursin("that is not a timestamp difference or a DurationField column is not supported on SQLite",
+                   err === nothing ? "" : sprint(showerror, err))
+  end
+  q = pg_model.objects
+  q.values("v" => dur_case() * 2)
+  @test occursin("(CASE WHEN \"Tb\".\"year\" = \$1 THEN \"Tb\".\"laptime\" ELSE \"Tb\".\"laptime\" END * \$2::bigint) as \"v\"",
+                 replace(inspect_query(q)[:sql_text], r"\s+" => " "))
+  # On PostgreSQL the typed result follows a duration's rules, as other duration arithmetic does: a
+  # filter on its alias binds a duration's text and refuses a number, a pattern lookup is refused
+  # (#1183), and `Concat` refuses it (#1028). Each built before, and failed when the query ran.
+  pg_q(build!) = (q = pg_model.objects; q.values("d" => dur_case() * 2); build!(q); q)
+  @test inspect_query(pg_q(q -> q.filter("d__@gt" => Hour(1))))[:parameters][end] == "01:00:00"
+  refusal(q) = try inspect_query(q); nothing catch e; e end
+  msg(e) = e === nothing ? "" : replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
+  err = refusal(pg_q(q -> q.filter("d__@gt" => 5)))
+  @test err isa PormG.InvalidValueError
+  @test occursin("the `d` projection alias (duration)", msg(err))
+  err = refusal(pg_q(q -> q.filter("d__@startswith" => "0")))
+  @test err isa PormG.FilterError
+  @test occursin("a pattern lookup", msg(err)) && occursin("this is a duration", msg(err))
+  q = pg_model.objects
+  q.values("s" => PormG.Functions.Concat(PormG.Functions.Value("-"), dur_case() * 2))
+  err = refusal(q)
+  @test err isa PormG.QueryBuildError
+  @test occursin("an interval expression is not text", msg(err)) && occursin("(#1028)", msg(err))
+  # A function SQLite does compute in milliseconds keeps that form (#900): unchanged.
+  q = sl_model.objects
+  q.values("v" => Max("laptime") * 2)
+  @test occursin("_pormg_ms", inspect_query(q)[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ordering an interval with no millisecond form is refused on SQLite (#1301 review).
+# Expected on SQLite: a `Case` over durations, a function over one, `Lag` or `NullIf` over a duration,
+# ORDERED (`>`, `<`, …) against a duration or an interval, raises `QueryBuildError` when the query is
+# built; `==` still compares the stored text: `(CASE … END = ?)`. Expected on PostgreSQL: each builds,
+# `(CASE WHEN "Tb"."year" = $1 THEN "Tb"."laptime" ELSE "Tb"."laptime" END > $2)` with `"100:00:00"`.
+# Before, SQLite compared the `HH:MM:SS` text (`'99:00:00' > '100:00:00'`), wrong at 100 hours and for
+# negative values, or (for the `Case`, untyped before #1301) the comparison raised on both engines.
+# Why it matters: a filter must keep the same rows on both engines; text order silently does not.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1301: ordering an interval with no millisecond form is refused on SQLite" begin
+  pg_model, sl_model = _TAK_MODELS[1][2], _TAK_MODELS[2][2]
+  QB = PormG.QueryBuilder
+  dc() = Case([When("year" => 2009, then = F("laptime"))], default = F("laptime"))
+  lag() = QB.Lag("laptime"; over = QB.WindowOver(order_by = ["raceid"]))
+  flag(cond) = q -> q.values("f" => Case([When(cond, then = 1)], default = 0))
+  ordered = (q -> q.filter(dc() > Hour(100)), q -> q.filter(dc() < F("laptime")),
+             flag(dc() >= Hour(1)), flag(Max(dc()) > Hour(1)), flag(lag() > Hour(1)),
+             q -> q.filter(PormG.Functions.NullIf("laptime", F("laptime")) <= "01:00:00"))
+  build(model, f) = (q = model.objects; f(q); inspect_query(q))
+  for f in ordered
+    err = try build(sl_model, f); nothing catch e; e end
+    @test err isa PormG.QueryBuildError
+    @test occursin("an interval with no millisecond form", err === nothing ? "" : sprint(showerror, err))
+    @test build(pg_model, f) isa AbstractDict
+  end
+  # Equality compares the stored text on SQLite, as for a `DurationField` column.
+  @test occursin("END = ?)", replace(build(sl_model, q -> q.filter(dc() == Hour(1)))[:sql_text], r"\s+" => " "))
+  # PostgreSQL binds the duration as its text against the typed interval.
+  r = build(pg_model, q -> q.filter(dc() > Hour(100)))
+  @test occursin("ELSE \"Tb\".\"laptime\" END > \$2)", replace(r[:sql_text], r"\s+" => " "))
+  @test r[:parameters][end] == "100:00:00"
+  # A DurationField keeps its millisecond comparison on SQLite.
+  @test build(sl_model, q -> q.filter(F("laptime") > Hour(1)))[:parameters] == Any[3_600_000]
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

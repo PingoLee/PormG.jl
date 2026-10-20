@@ -979,55 +979,55 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast datetime to date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast float to integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast float to integer | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the FloatField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated one"),
   ("Cast float to integer | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast float to integer | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast float to integer | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the FloatField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated one"),
   ("Cast float to integer | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast float to integer | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast float to integer | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the FloatField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated one"),
   ("Cast float to integer | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast int to text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast int to text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast int to text | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast int to text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast int to text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast int to text | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast int to text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast int to text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast int to text | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Case declared date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case declared date | alone", :sqlite) =>
@@ -2203,73 +2203,73 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast float to text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast float to text | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast float to text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast float to text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast float to text | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast float to text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast float to text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast float to text | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast decimal to text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast decimal to text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast decimal to text | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast decimal to text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast decimal to text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast decimal to text | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast decimal to text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast decimal to text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast decimal to text | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast decimal to integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast decimal to integer | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DecimalField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated o"),
   ("Cast decimal to integer | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast decimal to integer | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast decimal to integer | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DecimalField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated o"),
   ("Cast decimal to integer | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast decimal to integer | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast decimal to integer | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DecimalField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated o"),
   ("Cast decimal to integer | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast float to scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float to scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
   ("Cast float to scale 1 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float to scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
   ("Cast float to scale 1 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float to scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float to scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
   ("Cast float to scale 1 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Concat float | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and the FloatField `points` is not text: say which text you mean (#1027). Cast it to text first: Cast"),
   ("Concat float | alone", :sqlite) =>
@@ -2329,19 +2329,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast Sum bigint / 2 int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Sum Case int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum Case int | alone", :sqlite) =>
@@ -2617,19 +2617,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast Sum F interval + interval / 2 text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat Sum F interval + interval / 2 | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
   ("Concat Sum F interval + interval / 2 | alone", :sqlite) =>
@@ -2653,19 +2653,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast Sum F interval * 2 / 2 text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval * 2 / 2 text | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval * 2 / 2 text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval * 2 / 2 text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval * 2 / 2 text | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval * 2 / 2 text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval * 2 / 2 text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval * 2 / 2 text | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F datetime - datetime / 2 text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F datetime - datetime / 2 text | alone", :sqlite) =>
@@ -2689,19 +2689,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast Sum F int * interval / 2 text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F int * interval / 2 text | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F int * interval / 2 text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F int * interval / 2 text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F int * interval / 2 text | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F int * interval / 2 text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F int * interval / 2 text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F int * interval / 2 text | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | alone", :sqlite) =>
@@ -2833,19 +2833,19 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast int numeric / 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("NullIf int float / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("NullIf int float / 2 | alone", :sqlite) =>
@@ -3229,55 +3229,55 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast F float * 1.5 numeric | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce F float output decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce F float output decimal | alone", :sqlite) =>
@@ -3337,73 +3337,73 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Max Cast F float numeric | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int float8 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int float8 | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int float8 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int float8 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int float8 | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int float8 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int float8 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int float8 | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int float8 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int FloatField | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int FloatField | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int FloatField | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int FloatField | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int FloatField | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int FloatField | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int FloatField | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int FloatField | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int FloatField | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
   ("Cast float real | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
   ("Cast float real | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
   ("Cast float real | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case F float * 1.5 output scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output scale 1 | alone", :sqlite) =>
@@ -3751,127 +3751,127 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast Max decimal to scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of `MAX(…)` over the DecimalField `points` (2 decimal places) means the value rounded to the sc"),
   ("Cast Max decimal to scale 1 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Max decimal to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Max decimal to scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of `MAX(…)` over the DecimalField `points` (2 decimal places) means the value rounded to the sc"),
   ("Cast Max decimal to scale 1 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Max decimal to scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Max decimal to scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of `MAX(…)` over the DecimalField `points` (2 decimal places) means the value rounded to the sc"),
   ("Cast Max decimal to scale 1 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
   ("Cast decimal to scale 1 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
   ("Cast decimal to scale 1 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
   ("Cast decimal to scale 1 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float float4 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float4 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float4\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte doub"),
   ("Cast float float4 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float4 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float4 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float4\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte doub"),
   ("Cast float float4 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float4 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float4 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float4\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte doub"),
   ("Cast float float4 | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(24) | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(24) | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float(24)\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte d"),
   ("Cast float float(24) | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(24) | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(24) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float(24)\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte d"),
   ("Cast float float(24) | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(24) | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(24) | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float(24)\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte d"),
   ("Cast float float(24) | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(25) | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(25) | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(25) | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(25) | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(25) | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(25) | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(25) | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(25) | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(25) | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int real | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int real | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
   ("Cast int real | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int real | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int real | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
   ("Cast int real | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int real | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int real | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
   ("Cast int real | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce float int output real | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce float int output real | alone", :sqlite) =>
@@ -3913,55 +3913,55 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast float DecimalField(10,1) | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
   ("Cast float DecimalField(10,1) | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float DecimalField(10,1) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float DecimalField(10,1) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
   ("Cast float DecimalField(10,1) | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float DecimalField(10,1) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float DecimalField(10,1) | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
   ("Cast float DecimalField(10,1) | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
   ("Cast decimal DecimalField(10,1) | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
   ("Cast decimal DecimalField(10,1) | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
   ("Cast decimal DecimalField(10,1) | subquery", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output DecimalField(10,1) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output DecimalField(10,1) | alone", :sqlite) =>
@@ -4075,13 +4075,13 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast CTE decimal col to scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast CTE decimal col to scale 2 | subquery", :sqlite) =>
@@ -4093,13 +4093,13 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("Cast CTE decimal col to scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `CTE(\"c\", \"p\")` (2 decimal places) means the value rounded to the scale of "),
   ("Cast CTE decimal col to scale 1 | alone", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `CTE(\"c\", \"p\")` (2 decimal places) means the value rounded to the scale of "),
   ("Cast CTE decimal col to scale 1 | cte", :mysql) =>
-    (stage = :build, error = "MethodError", message = "MethodError: no method matching CAST(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 1 | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast CTE decimal col to scale 1 | subquery", :sqlite) =>
@@ -4671,6 +4671,12 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=datetime has no MySQL read parser")],
   ("Value datetime | subquery", :mysql) =>
     [(:unparsed, "read=datetime has no MySQL read parser")],
+  ("Cast datetime to date | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Cast datetime to date | cte", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Cast datetime to date | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
   ("Sum decimal | alone", :mysql) =>
     [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Sum decimal | cte", :mysql) =>
@@ -4707,6 +4713,12 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Max decimal | subquery", :mysql) =>
     [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast float to scale 1 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast float to scale 1 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast float to scale 1 | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Sum F bigint + epoch / 2 | alone", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
   ("Sum F bigint + epoch / 2 | cte", :postgres) =>
@@ -4724,6 +4736,80 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
   ("F decimal / 2 | cte", :mysql) =>
     [(:unparsed, "read=decimal has no MySQL read parser")],
   ("F decimal / 2 | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int numeric / 2 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int numeric / 2 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int numeric / 2 | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast F float * 1.5 numeric | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast F float * 1.5 numeric | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast F float * 1.5 numeric | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal to scale 2 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal to scale 2 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal to scale 2 | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int DecimalField | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int DecimalField | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int DecimalField | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Max Cast F float numeric | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Max Cast F float numeric | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Max Cast F float numeric | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast Max decimal to scale 1 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast Max decimal to scale 1 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast Max decimal to scale 1 | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal to scale 1 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal to scale 1 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal to scale 1 | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int to scale 1 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int to scale 1 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int to scale 1 | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast float DecimalField(10,1) | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast float DecimalField(10,1) | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast float DecimalField(10,1) | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int DecimalField(10,1) | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int DecimalField(10,1) | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int DecimalField(10,1) | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal DecimalField(10,1) | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal DecimalField(10,1) | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal DecimalField(10,1) | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast CTE decimal col to scale 2 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast CTE decimal col to scale 2 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast CTE decimal col to scale 1 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast CTE decimal col to scale 1 | cte", :mysql) =>
     [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Subquery Max hop date | alone", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],

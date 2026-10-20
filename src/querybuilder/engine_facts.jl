@@ -48,6 +48,9 @@ _casts_bigint_day_count(::PormGSQLite) = false
 # `CAST(x AS TEXT)` (#929).
 _cast_renders_text(::PormGField, ::PormGPostgres) = false
 _cast_renders_text(field::PormGField, ::PormGSQLite) = _text_cast_on_sqlite(field)
+# MySQL casts a `uuid` to `CHAR(36)`, the text it stores one as (#1270), and refuses a network type
+# (`:network_types`), so a value compared with either cast is text, as on SQLite (#1130 phase 2b).
+_cast_renders_text(field::PormGField, ::PormGMySQL) = _text_cast_on_sqlite(field)
 
 # A bound parameter carries an explicit SQL type cast (`$1::bigint`), so the server types an untyped
 # literal as PormG means it. SQLite's collector ignores a cast (`add_parameter!(::PormGSQLiteParam)`).

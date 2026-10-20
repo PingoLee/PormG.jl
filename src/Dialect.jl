@@ -14,7 +14,8 @@ import PormG: PormGSettings, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLT
 #                                lookup, an extract part SQLite lacks, too old a SQLite library,
 #                                a DecimalField wider than SQLite stores exactly #648).
 #   QueryBuildError            — the caller passed an impossible argument shape (on_conflict_clause).
-import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError, InvalidMigrationError
+#   UnsupportedConnectionError — a MySQL rendering a later phase of #1130 delivers (a cast target).
+import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError, InvalidMigrationError, UnsupportedConnectionError
 import PormG: _supports, _capability_error, _engine_key  # #1129: the backend capability table (Kernel)
 import PormG: _require_feature  # #1163: a version row (window functions on SQLite)
 # #496: the `db_default` vocabulary (Kernel, layer 1). `db_default_sql` below renders from it, and
@@ -791,6 +792,64 @@ function cast_type_sql(type::AbstractString, conn::PormGSQLite; context::Abstrac
   occursin('[', suffix) && throw(_capability_error(conn, :arrays, "$(context): a cast to $(repr(name * suffix))"))
   return uppercase(_map_cast_name(sqlite_type_map_reverse, name, suffix) * suffix)
 end
+# #1130 phase 2b — MySQL's `CAST` takes a closed set of targets (`CHAR`, `SIGNED`, `DECIMAL`, `DOUBLE`,
+# `FLOAT`, `DATE`, `DATETIME`, `TIME`, `JSON`, `BINARY`, …), so each PormG type name maps to the one
+# that holds its meaning (#1271), keyed on the parsed name's lowercase spelling:
+# - text and the character types → `CHAR`, with a size kept (`varchar(20)` → `CHAR(20)`, which cuts
+#   to 20 characters as PostgreSQL's explicit cast does);
+# - every integer → `SIGNED`, a BIGINT. `integer unsigned` too: PostgreSQL renders it `integer`, and
+#   no cast enforces the sign (`UNSIGNED` would read `-1` as 18446744073709551615);
+# - a sized decimal → `DECIMAL(p, s)`, which rounds to `s` places (measured: `1.235` → `1.24`); a bare
+#   `numeric`, which keeps the value on PostgreSQL, → `DECIMAL(65, 30)`, the widest MySQL has, since
+#   MySQL's own bare `DECIMAL` is `DECIMAL(10, 0)` and would round to an integer;
+# - `real`/`float4` → `FLOAT`, single precision, read back as a `Float32` (#1215); the doubles → `DOUBLE`;
+#   `float(p)` keeps its `p`, which picks the width as on PostgreSQL;
+# - `date` → `DATE`; a timestamp, with or without a zone → `DATETIME(3)`, the precision a `DateTime`
+#   holds (#1270), read in the session's UTC; `time` → `TIME(6)`, PostgreSQL's precision;
+# - `json`/`jsonb` → `JSON`; `uuid` → `CHAR(36)`, the text MySQL stores a UUID as (#1270).
+# A network type is a feature MySQL lacks (`:network_types`), and an array too (`:arrays`). Every other
+# name — a boolean (MySQL casts to none), an interval (phase 4 decides what a duration is there),
+# `bytea` (MySQL's `BINARY` cast reads back as text), a zoned time, a user-defined type — is not
+# rendered yet, refused before any SQL rather than passed through to the server.
+const _MYSQL_CAST_TARGETS = Dict{String,String}(
+  "text" => "CHAR", "varchar" => "CHAR", "character varying" => "CHAR", "char" => "CHAR", "character" => "CHAR",
+  "smallint" => "SIGNED", "int2" => "SIGNED", "integer" => "SIGNED", "int" => "SIGNED", "int4" => "SIGNED",
+  "bigint" => "SIGNED", "int8" => "SIGNED", "integer unsigned" => "SIGNED",
+  "numeric" => "DECIMAL", "decimal" => "DECIMAL", "dec" => "DECIMAL",
+  "real" => "FLOAT", "float4" => "FLOAT", "float" => "DOUBLE", "float8" => "DOUBLE", "double precision" => "DOUBLE",
+  "date" => "DATE", "timestamp" => "DATETIME", "timestamp without time zone" => "DATETIME", "datetime" => "DATETIME",
+  "timestamptz" => "DATETIME", "timestamp with time zone" => "DATETIME",
+  "time" => "TIME", "time without time zone" => "TIME",
+  "json" => "JSON", "jsonb" => "JSON", "uuid" => "CHAR(36)",
+)
+# The targets a size modifier means the same thing on (`numeric(10,2)`, `varchar(20)`, `float(24)`,
+# `timestamp(3)`, `time(3)`); on any other the size is not MySQL's to keep (`integer(4)`). `float(p)`
+# stays `FLOAT(p)`, since MySQL's `DOUBLE` cast takes no size and `FLOAT(p)` picks the width by `p`.
+const _MYSQL_SIZED_CAST_TARGETS = ("CHAR", "DECIMAL", "FLOAT", "DATETIME", "TIME")
+function cast_type_sql(type::AbstractString, conn::PormGMySQL; context::AbstractString = "Cast")
+  name, suffix = _parse_cast_type(type, context)
+  occursin('[', suffix) && throw(_capability_error(conn, :arrays, "$(context): a cast to $(repr(name * suffix))"))
+  key = lowercase(name)
+  key in ("inet", "cidr") && throw(_capability_error(conn, :network_types, "$(context): a cast to $(repr(name * suffix))"))
+  # The parser keeps `with/without time zone` after a size (`timestamp(3) with time zone`) in the
+  # suffix; MySQL takes only the size, and the zone words decide the name as they do unsized.
+  m = match(r"^(\(\d+(?:,\d+)?\))?(?: (with|without) time zone)?$", suffix)
+  size = m === nothing || m.captures[1] === nothing ? "" : m.captures[1]
+  m === nothing || m.captures[2] === nothing || (key = "$(key) $(m.captures[2]) time zone")
+  # A field struct's canonical `type` (`INTEGER UNSIGNED`, `TIMESTAMPTZ`, `BLOB`) is one of the names above.
+  target = m === nothing ? nothing : get(_MYSQL_CAST_TARGETS, key, nothing)
+  target == "DOUBLE" && key == "float" && !isempty(size) && (target = "FLOAT")
+  if target === nothing || (!isempty(size) && !(target in _MYSQL_SIZED_CAST_TARGETS))
+    throw(UnsupportedConnectionError(
+      "$(context): a cast to $(repr(name * suffix)) is not rendered for MySQL yet: MySQL's CAST has no " *
+      "target that holds its meaning, and PormG passes no type name through unmapped (#1130)."))
+  end
+  isempty(size) || return target * size
+  target == "DECIMAL" && return "DECIMAL(65,30)"
+  target == "DATETIME" && return "DATETIME(3)"
+  target == "TIME" && return "TIME(6)"
+  return target
+end
 
 # #822 — SQLite has no temporal types, only type AFFINITY, and every temporal type name gets NUMERIC
 # affinity (it contains none of INT/CHAR/CLOB/TEXT/BLOB/REAL/FLOA/DOUB). A NUMERIC cast reads the
@@ -990,6 +1049,10 @@ end
 function CAST(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   return sqlite_cast_sql(column, format["type"], conn)
 end
+# MySQL: the target `cast_type_sql` maps the name to (#1130 phase 2b). A meaning departure
+# (`_MEANING_DEPARTURES`) refuses the cast before this renders.
+CAST(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
+  "CAST($(column) AS $(cast_type_sql(format["type"], conn)))"
 # #1006: the public `Concat` skips a NULL operand on both engines, as Django's `ConcatPair` does
 # (it coalesces every operand to `''`). PostgreSQL's `CONCAT` already skips one; SQLite has no
 # `CONCAT` before 3.44 and its `||` propagates NULL, so each operand is wrapped in `COALESCE(…, '')`.

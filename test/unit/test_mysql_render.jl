@@ -499,3 +499,48 @@ end
   @test occursin("MySQL's / always keeps the fraction, so PormG refuses it on MySQL", msg)
   @test occursin("Cast(x, IntegerField())", msg) && occursin("Cast(x, \"numeric\")", msg)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL casts: each type name maps to the CAST target that holds its meaning (#1130 phase 2b)
+# MySQL's CAST takes a closed set of targets, so a PormG type name is mapped, never passed through.
+# Expected: text → CHAR, integers → SIGNED, a bare numeric → DECIMAL(65,30) (MySQL's bare DECIMAL is
+# DECIMAL(10,0)), a sized one kept, real → FLOAT (single precision), the doubles → DOUBLE, timestamps
+# → DATETIME(3), time → TIME(6), uuid → CHAR(36); arrays and network types refused through the
+# capability table, and a name with no faithful target (boolean, interval, bytea, a user type)
+# refused before any SQL. Why: an unmapped name reaching the server is either a syntax error or a
+# cast to some other type than the one written.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL casts: each type name maps to the CAST target that holds its meaning" begin
+  my = MrMockMySQL()
+  t(x) = PormG.Dialect.cast_type_sql(x, my)
+  @test [t(x) for x in ("text", "varchar", "varchar(20)", "character varying(5)", "TEXT", "VARCHAR")] ==
+        ["CHAR", "CHAR", "CHAR(20)", "CHAR(5)", "CHAR", "CHAR"]
+  @test [t(x) for x in ("integer", "int", "int4", "smallint", "bigint", "int8", "INTEGER UNSIGNED")] == fill("SIGNED", 7)
+  @test [t(x) for x in ("numeric", "decimal", "dec", "numeric(10,2)", "numeric(5)")] ==
+        ["DECIMAL(65,30)", "DECIMAL(65,30)", "DECIMAL(65,30)", "DECIMAL(10,2)", "DECIMAL(5)"]
+  @test [t(x) for x in ("real", "float4", "float", "float8", "double precision", "float(24)", "float(53)")] ==
+        ["FLOAT", "FLOAT", "DOUBLE", "DOUBLE", "DOUBLE", "FLOAT(24)", "FLOAT(53)"]
+  @test [t(x) for x in ("date", "timestamp", "timestamptz", "TIMESTAMPTZ", "timestamp with time zone",
+                        "timestamp(3) with time zone", "timestamp(0)", "time", "time(3)")] ==
+        ["DATE", "DATETIME(3)", "DATETIME(3)", "DATETIME(3)", "DATETIME(3)", "DATETIME(3)", "DATETIME(0)", "TIME(6)", "TIME(3)"]
+  @test [t(x) for x in ("json", "jsonb", "uuid")] == ["JSON", "JSON", "CHAR(36)"]
+  # A feature MySQL lacks is the capability table's refusal.
+  @test_throws PormG.BackendCapabilityError t("integer[]")
+  @test_throws PormG.BackendCapabilityError t("inet")
+  # No faithful target: refused before any SQL, never passed through.
+  for x in ("boolean", "bool", "interval", "bytea", "BLOB", "time with time zone", "mood", "integer(4)", "uuid(3)")
+    err = try; t(x); nothing; catch e; e; end
+    @test (x, err isa PormG.UnsupportedConnectionError) == (x, true)
+    @test occursin("is not rendered for MySQL yet", sprint(showerror, err))
+  end
+  # The rendered cast, through the public `Cast`.
+  sel(f) = _mr_inspect(_MR_MY.Result.objects.values("c" => f))[:sql_text]
+  @test occursin("CAST(`Tb`.`grid` AS CHAR) as `c`", sel(PormG.QueryBuilder.Cast("grid", "text")))
+  @test occursin("CAST(`Tb`.`points` AS DECIMAL(10,2)) as `c`", sel(PormG.QueryBuilder.Cast("points", "numeric(10,2)")))
+  # The departures still refuse first: a date's cast to a number is MySQL's departure (#1260).
+  err = try; sel(PormG.QueryBuilder.Cast("raceid__date", "integer")); nothing; catch e; e; end
+  @test err isa PormG.QueryBuildError && occursin("MySQL computes its digits read as one number", sprint(showerror, err))
+  # A uuid cast compares as text on MySQL, as on SQLite: the engine fact the walk reads.
+  @test PormG.QueryBuilder._cast_renders_text(PormG.Models.UUIDField(), my)
+  @test !PormG.QueryBuilder._cast_renders_text(PormG.Models.IntegerField(), my)
+end

@@ -12,7 +12,7 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 using Test, Dates, TimeZones, Decimals, DataFrames
-import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, F, Coalesce
+import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, F, Coalesce, Cast
 
 # The model tables this file creates, in drop order (children first).
 const _MYR_TABLES = ("result", "new_join_position", "race", "circuit", "driver")
@@ -324,6 +324,41 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             end
             # Division by zero reads NULL on MySQL (the server warns, 1365); documented per engine.
             @test only(M.Result.objects.filter("resultid" => 1).values("z" => F("grid") / 0).list())[:z] === missing
+        end
+
+        # What: `Cast` reads back as the type it names, and a cast MySQL computes another value for is
+        # refused before any SQL.
+        # SQL: `CAST(`Tb`.`grid` AS CHAR)`, `CAST(… AS DECIMAL(10,2))`, `CAST(… AS SIGNED)`, `CAST(… AS FLOAT)`,
+        #      `CAST(`Tb`.`start_at` AS DATE)`, `CAST(… AS DATETIME(3))`, `CAST(… AS DECIMAL(65,30))`.
+        # Why: MySQL's CAST takes a closed set of targets, so each type name is mapped to the one that
+        # holds its meaning (#1271): checked here against the value each type means in Julia.
+        @testset "Cast reads back as the type it names" begin
+            r = only(M.Result.objects.filter("resultid" => 2).values(
+                "t" => Cast("grid", "text"), "d" => Cast("points", "numeric(10,2)"), "i" => Cast("points", "integer"),
+                "n" => Cast("grid", "numeric"), "f4" => Cast("points", "real"), "f8" => Cast("grid", "float8")).list())
+            @test r[:t] == "4"
+            @test r[:d] isa Decimals.Decimal && r[:d] == Decimals.Decimal(9)
+            @test r[:i] isa Integer && r[:i] == 9
+            # A bare `numeric` keeps the value: MySQL's own bare `DECIMAL` would be `DECIMAL(10,0)`.
+            @test r[:n] isa Decimals.Decimal && r[:n] == Decimals.Decimal(4)
+            @test r[:f4] isa Float32 && r[:f4] == 9.0f0
+            @test r[:f8] isa Float64 && r[:f8] == 4.0
+            # Rounding to the scale and to the nearest integer, as the casts mean: 6 / 4 = 1.5.
+            r = only(M.Result.objects.filter("resultid" => 1).values(
+                "half" => Cast(F("points") / 4, "integer"), "s" => Cast(F("points") / 4, "numeric(10,0)")).list())
+            @test r[:half] == 2 && r[:s] == Decimals.Decimal(2)
+            # Temporal targets: a timestamp cut to its date, and a timestamp at millisecond precision.
+            r = only(M.Race.objects.filter("raceid" => 1).values(
+                "d" => Cast("start_at", "date"), "ts" => Cast("start_at", "timestamp")).list())
+            @test r[:d] == Date(1990, 3, 25)
+            @test r[:ts] == DateTime(1990, 3, 25, 17, 0, 0, 125)
+            # A cast whose value MySQL computes differently is refused before any SQL (#1260): a date's
+            # number is its digits there (`19900325`), not the error the cast means.
+            e = try; M.Race.objects.values("n" => Cast("date", "integer")).list(); nothing; catch err; err; end
+            @test e isa PormG.QueryBuildError && occursin("so PormG refuses it on MySQL", msg(e))
+            # A type with no faithful MySQL target is refused before any SQL, never passed through.
+            e = try; M.Result.objects.values("b" => Cast("grid", "boolean")).list(); nothing; catch err; err; end
+            @test e isa PormG.UnsupportedConnectionError && occursin("is not rendered for MySQL yet", msg(e))
         end
 
         # What: a DurationField filter is refused before any SQL; an ordering or a sum over one reaches the

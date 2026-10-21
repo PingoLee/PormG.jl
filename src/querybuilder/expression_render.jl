@@ -653,7 +653,9 @@ _interval_ms_as_text(ms::AbstractString, ::PormGMySQL) = String(ms)
 # A product or a quotient of the integer form, or a mean of it, rounded back to a whole unit, half away
 # from zero, as `_ns_to_units` rounds a literal (#881, #900). MySQL's `ROUND` of an exact value rounds
 # half away from zero too (measured on 8.4: `ROUND(-5/2)` is `-3`), and its `/` and `AVG` are exact
-# DECIMALs, so the cast is the only rounding.
+# DECIMALs, so the cast is the only rounding. A product with a DOUBLE (`d * F("points")`) is a DOUBLE,
+# which MySQL's `ROUND` rounds as its C library does: a representation difference at a tie of half a
+# microsecond, documented rather than guarded.
 _interval_round_sql(x::AbstractString, ::PormGSQLite) = "CAST(round($(x)) AS INTEGER)"
 _interval_round_sql(x::AbstractString, ::PormGMySQL) = "CAST(ROUND($(x)) AS SIGNED)"
 # `date ± interval` with the interval in its integer form (#881). SQLite shifts the julian day by the
@@ -826,7 +828,10 @@ function _interval_ms_candidate(p::FObject)
   end
   return false
 end
-_interval_ms_candidate(p::SQLText) = _duration_literal_units(p.field, 1_000_000) !== nothing   # #907, SQLite's unit
+# SQLite's unit, deliberately: the question is whether the literal's millisecond text prints back as
+# what it binds (#907), which only SQLite asks; an engine that stores the integer skips every gate this
+# answers (`_stores_interval_as_units`).
+_interval_ms_candidate(p::SQLText) = _duration_literal_units(p.field, 1_000_000) !== nothing   # #907
 _interval_ms_candidate(::Any) = false
 
 # #907 — a duration literal's exact number of `unit`s (nanoseconds per unit, `_interval_unit_ns`), or
@@ -972,6 +977,13 @@ _interval_error(what::AbstractString, conn) =
   QueryBuildError("$(what) is not supported on $(_backend_name(conn)). An interval there is a timestamp " *
                   "difference, a DurationField column or a duration (Hour(1)); it combines with another " *
                   "interval (+, -, comparisons), with a number (* and /), or with a date (date + interval).")
+# #1130 — where an interval is the integer it stores (MySQL), comparing one with a value that is not
+# one compares a count with microseconds and answers, silently; PostgreSQL has no such operator. Refused
+# both ways round, from every path that compares two expressions. SQLite keeps its #881 rules.
+function _refuse_interval_against_number(op, instruc::SQLInstruction)
+  _stores_interval_as_units(instruc.connection) || return nothing
+  throw(_interval_error("`$(op)` between an interval and a value that is not one", instruc.connection))
+end
 # #1301 — ordering an interval with no millisecond form: a `Case` whose value is a duration, a function
 # over one (`Max`, `Coalesce`, …), a window value function (`Lag`) or `NullIf`. SQLite holds it as its
 # `HH:MM:SS` text, and text order is the interval's order only below 100 hours and for non-negative
@@ -1043,7 +1055,7 @@ _is_field_path(s::String, instruc::SQLInstruction) = contains(s, "__") || s in i
 # MySQL (#1130 phase 2b): `± INTERVAL (n) DAY`, which keeps a DATE a DATE and a DATETIME a DATETIME,
 # and takes a `BIGINT` count as it is. MySQL also has `INTERVAL (n) DAY + date`, so `count + date`
 # keeps its text order, and with it the order its parameters were bound in. Only a whole-day count
-# reaches it there: a shift by an interval's milliseconds is refused before (`_interval_ms_sql`).
+# reaches it there: a shift by an interval is `INTERVAL (d) MICROSECOND` (`_interval_shift_sql`).
 _render_day_count_shift(date_side::AbstractString, date_kind::Union{CDate,CDateTime}, count_side::AbstractString,
                         operation::String, date_first::Bool, instruc::SQLInstruction)::String =
   _day_count_shift_sql(instruc.connection, date_side, date_kind, count_side, operation, date_first, instruc)
@@ -1124,6 +1136,7 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
   if op in _COMPARISON_OPERATIONS
     if expr_right
       right_side, right_kind = _render_operand_typed(v.operand, v.field_name, op, instruc; left_kind = bind_kind)
+      _is_interval_kind(right_kind) || _refuse_interval_against_number(op, instruc)
       if sqlite && (left_kind isa _IntervalMs || right_kind isa _IntervalMs)
         lms = _interval_ms_sql(left_side, v.field_name, left_kind, instruc)
         rms = _interval_ms_sql(right_side, v.operand, right_kind, instruc)
@@ -1149,10 +1162,11 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
     # milliseconds, as a `DurationField` column does: both leave SQLite as their text. The right side
     # renders once (a `Subquery` binds), to the SQL `_set_update_query_operand` gives it, so a right
     # side that is not a duration keeps the comparison it had.
-    if sqlite && op in _ORDERING_OPERATIONS && left_kind isa Union{CInterval,_IntervalMs} &&
-       v.operand isa Union{CTEReference,SubqueryObject}
+    if sqlite && (op in _ORDERING_OPERATIONS || _stores_interval_as_units(instruc.connection)) &&
+       left_kind isa Union{CInterval,_IntervalMs} && v.operand isa Union{CTEReference,SubqueryObject}
       # #985: on a join condition the right side renders on the right, as `_set_update_query_operand`'s does.
       right_side, right_ms, right_interval = _on_join_right(() -> _render_interval_operand(v.operand, instruc), instruc)
+      right_interval || _refuse_interval_against_number(op, instruc)
       if right_interval
         lms = _interval_ms_sql(left_side, v.field_name, left_kind, instruc)
         lms !== nothing && right_ms !== nothing && return "($(lms) $(op) $(right_ms))", nothing
@@ -1165,6 +1179,14 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
     if sqlite && left_kind isa _IntervalMs
       if v.operand isa Union{Dates.Period,Dates.CompoundPeriod}
         return "($(left_side) $(op) $(add_parameter!(instruc, _duration_units(v.operand, instruc.connection))))", nothing
+      end
+      # #1130: where the interval IS its integer (MySQL) there is no text to compare: a duration string
+      # binds its count, and anything else is no duration, which the duration formatter says, rather
+      # than a text bound against a number (MySQL reads `'00:01:00'` as `0`).
+      if _stores_interval_as_units(instruc.connection) && !(v.operand isa Union{Nothing,Missing})
+        units = _duration_value_units(v.operand, instruc.connection)
+        units === nothing && value_formatter(CInterval(), instruc.connection)(v.operand)   # raises
+        return "($(left_side) $(op) $(add_parameter!(instruc, units)))", nothing
       end
       op in _ORDERING_OPERATIONS &&
         throw(_interval_error("Ordering (`$(op)`) an interval against $(typeof(v.operand))", instruc.connection))

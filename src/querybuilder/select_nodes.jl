@@ -674,8 +674,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     # every engine, since the spelling below means the magnitude everywhere.
     (ms === nothing && !operand_interval) || throw(QueryBuildError(
       "`Abs` of an interval is not supported on $(_backend_name(instruc.connection)): an interval has no " *
-      "absolute value in SQL (PostgreSQL has no abs(interval)). For the magnitude of an interval d, " *
-      "write Greatest(d, d * -1)."))
+      "absolute value in SQL. For the magnitude of an interval d, write Greatest(d, d * -1)."))
   elseif v isa FObject && _interval_ms_candidate(v)
     sqlite = _interval_as_ms(instruc.connection)
     if v.column isa AbstractVector
@@ -881,6 +880,14 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     d = _cast_divergent_operand(v, instruc)
     d === nothing || throw(_meaning_refusal(_declared_cast_label(v), d.what, d.row, instruc.connection;
                                             flag = d.flag, declared = d.declared))
+  end
+  # #1130: MySQL stores an interval as its microseconds, so a cast of one to text printed that count
+  # (`80500000`), which PormG would read back as that many seconds. The engine that departs normalizes
+  # on itself: the cast reads the `HH:MM:SS` text PormG writes, as SQLite's stored text does.
+  if v.function_name == "CAST" && _stores_interval_as_units(instruc.connection) &&
+     _sql_type_field(v.kwargs["type"]) isa Union{Models.sTextField,Models.sCharField} &&
+     _expression_kind(v.column, instruc) isa CInterval
+    resolved_column = Dialect._mysql_interval_text(resolved_column)
   end
   sql = getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection)
   # #900: PostgreSQL's `avg(interval)` is an interval; the milliseconds' mean is rounded to one, the

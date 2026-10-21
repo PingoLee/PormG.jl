@@ -298,9 +298,25 @@ function _parse_mysql_interval(v::Decimals.Decimal)
     q, r = divrem(v.c, big(10)^(-v.q))
     2 * r >= big(10)^(-v.q) ? q + 1 : q
   end
-  return _microseconds_period(Int64(Bool(v.s) ? -c : c))   # `s` is an Int on Decimals 0.4, a Bool on 0.5
+  c = Bool(v.s) ? -c : c   # `s` is an Int on Decimals 0.4, a Bool on 0.5
+  typemin(Int64) <= c <= typemax(Int64) || return v
+  return _microseconds_period(Int64(c))
 end
 _parse_mysql_interval(v::Any) = v
+# The same microseconds as the text `Models._duration_nanoseconds_to_string` writes — `[-]HH:MM:SS`,
+# hours never folded into days, then the fraction with its trailing zeros dropped — for a cast of an
+# interval to text (#1130), where MySQL's own `CAST(… AS CHAR)` prints the count. The count is read
+# ONCE, through a derived table in a scalar subquery, since an expression's parameters may not bind
+# twice (measured on 8.4: an outer column and a bound parameter both read there, NULL in is NULL out).
+# `LPAD` would cut an hour count past two digits, so the padding is an `IF`.
+function _mysql_interval_text(us::AbstractString)::String
+  u = "`_pormg_us`"
+  pad2(x) = "IF($(x) < 10, CONCAT('0', $(x)), $(x))"
+  text = "CONCAT(IF($(u) < 0, '-', ''), $(pad2("ABS($(u)) DIV 3600000000")), ':', " *
+         "$(pad2("ABS($(u)) DIV 60000000 % 60")), ':', $(pad2("ABS($(u)) DIV 1000000 % 60")), " *
+         "IF(ABS($(u)) % 1000000 = 0, '', CONCAT('.', TRIM(TRAILING '0' FROM LPAD(ABS($(u)) % 1000000, 6, '0')))))"
+  return "(SELECT $(text) FROM (SELECT $(us) AS $(u)) AS `_pormg_d`)"
+end
 function _microseconds_period(us::Int64)
   s = us < 0 ? -1 : 1
   a = abs(us)

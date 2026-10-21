@@ -1644,6 +1644,15 @@ function _render_interval_alias_predicate(v::SQLTypeOper, having_key::MemoKey, i
   source = _projected_interval_source(having_key[2], instruc)
   source === nothing && return nothing
   ms_values = _predicate_duration_units(v.operator, v.values, instruc.connection)
+  # #1130: where the interval IS its integer (MySQL), a compared value that is no duration has no text
+  # comparison to fall back to: the duration formatter refuses it, as the alias's own formatter does
+  # for any other interval alias, rather than a `Value(Hour(1))` alias comparing its count with `10`.
+  if ms_values === nothing && _stores_interval_as_units(instruc.connection) &&
+     (v.operator in _INTERVAL_MS_PREDICATES || v.operator in _INTERVAL_MS_LIST_PREDICATES)
+    formatter = value_formatter(CInterval(), instruc.connection)
+    _guarded_format(formatter, v.values, v.operator, having_key[2], _formatter_type_label(formatter);
+                    subject = "projection alias")
+  end
   ms_values === nothing && return nothing
   sql, interval_ms = _render_interval_source_ms(source, instruc)
   interval_ms && return _render_predicate(sql, v.operator, _bind_predicate_value(instruc, v.operator, ms_values), instruc)

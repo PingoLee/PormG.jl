@@ -458,6 +458,12 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             for r in diffs
                 @test r[:start_at] === missing ? r[:g] === missing : same(r[:g], Hour(2))
             end
+            # Its text is the `HH:MM:SS` text PormG writes and reads back, not the stored count.
+            texts = M.Result.objects.filter("fastestlaptime__@isnull" => false).values("resultid",
+                "t" => Cast("fastestlaptime", "text"), "d" => Cast(F("fastestlaptime") * 2, "text")).order_by("resultid").list()
+            @test [r[:t] for r in texts] == ["00:01:20.5", "1000:00:00.000001", "00:01:21.25"]
+            @test [r[:d] for r in texts] == ["00:02:41", "2000:00:00.000002", "00:02:42.5"]
+            @test PormG.Models.format_duration_sql(lap[3]) == texts[3][:t]
             # What has no meaning is refused before any SQL, naming MySQL.
             e = try; M.Result.objects.values("t" => F("fastestlaptime") + 1).list(); nothing; catch err; err; end
             @test e isa PormG.QueryBuildError && occursin("is not supported on MySQL", msg(e))

@@ -799,6 +799,19 @@ function _is_duration_column(v::SQLTypeOper, instruc::SQLInstruction)::Bool
   end
   return field isa Models.sDurationField
 end
+# #1130 — on MySQL an interval is the count it stores, so a filter that compares an interval column
+# with an expression that is not an interval, or a column that is not one with an interval
+# (`"fastestlaptime" => F("grid")`, `"grid" => F("fastestlaptime")`, a `Subquery`, a function),
+# compares a count with microseconds and answers, silently. Decided after both sides render (render
+# first, then type), for the comparison and membership operators only: a pattern lookup and `@isnull`
+# have their own rules.
+function _refuse_duration_mismatch(v::SQLTypeOper, instruc::SQLInstruction)
+  _stores_interval_as_units(instruc.connection) || return nothing
+  v.operator in _INTERVAL_MS_PREDICATES || v.operator in _INTERVAL_MS_LIST_PREDICATES || return nothing
+  left = _is_duration_column(v, instruc) || (v.column isa SQLField && _expression_kind(v.column.field, instruc) isa CInterval)
+  left == (_expression_kind(v.values, instruc) isa CInterval) && return nothing
+  _refuse_interval_against_number(v.operator, instruc)
+end
 function _sqlite_duration_column_ms(v::SQLTypeOper, instruc::SQLInstruction)
   _is_sqlite_duration_column(v, instruc) || return nothing
   return _predicate_duration_units(v.operator, v.values, instruc.connection)
@@ -822,6 +835,8 @@ function _sqlite_interval_alias_comparison(v::SQLTypeOper, instruc::SQLInstructi
   source === nothing && return nothing
   lhs, lhs_ms = _render_interval_source_ms(source, instruc)
   rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)   # #985: the right side
+  # #1130: where every interval is its integer (MySQL), a side with no integer form is no interval.
+  lhs_ms == rhs_ms || _refuse_interval_against_number(v.operator, instruc)
   if !(lhs_ms && rhs_ms)
     lhs_ms && (lhs = _interval_ms_as_text(lhs, instruc.connection))
     rhs_ms && (rhs = _interval_ms_as_text(rhs, instruc.connection))
@@ -1109,16 +1124,19 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     if v.values isa Union{FExpression,CTEReference} && v.operator in _ORDERING_OPERATIONS &&
        _is_sqlite_duration_column(v, instruc)
       rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)
+      _refuse_duration_mismatch(v, instruc)
       return _render_column_rhs(rhs_ms ? _interval_text_as_ms(column, instruc.connection) : column, v.operator, rhs, instruc)
     end
     # F expressions are safe since they reference model fields; a CTE handle (#444) is the same
     # thing scoped to a CTE — `filter("raceid" => CTE("r91", "raceid"))` is a column comparison,
     # never a bound value.
     placeholders = _on_join_right(() -> _get_filter_query(v.values, instruc), instruc)
+    _refuse_duration_mismatch(v, instruc)
     return _render_column_rhs(column, v.operator, placeholders, instruc)
   elseif isa(v.values, SQLTypeFunction)
     # Case/When and other SQL function expressions as filter RHS
     placeholders = _on_join_right(() -> _get_filter_query(v.values, instruc), instruc)
+    _refuse_duration_mismatch(v, instruc)
     return _render_column_rhs(column, v.operator, placeholders, instruc)
   elseif isa(v.values, SubqueryObject)
     # #926: a scalar subquery, `"grid" => Subquery(…)`. `column` rendered first, so its markers number
@@ -1127,10 +1145,12 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # milliseconds, as against an `F` interval above; the subquery renders once either way.
     if v.operator in _ORDERING_OPERATIONS && _is_sqlite_duration_column(v, instruc)
       rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)
+      _refuse_duration_mismatch(v, instruc)
       return _render_column_rhs(rhs_ms ? _interval_text_as_ms(column, instruc.connection) : column, v.operator, rhs, instruc)
     end
-    return _render_column_rhs(column, v.operator,
-                              _on_join_right(() -> _get_filter_query(v.values, instruc), instruc), instruc)
+    placeholders = _on_join_right(() -> _get_filter_query(v.values, instruc), instruc)
+    _refuse_duration_mismatch(v, instruc)
+    return _render_column_rhs(column, v.operator, placeholders, instruc)
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && v.column.field.formatter !== nothing
     @pormg_debug false
     # #576: this is the arm `filter("happened__@month" => "abc")` lands in once the sargable rewrite

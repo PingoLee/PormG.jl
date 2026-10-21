@@ -7,7 +7,8 @@ timestamp, a time, an interval, binary data, a network address or a full-text do
 
 - PostgreSQL has no assignment cast from any of them to `numeric`, `integer` or `double precision`,
   so the statement failed only when it ran, as a `StatementError`;
-- SQLite stored the value's text in the INTEGER, REAL or NUMERIC column, a silent different value.
+- SQLite stored the value's text (a blob's bytes) in the INTEGER, REAL or NUMERIC column, a silent
+  different value.
 
 No engine gives the call a meaning, so it is explicit intent (#1147): refused on every engine. The
 refusal names no `Cast`, because PostgreSQL has none from these types to a number. A boolean is left
@@ -52,6 +53,8 @@ Unn_result = Models.Model("unn_result",
   grid            = Models.IntegerField(null = true),
   milliseconds    = Models.BigIntegerField(null = true),
   fastestlapspeed = Models.FloatField(null = true),
+  laps            = Models.PositiveIntegerField(null = true),
+  positionorder   = Models.PositiveSmallIntegerField(null = true),
   positiontext    = Models.CharField(null = true),
   finished        = Models.BooleanField(null = true),
   token           = Models.UUIDField(null = true),
@@ -86,7 +89,8 @@ _unn_msg(e) = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
   # PostgreSQL and SQLite, naming the call, the column, its type, the field and #1297. Why: SQLite
   # stored the value's text in the number column, and PostgreSQL failed only at execute.
   targets = (("points", "DecimalField"), ("grid", "IntegerField"),
-             ("milliseconds", "BigIntegerField"), ("fastestlapspeed", "FloatField"))
+             ("milliseconds", "BigIntegerField"), ("fastestlapspeed", "FloatField"),
+             ("laps", "PositiveIntegerField"), ("positionorder", "PositiveSmallIntegerField"))
   for (column, what) in (("token", "a UUID"), ("racedate", "a date"), ("recorded", "a timestamp"),
                          ("fastestlaptime", "a time of day"), ("duration", "an interval"),
                          ("telemetry", "binary data"))
@@ -114,6 +118,29 @@ end
       err = _unn_refusal("points", value; conn = conn)
       @test err isa QueryBuildError
       @test occursin("writes the expression, which is", _unn_msg(err))
+    end
+  end
+end
+
+@testset "update: temporal arithmetic and a declared non-number cast are refused too (#1297)" begin
+  # What: `recorded - recorded` (an interval), `racedate + 1` (a date) and `duration * 2` (an
+  # interval) into the BigIntegerField `milliseconds`, and `Cast(token, "uuid")` / `Cast(…, "inet")`
+  # into `grid`, raise `QueryBuildError` on both engines. Why: the arithmetic is the likeliest real
+  # shape (a timestamp difference into a milliseconds column), and on SQLite a uuid or network cast
+  # renders `CAST(x AS TEXT)`, which the walk types as text there, yet it still means a UUID; read by
+  # the walk alone it built on SQLite and stored the text.
+  for conn in (_UNN_PG, _UNN_SL)
+    for (value, what) in ((_NF("recorded") - _NF("recorded"), "an interval"),
+                          (_NF("racedate") + 1, "a date"),
+                          (_NF("duration") * 2, "an interval"))
+      err = _unn_refusal("milliseconds", value; conn = conn)
+      @test err isa QueryBuildError
+      @test occursin("which is $(what), into the BigIntegerField `milliseconds`", _unn_msg(err))
+    end
+    for (type, what) in (("uuid", "a UUID"), ("inet", "a network address"))
+      err = _unn_refusal("grid", Fn.Cast(_NF("token"), type); conn = conn)
+      @test err isa QueryBuildError
+      @test occursin("which is $(what), into the IntegerField `grid`", _unn_msg(err))
     end
   end
 end

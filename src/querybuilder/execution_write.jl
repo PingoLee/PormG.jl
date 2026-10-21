@@ -1140,7 +1140,7 @@ function _refuse_update_scale_departure(f_meta, field::AbstractString, value, in
 end
 
 # #1297 — an expression of a type that is no number, written into a numeric field. SQLite stores the
-# value's text in the INTEGER, REAL or NUMERIC column (a UUID, a date), and PostgreSQL has no
+# value's text (or a blob's bytes) in the INTEGER, REAL or NUMERIC column, and PostgreSQL has no
 # assignment cast from one to a number, so it fails only when the statement runs. No engine gives the
 # call a meaning, so this is explicit intent, refused on every engine before any SQL rather than a
 # departure row. Nor is there a `Cast` to name: PostgreSQL has none from these types to a number.
@@ -1155,6 +1155,13 @@ const _NUMBER_FIELD_KINDS = Union{CInt16,CInt32,CInt64,CFloat64,CDecimal}
 function _refuse_update_non_number(f_meta, field::AbstractString, value, instruction::SQLInstruction)
   _field_kind(f_meta) isa _NUMBER_FIELD_KINDS || return nothing
   kind = _expression_kind(value, instruction)
+  # A declared type is read by its name, the same on every engine: the walk types a uuid or network
+  # cast on SQLite as the text it renders (`_declared_kind`), and it still means a UUID there.
+  declared_type = value isa FObject ? _declared_cast(value) : nothing
+  if declared_type isa AbstractString && !isempty(declared_type)
+    declared_field = _sql_type_field(declared_type)
+    declared_field === nothing || (kind = _field_kind(declared_field))
+  end
   i = findfirst(((K, _),) -> kind isa K, _NON_NUMBER_KINDS)
   i === nothing && return nothing
   what = last(_NON_NUMBER_KINDS[i])

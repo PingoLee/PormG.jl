@@ -1106,7 +1106,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     if v.values isa Union{FExpression,CTEReference} && v.operator in _ORDERING_OPERATIONS &&
        _is_sqlite_duration_column(v, instruc)
       rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)
-      return _render_column_rhs(rhs_ms ? Dialect._sqlite_interval_ms(column) : column, v.operator, rhs, instruc)
+      return _render_column_rhs(rhs_ms ? _interval_text_as_ms(column, instruc.connection) : column, v.operator, rhs, instruc)
     end
     # F expressions are safe since they reference model fields; a CTE handle (#444) is the same
     # thing scoped to a CTE — `filter("raceid" => CTE("r91", "raceid"))` is a column comparison,
@@ -1124,7 +1124,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # milliseconds, as against an `F` interval above; the subquery renders once either way.
     if v.operator in _ORDERING_OPERATIONS && _is_sqlite_duration_column(v, instruc)
       rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)
-      return _render_column_rhs(rhs_ms ? Dialect._sqlite_interval_ms(column) : column, v.operator, rhs, instruc)
+      return _render_column_rhs(rhs_ms ? _interval_text_as_ms(column, instruc.connection) : column, v.operator, rhs, instruc)
     end
     return _render_column_rhs(column, v.operator,
                               _on_join_right(() -> _get_filter_query(v.values, instruc), instruc), instruc)
@@ -1234,7 +1234,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # `F("time") > Minute(2)` does (`_render_interval_left`). The column reference is repeated by the
     # parse, which is safe because it binds nothing.
     if (ms_values = _sqlite_duration_column_ms(v, instruc)) !== nothing
-      return _render_predicate(Dialect._sqlite_interval_ms(column), v.operator,
+      return _render_predicate(_interval_text_as_ms(column, instruc.connection), v.operator,
                                _bind_predicate_value(instruc, v.operator, ms_values), instruc)
     end
     if v.operator == "ISNULL"

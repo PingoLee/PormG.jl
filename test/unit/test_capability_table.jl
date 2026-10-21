@@ -163,21 +163,26 @@ struct _CtSlAt <: PormG.PormGSQLite
   v::Int
 end
 PormG.backend_sqlite_version(c::_CtSlAt) = c.v
+struct _CtMyAt <: PormG.PormGMySQL
+  v::Int
+end
+PormG.backend_mysql_version(c::_CtMyAt) = c.v
 
 @testset "#1163: each version row answers no below its version and yes at it" begin
   rows = [(T, f, since) for (_, T) in PormG._BACKENDS for f in first.(PormG._BACKEND_FEATURES)
           for since in (PormG.Kernel._feature_since(T, Val(f)),) if since !== nothing]
   # The rows the server-version gates read, on the backend each is read on, at the version each
   # backend's own release notes give (the two floors are PormG's: #1162).
-  Sl, Pg = PormG.PormGSQLite, PormG.PormGPostgres
+  Sl, Pg, My = PormG.PormGSQLite, PormG.PormGPostgres, PormG.PormGMySQL
   @test Dict((T, f) => since for (T, f, since) in rows) == Dict(
     (Sl, :window_functions) => 3_025_000, (Sl, :nulls_order) => 3_030_000, (Sl, :table_list) => 3_037_000,
     (Pg, :schema_introspection) => 90_600, (Pg, :migration_plans) => 110_000,
     (Pg, :identity_columns) => 100_000, (Pg, :declarative_partitions) => 100_000,
     (Pg, :include_columns) => 110_000, (Pg, :generated_columns) => 120_000,
-    (Pg, :drop_expression) => 130_000, (Pg, :input_validity) => 160_000)
-  conn(T, v) = T === PormG.PormGPostgres ? _CtPgAt(v) : _CtSlAt(v)
-  below(T, since) = T === PormG.PormGPostgres ? since - 100 : since - 1_000
+    (Pg, :drop_expression) => 130_000, (Pg, :input_validity) => 160_000,
+    (My, :supported_server) => 80_400)
+  conn(T, v) = T === PormG.PormGPostgres ? _CtPgAt(v) : T === PormG.PormGMySQL ? _CtMyAt(v) : _CtSlAt(v)
+  below(T, since) = T === PormG.PormGPostgres ? since - 100 : T === PormG.PormGMySQL ? since - 1 : since - 1_000
   for (T, f, since) in rows
     @test !PormG._supports(conn(T, below(T, since)), f)
     @test PormG._supports(conn(T, since), f)

@@ -20,6 +20,7 @@ using PormG
 const _MD_QB = PormG.QueryBuilder
 struct _MdPg <: PormG.PormGPostgres end
 struct _MdSl <: PormG.PormGSQLite end
+struct _MdMy <: PormG.PormGMySQL end
 struct _MdOther <: PormG.PormGBackend end   # a backend that has decided nothing yet, as #1130 starts
 
 # The rows that leave a backend of `backends` (`name => type` pairs, as `_BACKENDS` holds them)
@@ -36,7 +37,8 @@ function _md_unclassified(rows, backends)
 end
 
 # An instance of each shipped engine, to ask `_departure` with.
-const _MD_CONN = Dict{Type,Any}(PormG.PormGPostgres => _MdPg(), PormG.PormGSQLite => _MdSl())
+const _MD_CONN = Dict{Type,Any}(PormG.PormGPostgres => _MdPg(), PormG.PormGSQLite => _MdSl(),
+                                PormG.PormGMySQL => _MdMy())
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Meaning departures: every row decides every shipped backend, exactly once
@@ -48,18 +50,46 @@ const _MD_CONN = Dict{Type,Any}(PormG.PormGPostgres => _MdPg(), PormG.PormGSQLit
   @test length(rows) >= 4
   @test all(row -> !isempty(row.departs), rows)
   @test _md_unclassified(rows, PormG._BACKENDS) == []
-  # The decisions themselves, stated rather than recomputed: every row is SQLite's departure
-  # (#1028, #1040, #1087, #1215, #1259, #1260), as the single `engine` field said before #1170.
+  # The decisions themselves, stated rather than recomputed. Every row is SQLite's departure (#1028,
+  # #1040, #1087, #1215, #1259, #1260), as the single `engine` field said before #1170. MySQL's were
+  # measured on 8.4.11 with literal casts (#1130 phase 2b): it departs where it reads a boolean as
+  # `1`, a temporal value as the number its digits spell (`20090329`) and an overflow as the largest
+  # value the type holds (`99.99`); it keeps a rounding cast to an integer, a cast to a scale and
+  # single precision (`CAST(… AS FLOAT)` reads back as a `Float32`).
+  Pg, Sl, My = PormG.PormGPostgres, PormG.PormGSQLite, PormG.PormGMySQL
   @test [(row.issue, row.targets, row.departs, row.keeps) for row in rows] == [
-    ("#1028", (:text,), (PormG.PormGSQLite,), (PormG.PormGPostgres,)),
-    ("#1028", (:integer,), (PormG.PormGSQLite,), (PormG.PormGPostgres,)),
-    ("#1259", (:integer, :number), (PormG.PormGSQLite,), (PormG.PormGPostgres,)),
-    ("#1260", (:integer, :number), (PormG.PormGSQLite,), (PormG.PormGPostgres,)),
-    ("#1260", (:integer, :number), (PormG.PormGSQLite,), (PormG.PormGPostgres,)),
-    ("#1040", (:scale,), (PormG.PormGSQLite,), (PormG.PormGPostgres,)),
-    ("#1087", (:precision,), (PormG.PormGSQLite,), (PormG.PormGPostgres,)),
-    ("#1215", (:single_precision,), (PormG.PormGSQLite,), (PormG.PormGPostgres,)),
+    ("#1028", (:text,), (Sl, My), (Pg,)),
+    ("#1028", (:integer,), (Sl,), (Pg, My)),
+    ("#1259", (:integer, :number), (Sl, My), (Pg,)),
+    ("#1260", (:integer, :number), (Sl, My), (Pg,)),
+    ("#1260", (:integer, :number), (Sl, My), (Pg,)),
+    ("#1040", (:scale,), (Sl,), (Pg, My)),
+    ("#1087", (:precision,), (Sl, My), (Pg,)),
+    ("#1215", (:single_precision,), (Sl,), (Pg, My)),
   ]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Meaning departures: every engine a row departs on says what it computes instead
+# `computes` is per departing engine, so a refusal names the value that engine gives (MySQL's
+# `20090329`, not SQLite's "the year"). A `departs` engine with no `computes` pair would fail only when
+# the refusal is built; a pair for an engine that does not depart is a stale text. Both fail here.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1130: every departing engine has its own computes text, and only those do" begin
+  for row in (_MD_QB._MEANING_DEPARTURES..., _MD_QB._INTEGER_QUOTIENT_DEPARTURE)
+    departs = row === _MD_QB._INTEGER_QUOTIENT_DEPARTURE ?
+      Tuple(T for (_, T) in PormG._BACKENDS if _MD_QB._untyped_sum_departs(_MD_CONN[T])) : row.departs
+    @test (row.issue, Set(first.(row.computes))) == (row.issue, Set(departs))
+    for T in departs
+      text = _MD_QB._computes(row, _MD_CONN[T])(nothing)
+      @test text isa String && !isempty(text)
+    end
+  end
+  # The engine at hand's own text reaches the message: MySQL's digits, SQLite's leading digits.
+  row = _MD_QB._MEANING_DEPARTURES[4]   # #1260, a date or a timestamp
+  msg(conn) = replace(sprint(showerror, _MD_QB._meaning_refusal("Cast", "x", row, conn)), r"\e\[[0-9;]*m" => "")
+  @test occursin("MySQL computes its digits read as one number (`2009-03-29` → `20090329`), so PormG refuses it on MySQL", msg(_MdMy()))
+  @test occursin("SQLite computes the leading digits of its text, the year, so PormG refuses it on SQLite", msg(_MdSl()))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -95,8 +125,10 @@ end
     end
   end
   # The integer quotient is the engine fact's (#1034 phase 3 step 2a): PostgreSQL departs, SQLite
-  # builds, and a backend that has not decided it gets a MethodError rather than "builds".
+  # builds, and a backend that has not decided it gets a MethodError rather than "builds". MySQL
+  # departs: its `SUM` of integers is a DECIMAL and `/` keeps the fraction (`SUM(15) / 2` is `7.5`).
   @test _MD_QB._departure(_MdPg(), :integer, :numeric_whole_division) === _MD_QB._INTEGER_QUOTIENT_DEPARTURE
   @test _MD_QB._departure(_MdSl(), :integer, :numeric_whole_division) === nothing
+  @test _MD_QB._departure(_MdMy(), :integer, :numeric_whole_division) === _MD_QB._INTEGER_QUOTIENT_DEPARTURE
   @test_throws MethodError _MD_QB._departure(_MdOther(), :integer, :numeric_whole_division)
 end

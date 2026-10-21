@@ -6,3219 +6,4931 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("path int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("path int | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("path int | after_when", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("path int | after_when", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("path int | after_when", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("path int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("path int | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("path int | cte", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("path int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("path int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("path int | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("path float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("path float | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("path float | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("path float | after_when", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("path float | after_when", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("path float | after_when", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("path float | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("path float | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("path float | cte", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("path float | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("path float | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("path float | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("path text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
   ("path text | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
+  ("path text | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
   ("path text | after_when", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
   ("path text | after_when", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
+  ("path text | after_when", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("path text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(250)", whole_numeric = nothing),
   ("path text | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(250)", whole_numeric = nothing),
+  ("path text | cte", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CVarChar(250)", whole_numeric = nothing),
   ("path text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
   ("path text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
+  ("path text | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CVarChar(250)", whole_numeric = nothing),
   ("path interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = "CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("path interval | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = "CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("path interval | alone", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = false, render = nothing, operand = "CInterval()", function_ = nothing, column = "CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("path interval | after_when", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = "CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("path interval | after_when", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = "CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("path interval | after_when", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("path interval | cte", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("path interval | cte", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+  ("path interval | cte", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = false, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("path interval | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("path interval | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("path interval | subquery", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = false, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("path decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = "CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("path decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = "CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("path decimal | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = false, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = "CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("path decimal | after_when", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = "CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("path decimal | after_when", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = "CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("path decimal | after_when", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("path decimal | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("path decimal | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("path decimal | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = false, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("path decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("path decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("path decimal | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = false, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("path bool | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("path bool | alone", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("path bool | alone", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("path bool | after_when", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("path bool | after_when", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("path bool | after_when", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("path bool | cte", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("path bool | cte", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
+  ("path bool | cte", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("path bool | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("path bool | subquery", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("path bool | subquery", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("path date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("path date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("path date | alone", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("path date | after_when", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("path date | after_when", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("path date | after_when", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("path date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("path date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("path date | cte", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("path date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("path date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("path date | subquery", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("path datetime | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = "CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("path datetime | alone", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = "CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("path datetime | alone", :mysql) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = "CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("path datetime | after_when", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = "CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("path datetime | after_when", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = "CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("path datetime | after_when", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("path datetime | cte", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("path datetime | cte", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("path datetime | cte", :mysql) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("path datetime | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("path datetime | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("path datetime | subquery", :mysql) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("path time | alone", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("path time | alone", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+  ("path time | alone", :mysql) =>
+    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("path time | after_when", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("path time | after_when", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+  ("path time | after_when", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("path time | cte", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("path time | cte", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
+  ("path time | cte", :mysql) =>
+    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("path time | subquery", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("path time | subquery", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+  ("path time | subquery", :mysql) =>
+    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("hop date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("hop date | alone", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("hop date | after_when", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("hop date | after_when", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("hop date | after_when", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("hop date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("hop date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("hop date | cte", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("hop date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("hop date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("hop date | subquery", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("hop datetime | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = "CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("hop datetime | alone", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = "CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("hop datetime | alone", :mysql) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = "CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("hop datetime | after_when", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = "CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("hop datetime | after_when", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = "CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("hop datetime | after_when", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("hop datetime | cte", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("hop datetime | cte", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("hop datetime | cte", :mysql) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("hop datetime | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("hop datetime | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("hop datetime | subquery", :mysql) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("hop time | alone", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("hop time | alone", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+  ("hop time | alone", :mysql) =>
+    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("hop time | after_when", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("hop time | after_when", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = "CTime()", formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+  ("hop time | after_when", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("hop time | cte", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("hop time | cte", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
+  ("hop time | cte", :mysql) =>
+    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("hop time | subquery", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("hop time | subquery", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+  ("hop time | subquery", :mysql) =>
+    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("Joined date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Joined date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Joined date | alone", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Joined date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Joined date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Joined date | cte", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Joined date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Joined date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Joined date | subquery", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Joined datetime | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = "CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Joined datetime | alone", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = "CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Joined datetime | alone", :mysql) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = "CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Joined datetime | cte", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Joined datetime | cte", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Joined datetime | cte", :mysql) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Joined datetime | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Joined datetime | subquery", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Joined datetime | subquery", :mysql) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Max Joined date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Max Joined date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Max Joined date | alone", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Max Joined date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Max Joined date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Max Joined date | cte", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Max Joined date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Max Joined date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Max Joined date | subquery", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("transform @year | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("transform @year | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("transform @year | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("transform @year | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("transform @year | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("transform @year | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("transform @year | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("transform @year | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("transform @year | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("transform @date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("transform @date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("transform @date | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching DATE(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("transform @date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function DATE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("transform @date | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function DATE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+  ("transform @date | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching DATE(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("transform @date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("transform @date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("transform @date | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching DATE(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("transform @hour | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("transform @hour | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("transform @hour | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("transform @hour | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("transform @hour | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("transform @hour | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("transform @hour | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("transform @hour | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_hour_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("transform @hour | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("ToChar YYYY-MM | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("ToChar YYYY-MM | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("ToChar YYYY-MM | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT_DATE(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("ToChar YYYY-MM | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
   ("ToChar YYYY-MM | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT_DATE is not a recognized function. Allowed: COUNT, SUM, AVG,"),
+  ("ToChar YYYY-MM | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT_DATE(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("ToChar YYYY-MM | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("ToChar YYYY-MM | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_yyyy_mm", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("ToChar YYYY-MM | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT_DATE(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Extract year | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Extract year | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract year | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Extract year | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
   ("Extract year | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXTRACT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN,"),
+  ("Extract year | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Extract year | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Extract year | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_year_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Extract year | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("F bare float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F bare float | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("F bare float | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F bare float | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("F bare float | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("F bare float | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("F bare float | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F bare float | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("F bare float | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F bare hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F bare hop date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F bare hop date | alone", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = "CDate()", operand = "CDate()", function_ = nothing, column = "CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F bare hop date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("F bare hop date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("F bare hop date | cte", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("F bare hop date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F bare hop date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F bare hop date | subquery", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F int + int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F int + int | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F int + int | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F int + int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F int + int | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("F int + int | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F int + int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F int + int | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F int + int | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F float * 2 | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F float * 2 | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("F float * 2 | alone", :mysql) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F float * 2 | cte", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("F float * 2 | cte", :sqlite) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("F float * 2 | cte", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("F float * 2 | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F float * 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("F float * 2 | subquery", :mysql) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F decimal * 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal * 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("F decimal * 2 | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal * 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal * 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("F decimal * 2 | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal * 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal * 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("F decimal * 2 | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F date + Day(1) | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date + Day(1) | alone", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Day, whose type PormG does not infer. Name the type the column holds b"),
   ("F date + Day(1) | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Day, whose type PormG does not infer. Name the type the column holds b"),
+  ("F date + Day(1) | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Day, whose type PormG does not infer. Name the type the column holds b"),
   ("F date + Day(1) | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + Day(1) | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date + Day(1) | subquery", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F datetime - datetime | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime - datetime | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F datetime - datetime | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F datetime - datetime | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F datetime - datetime | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("F datetime - datetime | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F datetime - datetime | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F datetime - datetime | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F datetime - datetime | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F date - date | alone", :postgres) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | alone", :sqlite) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F date - date | alone", :mysql) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F date - date | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("F date - date | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F date - date | subquery", :postgres) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, operand = "CInt32()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F date - date | subquery", :sqlite) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, operand = "CInt32()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F date - date | subquery", :mysql) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, operand = "CInt32()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F comparison | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("F comparison | alone", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F comparison | alone", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("F comparison | cte", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("F comparison | cte", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
+  ("F comparison | cte", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("F comparison | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("F comparison | subquery", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("F comparison | subquery", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("F date + Hour(1) | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | alone", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("F date + Hour(1) | alone", :mysql) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
   ("F date + Hour(1) | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
+  ("F date + Hour(1) | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
   ("F date + Hour(1) | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F date + Hour(1) | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("F date + Hour(1) | subquery", :mysql) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F datetime - Hour(1) | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F datetime - Hour(1) | alone", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("F datetime - Hour(1) | alone", :mysql) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F datetime - Hour(1) | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
   ("F datetime - Hour(1) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
+  ("F datetime - Hour(1) | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is a Hour, whose type PormG does not infer. Name the type the column holds "),
   ("F datetime - Hour(1) | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F datetime - Hour(1) | subquery", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("F datetime - Hour(1) | subquery", :mysql) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F date + 1 | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + 1 | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date + 1 | alone", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + 1 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F date + 1 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F date + 1 | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F date + 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + 1 | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date + 1 | subquery", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date + int col | alone", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F date + int col | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F date + int col | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F date + int col | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date + int col | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date + int col | subquery", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date - int col | alone", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = "CDate()", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F date - int col | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("F date - int col | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("F date - int col | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F date - int col | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("F date - int col | subquery", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("F interval + interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval + interval | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval + interval | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F interval + interval | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F interval + interval | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F interval + interval | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F interval + interval | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval + interval | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval + interval | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F interval * 2 | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval * 2 | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval * 2 | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F interval * 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
   ("F interval * 2 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("F interval * 2 | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F interval * 2 | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval * 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval * 2 | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F interval / int col | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval / int col | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = "rooted: CInterval()", formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval / int col | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F interval / int col | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
   ("F interval / int col | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (/) on a value that is not a number. Name the type the column ho"),
+  ("F interval / int col | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F interval / int col | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F interval / int col | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F interval / int col | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F int col * interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * interval | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F int col * interval | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F int col * interval | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
   ("F int col * interval | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (*) on a value that is not a number. Name the type the column ho"),
+  ("F int col * interval | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F int col * interval | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("F int col * interval | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("F int col * interval | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F hop date + interval | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop date + interval | alone", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = "CDateTime(false)", operand = nothing, function_ = nothing, column = "rooted: CDate()", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("F hop date + interval | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F hop date + interval | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F hop date + interval | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F hop date + interval | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F hop date + interval | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("F hop date + interval | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("F hop date + interval | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F hop datetime + interval | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F hop datetime + interval | alone", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = "rooted: CDateTime(true)", formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("F hop datetime + interval | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F hop datetime + interval | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("F hop datetime + interval | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("F hop datetime + interval | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F hop datetime + interval | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("F hop datetime + interval | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("F hop datetime + interval | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("F @year + 1 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F @year + 1 | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("F @year + 1 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("F @year + 1 | cte", :postgres) =>
     (stage = :build, error = "UnknownFieldError", message = "Error in _set_field_from_sql_function, the field start_at__@year not found in race"),
   ("F @year + 1 | cte", :sqlite) =>
     (stage = :build, error = "UnknownFieldError", message = "Error in _set_field_from_sql_function, the field start_at__@year not found in race"),
+  ("F @year + 1 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("F @year + 1 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F @year + 1 | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("F @year + 1 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Max F datetime - datetime | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Max F datetime - datetime | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Max F datetime - datetime | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Max F datetime - datetime | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("Max F datetime - datetime | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("Max F datetime - datetime | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Max F datetime - datetime | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Max F datetime - datetime | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Max F datetime - datetime | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Abs F date - date | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Abs F date - date | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Abs F date - date | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Abs F date - date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs F date - date | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+  ("Abs F date - date | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Abs F date - date | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Abs F date - date | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Abs F date - date | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce F date + Hour(1), date | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
   ("Coalesce F date + Hour(1), date | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
+  ("Coalesce F date + Hour(1), date | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
   ("Coalesce F date + Hour(1), date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
   ("Coalesce F date + Hour(1), date | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
+  ("Coalesce F date + Hour(1), date | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
   ("Coalesce F date + Hour(1), date | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
   ("Coalesce F date + Hour(1), date | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
+  ("Coalesce F date + Hour(1), date | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp without time zone (an expression) and a date (`date`), and does not say which type its value "),
   ("Value int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Value int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Value int | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Value int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Value int | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("Value int | cte", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Value int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Value int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Value int | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Value float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Value float | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Value float | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Value float | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Value float | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("Value float | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Value float | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Value float | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Value float | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Value date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Value date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Value date | alone", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Value date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is a Value of type Date, whose type PormG does not infer. Name the type the column "),
   ("Value date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is a Value of type Date, whose type PormG does not infer. Name the type the column "),
+  ("Value date | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is a Value of type Date, whose type PormG does not infer. Name the type the column "),
   ("Value date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Value date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Value date | subquery", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Value text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Value text | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Value text | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Value text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CText()", whole_numeric = nothing),
   ("Value text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CText()", whole_numeric = nothing),
+  ("Value text | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sCharField", kind = "CText()", whole_numeric = nothing),
   ("Value text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Value text | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Value text | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Value bool | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Value bool | alone", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Value bool | alone", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Value bool | cte", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Value bool | cte", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
+  ("Value bool | cte", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Value bool | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Value bool | subquery", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Value bool | subquery", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = nothing, textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Value datetime | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Value datetime | alone", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("Value datetime | alone", :mysql) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Value datetime | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is a Value of type DateTime, whose type PormG does not infer. Name the type the col"),
   ("Value datetime | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is a Value of type DateTime, whose type PormG does not infer. Name the type the col"),
+  ("Value datetime | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is a Value of type DateTime, whose type PormG does not infer. Name the type the col"),
   ("Value datetime | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Value datetime | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("Value datetime | subquery", :mysql) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Cast datetime to date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Cast datetime to date | alone", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Cast datetime to date | cte", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Cast datetime to date | subquery", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast float to integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast float to integer | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the FloatField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated one"),
+  ("Cast float to integer | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast float to integer | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast float to integer | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the FloatField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated one"),
+  ("Cast float to integer | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast float to integer | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast float to integer | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the FloatField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated one"),
+  ("Cast float to integer | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast int to text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast int to text | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Cast int to text | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast int to text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast int to text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Cast int to text | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast int to text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast int to text | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Cast int to text | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Case declared date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case declared date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case declared date | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case declared date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Case declared date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Case declared date | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case declared date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case declared date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case declared date | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped bool | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Case untyped bool | alone", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Case untyped bool | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped bool | cte", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Case untyped bool | cte", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
+  ("Case untyped bool | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped bool | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Case untyped bool | subquery", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Case untyped bool | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Case untyped int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Case untyped int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Case untyped int | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("Case untyped int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Case untyped int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Case untyped int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped float col | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case untyped float col | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Case untyped float col | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped float col | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Case untyped float col | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("Case untyped float col | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped float col | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case untyped float col | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Case untyped float col | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped interval col | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Case untyped interval col | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Case untyped interval col | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped interval col | cte", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Case untyped interval col | cte", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+  ("Case untyped interval col | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped interval col | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Case untyped interval col | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Case untyped interval col | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped date col | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case untyped date col | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped date col | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Case untyped date col | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped date col | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case untyped date col | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped zoned col | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Case untyped zoned col | alone", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Case untyped zoned col | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped zoned col | cte", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Case untyped zoned col | cte", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Case untyped zoned col | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped zoned col | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Case untyped zoned col | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Case untyped zoned col | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped time col | alone", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("Case untyped time col | alone", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+  ("Case untyped time col | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped time col | cte", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("Case untyped time col | cte", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
+  ("Case untyped time col | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped time col | subquery", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("Case untyped time col | subquery", :sqlite) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+  ("Case untyped time col | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped decimal col | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case untyped decimal col | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Case untyped decimal col | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped decimal col | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case untyped decimal col | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Case untyped decimal col | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped decimal col | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case untyped decimal col | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Case untyped decimal col | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast datetime to timestamp | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Cast datetime to timestamp | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:12' into"),
+  ("Cast datetime to timestamp | alone", :mysql) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Cast datetime to timestamp | cte", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Cast datetime to timestamp | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:12' into"),
+  ("Cast datetime to timestamp | cte", :mysql) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Cast datetime to timestamp | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Cast datetime to timestamp | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:12' into"),
+  ("Cast datetime to timestamp | subquery", :mysql) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Cast datetime to timestamptz | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Cast datetime to timestamptz | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamptz\". It has no time types, and CAST(… AS TIMESTAMPTZ) turns '2020-03-29 10:11:12' "),
+  ("Cast datetime to timestamptz | alone", :mysql) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Cast datetime to timestamptz | cte", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Cast datetime to timestamptz | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamptz\". It has no time types, and CAST(… AS TIMESTAMPTZ) turns '2020-03-29 10:11:12' "),
+  ("Cast datetime to timestamptz | cte", :mysql) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Cast datetime to timestamptz | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Cast datetime to timestamptz | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamptz\". It has no time types, and CAST(… AS TIMESTAMPTZ) turns '2020-03-29 10:11:12' "),
+  ("Cast datetime to timestamptz | subquery", :mysql) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Cast datetime to time | alone", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("Cast datetime to time | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("Cast datetime to time | alone", :mysql) =>
+    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("Cast datetime to time | cte", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("Cast datetime to time | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("Cast datetime to time | cte", :mysql) =>
+    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
   ("Cast datetime to time | subquery", :postgres) =>
     (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("Cast datetime to time | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("Cast datetime to time | subquery", :mysql) =>
+    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
   ("Cast interval to interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Cast interval to interval | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"interval\". It has no time types, and CAST(… AS INTERVAL) turns '2020-03-29 10:11:12' into t"),
+  ("Cast interval to interval | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"interval\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG p"),
   ("Cast interval to interval | cte", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Cast interval to interval | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"interval\". It has no time types, and CAST(… AS INTERVAL) turns '2020-03-29 10:11:12' into t"),
+  ("Cast interval to interval | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"interval\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG p"),
   ("Cast interval to interval | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Cast interval to interval | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"interval\". It has no time types, and CAST(… AS INTERVAL) turns '2020-03-29 10:11:12' into t"),
+  ("Cast interval to interval | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"interval\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG p"),
   ("Cast text to bytea | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, kind = "CBytes()", whole_numeric = nothing),
   ("Cast text to bytea | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"bytea\". It has no bytea type, and CAST(… AS BYTEA) turns 'abc' into the number 0. Cast to B"),
+  ("Cast text to bytea | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"bytea\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG pass"),
   ("Cast text to bytea | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, cte_field = "sBinaryField", kind = "CBytes()", whole_numeric = nothing),
   ("Cast text to bytea | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"bytea\". It has no bytea type, and CAST(… AS BYTEA) turns 'abc' into the number 0. Cast to B"),
+  ("Cast text to bytea | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"bytea\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG pass"),
   ("Cast text to bytea | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, kind = "CBytes()", whole_numeric = nothing),
   ("Cast text to bytea | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"bytea\". It has no bytea type, and CAST(… AS BYTEA) turns 'abc' into the number 0. Cast to B"),
+  ("Cast text to bytea | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"bytea\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG pass"),
   ("Cast text to blob | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, kind = "CBytes()", whole_numeric = nothing),
   ("Cast text to blob | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, kind = "CBytes()", whole_numeric = nothing),
+  ("Cast text to blob | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"blob\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG passe"),
   ("Cast text to blob | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, cte_field = "sBinaryField", kind = "CBytes()", whole_numeric = nothing),
   ("Cast text to blob | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, cte_field = "sBinaryField", kind = "CBytes()", whole_numeric = nothing),
+  ("Cast text to blob | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"blob\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG passe"),
   ("Cast text to blob | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, kind = "CBytes()", whole_numeric = nothing),
   ("Cast text to blob | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, kind = "CBytes()", whole_numeric = nothing),
+  ("Cast text to blob | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"blob\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG passe"),
   ("Coalesce declared timestamp | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Coalesce declared timestamp | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "output_field: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:"),
+  ("Coalesce declared timestamp | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce declared timestamp | cte", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Coalesce declared timestamp | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "output_field: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:"),
+  ("Coalesce declared timestamp | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce declared timestamp | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Coalesce declared timestamp | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "output_field: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:"),
+  ("Coalesce declared timestamp | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lag interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag interval | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Lag interval | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lag interval | cte", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Lag interval | cte", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+  ("Lag interval | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lag interval | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Lag interval | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Lag interval | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("NullIf interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("NullIf interval | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("NullIf interval | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching NULLIF(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("NullIf interval | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function NULLIF is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
   ("NullIf interval | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function NULLIF is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+  ("NullIf interval | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching NULLIF(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("NullIf interval | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("NullIf interval | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("NullIf interval | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching NULLIF(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Max Case interval col | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Max Case interval col | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Max Case interval col | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Max Case interval col | cte", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Max Case interval col | cte", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+  ("Max Case interval col | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Max Case interval col | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Max Case interval col | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Max Case interval col | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped date col + 1 | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col + 1 | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case untyped date col + 1 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped date col + 1 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
   ("Case untyped date col + 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("Case untyped date col + 1 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped date col + 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case untyped date col + 1 | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case untyped date col + 1 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped date col - date | alone", :postgres) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case untyped date col - date | alone", :sqlite) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Case untyped date col - date | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped date col - date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("Case untyped date col - date | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("Case untyped date col - date | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped date col - date | subquery", :postgres) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, operand = "CInt32()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case untyped date col - date | subquery", :sqlite) =>
     (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, operand = "CInt32()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Case untyped date col - date | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped zoned col + interval | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Case untyped zoned col + interval | alone", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Case untyped zoned col + interval | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped zoned col + interval | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
   ("Case untyped zoned col + interval | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("Case untyped zoned col + interval | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case untyped zoned col + interval | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Case untyped zoned col + interval | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Case untyped zoned col + interval | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sum int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum int | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum int | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Sum int | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("Sum int | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Sum int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum int | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum int | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Sum float | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Sum float | alone", :mysql) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Sum float | cte", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Sum float | cte", :sqlite) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("Sum float | cte", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Sum float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Sum float | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Sum float | subquery", :mysql) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Sum decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Sum decimal | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum decimal | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum decimal | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Sum decimal | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Sum decimal | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sum interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Sum interval | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Sum interval | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Sum interval | cte", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Sum interval | cte", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+  ("Sum interval | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Sum interval | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Sum interval | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Sum interval | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Avg float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Avg float | alone", :sqlite) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Avg float | alone", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Avg float | cte", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Avg float | cte", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("Avg float | cte", :mysql) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Avg float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Avg float | subquery", :sqlite) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Avg float | subquery", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Avg decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Avg decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Avg decimal | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Avg decimal | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Avg decimal | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CFloat64()", whole_numeric = nothing),
+  ("Avg decimal | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Avg decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Avg decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Avg decimal | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Avg interval | alone", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Avg interval | alone", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = "CInterval()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Avg interval | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Avg interval | cte", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
   ("Avg interval | cte", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+  ("Avg interval | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Avg interval | subquery", :postgres) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
   ("Avg interval | subquery", :sqlite) =>
     (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Avg interval | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Count | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Count | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Count | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Count | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Count | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("Count | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Count | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Count | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Count | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Max hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Max hop date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Max hop date | alone", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Max hop date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Max hop date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Max hop date | cte", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Max hop date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Max hop date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Max hop date | subquery", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Max decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Max decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Max decimal | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = false, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Max decimal | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Max decimal | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Max decimal | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = false, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Max decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Max decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Max decimal | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = false, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Max bool | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Max bool | alone", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Max bool | alone", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Max bool | cte", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Max bool | cte", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
+  ("Max bool | cte", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Max bool | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Max bool | subquery", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Max bool | subquery", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Min float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Min float | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Min float | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Min float | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Min float | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("Min float | cte", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Min float | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Min float | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Min float | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Max of arithmetic | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Max of arithmetic | alone", :sqlite) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Max of arithmetic | alone", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Max of arithmetic | cte", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Max of arithmetic | cte", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("Max of arithmetic | cte", :mysql) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Max of arithmetic | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Max of arithmetic | subquery", :sqlite) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Max of arithmetic | subquery", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce date date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Coalesce date date | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce date date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
   ("Coalesce date date | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce date date | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce date date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Coalesce date date | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce float int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce float int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Coalesce float int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce float int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
   ("Coalesce float int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce float int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce float int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce float int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Coalesce float int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce int float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce int float | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Coalesce int float | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce int float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
   ("Coalesce int float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce int float | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce int float | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce int float | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Coalesce int float | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce bool literal | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce bool literal | alone", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce bool literal | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce bool literal | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
   ("Coalesce bool literal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce bool literal | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce bool literal | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce bool literal | subquery", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce bool literal | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Greatest datetime | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = "CDateTime(true)", column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Greatest datetime | alone", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = "CDateTime(true)", column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Greatest datetime | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Greatest datetime | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function GREATEST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
   ("Greatest datetime | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function GREATEST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Greatest datetime | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Greatest datetime | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Greatest datetime | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Greatest datetime | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Least decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Least decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Least decimal | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Least decimal | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LEAST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Least decimal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LEAST is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Least decimal | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Least decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Least decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Least decimal | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("NullIf date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("NullIf date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("NullIf date | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching NULLIF(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("NullIf date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function NULLIF is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
   ("NullIf date | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function NULLIF is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+  ("NullIf date | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching NULLIF(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("NullIf date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("NullIf date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("NullIf date | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching NULLIF(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lag hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Lag hop date | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lag hop date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Lag hop date | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lag hop date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag hop date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Lag hop date | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lag bool | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Lag bool | alone", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Lag bool | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lag bool | cte", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
   ("Lag bool | cte", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", cte_field = "sBooleanField", kind = "CBool()", whole_numeric = nothing),
+  ("Lag bool | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lag bool | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Lag bool | subquery", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Lag bool | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lag date default date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Lag date default date | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lag date default date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Lag date default date | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lag date default date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lag date default date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Lag date default date | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("FirstValue float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("FirstValue float | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("FirstValue float | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FIRST_VALUE(::String, ::String, ::EkmMockMySQL)"),
   ("FirstValue float | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("FirstValue float | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("FirstValue float | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FIRST_VALUE(::String, ::String, ::EkmMockMySQL)"),
   ("FirstValue float | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("FirstValue float | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("FirstValue float | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FIRST_VALUE(::String, ::String, ::EkmMockMySQL)"),
   ("FirstValue decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("FirstValue decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("FirstValue decimal | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FIRST_VALUE(::String, ::String, ::EkmMockMySQL)"),
   ("FirstValue decimal | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("FirstValue decimal | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("FirstValue decimal | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FIRST_VALUE(::String, ::String, ::EkmMockMySQL)"),
   ("FirstValue decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("FirstValue decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("FirstValue decimal | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FIRST_VALUE(::String, ::String, ::EkmMockMySQL)"),
   ("Lead hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Lead hop date | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LEAD(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lead hop date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Lead hop date | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LEAD(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lead hop date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Lead hop date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Lead hop date | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LEAD(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("LastValue float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("LastValue float | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("LastValue float | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAST_VALUE(::String, ::String, ::EkmMockMySQL)"),
   ("LastValue float | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("LastValue float | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("LastValue float | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAST_VALUE(::String, ::String, ::EkmMockMySQL)"),
   ("LastValue float | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("LastValue float | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("LastValue float | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAST_VALUE(::String, ::String, ::EkmMockMySQL)"),
   ("Rank | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Rank | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Rank | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching RANK(::String, ::EkmMockMySQL)"),
   ("Rank | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Rank | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("Rank | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching RANK(::String, ::EkmMockMySQL)"),
   ("Rank | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Rank | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Rank | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching RANK(::String, ::EkmMockMySQL)"),
   ("Concat text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat text | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat text | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat text | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CONCAT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
   ("Concat text | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CONCAT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+  ("Concat text | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CONCAT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
   ("Concat text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Concat text | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Concat text | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Upper text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Upper text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Upper text | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching UPPER(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Upper text | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function UPPER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Upper text | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function UPPER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Upper text | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching UPPER(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Upper text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Upper text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Upper text | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching UPPER(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Length text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Length text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Length text | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LENGTH(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Length text | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LENGTH is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
   ("Length text | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LENGTH is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+  ("Length text | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LENGTH(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Length text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Length text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Length text | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LENGTH(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round float | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Round float | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Round float | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round float | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Round float | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Round decimal | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round decimal | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round decimal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Round decimal | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Round decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Round decimal | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Abs float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs float | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Abs float | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Abs float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+  ("Abs float | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Abs float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs float | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Abs float | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Abs decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Abs decimal | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Abs decimal | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs decimal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+  ("Abs decimal | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Abs decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Abs decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Abs decimal | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Mod int | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Mod int | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Mod int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching MOD(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Mod int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function MOD is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Mod int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function MOD is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+  ("Mod int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching MOD(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Mod int | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Mod int | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Mod int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching MOD(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Abs int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Abs int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Abs int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Abs int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+  ("Abs int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Abs int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Abs int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Abs int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Abs bigint | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Abs bigint | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Abs bigint | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Abs bigint | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Abs bigint | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ABS is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+  ("Abs bigint | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Abs bigint | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Abs bigint | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Abs bigint | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ABS(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Floor int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Floor int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Floor int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Floor int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Floor int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Floor int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Ceil int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Ceil int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Ceil int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching CEIL(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Ceil int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("Ceil int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+  ("Ceil int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching CEIL(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Ceil int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Ceil int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Ceil int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching CEIL(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Round int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Round int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Round int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Round int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Round int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round int places | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Round int places | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Round int places | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round int places | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round int places | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Round int places | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round int places | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Round int places | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Round int places | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round bigint | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round bigint | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Round bigint | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round bigint | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Round bigint | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function ROUND is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Round bigint | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round bigint | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round bigint | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Round bigint | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round int / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int / 2 | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Round int / 2 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round int / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ROUND(…), whose result type PormG does not infer. Name the type the colu"),
   ("Round int / 2 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is ROUND(…), whose result type PormG does not infer. Name the type the colu"),
+  ("Round int / 2 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Round int / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Round int / 2 | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Round int / 2 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Floor year part | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor year part | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Floor year part | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Floor year part | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor year part | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Floor year part | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Floor year part | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor year part | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Floor year part | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Avg int | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Avg int | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Avg int | alone", :mysql) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Avg int | cte", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Avg int | cte", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("Avg int | cte", :mysql) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Avg int | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Avg int | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Avg int | subquery", :mysql) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor float | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Floor float | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Floor float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Floor float | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Floor float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor float | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Floor float | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Ceil float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Ceil float | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Ceil float | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching CEIL(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Ceil float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("Ceil float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function CEIL is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+  ("Ceil float | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching CEIL(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Ceil float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Ceil float | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Ceil float | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching CEIL(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Floor decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Floor decimal | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Floor decimal | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor decimal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Floor decimal | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Floor decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Floor decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Floor decimal | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sqrt float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sqrt float | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Sqrt float | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching SQRT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sqrt float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("Sqrt float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+  ("Sqrt float | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching SQRT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sqrt float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sqrt float | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Sqrt float | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching SQRT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sqrt int | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sqrt int | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Sqrt int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching SQRT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sqrt int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
   ("Sqrt int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function SQRT is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MA"),
+  ("Sqrt int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching SQRT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sqrt int | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Sqrt int | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Sqrt int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching SQRT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Exp int | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Exp int | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Exp int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXP(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Exp int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXP is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
   ("Exp int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function EXP is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX"),
+  ("Exp int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXP(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Exp int | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Exp int | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Exp int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXP(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Ln float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Ln float | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Ln float | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Ln float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LN is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX,"),
   ("Ln float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function LN is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, MAX,"),
+  ("Ln float | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Ln float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Ln float | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Ln float | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Power float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Power float | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Power float | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching POWER(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Power float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Power float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Power float | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching POWER(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Power float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Power float | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Power float | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching POWER(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Power int | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Power int | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Power int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching POWER(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Power int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Power int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function POWER is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Power int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching POWER(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Power int | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Power int | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Power int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching POWER(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast bool to text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast bool to text | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1` or `0`, the i"),
+  ("Cast bool to text | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; MySQL computes `1` or `0`, the in"),
   ("Cast bool to text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast bool to text | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1` or `0`, the i"),
+  ("Cast bool to text | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; MySQL computes `1` or `0`, the in"),
   ("Cast bool to text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast bool to text | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1` or `0`, the i"),
+  ("Cast bool to text | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; MySQL computes `1` or `0`, the in"),
   ("Cast float to text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast float to text | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Cast float to text | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast float to text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast float to text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Cast float to text | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast float to text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast float to text | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Cast float to text | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast decimal to text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast decimal to text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Cast decimal to text | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast decimal to text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast decimal to text | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Cast decimal to text | cte", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast decimal to text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast decimal to text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Cast decimal to text | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast decimal to integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast decimal to integer | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DecimalField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated o"),
+  ("Cast decimal to integer | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast decimal to integer | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast decimal to integer | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DecimalField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated o"),
+  ("Cast decimal to integer | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast decimal to integer | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast decimal to integer | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DecimalField `points` means the nearest integer (`1.5` → `2`); SQLite computes the truncated o"),
+  ("Cast decimal to integer | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast float to scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float to scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
+  ("Cast float to scale 1 | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float to scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
+  ("Cast float to scale 1 | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float to scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float to scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
+  ("Cast float to scale 1 | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Concat float | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and the FloatField `points` is not text: say which text you mean (#1027). Cast it to text first: Cast"),
   ("Concat float | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and the FloatField `points` is not text: say which text you mean (#1027). Cast it to text first: Cast"),
+  ("Concat float | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and the FloatField `points` is not text: say which text you mean (#1027). Cast it to text first: Cast"),
   ("Concat float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and the FloatField `points` is not text: say which text you mean (#1027). Cast it to text first: Cast"),
   ("Concat float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and the FloatField `points` is not text: say which text you mean (#1027). Cast it to text first: Cast"),
+  ("Concat float | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and the FloatField `points` is not text: say which text you mean (#1027). Cast it to text first: Cast"),
   ("Concat float | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and the FloatField `points` is not text: say which text you mean (#1027). Cast it to text first: Cast"),
   ("Concat float | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Concat joins text, and the FloatField `points` is not text: say which text you mean (#1027). Cast it to text first: Cast"),
+  ("Concat float | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and the FloatField `points` is not text: say which text you mean (#1027). Cast it to text first: Cast"),
   ("Sum bigint | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum bigint | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("Sum bigint | cte", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum bigint | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint / 2 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum bigint / 2 | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint / 2 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint / 2 | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("Sum bigint / 2 | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum bigint / 2 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum bigint / 2 | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Sum bigint / 2 int | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Sum bigint / 2 int | cte", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum bigint / 2 int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Sum bigint / 2 int | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Sum Case int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum Case int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum Case int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sum Case int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Sum Case int | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("Sum Case int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sum Case int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum Case int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum Case int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sum F int + 1 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum F int + 1 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum F int + 1 | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum F int + 1 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Sum F int + 1 | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("Sum F int + 1 | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Sum F int + 1 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum F int + 1 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum F int + 1 | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F int / int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F int / int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F int / int | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F int / int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F int / int | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("F int / int | cte", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F int / int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F int / int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F int / int | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor F int + 1 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int + 1 | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Floor F int + 1 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Floor F int + 1 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor F int + 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Floor F int + 1 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Floor F int + 1 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int + 1 | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Floor F int + 1 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("F int & int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F int & int | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("F int & int | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F int & int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("F int & int | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("F int & int | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("F int & int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F int & int | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("F int & int | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("F int << 1 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F int << 1 | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F int << 1 | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F int << 1 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F int << 1 | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("F int << 1 | cte", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("F int << 1 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("F int << 1 | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("F int << 1 | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor F int & 3 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int & 3 | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Floor F int & 3 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Floor F int & 3 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor F int & 3 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Floor F int & 3 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Floor F int & 3 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Floor F int & 3 | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Floor F int & 3 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sum F bigint << 1 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum F bigint << 1 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum F bigint << 1 | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum F bigint << 1 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Sum F bigint << 1 | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
+  ("Sum F bigint << 1 | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt64()", whole_numeric = nothing),
   ("Sum F bigint << 1 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum F bigint << 1 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Sum F bigint << 1 | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum F bigint + epoch / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", kind = nothing, whole_numeric = "numeric_whole_division"),
   ("Sum F bigint + epoch / 2 | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Sum F bigint + epoch / 2 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sum F bigint + epoch / 2 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", cte_field = "sIntegerField", kind = nothing, whole_numeric = "numeric_whole_division"),
   ("Sum F bigint + epoch / 2 | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Sum F bigint + epoch / 2 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sum F bigint + epoch / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", kind = nothing, whole_numeric = "numeric_whole_division"),
   ("Sum F bigint + epoch / 2 | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Sum F bigint + epoch / 2 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sum F int + epoch / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", kind = nothing, whole_numeric = "numeric_whole_division"),
   ("Sum F int + epoch / 2 | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Sum F int + epoch / 2 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sum F int + epoch / 2 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", cte_field = "sIntegerField", kind = nothing, whole_numeric = "numeric_whole_division"),
   ("Sum F int + epoch / 2 | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Sum F int + epoch / 2 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sum F int + epoch / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric_whole_division", kind = nothing, whole_numeric = "numeric_whole_division"),
   ("Sum F int + epoch / 2 | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Sum F int + epoch / 2 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Sum F bigint + epoch / 2 int | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F bigint + epoch / 2 int | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F bigint + epoch / 2 int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Sum F bigint + epoch / 2 int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F bigint + epoch / 2 int | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F bigint + epoch / 2 int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Sum F bigint + epoch / 2 int | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F bigint + epoch / 2 int | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F bigint + epoch / 2 int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Sum F int + epoch / 2 int | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F int + epoch / 2 int | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F int + epoch / 2 int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Sum F int + epoch / 2 int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F int + epoch / 2 int | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F int + epoch / 2 int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Sum F int + epoch / 2 int | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F int + epoch / 2 int | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F int + epoch / 2 int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Sum F bigint + epoch / 2.0 int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F bigint + epoch / 2.0 int | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F bigint + epoch / 2.0 int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Sum F bigint + epoch / 2.0 int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F bigint + epoch / 2.0 int | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F bigint + epoch / 2.0 int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Sum F bigint + epoch / 2.0 int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F bigint + epoch / 2.0 int | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F bigint + epoch / 2.0 int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Round Sum F int + epoch / 2 int | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `ROUND(…)` over arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient "),
   ("Cast Round Sum F int + epoch / 2 int | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Round Sum F int + epoch / 2 int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Round Sum F int + epoch / 2 int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `ROUND(…)` over arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient "),
   ("Cast Round Sum F int + epoch / 2 int | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Round Sum F int + epoch / 2 int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Round Sum F int + epoch / 2 int | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `ROUND(…)` over arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient "),
   ("Cast Round Sum F int + epoch / 2 int | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Round Sum F int + epoch / 2 int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Sum F int + epoch / Count int | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F int + epoch / Count int | alone", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F int + epoch / Count int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Sum F int + epoch / Count int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F int + epoch / Count int | cte", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F int + epoch / Count int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Sum F int + epoch / Count int | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of arithmetic over `SUM(…)` over a value PormG cannot type means an integer quotient (`15 / 2` is `7`"),
   ("Cast Sum F int + epoch / Count int | subquery", :sqlite) =>
     (stage = :build, error = "BackendCapabilityError", message = "Unsupported extract part for SQLite: EPOCH"),
+  ("Cast Sum F int + epoch / Count int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Sum F interval + interval / 2 text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Cast Sum F interval + interval / 2 text | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F interval + interval / 2 text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Cast Sum F interval + interval / 2 text | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F interval + interval / 2 text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval + interval / 2 text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Cast Sum F interval + interval / 2 text | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Concat Sum F interval + interval / 2 | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
   ("Concat Sum F interval + interval / 2 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
+  ("Concat Sum F interval + interval / 2 | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Concat Sum F interval + interval / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
   ("Concat Sum F interval + interval / 2 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
+  ("Concat Sum F interval + interval / 2 | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Concat Sum F interval + interval / 2 | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
   ("Concat Sum F interval + interval / 2 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and an interval expression is not text: say which text you mean (#1028). Cast it to text first: Cast("),
+  ("Concat Sum F interval + interval / 2 | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F interval * 2 / 2 text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval * 2 / 2 text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Cast Sum F interval * 2 / 2 text | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F interval * 2 / 2 text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval * 2 / 2 text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Cast Sum F interval * 2 / 2 text | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F interval * 2 / 2 text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F interval * 2 / 2 text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Cast Sum F interval * 2 / 2 text | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F datetime - datetime / 2 text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F datetime - datetime / 2 text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Cast Sum F datetime - datetime / 2 text | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F datetime - datetime / 2 text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F datetime - datetime / 2 text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Cast Sum F datetime - datetime / 2 text | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F datetime - datetime / 2 text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F datetime - datetime / 2 text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Cast Sum F datetime - datetime / 2 text | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F int * interval / 2 text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F int * interval / 2 text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Cast Sum F int * interval / 2 text | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F int * interval / 2 text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F int * interval / 2 text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Cast Sum F int * interval / 2 text | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F int * interval / 2 text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Cast Sum F int * interval / 2 text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Cast Sum F int * interval / 2 text | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum F date - date + bigint / 2 int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Sum F date - date + bigint / 2 int | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Sum F date - date + bigint / 2 int | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date + bigint / 2 int | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Sum F date - date + bigint / 2 int | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Sum F date - date / 2 int | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Sum F date - date / 2 int | cte", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum F date - date / 2 int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast Sum F date - date / 2 int | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor Subquery int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor Subquery int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Floor Subquery int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Floor Subquery int | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
   ("Floor Subquery int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function FLOOR is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, M"),
+  ("Floor Subquery int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Floor Subquery int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Floor Subquery int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("Floor Subquery int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("F decimal / 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("F decimal / 2 | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = "rooted: CDecimal(10, 2)", formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("F decimal / 2 | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F decimal / 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("F decimal / 2 | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("F float / 2 | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F float / 2 | alone", :sqlite) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("F float / 2 | alone", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F float / 2 | cte", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("F float / 2 | cte", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("F float / 2 | cte", :mysql) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("F float / 2 | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("F float / 2 | subquery", :sqlite) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("F float / 2 | subquery", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce int float / 2 | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce int float / 2 | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Coalesce int float / 2 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce int float / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is COALESCE(…), whose result type PormG does not infer. Name the type the c"),
   ("Coalesce int float / 2 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is COALESCE(…), whose result type PormG does not infer. Name the type the c"),
+  ("Coalesce int float / 2 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce int float / 2 | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce int float / 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Coalesce int float / 2 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case int float / 2 | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case int float / 2 | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Case int float / 2 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case int float / 2 | cte", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Case int float / 2 | cte", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("Case int float / 2 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case int float / 2 | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case int float / 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Case int float / 2 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast int numeric / 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast int numeric / 2 | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast int numeric / 2 | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int numeric / 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast int numeric / 2 | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("NullIf int float / 2 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("NullIf int float / 2 | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("NullIf int float / 2 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching NULLIF(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("NullIf int float / 2 | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is NULLIF(…), whose result type PormG does not infer. Name the type the col"),
   ("NullIf int float / 2 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: an operand is NULLIF(…), whose result type PormG does not infer. Name the type the col"),
+  ("NullIf int float / 2 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching NULLIF(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("NullIf int float / 2 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("NullIf int float / 2 | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
+  ("NullIf int float / 2 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching NULLIF(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lag int default float / 2 | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Lag int default float / 2 | alone", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Lag int default float / 2 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lag int default float / 2 | cte", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Lag int default float / 2 | cte", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("Lag int default float / 2 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lag int default float / 2 | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Lag int default float / 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Lag int default float / 2 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case int float to integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Case int float to integer | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` over a Float64 literal means the nearest integer (`1.5` → `2`); SQLite computes the trun"),
+  ("Cast Case int float to integer | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case int float to integer | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Case int float to integer | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` over a Float64 literal means the nearest integer (`1.5` → `2`); SQLite computes the trun"),
+  ("Cast Case int float to integer | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case int float to integer | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Case int float to integer | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` over a Float64 literal means the nearest integer (`1.5` → `2`); SQLite computes the trun"),
+  ("Cast Case int float to integer | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case float col to scale 0 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,0)\") of `CASE(…)` over the FloatField `points` means the value rounded to the scale of numeric(10,0)"),
+  ("Cast Case float col to scale 0 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case float col to scale 0 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,0)\") of `CASE(…)` over the FloatField `points` means the value rounded to the scale of numeric(10,0)"),
+  ("Cast Case float col to scale 0 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case float col to scale 0 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 0)", whole_numeric = nothing),
   ("Cast Case float col to scale 0 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,0)\") of `CASE(…)` over the FloatField `points` means the value rounded to the scale of numeric(10,0)"),
+  ("Cast Case float col to scale 0 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case float literal to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case float literal to scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Case float literal to scale 2 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case float literal to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case float literal to scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Case float literal to scale 2 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case float literal to scale 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case float literal to scale 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Case float literal to scale 2 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case decimal to integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Case decimal to integer | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` over the DecimalField `points` means the nearest integer (`1.5` → `2`); SQLite computes "),
+  ("Cast Case decimal to integer | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case decimal to integer | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Case decimal to integer | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` over the DecimalField `points` means the nearest integer (`1.5` → `2`); SQLite computes "),
+  ("Cast Case decimal to integer | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case decimal to integer | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Case decimal to integer | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `CASE(…)` over the DecimalField `points` means the nearest integer (`1.5` → `2`); SQLite computes "),
+  ("Cast Case decimal to integer | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Concat Case float | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `CASE(…)` over a Float64 literal is not text: say which text you mean (#1027). Cast it to text fi"),
   ("Concat Case float | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `CASE(…)` over a Float64 literal is not text: say which text you mean (#1027). Cast it to text fi"),
+  ("Concat Case float | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Concat Case float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `CASE(…)` over a Float64 literal is not text: say which text you mean (#1027). Cast it to text fi"),
   ("Concat Case float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `CASE(…)` over a Float64 literal is not text: say which text you mean (#1027). Cast it to text fi"),
+  ("Concat Case float | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Concat Case float | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `CASE(…)` over a Float64 literal is not text: say which text you mean (#1027). Cast it to text fi"),
   ("Concat Case float | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Concat joins text, and `CASE(…)` over a Float64 literal is not text: say which text you mean (#1027). Cast it to text fi"),
+  ("Concat Case float | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce date zoned literal | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
   ("Coalesce date zoned literal | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Coalesce date zoned literal | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
   ("Coalesce date zoned literal | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
   ("Coalesce date zoned literal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Coalesce date zoned literal | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
   ("Coalesce date zoned literal | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
   ("Coalesce date zoned literal | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Coalesce date zoned literal | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
   ("Greatest date zoned literal | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
   ("Greatest date zoned literal | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Greatest date zoned literal | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Greatest date zoned literal | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
   ("Greatest date zoned literal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Greatest date zoned literal | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Greatest date zoned literal | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
   ("Greatest date zoned literal | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its"),
+  ("Greatest date zoned literal | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Least date zoned literal | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Least mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its va"),
   ("Least date zoned literal | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Least mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its va"),
+  ("Least date zoned literal | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Least date zoned literal | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Least mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its va"),
   ("Least date zoned literal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Least mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its va"),
+  ("Least date zoned literal | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Least date zoned literal | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Least mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its va"),
   ("Least date zoned literal | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Least mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its va"),
+  ("Least date zoned literal | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("NullIf date zoned literal | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "NullIf mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its v"),
   ("NullIf date zoned literal | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its v"),
+  ("NullIf date zoned literal | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "NullIf mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its v"),
   ("NullIf date zoned literal | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "NullIf mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its v"),
   ("NullIf date zoned literal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "NullIf mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its v"),
+  ("NullIf date zoned literal | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its v"),
   ("NullIf date zoned literal | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "NullIf mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its v"),
   ("NullIf date zoned literal | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "NullIf mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its v"),
+  ("NullIf date zoned literal | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "NullIf mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its v"),
   ("Case date branch zoned default | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Case mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its val"),
   ("Case date branch zoned default | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its val"),
+  ("Case date branch zoned default | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case date branch zoned default | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Case mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its val"),
   ("Case date branch zoned default | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its val"),
+  ("Case date branch zoned default | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case date branch zoned default | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Case mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its val"),
   ("Case date branch zoned default | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its val"),
+  ("Case date branch zoned default | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case zoned naive literals | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Case mixes a timestamp with time zone (a ZonedDateTime literal) and a timestamp without time zone (a DateTime literal), "),
   ("Case zoned naive literals | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case mixes a timestamp with time zone (a ZonedDateTime literal) and a timestamp without time zone (a DateTime literal), "),
+  ("Case zoned naive literals | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case zoned naive literals | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Case mixes a timestamp with time zone (a ZonedDateTime literal) and a timestamp without time zone (a DateTime literal), "),
   ("Case zoned naive literals | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case mixes a timestamp with time zone (a ZonedDateTime literal) and a timestamp without time zone (a DateTime literal), "),
+  ("Case zoned naive literals | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case zoned naive literals | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Case mixes a timestamp with time zone (a ZonedDateTime literal) and a timestamp without time zone (a DateTime literal), "),
   ("Case zoned naive literals | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case mixes a timestamp with time zone (a ZonedDateTime literal) and a timestamp without time zone (a DateTime literal), "),
+  ("Case zoned naive literals | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Lag date default zoned | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Lag mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its valu"),
   ("Lag date default zoned | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Lag mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its valu"),
+  ("Lag date default zoned | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Lag mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its valu"),
   ("Lag date default zoned | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Lag mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its valu"),
   ("Lag date default zoned | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Lag mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its valu"),
+  ("Lag date default zoned | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Lag mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its valu"),
   ("Lag date default zoned | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Lag mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its valu"),
   ("Lag date default zoned | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Lag mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its valu"),
+  ("Lag date default zoned | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Lag mixes a date (`date`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which type its valu"),
   ("Coalesce date zoned column | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (`start_at`), and does not say which type its value has (#"),
   ("Coalesce date zoned column | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (`start_at`), and does not say which type its value has (#"),
+  ("Coalesce date zoned column | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (`start_at`), and does not say which type its value has (#"),
   ("Coalesce date zoned column | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (`start_at`), and does not say which type its value has (#"),
   ("Coalesce date zoned column | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (`start_at`), and does not say which type its value has (#"),
+  ("Coalesce date zoned column | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (`start_at`), and does not say which type its value has (#"),
   ("Coalesce date zoned column | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (`start_at`), and does not say which type its value has (#"),
   ("Coalesce date zoned column | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (`start_at`), and does not say which type its value has (#"),
+  ("Coalesce date zoned column | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a date (`date`) and a timestamp with time zone (`start_at`), and does not say which type its value has (#"),
   ("Coalesce zoned naive literal | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp with time zone (`start_at`) and a timestamp without time zone (a DateTime literal), and does "),
   ("Coalesce zoned naive literal | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp with time zone (`start_at`) and a timestamp without time zone (a DateTime literal), and does "),
+  ("Coalesce zoned naive literal | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp with time zone (`start_at`) and a timestamp without time zone (a DateTime literal), and does "),
   ("Coalesce zoned naive literal | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp with time zone (`start_at`) and a timestamp without time zone (a DateTime literal), and does "),
   ("Coalesce zoned naive literal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp with time zone (`start_at`) and a timestamp without time zone (a DateTime literal), and does "),
+  ("Coalesce zoned naive literal | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp with time zone (`start_at`) and a timestamp without time zone (a DateTime literal), and does "),
   ("Coalesce zoned naive literal | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp with time zone (`start_at`) and a timestamp without time zone (a DateTime literal), and does "),
   ("Coalesce zoned naive literal | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp with time zone (`start_at`) and a timestamp without time zone (a DateTime literal), and does "),
+  ("Coalesce zoned naive literal | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a timestamp with time zone (`start_at`) and a timestamp without time zone (a DateTime literal), and does "),
   ("Coalesce text zoned literal | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which ty"),
   ("Coalesce text zoned literal | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which ty"),
+  ("Coalesce text zoned literal | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which ty"),
   ("Coalesce text zoned literal | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which ty"),
   ("Coalesce text zoned literal | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which ty"),
+  ("Coalesce text zoned literal | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which ty"),
   ("Coalesce text zoned literal | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which ty"),
   ("Coalesce text zoned literal | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which ty"),
+  ("Coalesce text zoned literal | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Coalesce mixes text (`positiontext`) and a timestamp with time zone (a ZonedDateTime literal), and does not say which ty"),
   ("Coalesce time interval | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
   ("Coalesce time interval | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
+  ("Coalesce time interval | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Coalesce time interval | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
   ("Coalesce time interval | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
+  ("Coalesce time interval | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Coalesce time interval | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
   ("Coalesce time interval | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce mixes a time (`raceid__time`) and an interval (`fastestlaptime`), and does not say which type its value has (#1"),
+  ("Coalesce time interval | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Coalesce date Date(zoned) | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date Date(zoned) | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Coalesce date Date(zoned) | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce date Date(zoned) | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
   ("Coalesce date Date(zoned) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce date Date(zoned) | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce date Date(zoned) | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date Date(zoned) | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Coalesce date Date(zoned) | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce zoned zoned | alone", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = "CDateTime(true)", column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Coalesce zoned zoned | alone", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = "CDateTime(true)", column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Coalesce zoned zoned | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce zoned zoned | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
   ("Coalesce zoned zoned | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce zoned zoned | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce zoned zoned | subquery", :postgres) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
   ("Coalesce zoned zoned | subquery", :sqlite) =>
     (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Coalesce zoned zoned | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce date zoned output date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date zoned output date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Coalesce date zoned output date | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce date zoned output date | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date zoned output date | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Coalesce date zoned output date | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce date zoned output date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Coalesce date zoned output date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Coalesce date zoned output date | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast F float * 1.5 numeric | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast F float * 1.5 numeric | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast F float * 1.5 numeric | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast F float * 1.5 numeric | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Cast F float * 1.5 numeric | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast decimal to scale 2 | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast decimal to scale 2 | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast decimal to scale 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast decimal to scale 2 | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast int DecimalField | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast int DecimalField | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast int DecimalField | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast int DecimalField | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce F float output decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce F float output decimal | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,2)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
+  ("Coalesce F float output decimal | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce F float output decimal | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce F float output decimal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,2)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
+  ("Coalesce F float output decimal | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce F float output decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce F float output decimal | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,2)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
+  ("Coalesce F float output decimal | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Greatest float int output decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Greatest float int output decimal | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest(…; output_field = \"numeric(10,2)\") of the FloatField `points` means the value rounded to the scale of numeric(1"),
+  ("Greatest float int output decimal | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Greatest float int output decimal | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Greatest float int output decimal | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest(…; output_field = \"numeric(10,2)\") of the FloatField `points` means the value rounded to the scale of numeric(1"),
+  ("Greatest float int output decimal | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Greatest float int output decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Greatest float int output decimal | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest(…; output_field = \"numeric(10,2)\") of the FloatField `points` means the value rounded to the scale of numeric(1"),
+  ("Greatest float int output decimal | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case float output decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case float output decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Case float output decimal | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case float output decimal | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case float output decimal | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Case float output decimal | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case float output decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case float output decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Case float output decimal | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Max Cast F float numeric | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Max Cast F float numeric | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Max Cast F float numeric | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Max Cast F float numeric | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Max Cast F float numeric | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Cast int float8 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int float8 | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast int float8 | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int float8 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int float8 | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast int float8 | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int float8 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int float8 | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast int float8 | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int FloatField | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int FloatField | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast int FloatField | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int FloatField | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int FloatField | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast int FloatField | cte", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int FloatField | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int FloatField | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast int FloatField | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
+  ("Cast float real | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
+  ("Cast float real | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float real | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
+  ("Cast float real | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case F float * 1.5 output scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the scale "),
+  ("Case F float * 1.5 output scale 1 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case F float * 1.5 output scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the scale "),
+  ("Case F float * 1.5 output scale 1 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case F float * 1.5 output scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the scale "),
+  ("Case F float * 1.5 output scale 1 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case decimal output scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case decimal output scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the s"),
+  ("Case decimal output scale 1 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case decimal output scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case decimal output scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the s"),
+  ("Case decimal output scale 1 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case decimal output scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case decimal output scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the s"),
+  ("Case decimal output scale 1 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case float literal output integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case float literal output integer | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"integer\") of a Float64 literal means the nearest integer (`1.5` → `2`); SQLite computes the trun"),
+  ("Case float literal output integer | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case float literal output integer | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Case float literal output integer | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"integer\") of a Float64 literal means the nearest integer (`1.5` → `2`); SQLite computes the trun"),
+  ("Case float literal output integer | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case float literal output integer | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case float literal output integer | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"integer\") of a Float64 literal means the nearest integer (`1.5` → `2`); SQLite computes the trun"),
+  ("Case float literal output integer | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case bool output text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Case bool output text | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1"),
+  ("Case bool output text | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case bool output text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Case bool output text | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1"),
+  ("Case bool output text | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case bool output text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Case bool output text | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1"),
+  ("Case bool output text | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case bool output text default false | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Case bool output text default false | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1"),
+  ("Case bool output text default false | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case bool output text default false | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Case bool output text default false | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1"),
+  ("Case bool output text default false | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case bool output text default false | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Case bool output text default false | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"text\") of the BooleanField `boolean_field` means its text, `true` or `false`; SQLite computes `1"),
+  ("Case bool output text default false | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case int output text default text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Case int output text default text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Case int output text default text | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case int output text default text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Case int output text default text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Case int output text default text | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case int output text default text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Case int output text default text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Case int output text default text | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case float output text default text | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Case float output text default text | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Case float output text default text | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case float output text default text | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
   ("Case float output text default text | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTextField", kind = "CText()", whole_numeric = nothing),
+  ("Case float output text default text | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case float output text default text | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
   ("Case float output text default text | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CText()", whole_numeric = nothing),
+  ("Case float output text default text | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case int output integer default float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case int output integer default float | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"integer\") of a Float64 literal means the nearest integer (`1.5` → `2`); SQLite computes the trun"),
+  ("Case int output integer default float | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case int output integer default float | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Case int output integer default float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"integer\") of a Float64 literal means the nearest integer (`1.5` → `2`); SQLite computes the trun"),
+  ("Case int output integer default float | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case int output integer default float | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case int output integer default float | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"integer\") of a Float64 literal means the nearest integer (`1.5` → `2`); SQLite computes the trun"),
+  ("Case int output integer default float | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case date output date default text | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case date output date default text | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case date output date default text | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case date output date default text | cte", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
   ("Case date output date default text | cte", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, cte_field = "sDateField", kind = "CDate()", whole_numeric = nothing),
+  ("Case date output date default text | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case date output date default text | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Case date output date default text | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case date output date default text | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce F float * 1.5 output scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
+  ("Coalesce F float * 1.5 output scale 1 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce F float * 1.5 output scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
+  ("Coalesce F float * 1.5 output scale 1 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce F float * 1.5 output scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
+  ("Coalesce F float * 1.5 output scale 1 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Greatest float int output scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Greatest float int output scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest(…; output_field = \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(1"),
+  ("Greatest float int output scale 1 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Greatest float int output scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Greatest float int output scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest(…; output_field = \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(1"),
+  ("Greatest float int output scale 1 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Greatest float int output scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Greatest float int output scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Greatest(…; output_field = \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(1"),
+  ("Greatest float int output scale 1 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Least float int output scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Least float int output scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Least(…; output_field = \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1"),
+  ("Least float int output scale 1 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Least float int output scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Least float int output scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Least(…; output_field = \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1"),
+  ("Least float int output scale 1 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Least float int output scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Least float int output scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Least(…; output_field = \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1"),
+  ("Least float int output scale 1 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case Round output scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case Round output scale 1 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Case Round output scale 1 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case Round output scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case Round output scale 1 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Case Round output scale 1 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case Round output scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case Round output scale 1 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Case Round output scale 1 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case int output scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case int output scale 1 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Case int output scale 1 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case int output scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case int output scale 1 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Case int output scale 1 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case int output scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case int output scale 1 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Case int output scale 1 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case decimal output scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case decimal output scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Case decimal output scale 2 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case decimal output scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case decimal output scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Case decimal output scale 2 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case decimal output scale 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case decimal output scale 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Case decimal output scale 2 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case Floor output integer | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case Floor output integer | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Case Floor output integer | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case Floor output integer | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Case Floor output integer | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Case Floor output integer | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case Floor output integer | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Case Floor output integer | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Case Floor output integer | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching FLOOR(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case output scale 1 to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output scale 1 to scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Case output scale 1 to scale 2 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case output scale 1 to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output scale 1 to scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Case output scale 1 to scale 2 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case output scale 1 to scale 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output scale 1 to scale 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Case output scale 1 to scale 2 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Cast Round scale 2 to scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Cast Round scale 2 to scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
+  ("Cast Cast Round scale 2 to scale 1 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Cast Round scale 2 to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Cast Round scale 2 to scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
+  ("Cast Cast Round scale 2 to scale 1 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Cast Round scale 2 to scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Cast Round scale 2 to scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
+  ("Cast Cast Round scale 2 to scale 1 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Cast Round scale 1 to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Cast Round scale 1 to scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast Round scale 1 to scale 2 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Cast Round scale 1 to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Cast Round scale 1 to scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast Round scale 1 to scale 2 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Cast Round scale 1 to scale 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Cast Round scale 1 to scale 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Cast Round scale 1 to scale 2 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Max decimal to scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Max decimal to scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of `MAX(…)` over the DecimalField `points` (2 decimal places) means the value rounded to the sc"),
+  ("Cast Max decimal to scale 1 | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Max decimal to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Max decimal to scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of `MAX(…)` over the DecimalField `points` (2 decimal places) means the value rounded to the sc"),
+  ("Cast Max decimal to scale 1 | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Max decimal to scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Max decimal to scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of `MAX(…)` over the DecimalField `points` (2 decimal places) means the value rounded to the sc"),
+  ("Cast Max decimal to scale 1 | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
+  ("Cast decimal to scale 1 | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
+  ("Cast decimal to scale 1 | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal to scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
+  ("Cast decimal to scale 1 | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast int to scale 1 | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast int to scale 1 | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int to scale 1 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast int to scale 1 | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float float4 | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float4 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float4\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte doub"),
+  ("Cast float float4 | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float4 | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float4 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float4\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte doub"),
+  ("Cast float float4 | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float4 | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float4 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float4\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte doub"),
+  ("Cast float float4 | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(24) | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(24) | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float(24)\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte d"),
+  ("Cast float float(24) | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(24) | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(24) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float(24)\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte d"),
+  ("Cast float float(24) | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(24) | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(24) | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float(24)\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte d"),
+  ("Cast float float(24) | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(25) | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(25) | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast float float(25) | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(25) | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(25) | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast float float(25) | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(25) | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast float float(25) | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
+  ("Cast float float(25) | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int real | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int real | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
+  ("Cast int real | alone", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int real | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int real | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
+  ("Cast int real | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int real | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast int real | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes the 8-byte double"),
+  ("Cast int real | subquery", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce float int output real | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce float int output real | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite compute"),
+  ("Coalesce float int output real | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce float int output real | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce float int output real | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite compute"),
+  ("Coalesce float int output real | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce float int output real | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Coalesce float int output real | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite compute"),
+  ("Coalesce float int output real | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case float literal output real | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal output real | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes th"),
+  ("Case float literal output real | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case float literal output real | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal output real | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes th"),
+  ("Case float literal output real | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case float literal output real | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Case float literal output real | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"real\") of any value means the value rounded to single precision, a `Float32`; SQLite computes th"),
+  ("Case float literal output real | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast float DecimalField(10,1) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float DecimalField(10,1) | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
+  ("Cast float DecimalField(10,1) | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float DecimalField(10,1) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float DecimalField(10,1) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
+  ("Cast float DecimalField(10,1) | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float DecimalField(10,1) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast float DecimalField(10,1) | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the FloatField `points` means the value rounded to the scale of numeric(10,1); SQLite comput"),
+  ("Cast float DecimalField(10,1) | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast int DecimalField(10,1) | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast int DecimalField(10,1) | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast int DecimalField(10,1) | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
+  ("Cast int DecimalField(10,1) | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
+  ("Cast decimal DecimalField(10,1) | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
+  ("Cast decimal DecimalField(10,1) | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast decimal DecimalField(10,1) | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `points` (2 decimal places) means the value rounded to the scale of numeric"),
+  ("Cast decimal DecimalField(10,1) | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output DecimalField(10,1) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output DecimalField(10,1) | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
+  ("Coalesce F float * 1.5 output DecimalField(10,1) | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce F float * 1.5 output DecimalField(10,1) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output DecimalField(10,1) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
+  ("Coalesce F float * 1.5 output DecimalField(10,1) | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce F float * 1.5 output DecimalField(10,1) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Coalesce F float * 1.5 output DecimalField(10,1) | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Coalesce(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the sc"),
+  ("Coalesce F float * 1.5 output DecimalField(10,1) | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case F float * 1.5 output DecimalField(10,1) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output DecimalField(10,1) | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the scale "),
+  ("Case F float * 1.5 output DecimalField(10,1) | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case F float * 1.5 output DecimalField(10,1) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output DecimalField(10,1) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the scale "),
+  ("Case F float * 1.5 output DecimalField(10,1) | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case F float * 1.5 output DecimalField(10,1) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Case F float * 1.5 output DecimalField(10,1) | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Case(…; output_field = \"numeric(10,1)\") of arithmetic over the FloatField `points` means the value rounded to the scale "),
+  ("Case F float * 1.5 output DecimalField(10,1) | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case output DecimalField(10,1) to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output DecimalField(10,1) to scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Case output DecimalField(10,1) to scale 2 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case output DecimalField(10,1) to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output DecimalField(10,1) to scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Case output DecimalField(10,1) to scale 2 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Case output DecimalField(10,1) to scale 2 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast Case output DecimalField(10,1) to scale 2 | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast Case output DecimalField(10,1) to scale 2 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Cast Round DecimalField(10,2) to scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Cast Round DecimalField(10,2) to scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
+  ("Cast Cast Round DecimalField(10,2) to scale 1 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Cast Round DecimalField(10,2) to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Cast Round DecimalField(10,2) to scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
+  ("Cast Cast Round DecimalField(10,2) to scale 1 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast Cast Round DecimalField(10,2) to scale 1 | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast Cast Round DecimalField(10,2) to scale 1 | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of a value cast to numeric(10,2) means the value rounded to the scale of numeric(10,1); SQLite "),
+  ("Cast Cast Round DecimalField(10,2) to scale 1 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast CTE scale 1 col to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 1 col to scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast CTE scale 1 col to scale 2 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast CTE scale 1 col to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 1 col to scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast CTE scale 1 col to scale 2 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast CTE scale 1 col to scale 2 | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast CTE scale 1 col to scale 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+  ("Cast CTE scale 1 col to scale 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast CTE scale 3 col to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 3 col to scale 2 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DecimalField `CTE(\"c\", \"r3\")` (3 decimal places) means the value rounded to the scale of"),
+  ("Cast CTE scale 3 col to scale 2 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast CTE scale 3 col to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE scale 3 col to scale 2 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DecimalField `CTE(\"c\", \"r3\")` (3 decimal places) means the value rounded to the scale of"),
+  ("Cast CTE scale 3 col to scale 2 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching ROUND(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast CTE scale 3 col to scale 2 | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast CTE scale 3 col to scale 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+  ("Cast CTE scale 3 col to scale 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast CTE decimal col to scale 2 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast CTE decimal col to scale 2 | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Cast CTE decimal col to scale 2 | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 2 | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast CTE decimal col to scale 2 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+  ("Cast CTE decimal col to scale 2 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast CTE decimal col to scale 1 | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 1 | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `CTE(\"c\", \"p\")` (2 decimal places) means the value rounded to the scale of "),
+  ("Cast CTE decimal col to scale 1 | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 1 | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 1 | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,1)\") of the DecimalField `CTE(\"c\", \"p\")` (2 decimal places) means the value rounded to the scale of "),
+  ("Cast CTE decimal col to scale 1 | cte", :mysql) =>
+    (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 1)", whole_numeric = nothing),
   ("Cast CTE decimal col to scale 1 | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast CTE decimal col to scale 1 | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
+  ("Cast CTE decimal col to scale 1 | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "Subquery(...) does not support a subquery that declares its own .with(...); this one declares c."),
   ("Cast interval int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast interval int | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DurationField `fastestlaptime` means an error, since an interval has no numeric value; SQLite "),
+  ("Cast interval int | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DurationField `fastestlaptime` means an error, since an interval has no numeric value; MySQL c"),
   ("Cast interval int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast interval int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DurationField `fastestlaptime` means an error, since an interval has no numeric value; SQLite "),
+  ("Cast interval int | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DurationField `fastestlaptime` means an error, since an interval has no numeric value; MySQL c"),
   ("Cast interval int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast interval int | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DurationField `fastestlaptime` means an error, since an interval has no numeric value; SQLite "),
+  ("Cast interval int | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DurationField `fastestlaptime` means an error, since an interval has no numeric value; MySQL c"),
   ("Cast Sum interval int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum interval int | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
+  ("Cast Sum interval int | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum interval int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum interval int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
+  ("Cast Sum interval int | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Sum interval int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Sum interval int | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `SUM(…)` over the DurationField `fastestlaptime` means an error, since an interval has no numeric "),
+  ("Cast Sum interval int | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Avg interval int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Avg interval int | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; SQLite computes the leading digit"),
+  ("Cast Avg interval int | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Avg interval int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast Avg interval int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; SQLite computes the leading digit"),
+  ("Cast Avg interval int | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Cast Avg interval int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast Avg interval int | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of `AVG(…)` means an error, since an interval has no numeric value; SQLite computes the leading digit"),
+  ("Cast Avg interval int | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Coalesce decimal output numeric(10,2) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(10,2) | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Coalesce decimal output numeric(10,2) | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce decimal output numeric(10,2) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(10,2) | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Coalesce decimal output numeric(10,2) | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce decimal output numeric(10,2) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(10,2) | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Coalesce decimal output numeric(10,2) | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce decimal output DecimalField() | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce decimal output DecimalField() | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Coalesce decimal output DecimalField() | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce decimal output DecimalField() | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce decimal output DecimalField() | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Coalesce decimal output DecimalField() | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce decimal output DecimalField() | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Coalesce decimal output DecimalField() | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Coalesce decimal output DecimalField() | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce decimal output numeric(12,4) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(12,4) | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
+  ("Coalesce decimal output numeric(12,4) | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce decimal output numeric(12,4) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(12,4) | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(12, 4)", whole_numeric = nothing),
+  ("Coalesce decimal output numeric(12,4) | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce decimal output numeric(12,4) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Coalesce decimal output numeric(12,4) | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
+  ("Coalesce decimal output numeric(12,4) | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce decimal output numeric | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Coalesce decimal output numeric | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Coalesce decimal output numeric | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce decimal output numeric | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Coalesce decimal output numeric | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Coalesce decimal output numeric | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce decimal output numeric | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Coalesce decimal output numeric | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Coalesce decimal output numeric | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Greatest decimal output numeric(12,4) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Greatest decimal output numeric(12,4) | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
+  ("Greatest decimal output numeric(12,4) | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Greatest decimal output numeric(12,4) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Greatest decimal output numeric(12,4) | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(12, 4)", whole_numeric = nothing),
+  ("Greatest decimal output numeric(12,4) | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Greatest decimal output numeric(12,4) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
   ("Greatest decimal output numeric(12,4) | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(12, 4)", whole_numeric = nothing),
+  ("Greatest decimal output numeric(12,4) | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Least decimal output numeric | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Least decimal output numeric | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = "CDecimal(10, 2)", column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Least decimal output numeric | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Least decimal output numeric | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Least decimal output numeric | cte", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Least decimal output numeric | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Least decimal output numeric | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
   ("Least decimal output numeric | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(nothing, nothing)", whole_numeric = nothing),
+  ("Least decimal output numeric | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast date int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast date int | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; SQLite comp"),
+  ("Cast date int | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; MySQL compu"),
   ("Cast date int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast date int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; SQLite comp"),
+  ("Cast date int | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; MySQL compu"),
   ("Cast date int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast date int | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; SQLite comp"),
+  ("Cast date int | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; MySQL compu"),
   ("Cast datetime int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast datetime int | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; SQL"),
+  ("Cast datetime int | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; MyS"),
   ("Cast datetime int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast datetime int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; SQL"),
+  ("Cast datetime int | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; MyS"),
   ("Cast datetime int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast datetime int | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; SQL"),
+  ("Cast datetime int | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; MyS"),
   ("Cast time int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast time int | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the TimeField `time` means an error, since a time has no numeric value; SQLite computes the leadin"),
+  ("Cast time int | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the TimeField `time` means an error, since a time has no numeric value; MySQL computes its digits "),
   ("Cast time int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast time int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the TimeField `time` means an error, since a time has no numeric value; SQLite computes the leadin"),
+  ("Cast time int | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the TimeField `time` means an error, since a time has no numeric value; MySQL computes its digits "),
   ("Cast time int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast time int | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the TimeField `time` means an error, since a time has no numeric value; SQLite computes the leadin"),
+  ("Cast time int | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of the TimeField `time` means an error, since a time has no numeric value; MySQL computes its digits "),
   ("Cast date numeric(10,2) | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast date numeric(10,2) | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; SQLit"),
+  ("Cast date numeric(10,2) | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; MySQL"),
   ("Cast date numeric(10,2) | cte", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", cte_field = "sDecimalField", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast date numeric(10,2) | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; SQLit"),
+  ("Cast date numeric(10,2) | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; MySQL"),
   ("Cast date numeric(10,2) | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(nothing, nothing)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Cast date numeric(10,2) | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; SQLit"),
+  ("Cast date numeric(10,2) | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"numeric(10,2)\") of the DateField `date` means an error, since a date or a timestamp has no numeric value; MySQL"),
   ("Cast datetime float | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast datetime float | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; SQLi"),
+  ("Cast datetime float | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; MySQ"),
   ("Cast datetime float | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", cte_field = "sFloatField", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast datetime float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; SQLi"),
+  ("Cast datetime float | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; MySQ"),
   ("Cast datetime float | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "float", kind = "CFloat64()", whole_numeric = nothing),
   ("Cast datetime float | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; SQLi"),
+  ("Cast datetime float | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"float8\") of the DateTimeField `start_at` means an error, since a date or a timestamp has no numeric value; MySQ"),
   ("Cast F date + Day(1) int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date + Day(1) int | alone", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of a date expression means an error, since a date or a timestamp has no numeric value; SQLite compute"),
+  ("Cast F date + Day(1) int | alone", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of a date expression means an error, since a date or a timestamp has no numeric value; MySQL computes"),
   ("Cast F date + Day(1) int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date + Day(1) int | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of a date expression means an error, since a date or a timestamp has no numeric value; SQLite compute"),
+  ("Cast F date + Day(1) int | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of a date expression means an error, since a date or a timestamp has no numeric value; MySQL computes"),
   ("Cast F date + Day(1) int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date + Day(1) int | subquery", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of a date expression means an error, since a date or a timestamp has no numeric value; SQLite compute"),
+  ("Cast F date + Day(1) int | subquery", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "Cast(…, \"integer\") of a date expression means an error, since a date or a timestamp has no numeric value; MySQL computes"),
   ("Cast F date - date int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date - date int | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast F date - date int | alone", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date - date int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date - date int | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Cast F date - date int | cte", :mysql) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date - date int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast F date - date int | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast F date - date int | subquery", :mysql) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast transform @year int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast transform @year int | alone", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast transform @year int | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast transform @year int | cte", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
   ("Cast transform @year int | cte", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, cte_field = "sIntegerField", kind = "CInt32()", whole_numeric = nothing),
+  ("Cast transform @year int | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast transform @year int | subquery", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
   ("Cast transform @year int | subquery", :sqlite) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Cast transform @year int | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching EXTRACT(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Subquery Max hop date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Subquery Max hop date | alone", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Subquery Max hop date | alone", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Subquery Max hop date | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
   ("Subquery Max hop date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
+  ("Subquery Max hop date | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
   ("Subquery Max hop date | subquery", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Subquery Max hop date | subquery", :sqlite) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Subquery Max hop date | subquery", :mysql) =>
+    (stage = :ok, read = "CDate()", read_parsed = false, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Subquery Avg float | alone", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Subquery Avg float | alone", :sqlite) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Subquery Avg float | alone", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Subquery Avg float | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
   ("Subquery Avg float | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
+  ("Subquery Avg float | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
   ("Subquery Avg float | subquery", :postgres) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Subquery Avg float | subquery", :sqlite) =>
+    (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
+  ("Subquery Avg float | subquery", :mysql) =>
     (stage = :ok, read = "CFloat64()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "numeric", kind = "CFloat64()", whole_numeric = nothing),
   ("Subquery path decimal | alone", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Subquery path decimal | alone", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Subquery path decimal | alone", :mysql) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = false, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Subquery path decimal | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
   ("Subquery path decimal | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
+  ("Subquery path decimal | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Subquery(…), whose type PormG does not infer. Name the type the column holds by "),
   ("Subquery path decimal | subquery", :postgres) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Subquery path decimal | subquery", :sqlite) =>
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
+  ("Subquery path decimal | subquery", :mysql) =>
+    (stage = :ok, read = "CDecimal(10, 2)", read_parsed = false, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Exists | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Exists | alone", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Exists | alone", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Exists | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Exists(…), whose type PormG does not infer. Project it in the outer query instea"),
   ("Exists | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Exists(…), whose type PormG does not infer. Project it in the outer query instea"),
+  ("Exists | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is Exists(…), whose type PormG does not infer. Project it in the outer query instea"),
   ("Exists | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Exists | subquery", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Exists | subquery", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Max Q | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Max Q | alone", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Max Q | alone", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Max Q | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is MAX over a QObject, whose type PormG does not infer. Name the type the column ho"),
   ("Max Q | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is MAX over a QObject, whose type PormG does not infer. Name the type the column ho"),
+  ("Max Q | cte", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is MAX over a QObject, whose type PormG does not infer. Name the type the column ho"),
   ("Max Q | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Max Q | subquery", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Max Q | subquery", :mysql) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Min Qor | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Min Qor | alone", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Min Qor | alone", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Min Qor | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is MIN over a QorObject, whose type PormG does not infer. Name the type the column "),
   ("Min Qor | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is MIN over a QorObject, whose type PormG does not infer. Name the type the column "),
+  ("Min Qor | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is MIN over a QorObject, whose type PormG does not infer. Name the type the column "),
   ("Min Qor | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Min Qor | subquery", :sqlite) =>
+    (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Min Qor | subquery", :mysql) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce Q false | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce Q false | alone", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce Q false | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce Q false | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
   ("Coalesce Q false | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function COALESCE is not a recognized function. Allowed: COUNT, SUM, AVG, MIN"),
+  ("Coalesce Q false | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Coalesce Q false | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Coalesce Q false | subquery", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Coalesce Q false | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sum Q | alone", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "`Sum` over a boolean is not supported: the query does not say which number a flag counts as (#953). Turn the flag into a"),
   ("Sum Q | alone", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` over a boolean is not supported: the query does not say which number a flag counts as (#953). Turn the flag into a"),
+  ("Sum Q | alone", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`Sum` over a boolean is not supported: the query does not say which number a flag counts as (#953). Turn the flag into a"),
   ("Sum Q | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "`Sum` over a boolean is not supported: the query does not say which number a flag counts as (#953). Turn the flag into a"),
   ("Sum Q | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "`Sum` over a boolean is not supported: the query does not say which number a flag counts as (#953). Turn the flag into a"),
+  ("Sum Q | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` over a boolean is not supported: the query does not say which number a flag counts as (#953). Turn the flag into a"),
   ("Sum Q | subquery", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "`Sum` over a boolean is not supported: the query does not say which number a flag counts as (#953). Turn the flag into a"),
   ("Sum Q | subquery", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "`Sum` over a boolean is not supported: the query does not say which number a flag counts as (#953). Turn the flag into a"),
+  ("Sum Q | subquery", :mysql) =>
     (stage = :build, error = "QueryBuildError", message = "`Sum` over a boolean is not supported: the query does not say which number a flag counts as (#953). Turn the flag into a"),
   ("Case then Q | alone", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Case then Q | alone", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = "CBool()", column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Case then Q | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case then Q | cte", :postgres) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: a branch is a QObject, whose type PormG does not infer. Name t"),
   ("Case then Q | cte", :sqlite) =>
     (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: a branch is a QObject, whose type PormG does not infer. Name t"),
+  ("Case then Q | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Case then Q | subquery", :postgres) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
   ("Case then Q | subquery", :sqlite) =>
     (stage = :ok, read = "CBool()", read_parsed = true, render = nothing, operand = "CBool()", function_ = nothing, column = nothing, formatter = "format_bool_sql", textless = "bool", kind = "CBool()", whole_numeric = nothing),
+  ("Case then Q | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
 )
 
 # The cells on which two channels disagree, by `_ekm_disagreements`' rule. Derived from the entries
 # above; pinned so the measurement itself is reviewable, and iterated by the integration read-back.
 const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}}}(
+  ("path interval | alone", :mysql) =>
+    [(:unparsed, "read=interval has no MySQL read parser")],
+  ("path interval | cte", :mysql) =>
+    [(:unparsed, "read=interval has no MySQL read parser")],
+  ("path interval | subquery", :mysql) =>
+    [(:unparsed, "read=interval has no MySQL read parser")],
+  ("path decimal | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("path decimal | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("path decimal | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("path date | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("path date | cte", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("path date | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("path time | alone", :mysql) =>
+    [(:unparsed, "read=time has no MySQL read parser")],
+  ("path time | cte", :mysql) =>
+    [(:unparsed, "read=time has no MySQL read parser")],
+  ("path time | subquery", :mysql) =>
+    [(:unparsed, "read=time has no MySQL read parser")],
+  ("hop date | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("hop date | cte", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("hop date | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("hop time | alone", :mysql) =>
+    [(:unparsed, "read=time has no MySQL read parser")],
+  ("hop time | cte", :mysql) =>
+    [(:unparsed, "read=time has no MySQL read parser")],
+  ("hop time | subquery", :mysql) =>
+    [(:unparsed, "read=time has no MySQL read parser")],
+  ("Joined date | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Joined date | cte", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Joined date | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Max Joined date | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Max Joined date | cte", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Max Joined date | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("F bare hop date | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("F bare hop date | cte", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("F bare hop date | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("F decimal * 2 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("F decimal * 2 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("F decimal * 2 | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("F date + Day(1) | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("F date + Day(1) | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
   ("F date - date | alone", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | alone", :sqlite) =>
     [(:unparsed, "read=int has no SQLite read parser")],
+  ("F date - date | alone", :mysql) =>
+    [(:unparsed, "read=int has no MySQL read parser")],
   ("F date - date | subquery", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("F date - date | subquery", :sqlite) =>
     [(:unparsed, "read=int has no SQLite read parser")],
+  ("F date - date | subquery", :mysql) =>
+    [(:unparsed, "read=int has no MySQL read parser")],
+  ("F date + Hour(1) | alone", :mysql) =>
+    [(:unparsed, "read=datetime has no MySQL read parser")],
+  ("F date + Hour(1) | subquery", :mysql) =>
+    [(:unparsed, "read=datetime has no MySQL read parser")],
+  ("F date + 1 | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("F date + 1 | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("F date + int col | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("F date + int col | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("F date - int col | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("F date - int col | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Value date | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Value date | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Value datetime | alone", :mysql) =>
+    [(:unparsed, "read=datetime has no MySQL read parser")],
+  ("Value datetime | subquery", :mysql) =>
+    [(:unparsed, "read=datetime has no MySQL read parser")],
+  ("Cast datetime to date | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Cast datetime to date | cte", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Cast datetime to date | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Cast datetime to timestamp | alone", :mysql) =>
+    [(:unparsed, "read=datetime has no MySQL read parser")],
+  ("Cast datetime to timestamp | cte", :mysql) =>
+    [(:unparsed, "read=datetime has no MySQL read parser")],
+  ("Cast datetime to timestamp | subquery", :mysql) =>
+    [(:unparsed, "read=datetime has no MySQL read parser")],
+  ("Cast datetime to time | alone", :mysql) =>
+    [(:unparsed, "read=time has no MySQL read parser")],
+  ("Cast datetime to time | cte", :mysql) =>
+    [(:unparsed, "read=time has no MySQL read parser")],
+  ("Cast datetime to time | subquery", :mysql) =>
+    [(:unparsed, "read=time has no MySQL read parser")],
   ("Case untyped date col - date | alone", :postgres) =>
     [(:unparsed, "read=int has no SQLite read parser")],
   ("Case untyped date col - date | alone", :sqlite) =>
@@ -3227,6 +4939,36 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=int has no SQLite read parser")],
   ("Case untyped date col - date | subquery", :sqlite) =>
     [(:unparsed, "read=int has no SQLite read parser")],
+  ("Sum decimal | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Sum decimal | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Sum decimal | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Avg decimal | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Avg decimal | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Avg decimal | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Max hop date | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Max hop date | cte", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Max hop date | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Max decimal | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Max decimal | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Max decimal | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast float to scale 1 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast float to scale 1 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast float to scale 1 | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Sum F bigint + epoch / 2 | alone", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
   ("Sum F bigint + epoch / 2 | cte", :postgres) =>
@@ -3239,6 +4981,94 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:gap, "read=none vs textless=numeric")],
   ("Sum F int + epoch / 2 | subquery", :postgres) =>
     [(:gap, "read=none vs textless=numeric")],
+  ("F decimal / 2 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("F decimal / 2 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("F decimal / 2 | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int numeric / 2 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int numeric / 2 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int numeric / 2 | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast F float * 1.5 numeric | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast F float * 1.5 numeric | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast F float * 1.5 numeric | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal to scale 2 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal to scale 2 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal to scale 2 | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int DecimalField | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int DecimalField | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int DecimalField | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Max Cast F float numeric | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Max Cast F float numeric | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Max Cast F float numeric | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast Max decimal to scale 1 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast Max decimal to scale 1 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast Max decimal to scale 1 | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal to scale 1 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal to scale 1 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal to scale 1 | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int to scale 1 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int to scale 1 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int to scale 1 | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast float DecimalField(10,1) | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast float DecimalField(10,1) | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast float DecimalField(10,1) | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int DecimalField(10,1) | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int DecimalField(10,1) | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast int DecimalField(10,1) | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal DecimalField(10,1) | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal DecimalField(10,1) | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast decimal DecimalField(10,1) | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast CTE decimal col to scale 2 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast CTE decimal col to scale 2 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast CTE decimal col to scale 1 | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Cast CTE decimal col to scale 1 | cte", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Subquery Max hop date | alone", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Subquery Max hop date | subquery", :mysql) =>
+    [(:unparsed, "read=date has no MySQL read parser")],
+  ("Subquery path decimal | alone", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
+  ("Subquery path decimal | subquery", :mysql) =>
+    [(:unparsed, "read=decimal has no MySQL read parser")],
 )
 
 # The shapes whose channels answer differently across contexts, by `_ekm_cross_context`' rule.
@@ -3247,16 +5077,24 @@ const _EKM_CROSS_CONTEXT = Dict{Tuple{String,Symbol},Vector{String}}(
     ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Value int", :sqlite) =>
     ["drops formatter: alone=none, cte=number, subquery=none"],
+  ("Value int", :mysql) =>
+    ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Value float", :postgres) =>
     ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Value float", :sqlite) =>
+    ["drops formatter: alone=none, cte=number, subquery=none"],
+  ("Value float", :mysql) =>
     ["drops formatter: alone=none, cte=number, subquery=none"],
   ("Value text", :postgres) =>
     ["drops formatter: alone=none, cte=text_or_time, subquery=none"],
   ("Value text", :sqlite) =>
     ["drops formatter: alone=none, cte=text_or_time, subquery=none"],
+  ("Value text", :mysql) =>
+    ["drops formatter: alone=none, cte=text_or_time, subquery=none"],
   ("Value bool", :postgres) =>
     ["drops formatter: alone=none, cte=bool, subquery=none"],
   ("Value bool", :sqlite) =>
+    ["drops formatter: alone=none, cte=bool, subquery=none"],
+  ("Value bool", :mysql) =>
     ["drops formatter: alone=none, cte=bool, subquery=none"],
 )

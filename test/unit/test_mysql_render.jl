@@ -473,3 +473,179 @@ end
     @test (kind, PormG.value_parser(kind, my)) == (kind, nothing)
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL division: the operator states which division the operands mean (#1130 phase 2b)
+# MySQL's `/` keeps the fraction whatever its operands (`7 / 2` is `3.5`), so the walk's kinds pick
+# the operator. Expected: `DIV` between two integer sides (columns, literals, an integer `Sum`), `/`
+# beside a float or a decimal side, and a refusal on MySQL for a side the walk cannot type (a text
+# column), naming the casts that state the meaning; PostgreSQL's `/` unchanged.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL division: DIV between integers, / beside a fraction, refused when untyped" begin
+  sel(M, f) = _mr_inspect(M.Result.objects.values("h" => f))[:sql_text]
+  @test occursin("(`Tb`.`grid` DIV ?) as `h`", sel(_MR_MY, F("grid") / 2))
+  @test occursin("(`Tb`.`laps` DIV `Tb`.`grid`) as `h`", sel(_MR_MY, F("laps") / F("grid")))
+  @test occursin("((SUM(`Tb`.`grid`) DIV 1) DIV ?)", _mr_inspect(_MR_MY.Result.objects.values("driverid", "h" => Sum("grid") / 2))[:sql_text])
+  # A float side keeps the fraction, as the meaning says (`F("points") / 4` is `1.5` for 6 points).
+  @test occursin("(`Tb`.`points` / ?) as `h`", sel(_MR_MY, F("points") / 4))
+  @test occursin("(`Tb`.`grid` / ?) as `h`", sel(_MR_MY, F("grid") / 2.0))
+  # PostgreSQL's integer `/` is already integer division: no DIV there.
+  @test occursin("(\"Tb\".\"grid\" / \$1::bigint) as \"h\"", sel(_MR_PG, F("grid") / 2))
+  # A side the walk cannot type: MySQL has no operator for "whichever division the type at run time
+  # means", so it refuses, naming both casts. A text column along a relation is such a side.
+  err = try; sel(_MR_MY, F("driverid__forename") / 2); nothing; catch e; e; end
+  @test err isa PormG.QueryBuildError
+  msg = replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
+  @test occursin("MySQL's / always keeps the fraction, so PormG refuses it on MySQL", msg)
+  @test occursin("Cast(x, IntegerField())", msg) && occursin("Cast(x, \"numeric\")", msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL casts: each type name maps to the CAST target that holds its meaning (#1130 phase 2b)
+# MySQL's CAST takes a closed set of targets, so a PormG type name is mapped, never passed through.
+# Expected: text → CHAR, integers → SIGNED, a bare numeric → DECIMAL(65,30) (MySQL's bare DECIMAL is
+# DECIMAL(10,0)), a sized one kept, real → FLOAT (single precision), the doubles → DOUBLE, timestamps
+# → DATETIME(3), time → TIME(6), uuid → CHAR(36); arrays and network types refused through the
+# capability table, and a name with no faithful target (boolean, interval, bytea, a user type)
+# refused before any SQL. Why: an unmapped name reaching the server is either a syntax error or a
+# cast to some other type than the one written.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL casts: each type name maps to the CAST target that holds its meaning" begin
+  my = MrMockMySQL()
+  t(x) = PormG.Dialect.cast_type_sql(x, my)
+  @test [t(x) for x in ("text", "varchar", "varchar(20)", "character varying(5)", "TEXT", "VARCHAR")] ==
+        ["CHAR", "CHAR", "CHAR(20)", "CHAR(5)", "CHAR", "CHAR"]
+  # PostgreSQL's unsized `char` is `char(1)`: one character, not the whole value.
+  @test [t(x) for x in ("char", "character", "char(3)")] == ["CHAR(1)", "CHAR(1)", "CHAR(3)"]
+  @test [t(x) for x in ("integer", "int", "int4", "smallint", "bigint", "int8", "INTEGER UNSIGNED")] == fill("SIGNED", 7)
+  @test [t(x) for x in ("numeric", "decimal", "dec", "numeric(10,2)", "numeric(5)")] ==
+        ["DECIMAL(65,30)", "DECIMAL(65,30)", "DECIMAL(65,30)", "DECIMAL(10,2)", "DECIMAL(5)"]
+  @test [t(x) for x in ("real", "float4", "float", "float8", "double precision", "float(24)", "float(53)")] ==
+        ["FLOAT", "FLOAT", "DOUBLE", "DOUBLE", "DOUBLE", "FLOAT(24)", "FLOAT(53)"]
+  @test [t(x) for x in ("date", "timestamp", "timestamptz", "TIMESTAMPTZ", "timestamp with time zone",
+                        "timestamp(3) with time zone", "timestamp(0)", "time", "time(3)")] ==
+        ["DATE", "DATETIME(3)", "DATETIME(3)", "DATETIME(3)", "DATETIME(3)", "DATETIME(3)", "DATETIME(0)", "TIME(6)", "TIME(3)"]
+  @test [t(x) for x in ("json", "jsonb", "uuid")] == ["JSON", "JSON", "CHAR(36)"]
+  # A feature MySQL lacks is the capability table's refusal.
+  @test_throws PormG.BackendCapabilityError t("integer[]")
+  @test_throws PormG.BackendCapabilityError t("inet")
+  # No faithful target: refused before any SQL, never passed through.
+  for x in ("boolean", "bool", "interval", "bytea", "BLOB", "time with time zone", "mood", "integer(4)", "uuid(3)")
+    err = try; t(x); nothing; catch e; e; end
+    @test (x, err isa PormG.UnsupportedConnectionError) == (x, true)
+    @test occursin("is not rendered for MySQL yet", sprint(showerror, err))
+  end
+  # The rendered cast, through the public `Cast`.
+  sel(f) = _mr_inspect(_MR_MY.Result.objects.values("c" => f))[:sql_text]
+  @test occursin("CAST(`Tb`.`grid` AS CHAR) as `c`", sel(PormG.QueryBuilder.Cast("grid", "text")))
+  @test occursin("CAST(`Tb`.`points` AS DECIMAL(10,2)) as `c`", sel(PormG.QueryBuilder.Cast("points", "numeric(10,2)")))
+  # The departures still refuse first: a date's cast to a number is MySQL's departure (#1260).
+  err = try; sel(PormG.QueryBuilder.Cast("raceid__date", "integer")); nothing; catch e; e; end
+  @test err isa PormG.QueryBuildError && occursin("MySQL computes its digits read as one number", sprint(showerror, err))
+  # A temporal value cast to a single-precision float is no number either (#1260): MySQL keeps #1215's
+  # single precision, so the operand rule must still run (review of #1130 2b: it returned early, and
+  # `CAST(date AS FLOAT)` read back `20090329`).
+  for target in ("real", "float4", "float(10)")
+    err = try; sel(PormG.QueryBuilder.Cast("raceid__date", target)); nothing; catch e; e; end
+    @test (target, err isa PormG.QueryBuildError) == (target, true)
+    @test occursin("MySQL computes its digits read as one number", sprint(showerror, err))
+  end
+  @test occursin("CAST(`Tb`.`points` AS FLOAT)", sel(PormG.QueryBuilder.Cast("points", "real")))
+  # A uuid cast compares as text on MySQL, as on SQLite: the engine fact the walk reads.
+  @test PormG.QueryBuilder._cast_renders_text(PormG.Models.UUIDField(), my)
+  @test !PormG.QueryBuilder._cast_renders_text(PormG.Models.IntegerField(), my)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL Concat: CONCAT_WS('', …), never `||` (#1130 phase 2b, #1271)
+# `||` is a logical OR on MySQL (`'a' || 'b'` is `0`), so a `Concat` never writes it. Expected:
+# `CONCAT_WS('', a, b)`, which skips a NULL operand as PostgreSQL's `CONCAT` does (the public meaning,
+# #1006), for one operand as for several; `CONCAT(a, b)` under `propagate_null` (the `@yyyy_q` label),
+# where a NULL operand means a NULL result; a float operand still refused on MySQL as on every engine
+# (explicit intent: a float's text is each engine's own). Why: a `||` reaching MySQL is a silent 0 or 1, not an error.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL Concat: CONCAT_WS('', …), never ||" begin
+  my = MrMockMySQL()
+  @test PormG.Dialect.CONCAT(Any["`a`", "`b`"], Dict{String,Any}(), my) == "CONCAT_WS('',\n`a`,\n`b`)"
+  @test PormG.Dialect.CONCAT(Any["`a`"], Dict{String,Any}(), my) == "CONCAT_WS('',\n`a`)"
+  @test PormG.Dialect.CONCAT(Any["`a`", "`b`"], Dict{String,Any}("propagate_null" => true), my) == "CONCAT(`a`,\n`b`)"
+  # Through the public `Concat`, over two text paths.
+  sql = _mr_inspect(_MR_MY.Result.objects.values("c" => PormG.QueryBuilder.Concat("driverid__forename", "driverid__surname")))[:sql_text]
+  @test occursin("CONCAT_WS('',", sql) && !occursin("||", sql)
+  # A float operand is explicit intent on every engine (its text is each engine's own): MySQL refuses it too.
+  err = try; _mr_inspect(_MR_MY.Result.objects.values("c" => PormG.QueryBuilder.Concat("driverid__surname", "points"))); nothing; catch e; e; end
+  @test err isa PormG.QueryBuildError && occursin("Cast(", sprint(showerror, err))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL date arithmetic: INTERVAL shifts and DATEDIFF, in the text order the binds follow (#1130 2b)
+# MySQL's `+`/`-` on a date read it as the number its digits spell, so date arithmetic renders MySQL's
+# own: a duration as one `± INTERVAL ? <unit>` per component (years first, as PostgreSQL's
+# `make_interval` applies them), a day count as `± INTERVAL (n) DAY` (and `INTERVAL (n) DAY + date`
+# when the count comes first, so its binds stay in text order), a date difference as `DATEDIFF`.
+# Expected: those spellings, the bound values in text order, an untyped operand refused naming the
+# typed spellings, and PostgreSQL's SQL unchanged.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL date arithmetic: INTERVAL shifts and DATEDIFF, in text order" begin
+  q(f) = _mr_inspect(_MR_MY.Race.objects.values("v" => f))
+  r = q(F("date") + Day(3))
+  @test occursin("(`Tb`.`date` + INTERVAL ? DAY) as `v`", r[:sql_text]) && r[:parameters] == Any[3]
+  # Years and months are ONE month count, as `make_interval` adds them: a year and then a month would
+  # clamp at a month end first (`2008-02-29` + 1y + 1m: `2009-03-28`, where PostgreSQL says `2009-03-29`).
+  r = q(F("date") - (Year(1) + Month(2)))
+  @test occursin("(`Tb`.`date` - INTERVAL ? MONTH) as `v`", r[:sql_text]) && r[:parameters] == Any[14]
+  r = q(F("date") + (Year(1) - Month(1) + Day(2)))
+  @test occursin("((`Tb`.`date` + INTERVAL ? MONTH) + INTERVAL ? DAY)", r[:sql_text]) && r[:parameters] == Any[11, 2]
+  # A year count too large for a month count raises rather than wrapping into a small shift.
+  @test_throws OverflowError q(F("date") + Year(typemax(Int) ÷ 12 + 1))
+  # A sub-second duration binds its seconds as a Float64, whose fraction MySQL keeps.
+  r = _mr_inspect(_MR_MY.Race.objects.values("v" => F("date") + Millisecond(1500)))
+  @test occursin("(`Tb`.`date` + INTERVAL ? SECOND)", r[:sql_text]) && r[:parameters] == Any[1.5]
+  # A bare integer is a whole number of days; an integer column is a day count, either side.
+  @test occursin("(`Tb`.`date` + INTERVAL ? DAY)", q(F("date") + 7)[:sql_text])
+  @test occursin("(`Tb`.`date` + INTERVAL (`Tb`.`year`) DAY)", q(F("date") + F("year"))[:sql_text])
+  @test occursin("(INTERVAL (`Tb`.`year`) DAY + `Tb`.`date`)", q(F("year") + F("date"))[:sql_text])
+  @test occursin("DATEDIFF(`Tb`.`date`, `Tb`.`date`) as `v`", q(F("date") - F("date"))[:sql_text])
+  # The binds follow the text: a filter value bound after the shift's own.
+  r = _mr_inspect(_MR_MY.Race.objects.filter("year__@gt" => 1990).values("v" => F("date") + Day(3)))
+  @test r[:parameters] == Any[3, 1990]
+  # An operand PormG cannot type: MySQL's `+` would read the date's digits (`20090329 + 1`).
+  err = try; q(F("date") + Sum("year")); nothing; catch e; e; end
+  @test err isa PormG.QueryBuildError
+  @test occursin("MySQL, where `+` reads a date as the number its digits spell", sprint(showerror, err))
+  # PostgreSQL's spelling is unchanged.
+  @test occursin("make_interval(days => \$1::integer)", _mr_inspect(_MR_PG.Race.objects.values("v" => F("date") + Day(3)))[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL intervals: every edge of the millisecond form refuses before any SQL (#1130 phase 2b)
+# MySQL computes an interval in milliseconds, as SQLite does (`_interval_as_ms`), but its millisecond
+# SQL is the follow-up to phase 2b and a DurationField's storage is phase 4's. Expected: a timestamp
+# difference, a DurationField in an ordering, an aggregate or arithmetic, and a date shifted by one,
+# each raise UnsupportedConnectionError before any SQL (never SQLite's millisecond SQL, which MySQL
+# rejects at the server); a projected DurationField still renders its column.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL intervals: every edge of the millisecond form refuses before any SQL" begin
+  refused(build) = (e = try; _mr_inspect(build()); nothing; catch err; err; end;
+                    e isa PormG.UnsupportedConnectionError && occursin("is not rendered for MySQL yet", sprint(showerror, e)))
+  # A timestamp difference is an interval: refused at its render (the mock models have no timestamp).
+  @test_throws PormG.UnsupportedConnectionError _MR_QB._temporal_difference_sql(MrMockMySQL(), "`a`", "`b`", PormG.CInterval())
+  @test _MR_QB._temporal_difference_sql(MrMockMySQL(), "`a`", "`b`", PormG.CInt32()) == ("DATEDIFF(`a`, `b`)", PormG.CInt32())
+  @test refused(() -> _MR_MY.Result.objects.values("resultid").order_by("fastestlaptime"))
+  @test refused(() -> _MR_MY.Result.objects.values("v" => Sum("fastestlaptime")))
+  @test refused(() -> _MR_MY.Result.objects.values("v" => F("fastestlaptime") * 2))
+  @test refused(() -> _MR_MY.Result.objects.values("v" => F("raceid__date") + F("fastestlaptime")))
+  # Interval arithmetic the SQLite path refuses in its own words is MySQL's refusal too, naming MySQL.
+  @test refused(() -> _MR_MY.Result.objects.values("v" => F("fastestlaptime") + 1))
+  @test refused(() -> _MR_MY.Result.objects.values("v" => F("fastestlaptime") * F("fastestlaptime")))
+  # An interval on the right of a number: the right-side render, and the count-plus-interval arm.
+  @test refused(() -> _MR_MY.Result.objects.values("v" => F("points") + F("fastestlaptime")))
+  @test refused(() -> _MR_MY.Result.objects.values("v" => F("grid") + F("fastestlaptime")))
+  # A duration literal inside a function is the text edge of the millisecond form (`_interval_ms_as_text`).
+  @test refused(() -> _MR_MY.Result.objects.values("v" => Max(PormG.QueryBuilder.Value(Hour(1)))))
+  @test occursin("`Tb`.`fastestlaptime` as `v`", _mr_inspect(_MR_MY.Result.objects.values("v" => F("fastestlaptime")))[:sql_text])
+  # The per-engine edges: SQLite's are its own Dialect helpers, unchanged.
+  @test _MR_QB._interval_text_as_ms("`c`", MrMockSQLite()) == PormG.Dialect._sqlite_interval_ms("`c`")
+  @test _MR_QB._interval_ms_as_text("?", MrMockSQLite()) == PormG.Dialect._sqlite_interval_text("?")
+  @test_throws PormG.UnsupportedConnectionError _MR_QB._interval_text_as_ms("`c`", MrMockMySQL())
+end

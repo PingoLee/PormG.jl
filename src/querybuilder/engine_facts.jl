@@ -22,8 +22,11 @@
 # on the server.
 _interval_as_ms(::PormGPostgres) = false
 _interval_as_ms(::PormGSQLite) = true
-# MySQL has no interval type either (#1130): until phase 2b spells its millisecond form, a duration in an
-# ordering or a comparison renders SQLite's, which MySQL rejects at the server, never a silent answer.
+# MySQL has no interval type either (#1130), so an interval is computed in milliseconds there too. Its
+# millisecond SQL is the follow-up to phase 2b: until then each edge of that form (a `DurationField`
+# or interval column read as milliseconds, a timestamp difference, a duration inside a function) refuses
+# on MySQL before any SQL (`_interval_text_as_ms` and its siblings in `expression_render.jl`), so no
+# other engine's millisecond SQL reaches the server.
 _interval_as_ms(::PormGMySQL) = true
 
 # A `DurationField` can be filtered: the engine has a decided storage for it (PostgreSQL `interval`,
@@ -42,12 +45,17 @@ _stores_date_as_text(::PormGSQLite) = true
 # `date ± integer` but no `date ± bigint`.
 _casts_bigint_day_count(::PormGPostgres) = true
 _casts_bigint_day_count(::PormGSQLite) = false
+# MySQL's `INTERVAL (n) DAY` takes a BIGINT count as it is (measured on 8.4, #1130 phase 2b).
+_casts_bigint_day_count(::PormGMySQL) = false
 
 # Whether a declared cast type renders as a cast to TEXT on this engine, so a value compared with it
 # is that text, not the type's value: on SQLite `Cast(x, "uuid")` and the network types render
 # `CAST(x AS TEXT)` (#929).
 _cast_renders_text(::PormGField, ::PormGPostgres) = false
 _cast_renders_text(field::PormGField, ::PormGSQLite) = _text_cast_on_sqlite(field)
+# MySQL casts a `uuid` to `CHAR(36)`, the text it stores one as (#1270), and refuses a network type
+# (`:network_types`), so a value compared with either cast is text, as on SQLite (#1130 phase 2b).
+_cast_renders_text(field::PormGField, ::PormGMySQL) = _text_cast_on_sqlite(field)
 
 # A bound parameter carries an explicit SQL type cast (`$1::bigint`), so the server types an untyped
 # literal as PormG means it. SQLite's collector ignores a cast (`add_parameter!(::PormGSQLiteParam)`).
@@ -98,6 +106,10 @@ _locks_rows(::PormGMySQL) = true   # InnoDB row locks (#1269)
 # division refusal (`_INTEGER_QUOTIENT_DEPARTURE`) fires on an engine that answers `true`.
 _untyped_sum_departs(::PormGPostgres) = true
 _untyped_sum_departs(::PormGSQLite) = false
+# MySQL's `SUM` of integers is a `DECIMAL` whatever their width, and its `/` keeps the fraction
+# (measured on 8.4: `SUM(15) / 2` is `7.5`). A sum the walk names is turned back into the integer
+# (`_sums_integers_as_decimal`); one it cannot name is not, so its quotient departs (#1130 phase 2b).
+_untyped_sum_departs(::PormGMySQL) = true
 
 # `SUM` over an integer is a DECIMAL (MySQL: `SUM(INT)` and `SUM(BIGINT)` alike), so `Dialect.SUM` casts
 # it back to the integer the sum of integers means. PostgreSQL widens only `sum(bigint)` to `numeric`,

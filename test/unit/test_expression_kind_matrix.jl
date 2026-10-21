@@ -54,14 +54,16 @@
 #                 back differently per engine: one with a read parser (bool, date, datetime, time,
 #                 interval, decimal), or `numeric` — a function PostgreSQL computes as `numeric` and
 #                 SQLite as a REAL (`textless`'s `:numeric`, #1028);
-# - `:unparsed` — a read kind is recorded that no SQLite read parser undoes (`read_parsed`, asked of
-#                 the parser table itself), so each driver's own representation comes through.
+# - `:unparsed` — a read kind is recorded that no read parser undoes (`read_parsed`, asked of the
+#                 parser table itself), so each driver's own representation comes through. A MySQL
+#                 cell asks MySQL's parsers; a PostgreSQL cell asks SQLite's, as it has since phase 1.
 # A second pinned set compares ACROSS contexts (`_ekm_cross_context`): one shape whose channel answers
 # differently alone, under a CTE and inside a `Subquery` — the #979 class, which a within-cell rule
 # cannot see. It is a measurement only, and not a defect count: a `drops` entry (an answer in one
 # context, none in another) includes absences that are by design. The read-back covers the flagged set.
 # `test/integration/test_expression_kind_readback.jl` projects every disagreeing cell on the seeded
-# F1 fixture and records what it actually reads back as, on both engines.
+# F1 fixture and records what it actually reads back as, on PostgreSQL and SQLite. The MySQL column
+# (#1130 phase 2b) has no read-back until phase 4 can seed the F1 fixture there.
 #
 # Regenerating: `PORMG_EKM_RECORD=1 julia --project=test/integration test/unit/test_expression_kind_matrix.jl`
 # rewrites both fixtures from the current code. Only do that for a change you intend, and read the diff:
@@ -78,16 +80,19 @@ const _EKM_QB = PormG.QueryBuilder
 
 struct EkmMockPostgres <: PormG.PormGPostgres end
 struct EkmMockSQLite <: PormG.PormGSQLite end
+struct EkmMockMySQL <: PormG.PormGMySQL end
 PormG.backend_sqlite_version(::EkmMockSQLite) = 3045000   # the SQLite window renderer asks for it
 
 PormG.config["ekm_pg"] = PormG.Configuration.Settings(
   connections = EkmMockPostgres(), change_data = true, db_def_folder = "ekm_pg")
 PormG.config["ekm_sl"] = PormG.Configuration.Settings(
   connections = EkmMockSQLite(), change_data = true, db_def_folder = "ekm_sl")
+PormG.config["ekm_my"] = PormG.Configuration.Settings(
+  connections = EkmMockMySQL(), change_data = true, db_def_folder = "ekm_my")
 
 # One model set per engine, identical: the subset of the integration F1 models
 # (`test/integration/db_2/models.jl`) the shape table names, with the same field types and keys.
-for (modname, key) in ((:EkmPGModels, "ekm_pg"), (:EkmSLModels, "ekm_sl"))
+for (modname, key) in ((:EkmPGModels, "ekm_pg"), (:EkmSLModels, "ekm_sl"), (:EkmMYModels, "ekm_my"))
   @eval module $modname
   import PormG
   import PormG.Models
@@ -136,7 +141,14 @@ end
 
 include(joinpath(@__DIR__, "helper_expression_kind_shapes.jl"))
 
-const _EKM_MODELS = ((:postgres, EkmPGModels), (:sqlite, EkmSLModels))
+# MySQL's column (#1130 phase 2b) was recorded before 2b rendered any expression on it, so each cell 2b
+# and 2c make build is a reviewed diff of that column.
+const _EKM_MODELS = ((:postgres, EkmPGModels), (:sqlite, EkmSLModels), (:mysql, EkmMYModels))
+
+# The parser table `read_parsed` asks, per engine, and the name the `:unparsed` class gives it. A
+# PostgreSQL cell asks SQLite's, as the class was defined in phase 1; MySQL's cells ask its own.
+const _EKM_PARSER_ENGINE = Dict(:postgres => (EkmMockSQLite(), "SQLite"), :sqlite => (EkmMockSQLite(), "SQLite"),
+                                :mysql => (EkmMockMySQL(), "MySQL"))
 
 # The first line of an error, ANSI-stripped and cut to a stable length (as the #977 matrix does).
 function _ekm_message(e)
@@ -197,7 +209,7 @@ end
 
 # What one cell does on one engine: every channel, or the error and the stage it fired at. `nothing`
 # for a context the shape does not apply to.
-function _ekm_observe(mod, label, base, build, context)
+function _ekm_observe(backend, mod, label, base, build, context)
   cell = try
     ekm_query(mod, base, build, context; prep! = get(EKM_PREP, label, nothing))
   catch e
@@ -212,9 +224,9 @@ function _ekm_observe(mod, label, base, build, context)
     return (stage = :build, error = string(nameof(typeof(e))), message = _ekm_message(e))
   end
   kind = get(q.object.projection_kinds, name, nothing)
-  # Whether SQLite's read path undoes the recorded kind: asked of the parser table, so a parser added
-  # for a kind moves the cell rather than a list here going stale.
-  read_parsed = kind === nothing ? nothing : PormG.value_parser(kind, EkmMockSQLite()) !== nothing
+  # Whether the read path undoes the recorded kind: asked of the parser table, so a parser added for a
+  # kind moves the cell rather than a list here going stale.
+  read_parsed = kind === nothing ? nothing : PormG.value_parser(kind, first(_EKM_PARSER_ENGINE[backend])) !== nothing
   return merge((stage = :ok, read = _ekm_show(kind), read_parsed = read_parsed), probe[])
 end
 
@@ -285,7 +297,7 @@ _ekm_compatible(a, b) = a === b || a === :other || b === :other ||
 const _EKM_GAP_FAMILIES = (:bool, :date, :datetime, :time, :interval, :decimal, :numeric)
 
 """The disagreements one observation shows: `(class, description)` pairs, sorted."""
-function _ekm_disagreements(obs)
+function _ekm_disagreements(obs, backend::Symbol = :sqlite)
   obs === nothing && return Tuple{Symbol,String}[]
   obs.stage === :ok || return Tuple{Symbol,String}[]
   claims = [(ch, fam) for ch in keys(obs) if ch ∉ (:stage,)
@@ -301,7 +313,7 @@ function _ekm_disagreements(obs)
     end
   else
     get(obs, :read_parsed, true) === false &&
-      push!(out, (:unparsed, "read=$(_ekm_family(:read, obs.read)) has no SQLite read parser"))
+      push!(out, (:unparsed, "read=$(_ekm_family(:read, obs.read)) has no $(last(_EKM_PARSER_ENGINE[backend])) read parser"))
   end
   return sort!(out)
 end
@@ -349,7 +361,7 @@ const _EKM_FIXTURE = joinpath(@__DIR__, "fixtures", "expression_kind_matrix_expe
 function _ekm_observations()
   obs = Dict{Tuple{String,Symbol},Any}()
   for (id, label, base, build, ctx) in _EKM_CELLS, (backend, mod) in _EKM_MODELS
-    o = _ekm_observe(mod, label, base, build, ctx)
+    o = _ekm_observe(backend, mod, label, base, build, ctx)
     o === nothing || (obs[(id, backend)] = o)
   end
   return obs
@@ -496,7 +508,7 @@ if get(ENV, "PORMG_EKM_RECORD", "") == "1"
   cross = _ekm_cross_context(obs)
   cross_ids = [(label, backend) for (label, _, _) in EKM_SHAPES for (backend, _) in _EKM_MODELS
                if haskey(cross, (label, backend))]
-  disagreeing = [(k, _ekm_disagreements(obs[k])) for k in ids]
+  disagreeing = [(k, _ekm_disagreements(obs[k], k[2])) for k in ids]
   filter!(p -> !isempty(last(p)), disagreeing)
   open(_EKM_FIXTURE, "w") do io
     println(io, "# GENERATED by test/unit/test_expression_kind_matrix.jl with PORMG_EKM_RECORD=1 — do not edit by hand.")
@@ -637,7 +649,7 @@ else
   # consolidation fixed it; a cell joining it is a new disagreement.
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "#1034: expression-kind matrix, disagreement set" begin
-    derived = Dict(k => d for (k, o) in _EKM_EXPECTED for d in (_ekm_disagreements(o),) if !isempty(d))
+    derived = Dict(k => d for (k, o) in _EKM_EXPECTED for d in (_ekm_disagreements(o, k[2]),) if !isempty(d))
     @test Set(keys(derived)) == Set(keys(_EKM_DISAGREEMENTS))
     for (k, d) in _EKM_DISAGREEMENTS
       @test get(derived, k, nothing) == d

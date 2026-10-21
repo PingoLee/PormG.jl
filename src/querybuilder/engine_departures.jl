@@ -29,57 +29,75 @@
 # (a declared cast to one), `:number` (a cast to any number type, #1259, #1260), `:scale` (`numeric(p, s)`), `:precision` (a literal `numeric(p, s)` cannot
 # hold), `:single_precision` (`real`, #1215) and `:concat` (a `Concat` operand). `kinds` are the
 # operand classes the classifiers in `projection_types.jl` name. `meaning`, `computes` and `fix` take the declared type, and `fix` also
-# the operand's flag, the path a suggestion can name.
+# the operand's flag, the path a suggestion can name. `computes` is per departing engine (`Backend =>
+# text`), since two engines can depart from one meaning with different values; `_computes` picks the
+# one for the engine at hand, and `test_meaning_departures.jl` fails on a `departs` engine without one.
 const _MEANING_DEPARTURES = (
-  # #1028: a boolean's text is the word. SQLite has no boolean and stores 1 / 0.
-  (targets = (:text,), kinds = (:bool,), departs = (PormGSQLite,), keeps = (PormGPostgres,), issue = "#1028",
+  # #1028: a boolean's text is the word. SQLite has no boolean and stores 1 / 0; MySQL's is a
+  # `TINYINT(1)`, and a comparison is an integer there too (measured on 8.4: `CAST(TRUE AS CHAR)` is `'1'`).
+  (targets = (:text,), kinds = (:bool,), departs = (PormGSQLite, PormGMySQL), keeps = (PormGPostgres,), issue = "#1028",
    meaning = _ -> "its text, `true` or `false`",
-   computes = _ -> "`1` or `0`, the integer it stores",
+   computes = (PormGSQLite => _ -> "`1` or `0`, the integer it stores",
+               PormGMySQL => _ -> "`1` or `0`, the integer it stores"),
    fix = (flag, _) -> "Write the text you mean: \e[32mCase(When(\"$(flag)\" => true, then = Value(\"true\")), default = \"false\")\e[0m."),
-  # #1028: a fractional number cast to an integer is the nearest one; SQLite's cast truncates.
-  (targets = (:integer,), kinds = (:float, :decimal, :numeric), departs = (PormGSQLite,), keeps = (PormGPostgres,), issue = "#1028",
+  # #1028: a fractional number cast to an integer is the nearest one; SQLite's cast truncates. MySQL's
+  # `CAST(… AS SIGNED)` rounds (measured: `1.5` → `2`, `-1.5` → `-2`; a double's tie to even, `2.5E0` →
+  # `2`, as PostgreSQL's `float8`), so it keeps the meaning.
+  (targets = (:integer,), kinds = (:float, :decimal, :numeric), departs = (PormGSQLite,), keeps = (PormGPostgres, PormGMySQL), issue = "#1028",
    meaning = _ -> "the nearest integer (`1.5` → `2`)",
-   computes = _ -> "the truncated one (`1`)",
+   computes = (PormGSQLite => _ -> "the truncated one (`1`)",),
    fix = (_, _) -> "Say how to round it: \e[32mCast(Round(x), IntegerField())\e[0m, \e[32mFloor(x)\e[0m or \e[32mCeil(x)\e[0m."),
   # #1259: an interval is no number, so its cast to an integer, a float or a `numeric` is an error (the
   # tie-breaker: an error on one engine is left to raise when the engines that answer give the
   # meaning). SQLite casts the stored `HH:MM:SS.sss` text and reads its leading digits, the hours: a
-  # silent different answer.
-  (targets = (:integer, :number), kinds = (:interval,), departs = (PormGSQLite,), keeps = (PormGPostgres,), issue = "#1259",
+  # silent different answer. MySQL casts a `TIME` to the number its digits spell (measured:
+  # `TIME '01:27:45.452'` → `12745`), and an interval PormG computes there is a millisecond count, so
+  # its cast is that count: a number either way, where the meaning is an error.
+  (targets = (:integer, :number), kinds = (:interval,), departs = (PormGSQLite, PormGMySQL), keeps = (PormGPostgres,), issue = "#1259",
    meaning = _ -> "an error, since an interval has no numeric value",
-   computes = _ -> "the leading digits of its `HH:MM:SS` text, the hours",
+   computes = (PormGSQLite => _ -> "the leading digits of its `HH:MM:SS` text, the hours",
+               PormGMySQL => _ -> "a number it does not mean: a `TIME`'s digits read as one (`1:27:45` → `12745`), or a computed interval's milliseconds"),
    fix = (flag, _) -> "Fetch the duration and take the number you mean in Julia, or ask for its text, \e[32mCast(\"$(flag)\", \"text\")\e[0m, which each engine writes in its own form."),
   # #1260: a date, a timestamp or a time is no number either, so its cast is an error by the same
   # tie-breaker. SQLite casts the stored text (`2009-03-29`, `2009-03-29T06:00:00.000+00:00`,
   # `06:00:00`) and reads its leading digits: the year, or a time's hour. A part names the number.
-  (targets = (:integer, :number), kinds = (:date, :timestamp), departs = (PormGSQLite,), keeps = (PormGPostgres,), issue = "#1260",
+  # MySQL casts a temporal value to the number its digits spell (measured: `DATE '2009-03-29'` →
+  # `20090329`, a `DATETIME` → `20090329060000`, `TIME '06:00:00'` → `60000`).
+  (targets = (:integer, :number), kinds = (:date, :timestamp), departs = (PormGSQLite, PormGMySQL), keeps = (PormGPostgres,), issue = "#1260",
    meaning = _ -> "an error, since a date or a timestamp has no numeric value",
-   computes = _ -> "the leading digits of its text, the year",
+   computes = (PormGSQLite => _ -> "the leading digits of its text, the year",
+               PormGMySQL => _ -> "its digits read as one number (`2009-03-29` → `20090329`)"),
    fix = (flag, _) -> "Name the number you mean with a part: its year, $(_temporal_part_spelling(flag, "year")), or another part \e[32mExtract\e[0m names."),
-  (targets = (:integer, :number), kinds = (:time,), departs = (PormGSQLite,), keeps = (PormGPostgres,), issue = "#1260",
+  (targets = (:integer, :number), kinds = (:time,), departs = (PormGSQLite, PormGMySQL), keeps = (PormGPostgres,), issue = "#1260",
    meaning = _ -> "an error, since a time has no numeric value",
-   computes = _ -> "the leading digits of its `HH:MM:SS` text, the hour",
+   computes = (PormGSQLite => _ -> "the leading digits of its `HH:MM:SS` text, the hour",
+               PormGMySQL => _ -> "its digits read as one number (`06:00:00` → `60000`)"),
    fix = (flag, _) -> "Name the number you mean with a part: its hour, $(_temporal_part_spelling(flag, "hour")), or another part \e[32mExtract\e[0m names."),
   # #1040: a cast to `numeric(p, s)` rounds to `s` places. SQLite reads the type name as NUMERIC
-  # affinity and keeps every digit; text is parsed and rounded by PostgreSQL, kept by SQLite.
-  (targets = (:scale,), kinds = (:float, :decimal, :numeric, :text), departs = (PormGSQLite,), keeps = (PormGPostgres,), issue = "#1040",
+  # affinity and keeps every digit; text is parsed and rounded by PostgreSQL, kept by SQLite. MySQL's
+  # `DECIMAL(p, s)` rounds a decimal, a double and text alike (measured: `1.235` → `1.24`).
+  (targets = (:scale,), kinds = (:float, :decimal, :numeric, :text), departs = (PormGSQLite,), keeps = (PormGPostgres, PormGMySQL), issue = "#1040",
    meaning = declared -> "the value rounded to the scale of $(declared)",
-   computes = _ -> "every digit of it",
+   computes = (PormGSQLite => _ -> "every digit of it",),
    fix = (_, declared) -> "Round it to the scale first (\e[32mCast(Round(x, $(something(_numeric_cast_scale(declared), 0))), \"$(declared)\")\e[0m, #1061), or cast to an unscaled \e[32m\"numeric\"\e[0m, which keeps the value."),
   # #1087: a literal the declared type cannot hold overflows: the cast is an error. SQLite stores it as it is,
   # a silent different answer (the tie-breaker: an error on one engine is left to raise when the
-  # engines that answer give the meaning; SQLite does not).
-  (targets = (:precision,), kinds = (:overflow,), departs = (PormGSQLite,), keeps = (PormGPostgres,), issue = "#1087",
+  # engines that answer give the meaning; SQLite does not). Nor does MySQL: in a `SELECT` it clamps the
+  # value to the largest the type holds, with only a warning (measured: `CAST(123456 AS DECIMAL(4,2))` is
+  # `99.99`, warning 1264).
+  (targets = (:precision,), kinds = (:overflow,), departs = (PormGSQLite, PormGMySQL), keeps = (PormGPostgres,), issue = "#1087",
    meaning = declared -> "a numeric field overflow, since $(declared) cannot hold it",
-   computes = _ -> "the value as it is",
+   computes = (PormGSQLite => _ -> "the value as it is",
+               PormGMySQL => _ -> "the largest value the type holds (`99.99` for `numeric(4, 2)`)"),
    fix = (_, declared) -> "Declare a precision that holds it (\e[32mCast(x, \"numeric(p, $(something(_numeric_cast_scale(declared), 0)))\")\e[0m with a larger p), or cast to an unscaled \e[32m\"numeric\"\e[0m."),
   # #1215: a single-precision float (`real`, `float4`, `float(p)` for p ≤ 24) is the value rounded to a
   # 4-byte float, which reads back as a `Float32`. SQLite has no 4-byte REAL: its cast keeps the
   # 8-byte double, so `0.1` stays `0.1` where single precision holds `0.10000000149011612`. The
-  # operand does not decide it, so the one kind is `:value`, any operand.
-  (targets = (:single_precision,), kinds = (:value,), departs = (PormGSQLite,), keeps = (PormGPostgres,), issue = "#1215",
+  # operand does not decide it, so the one kind is `:value`, any operand. MySQL's `CAST(… AS FLOAT)` is
+  # single precision and reads back as a `Float32` (measured), so it keeps the meaning.
+  (targets = (:single_precision,), kinds = (:value,), departs = (PormGSQLite,), keeps = (PormGPostgres, PormGMySQL), issue = "#1215",
    meaning = _ -> "the value rounded to single precision, a `Float32`",
-   computes = _ -> "the 8-byte double, every digit of it",
+   computes = (PormGSQLite => _ -> "the 8-byte double, every digit of it",),
    fix = (_, _) -> "Cast to a double, which is a `Float64` on every engine: \e[32mCast(x, \"float8\")\e[0m or \e[32mCast(x, FloatField())\e[0m."),
 )
 
@@ -97,7 +115,8 @@ _temporal_part_spelling(flag::AbstractString, part::AbstractString) =
 const _INTEGER_QUOTIENT_DEPARTURE = (
   targets = (:text, :integer, :scale, :concat), issue = "#1111",
   meaning = _ -> "an integer quotient (`15 / 2` is `7`) when the sum is whole",
-  computes = _ -> "a `numeric` one (`7.5`) for a `bigint` or `numeric` sum",
+  computes = (PormGPostgres => _ -> "a `numeric` one (`7.5`) for a `bigint` or `numeric` sum",
+              PormGMySQL => _ -> "a `DECIMAL` one (`7.5`), since its `SUM` is one"),
   fix = (_, _) -> "Say which division you mean: cast the dividend to an integer first, \e[32mCast(x, BigIntegerField()) / 2\e[0m, which divides as integers on every engine, or divide by a float, \e[32mx / 2.0\e[0m, to keep the fraction.")
 
 """
@@ -132,5 +151,9 @@ function _meaning_refusal(fname::AbstractString, what::AbstractString, row, conn
   engine = _backend_name(conn)
   return QueryBuildError(
     "\e[4m\e[31m$(fname)\e[0m of $(what) means $(row.meaning(declared)); $(engine) computes " *
-    "$(row.computes(declared)), so PormG refuses it on $(engine) ($(row.issue)). $(row.fix(flag, declared))")
+    "$(_computes(row, conn)(declared)), so PormG refuses it on $(engine) ($(row.issue)). $(row.fix(flag, declared))")
 end
+
+# What `conn`'s engine computes instead, from the row's per-engine `computes` pairs. Asked only of an
+# engine the row departs on, so a missing pair is a row written wrong, which the departure test catches.
+_computes(row, conn) = last(row.computes[findfirst(p -> conn isa first(p), row.computes)])

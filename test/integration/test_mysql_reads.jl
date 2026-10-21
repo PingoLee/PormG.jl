@@ -1,4 +1,5 @@
-# MySQL backend, phase 2a (#1130): plain-column fluent reads against a live MySQL 8.4.
+# MySQL backend, phases 2a and 2b (#1130): fluent reads against a live MySQL 8.4 — plain columns (2a),
+# and the expressions 2b renders: division, casts, `Concat`, date arithmetic.
 #
 #   PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_reads.jl
 #
@@ -11,13 +12,13 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 using Test, Dates, TimeZones, Decimals, DataFrames
-import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, F
+import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, F, Coalesce, Cast, Concat
 
 # The model tables this file creates, in drop order (children first).
 const _MYR_TABLES = ("result", "new_join_position", "race", "circuit", "driver")
 
-@testset "MySQL backend, phase 2a: plain-column reads (#1130)" begin
-if only_on(:mysql, "reads through the MySQL query builder (phase 2a)")
+@testset "MySQL backend, phases 2a and 2b: reads (#1130)" begin
+if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
     pool = PormG.config[PORMG_DB_FOLDER].connections
     run(sql; params = nothing) = PormG.fetch(pool, sql; params = params)
     sql_rows(sql; params = nothing) = DataFrame(run(sql; params = params))
@@ -293,24 +294,123 @@ if only_on(:mysql, "reads through the MySQL query builder (phase 2a)")
             @test_throws PormG.PormGError M.Driver.objects.filter("driverref" => "senna").select_for_update().list()
         end
 
-        # What: what phase 2a does not render stays loud, never another engine's SQL.
-        # SQL: none — division (phase 2b's `DIV`) and `create` (phase 3) fail before a statement is sent.
+        # What: what MySQL does not render yet stays loud, never another engine's SQL.
+        # SQL: none — `Coalesce` (phase 2c) and `create` (phase 3) fail before a statement is sent.
         # Why: a silent wrong answer is the failure #1130 exists to prevent.
-        @testset "what 2a does not render fails before any SQL is sent" begin
+        @testset "what is not rendered yet fails before any SQL is sent" begin
             # Each names the piece of the query builder MySQL does not have yet.
-            e = try; M.Result.objects.values("half" => F("grid") / 2).list(); nothing; catch err; err; end
-            @test e isa MethodError && e.f === PormG.QueryBuilder._division_sql
+            e = try; M.Result.objects.values("c" => Coalesce("position", 0)).list(); nothing; catch err; err; end
+            @test e isa MethodError && e.f === PormG.Dialect.COALESCE
             e = try; M.New_join_position.objects.create("description" => "x"); nothing; catch err; err; end
             @test e isa MethodError && e.f === PormG.QueryBuilder._insert_returns_rows
             @test M.New_join_position.objects.count() == 3
         end
 
-        # What: a DurationField filter is refused before any SQL; an ordering or a sum over one reaches the
-        # server and is rejected there; IS NULL works.
-        # SQL: none for a filter; for an ordering or a sum, the millisecond form PormG writes for an engine
-        #      with no interval type, which MySQL cannot parse (`CAST(… AS INTEGER)`), whatever the rows hold.
-        # Why: what a DurationField stores on MySQL is phase 4's decision; until then a duration read
-        # must fail rather than answer.
+        # What: `/` divides as its operands mean: integers as integers, a float side keeping the fraction.
+        # SQL: `(`Tb`.`grid` DIV ?)` between integers, `(`Tb`.`points` / ?)` beside a DOUBLE.
+        # Why: MySQL's own `/` keeps the fraction of `7 / 2`, which `F("grid") / 2` does not mean (#1130
+        # phase 2b): each value is checked against Julia's own division, never against another engine.
+        @testset "division divides integers as integers, and keeps a float's fraction" begin
+            rows = M.Result.objects.values("resultid", "grid", "laps", "points", "h" => F("grid") / 2,
+                                           "q" => F("laps") / F("grid"), "n" => (F("grid") - 10) / 4,
+                                           "f" => F("points") / 4).order_by("resultid").list()
+            @test length(rows) == 7
+            for r in rows
+                @test r[:h] isa Integer && r[:h] == div(r[:grid], 2)
+                @test r[:q] isa Integer && r[:q] == div(r[:laps], r[:grid])
+                # truncation toward zero, as an integer `/` means: (1 - 10) / 4 is -2, not -3
+                @test r[:n] == div(r[:grid] - 10, 4)
+                @test r[:f] isa Float64 && r[:f] == r[:points] / 4
+            end
+            # Division by zero reads NULL on MySQL (the server warns, 1365); documented per engine.
+            @test only(M.Result.objects.filter("resultid" => 1).values("z" => F("grid") / 0).list())[:z] === missing
+        end
+
+        # What: `Cast` reads back as the type it names, and a cast MySQL computes another value for is
+        # refused before any SQL.
+        # SQL: `CAST(`Tb`.`grid` AS CHAR)`, `CAST(… AS DECIMAL(10,2))`, `CAST(… AS SIGNED)`, `CAST(… AS FLOAT)`,
+        #      `CAST(`Tb`.`start_at` AS DATE)`, `CAST(… AS DATETIME(3))`, `CAST(… AS DECIMAL(65,30))`.
+        # Why: MySQL's CAST takes a closed set of targets, so each type name is mapped to the one that
+        # holds its meaning (#1271): checked here against the value each type means in Julia.
+        @testset "Cast reads back as the type it names" begin
+            r = only(M.Result.objects.filter("resultid" => 2).values(
+                "t" => Cast("grid", "text"), "d" => Cast("points", "numeric(10,2)"), "i" => Cast("points", "integer"),
+                "n" => Cast("grid", "numeric"), "f4" => Cast("points", "real"), "f8" => Cast("grid", "float8")).list())
+            @test r[:t] == "4"
+            @test r[:d] isa Decimals.Decimal && r[:d] == Decimals.Decimal(9)
+            @test r[:i] isa Integer && r[:i] == 9
+            # A bare `numeric` keeps the value: MySQL's own bare `DECIMAL` would be `DECIMAL(10,0)`.
+            @test r[:n] isa Decimals.Decimal && r[:n] == Decimals.Decimal(4)
+            @test r[:f4] isa Float32 && r[:f4] == 9.0f0
+            @test r[:f8] isa Float64 && r[:f8] == 4.0
+            # Rounding to the scale and to the nearest integer, as the casts mean: 6 / 4 = 1.5.
+            r = only(M.Result.objects.filter("resultid" => 1).values(
+                "half" => Cast(F("points") / 4, "integer"), "s" => Cast(F("points") / 4, "numeric(10,0)")).list())
+            @test r[:half] == 2 && r[:s] == Decimals.Decimal(2)
+            # Temporal targets: a timestamp cut to its date, and a timestamp at millisecond precision.
+            r = only(M.Race.objects.filter("raceid" => 1).values(
+                "d" => Cast("start_at", "date"), "ts" => Cast("start_at", "timestamp")).list())
+            @test r[:d] == Date(1990, 3, 25)
+            @test r[:ts] == DateTime(1990, 3, 25, 17, 0, 0, 125)
+            # A cast whose value MySQL computes differently is refused before any SQL (#1260): a date's
+            # number is its digits there (`19900325`), not the error the cast means.
+            e = try; M.Race.objects.values("n" => Cast("date", "integer")).list(); nothing; catch err; err; end
+            @test e isa PormG.QueryBuildError && occursin("so PormG refuses it on MySQL", msg(e))
+            # A type with no faithful MySQL target is refused before any SQL, never passed through.
+            e = try; M.Result.objects.values("b" => Cast("grid", "boolean")).list(); nothing; catch err; err; end
+            @test e isa PormG.UnsupportedConnectionError && occursin("is not rendered for MySQL yet", msg(e))
+        end
+
+        # What: `Concat` joins its operands' text and skips a NULL one, as it means on every engine.
+        # SQL: `CONCAT_WS('', `Tb`.`positiontext`, `Tb`.`grid`)` — never `||`, a logical OR on MySQL.
+        # Why: `'a' || 'b'` is `0` on MySQL; a NULL operand is skipped, not a NULL result (#1006).
+        @testset "Concat joins text and skips a NULL operand" begin
+            rows = M.Result.objects.filter("resultid__@in" => [1, 3]).values(
+                "resultid", "positiontext", "grid", "position", "c" => Concat("positiontext", "grid"),
+                "n" => Concat("raceid__name", "position")).order_by("resultid").list()
+            @test [r[:c] for r in rows] == [string(r[:positiontext], r[:grid]) for r in rows] == ["21", "R3"]
+            # Result 3 has no position: the NULL operand is skipped, so the name stands alone.
+            @test [r[:n] for r in rows] == ["Brazilian Grand Prix2", "Brazilian Grand Prix"]
+            @test rows[2][:position] === missing
+        end
+
+        # What: date arithmetic answers as Julia's own `Date` arithmetic does.
+        # SQL: `(`Tb`.`date` + INTERVAL ? DAY)`, `((… - INTERVAL ? MONTH) - INTERVAL ? DAY)`,
+        #      `(`Tb`.`date` + INTERVAL (`Tb`.`year`) DAY)`, `DATEDIFF(…)`, `(`Tb`.`start_at` + INTERVAL ? HOUR)`.
+        # Why: MySQL's own `+` on a date reads its digits (`DATE '2009-03-29' + 1` is `20090330`), so each
+        # shape renders MySQL's date functions (#1130 phase 2b); the values are checked against Julia.
+        @testset "date arithmetic answers as Julia's Date arithmetic" begin
+            rows = M.Race.objects.values("raceid", "date", "year", "start_at",
+                "d3" => F("date") + Day(3), "m" => F("date") - (Month(1) + Day(2)), "y" => F("date") + F("year"),
+                "dd" => F("date") - F("date"),
+                "h" => F("start_at") + Hour(2), "ms" => F("start_at") + Millisecond(1500)).order_by("raceid").list()
+            @test length(rows) == 3
+            for r in rows
+                @test r[:d3] isa Date && r[:d3] == r[:date] + Day(3)
+                @test r[:m] == r[:date] - Month(1) - Day(2)
+                @test r[:y] == r[:date] + Day(r[:year])
+                @test r[:dd] == 0
+                if r[:start_at] === missing
+                    # NULL in is NULL out.
+                    @test r[:h] === missing && r[:ms] === missing
+                else
+                    @test r[:h] == r[:start_at] + Hour(2)
+                    @test r[:ms] == r[:start_at] + Millisecond(1500)
+                end
+            end
+            # The difference of two dates is the whole days between them, negative the other way round.
+            @test only(M.Race.objects.filter("raceid" => 3).values("n" => F("date") - Date(1991, 3, 24)).list())[:n] == 210
+            # A value PormG cannot type beside a date is refused before any SQL, naming the typed spellings.
+            e = try; M.Race.objects.values("x" => F("date") + Sum("year")).list(); nothing; catch err; err; end
+            @test e isa PormG.QueryBuildError && occursin("reads a date as the number its digits spell", msg(e))
+        end
+
+        # What: a DurationField filter, ordering or aggregate is refused before any SQL; IS NULL works,
+        # and so does projecting the column.
+        # SQL: none for each refusal; the plain column for a projection.
+        # Why: what a DurationField stores on MySQL is phase 4's decision, and MySQL's interval
+        # millisecond form is the follow-up to phase 2b; until then a duration read must fail rather
+        # than answer, and fail in PormG rather than at the server.
         @testset "a DurationField read fails rather than answers" begin
             run("UPDATE `result` SET `fastestlaptime` = '00:01:20.500' WHERE `resultid` IN (1, 2)")
             for pair in ("fastestlaptime" => Dates.Second(80), "fastestlaptime__@in" => [Dates.Second(80)],
@@ -319,9 +419,10 @@ if only_on(:mysql, "reads through the MySQL query builder (phase 2a)")
                 @test e isa PormG.UnsupportedConnectionError && occursin("not rendered for MySQL yet", msg(e))
             end
             for q in (() -> M.Result.objects.order_by("fastestlaptime").values("resultid").list(),
-                      () -> M.Result.objects.values("t" => Sum("fastestlaptime")).list())
+                      () -> M.Result.objects.values("t" => Sum("fastestlaptime")).list(),
+                      () -> M.Result.objects.values("t" => F("raceid__start_at") - F("raceid__start_at")).list())
                 e = try; q(); nothing; catch err; err; end
-                @test e isa PormG.StatementError
+                @test e isa PormG.UnsupportedConnectionError && occursin("not rendered for MySQL yet", msg(e))
             end
             @test M.Result.objects.filter("fastestlaptime__@isnull" => false).count() == 2
         end

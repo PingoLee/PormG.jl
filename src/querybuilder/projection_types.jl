@@ -1048,8 +1048,13 @@ function _cast_divergent_operand(v::FObject, instruc::SQLInstruction)
   departs(kind, what, target, flag) = (row = _departure(conn, target, kind);
     row === nothing ? nothing : (kind = kind, what = what, target = target, flag = flag, declared = declared, row = row))
   # #1215: a single-precision target rounds whatever it casts, so the node is checked once, not per
-  # operand; no other rule below applies to a float target.
-  _single_precision_cast(declared) && return departs(:value, "any value", :single_precision, "<flag>")
+  # operand. On an engine that keeps single precision the operands are still read below: a date or an
+  # interval is no number whatever the float's width (#1259, #1260), and MySQL reads the digits of one
+  # (`CAST(DATE '2009-03-29' AS FLOAT)` is `20090329`). The other rules below do not apply to a float.
+  if _single_precision_cast(declared)
+    d = departs(:value, "any value", :single_precision, "<flag>")
+    d === nothing || return d
+  end
   size = _numeric_cast_size(declared)
   target = _sql_type_field(declared)
   # #1259: an interval is no number, whatever number the target is: an integer, a float, a `numeric`,

@@ -443,8 +443,17 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
       end
       # Lost the insert race → the row exists now; return the winner, created == false.
       raced = fetch_by_target()
+      # #1299: not the caller's call, so not a `UsageError`. The usual cause is a race: the conflicting
+      # row was there when the INSERT skipped and another session deleted it before this read (a
+      # winner not yet visible to a REPEATABLE READ snapshot is PostgreSQL's own serialization
+      # failure). The same call retried can succeed, which is what `OperationalError` signals. A
+      # trigger or rule that skips the insert leaves the same empty RETURNING and fails every retry,
+      # so the message names it rather than claiming the race.
       raced === nothing &&
-        throw(QueryBuildError("get_or_create: ON CONFLICT DO NOTHING skipped the insert but the existing $(model.name) row could not be read back."))
+        throw(OperationalError(_backend_name(connection),
+          "get_or_create: the insert returned no row, and the $(model.name) row could not be read back. " *
+          "Usually another session deleted the conflicting row in between, and retrying the call can " *
+          "succeed; a trigger or rule that skips the insert gives the same result on every retry."))
       return (raced, false)
 
     elseif connection isa PormGSQLite
@@ -454,8 +463,14 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
         _rethrow_conflict_target_error(e, model, target_fields)
       end
       row = fetch_by_target()
+      # #1299: not the caller's call, so not a `UsageError`, and no race either: the serialized write
+      # lock (below) keeps every other writer out between the INSERT and this read. So the insert
+      # stored nothing the lookup finds (a trigger that drops the row, or a PormG fault), and a retry
+      # fails the same way: `StatementError`, the landing type for such a fault on the statement path.
       row === nothing &&
-        throw(QueryBuildError("get_or_create: insert reported success but the $(model.name) row could not be read back."))
+        throw(StatementError(_backend_name(connection),
+          "get_or_create: the insert reported success, but the $(model.name) row could not be read back: " *
+          "a trigger may have dropped it, or the lookup does not match what was stored."))
       # Under the serialized write lock (the transaction below) no writer can interleave between the
       # miss-check and this insert, so a fetched-nothing-then-insert is always a real creation.
       # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
@@ -1127,6 +1142,41 @@ function _refuse_update_scale_departure(f_meta, field::AbstractString, value, in
     declared = "DecimalField(max_digits = $(f_meta.max_digits), decimal_places = $(places))"))
 end
 
+# #1297 — an expression of a type that is no number, written into a numeric field. SQLite stores the
+# value's text (or a blob's bytes) in the INTEGER, REAL or NUMERIC column, and PostgreSQL has no
+# assignment cast from one to a number, so it fails only when the statement runs. No engine gives the
+# call a meaning, so this is explicit intent, refused on every engine before any SQL rather than a
+# departure row. Nor is there a `Cast` to name: PostgreSQL has none from these types to a number.
+# Left out on purpose: a boolean (`true` against `1` is a #1147 meaning question), and text and JSON,
+# which #1279 reads as numbers to round. Typed by the walk (`_AllKinds`), after the SET value renders,
+# so a joined path's column is resolved.
+const _NON_NUMBER_KINDS = (
+  (CUUID, "a UUID"), (CDate, "a date"), (CDateTime, "a timestamp"), (CTime, "a time of day"),
+  (CInterval, "an interval"), (CBytes, "binary data"), (CInet, "a network address"),
+  (CCidr, "a network address"), (CTsVector, "a full-text document"))
+const _NUMBER_FIELD_KINDS = Union{CInt16,CInt32,CInt64,CFloat64,CDecimal}
+function _refuse_update_non_number(f_meta, field::AbstractString, value, instruction::SQLInstruction)
+  _field_kind(f_meta) isa _NUMBER_FIELD_KINDS || return nothing
+  kind = _expression_kind(value, instruction)
+  # A declared type is read by its name, the same on every engine: the walk types a uuid or network
+  # cast on SQLite as the text it renders (`_declared_kind`), and it still means a UUID there.
+  declared_type = value isa FObject ? _declared_cast(value) : nothing
+  if declared_type isa AbstractString && !isempty(declared_type)
+    declared_field = _sql_type_field(declared_type)
+    declared_field === nothing || (kind = _field_kind(declared_field))
+  end
+  i = findfirst(((K, _),) -> kind isa K, _NON_NUMBER_KINDS)
+  i === nothing && return nothing
+  what = last(_NON_NUMBER_KINDS[i])
+  label = _concat_operand_label(value)
+  named = label === nothing ? "the expression" : "`$(label)`"
+  declared = replace(String(nameof(typeof(f_meta))), r"^s" => "")
+  throw(QueryBuildError(
+    "\e[4m\e[31mupdate(\"$(field)\" => …)\e[0m writes $(named), which is $(what), into the " *
+    "$(declared) `$(field)`. That is no number on any engine, so PormG refuses it (#1297). " *
+    "Write a numeric expression into `$(field)`, or write the value into a field of its own type."))
+end
+
 function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Symbol = :execute)
   real_obj = objct isa SQLObjectHandler ? objct.object : objct
   model = real_obj.model
@@ -1209,6 +1259,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     elseif isa(objct.insert[field], SQLTypeF) || isa(objct.insert[field], SQLTypeFunction) ||
        isa(objct.insert[field], SQLTypeCTE) || isa(objct.insert[field], SQLTypeJoined)
       f_value = _set_update_query(objct.insert[field], instruction)
+      _refuse_update_non_number(model.fields[field], field, objct.insert[field], instruction)
       _refuse_update_scale_departure(model.fields[field], field, objct.insert[field], instruction)
       push!(set_clause_parts, "$(quoted_field) = $(f_value)")
     else

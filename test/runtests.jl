@@ -97,6 +97,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Concat Operands With No Single Text (#1027)" include("unit/test_concat_textless_operands.jl")
     @testset "Divergent Casts And Concat Operands (#1028)" include("unit/test_cast_divergent_operands.jl")
     @testset "Expression Update Into a Scaled DecimalField (#1279)" include("unit/test_update_decimal_scale.jl")
+    @testset "Non-Number Expression Update Into a Numeric Field (#1297)" include("unit/test_update_non_number.jl")
     @testset "Expression Refused by Every Writer but update (#1283)" include("unit/test_write_expression_refusal.jl")
     @testset "A Non-Boolean Refused by a BooleanField (#1290)" include("unit/test_boolean_field_value.jl")
     @testset "Mixed Temporal Operands Refused (#1200)" include("unit/test_temporal_mix_refusal.jl")

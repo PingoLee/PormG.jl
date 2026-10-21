@@ -77,6 +77,8 @@ with `FilterError`.** So a bad value — the part of a filter an end user usuall
 | any query, PostgreSQL connection string libpq cannot parse | `PoolConnectError` | Fails fast; `cause` is an `InvalidConfigurationError` with the quoted fragment masked — see [Advanced Configuration](configuration/advanced.md) |
 | `with_advisory_lock(...; wait = false)` | `OperationalError` | Lock held elsewhere. **Never raised on SQLite** — see [Advisory Locks](advisory_lock.md) |
 | `with_advisory_lock(...; on_missing_lock = :error)` on SQLite | `BackendCapabilityError` | SQLite has no advisory locks; the body would run unprotected, so it is refused instead |
+| `get_or_create` on PostgreSQL, the insert returns no row and the row cannot be read back | `OperationalError` | Usually a race: another session deleted the conflicting row, and the call retried can succeed. A trigger or rule that skips the insert gives the same error on every retry (#1299) |
+| `get_or_create` on SQLite, the insert reports success but the row cannot be read back | `StatementError` | No race is possible under the write lock: a trigger dropped the row, or a PormG fault. A retry fails the same way (#1299) |
 
 ### Configuration and migrations
 

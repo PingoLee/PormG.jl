@@ -47,6 +47,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "Deletes"                      begin include("test_deletes.jl")            end
     @testset "Mutation Fence Race (#765)"   begin include("test_mutation_fence_concurrency.jl") end
     @testset "Fluent parity (#208)"         begin include("test_fluent_parity_208.jl")  end
+    @testset "get_or_create read-back (#1299)" begin include("test_get_or_create_read_back.jl") end
     @testset "Bulk copy"                    begin include("test_bulk_copy.jl")          end
     @testset "Bulk column arrays (#672)"    begin include("test_bulk_column_arrays.jl") end
     @testset "bulk_insert returning= (#671)" begin include("test_bulk_returning.jl")     end

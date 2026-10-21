@@ -293,6 +293,19 @@ WHERE "Tb"."driverid" = $1
 -- Parameters: [1]
 ```
 
+A number field takes only an expression that is a number. Writing a UUID, a date, a timestamp, a
+time, an interval or binary data into an `IntegerField`, `BigIntegerField`, `FloatField` or
+`DecimalField` raises `QueryBuildError` on every engine before any SQL is sent (#1297). So does
+arithmetic that keeps such a type: a timestamp difference is an interval, not a count of milliseconds.
+SQLite would store the value's text (or a blob's bytes) in the number column, and PostgreSQL would fail
+when the statement ran:
+
+```julia
+query.update("number" => F("dob"))
+# QueryBuildError: update("number" => …) writes `dob`, which is a date, into the IntegerField
+# `number`. That is no number on any engine, so PormG refuses it (#1297). …
+```
+
 ### Supported Mathematical Operations
 
 All basic mathematical operations are supported within the database context using `F`.

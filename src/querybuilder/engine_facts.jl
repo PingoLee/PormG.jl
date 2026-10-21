@@ -144,6 +144,14 @@ _greatest_skips_nulls(::PormGSQLite) = false
 # 3)` is NULL), so the operands are rewritten there too, and MySQL renders its own `GREATEST` over them.
 _greatest_skips_nulls(::PormGMySQL) = false
 
+# The engine has no boolean type to cast to (#1130 phase 2c-1, MySQL), so a boolean declaration
+# (`Cast(x, "boolean")`, `output_field = "boolean"`) over booleans or integers is `((x) <> 0)` there,
+# and refused over anything else (`_mysql_declared_output`). PostgreSQL casts to `boolean`; SQLite's
+# declarations take `sqlite_cast_sql`.
+_normalizes_boolean_cast(::PormGPostgres) = false
+_normalizes_boolean_cast(::PormGSQLite) = false
+_normalizes_boolean_cast(::PormGMySQL) = true
+
 # NULL placement is emulated with an `(expr IS NULL)` sort key, because the engine has no
 # `NULLS FIRST`/`NULLS LAST` (SQLite before 3.30, #75). The version is the capability table's
 # `:nulls_order` row (#1163); the fact is whether this engine falls back when the row says no.

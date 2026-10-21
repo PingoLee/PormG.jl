@@ -78,7 +78,9 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                :_interval_unit_ns, :_stores_interval_as_units,
                                # #1310: MySQL computes a date as the number its digits spell, so an
                                # operand the walk cannot name is refused beside one there.
-                               :_types_temporal_operands])
+                               :_types_temporal_operands,
+                               # Phase 2c-1: a boolean declaration MySQL has no cast target for.
+                               :_normalizes_boolean_cast])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions

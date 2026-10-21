@@ -800,6 +800,8 @@ end
 # rotations, and never SQLite's `MAX`/`MIN`, which are aggregates on MySQL); `NULLIF(a, ?)` with no
 # cast back (MySQL keeps `a`'s type, measured); `CASE WHEN c THEN ? ELSE ? END` binding in text order;
 # a declared `output_field` is `CAST(… AS T)`.
+# Why: before phase 2c-1 each raised a `MethodError` on MySQL; SQLite's `MAX`/`MIN` would be aggregates
+# there, and a cast back over `NULLIF` would be a second, needless conversion.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "MySQL conditionals: Case/When, Coalesce, Greatest/Least and NullIf render MySQL's own SQL" begin
   QB = PormG.QueryBuilder
@@ -828,8 +830,9 @@ end
 # MySQL stores an interval as its microseconds and casts to no boolean type, so the engine that departs
 # decides on itself. Expected: an interval to text reads the `HH:MM:SS` text (`_mysql_interval_text`)
 # for `Coalesce` as for `Cast`; to an interval it is the count itself; to a date it is refused; a
-# boolean target over integers is `((x) <> 0)` and over anything else refused; an interval beside
-# another type under one declaration is refused.
+# boolean target over booleans or integers is `((x) <> 0)` and over anything else refused; an interval
+# beside another type is refused, declared or not (`Coalesce("fastestlaptime", 0)` read the duration as
+# its count); a NULL operand is no value of another type.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "MySQL declared types: intervals and booleans decided on MySQL" begin
   QB = PormG.QueryBuilder
@@ -848,9 +851,27 @@ end
                 "of an interval is not supported on MySQL")
   @test refused(() -> R.objects.values("v" => QB.Coalesce("fastestlaptime", 0; output_field = "text")),
                 "over an interval and a value of another type is not supported on MySQL")
-  @test sql(() -> R.objects.values("v" => QB.Case(QB.When("grid__@gt" => 5, then = 2), default = 0; output_field = "boolean")))[1] |>
-        x -> occursin("SELECT ((CASE WHEN `Tb`.`grid` > ? THEN ? ELSE ? END ) <> 0) as `v`", x) ||
-             occursin("SELECT ((CASE WHEN `Tb`.`grid` > ? THEN ? ELSE ? END) <> 0) as `v`", x)
+  for (label, build) in ("Coalesce(d, 0)" => () -> R.objects.values("v" => QB.Coalesce("fastestlaptime", 0)),
+                         "Greatest(d, 0)" => () -> R.objects.values("v" => QB.Greatest("fastestlaptime", 0)),
+                         "NullIf(d, 0)" => () -> R.objects.values("v" => QB.NullIf("fastestlaptime", 0)),
+                         "Case(d | 0)" => () -> R.objects.values("v" => QB.Case(QB.When("grid__@gt" => 5,
+                                                   then = F("fastestlaptime")), default = 0)))
+    @test (label, refused(build, "over an interval and a value of another type is not supported on MySQL")) == (label, true)
+  end
+  # A duration beside a duration, or beside NULL, builds; SQLite keeps its own answer for the mixed one.
+  @test occursin("COALESCE(`Tb`.`fastestlaptime`, ?)",
+                 sql(() -> R.objects.values("v" => QB.Coalesce("fastestlaptime", QB.Value(Second(0)))))[1])
+  @test occursin("NULLIF(`Tb`.`fastestlaptime`, ?)", sql(() -> R.objects.values("v" => QB.NullIf("fastestlaptime", hour)))[1])
+  @test occursin("ELSE NULL", sql(() -> R.objects.values("v" => QB.Case(QB.When("grid__@gt" => 5,
+                                    then = F("fastestlaptime")))))[1])
+  @test !refused(() -> _MR_SL.Result.objects.values("v" => QB.Coalesce("fastestlaptime", 0)), "")
+  @test occursin("SELECT ((CASE WHEN `Tb`.`grid` > ? THEN ? ELSE ? END) <> 0) as `v`",
+                 sql(() -> R.objects.values("v" => QB.Case(QB.When("grid__@gt" => 5, then = 2), default = 0; output_field = "boolean")))[1])
+  # Over a boolean value too, and a NULL operand is no other type.
+  @test occursin("((?) <> 0) as `v`", sql(() -> R.objects.values("v" => QB.Cast(QB.Value(true), "boolean")))[1])
+  @test occursin("((COALESCE(`Tb`.`grid`, NULL)) <> 0)",
+                 sql(() -> R.objects.values("v" => QB.Coalesce("grid", QB.Value(nothing); output_field = "boolean")))[1])
+  @test refused(() -> R.objects.values("v" => QB.Cast("fastestlaptime", "boolean")), "of an interval is not supported on MySQL")
   @test occursin("((`Tb`.`grid`) <> 0) as `v`", sql(() -> R.objects.values("v" => QB.Cast("grid", "boolean")))[1])
   for (label, then, default) in (("text", "y", "n"), ("float", 1.5, 0.0))
     @test (label, refused(() -> R.objects.values("v" => QB.Case(QB.When("grid__@gt" => 5, then = then), default = default;
@@ -866,7 +887,7 @@ end
 # The extension binds a `Decimals.Decimal` as its exact text, which MySQL types as a string: a `CASE`
 # with such a branch read back text and ordered as text (measured: `'10.00' < '5.50'`). Expected: the
 # marker is `CAST(? AS DECIMAL(p,s))` at the value's own precision and scale; every other value keeps
-# `?`; a value past MySQL's DECIMAL keeps `?`.
+# `?`; a value past MySQL's DECIMAL (65 digits, a scale of 30) is refused rather than bound as text.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "MySQL Decimal binds state their DECIMAL" begin
   QB = PormG.QueryBuilder
@@ -876,7 +897,8 @@ end
   @test ph(parse(Decimal, "0.005")) == "CAST(? AS DECIMAL(3,3))"
   @test ph(Decimal(0, 12, 1)) == "CAST(? AS DECIMAL(3,0))"
   @test ph(Decimal(0, 0, 0)) == "CAST(? AS DECIMAL(1,0))"
-  @test ph(Decimal(0, big(10)^70, 0)) == "?" && ph(Decimal(0, 1, -31)) == "?"
+  @test_throws PormG.QueryBuildError ph(Decimal(0, big(10)^70, 0))
+  @test_throws PormG.QueryBuildError ph(Decimal(0, 1, -31))
   @test ph(5) == "?" && ph(2.5) == "?" && ph("5.50") == "?"
   r = _mr_inspect(_MR_MY.Result.objects.values("v" => QB.Case(QB.When("grid__@gt" => 5, then = parse(Decimal, "10.25")),
                                                                default = parse(Decimal, "5.5"))))

@@ -471,13 +471,17 @@ end
 # #1130 phase 2c — a `Decimals.Decimal` binds as its exact text (the extension's `_bind_value`), which
 # MySQL types as a string: a `CASE` or `COALESCE` with such a branch was a VARCHAR (measured on 8.4:
 # `CASE … THEN ? ELSE 7 END` over `"5.50"` reads back `"5.50"`, and orders as text, `'10.00' < '5.50'`).
-# The marker states the value's own DECIMAL, at its exact precision and scale, as PostgreSQL's
-# `$1::numeric` does there. A value past MySQL's DECIMAL (65 digits, a scale of 30) keeps the bare marker.
+# The marker states the value's own DECIMAL, at its exact precision and scale, so the value is the
+# number it is wherever it lands. A value past MySQL's DECIMAL (65 digits, a scale of 30) has no such
+# type there, and as text it would make the expression text again: refused rather than bound so. A
+# filter value against a column never reaches here as a `Decimal`: the column's formatter writes it.
 function _mysql_placeholder(v::Decimals.Decimal)::String
   scale = max(-v.q, 0)
   digits = iszero(v.c) ? 1 : ndigits(v.c)
   precision = max(digits + max(v.q, 0), scale, 1)
-  (precision <= 65 && scale <= 30) || return "?"
+  (precision <= 65 && scale <= 30) || throw(QueryBuildError(
+    "A Decimal of $(precision) digits with $(scale) after the point cannot be bound on MySQL, whose DECIMAL " *
+    "holds at most 65 digits and 30 after the point. Round it first, or bind it as a Float64."))
   return "CAST(? AS DECIMAL($(precision),$(scale)))"
 end
 _mysql_placeholder(::Any) = "?"

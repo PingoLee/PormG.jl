@@ -508,7 +508,7 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             # The Decimal branch orders as a number, not as text (`'10.25' < '5.5'`).
             ordered = M.Result.objects.values("resultid", "d" => Case(When("grid__@gt" => 2, then = parse(Decimal, "10.25")),
                 default = parse(Decimal, "5.5"))).order_by("d", "resultid").list()
-            @test [r[:d] for r in ordered] == sort([r[:d] for r in ordered])
+            @test issorted([Float64(r[:d]) for r in ordered]) && [r[:d] for r in ordered][1] == parse(Decimal, "5.5")
             # A Case over durations is the microseconds it holds: it orders, filters and reads as one.
             lap = Case(When("grid__@gt" => 2, then = F("fastestlaptime")), default = Value(Second(0)))
             want(id) = (g = base[id][:grid]; t = base[id][:fastestlaptime]; g > 2 ? t : Dates.CompoundPeriod(Second(0)))
@@ -520,6 +520,9 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             @test [r[:resultid] for r in over] == sort([id for id in keys(base) if (u = us(want(id))) !== missing && u > 80_000_000])
             text = only(M.Result.objects.filter("resultid" => 1).values("t" => Coalesce("fastestlaptime", Value(Second(0)); output_field = "text")).list())
             @test text[:t] == PormG.Models.format_duration_sql(base[1][:fastestlaptime])
+            # A duration beside a number would read the duration as its count: refused before any SQL.
+            e = try; M.Result.objects.values("c" => Coalesce("fastestlaptime", 0)).list(); nothing; catch err; err; end
+            @test e isa PormG.QueryBuildError && occursin("over an interval and a value of another type", msg(e))
         end
     finally
         for t in _MYR_TABLES

@@ -515,6 +515,10 @@ negative values. These cases use the milliseconds:
   literal. Any other argument keeps the text comparison: a text column, a `CTE(...)` column, a
   `Subquery(...)`, or a duration literal with a month, a year or a fraction of a millisecond. So
   does a declared `output_field`.
+- A duration literal projected under an alias (`values("v" => Value(Hour(100)))`) and filtered by
+  an ordering lookup (`"v__@gt" => Hour(99)`), both sides bound as milliseconds. A literal with a
+  fraction of a millisecond has no millisecond form, so ordering it is refused on SQLite. Equality
+  keeps the text. A literal with a month or a year cannot be a SQLite parameter at all.
 - A `When` condition on an interval's alias, as a filter on it is
   (`Case(When(Q("total__@gt" => Hour(1)); then = 1); default = 0)`). The alias must come before the
   `Case` in `values(...)`.
@@ -524,6 +528,11 @@ negative values. These cases use the milliseconds:
   (since #891), and an index on the column still serves them.
 
 Like the arithmetic above, these comparisons round each side to the nearest millisecond on SQLite.
+
+On PostgreSQL a duration literal binds as an `interval` (`$1::interval`), wherever it is written: a
+`Value(Hour(1))`, a `Case` branch, a `Coalesce` argument. It compares as an interval and reads back
+as a `Dates.CompoundPeriod`, as a `DurationField` does. Without the type, two such parameters were
+compared as text (`"5 hours" > "40 hours"`), and a `Case` over them read back as its text.
 
 The latest 2009 starts, by time of day:
 

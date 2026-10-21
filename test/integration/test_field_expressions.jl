@@ -1155,6 +1155,32 @@ end
     @test [Dates.toms(x) for x in got.x] == [expected[id] for id in got.driverid]
   end
 
+  # #1316 — a duration literal projected as an alias and filtered by an ordering lookup compared two
+  # texts on both engines: SQLite the `HH:MM:SS` text (`"100:00:00" > "99:00:00"` is false), PostgreSQL
+  # two parameters with no type (`"5 hours" > "40 hours"` is true). Expected SQL, SQLite: `WHERE ? > ?`
+  # with the two durations' milliseconds; PostgreSQL: `WHERE $2::interval > $3`. Five results are
+  # filtered, so a comparison that holds keeps all five; the oracle is Julia's comparison of the two
+  # durations. A `Case` over duration literals is an interval on both engines too: PostgreSQL read its
+  # untyped branches back as their text (`"100 hours"`), and it reads the duration now, as SQLite does.
+  @testset "a duration-literal alias compares durations, not their text (#1316)" begin
+    FN = PormG.Functions
+    kept(a, b) = (q = M.Result.objects;
+                  q.values("resultid", "v" => Value(a));
+                  q.filter("v__@gt" => b, "resultid__@lte" => 5);
+                  size(q |> DataFrame, 1))
+    for (a, b) in ((Dates.Hour(100), Dates.Hour(99)), (Dates.Hour(2), Dates.Hour(1)), (Dates.Hour(5), Dates.Hour(40)),
+                   (Dates.Minute(90), Dates.Hour(1) + Dates.Minute(29)), (-Dates.Hour(1), -Dates.Hour(2)))
+      @test kept(a, b) == (Dates.toms(a) > Dates.toms(b) ? 5 : 0)
+    end
+    q = M.Result.objects
+    q.filter("resultid__@lte" => 2)
+    q.values("resultid", "c" => FN.Case(FN.When("resultid" => 1, then = Dates.Hour(100)), default = Dates.Minute(90)))
+    q.order_by("resultid")
+    c = (q |> DataFrame).c
+    @test all(x -> x isa Dates.CompoundPeriod, c)
+    @test [Dates.toms(x) for x in c] == [360_000_000, 5_400_000]
+  end
+
   # #882 — an IntegerField beside a date is a whole number of days on both engines. SQLite used to
   # subtract it from the YEAR. The oracle is the same shift in Julia over the same rows.
   @testset "an integer column shifts a date by whole days (#882)" begin

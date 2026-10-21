@@ -330,6 +330,9 @@ function _infer_parameter_sql_type(value, instruc::SQLInstruction; fallback::Uni
   # #1175: untyped, the offset text was resolved by context — `($1)::date` read the wall-clock date
   # of the offset written, and a projected `Value(zdt)` read back as text. `timestamptz` is the instant.
   value isa TimeZones.ZonedDateTime && return "timestamptz"
+  # #1316: untyped, two durations compared as text — `Value(Hour(100))`'s alias filtered
+  # `@gt Hour(99)` kept no row, and a `Case` over duration literals projected its text.
+  value isa Union{Dates.Period,Dates.CompoundPeriod} && return "interval"
   value isa Sockets.IPAddr && return "inet"   # #903 — bound as its text by `add_parameter!`
   return nothing
 end

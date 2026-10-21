@@ -843,30 +843,56 @@ const _INTERVAL_MS_VARIADIC = ("GREATEST", "LEAST", "COALESCE")
 # #894 — the source of the projection named `name` when it is a SQLite interval that may have a
 # millisecond form, or `nothing`. Decided without rendering anything, so a caller can check its other
 # conditions before it commits to a render that binds. SQLite only — PostgreSQL orders and compares
-# the `interval` itself.
-function _projected_interval_source(name::AbstractString, instruc::SQLInstruction)::Union{SQLField,Nothing}
+# the `interval` itself. #1316: a `Value(<duration>)` alias is its literal (an `SQLText`), which has a
+# millisecond form when it has a whole number of milliseconds (#907); it compared its text before.
+function _projected_interval_source(name::AbstractString, instruc::SQLInstruction)::Union{SQLField,SQLText,Nothing}
   _interval_as_ms(instruc.connection) || return nothing
   get(instruc.projection_kinds, Symbol(name), nothing) isa CInterval || return nothing
   source = _projected_source(memo_key(:base, name), instruc)
+  source isa SQLText && return _interval_ms_candidate(source) ? source : nothing
   source isa SQLField && _interval_ms_candidate(source.field) || return nothing
   return source
 end
+
+# A `_projected_interval_source` rendered once by `_render_interval_ms`: a projected expression with its
+# alias, or a `Value` literal as itself, which is what binds its milliseconds.
+_render_interval_source_ms(source::SQLField, instruc::SQLInstruction) =
+  _render_interval_ms(source.field, instruc; _as = source._as)
+_render_interval_source_ms(source::SQLText, instruc::SQLInstruction) = _render_interval_ms(source, instruc)
 
 # #1311 — whether the projection named `name` is, on SQLite, an interval with NO millisecond form: a
 # `Case` whose value is a duration, a function over one, `NullIf` or a window function (`Lag`) over a
 # duration. `_projected_interval_source` rules these out, so an ordering filter or an ORDER BY on the
 # alias compared its `HH:MM:SS` text, while the same comparison inside an expression is refused (#1301).
-# Decided without rendering, from the walk, as `_projected_interval_source` is.
+# Decided without rendering, from the walk, as `_projected_interval_source` is. #1316: so is a duration
+# literal with no millisecond form — a month or a year, or a fraction of a millisecond.
 function _projected_unordered_interval(name::AbstractString, instruc::SQLInstruction)::Bool
   _interval_as_ms(instruc.connection) || return false
   source = _projected_source(memo_key(:base, name), instruc)
+  source isa SQLText && return _unordered_interval_literal(source)
   source isa SQLField || return false
   _interval_ms_candidate(source.field) && return false
   return _expression_kind(source.field, instruc) isa CInterval
 end
+_unordered_interval_literal(source::SQLText) =
+  literal_canonical_kind(source.field) isa CInterval && !_interval_ms_candidate(source)
 
-# #1311 — the refusal for such an alias: `what` is the clause that orders it. A CTE column holding the
-# interval is read in milliseconds (#1285), which is the spelling that orders it on SQLite.
+# #1311 — refuse ordering such an alias: `what` is the clause that orders it. A CTE column holding the
+# interval is read in milliseconds (#1285), which is the spelling that orders it on SQLite. A literal
+# has no such column (a CTE refuses a `Value` it cannot type), so its message names the durations that
+# have a millisecond form instead.
+function _refuse_unordered_interval_alias(what::AbstractString, name::AbstractString, instruc::SQLInstruction)
+  _projected_unordered_interval(name, instruc) || return nothing
+  source = _projected_source(memo_key(:base, name), instruc)
+  throw(source isa SQLText ? _unordered_interval_literal_error(what, name, _backend_name(instruc.connection)) :
+                             _unordered_interval_alias_error(what, name))
+end
+_unordered_interval_literal_error(what::AbstractString, name::AbstractString, engine::AbstractString) = QueryBuildError(
+  "$(what) on the `$(name)` alias is not supported on $(engine): it is a duration literal with no " *
+  "millisecond form (months or years, which have no fixed length, or a fraction of a millisecond), " *
+  "which $(engine) holds as its text, and that text does not sort in the duration's order. Equality " *
+  "(`==`, `@in`) still compares the text. Write the duration in weeks, days or a time with whole " *
+  "milliseconds: Day(30), Hour(1).")
 _unordered_interval_alias_error(what::AbstractString, name::AbstractString) = QueryBuildError(
   "$(what) on the `$(name)` alias is not supported on SQLite: it is an interval with no millisecond " *
   "form (a `Case` whose value is a duration, a function over one, `NullIf` or a window function such " *
@@ -880,11 +906,13 @@ _unordered_interval_alias_error(what::AbstractString, name::AbstractString) = Qu
 # render turned out to be text after all — still the projection's own SQL with its own bindings, so a
 # caller that prints it orders and compares exactly as the alias would have.
 function _render_projected_interval_ms(name::AbstractString, instruc::SQLInstruction)::Union{Tuple{String,Bool},Nothing}
+  # #1316: a `Value` alias is one constant on every row, so it orders nothing: the alias, as before.
+  _projected_source(memo_key(:base, name), instruc) isa SQLText && return nothing
   # #1311: its only callers are ORDER BY terms, which would sort such an alias by its text.
-  _projected_unordered_interval(name, instruc) && throw(_unordered_interval_alias_error("`order_by`", name))
+  _refuse_unordered_interval_alias("`order_by`", name, instruc)
   source = _projected_interval_source(name, instruc)
   source === nothing && return nothing
-  return _render_interval_ms(source.field, instruc; _as = source._as)
+  return _render_interval_source_ms(source, instruc)
 end
 
 # #814 — a WINDOW function cannot be inside a SQLite interval. The interval becomes text in a correlated

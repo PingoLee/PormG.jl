@@ -643,6 +643,9 @@ end
   @test refused(() -> _MR_MY.Result.objects.values("v" => F("grid") + F("fastestlaptime")))
   # A duration literal inside a function is the text edge of the millisecond form (`_interval_ms_as_text`).
   @test refused(() -> _MR_MY.Result.objects.values("v" => Max(PormG.QueryBuilder.Value(Hour(1)))))
+  # #1316: so is a duration literal's alias ordered against a duration, which bound the two `Hour`s.
+  @test refused(() -> (q = _MR_MY.Result.objects; q.values("v" => PormG.QueryBuilder.Value(Hour(100)));
+                       q.filter("v__@gt" => Hour(99)); q))
   @test occursin("`Tb`.`fastestlaptime` as `v`", _mr_inspect(_MR_MY.Result.objects.values("v" => F("fastestlaptime")))[:sql_text])
   # The per-engine edges: SQLite's are its own Dialect helpers, unchanged.
   @test _MR_QB._interval_text_as_ms("`c`", MrMockSQLite()) == PormG.Dialect._sqlite_interval_ms("`c`")

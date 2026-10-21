@@ -1256,47 +1256,47 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Value interval | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "? > ?", params = [("100 hours", "Hour"), ("100 hours", "Hour"), ("10", "Int64")]),
   ("Value interval | alone", :mysql, "v__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :where, sql = "? > ?", params = [("100 hours", "Hour"), ("100 hours", "Hour"), ("1 minute", "Minute")]),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Value interval | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\$2 > \$3", params = [("100 hours", "Hour"), ("100 hours", "Hour"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "\$2::interval > \$3", params = [("100 hours", "Hour"), ("100 hours", "Hour"), ("10", "Int64")]),
   ("Value interval | alone", :postgres, "v__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :where, sql = "\$2 > \$3", params = [("100 hours", "Hour"), ("100 hours", "Hour"), ("1 minute", "Minute")]),
+    (stage = :ok, clause = :where, sql = "\$2::interval > \$3", params = [("100 hours", "Hour"), ("100 hours", "Hour"), ("1 minute", "Minute")]),
   ("Value interval | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "? > ?", params = [("\"100:00:00\"", "String"), ("\"100:00:00\"", "String"), ("10", "Int64")]),
   ("Value interval | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :where, sql = "? > ?", params = [("\"100:00:00\"", "String"), ("\"100:00:00\"", "String"), ("\"00:01:00\"", "String")]),
+    (stage = :ok, clause = :where, sql = "? > ?", params = [("\"100:00:00\"", "String"), ("360000000", "Int64"), ("60000", "Int64")]),
   ("Value interval | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ? as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("100 hours", "Hour"), ("1", "Int64"), ("100 hours", "Hour"), ("1", "Int64"), ("10", "Int64")]),
   ("Value interval | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
     (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Value interval | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    \$3 as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("100 hours", "Hour"), ("1", "Int64"), ("100 hours", "Hour"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    \$3::interval as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("100 hours", "Hour"), ("1", "Int64"), ("100 hours", "Hour"), ("1", "Int64"), ("10", "Int64")]),
   ("Value interval | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    \$3 as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("100 hours", "Hour"), ("1", "Int64"), ("100 hours", "Hour"), ("1", "Int64"), ("1 minute", "Minute")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    \$3::interval as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("100 hours", "Hour"), ("1", "Int64"), ("100 hours", "Hour"), ("1", "Int64"), ("1 minute", "Minute")]),
   ("Value interval | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ? as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("\"100:00:00\"", "String"), ("1", "Int64"), ("\"100:00:00\"", "String"), ("1", "Int64"), ("10", "Int64")]),
   ("Value interval | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :where, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    ? as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) > ?", params = [("\"100:00:00\"", "String"), ("1", "Int64"), ("\"100:00:00\"", "String"), ("1", "Int64"), ("60000", "Int64")]),
   ("Value interval month | alone", :mysql, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "? > ?", params = [("1 month", "Month"), ("1 month", "Month"), ("10", "Int64")]),
+    (stage = :build, error = "QueryBuildError", message = "An ordering filter (`>`) on the `v` alias is not supported on MySQL: it is a duration literal with no millisecond form ("),
   ("Value interval month | alone", :mysql, "v__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :where, sql = "? > ?", params = [("1 month", "Month"), ("1 month", "Month"), ("1 minute", "Minute")]),
+    (stage = :build, error = "QueryBuildError", message = "An ordering filter (`>`) on the `v` alias is not supported on MySQL: it is a duration literal with no millisecond form ("),
   ("Value interval month | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "\$2 > \$3", params = [("1 month", "Month"), ("1 month", "Month"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "\$2::interval > \$3", params = [("1 month", "Month"), ("1 month", "Month"), ("10", "Int64")]),
   ("Value interval month | alone", :postgres, "v__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :where, sql = "\$2 > \$3", params = [("1 month", "Month"), ("1 month", "Month"), ("1 minute", "Minute")]),
+    (stage = :ok, clause = :where, sql = "\$2::interval > \$3", params = [("1 month", "Month"), ("1 month", "Month"), ("1 minute", "Minute")]),
   ("Value interval month | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ? as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1 month", "Month"), ("1", "Int64"), ("1 month", "Month"), ("1", "Int64"), ("10", "Int64")]),
   ("Value interval month | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
     (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Value interval month | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    \$3 as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1 month", "Month"), ("1", "Int64"), ("1 month", "Month"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    \$3::interval as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1 month", "Month"), ("1", "Int64"), ("1 month", "Month"), ("1", "Int64"), ("10", "Int64")]),
   ("Value interval month | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    \$3 as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1 month", "Month"), ("1", "Int64"), ("1 month", "Month"), ("1", "Int64"), ("1 minute", "Minute")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    \$3::interval as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1 month", "Month"), ("1", "Int64"), ("1 month", "Month"), ("1", "Int64"), ("1 minute", "Minute")]),
   ("Case interval literals | alone", :postgres, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Case interval literals | alone", :postgres, "v__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN \$5\nELSE \$6\nEND\n > \$7", params = [("1", "Int64"), ("100 hours", "Hour"), ("2 hours", "Hour"), ("1", "Int64"), ("100 hours", "Hour"), ("2 hours", "Hour"), ("\"00:01:00\"", "String")]),
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN \$5::interval\nELSE \$6::interval\nEND\n > \$7", params = [("1", "Int64"), ("100 hours", "Hour"), ("2 hours", "Hour"), ("1", "Int64"), ("100 hours", "Hour"), ("2 hours", "Hour"), ("\"00:01:00\"", "String")]),
   ("Case interval literals | alone", :sqlite, "v__@gt", "10") =>
     (stage = :build, error = "QueryBuildError", message = "An ordering filter (`>`) on the `v` alias is not supported on SQLite: it is an interval with no millisecond form (a `Cas"),
   ("Case interval literals | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
@@ -1304,7 +1304,7 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Case interval literals | subquery", :postgres, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Case interval literals | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = \$5 THEN \$6\nELSE \$7\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("100 hours", "Hour"), ("2 hours", "Hour"), ("1", "Int64"), ("1", "Int64"), ("100 hours", "Hour"), ("2 hours", "Hour"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = \$5 THEN \$6::interval\nELSE \$7::interval\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("100 hours", "Hour"), ("2 hours", "Hour"), ("1", "Int64"), ("1", "Int64"), ("100 hours", "Hour"), ("2 hours", "Hour"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
   ("Case interval literals | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
   ("Case interval literals | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>

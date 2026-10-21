@@ -170,6 +170,9 @@ end
       ("Max(Case(key | date)) + 1", Max(_utt_case_date()) + 1,                   false, "+", "`MAX(…)`"),
       ("year + Coalesce(date, 0)",  F("year") + Fn.Coalesce("date", 0),          false, "+", "`COALESCE(…)`"),
       ("Floor(duration) / 2",       Fn.Floor(F("fastestlaptime") * 2) / 2,       false, "/", "`FLOOR(…)`"),
+      ("Lag(key, default = date) + 1",
+       PormG.QueryBuilder.Lag("meta__round", default = F("date"), over = PormG.QueryBuilder.WindowOver(order_by = "raceid")) + 1,
+                                                                                  false, "+", "`LAG(…)`"),
       ("Case(key | duration) > 2",  _utt_case_lap() > 2,                         true,  ">", "`CASE(…)`"),
     )
     @testset "$label" begin
@@ -235,16 +238,81 @@ end
 # Why it matters: a remedy that is itself a `BackendCapabilityError` on this engine is a dead end.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1310: the refusal's remedies are the engine's own" begin
+  # A date at stake: the branch spelling, or a cast to a date, which SQLite renders (`date(x)`).
   sl = _utt_refusal(_utt_case_date() + 1; conn = _UTT_SL).msg
-  @test occursin("Cast(…, \"date\")", sl) && occursin("Cast(…, \"integer\")", sl)
-  @test occursin("inside each branch of a `Case`", sl)
-  @test !occursin("timestamp\")", sl)
-  @test !occursin("PostgreSQL", sl) && !occursin("MySQL", sl)
+  @test occursin("inside each branch", sl) && occursin("Cast(…, \"date\")", sl)
+  # A duration at stake: SQLite casts an interval to nothing, and to a number refuses it (#1259), so the
+  # one spelling is the branch one, with a duration where `0` was.
+  lap = _utt_refusal(_utt_case_lap() * 2; conn = _UTT_SL).msg
+  @test occursin("inside each branch", lap) && occursin("default = Second(0)", lap)
+  @test !occursin("Cast(", lap)
+  # A timestamp at stake: SQLite cannot cast to one (#822).
+  ts = _utt_refusal(F("start_at") > F("meta__round"); conn = _UTT_SL, filter = true).msg
+  @test !occursin("Cast(", ts)
+  for msg in (sl, lap, ts)
+    @test !occursin("Cast(…, \"integer\")", msg)
+    @test !occursin("PostgreSQL", msg) && !occursin("MySQL", msg)
+  end
 
-  my = PormG.QueryBuilder._unnamed_temporal_refusal(_UTT_MY, "+", "`CASE(…)`")
+  QB = PormG.QueryBuilder
+  my = QB._unnamed_temporal_refusal(_UTT_MY, "+", "`CASE(…)`", PormG.CDateTime(false))
   @test my isa QueryBuildError
   @test occursin("not supported on MySQL", my.msg)
   @test occursin("the number its digits spell", my.msg)
   @test occursin("Cast(…, \"timestamp\")", my.msg)
   @test !occursin("PostgreSQL", my.msg) && !occursin("SQLite", my.msg)
+  @test !occursin("Cast(", QB._unnamed_temporal_refusal(_UTT_MY, "*", "`CASE(…)`", PormG.CInterval()).msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Every spelling of an ordering takes the rule: a filter pair, an alias, a `Q`, a `When` condition, and
+# an `update()` value.
+# Expected on SQLite: `filter("date__@gt" => F("meta__round"))`, `filter("fastestlaptime__@gt" =>
+# <Case(key | duration)>)`, a projected `Case(key | date)` filtered by its alias against a date, the same
+# pair inside `Q(...)`, a `When` comparing the key with a date, and `update("date" => Case(key | date) + 1)`
+# each raise the refusal; PostgreSQL builds each. A typed alias (`F("date") + 1`) filtered against a date,
+# and `"date__@range" => [Date, Date]`, build on SQLite.
+# Why it matters: one comparison spelled two ways must not build in one and be refused in the other
+# (#1311 fixed that asymmetry for duration aliases).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1310: filter pairs, aliases, Q, When and update take the rule" begin
+  QB = PormG.QueryBuilder
+  refused = (
+    ("pair date > key",       q -> q.filter("date__@gt" => F("meta__round")),                        "`meta__round`"),
+    ("pair duration > Case",  q -> q.filter("fastestlaptime__@gt" => _utt_case_lap()),               "`CASE(…)`"),
+    ("alias Case > Date",     q -> (q.values("raceid", "c" => _utt_case_date()); q.filter("c__@gt" => Date(2009, 1, 1))), "`CASE(…)`"),
+    ("Q pair",                q -> q.filter(QB.Q("date__@lt" => F("meta__round"))),                  "`meta__round`"),
+    ("When condition",        q -> q.values("w" => Case(When(F("meta__round") > F("date"), then = 1), default = 0)), "`meta__round`"),
+  )
+  for (label, build, named) in refused
+    @testset "$label" begin
+      for (conn, refuses) in ((_UTT_PG, false), (_UTT_SL, true))
+        q = UTT.Utt_race.objects
+        e = try build(q); inspect_query(q; connection = conn); nothing catch err; err end
+        if refuses
+          @test e isa QueryBuildError
+          @test e isa QueryBuildError && occursin("with $(named) on one side", e.msg)
+        else
+          @test e === nothing
+        end
+      end
+    end
+  end
+  # update(): the SET value is an F render of its own (`_set_update_query_typed`).
+  upd = try
+    q = UTT.Utt_race.objects
+    q.filter("raceid" => 1)
+    q.update("date" => _utt_case_date() + 1; show_query = :sql)
+    nothing
+  catch err
+    err
+  end
+  @test upd isa QueryBuildError && occursin("with `CASE(…)` on one side", upd.msg)
+  # A typed alias and a date range on a date column keep building.
+  for build in (q -> (q.values("raceid", "c" => F("date") + 1); q.filter("c__@gt" => Date(2009, 1, 1))),
+                q -> (q.values("raceid"); q.filter("date__@range" => [Date(2009, 1, 1), Date(2010, 1, 1)])))
+    q = UTT.Utt_race.objects
+    build(q)
+    @test inspect_query(q; connection = _UTT_SL)[:sql_text] isa AbstractString
+  end
 end

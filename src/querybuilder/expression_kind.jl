@@ -289,46 +289,60 @@ _unnamed_side(x, instruc::SQLInstruction) =
 _is_temporal_kind(k) = k isa Union{CDate,CDateTime,CInterval}
 
 """
-    _unnamed_temporal_side(v, instruc) -> Union{Nothing, Any}
+    _unnamed_temporal_side(left, right, instruc) -> Union{Nothing, Tuple{Any, CanonicalType}}
 
-The side of the arithmetic or ordering `v` that the type walk cannot name, when the shape is temporal:
-the other side is a date, a timestamp or an interval, or the unnamed side holds one (`Case(<a JSON key
-or a duration>) * 2`). `nothing` otherwise. A side that only holds a temporal value under a function
-that names its own result (`Extract`, `Count`, a declared `Cast`) is not one: its value is that result.
-Read after both sides render.
+The side of arithmetic or an ordering over `left` and `right` that the type walk cannot name, when the
+shape is temporal, with the temporal kind that makes it so: the other side is a date, a timestamp or an
+interval, or the unnamed side holds one (`Case(<a JSON key or a duration>) * 2`). `nothing` otherwise.
+A side that only holds a temporal value under a function that names its own result (`Extract`,
+`Count`, a declared `Cast`) is not one: its value is that result. Read after both sides render, inside
+one walk question (`_memo_kind`), so a node is walked once however many comparisons ask about it.
 """
-function _unnamed_temporal_side(v::FExpression, instruc::SQLInstruction)
-  left, right = v.field_name, v.operand
+function _unnamed_temporal_side(left, right, instruc::SQLInstruction)
   for (side, other) in ((left, right), (right, left))
     _unnamed_side(side, instruc) || continue
-    (_is_temporal_kind(_side_walk_kind(other, instruc)) || _temporal_inside(side, instruc)) && return side
+    k = _side_walk_kind(other, instruc)
+    _is_temporal_kind(k) && return (side, k)
+    held = _temporal_inside(side, instruc)
+    held === nothing || return (side, held)
   end
   return nothing
 end
 
-# Whether an unnamed value holds a date, a timestamp or an interval its value can be: through the
-# operands of arithmetic, and of a function whose value is an operand's (`_result_rule` `:operand`,
-# `:first_operand`, `:one_of`, `:promoting`, an undeclared `Case`'s branches). A declared type is the
-# value's type, so it is not looked through.
-_holds_temporal(x, instruc::SQLInstruction) =
-  !_is_null_literal(x isa SQLText ? x.field : x) &&
-  (_is_temporal_kind(_side_walk_kind(x, instruc)) || _temporal_inside(x, instruc))
+# The date, timestamp or interval kind an unnamed value can be, or `nothing`: through the operands of
+# arithmetic, of a function whose value is an operand's (`_result_rule` `:operand`, `:first_operand`,
+# `:one_of`, `:promoting`, a `Lag`/`Lead` and its `default`), and of an undeclared `Case`'s branches. A
+# declared type is the value's type, so it is not looked through. Memoized per node: a chain of
+# arithmetic asks about each of its sub-expressions once per level.
+function _held_temporal(x, instruc::SQLInstruction)
+  _is_null_literal(x isa SQLText ? x.field : x) && return nothing
+  k = _side_walk_kind(x, instruc)
+  return _is_temporal_kind(k) ? k : _temporal_inside(x, instruc)
+end
+_first_held(values, instruc::SQLInstruction) =
+  (for v in values; k = _held_temporal(v, instruc); k === nothing || return k; end; nothing)
 _temporal_inside(p::FExpression, instruc::SQLInstruction) =
-  p.operation in ("+", "-", "*", "/") && (_holds_temporal(p.field_name, instruc) || _holds_temporal(p.operand, instruc))
-function _temporal_inside(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
+  p.operation in ("+", "-", "*", "/") ?
+    _memo_kind(() -> _first_held((p.field_name, p.operand), instruc), p, instruc, :held_temporal) : nothing
+_temporal_inside(p::Union{FObject,WindowFunction}, instruc::SQLInstruction) =
+  _memo_kind(() -> _function_held_temporal(p, instruc), p, instruc, :held_temporal)
+_temporal_inside(::Any, ::SQLInstruction) = nothing
+function _function_held_temporal(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   rule = _result_rule(p)
   if p isa FObject && rule in (:declared, :one_of)
     declared = _declared_cast(p)
-    declared isa AbstractString && !isempty(declared) && return false
+    declared isa AbstractString && !isempty(declared) && return nothing
   end
-  operands = p.column isa AbstractVector ? p.column : (p.column,)
-  rule in (:operand, :promoting, :one_of) && return any(o -> _holds_temporal(o, instruc), operands)
-  rule === :first_operand && return _holds_temporal(first(operands), instruc)
-  rule === :declared && p isa FObject && p.function_name == "CASE" &&
-    return any(v -> _holds_temporal(v, instruc), _case_values(p))
-  return false
+  operands = Any[(p.column isa AbstractVector ? p.column : (p.column,))...]
+  # A window value function's `default` is one of its values (`_with_window_default`); a string there
+  # is a literal, not a path.
+  default = p isa WindowFunction ? get(p.kwargs, "default", nothing) : nothing
+  default === nothing || push!(operands, default isa AbstractString ? SQLText(default) : default)
+  rule in (:operand, :promoting, :one_of) && return _first_held(operands, instruc)
+  rule === :first_operand && return _held_temporal(first(operands), instruc)
+  rule === :declared && p isa FObject && p.function_name == "CASE" && return _first_held(_case_values(p), instruc)
+  return nothing
 end
-_temporal_inside(::Any, ::SQLInstruction) = false
 
 # ── Leaves: a column's field and a literal ───────────────────────────────────────────────────────────
 _column_kind(f, ::_ReadKinds) = field_canonical_kind(f)

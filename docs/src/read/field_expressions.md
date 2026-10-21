@@ -653,19 +653,22 @@ or a timestamp difference — gives a timestamp on both engines (see above).
 
 #### A value PormG cannot type beside a date or a duration
 
-PormG writes the SQL of arithmetic and of an ordering (`<`, `>`, `<=`, `>=`) beside a date, a timestamp
-or an interval by its type: a whole-day shift, an interval in milliseconds, a date's text. Some values
-have no type PormG can name: a JSON key lookup, whose type is the data's, a `Case` or `Coalesce` whose
-values have different types (a duration or `0`), or a function over one. On SQLite and MySQL such a
-value beside a date or a duration raises `QueryBuildError` when the query is built, and so does one
-that *holds* a date or a duration, whatever it is combined with. Those engines compute on what they
-store (SQLite on a date's or an interval's text, MySQL on the number a date's digits spell), so
+PormG writes the SQL of arithmetic and of an ordering (`<`, `>`, `<=`, `>=`, `@range`) beside a date, a
+timestamp or an interval by its type: a whole-day shift, an interval in milliseconds, a date's text.
+Some values have no type PormG can name: a JSON key lookup, whose type is the data's, a `Case` or
+`Coalesce` whose values have different types (a duration or `0`), or a function over one. On SQLite and
+MySQL such a value beside a date or a duration raises `QueryBuildError` when the query is built, and so
+does one that *holds* a date or a duration, whatever it is combined with. Those engines compute on what
+they store (SQLite on a date's or an interval's text, MySQL on the number a date's digits spell), so
 `Case(When("rank" => 1, then = F("fastestlaptime")), default = 0) * 2` would multiply the text
-`'00:01:30'` and read `0`. PostgreSQL types the operands itself, so it builds these shapes, and raises
-at the server when they have no common type, as that one does.
+`'00:01:30'` and read `0`. Every spelling of the ordering is checked: `F(…) > F(…)`, a filter pair
+(`"date__@gt" => F(…)`), a filter on a projected alias, `Q(…)`, a `When` condition, and an `update()`
+value. PostgreSQL types the operands itself, so it builds these shapes, and raises at the server when
+they have no common type, as that one does. A time of day (`TimeField`) is not covered by this check.
 
-State the type instead: do the arithmetic inside each branch of a `Case`, with values of one type, or
-cast the value (`Cast(…, "date")`, `Cast(…, "integer")`). Twice the fastest lap of each 2009 race's
+State the type instead: give every value of the `Case` or `Coalesce` the one type and do the arithmetic
+inside each branch, or, where a date is at stake, cast the value (`Cast(…, "date")`). A duration has no
+cast on SQLite, so write it as one (`Second(0)`, not `0`). Twice the fastest lap of each 2009 race's
 fastest driver, and no time for the others:
 
 ```julia
@@ -675,8 +678,8 @@ query.values("driverid__surname",
              "doubled" => Case(When("rank" => 1, then = F("fastestlaptime") * 2), default = Second(0)))
 ```
 
-Equality, `@in` and arithmetic beside a number are not checked: a JSON key times `2`, or compared for
-equality with a date, builds on every engine.
+A value that holds no date or duration is not checked beside a number, and equality and `@in` are not
+checked at all: a JSON key times `2`, or compared for equality with a date, builds on every engine.
 
 ### When NOT to Use F
 

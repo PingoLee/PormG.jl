@@ -2246,8 +2246,15 @@ end
   for x in (_CF("laptime") * _CF("price"), _CF("laptime") / 2.0)
     _ccd_expect(Fn.Cast(x, "float8"); departs = _SL_ONLY, issue = "#1259", named = "of an interval expression")
   end
-  _ccd_expect(Fn.Cast(Fn.Floor(_CF("laptime") * 2) / 2, "integer"); departs = _SL_ONLY, issue = "#1259",
-              named = "`FLOOR(…)` over an interval expression")
+  # #1310: under a further step the quotient is refused before the cast is checked. `Floor` names no
+  # type over an interval, and on SQLite `Floor(<interval>) / 2` divided the floor of its `HH:MM:SS`
+  # text; it is refused there with or without the `Cast`, and PostgreSQL builds it.
+  floored = Fn.Cast(Fn.Floor(_CF("laptime") * 2) / 2, "integer")
+  @test _ccd_refusal(floored; conn = _CCD_PG) === nothing
+  floor_err = _ccd_refusal(floored; conn = _CCD_SL)
+  @test floor_err isa QueryBuildError
+  @test occursin("`/` beside a date, a timestamp or an interval, with `FLOOR(…)` on one side, is not supported on SQLite",
+                 _ccd_msg(floor_err))
   # `Mod` over such arithmetic, cast to an integer, takes the refusal `Mod("laptime", 3)` already had.
   _ccd_expect(Fn.Cast(Fn.Mod(_CF("start_at") - _CF("start_at"), 3), "integer"); departs = _SL_ONLY, issue = "#1028",
               named = "`MOD(…)`")

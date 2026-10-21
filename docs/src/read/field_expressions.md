@@ -121,7 +121,7 @@ query.values("driverid__surname", "laps",
              "started" => Case([When(Cast("laps", "boolean"), then = 1)], default = 0))
 ```
 
-A boolean result is recognized from a `Cast(…, "boolean")`, an `output_field = "boolean"`, a `BooleanField` operand (`Coalesce(F("is_active"), false)`), or a condition operand (`Max(Q("grid__@gt" => 1))`). PormG checks the result type when it can name it: `Lag` over a column has the column's type, and a `Case` with no `output_field` the type its branches agree on, so `When(Lag("grid", over = …))` is refused as a number. A function whose type it cannot name, such as arithmetic over a duration, is not checked and renders as written.
+A boolean result is recognized from a `Cast(…, "boolean")`, an `output_field = "boolean"`, a `BooleanField` operand (`Coalesce(F("is_active"), false)`), or a condition operand (`Max(Q("grid__@gt" => 1))`). PormG checks the result type when it can name it: `Lag` over a column has the column's type, and a `Case` with no `output_field` the type its branches agree on, so `When(Lag("grid", over = …))` is refused as a number. A function whose type it cannot name, such as a `Case` whose branches have different types, is not checked here and renders as written; beside a date or a duration, SQLite and MySQL refuse it ([A value PormG cannot type beside a date or a duration](#A-value-PormG-cannot-type-beside-a-date-or-a-duration)).
 
 ### Expressions are values, not builders
 
@@ -650,6 +650,33 @@ for it — an intentional divergence. On SQLite, add the time as a duration inst
 A day count **minus** a date has no meaning and raises `QueryBuildError` on both engines; subtract the
 count from the date instead. Shifting a date or timestamp by an interval *value* — a `DurationField`
 or a timestamp difference — gives a timestamp on both engines (see above).
+
+#### A value PormG cannot type beside a date or a duration
+
+PormG writes the SQL of arithmetic and of an ordering (`<`, `>`, `<=`, `>=`) beside a date, a timestamp
+or an interval by its type: a whole-day shift, an interval in milliseconds, a date's text. Some values
+have no type PormG can name: a JSON key lookup, whose type is the data's, a `Case` or `Coalesce` whose
+values have different types (a duration or `0`), or a function over one. On SQLite and MySQL such a
+value beside a date or a duration raises `QueryBuildError` when the query is built, and so does one
+that *holds* a date or a duration, whatever it is combined with. Those engines compute on what they
+store (SQLite on a date's or an interval's text, MySQL on the number a date's digits spell), so
+`Case(When("rank" => 1, then = F("fastestlaptime")), default = 0) * 2` would multiply the text
+`'00:01:30'` and read `0`. PostgreSQL types the operands itself, so it builds these shapes, and raises
+at the server when they have no common type, as that one does.
+
+State the type instead: do the arithmetic inside each branch of a `Case`, with values of one type, or
+cast the value (`Cast(…, "date")`, `Cast(…, "integer")`). Twice the fastest lap of each 2009 race's
+fastest driver, and no time for the others:
+
+```julia
+query = M.Result.objects
+query.filter("raceid__year" => 2009)
+query.values("driverid__surname",
+             "doubled" => Case(When("rank" => 1, then = F("fastestlaptime") * 2), default = Second(0)))
+```
+
+Equality, `@in` and arithmetic beside a number are not checked: a JSON key times `2`, or compared for
+equality with a date, builds on every engine.
 
 ### When NOT to Use F
 

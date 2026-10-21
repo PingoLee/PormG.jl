@@ -262,6 +262,74 @@ function _render_side_kind(x, instruc::SQLInstruction; right::Bool = false)::Uni
   return x isa SQLTypeFunction ? _side_kind(x, instruc) : nothing
 end
 
+# ── #1310: an operand the walk cannot name, beside a date, a timestamp or an interval ────────────────
+# `_expression_kind` answers `nothing` for a value it cannot name: a JSON key lookup, a `Case` or a
+# `Coalesce` whose values disagree, a function with no stated rule. Where the value only passes —
+# projected, compared for equality, beside another number — that is harmless. Where the engine computes
+# by what it stores (`_types_temporal_operands`), the SQL of arithmetic or an ordering beside a date or
+# an interval is chosen by the type, and an unnamed side fell to the generic arm: SQLite multiplied a
+# duration's text (#1301) and added to a date's (#1307). `_unnamed_temporal_side` names the side the
+# render cannot type in such a shape, so it is refused before SQL is written for a type it may not have.
+
+# A side as the walk names it. A bare literal is its own kind (the walk's `::Any` arm names none), a
+# Julia period is an interval, and a string that is not a field path is a text literal, as the binder
+# takes it. A NULL is never the value, so it is named (`_unnamed_side` skips it).
+_side_walk_kind(x::Bool, ::SQLInstruction) = CBool()
+_side_walk_kind(x::Union{Integer,AbstractFloat,Decimals.Decimal}, ::SQLInstruction) = _literal_kind(x, _AllKinds())
+_side_walk_kind(::Union{Dates.Period,Dates.CompoundPeriod,Interval}, ::SQLInstruction) = CInterval()
+_side_walk_kind(x::_TemporalLiteral, ::SQLInstruction) = literal_canonical_kind(x)
+_side_walk_kind(x::AbstractString, instruc::SQLInstruction) =
+  x isa String && _is_field_path(x, instruc) ? _expression_kind(x, instruc) : CText()
+_side_walk_kind(x, instruc::SQLInstruction) = _expression_kind(x, instruc)
+
+# A JSON value counts as unnamed: the walk names a key lookup (`"payload__n"`) the document's `CJSON`,
+# not the scalar the lookup returns, whose type is the data's (#1034 phase 4 lists it).
+_unnamed_side(x, instruc::SQLInstruction) =
+  !_is_null_literal(x isa SQLText ? x.field : x) && (k = _side_walk_kind(x, instruc); k === nothing || k isa CJSON)
+_is_temporal_kind(k) = k isa Union{CDate,CDateTime,CInterval}
+
+"""
+    _unnamed_temporal_side(v, instruc) -> Union{Nothing, Any}
+
+The side of the arithmetic or ordering `v` that the type walk cannot name, when the shape is temporal:
+the other side is a date, a timestamp or an interval, or the unnamed side holds one (`Case(<a JSON key
+or a duration>) * 2`). `nothing` otherwise. A side that only holds a temporal value under a function
+that names its own result (`Extract`, `Count`, a declared `Cast`) is not one: its value is that result.
+Read after both sides render.
+"""
+function _unnamed_temporal_side(v::FExpression, instruc::SQLInstruction)
+  left, right = v.field_name, v.operand
+  for (side, other) in ((left, right), (right, left))
+    _unnamed_side(side, instruc) || continue
+    (_is_temporal_kind(_side_walk_kind(other, instruc)) || _temporal_inside(side, instruc)) && return side
+  end
+  return nothing
+end
+
+# Whether an unnamed value holds a date, a timestamp or an interval its value can be: through the
+# operands of arithmetic, and of a function whose value is an operand's (`_result_rule` `:operand`,
+# `:first_operand`, `:one_of`, `:promoting`, an undeclared `Case`'s branches). A declared type is the
+# value's type, so it is not looked through.
+_holds_temporal(x, instruc::SQLInstruction) =
+  !_is_null_literal(x isa SQLText ? x.field : x) &&
+  (_is_temporal_kind(_side_walk_kind(x, instruc)) || _temporal_inside(x, instruc))
+_temporal_inside(p::FExpression, instruc::SQLInstruction) =
+  p.operation in ("+", "-", "*", "/") && (_holds_temporal(p.field_name, instruc) || _holds_temporal(p.operand, instruc))
+function _temporal_inside(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
+  rule = _result_rule(p)
+  if p isa FObject && rule in (:declared, :one_of)
+    declared = _declared_cast(p)
+    declared isa AbstractString && !isempty(declared) && return false
+  end
+  operands = p.column isa AbstractVector ? p.column : (p.column,)
+  rule in (:operand, :promoting, :one_of) && return any(o -> _holds_temporal(o, instruc), operands)
+  rule === :first_operand && return _holds_temporal(first(operands), instruc)
+  rule === :declared && p isa FObject && p.function_name == "CASE" &&
+    return any(v -> _holds_temporal(v, instruc), _case_values(p))
+  return false
+end
+_temporal_inside(::Any, ::SQLInstruction) = false
+
 # ── Leaves: a column's field and a literal ───────────────────────────────────────────────────────────
 _column_kind(f, ::_ReadKinds) = field_canonical_kind(f)
 _column_kind(f, ::_EveryKind) = _field_kind(f)

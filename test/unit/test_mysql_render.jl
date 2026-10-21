@@ -128,7 +128,7 @@ end
 # MySQL collector: values as MySQL.jl binds them
 # MySQL has no array binding and no array or UUID type. Expected: a list renders `?, ?, ?` with one
 # value each, a UUID binds as its 36-character text (the `CHAR(36)` it is stored as, #1270), a binary
-# payload as its bytes, a Decimal unchanged (the extension binds its exact text), a duration as the
+# payload as its bytes, a Decimal as its exact text under a `CAST(? AS DECIMAL(p,s))` marker, a duration as the
 # microseconds a `DurationField` stores (#1130; MySQL.jl binds no `Period`), and an ArrayField value
 # raises BackendCapabilityError rather than binding as text.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -138,7 +138,7 @@ end
   u = UUID("123e4567-e89b-12d3-a456-426614174000")
   @test _MR_QB.add_parameter!(params, u) == "?"
   @test _MR_QB.add_parameter!(params, PormG.PormGBytes(UInt8[0x00, 0xff])) == "?"
-  @test _MR_QB.add_parameter!(params, Decimal(0, 255, -1)) == "?"
+  @test _MR_QB.add_parameter!(params, Decimal(0, 255, -1)) == "CAST(? AS DECIMAL(3,1))"   # #1130 2c-1: its own DECIMAL
   @test params.parameters == Any[1, 2, 3, "123e4567-e89b-12d3-a456-426614174000", UInt8[0x00, 0xff], Decimal(0, 255, -1)]
   _MR_QB.add_parameter!(params, Hour(1))
   _MR_QB.add_parameter!(params, Minute(1) + Second(20) + Millisecond(500))
@@ -791,4 +791,95 @@ end
   @test _MR_QB._interval_ms_as_text("?", MrMockMySQL()) == "?"
   @test _MR_QB._interval_text_as_ms("`c`", MrMockSQLite()) == PormG.Dialect._sqlite_interval_ms("`c`")
   @test _MR_QB._interval_ms_as_text("?", MrMockSQLite()) == PormG.Dialect._sqlite_interval_text("?")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL conditionals: Case/When, Coalesce, Greatest/Least and NullIf (#1130 phase 2c-1)
+# MySQL has each of them natively. Expected SQL: `COALESCE(a, ?)`; `GREATEST(COALESCE(a, b),
+# COALESCE(b, a))` (MySQL's GREATEST/LEAST return NULL on any NULL, so the operands are the #844
+# rotations, and never SQLite's `MAX`/`MIN`, which are aggregates on MySQL); `NULLIF(a, ?)` with no
+# cast back (MySQL keeps `a`'s type, measured); `CASE WHEN c THEN ? ELSE ? END` binding in text order;
+# a declared `output_field` is `CAST(… AS T)`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL conditionals: Case/When, Coalesce, Greatest/Least and NullIf render MySQL's own SQL" begin
+  QB = PormG.QueryBuilder
+  R = _MR_MY.Result
+  proj(build) = (r = _mr_inspect(build()); (strip(replace(split(split(r[:sql_text], "SELECT"; limit = 2)[2], " as `v`")[1], r"\s+" => " ")),
+                                             r[:parameters]))
+  @test proj(() -> R.objects.values("v" => QB.Coalesce("position", 0))) == ("COALESCE(`Tb`.`position`, ?)", Any[0])
+  @test proj(() -> R.objects.values("v" => QB.Greatest("grid", "laps"))) ==
+        ("GREATEST(COALESCE(`Tb`.`grid`, `Tb`.`laps`), COALESCE(`Tb`.`laps`, `Tb`.`grid`))", Any[])
+  @test proj(() -> R.objects.values("v" => QB.Least("grid", "position"))) ==
+        ("LEAST(COALESCE(`Tb`.`grid`, `Tb`.`position`), COALESCE(`Tb`.`position`, `Tb`.`grid`))", Any[])
+  @test proj(() -> R.objects.values("v" => QB.NullIf("grid", 1.5))) == ("NULLIF(`Tb`.`grid`, ?)", Any[1.5])
+  @test proj(() -> R.objects.values("v" => QB.Case(QB.When("grid__@gt" => 5, then = "back"), default = "front"))) ==
+        ("CASE WHEN `Tb`.`grid` > ? THEN ? ELSE ? END", Any[5, "back", "front"])
+  @test proj(() -> R.objects.values("v" => QB.Coalesce("position", 0; output_field = "numeric(10,2)"))) ==
+        ("CAST(COALESCE(`Tb`.`position`, ?) AS DECIMAL(10,2))", Any[0])
+  @test proj(() -> R.objects.values("v" => QB.Case(QB.When("grid__@gt" => 5, then = 1), default = 0; output_field = "text"))) ==
+        ("CAST(CASE WHEN `Tb`.`grid` > ? THEN ? ELSE ? END AS CHAR)", Any[5, 1, 0])
+  # SQLite keeps its `MAX`, PostgreSQL its native NULL-skipping GREATEST: unchanged.
+  @test occursin("MAX(COALESCE(", _mr_inspect(_MR_SL.Result.objects.values("v" => QB.Greatest("grid", "laps")))[:sql_text])
+  @test occursin("GREATEST(\"Tb\".\"grid\", \"Tb\".\"laps\")", _mr_inspect(_MR_PG.Result.objects.values("v" => QB.Greatest("grid", "laps")))[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL declared types a plain CAST would misread (#1130 phase 2c-1)
+# MySQL stores an interval as its microseconds and casts to no boolean type, so the engine that departs
+# decides on itself. Expected: an interval to text reads the `HH:MM:SS` text (`_mysql_interval_text`)
+# for `Coalesce` as for `Cast`; to an interval it is the count itself; to a date it is refused; a
+# boolean target over integers is `((x) <> 0)` and over anything else refused; an interval beside
+# another type under one declaration is refused.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL declared types: intervals and booleans decided on MySQL" begin
+  QB = PormG.QueryBuilder
+  R = _MR_MY.Result
+  sql(build) = (r = _mr_inspect(build()); (replace(r[:sql_text], r"\s+" => " "), r[:parameters]))
+  refused(build, needle) = (e = try; _mr_inspect(build()); nothing; catch err; err; end;
+                            e isa PormG.QueryBuildError && occursin(needle, sprint(showerror, e)))
+  hour = QB.Value(Hour(1))
+  text = sql(() -> R.objects.values("v" => QB.Coalesce("fastestlaptime", hour; output_field = "text")))
+  @test occursin("CAST($(PormG.Dialect._mysql_interval_text("COALESCE(`Tb`.`fastestlaptime`, ?)")) AS CHAR)", text[1])
+  @test text[2] == Any[3_600_000_000]
+  @test occursin("SELECT COALESCE(`Tb`.`fastestlaptime`, ?) as `v`",
+                 sql(() -> R.objects.values("v" => QB.Coalesce("fastestlaptime", hour; output_field = "interval")))[1])
+  @test occursin("SELECT `Tb`.`fastestlaptime` as `v`", sql(() -> R.objects.values("v" => QB.Cast("fastestlaptime", "interval")))[1])
+  @test refused(() -> R.objects.values("v" => QB.Coalesce("fastestlaptime", hour; output_field = "date")),
+                "of an interval is not supported on MySQL")
+  @test refused(() -> R.objects.values("v" => QB.Coalesce("fastestlaptime", 0; output_field = "text")),
+                "over an interval and a value of another type is not supported on MySQL")
+  @test sql(() -> R.objects.values("v" => QB.Case(QB.When("grid__@gt" => 5, then = 2), default = 0; output_field = "boolean")))[1] |>
+        x -> occursin("SELECT ((CASE WHEN `Tb`.`grid` > ? THEN ? ELSE ? END ) <> 0) as `v`", x) ||
+             occursin("SELECT ((CASE WHEN `Tb`.`grid` > ? THEN ? ELSE ? END) <> 0) as `v`", x)
+  @test occursin("((`Tb`.`grid`) <> 0) as `v`", sql(() -> R.objects.values("v" => QB.Cast("grid", "boolean")))[1])
+  for (label, then, default) in (("text", "y", "n"), ("float", 1.5, 0.0))
+    @test (label, refused(() -> R.objects.values("v" => QB.Case(QB.When("grid__@gt" => 5, then = then), default = default;
+                                                                output_field = "boolean")),
+                          "is not supported on MySQL over a value that is not a boolean or an integer")) == (label, true)
+  end
+  # PostgreSQL and SQLite render their own casts, unchanged.
+  @test occursin("::boolean", _mr_inspect(_MR_PG.Result.objects.values("v" => QB.Cast("grid", "boolean")))[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL Decimal binds state their DECIMAL (#1130 phase 2c-1)
+# The extension binds a `Decimals.Decimal` as its exact text, which MySQL types as a string: a `CASE`
+# with such a branch read back text and ordered as text (measured: `'10.00' < '5.50'`). Expected: the
+# marker is `CAST(? AS DECIMAL(p,s))` at the value's own precision and scale; every other value keeps
+# `?`; a value past MySQL's DECIMAL keeps `?`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL Decimal binds state their DECIMAL" begin
+  QB = PormG.QueryBuilder
+  ph = QB._mysql_placeholder
+  @test ph(parse(Decimal, "5.50")) == "CAST(? AS DECIMAL(2,1))"
+  @test ph(parse(Decimal, "-123.45")) == "CAST(? AS DECIMAL(5,2))"
+  @test ph(parse(Decimal, "0.005")) == "CAST(? AS DECIMAL(3,3))"
+  @test ph(Decimal(0, 12, 1)) == "CAST(? AS DECIMAL(3,0))"
+  @test ph(Decimal(0, 0, 0)) == "CAST(? AS DECIMAL(1,0))"
+  @test ph(Decimal(0, big(10)^70, 0)) == "?" && ph(Decimal(0, 1, -31)) == "?"
+  @test ph(5) == "?" && ph(2.5) == "?" && ph("5.50") == "?"
+  r = _mr_inspect(_MR_MY.Result.objects.values("v" => QB.Case(QB.When("grid__@gt" => 5, then = parse(Decimal, "10.25")),
+                                                               default = parse(Decimal, "5.5"))))
+  @test occursin("THEN CAST(? AS DECIMAL(4,2)) ELSE CAST(? AS DECIMAL(2,1)) END", replace(r[:sql_text], r"\s+" => " "))
+  @test r[:parameters] == Any[5, parse(Decimal, "10.25"), parse(Decimal, "5.5")]
 end

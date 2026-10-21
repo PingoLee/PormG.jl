@@ -461,13 +461,26 @@ function add_parameter!(sq::PormGMySQLParam, value::AbstractArray; contains::Boo
   for v in value
     push!(_current_bucket(sq), _mysql_collect_value(v))
   end
-  return join(fill("?", length(value)), ", ")
+  return join((_mysql_placeholder(v) for v in value), ", ")
 end
 function add_parameter!(sq::PormGMySQLParam, value; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
   contains && (value = _apply_like_wildcards(value, operator))
   push!(_current_bucket(sq), _mysql_collect_value(value))
-  return "?"
+  return _mysql_placeholder(value)
 end
+# #1130 phase 2c — a `Decimals.Decimal` binds as its exact text (the extension's `_bind_value`), which
+# MySQL types as a string: a `CASE` or `COALESCE` with such a branch was a VARCHAR (measured on 8.4:
+# `CASE … THEN ? ELSE 7 END` over `"5.50"` reads back `"5.50"`, and orders as text, `'10.00' < '5.50'`).
+# The marker states the value's own DECIMAL, at its exact precision and scale, as PostgreSQL's
+# `$1::numeric` does there. A value past MySQL's DECIMAL (65 digits, a scale of 30) keeps the bare marker.
+function _mysql_placeholder(v::Decimals.Decimal)::String
+  scale = max(-v.q, 0)
+  digits = iszero(v.c) ? 1 : ndigits(v.c)
+  precision = max(digits + max(v.q, 0), scale, 1)
+  (precision <= 65 && scale <= 30) || return "?"
+  return "CAST(? AS DECIMAL($(precision),$(scale)))"
+end
+_mysql_placeholder(::Any) = "?"
 function add_parameter!(sq::PormGMySQLParam, value::PormGBytes; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
   contains && throw(FilterError("Contains option is not supported for binary parameters"))
   push!(_current_bucket(sq), value.bytes)

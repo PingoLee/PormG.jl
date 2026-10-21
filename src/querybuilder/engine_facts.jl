@@ -140,8 +140,8 @@ _sums_integers_as_decimal(::PormGMySQL) = true
 # return NULL when any argument is, so PormG rewrites the operands (#844).
 _greatest_skips_nulls(::PormGPostgres) = true
 _greatest_skips_nulls(::PormGSQLite) = false
-# MySQL's `GREATEST`/`LEAST` return NULL when any argument is NULL (its documented rule), so the operands
-# are rewritten there too; the `GREATEST` renderer itself is phase 2b's.
+# MySQL's `GREATEST`/`LEAST` return NULL when any argument is NULL (measured on 8.4: `GREATEST(1, NULL,
+# 3)` is NULL), so the operands are rewritten there too, and MySQL renders its own `GREATEST` over them.
 _greatest_skips_nulls(::PormGMySQL) = false
 
 # NULL placement is emulated with an `(expr IS NULL)` sort key, because the engine has no

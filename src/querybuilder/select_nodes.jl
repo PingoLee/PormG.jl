@@ -881,33 +881,76 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     d === nothing || throw(_meaning_refusal(_declared_cast_label(v), d.what, d.row, instruc.connection;
                                             flag = d.flag, declared = d.declared))
   end
-  # #1130: MySQL stores an interval as its microseconds, so a cast of one to text printed that count
-  # (`80500000`), which PormG would read back as that many seconds. The engine that departs normalizes
-  # on itself: the cast reads the `HH:MM:SS` text PormG writes, as SQLite's stored text does. Every
-  # target MySQL holds as text (the character types, `uuid`'s `CHAR(36)`) and `JSON`, which then fails
-  # at the server as PostgreSQL's cast of an interval to `json` does, rather than read the count.
-  if v.function_name == "CAST" && _stores_interval_as_units(instruc.connection) &&
-     _expression_kind(v.column, instruc) isa CInterval
-    target = Dialect.cast_type_sql(v.kwargs["type"], instruc.connection)
-    if Base.startswith(target, "CHAR") || target == "JSON"
-      resolved_column = Dialect._mysql_interval_text(resolved_column)
-    elseif any(t -> Base.startswith(target, t), ("DATE", "TIME"))
-      # A date, a time or a timestamp cast of the count reads its digits as one (`80500000` is
-      # `8050:00:00`), where PostgreSQL refuses `interval::date` and reads `interval::time` as a time
-      # of day. Refused on MySQL, the engine that departs, before any SQL.
-      as_what = Base.startswith(target, "DATETIME") ? "timestamp" : Base.startswith(target, "DATE") ? "date" : "time"
-      throw(QueryBuildError("$(_declared_cast_label(v)) of an interval is not supported on " *
-                            "$(_backend_name(instruc.connection)): it stores an interval as its count of " *
-                            "microseconds, whose digits the cast would read as a $(as_what). " *
-                            "Shift a date or a timestamp by the interval instead: F(\"date\") + F(\"duration\")."))
-    end
+  # #1130: a declared type over values whose MySQL form a plain `CAST` would misread (an interval, which
+  # is its count of microseconds there, or a boolean target, which MySQL casts to no type). Decided by
+  # `_mysql_declared_output`, before any SQL; `nothing` everywhere else, which renders as it always has.
+  declared_sql = _mysql_declared_output(v, instruc)
+  if declared_sql === nothing
+    sql = getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection)
+  else
+    # The function with no declaration (`Cast`'s is the operand itself), handed to the decided form.
+    undeclared = copy(resolved_kwargs)
+    delete!(undeclared, "output_field")
+    sql = declared_sql(v.function_name == "CAST" ? resolved_column :
+                       getfield(Dialect, Symbol(v.function_name))(resolved_column, undeclared, instruc.connection))
   end
-  sql = getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection)
   # #900: PostgreSQL's `avg(interval)` is an interval; the milliseconds' mean is rounded to one, the
   # precision every SQLite interval has (#881).
   interval_ms && v.function_name == "AVG" && (sql = _interval_round_sql(sql, instruc.connection))
   return sql, interval_ms, interval
 end
+# #1130 — a declared type (`Cast(x, T)`, `output_field = T` on `Coalesce`, `Greatest`, `Least`, `Case`)
+# over values whose MySQL form a plain `CAST(… AS T)` would misread. MySQL stores an interval as its
+# count of microseconds (`_stores_interval_as_units`), and casts to no boolean type. The engine that
+# departs decides on itself (#1147), so each answer here is MySQL's, as a function of the undeclared SQL:
+# - an interval to text (or `uuid`'s `CHAR(36)`, or `json`): the `HH:MM:SS` text PormG writes, then the
+#   cast (`json` then fails at the server, as PostgreSQL's cast of an interval does);
+# - an interval to an interval (`DurationField()`): the count itself, which IS the interval there;
+# - an interval to a date, a time or a timestamp: refused, since the cast would read the count's digits;
+# - a boolean target over booleans or integers: `((x) <> 0)`, NULL kept, as PostgreSQL's
+#   `integer::boolean` reads it; over any other value refused, since PostgreSQL has no such cast.
+# `nothing` for every other declaration, and on every other engine.
+function _mysql_declared_output(v::FObject, instruc::SQLInstruction)::Union{Function,Nothing}
+  conn = instruc.connection
+  _stores_interval_as_units(conn) || return nothing
+  v.function_name in ("CAST", "CASE", _DECLARED_CAST_FUNCTIONS...) || return nothing
+  declared = _declared_cast(v)
+  (declared isa AbstractString && !isempty(declared)) || return nothing
+  values = v.function_name == "CASE" ? _case_values(v) : v.column isa AbstractVector ? v.column : Any[v.column]
+  kinds = [_expression_kind(x, instruc) for x in values if !_is_null_operand(x)]
+  target_kind = _declared_kind(declared, conn)
+  engine = _backend_name(conn)
+  if any(k -> k isa CInterval, kinds)
+    all(k -> k isa CInterval, kinds) || throw(QueryBuildError(
+      "$(_declared_cast_label(v)) over an interval and a value of another type is not supported on " *
+      "$(engine): it stores an interval as its count of microseconds, so one cast cannot read both. " *
+      "Give every value the one type."))
+    target_kind isa CInterval && return identity
+    target = Dialect.cast_type_sql(declared, conn; context = v.function_name == "CAST" ? "Cast" : "output_field")
+    (Base.startswith(target, "CHAR") || target == "JSON") &&
+      return sql -> "CAST($(Dialect._mysql_interval_text(sql)) AS $(target))"
+    if any(t -> Base.startswith(target, t), ("DATE", "TIME"))
+      # A date, a time or a timestamp cast of the count reads its digits as one (`80500000` is
+      # `8050:00:00`), where PostgreSQL refuses `interval::date` and reads `interval::time` as a time
+      # of day. Refused on MySQL, the engine that departs, before any SQL.
+      as_what = Base.startswith(target, "DATETIME") ? "timestamp" : Base.startswith(target, "DATE") ? "date" : "time"
+      throw(QueryBuildError("$(_declared_cast_label(v)) of an interval is not supported on $(engine): it " *
+                            "stores an interval as its count of microseconds, whose digits the cast would read " *
+                            "as a $(as_what). Shift a date or a timestamp by the interval instead: " *
+                            "F(\"date\") + F(\"duration\")."))
+    end
+    return nothing
+  end
+  if target_kind isa CBool
+    all(k -> k isa Union{CBool,CInt16,CInt32,CInt64}, kinds) || throw(QueryBuildError(
+      "$(_declared_cast_label(v)) is not supported on $(engine) over a value that is not a boolean or an " *
+      "integer: $(engine) has no boolean type to cast to, and PormG reads only those two as one. Compare " *
+      "the value instead, which is a boolean: When(\"points__@gt\" => 0)."))
+    return sql -> "(($(sql)) <> 0)"
+  end
+  return nothing
+end
+
 # #1021: a `SearchVectorField` column is a document, not text. `SearchRank`'s vector written as a path
 # must be one — a text column would be cast to `tsvector` as a literal, not parsed. `SearchVector` and
 # `SearchHeadline` cast their text operands to text: on a stored document that text is the lexeme list

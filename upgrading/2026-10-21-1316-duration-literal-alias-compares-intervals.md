@@ -32,7 +32,9 @@ Its equality still compares the text. `order_by` on such an alias orders one con
 unchanged.
 
 On PostgreSQL a nanosecond or a quarter (`Nanosecond(1500)`, `Quarter(1)`) has no interval input
-text (`1500 nanoseconds`), so such a literal still binds untyped and reads back as its text. Write
+text (`1500 nanoseconds`), so such a literal still binds untyped and reads back as its text. Beside
+another duration literal in the same `Case` or `Coalesce`, now typed `::interval`, PostgreSQL reads
+the untyped one as an interval too and fails to parse it, where both compared as text before. Write
 `Microsecond(…)` or `Month(3)` for an interval.
 
 Measured on the F1 fixture, `values("resultid", "v" => Value(a))` filtered by `"v__@gt" => b` and

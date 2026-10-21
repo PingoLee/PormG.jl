@@ -3,7 +3,7 @@
 - **Version**: Unreleased
 - **PormG ref**: #1316 ; `src/querybuilder/field_resolution.jl` (`_case_default_bind_type`)
 - **Recorded**: 2026-10-21
-- **Severity**: behavior change, PostgreSQL only. A `Case` with an `output_field` whose branches are all literals runs where the statement failed when it ran (`CASE types text and bigint cannot be matched`). A `Case` over duration literals cast to text returns PostgreSQL's interval text where it returned the literal's own text. SQLite is unchanged.
+- **Severity**: behavior change, PostgreSQL only. A `Case` with an `output_field` whose branches are all literals runs where the statement failed when it ran (`CASE types text and bigint cannot be matched`). A `Case` over duration literals cast to text returns PostgreSQL's interval text where it returned the literal's own text, and one mixing a duration literal with a text literal fails when it runs where it ran. SQLite is unchanged.
 
 ### What changed
 
@@ -23,8 +23,11 @@ The default now binds as the literals' type there too, and the `output_field` ca
 (CASE WHEN "Tb"."resultid" = $1 THEN $2::bigint ELSE $3::bigint END)::text
 ```
 
-Literals with no shared type (an integer or a duration beside a text default) keep the
-`output_field` type, as before, and still fail when they run: write both branches as the same type.
+Literals with no shared type keep the `output_field` type for the default, as before. An integer
+beside a text default still fails when it runs. A duration beside a text default now fails the same
+way (`THEN $2::interval ELSE $3::text`): it ran before only because the duration bound untyped, as
+text (#1316). Write both branches as the same type: the duration as text (`"01:00:00"`), or the
+`output_field` as `"interval"`.
 
 Measured on the F1 fixture, `Case(When("resultid" => 1, then = a), default = b, output_field = "text")`
 over results 1 and 2:
@@ -33,7 +36,8 @@ over results 1 and 2:
 |---|---|---|
 | `1`, `0` | raised `StatementError` (SQLSTATE 42804) | `["1", "0"]` |
 | `Date(2020, 1, 1)`, `Date(2021, 1, 1)` | raised `StatementError` | `["2020-01-01", "2021-01-01"]` |
-| `Hour(1)`, `Hour(2)` | `["1 hour", "2 hours"]` (the literals' text, untyped) | `["PT1H", "PT2H"]` (PostgreSQL's interval text) |
+| `Hour(1)`, `Hour(2)` | `["1 hour", "2 hours"]` (the literals' text, untyped) | `["PT1H", "PT2H"]`: PostgreSQL's interval text, in the server's `IntervalStyle` (here `iso_8601`) |
+| `Hour(1)`, `"x"` | `["1 hour", "x"]` | raises `StatementError` (SQLSTATE 42804), as `1`, `"x"` does |
 
 The SQL of a declared `Case` with a fractional `then` and an integer default moves too
 (`ELSE $3::double precision` where it was `ELSE $3::<output_field>`); PostgreSQL resolved that

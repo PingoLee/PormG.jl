@@ -768,8 +768,13 @@ end
                    _ccd_render(case(then; default = default, output_field = "text"); conn = _CCD_PG))
   end
   # No shared type (a duration beside text): the output_field's, as an integer beside text keeps it.
+  # The server rejects that mix; it ran before #1316 only because the duration bound untyped.
   @test occursin("THEN \$2::interval ELSE \$3::text END)::text",
                  _ccd_render(case(Dates.Hour(1); default = "x", output_field = "text"); conn = _CCD_PG))
+  # A duration with no interval input text (a nanosecond) stays untyped as a default too, never
+  # `::interval`, which the server would refuse to parse: the output_field's, as before.
+  @test occursin("THEN \$2 ELSE \$3::text END)::text",
+                 _ccd_render(case(Dates.Nanosecond(1); default = Dates.Nanosecond(2), output_field = "text"); conn = _CCD_PG))
   # A `then` literal is the `When`'s own, typed by its value, as before.
   @test occursin("THEN \$2::boolean ELSE \"Tb\".\"active\" END)::text",
                  _ccd_render(case(false; default = _CF("active"), output_field = "text"); conn = _CCD_PG))

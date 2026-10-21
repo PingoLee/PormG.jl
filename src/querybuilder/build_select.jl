@@ -535,6 +535,7 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # #76 DISTINCT guard below read, and neither may see an ordering-only rewrite.
     order_expr = nothing
     interval_name = nothing   # the alias `order_expr` re-renders, for the old-SQLite NULL flag
+    interval_node = nothing   # #1313: or the term's own expression, rendered in its milliseconds
     # #1115: whether an unprojected term joins GROUP BY. Only the render branch below can say no — the
     # alias, memo and projected-name branches never hold an aggregate or a window.
     groups_term = true
@@ -605,8 +606,20 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
       # so a window reached through an alias (`When("r" => 1, …)` over `"r" => Rank(…)`) counts.
       order_node = v_field_copy.field
       groups_term = !_resolved_contains_agg(order_node, instruc) && !_resolved_window(order_node, instruc)
-      v_field_copy.field = with_scope(() -> _get_select_query(order_node, instruc), instruc;
-                                      group_key = groups_term)
+      # #1313: on SQLite an interval with a millisecond form orders by it, as its alias and an
+      # unprojected `DurationField` path do (#894); a labelled term (`SQLOrder(SQLField(F("time"), "x"))`)
+      # sorted its `HH:MM:SS` text. One render gives both forms with the same parameters in the same
+      # order: the text stays the term's SQL, which GROUP BY, the #76 guard and the memo read, and
+      # ORDER BY prints the milliseconds.
+      if _interval_as_ms(instruc.connection) && _interval_ms_candidate(order_node)
+        text, ms, _ = with_scope(() -> _render_interval_operand(order_node, instruc), instruc;
+                                 group_key = groups_term)
+        v_field_copy.field = text
+        ms === nothing || (order_expr = ms; interval_node = order_node)
+      else
+        v_field_copy.field = with_scope(() -> _get_select_query(order_node, instruc), instruc;
+                                        group_key = groups_term)
+      end
       order_params = bound_since(mark)
       # #1311 (review): a term rendered here orders by the expression itself (a labelled
       # `SQLOrder(SQLField(x, "v"))`), so an interval with no millisecond form would sort its text on
@@ -633,8 +646,14 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
     # binds gets a second render of the same projection as that flag (see `_order_term_sql`); one that
     # binds nothing, and a bare column's millisecond parse, are their own flag.
     null_flag = nothing
-    if interval_name !== nothing && occursin('?', order_expr) && _emulates_nulls_order(instruc.connection)
-      null_flag = first(_render_projected_interval_ms(interval_name, instruc))
+    if order_expr !== nothing && occursin('?', order_expr) && _emulates_nulls_order(instruc.connection)
+      interval_name === nothing ||
+        (null_flag = first(_render_projected_interval_ms(interval_name, instruc)))
+      # #1313: a term's expression is rendered again for its flag, as an alias's projection is. Its
+      # GROUP BY copy holds the first render's values (`order_params`), so this one is the flag's alone.
+      interval_node === nothing ||
+        (null_flag = with_scope(() -> first(_render_interval_ms(interval_node, instruc)), instruc;
+                                group_key = groups_term))
     end
     push!(instruc.order, order_expr === nothing ?
       _order_term_sql(v_field_copy.field, orientation, placement, instruc.connection) :

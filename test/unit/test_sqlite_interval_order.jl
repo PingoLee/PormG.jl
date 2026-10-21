@@ -1401,3 +1401,63 @@ end
     close(db)
   end
 end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# #1313 — a labelled order term over an interval with a millisecond form sorts its milliseconds
+# `order_by(SQLOrder(SQLField(F("lap"), "x")))` rendered the term as a projection would, so on SQLite it
+# sorted the stored `HH:MM:SS` text (`ORDER BY "Tb"."lap"`), and `F("lap") * 2` sorted the interval
+# re-formatted as text, while `order_by("lap")` and the same expression's alias sort its milliseconds
+# (#894). The term now orders by the millisecond form, from the one render that also gives its text:
+# GROUP BY keeps the text (one bind), ORDER BY prints the milliseconds (one bind). An interval with no
+# millisecond form is still refused (#1311), a number term and PostgreSQL are unchanged.
+# ═════════════════════════════════════════════════════════════════════════════
+_io_labelled(e; dir = "ASC") = (q = _IOM.Io_lap.objects; q.values("id"); q.order_by(QB.SQLOrder(QB.SQLField(e, "x"); orientation = dir)); q)
+
+@testset "#1313: a labelled interval order term sorts its milliseconds on SQLite" begin
+  @test occursin("ORDER BY $(_IO_LAP_MS) DESC NULLS FIRST", _io_sql(_io_labelled(F("lap"); dir = "DESC")))
+  @test occursin("ORDER BY $(_IO_LAP_MS) ASC NULLS LAST", _io_sql(_io_labelled("lap")))
+  sql = _io_sql(_io_labelled(F("lap") * 2))
+  @test occursin("ORDER BY CAST(round(($(_IO_LAP_MS)) * (?)) AS INTEGER) ASC NULLS LAST", sql)
+  @test !occursin("printf(", sql)   # not the interval re-formatted as text
+  @test _io_params(_io_labelled(F("lap") * 2)) == Any[2]
+  # A number term is not an interval: unchanged.
+  @test occursin("ORDER BY (\"Tb\".\"id\" * ?) ASC NULLS LAST", _io_sql(_io_labelled(F("id") * 2)))
+  # Grouped: GROUP BY keeps the text form, ORDER BY the milliseconds, each with its own bind.
+  q = _IOM.Io_lap.objects
+  q.values("circuit", "n" => _IO_FN.Count("id"))
+  q.order_by(QB.SQLOrder(QB.SQLField(F("lap") * 2, "x")))
+  sql = _io_sql(q)
+  @test occursin("GROUP BY 1, (SELECT CASE WHEN _pormg_ms IS NULL", sql)
+  @test occursin("ORDER BY CAST(round(($(_IO_LAP_MS)) * (?)) AS INTEGER) ASC NULLS LAST", sql)
+  @test _io_params(q) == Any[2, 2]
+  # PostgreSQL orders the interval itself, as before.
+  @test occursin("ORDER BY \"Tb\".\"lap\" ASC NULLS LAST", _io_sql(_io_labelled(F("lap")); conn = _IO_PG))
+  @test occursin("ORDER BY (\"Tb\".\"lap\" * \$1::bigint) ASC NULLS LAST", _io_sql(_io_labelled(F("lap") * 2); conn = _IO_PG))
+end
+
+@testset "#1313: old-SQLite NULL placement of a binding labelled interval term" begin
+  # Before 3.30 the placement is a flag; a term that binds is rendered again for it (two binds), as an
+  # alias's projection is, rather than repeating one `?` twice.
+  sql = _io_sql(_io_labelled(F("lap") * 2); conn = _IO_OLD)
+  term = "CAST(round(($(_IO_LAP_MS)) * (?)) AS INTEGER)"
+  @test occursin("ORDER BY ($(term) IS NULL) ASC, $(term) ASC", sql)
+  @test _io_params(_io_labelled(F("lap") * 2); conn = _IO_OLD) == Any[2, 2]
+  # One that binds nothing is its own flag.
+  @test occursin("ORDER BY ($(_IO_LAP_MS) IS NULL) ASC, $(_IO_LAP_MS) ASC", _io_sql(_io_labelled(F("lap")); conn = _IO_OLD))
+end
+
+@testset "#1313: SQLite sorts a labelled interval term by its length (in-memory oracle)" begin
+  isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+  db = Main.SQLite.DB()
+  try
+    exe(sql, params = Any[]) = Main.SQLite.DBInterface.execute(db, sql, params)
+    _io_seed!(exe)
+    ids(q; conn = _IO_SL) = (insp = inspect_query(q; connection = conn); [r.id for r in exe(insp[:sql_text], insp[:parameters])])
+    # Laps 1 → 99 h, 2 → 100 h, 3 → -1 h, 4 → -2 h, 5 → 1:30. The text order was [3, 4, 5, 2, 1].
+    @test ids(_io_labelled(F("lap"))) == [4, 3, 5, 1, 2]
+    @test ids(_io_labelled(F("lap") * 2; dir = "DESC")) == [2, 1, 5, 3, 4]
+    @test ids(_io_labelled("lap")) == [4, 3, 5, 1, 2]
+  finally
+    close(db)
+  end
+end

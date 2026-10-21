@@ -936,6 +936,13 @@ end
     @test run(q -> (q.values("raceid", "neg" => negated()); q.order_by("neg", "raceid"))).raceid == by_length(-1)
     @test run(q -> (q.values("raceid", "scaled" => scaled()); q.order_by("-scaled", "raceid"))).raceid ==
           sort(collect(keys(gap)); by = id -> (-gap[id], id))
+    # #1313: a labelled order term of the expression itself, not projected, sorts its length too. On
+    # SQLite it sorted the interval re-formatted as `HH:MM:SS` text; expected SQL there is
+    # `ORDER BY <milliseconds of the expression> DESC`, on PostgreSQL the interval expression itself.
+    @test run(q -> (q.values("raceid");
+                    q.order_by(PormG.QueryBuilder.SQLOrder(PormG.QueryBuilder.SQLField(scaled(), "s"); orientation = "DESC"),
+                               "raceid"))).raceid ==
+          sort(collect(keys(gap)); by = id -> (-gap[id], id))
 
     # A filter on the alias: the races past 99 h, and a range across the boundary.
     @test sort(run(q -> (q.values("raceid", "scaled" => scaled()); q.filter("scaled__@gt" => Dates.Hour(99)))).raceid) ==

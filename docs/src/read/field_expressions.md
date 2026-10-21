@@ -515,6 +515,9 @@ negative values. These cases use the milliseconds:
   literal. Any other argument keeps the text comparison: a text column, a `CTE(...)` column, a
   `Subquery(...)`, or a duration literal with a month, a year or a fraction of a millisecond. So
   does a declared `output_field`.
+- A labelled order term of an interval expression, which orders by the expression without projecting
+  it: `order_by(SQLOrder(SQLField(F("time") * 2, "x")))`, or a `DurationField` written `F("time")`.
+  Grouped, its `GROUP BY` copy keeps the text and binds its own values.
 - A duration literal projected under an alias (`values("v" => Value(Hour(100)))`) and filtered by
   an ordering lookup (`"v__@gt" => Hour(99)`), both sides bound as milliseconds. A literal with a
   fraction of a millisecond has no millisecond form, so ordering it is refused on SQLite. Equality

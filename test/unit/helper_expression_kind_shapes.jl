@@ -305,6 +305,12 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Cast Max decimal to scale 1", :Constructor_results, m -> _EKM_FN.Cast(_EKM_FN.Max("points"), "numeric(10,1)")),
   ("Cast decimal to scale 1", :Constructor_results, m -> _EKM_FN.Cast("points", "numeric(10,1)")),
   ("Cast int to scale 1",     :Result,              m -> _EKM_FN.Cast("grid", "numeric(10,1)")),
+  # #1110: a declared precision a row's value can overflow, which only reading the row can tell
+  ("Cast int to numeric(2,0)", :Result,             m -> _EKM_FN.Cast("driverid", "numeric(2,0)")),
+  ("Cast decimal to numeric(3,2)", :Constructor_results, m -> _EKM_FN.Cast("points", "numeric(3,2)")),
+  ("Cast float to numeric(3,1)", :Result,           m -> _EKM_FN.Cast("points", "numeric(3,1)")),
+  ("Cast F int * 10 to numeric(2,0)", :Result,      m -> _EKM_FN.Cast(_EKM_Q.F("grid") * 10, "numeric(2,0)")),
+  ("Coalesce decimal output numeric(4,2)", :Constructor_results, m -> _EKM_FN.Coalesce("points", 0; output_field = "numeric(4,2)")),
   # #1215: a single-precision cast — `real`, `float4`, `float(p)` up to 24 — and `float(25)`, a double
   ("Cast float float4",       :Result,              m -> _EKM_FN.Cast("points", "float4")),
   ("Cast float float(24)",    :Result,              m -> _EKM_FN.Cast("points", "float(24)")),

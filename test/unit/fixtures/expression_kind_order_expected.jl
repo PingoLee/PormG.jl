@@ -831,6 +831,34 @@ const _EKM_ORDERS = Dict{Tuple{String,Symbol,String},Any}(
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("2009-03-29T06:00:00", "DateTime"), ("1", "Int64")]),
   ("Value datetime | subquery", :sqlite, "w") =>
     (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("\"2009-03-29T06:00:00.000+00:00\"", "String"), ("1", "Int64")]),
+  ("Value interval | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("100 hours", "Hour")]),
+  ("Value interval | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("100 hours", "Hour")]),
+  ("Value interval | alone", :sqlite, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("\"100:00:00\"", "String")]),
+  ("Value interval | subquery", :mysql, "w") =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
+  ("Value interval | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("100 hours", "Hour"), ("1", "Int64")]),
+  ("Value interval | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    ? as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) ASC NULLS LAST", params = [("\"100:00:00\"", "String"), ("1", "Int64"), ("\"100:00:00\"", "String"), ("1", "Int64")]),
+  ("Value interval month | alone", :mysql, "v") =>
+    (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = [("1 month", "Month")]),
+  ("Value interval month | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1 month", "Month")]),
+  ("Value interval month | subquery", :mysql, "w") =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
+  ("Value interval month | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1 month", "Month"), ("1", "Int64")]),
+  ("Case interval literals | alone", :postgres, "v") =>
+    (stage = :ok, sql = "\"v\" ASC NULLS LAST", params = [("1", "Int64"), ("100 hours", "Hour"), ("2 hours", "Hour")]),
+  ("Case interval literals | alone", :sqlite, "v") =>
+    (stage = :build, error = "QueryBuildError", message = "`order_by` on the `v` alias is not supported on SQLite: it is an interval with no millisecond form (a `Case` whose value"),
+  ("Case interval literals | subquery", :postgres, "w") =>
+    (stage = :ok, sql = "\"w\" ASC NULLS LAST", params = [("1", "Int64"), ("100 hours", "Hour"), ("2 hours", "Hour"), ("1", "Int64")]),
+  ("Case interval literals | subquery", :sqlite, "w") =>
+    (stage = :ok, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    CASE\nWHEN \"R2\".\"grid\" = ? THEN ?\nELSE ?\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) ASC NULLS LAST", params = [("1", "Int64"), ("\"100:00:00\"", "String"), ("\"02:00:00\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"100:00:00\"", "String"), ("\"02:00:00\"", "String"), ("1", "Int64")]),
   ("Cast datetime to date | alone", :mysql, "v") =>
     (stage = :ok, sql = "(`v` IS NULL) ASC, `v` ASC", params = Tuple{Any, String}[]),
   ("Cast datetime to date | alone", :postgres, "v") =>

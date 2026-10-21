@@ -94,6 +94,10 @@ const EKM_SHAPES = Tuple{String,Symbol,Function}[
   ("Value text",              :Result,              m -> _EKM_FN.Value("pole")),
   ("Value bool",              :Result,              m -> _EKM_FN.Value(true)),
   ("Value datetime",          :Result,              m -> _EKM_FN.Value(DateTime(2009, 3, 29, 6))),
+  # #1316: a duration literal, ordered or filtered by its alias; a month has no fixed length
+  ("Value interval",          :Result,              m -> _EKM_FN.Value(Hour(100))),
+  ("Value interval month",    :Result,              m -> _EKM_FN.Value(Month(1))),
+  ("Case interval literals",  :Result,              m -> _EKM_FN.Case([_EKM_FN.When("grid" => 1, then = Hour(100))], default = Hour(2))),
   # ── declared types ─────────────────────────────────────────────────────────────────────────────
   ("Cast datetime to date",   :Race,                m -> _EKM_FN.Cast("start_at", "date")),
   ("Cast float to integer",   :Result,              m -> _EKM_FN.Cast("points", "integer")),

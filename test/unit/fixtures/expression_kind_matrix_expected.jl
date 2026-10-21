@@ -974,6 +974,60 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
   ("Value datetime | subquery", :mysql) =>
     (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = nothing, textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("Value interval | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Value interval | alone", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Value interval | alone", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = false, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Value interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is a Value of type Hour, whose type PormG does not infer. Name the type the column "),
+  ("Value interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is a Value of type Hour, whose type PormG does not infer. Name the type the column "),
+  ("Value interval | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is a Value of type Hour, whose type PormG does not infer. Name the type the column "),
+  ("Value interval | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Value interval | subquery", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Value interval | subquery", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = false, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Value interval month | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Value interval month | alone", :sqlite) =>
+    (stage = :build, error = "InvalidValueError", message = "A Month value cannot be bound as a SQLite parameter: DurationField only supports week/day/time-based periods. Months and"),
+  ("Value interval month | alone", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = false, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Value interval month | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is a Value of type Month, whose type PormG does not infer. Name the type the column"),
+  ("Value interval month | cte", :sqlite) =>
+    (stage = :build, error = "InvalidValueError", message = "A Month value cannot be bound as a SQLite parameter: DurationField only supports week/day/time-based periods. Months and"),
+  ("Value interval month | cte", :mysql) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is a Value of type Month, whose type PormG does not infer. Name the type the column"),
+  ("Value interval month | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Value interval month | subquery", :sqlite) =>
+    (stage = :build, error = "InvalidValueError", message = "A Month value cannot be bound as a SQLite parameter: DurationField only supports week/day/time-based periods. Months and"),
+  ("Value interval month | subquery", :mysql) =>
+    (stage = :ok, read = "CInterval()", read_parsed = false, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = nothing, textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Case interval literals | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Case interval literals | alone", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Case interval literals | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Case interval literals | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: a branch is a Hour, whose type PormG does not infer. Name the "),
+  ("Case interval literals | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v is a Case whose type cannot be inferred: a branch is a Hour, whose type PormG does not infer. Name the "),
+  ("Case interval literals | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Case interval literals | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Case interval literals | subquery", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Case interval literals | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Cast datetime to date | alone", :postgres) =>
     (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = "CDate()", column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
   ("Cast datetime to date | alone", :sqlite) =>
@@ -4913,6 +4967,14 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=datetime has no MySQL read parser")],
   ("Value datetime | subquery", :mysql) =>
     [(:unparsed, "read=datetime has no MySQL read parser")],
+  ("Value interval | alone", :mysql) =>
+    [(:unparsed, "read=interval has no MySQL read parser")],
+  ("Value interval | subquery", :mysql) =>
+    [(:unparsed, "read=interval has no MySQL read parser")],
+  ("Value interval month | alone", :mysql) =>
+    [(:unparsed, "read=interval has no MySQL read parser")],
+  ("Value interval month | subquery", :mysql) =>
+    [(:unparsed, "read=interval has no MySQL read parser")],
   ("Cast datetime to date | alone", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
   ("Cast datetime to date | cte", :mysql) =>

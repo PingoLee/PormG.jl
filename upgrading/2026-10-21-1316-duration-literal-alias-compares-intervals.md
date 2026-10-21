@@ -3,7 +3,7 @@
 - **Version**: Unreleased
 - **PormG ref**: #1316 ; `src/querybuilder/field_resolution.jl` (`_infer_parameter_sql_type`), `src/querybuilder/expression_render.jl` (`_projected_interval_source`)
 - **Recorded**: 2026-10-21
-- **Severity**: behavior change, both engines. An ordering filter on a `Value(<duration>)` alias keeps the rows the durations' order keeps, where it kept the rows their text's order kept, with no error. On PostgreSQL a projected `Value(<duration>)`, and a `Case` whose branches are duration literals, read back as a `Dates.CompoundPeriod` where they read back as a `String`. On SQLite such a filter on a literal with a fraction of a millisecond raises `QueryBuildError` where it built.
+- **Severity**: behavior change, both engines. An ordering filter on a `Value(<duration>)` alias keeps the rows the durations' order keeps, where it kept the rows their text's order kept, with no error; on SQLite its equality compares the durations, not their text. On PostgreSQL a projected `Value(<duration>)`, and a `Case` whose branches are duration literals, read back as a `Dates.CompoundPeriod` where they read back as a `String`. On SQLite such a filter on a literal with a fraction of a millisecond raises `QueryBuildError` where it built.
 
 ### What changed
 
@@ -21,10 +21,19 @@ as a `date`: a `Value(...)`, a `Case` branch, a `Coalesce` or `Greatest` argumen
 So it compares as an interval and reads back as one. Beside a `DurationField` column PostgreSQL
 already typed the literal from the column, so those values do not change.
 
+On SQLite equality and membership (`"v" => …`, `"v__@in" => […]`) on such an alias compare the
+milliseconds too, as they do on a timestamp difference's alias: `"v" => "1:00:00"` matches a
+`Value(Hour(1))`, where the two texts (`"01:00:00"`, `"1:00:00"`) differed. Each side is rounded to
+the nearest millisecond, so `Value(Millisecond(2))` equals `Microsecond(1500)` there.
+
 A literal with a fraction of a millisecond (`Nanosecond(1500)`) has no millisecond form on SQLite,
 so an ordering filter on its alias is refused there, as it is for a `Case` over durations (#1311).
-Equality (`==`, `@in`) still compares its text. `order_by` on such an alias orders one constant, and
-is unchanged.
+Its equality still compares the text. `order_by` on such an alias orders one constant, and is
+unchanged.
+
+On PostgreSQL a nanosecond or a quarter (`Nanosecond(1500)`, `Quarter(1)`) has no interval input
+text (`1500 nanoseconds`), so such a literal still binds untyped and reads back as its text. Write
+`Microsecond(…)` or `Month(3)` for an interval.
 
 Measured on the F1 fixture, `values("resultid", "v" => Value(a))` filtered by `"v__@gt" => b` and
 `"resultid__@lte" => 5`, rows kept (5 when the comparison holds):
@@ -45,9 +54,10 @@ Read back on PostgreSQL:
 
 ### Who this affects
 
-Code that projects a duration literal with `Value(...)` and filters its alias with `@gt`, `@gte`,
-`@lt`, `@lte` or `@range`. On PostgreSQL, code that reads a projected duration literal, or a `Case`
-whose branches are all duration literals, and expects a `String`.
+Code that projects a duration literal with `Value(...)` and filters its alias: with `@gt`, `@gte`,
+`@lt`, `@lte` or `@range` on both engines, and with `==` or `@in` on SQLite. On PostgreSQL, code that
+reads a projected duration literal, or a `Case` whose branches are all duration literals, and expects
+a `String`.
 
 ### How to find the calls to migrate
 

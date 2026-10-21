@@ -884,13 +884,16 @@ _unordered_interval_literal(source::SQLText) =
 function _refuse_unordered_interval_alias(what::AbstractString, name::AbstractString, instruc::SQLInstruction)
   _projected_unordered_interval(name, instruc) || return nothing
   source = _projected_source(memo_key(:base, name), instruc)
+  # An engine that renders no millisecond form at all (MySQL) refuses the feature first: the remedy
+  # below, a duration with whole milliseconds, would be refused there too.
+  source isa SQLText && _interval_ms_refusal(instruc.connection)
   throw(source isa SQLText ? _unordered_interval_literal_error(what, name, _backend_name(instruc.connection)) :
                              _unordered_interval_alias_error(what, name))
 end
 _unordered_interval_literal_error(what::AbstractString, name::AbstractString, engine::AbstractString) = QueryBuildError(
   "$(what) on the `$(name)` alias is not supported on $(engine): it is a duration literal with no " *
-  "millisecond form (months or years, which have no fixed length, or a fraction of a millisecond), " *
-  "which $(engine) holds as its text, and that text does not sort in the duration's order. Equality " *
+  "millisecond form (a fraction of a millisecond, or months or years, which have no fixed length), " *
+  "which $(engine) compares as its text, and that text does not sort in the duration's order. Equality " *
   "(`==`, `@in`) still compares the text. Write the duration in weeks, days or a time with whole " *
   "milliseconds: Day(30), Hour(1).")
 _unordered_interval_alias_error(what::AbstractString, name::AbstractString) = QueryBuildError(

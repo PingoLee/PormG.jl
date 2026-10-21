@@ -332,10 +332,16 @@ function _infer_parameter_sql_type(value, instruc::SQLInstruction; fallback::Uni
   value isa TimeZones.ZonedDateTime && return "timestamptz"
   # #1316: untyped, two durations compared as text — `Value(Hour(100))`'s alias filtered
   # `@gt Hour(99)` kept no row, and a `Case` over duration literals projected its text.
-  value isa Union{Dates.Period,Dates.CompoundPeriod} && return "interval"
+  value isa Union{Dates.Period,Dates.CompoundPeriod} && _interval_input(value) && return "interval"
   value isa Sockets.IPAddr && return "inet"   # #903 — bound as its text by `add_parameter!`
   return nothing
 end
+
+# #1316 — whether a duration's text (`string`, what the driver sends) is PostgreSQL interval input.
+# Nanoseconds and quarters are not (`1500 nanoseconds`, `1 quarter`: SQLSTATE 22007, measured), so
+# such a literal binds untyped, as every duration did before, rather than failing when it runs.
+_interval_input(p::Dates.Period) = !(p isa Union{Dates.Nanosecond,Dates.Quarter})
+_interval_input(p::Dates.CompoundPeriod) = all(_interval_input, p.periods)
 
 function _deferred_kwarg_sql_type(v::SQLTypeFunction, key::String, resolved_kwargs::Dict{String,Any}, instruc::SQLInstruction)
   value = v.kwargs[key]

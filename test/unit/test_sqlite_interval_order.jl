@@ -1346,6 +1346,11 @@ end
   @test occursin("WHERE ? BETWEEN ? AND ?", insp[:sql_text])
   @test insp[:parameters] == Any["01:30:00", 5_400_000, 3_600_000, 7_200_000]
   # Equality on a literal with a millisecond form compares milliseconds too, as for a timestamp difference.
+  q = _IOM.Io_lap.objects
+  q.values("id", "v" => Value(Dates.Hour(1)))
+  q.filter("v" => "1:00:00")
+  @test occursin("WHERE ? = ?", _io_sql(q))
+  @test _io_params(q) == Any["01:00:00", 3_600_000, 3_600_000]
   @test _io_value_alias(Dates.Hour(1), "@in", [Dates.Hour(1)])[:parameters] == Any["01:00:00", 3_600_000, 3_600_000]
   # A fraction of a millisecond has no exact millisecond form (#907): ordering it is refused, equality
   # keeps the text. (A month cannot be a SQLite parameter at all, #721.)
@@ -1370,6 +1375,10 @@ end
   @test occursin("\$1::interval as \"v\"", insp[:sql_text])
   @test occursin("WHERE \$2::interval > \$3", insp[:sql_text])
   @test insp[:parameters] == Any[Dates.Hour(100), Dates.Hour(100), Dates.Hour(99)]
+  # A nanosecond or a quarter is no interval input text (`1500 nanoseconds`): untyped, as before.
+  for lit in (Dates.Nanosecond(1500), Dates.Quarter(1), Dates.Second(1) + Dates.Nanosecond(500))
+    @test occursin("WHERE \$2 > \$3", _io_value_alias(lit, "@gt", Dates.Hour(1); conn = _IO_PG)[:sql_text])
+  end
   # A month is an interval there, and builds.
   @test occursin("WHERE \$2::interval > \$3", _io_value_alias(Dates.Month(1), "@gt", Dates.Hour(1); conn = _IO_PG)[:sql_text])
   # A `Case` over duration literals was untyped text; its branches are intervals now.

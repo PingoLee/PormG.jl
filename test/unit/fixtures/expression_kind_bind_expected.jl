@@ -1278,9 +1278,9 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Value interval | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>
     (stage = :ok, clause = :where, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    ? as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) > ?", params = [("\"100:00:00\"", "String"), ("1", "Int64"), ("\"100:00:00\"", "String"), ("1", "Int64"), ("60000", "Int64")]),
   ("Value interval month | alone", :mysql, "v__@gt", "10") =>
-    (stage = :build, error = "QueryBuildError", message = "An ordering filter (`>`) on the `v` alias is not supported on MySQL: it is a duration literal with no millisecond form ("),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Value interval month | alone", :mysql, "v__@gt", "interval Minute(1)") =>
-    (stage = :build, error = "QueryBuildError", message = "An ordering filter (`>`) on the `v` alias is not supported on MySQL: it is a duration literal with no millisecond form ("),
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
   ("Value interval month | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\$2::interval > \$3", params = [("1 month", "Month"), ("1 month", "Month"), ("10", "Int64")]),
   ("Value interval month | alone", :postgres, "v__@gt", "interval Minute(1)") =>

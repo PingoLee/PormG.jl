@@ -507,6 +507,8 @@ _guarded_format(formatter, values, operator::AbstractString, label, type_label;
 # "is the type format_yyyy_mm" — an internal symbol — in a sentence a user reads; truthful and
 # unreadable are not the same bar. `yyyy-mm` is what that formatter actually demands.
 function _formatter_type_label(formatter)::String
+  # #1130: MySQL's `DurationField` formatter (a BIGINT of microseconds) demands what SQLite's does.
+  formatter === Dialect._format_mysql_duration && return "duration"
   n = string(nameof(formatter))
   m = match(r"^format_(.+)_sql$", n)
   m === nothing || return replace(m.captures[1], '_' => ' ')
@@ -767,9 +769,17 @@ end
 # duration as its text (`Dialect._sqlite_interval_text` over a computed one), so the column converts
 # once, as a model column does. A path on through a CTE key column (`"c__team__best"`) ends at the
 # related model's stored column, which converts the same way; a transform (`__@…`) is no duration.
+#
+# #1130: on MySQL the column IS that integer (a BIGINT of microseconds, `_stores_interval_as_units`), so
+# an equality and a membership bind it too: the `HH:MM:SS` text against a BIGINT would be read as the
+# number its leading digits spell, silently.
 const _INTERVAL_ORDERING_LOOKUPS = (">", ">=", "<", "<=", "BETWEEN", "NOT BETWEEN")
+const _INTERVAL_EQUALITY_LOOKUPS = ("=", "!=", "<>", "IN", "NOT IN")
 function _is_sqlite_duration_column(v::SQLTypeOper, instruc::SQLInstruction)::Bool
-  (_interval_as_ms(instruc.connection) && v.operator in _INTERVAL_ORDERING_LOOKUPS) || return false
+  conn = instruc.connection
+  _interval_as_ms(conn) || return false
+  (v.operator in _INTERVAL_ORDERING_LOOKUPS ||
+   _stores_interval_as_units(conn) && v.operator in _INTERVAL_EQUALITY_LOOKUPS) || return false
   return _is_duration_column(v, instruc)
 end
 # Whether the filter's column is a `DurationField`: a model column, a joined path's terminal field, or
@@ -789,10 +799,30 @@ function _is_duration_column(v::SQLTypeOper, instruc::SQLInstruction)::Bool
   end
   return field isa Models.sDurationField
 end
+# #1130 — on MySQL an interval is the count it stores, so a filter that compares an interval column
+# with an expression that is not an interval, or a column that is not one with an interval
+# (`"fastestlaptime" => F("grid")`, `"grid" => F("fastestlaptime")`, a `Subquery`, a function),
+# compares a count with microseconds and answers, silently. Decided after both sides render (render
+# first, then type), for the comparison and membership operators only: a pattern lookup and `@isnull`
+# have their own rules.
+function _refuse_duration_mismatch(v::SQLTypeOper, instruc::SQLInstruction)
+  _stores_interval_as_units(instruc.connection) || return nothing
+  v.operator in _INTERVAL_MS_PREDICATES || v.operator in _INTERVAL_MS_LIST_PREDICATES || return nothing
+  _is_interval_operand_side(v, instruc) == (_expression_kind(v.values, instruc) isa CInterval) && return nothing
+  _refuse_interval_against_number(v.operator, instruc)
+end
+# Whether the filter's column is an interval: a `DurationField` (a model column, a joined path, a CTE
+# column holding one), a projection alias the build typed an interval (`"v__@in"` over
+# `"v" => F("lap") * 2`, a `Sum` alias in HAVING), or anything the type walk names an interval.
+function _is_interval_operand_side(v::SQLTypeOper, instruc::SQLInstruction)::Bool
+  _is_duration_column(v, instruc) && return true
+  alias = _alias_filter_key(v.column, instruc)
+  alias === nothing || return get(instruc.projection_kinds, Symbol(alias), nothing) isa CInterval
+  return v.column isa SQLField && _expression_kind(v.column.field, instruc) isa CInterval
+end
 function _sqlite_duration_column_ms(v::SQLTypeOper, instruc::SQLInstruction)
   _is_sqlite_duration_column(v, instruc) || return nothing
-  v.operator in ("BETWEEN", "NOT BETWEEN") && return _duration_values_ms(v.values)
-  return _duration_value_ms(v.values)
+  return _predicate_duration_units(v.operator, v.values, instruc.connection)
 end
 
 # #894 — `filter("gap__@gt" => F("start_at") - F("date") - Hour(1))` over `"gap" => <interval>`: an
@@ -813,9 +843,11 @@ function _sqlite_interval_alias_comparison(v::SQLTypeOper, instruc::SQLInstructi
   source === nothing && return nothing
   lhs, lhs_ms = _render_interval_source_ms(source, instruc)
   rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)   # #985: the right side
+  # #1130: where every interval is its integer (MySQL), a side with no integer form is no interval.
+  lhs_ms == rhs_ms || _refuse_interval_against_number(v.operator, instruc)
   if !(lhs_ms && rhs_ms)
-    lhs_ms && (lhs = Dialect._sqlite_interval_text(lhs))
-    rhs_ms && (rhs = Dialect._sqlite_interval_text(rhs))
+    lhs_ms && (lhs = _interval_ms_as_text(lhs, instruc.connection))
+    rhs_ms && (rhs = _interval_ms_as_text(rhs, instruc.connection))
   end
   return _render_column_rhs(lhs, v.operator, rhs, instruc)
 end
@@ -1110,12 +1142,6 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   column = _pattern_operand(column, operand_formatter, v.operator, instruc;
                             label = refuses ? _pattern_refusal_label(v, column) : column,
                             operand_kind = operand_kind)
-  # #1130: what a `DurationField` stores on MySQL is the migrations phase's decision, so no comparison
-  # can know what it compares there yet: an equality or a membership would bind the `HH:MM:SS` text
-  # and the server would answer by whatever the column holds. Refused before any SQL; `IS NULL` asks
-  # nothing of the stored form.
-  v.operator == "ISNULL" || _filters_durations(instruc.connection) || !_is_duration_column(v, instruc) ||
-    throw(_unsupported_conn("A DurationField filter", instruc.connection))
   if isa(v.values, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
     @pormg_debug false
     # #894: a `DurationField` ordered against an `F` interval — another `DurationField`, a timestamp
@@ -1126,16 +1152,19 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     if v.values isa Union{FExpression,CTEReference} && v.operator in _ORDERING_OPERATIONS &&
        _is_sqlite_duration_column(v, instruc)
       rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)
+      _refuse_duration_mismatch(v, instruc)
       return _render_column_rhs(rhs_ms ? _interval_text_as_ms(column, instruc.connection) : column, v.operator, rhs, instruc)
     end
     # F expressions are safe since they reference model fields; a CTE handle (#444) is the same
     # thing scoped to a CTE — `filter("raceid" => CTE("r91", "raceid"))` is a column comparison,
     # never a bound value.
     placeholders = _on_join_right(() -> _get_filter_query(v.values, instruc), instruc)
+    _refuse_duration_mismatch(v, instruc)
     return _render_column_rhs(column, v.operator, placeholders, instruc)
   elseif isa(v.values, SQLTypeFunction)
     # Case/When and other SQL function expressions as filter RHS
     placeholders = _on_join_right(() -> _get_filter_query(v.values, instruc), instruc)
+    _refuse_duration_mismatch(v, instruc)
     return _render_column_rhs(column, v.operator, placeholders, instruc)
   elseif isa(v.values, SubqueryObject)
     # #926: a scalar subquery, `"grid" => Subquery(…)`. `column` rendered first, so its markers number
@@ -1144,10 +1173,12 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     # milliseconds, as against an `F` interval above; the subquery renders once either way.
     if v.operator in _ORDERING_OPERATIONS && _is_sqlite_duration_column(v, instruc)
       rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)
+      _refuse_duration_mismatch(v, instruc)
       return _render_column_rhs(rhs_ms ? _interval_text_as_ms(column, instruc.connection) : column, v.operator, rhs, instruc)
     end
-    return _render_column_rhs(column, v.operator,
-                              _on_join_right(() -> _get_filter_query(v.values, instruc), instruc), instruc)
+    placeholders = _on_join_right(() -> _get_filter_query(v.values, instruc), instruc)
+    _refuse_duration_mismatch(v, instruc)
+    return _render_column_rhs(column, v.operator, placeholders, instruc)
   elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && v.column.field.formatter !== nothing
     @pormg_debug false
     # #576: this is the arm `filter("happened__@month" => "abc")` lands in once the sargable rewrite
@@ -1230,9 +1261,18 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     # #432: same nested-run reordering — the subquery renders inside this predicate's clause.
     nested_mark = nested_parameter_mark(instruc)
     # #1002: `IN (…)` is a set test, so a repeated row is invisible — unless a slice picks rows by count.
+    # #1130: the queryset's one column, typed by its own build, for the interval check below.
+    inner_kind = Ref{Any}(nothing)
     placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc,
-                         semi_join = !_is_sliced(getfield(v.values, :object)))
+                         semi_join = !_is_sliced(getfield(v.values, :object)),
+                         built = inner -> (inner_kind[] = _subquery_projection_kind(v.values, inner)))
     reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
+    # Where an interval is its integer (MySQL), membership of an interval column in a queryset of
+    # numbers, or of a number in a queryset of intervals, compares a count with microseconds. A column
+    # the queryset's build cannot type (a NULL literal) is left to the server, as on PostgreSQL.
+    _stores_interval_as_units(instruc.connection) && inner_kind[] !== nothing &&
+      _is_interval_operand_side(v, instruc) != (inner_kind[] isa CInterval) &&
+      _refuse_interval_against_number(v.operator, instruc)
     # #586: `column` was rendered before the subquery, so its markers number ahead of the
     # subquery's — the text order. Re-rendering here would bind a composite LHS a second time.
     return string(column, " ", v.operator, " ($placeholders)")

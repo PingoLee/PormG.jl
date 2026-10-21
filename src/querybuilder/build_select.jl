@@ -246,7 +246,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
             # the related path, and the column render below refreshes the field memo under whatever
             # it is handed — so `_as` filed the FK's own field under the path to the race's `year`.
             sql, interval_ms, interval = _render_function_typed(original, instruc; _as = memo_name(v_copy))
-            v_copy.field = interval_ms ? Dialect._sqlite_interval_text(sql) : sql
+            v_copy.field = interval_ms ? _interval_ms_as_text(sql, instruc.connection) : sql
           else
             v_copy.field = _get_select_query(original, instruc, _as=memo_name(v_copy))   # #1004, as above
           end
@@ -626,11 +626,12 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
       # `SQLOrder(SQLField(x, "v"))`), so an interval with no millisecond form would sort its text on
       # SQLite, as its alias did. Refused the same way, naming the term's label and the CTE spelling;
       # render first, then type.
-      if _interval_as_ms(instruc.connection) && !_interval_ms_candidate(order_node) &&
+      if _interval_as_ms(instruc.connection) && !_stores_interval_as_units(instruc.connection) &&
+         !_interval_ms_candidate(order_node) &&
          _expression_kind(order_node, instruc) isa CInterval
         label = v_field_copy._as
         throw(label isa AbstractString ? _unordered_interval_alias_error("`order_by`", label) :
-                                         _unordered_interval_error("order_by"))
+                                         _unordered_interval_error("order_by", instruc.connection))
       end
     end
     # #540: no render-time re-validation. `SQLOrder` is an immutable struct whose inner constructor

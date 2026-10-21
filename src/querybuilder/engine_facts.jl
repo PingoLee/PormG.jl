@@ -16,25 +16,32 @@
 # `test/unit/test_engine_facts.jl` holds the registry: every function here has a PostgreSQL and a
 # SQLite method, none for `PormGBackend` or `Any`, and a mock third backend gets a `MethodError`.
 
-# The engine has no interval type, so PormG computes an interval as milliseconds (#881, #894): a
-# `DurationField` column orders and compares by its millisecond form, an interval in arithmetic is
-# rewritten over it, and the shapes that form cannot express are refused here rather than failing
-# on the server.
+# The engine has no interval type, so PormG computes an interval as an integer (#881, #894) — of
+# milliseconds on SQLite, of `_interval_unit_ns` in general: a `DurationField` column orders and
+# compares by its integer form, an interval in arithmetic is rewritten over it, and the shapes that form
+# cannot express are refused here rather than failing on the server. MySQL has no interval type either
+# (#1130): a `DurationField` is a BIGINT of microseconds there.
 _interval_as_ms(::PormGPostgres) = false
 _interval_as_ms(::PormGSQLite) = true
-# MySQL has no interval type either (#1130), so an interval is computed in milliseconds there too. Its
-# millisecond SQL is the follow-up to phase 2b: until then each edge of that form (a `DurationField`
-# or interval column read as milliseconds, a timestamp difference, a duration inside a function) refuses
-# on MySQL before any SQL (`_interval_text_as_ms` and its siblings in `expression_render.jl`), so no
-# other engine's millisecond SQL reaches the server.
 _interval_as_ms(::PormGMySQL) = true
 
-# A `DurationField` can be filtered: the engine has a decided storage for it (PostgreSQL `interval`,
-# SQLite the `HH:MM:SS` text PormG writes). MySQL's is phase 4's decision (#1130), so every duration
-# filter but `IS NULL` is refused there until then.
-_filters_durations(::PormGPostgres) = true
-_filters_durations(::PormGSQLite) = true
-_filters_durations(::PormGMySQL) = false
+# The unit of that integer, in nanoseconds: what a duration literal binds as, and what a timestamp
+# difference counts. SQLite computes in milliseconds, the precision its stored timestamps carry (#79).
+# PostgreSQL never computes an interval as an integer (`_interval_as_ms`); its answer is the
+# resolution of its own `interval`, for completeness.
+_interval_unit_ns(::PormGPostgres) = 1_000
+_interval_unit_ns(::PormGSQLite) = 1_000_000
+_interval_unit_ns(::PormGMySQL) = 1_000
+
+# The engine STORES an interval as that integer (#1130: MySQL's `DurationField` is a BIGINT of
+# microseconds), so an interval's value is already its integer form: a column needs no conversion, a
+# computed one leaves the expression as it is, and every interval — a `Case` over durations, a window
+# value — orders and compares as the number it is. SQLite stores the `HH:MM:SS` text, which orders as
+# the duration only below 100 hours (#894), so it converts at each edge and refuses an interval with no
+# integer form. PostgreSQL never computes an interval as an integer (`_interval_as_ms`).
+_stores_interval_as_units(::PormGPostgres) = false
+_stores_interval_as_units(::PormGSQLite) = false
+_stores_interval_as_units(::PormGMySQL) = true
 
 # The engine stores a date as text, so `date ± x` with an operand PormG cannot type would do
 # arithmetic on the text — on SQLite, on its year (#882).

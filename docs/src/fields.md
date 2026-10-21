@@ -1144,7 +1144,8 @@ Race = Models.Model(
 
 **Purpose**: Time intervals and durations.
 
-**Database Type**: `INTERVAL`
+**Database Type**: `INTERVAL` on PostgreSQL, the `HH:MM:SS` text on SQLite, and a `BIGINT` of
+microseconds on MySQL, which has no interval type and whose `TIME` stops at 838:59:59.
 
 **Use Cases**: Elapsed time, durations, time spans.
 
@@ -1175,8 +1176,8 @@ because they have no fixed length. Before #891 a string was stored as it was spe
 `00:00:90`, `00:125:30`), so on SQLite a row written then can still hold that spelling. The upgrade
 guide's #891 entry shows how to re-save those rows.
 
-**Reads back as**: a `Dates.CompoundPeriod` — on PostgreSQL (either driver) and on SQLite alike, so
-code can dispatch on it. That holds for the column read through a query: `list()`, `DataFrame`, and
+**Reads back as**: a `Dates.CompoundPeriod` — on PostgreSQL (either driver), on SQLite and on MySQL
+alike, so code can dispatch on it. That holds for the column read through a query: `list()`, `DataFrame`, and
 the column in `values(...)`, including a whole-second value like a `23 seconds` pit stop, which one
 PostgreSQL driver would otherwise hand back as a bare `Second(23)`.
 
@@ -1240,6 +1241,13 @@ That reading rounds each side to the nearest **millisecond**, the precision of a
 while PostgreSQL keeps microseconds. So two durations less than a millisecond apart can order the
 same on SQLite when PostgreSQL tells them apart. `==` and `@in` compare the stored text, which is
 exact for every value written in the canonical form (see *Accepts* above).
+
+On **MySQL** a duration is stored as its microseconds, so the column is already the number it orders
+and compares by: every comparison, `@in` and `@range` bind the duration as its microseconds
+(`"time" => Second(80)` binds `80000000`), and arithmetic, aggregates and timestamp differences compute
+in microseconds, exactly; none of SQLite's millisecond rounding applies. What has no meaning is
+refused as on SQLite, naming MySQL: a duration plus a number, times another duration, or a number
+compared with one (`F("grid") == F("time")`).
 
 The **components** inside it are the engine's own, though: the same lap time can arrive as minutes,
 seconds and milliseconds from one engine and as hours through nanoseconds from another. Compare

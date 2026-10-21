@@ -128,8 +128,9 @@ end
 # MySQL collector: values as MySQL.jl binds them
 # MySQL has no array binding and no array or UUID type. Expected: a list renders `?, ?, ?` with one
 # value each, a UUID binds as its 36-character text (the `CHAR(36)` it is stored as, #1270), a binary
-# payload as its bytes, a Decimal unchanged (the extension binds its exact text), and an ArrayField
-# value raises BackendCapabilityError rather than binding as text.
+# payload as its bytes, a Decimal unchanged (the extension binds its exact text), a duration as the
+# microseconds a `DurationField` stores (#1130; MySQL.jl binds no `Period`), and an ArrayField value
+# raises BackendCapabilityError rather than binding as text.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "MySQL collector: values as MySQL.jl binds them" begin
   params = _MR_QB.get_parameter(MrMockMySQL())
@@ -139,6 +140,10 @@ end
   @test _MR_QB.add_parameter!(params, PormG.PormGBytes(UInt8[0x00, 0xff])) == "?"
   @test _MR_QB.add_parameter!(params, Decimal(0, 255, -1)) == "?"
   @test params.parameters == Any[1, 2, 3, "123e4567-e89b-12d3-a456-426614174000", UInt8[0x00, 0xff], Decimal(0, 255, -1)]
+  _MR_QB.add_parameter!(params, Hour(1))
+  _MR_QB.add_parameter!(params, Minute(1) + Second(20) + Millisecond(500))
+  _MR_QB.add_parameter!(params, Nanosecond(1_500))   # half a microsecond rounds away from zero
+  @test params.parameters[end-2:end] == Any[3_600_000_000, 80_500_000, 2]
   # A pattern value gets the same wildcards as on every engine.
   _MR_QB.add_parameter!(params, "Senna"; contains = true, operator = "contains")
   @test params.parameters[end] == "%Senna%"
@@ -428,34 +433,45 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MySQL DurationField filters: refused until its storage is decided
-# What a `DurationField` stores on MySQL is the migrations phase's decision, so an equality or a
-# membership would bind the `HH:MM:SS` text and the server would answer by whatever the column holds.
-# Expected: every comparison, a membership and a range on a duration column raise
-# UnsupportedConnectionError naming the filter, before any SQL; `IS NULL` builds; PostgreSQL and SQLite
-# build the same filters.
+# MySQL DurationField filters: the column is its microseconds, and so is every value it meets (#1130)
+# A `DurationField` is a BIGINT of microseconds on MySQL. Expected: an equality, a membership, an
+# ordering and a range bind each duration as its microseconds — never the `HH:MM:SS` text, which MySQL
+# would compare as the number its leading digits spell, silently; a duration string is parsed as the
+# field parses it; `IS NULL` binds nothing; a value that is no duration raises what the field's
+# formatter raises on every engine.
+# Expected SQL: `WHERE `Tb`.`fastestlaptime` = ?` with `[80000000]`, `IN (?, ?)`, `BETWEEN ? AND ?`.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "MySQL DurationField filters: refused until its storage is decided" begin
-  refused(q) = try; _mr_inspect(q); false; catch e
-    e isa PormG.UnsupportedConnectionError && occursin("A DurationField filter is not rendered for MySQL yet", sprint(showerror, e))
-  end
-  for pair in ("fastestlaptime" => Second(80), "fastestlaptime__@ne" => Second(80),
-               "fastestlaptime__@in" => [Second(80), Second(90)], "fastestlaptime__@gt" => Minute(1),
-               "fastestlaptime__@range" => [Minute(1), Minute(2)])
-    @test (pair.first, refused(_MR_MY.Result.objects.filter(pair))) == (pair.first, true)
-    @test (pair.first, refused(_MR_PG.Result.objects.filter(pair))) == (pair.first, false)
-    @test (pair.first, refused(_MR_SL.Result.objects.filter(pair))) == (pair.first, false)
-  end
-  @test occursin("IS NULL", _mr_inspect(_MR_MY.Result.objects.filter("fastestlaptime__@isnull" => true))[:sql_text])
+@testset "MySQL DurationField filters: the column is its microseconds, and so is every value" begin
+  where_of(pair) = (r = _mr_inspect(_MR_MY.Result.objects.filter(pair));
+                    (strip(split(r[:sql_text], "WHERE")[end]), r[:parameters]))
+  @test where_of("fastestlaptime" => Second(80)) == ("`Tb`.`fastestlaptime` = ?", Any[80_000_000])
+  @test where_of("fastestlaptime" => "00:01:20.5") == ("`Tb`.`fastestlaptime` = ?", Any[80_500_000])
+  @test where_of("fastestlaptime__@ne" => Second(80)) == ("`Tb`.`fastestlaptime` != ?", Any[80_000_000])
+  @test where_of("fastestlaptime__@in" => [Second(80), Second(90)]) ==
+        ("`Tb`.`fastestlaptime` IN (?, ?)", Any[80_000_000, 90_000_000])
+  @test where_of("fastestlaptime__@gt" => Minute(1)) == ("`Tb`.`fastestlaptime` > ?", Any[60_000_000])
+  @test where_of("fastestlaptime__@range" => [Minute(1), Minute(2)]) ==
+        ("`Tb`.`fastestlaptime` BETWEEN ? AND ?", Any[60_000_000, 120_000_000])
+  @test where_of("fastestlaptime__@isnull" => true) == ("`Tb`.`fastestlaptime` IS NULL", Any[])
+  # Against another interval: the two integers.
+  @test where_of("fastestlaptime__@gt" => F("fastestlaptime") * 2) ==
+        ("`Tb`.`fastestlaptime` > CAST(ROUND((`Tb`.`fastestlaptime`) * (?)) AS SIGNED)", Any[2])
+  # No duration: the field's own refusal, as on SQLite.
+  @test_throws PormG.InvalidValueError _mr_inspect(_MR_MY.Result.objects.filter("fastestlaptime" => 5))
+  @test_throws PormG.InvalidValueError _mr_inspect(_MR_SL.Result.objects.filter("fastestlaptime" => 5))
+  # SQLite keeps the stored text for an equality (#891) and its milliseconds for an ordering (#894).
+  sl = _mr_inspect(_MR_SL.Result.objects.filter("fastestlaptime" => Second(80)))
+  @test sl[:parameters] == Any["00:01:20"]
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MySQL read parsers: what MySQL.jl delivers, turned into what the kind means
 # #1270: the wire has no boolean (a `TINYINT(1)` reads as `Int8`, a comparison as `Int64`); a
 # DATETIME has no zone and the session is UTC; `AVG` over an integer is a DECIMAL that means a float
-# (#1121). Expected: those three parsed, every parser fail-open on a value it does not recognize, and
-# no parser for the kinds MySQL.jl already delivers typed (a date, a time, a naive datetime, a decimal
-# column) or that have no MySQL storage yet (an interval).
+# (#1121); a `DurationField` is a BIGINT of microseconds (#1130). Expected: those four parsed — the
+# interval into the `CompoundPeriod` SQLite reads, in the same units — every parser fail-open on a value
+# it does not recognize, and no parser for the kinds MySQL.jl already delivers typed (a date, a time, a
+# naive datetime, a decimal column).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "MySQL read parsers: what MySQL.jl delivers, turned into what the kind means" begin
   my = MrMockMySQL()
@@ -469,7 +485,18 @@ end
   parse_float = PormG.value_parser(PormG.CFloat64(), my)
   @test parse_float(Decimal(0, 16666666666666666666666666666667, -31)) === 1.6666666666666667
   @test parse_float(2.5) === 2.5
-  for kind in (PormG.CDate(), PormG.CTime(), PormG.CInterval(), PormG.CDecimal(10, 2), PormG.CText(), PormG.CInt64())
+  parse_interval = PormG.value_parser(PormG.CInterval(), my)
+  parse_sqlite_interval = PormG.value_parser(PormG.CInterval(), MrMockSQLite())
+  # The same duration reads back as the same value, component by component, on both engines.
+  for (us, text) in ((80_500_000, "00:01:20.5"), (-5_400_500_000, "-01:30:00.5"), (360_000_000_001, "100:00:00.000001"),
+                     (0, "00:00:00"))
+    @test (us, parse_interval(us).periods) == (us, parse_sqlite_interval(text).periods)
+  end
+  # A computed one (`SUM`, `/`) is a DECIMAL: rounded to the microsecond, half away from zero.
+  @test parse_interval(Decimal(0, 805, 5)) == parse_interval(80_500_000)
+  @test parse_interval(Decimal(0, 25, -1)) == parse_interval(3) && parse_interval(Decimal(1, 25, -1)) == parse_interval(-3)
+  @test parse_interval(missing) === missing && parse_interval("00:01:20") == "00:01:20"
+  for kind in (PormG.CDate(), PormG.CTime(), PormG.CDecimal(10, 2), PormG.CText(), PormG.CInt64())
     @test (kind, PormG.value_parser(kind, my)) == (kind, nothing)
   end
 end
@@ -618,40 +645,150 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MySQL intervals: every edge of the millisecond form refuses before any SQL (#1130 phase 2b)
-# MySQL computes an interval in milliseconds, as SQLite does (`_interval_as_ms`), but its millisecond
-# SQL is the follow-up to phase 2b and a DurationField's storage is phase 4's. Expected: a timestamp
-# difference, a DurationField in an ordering, an aggregate or arithmetic, and a date shifted by one,
-# each raise UnsupportedConnectionError before any SQL (never SQLite's millisecond SQL, which MySQL
-# rejects at the server); a projected DurationField still renders its column.
+# MySQL intervals: a DurationField is its microseconds, and every interval computes in them (#1130)
+# MySQL has no interval type; a `DurationField` is a BIGINT of microseconds there (Django's choice), so
+# the integer SQLite converts its `HH:MM:SS` text into is MySQL's stored value itself: a column is used
+# as it is, a computed interval leaves the expression as it is, and a duration literal binds its count.
+# Expected SQL, each pinned below:
+#   timestamp difference  `(-TIMESTAMPDIFF(MICROSECOND, l, r))` — `l` first, so its binds come first;
+#   date ± interval       `(date ± INTERVAL (d) MICROSECOND)`, `(INTERVAL (d) MICROSECOND + date)`;
+#   interval × number     `CAST(ROUND((d) * (?)) AS SIGNED)`, and `AVG` the same, half away from zero.
+# What has no meaning — an interval plus a number, times an interval, a number compared with one —
+# is refused before any SQL, naming MySQL, as SQLite refuses it naming SQLite.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "MySQL intervals: every edge of the millisecond form refuses before any SQL" begin
-  refused(build) = (e = try; _mr_inspect(build()); nothing; catch err; err; end;
-                    e isa PormG.UnsupportedConnectionError && occursin("is not rendered for MySQL yet", sprint(showerror, e)))
-  # A timestamp difference is an interval: refused at its render (the mock models have no timestamp).
-  @test_throws PormG.UnsupportedConnectionError _MR_QB._temporal_difference_sql(MrMockMySQL(), "`a`", "`b`", PormG.CInterval())
+@testset "MySQL intervals: a DurationField is its microseconds, and every interval computes in them" begin
+  sql(build) = (r = _mr_inspect(build()); (r[:sql_text], r[:parameters]))
+  proj(build) = (r = sql(build); (strip(split(split(r[1], "SELECT")[end], " as `v`")[1]), r[2]))
+  R = _MR_MY.Result
+  @test proj(() -> R.objects.values("v" => F("fastestlaptime"))) == ("`Tb`.`fastestlaptime`", Any[])
+  @test proj(() -> R.objects.values("v" => Sum("fastestlaptime"))) == ("SUM(`Tb`.`fastestlaptime`)", Any[])
+  @test proj(() -> R.objects.values("v" => Max("fastestlaptime"))) == ("MAX(`Tb`.`fastestlaptime`)", Any[])
+  @test proj(() -> R.objects.values("v" => Avg("fastestlaptime"))) ==
+        ("CAST(ROUND(AVG(`Tb`.`fastestlaptime`)) AS SIGNED)", Any[])
+  @test proj(() -> R.objects.values("v" => F("fastestlaptime") * 2)) ==
+        ("CAST(ROUND((`Tb`.`fastestlaptime`) * (?)) AS SIGNED)", Any[2])
+  @test proj(() -> R.objects.values("v" => F("fastestlaptime") / 2)) ==
+        ("CAST(ROUND((`Tb`.`fastestlaptime`) * 1.0 / (?)) AS SIGNED)", Any[2])
+  @test proj(() -> R.objects.values("v" => F("fastestlaptime") + F("fastestlaptime"))) ==
+        ("(`Tb`.`fastestlaptime` + `Tb`.`fastestlaptime`)", Any[])
+  # A date shifted by an interval, on either side; a timestamp difference, its left side binding first.
+  @test proj(() -> R.objects.values("v" => F("raceid__date") + F("fastestlaptime"))) ==
+        ("(`Tb_1`.`date` + INTERVAL (`Tb`.`fastestlaptime`) MICROSECOND)", Any[])
+  @test proj(() -> R.objects.values("v" => F("raceid__date") - F("fastestlaptime"))) ==
+        ("(`Tb_1`.`date` - INTERVAL (`Tb`.`fastestlaptime`) MICROSECOND)", Any[])
+  @test proj(() -> R.objects.values("v" => F("fastestlaptime") + F("raceid__date"))) ==
+        ("(INTERVAL (`Tb`.`fastestlaptime`) MICROSECOND + `Tb_1`.`date`)", Any[])
+  diff = (F("raceid__date") + Hour(6)) - F("driverid__dob")
+  @test proj(() -> R.objects.values("v" => diff)) ==
+        ("(-TIMESTAMPDIFF(MICROSECOND, (`Tb_1`.`date` + INTERVAL ? HOUR), `Tb_2`.`dob`))", Any[6])
   @test _MR_QB._temporal_difference_sql(MrMockMySQL(), "`a`", "`b`", PormG.CInt32()) == ("DATEDIFF(`a`, `b`)", PormG.CInt32())
-  @test refused(() -> _MR_MY.Result.objects.values("resultid").order_by("fastestlaptime"))
-  @test refused(() -> _MR_MY.Result.objects.values("v" => Sum("fastestlaptime")))
-  @test refused(() -> _MR_MY.Result.objects.values("v" => F("fastestlaptime") * 2))
-  @test refused(() -> _MR_MY.Result.objects.values("v" => F("raceid__date") + F("fastestlaptime")))
-  # Interval arithmetic the SQLite path refuses in its own words is MySQL's refusal too, naming MySQL.
-  @test refused(() -> _MR_MY.Result.objects.values("v" => F("fastestlaptime") + 1))
-  @test refused(() -> _MR_MY.Result.objects.values("v" => F("fastestlaptime") * F("fastestlaptime")))
-  # An interval on the right of a number: the right-side render, and the count-plus-interval arm.
-  @test refused(() -> _MR_MY.Result.objects.values("v" => F("points") + F("fastestlaptime")))
-  @test refused(() -> _MR_MY.Result.objects.values("v" => F("grid") + F("fastestlaptime")))
-  # A duration literal inside a function is the text edge of the millisecond form (`_interval_ms_as_text`).
-  @test refused(() -> _MR_MY.Result.objects.values("v" => Max(PormG.QueryBuilder.Value(Hour(1)))))
-  # #1316: so is a duration literal's alias ordered against a duration, which bound the two `Hour`s.
-  @test refused(() -> (q = _MR_MY.Result.objects; q.values("v" => PormG.QueryBuilder.Value(Hour(100)));
-                       q.filter("v__@gt" => Hour(99)); q))
-  # A literal with no millisecond form meets the same refusal first, not a remedy MySQL refuses too.
-  @test refused(() -> (q = _MR_MY.Result.objects; q.values("v" => PormG.QueryBuilder.Value(Month(1)));
-                       q.filter("v__@gt" => Hour(1)); q))
-  @test occursin("`Tb`.`fastestlaptime` as `v`", _mr_inspect(_MR_MY.Result.objects.values("v" => F("fastestlaptime")))[:sql_text])
-  # The per-engine edges: SQLite's are its own Dialect helpers, unchanged.
+  # Compared with a duration: its microseconds, for an equality too (the stored value is the number).
+  @test occursin("WHERE ((-TIMESTAMPDIFF(MICROSECOND, (`Tb_1`.`date` + INTERVAL ? HOUR), `Tb_2`.`dob`)) = ?)",
+                 sql(() -> R.objects.filter(diff == Hour(1)))[1])
+  @test sql(() -> R.objects.filter(diff == Hour(1)))[2] == Any[6, 3_600_000_000]
+  @test occursin("WHERE (`Tb`.`fastestlaptime` = ?)", sql(() -> R.objects.filter(F("fastestlaptime") == Second(80)))[1])
+  @test sql(() -> R.objects.filter(F("fastestlaptime") == "00:01:20"))[2] == Any[80_000_000]
+  @test sql(() -> R.objects.filter(F("fastestlaptime") > Hour(1)))[2] == Any[3_600_000_000]
+  # An ordering is the column itself; so is an alias's, and an ordering filter on one.
+  @test occursin("ORDER BY (`Tb`.`fastestlaptime` IS NULL) ASC, `Tb`.`fastestlaptime` ASC",
+                 sql(() -> R.objects.values("resultid").order_by("fastestlaptime"))[1])
+  q = R.objects; q.values("v" => F("fastestlaptime")); q.filter("v__@gt" => Hour(1))
+  @test occursin("WHERE `Tb`.`fastestlaptime` > ?", sql(() -> q)[1]) && sql(() -> q)[2] == Any[3_600_000_000]
+  # A duration literal binds its microseconds, inside a function and as a projection (#1316's alias).
+  @test proj(() -> R.objects.values("v" => Max(PormG.QueryBuilder.Value(Hour(1))))) == ("MAX(?)", Any[3_600_000_000])
+  q = R.objects; q.values("v" => PormG.QueryBuilder.Value(Hour(100))); q.filter("v__@gt" => Hour(99))
+  @test sql(() -> q)[2] == Any[360_000_000_000, 360_000_000_000, 356_400_000_000]
+  # No meaning: refused before any SQL, naming MySQL.
+  refused(build) = (e = try; _mr_inspect(build()); nothing; catch err; err; end;
+                    e isa PormG.QueryBuildError && occursin("is not supported on MySQL", sprint(showerror, e)))
+  @test refused(() -> R.objects.values("v" => F("fastestlaptime") + 1))
+  @test refused(() -> R.objects.values("v" => F("fastestlaptime") * F("fastestlaptime")))
+  @test refused(() -> R.objects.values("v" => F("points") + F("fastestlaptime")))
+  @test refused(() -> R.objects.values("v" => F("grid") + F("fastestlaptime")))
+  @test refused(() -> R.objects.values("v" => PormG.QueryBuilder.Abs("fastestlaptime")))
+  # A number compared with an interval: SQLite compares the stored text (its #881 rule); MySQL would
+  # compare a count with microseconds, so it refuses an ordering and an equality alike.
+  @test refused(() -> R.objects.filter(F("grid") > F("fastestlaptime")))
+  @test refused(() -> R.objects.filter(F("grid") == F("fastestlaptime")))
+  @test refused(() -> R.objects.filter(F("grid") != F("fastestlaptime")))
+  @test occursin("(`Tb`.`grid` = `Tb`.`fastestlaptime`)" |> x -> replace(x, '`' => '"'),
+                 sql(() -> _MR_SL.Result.objects.filter(F("grid") == F("fastestlaptime")))[1])
+  # ... and with the interval on the left, through an expression, a filter pair either way round, a
+  # `Subquery`, and an interval alias: every path that compares two expressions (review of #1130).
+  sub = (s = _MR_MY.Result.objects; s.filter("resultid" => PormG.OuterRef("resultid")); s.values("t" => F("fastestlaptime")); s)
+  subn = (s = _MR_MY.Result.objects; s.filter("resultid" => PormG.OuterRef("resultid")); s.values("t" => F("grid")); s)
+  for (label, build) in (
+      "interval == number" => () -> R.objects.filter(F("fastestlaptime") == F("grid")),
+      "interval > float" => () -> R.objects.filter(F("fastestlaptime") > F("points")),
+      "computed == number" => () -> R.objects.filter((F("fastestlaptime") * 2) == F("grid")),
+      "pair interval => number" => () -> R.objects.filter("fastestlaptime" => F("grid")),
+      "pair interval @gt number" => () -> R.objects.filter("fastestlaptime__@gt" => F("grid")),
+      "pair number => interval" => () -> R.objects.filter("grid" => F("fastestlaptime")),
+      "pair number @gt interval" => () -> R.objects.filter("grid__@gt" => F("fastestlaptime")),
+      "pair number => Subquery(interval)" => () -> R.objects.filter("grid" => PormG.Subquery(sub)),
+      "interval alias @gt number" => () -> (q = R.objects; q.values("v" => F("fastestlaptime")); q.filter("v__@gt" => F("grid")); q),
+      "pair interval @gt function" => () -> R.objects.filter("fastestlaptime__@gt" => PormG.QueryBuilder.Cast("grid", "integer")),
+      "pair interval @gt Subquery(number)" => () -> R.objects.filter("fastestlaptime__@gt" => PormG.Subquery(subn)),
+      "interval == Subquery(number)" => () -> R.objects.filter(F("fastestlaptime") == PormG.Subquery(subn)),
+      "number == Subquery(interval)" => () -> R.objects.filter(F("grid") == PormG.Subquery(sub)),
+      "number > Subquery(interval)" => () -> R.objects.filter(F("grid") > PormG.Subquery(sub)),
+      "interval @in queryset of numbers" => () -> R.objects.filter("fastestlaptime__@in" => _MR_MY.Result.objects.values("grid")),
+      "number @in queryset of intervals" => () -> R.objects.filter("grid__@in" => _MR_MY.Result.objects.values("fastestlaptime")),
+      "interval alias @gt Subquery(number)" => () -> (q = R.objects; q.values("v" => F("fastestlaptime")); q.filter("v__@gt" => PormG.Subquery(subn)); q),
+      "computed interval > 5" => () -> R.objects.filter((F("fastestlaptime") * 2) > 5),
+      "interval alias @in queryset of numbers" =>
+        () -> (q = R.objects; q.values("v" => F("fastestlaptime") * 2); q.filter("v__@in" => _MR_MY.Result.objects.values("grid")); q),
+      "Sum alias @in queryset of numbers" =>
+        () -> (q = R.objects; q.values("driverid", "s" => Sum("fastestlaptime")); q.filter("s__@in" => _MR_MY.Result.objects.values("grid")); q),
+      "number alias @nin queryset of intervals" =>
+        () -> (q = R.objects; q.values("v" => F("grid")); q.filter("v__@nin" => _MR_MY.Result.objects.values("fastestlaptime")); q))
+    @test (label, refused(build)) == (label, true)
+  end
+  # Two intervals still compare, and SQLite keeps its own rules for the same pair.
+  @test sql(() -> R.objects.filter("fastestlaptime" => F("fastestlaptime")))[1] |> x -> occursin("`Tb`.`fastestlaptime` = `Tb`.`fastestlaptime`", x)
+  @test occursin("`Tb`.`fastestlaptime` > (SELECT", sql(() -> R.objects.filter("fastestlaptime__@gt" => PormG.Subquery(sub)))[1])
+  @test !refused(() -> _MR_SL.Result.objects.filter("fastestlaptime" => F("grid")))
+  # Interval against an interval builds through each of those paths.
+  @test occursin("`Tb`.`fastestlaptime` IN (SELECT", sql(() -> R.objects.filter("fastestlaptime__@in" => _MR_MY.Result.objects.values("fastestlaptime")))[1])
+  # ... an interval alias in a queryset of intervals, a `Sum` alias in HAVING too ...
+  @test occursin("IN (SELECT", sql(() -> (q = R.objects; q.values("v" => F("fastestlaptime") * 2);
+                                          q.filter("v__@in" => _MR_MY.Result.objects.values("fastestlaptime")); q))[1])
+  @test occursin("HAVING SUM(`Tb`.`fastestlaptime`) IN (SELECT",
+                 sql(() -> (q = R.objects; q.values("driverid", "s" => Sum("fastestlaptime"));
+                            q.filter("s__@in" => _MR_MY.Result.objects.values("fastestlaptime")); q))[1])
+  # ... and a queryset whose column its build cannot type (a NULL literal) is left to the server.
+  @test occursin("IN (SELECT", sql(() -> R.objects.filter("fastestlaptime__@in" =>
+                                       _MR_MY.Result.objects.values("t" => PormG.QueryBuilder.Value(nothing))))[1])
+  @test occursin("(`Tb`.`fastestlaptime` = (SELECT", sql(() -> R.objects.filter(F("fastestlaptime") == PormG.Subquery(sub)))[1])
+  @test occursin("`Tb`.`fastestlaptime` > (SELECT",
+                 sql(() -> (q = R.objects; q.values("v" => F("fastestlaptime")); q.filter("v__@gt" => PormG.Subquery(sub)); q))[1])
+  # A duration string against a computed interval binds its count; one that is no duration raises, as
+  # the duration formatter does, rather than a text compared with a number (`'00:01:00'` is `0` there).
+  @test sql(() -> R.objects.filter((F("fastestlaptime") * 2) == "00:01:00"))[2] == Any[2, 60_000_000]
+  @test refused(() -> R.objects.filter((F("fastestlaptime") * 2) == "a minute"))
+  # A duration literal's alias compared with a number: refused as any other interval alias is.
+  e = try; _mr_inspect((q = R.objects; q.values("v" => PormG.QueryBuilder.Value(Hour(100))); q.filter("v__@gt" => 10); q))
+      nothing; catch err; err; end
+  @test e isa PormG.InvalidValueError && occursin("projection alias", sprint(showerror, e))
+  # A cast to text prints the `HH:MM:SS` text PormG writes, not the stored count (`80500000`), read once
+  # through a derived table; a number is untouched.
+  cast = PormG.QueryBuilder.Cast
+  @test occursin("CAST($(PormG.Dialect._mysql_interval_text("`Tb`.`fastestlaptime`")) AS CHAR) as `v`",
+                 sql(() -> R.objects.values("v" => cast("fastestlaptime", "text")))[1])
+  @test occursin("FROM (SELECT CAST(ROUND((`Tb`.`fastestlaptime`) * (?)) AS SIGNED) AS `_pormg_us`)",
+                 sql(() -> R.objects.values("v" => cast(F("fastestlaptime") * 2, "varchar(20)")))[1])
+  @test proj(() -> R.objects.values("v" => cast("grid", "text"))) == ("CAST(`Tb`.`grid` AS CHAR)", Any[])
+  # Every target MySQL holds as text, and JSON (which then fails at the server, as PostgreSQL's does).
+  @test occursin("`_pormg_us`) AS `_pormg_d`) AS CHAR(36)) as `v`", sql(() -> R.objects.values("v" => cast("fastestlaptime", "uuid")))[1])
+  @test occursin("`_pormg_us`) AS `_pormg_d`) AS JSON) as `v`", sql(() -> R.objects.values("v" => cast("fastestlaptime", "json")))[1])
+  # A date, a time or a timestamp cast would read the count's digits: refused on MySQL.
+  for t in ("date", "time", "timestamp", "timestamptz")
+    e = try; _mr_inspect(R.objects.values("v" => cast("fastestlaptime", t))); nothing; catch err; err; end
+    @test (t, e isa PormG.QueryBuildError && occursin("of an interval is not supported on MySQL", sprint(showerror, e))) == (t, true)
+  end
+  # The per-engine edges: MySQL's are the identity; SQLite's are its own Dialect helpers, unchanged.
+  @test _MR_QB._interval_text_as_ms("`c`", MrMockMySQL()) == "`c`"
+  @test _MR_QB._interval_ms_as_text("?", MrMockMySQL()) == "?"
   @test _MR_QB._interval_text_as_ms("`c`", MrMockSQLite()) == PormG.Dialect._sqlite_interval_ms("`c`")
   @test _MR_QB._interval_ms_as_text("?", MrMockSQLite()) == PormG.Dialect._sqlite_interval_text("?")
-  @test_throws PormG.UnsupportedConnectionError _MR_QB._interval_text_as_ms("`c`", MrMockMySQL())
 end

@@ -379,7 +379,7 @@ function _render_operand_kind(node, instruc::SQLInstruction; _as::Union{Nothing,
   node isa FExpression && return _set_update_query_typed(node, instruc)
   if node isa FObject
     sql, interval_ms, interval = _render_function_typed(node, instruc; _as = _as)
-    return (interval_ms ? Dialect._sqlite_interval_text(sql) : sql), (interval ? CInterval() : nothing)
+    return (interval_ms ? _interval_ms_as_text(sql, instruc.connection) : sql), (interval ? CInterval() : nothing)
   end
   return _get_select_query(node, instruc; _as = _as), nothing
 end
@@ -442,7 +442,7 @@ _render_fts_operand(c, instruc::SQLInstruction; _as::Union{Nothing,String}=nothi
 function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   sql, interval_ms, _ = _render_function_typed(v, instruc; _as = _as)
   # #894: an interval held in milliseconds leaves as the interval text, as a difference does (#881).
-  return interval_ms ? Dialect._sqlite_interval_text(sql) : sql
+  return interval_ms ? _interval_ms_as_text(sql, instruc.connection) : sql
 end
 
 # The function's SQL, whether it is an interval held in SQLite milliseconds, and whether it is an
@@ -670,9 +670,11 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     resolved_column, ms, operand_interval = _render_interval_operand(v.column, instruc; _as = _as)
     # #900: PostgreSQL has no `abs(interval)`, so the statement fails there when it runs. SQLite
     # computed the absolute value of the text's leading hours, silently. Refused, as `d * d` is (#881).
+    # MySQL (#1130) would take it of the microseconds; refused there too, with the reason that holds on
+    # every engine, since the spelling below means the magnitude everywhere.
     (ms === nothing && !operand_interval) || throw(QueryBuildError(
-      "`Abs` of an interval is not supported: PostgreSQL has no abs(interval), and SQLite stores an " *
-      "interval as text. For the magnitude of an interval d, write Greatest(d, d * -1)."))
+      "`Abs` of an interval is not supported on $(_backend_name(instruc.connection)): an interval has no " *
+      "absolute value in SQL. For the magnitude of an interval d, write Greatest(d, d * -1)."))
   elseif v isa FObject && _interval_ms_candidate(v)
     sqlite = _interval_as_ms(instruc.connection)
     if v.column isa AbstractVector
@@ -879,10 +881,31 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     d === nothing || throw(_meaning_refusal(_declared_cast_label(v), d.what, d.row, instruc.connection;
                                             flag = d.flag, declared = d.declared))
   end
+  # #1130: MySQL stores an interval as its microseconds, so a cast of one to text printed that count
+  # (`80500000`), which PormG would read back as that many seconds. The engine that departs normalizes
+  # on itself: the cast reads the `HH:MM:SS` text PormG writes, as SQLite's stored text does. Every
+  # target MySQL holds as text (the character types, `uuid`'s `CHAR(36)`) and `JSON`, which then fails
+  # at the server as PostgreSQL's cast of an interval to `json` does, rather than read the count.
+  if v.function_name == "CAST" && _stores_interval_as_units(instruc.connection) &&
+     _expression_kind(v.column, instruc) isa CInterval
+    target = Dialect.cast_type_sql(v.kwargs["type"], instruc.connection)
+    if Base.startswith(target, "CHAR") || target == "JSON"
+      resolved_column = Dialect._mysql_interval_text(resolved_column)
+    elseif any(t -> Base.startswith(target, t), ("DATE", "TIME"))
+      # A date, a time or a timestamp cast of the count reads its digits as one (`80500000` is
+      # `8050:00:00`), where PostgreSQL refuses `interval::date` and reads `interval::time` as a time
+      # of day. Refused on MySQL, the engine that departs, before any SQL.
+      as_what = Base.startswith(target, "DATETIME") ? "timestamp" : Base.startswith(target, "DATE") ? "date" : "time"
+      throw(QueryBuildError("$(_declared_cast_label(v)) of an interval is not supported on " *
+                            "$(_backend_name(instruc.connection)): it stores an interval as its count of " *
+                            "microseconds, whose digits the cast would read as a $(as_what). " *
+                            "Shift a date or a timestamp by the interval instead: F(\"date\") + F(\"duration\")."))
+    end
+  end
   sql = getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection)
   # #900: PostgreSQL's `avg(interval)` is an interval; the milliseconds' mean is rounded to one, the
   # precision every SQLite interval has (#881).
-  interval_ms && v.function_name == "AVG" && (sql = "CAST(round($(sql)) AS INTEGER)")
+  interval_ms && v.function_name == "AVG" && (sql = _interval_round_sql(sql, instruc.connection))
   return sql, interval_ms, interval
 end
 # #1021: a `SearchVectorField` column is a document, not text. `SearchRank`'s vector written as a path

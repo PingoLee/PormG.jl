@@ -257,6 +257,7 @@ end
 const _EKM_FORMATTER_FAMILY = Dict(
   "format_number_sql" => :number, "format_bool_sql" => :bool, "format_text_sql" => :text_or_time,
   "format_date_sql" => :date, "format_timezone_sql" => :datetime, "format_duration_sql" => :interval,
+  "_format_mysql_duration" => :interval,   # #1130: MySQL's DurationField, a BIGINT of microseconds
   "format_json_sql" => :json, "format_uuid_sql" => :uuid, "format_binary_sql" => :binary,   # #1194
   # the date-part range formatters (`@year`, `@hour`, …) format an integer
   "format_year_sql" => :int, "format_hour_sql" => :int, "format_minute_sql" => :int,

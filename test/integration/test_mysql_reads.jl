@@ -1,12 +1,13 @@
 # MySQL backend, phases 2a and 2b (#1130): fluent reads against a live MySQL 8.4 — plain columns (2a),
-# and the expressions 2b renders: division, casts, `Concat`, date arithmetic.
+# and the expressions 2b renders: division, casts, `Concat`, date arithmetic and intervals.
 #
 #   PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_mysql_reads.jl
 #
 # The reads go through the ORM surface (`M.Model.objects`). The tables and their rows are made with
 # raw SQL, deliberately: `migrate` and the writes are later phases (4 and 3), so there is no ORM way to
 # make them yet. The DDL declares what #1265 and #1270 decided a PormG column is on MySQL — text in
-# `utf8mb4_0900_bin`, a `DateTimeField` as `DATETIME(3)`, a boolean as `TINYINT(1)` — and the tables
+# `utf8mb4_0900_bin`, a `DateTimeField` as `DATETIME(3)`, a boolean as `TINYINT(1)`, a `DurationField`
+# as a BIGINT of microseconds (#1130) — and the tables
 # are dropped at the end. On another engine the whole file is skipped (`only_on`).
 if !isdefined(Main, :PormG)
     include("common_setup.jl")
@@ -47,7 +48,7 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             "`driverid` BIGINT NOT NULL, `constructorid` BIGINT NOT NULL, `number` INT NULL, `grid` INT NOT NULL, " *
             "`position` INT NULL, `positiontext` VARCHAR(255) NOT NULL, `positionorder` INT NOT NULL, " *
             "`points` DOUBLE NOT NULL, `laps` INT NOT NULL, `time` VARCHAR(255) NULL, `milliseconds` INT NULL, " *
-            "`fastestlap` INT NULL, `rank` INT NULL, `fastestlaptime` TIME(3) NULL, `fastestlapspeed` DOUBLE NULL, " *
+            "`fastestlap` INT NULL, `rank` INT NULL, `fastestlaptime` BIGINT NULL, `fastestlapspeed` DOUBLE NULL, " *
             "`statusid` BIGINT NOT NULL)" * tail)
         run("CREATE TABLE `new_join_position` (`id` BIGINT AUTO_INCREMENT PRIMARY KEY, `description` VARCHAR(255) NOT NULL, " *
             "`result` INT NULL, `boolean_field` TINYINT(1) NULL)" * tail)
@@ -405,26 +406,72 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             @test e isa PormG.QueryBuildError && occursin("reads a date as the number its digits spell", msg(e))
         end
 
-        # What: a DurationField filter, ordering or aggregate is refused before any SQL; IS NULL works,
-        # and so does projecting the column.
-        # SQL: none for each refusal; the plain column for a projection.
-        # Why: what a DurationField stores on MySQL is phase 4's decision, and MySQL's interval
-        # millisecond form is the follow-up to phase 2b; until then a duration read must fail rather
-        # than answer, and fail in PormG rather than at the server.
-        @testset "a DurationField read fails rather than answers" begin
-            run("UPDATE `result` SET `fastestlaptime` = '00:01:20.500' WHERE `resultid` IN (1, 2)")
-            for pair in ("fastestlaptime" => Dates.Second(80), "fastestlaptime__@in" => [Dates.Second(80)],
-                         "fastestlaptime__@gt" => Dates.Second(70))
-                e = try; M.Result.objects.filter(pair).values("resultid").list(); nothing; catch err; err; end
-                @test e isa PormG.UnsupportedConnectionError && occursin("not rendered for MySQL yet", msg(e))
+        # What: a DurationField reads, filters, orders and computes as the duration it holds, each value
+        # checked against Julia's own `Dates` arithmetic.
+        # SQL: the column is a BIGINT of microseconds (#1130, Django's choice): `WHERE `Tb`.`fastestlaptime`
+        #      = ?` binding `80500000`; `SUM(…)`, `CAST(ROUND(AVG(…)) AS SIGNED)`,
+        #      `CAST(ROUND((…) * (?)) AS SIGNED)`; `(-TIMESTAMPDIFF(MICROSECOND, l, r))`;
+        #      `(`Tb_1`.`date` + INTERVAL (`Tb`.`fastestlaptime`) MICROSECOND)`.
+        # Why: MySQL has no interval type; its `TIME` stops at 838:59:59, and the `HH:MM:SS` text against a
+        # BIGINT would compare the number its leading digits spell, silently. 1000 hours is past `TIME`.
+        @testset "a DurationField is its microseconds: it reads, filters, orders and computes" begin
+            lap = Dict(1 => Second(80) + Millisecond(500), 2 => Hour(1000) + Microsecond(1),
+                       3 => Second(81) + Millisecond(250))
+            us(p) = Dates.tons(p) ÷ 1_000
+            for (id, p) in lap
+                run("UPDATE `result` SET `fastestlaptime` = ? WHERE `resultid` = ?"; params = Any[us(p), id])
             end
-            for q in (() -> M.Result.objects.order_by("fastestlaptime").values("resultid").list(),
-                      () -> M.Result.objects.values("t" => Sum("fastestlaptime")).list(),
-                      () -> M.Result.objects.values("t" => F("raceid__start_at") - F("raceid__start_at")).list())
-                e = try; q(); nothing; catch err; err; end
-                @test e isa PormG.UnsupportedConnectionError && occursin("not rendered for MySQL yet", msg(e))
+            same(a, b) = a !== missing && Dates.tons(a) == Dates.tons(b)
+            ids(q) = sort!([r[:resultid] for r in q.values("resultid").list()])
+            # Reads back as the `CompoundPeriod` SQLite reads, in its units.
+            row = only(M.Result.objects.filter("resultid" => 1).values("t" => F("fastestlaptime")).list())
+            @test row[:t] isa Dates.CompoundPeriod && row[:t].periods == PormG.Dialect._parse_sqlite_interval("00:01:20.5").periods
+            @test same(only(M.Result.objects.filter("resultid" => 2).values("fastestlaptime").list())[:fastestlaptime], lap[2])
+            # Filters bind the microseconds, an equality and a membership too.
+            @test ids(M.Result.objects.filter("fastestlaptime" => lap[1])) == [1]
+            @test ids(M.Result.objects.filter("fastestlaptime" => "00:01:20.5")) == [1]
+            @test ids(M.Result.objects.filter("fastestlaptime__@in" => [lap[1], lap[3]])) == [1, 3]
+            @test ids(M.Result.objects.filter("fastestlaptime__@gt" => Second(81))) == [2, 3]
+            @test ids(M.Result.objects.filter("fastestlaptime__@range" => [Second(80), Second(82)])) == [1, 3]
+            @test ids(M.Result.objects.filter(F("fastestlaptime") > Hour(1))) == [2]
+            @test M.Result.objects.filter("fastestlaptime__@isnull" => false).count() == 3
+            # Ordered as durations: 1000 hours last, where its `HH:MM:SS` text would sort first.
+            @test [r[:resultid] for r in M.Result.objects.filter("fastestlaptime__@isnull" => false).
+                   values("resultid").order_by("fastestlaptime").list()] == [1, 3, 2]
+            # Aggregates and arithmetic, against Julia.
+            agg = only(M.Result.objects.values("s" => Sum("fastestlaptime"), "x" => Max("fastestlaptime")).list())
+            @test same(agg[:s], lap[1] + lap[2] + lap[3]) && same(agg[:x], lap[2])
+            avg = only(M.Result.objects.filter("resultid__@in" => [1, 3]).values("a" => Avg("fastestlaptime")).list())
+            @test same(avg[:a], Microsecond((us(lap[1]) + us(lap[3])) ÷ 2))
+            r1 = only(M.Result.objects.filter("resultid" => 1).values(
+                "d" => F("fastestlaptime") * 2, "t" => F("fastestlaptime") / 3,
+                "p" => F("fastestlaptime") + F("fastestlaptime"), "on" => F("raceid__date") + F("fastestlaptime")).list())
+            @test same(r1[:d], Microsecond(2 * us(lap[1]))) && same(r1[:p], Microsecond(2 * us(lap[1])))
+            @test same(r1[:t], Microsecond(round(Int, us(lap[1]) / 3)))
+            @test r1[:on] == DateTime(1990, 3, 25) + lap[1]
+            # An alias over arithmetic orders and filters as the duration it is.
+            q = M.Result.objects.values("resultid", "t" => F("fastestlaptime") * 2)
+            @test [r[:resultid] for r in q.filter("t__@gt" => Second(162)).order_by("t").list()] == [3, 2]
+            # A timestamp difference is the microseconds between them; NULL in is NULL out.
+            diffs = M.Race.objects.values("raceid", "start_at", "g" => (F("start_at") + Hour(2)) - F("start_at")).
+                order_by("raceid").list()
+            for r in diffs
+                @test r[:start_at] === missing ? r[:g] === missing : same(r[:g], Hour(2))
             end
-            @test M.Result.objects.filter("fastestlaptime__@isnull" => false).count() == 2
+            # Its text is the `HH:MM:SS` text PormG writes and reads back, not the stored count.
+            texts = M.Result.objects.filter("fastestlaptime__@isnull" => false).values("resultid",
+                "t" => Cast("fastestlaptime", "text"), "d" => Cast(F("fastestlaptime") * 2, "text")).order_by("resultid").list()
+            @test [r[:t] for r in texts] == ["00:01:20.5", "1000:00:00.000001", "00:01:21.25"]
+            @test [r[:d] for r in texts] == ["00:02:41", "2000:00:00.000002", "00:02:42.5"]
+            @test PormG.Models.format_duration_sql(lap[3]) == texts[3][:t]
+            # Over an aggregate too, grouped: the derived table reads the outer query's aggregate.
+            per_race = M.Result.objects.filter("fastestlaptime__@isnull" => false).values("raceid",
+                "s" => Cast(Sum("fastestlaptime"), "text"), "x" => Cast(Max("fastestlaptime"), "text")).order_by("raceid").list()
+            @test [(r[:raceid], r[:s], r[:x]) for r in per_race] ==
+                  [(1, "1000:02:41.750001", "1000:00:00.000001")]
+            # What has no meaning is refused before any SQL, naming MySQL.
+            e = try; M.Result.objects.values("t" => F("fastestlaptime") + 1).list(); nothing; catch err; err; end
+            @test e isa PormG.QueryBuildError && occursin("is not supported on MySQL", msg(e))
         end
     finally
         for t in _MYR_TABLES

@@ -479,6 +479,9 @@ function add_parameter!(sq::PormGMySQLParam, value::PormGArrayLiteral; contains:
 end
 _mysql_collect_value(v::PormGBytes) = v.bytes
 _mysql_collect_value(v::UUIDs.UUID) = Models.format_uuid_sql(v)
+# #1130: a duration is the microseconds a `DurationField` stores there (MySQL.jl binds no `Period`), so
+# a literal (`Value(Hour(1))`) binds as the count the column it meets holds.
+_mysql_collect_value(v::Union{Dates.Period,Dates.CompoundPeriod}) = Dialect._format_mysql_duration(v)
 _mysql_collect_value(v) = v
 
 # #903: a scalar `Sockets.IPAddr` literal — `Value(ip"…")`, a `Value` operand, a `Case` branch — binds

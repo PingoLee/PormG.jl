@@ -50,13 +50,13 @@ const _MEANING_DEPARTURES = (
   # #1259: an interval is no number, so its cast to an integer, a float or a `numeric` is an error (the
   # tie-breaker: an error on one engine is left to raise when the engines that answer give the
   # meaning). SQLite casts the stored `HH:MM:SS.sss` text and reads its leading digits, the hours: a
-  # silent different answer. MySQL casts a `TIME` to the number its digits spell (measured:
-  # `TIME '01:27:45.452'` → `12745`), and an interval PormG computes there is a millisecond count, so
-  # its cast is that count: a number either way, where the meaning is an error.
+  # silent different answer. MySQL stores a `DurationField` as its microseconds (#1130), a BIGINT, and
+  # an interval PormG computes there is the same count, so its cast is that count, where the meaning is
+  # an error.
   (targets = (:integer, :number), kinds = (:interval,), departs = (PormGSQLite, PormGMySQL), keeps = (PormGPostgres,), issue = "#1259",
    meaning = _ -> "an error, since an interval has no numeric value",
    computes = (PormGSQLite => _ -> "the leading digits of its `HH:MM:SS` text, the hours",
-               PormGMySQL => _ -> "a number it does not mean: a `TIME`'s digits read as one (`1:27:45` → `12745`), or a computed interval's milliseconds"),
+               PormGMySQL => _ -> "a number it does not mean: the duration's count of microseconds, which is how MySQL stores it"),
    fix = (flag, _) -> "Fetch the duration and take the number you mean in Julia, or ask for its text, \e[32mCast(\"$(flag)\", \"text\")\e[0m, which each engine writes in its own form."),
   # #1260: a date, a timestamp or a time is no number either, so its cast is an error by the same
   # tie-breaker. SQLite casts the stored text (`2009-03-29`, `2009-03-29T06:00:00.000+00:00`,

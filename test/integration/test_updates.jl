@@ -1542,6 +1542,27 @@ end
     end
 end
 
+@testset "A date column written into a DecimalField is refused on every engine (#1297)" begin
+    # What: `update("price" => F("event_date"))` raises QueryBuildError before any SQL on every
+    # engine, naming the date and the field, and the row keeps its price. Why: SQLite stored the
+    # date's text in the NUMERIC column, and PostgreSQL failed only at execute (no assignment cast
+    # from `date` to `numeric`); the call means nothing on either.
+    label = "decimal-non-number-1297"
+    q() = M.Django_contract_scratch.objects.filter("label" => label)
+    q().exists() && q().delete()
+    M.Django_contract_scratch.objects.create("label" => label, "price" => "1.50", "event_date" => Date(2024, 3, 2))
+    try
+        err = try q().update("price" => F("event_date")); nothing catch e; e end
+        @test err isa PormG.QueryBuildError
+        msg = replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
+        @test occursin("writes `event_date`, which is a date, into the DecimalField `price`", msg)
+        @test occursin("(#1297)", msg)
+        @test (q().values("price").list() |> first)[:price] == Decimals.decimal("1.50")
+    finally
+        q().exists() && q().delete()
+    end
+end
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Pagination guard on update():
 # Standard SQL UPDATE does not natively support LIMIT, OFFSET, or ORDER BY.

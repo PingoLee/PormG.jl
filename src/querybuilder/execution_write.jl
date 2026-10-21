@@ -1127,6 +1127,34 @@ function _refuse_update_scale_departure(f_meta, field::AbstractString, value, in
     declared = "DecimalField(max_digits = $(f_meta.max_digits), decimal_places = $(places))"))
 end
 
+# #1297 — an expression of a type that is no number, written into a numeric field. SQLite stores the
+# value's text in the INTEGER, REAL or NUMERIC column (a UUID, a date), and PostgreSQL has no
+# assignment cast from one to a number, so it fails only when the statement runs. No engine gives the
+# call a meaning, so this is explicit intent, refused on every engine before any SQL rather than a
+# departure row. Nor is there a `Cast` to name: PostgreSQL has none from these types to a number.
+# Left out on purpose: a boolean (`true` against `1` is a #1147 meaning question), and text and JSON,
+# which #1279 reads as numbers to round. Typed by the walk (`_AllKinds`), after the SET value renders,
+# so a joined path's column is resolved.
+const _NON_NUMBER_KINDS = (
+  (CUUID, "a UUID"), (CDate, "a date"), (CDateTime, "a timestamp"), (CTime, "a time of day"),
+  (CInterval, "an interval"), (CBytes, "binary data"), (CInet, "a network address"),
+  (CCidr, "a network address"), (CTsVector, "a full-text document"))
+const _NUMBER_FIELD_KINDS = Union{CInt16,CInt32,CInt64,CFloat64,CDecimal}
+function _refuse_update_non_number(f_meta, field::AbstractString, value, instruction::SQLInstruction)
+  _field_kind(f_meta) isa _NUMBER_FIELD_KINDS || return nothing
+  kind = _expression_kind(value, instruction)
+  i = findfirst(((K, _),) -> kind isa K, _NON_NUMBER_KINDS)
+  i === nothing && return nothing
+  what = last(_NON_NUMBER_KINDS[i])
+  label = _concat_operand_label(value)
+  named = label === nothing ? "the expression" : "`$(label)`"
+  declared = replace(String(nameof(typeof(f_meta))), r"^s" => "")
+  throw(QueryBuildError(
+    "\e[4m\e[31mupdate(\"$(field)\" => …)\e[0m writes $(named), which is $(what), into the " *
+    "$(declared) `$(field)`. That is no number on any engine, so PormG refuses it (#1297). " *
+    "Write a numeric expression into `$(field)`, or write the value into a field of its own type."))
+end
+
 function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = nothing, connection::Union{Nothing, PormGPostgres, PormGSQLite} = nothing, show_query::Symbol = :execute)
   real_obj = objct isa SQLObjectHandler ? objct.object : objct
   model = real_obj.model
@@ -1209,6 +1237,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     elseif isa(objct.insert[field], SQLTypeF) || isa(objct.insert[field], SQLTypeFunction) ||
        isa(objct.insert[field], SQLTypeCTE) || isa(objct.insert[field], SQLTypeJoined)
       f_value = _set_update_query(objct.insert[field], instruction)
+      _refuse_update_non_number(model.fields[field], field, objct.insert[field], instruction)
       _refuse_update_scale_departure(model.fields[field], field, objct.insert[field], instruction)
       push!(set_clause_parts, "$(quoted_field) = $(f_value)")
     else

@@ -31,7 +31,9 @@ field, a `numeric` function, a `DecimalField` with more places, and a `Case` ove
 `F("price") * 2` is refused as well, although doubling happens to be exact.
 
 Unchanged: a literal value (the #761 width check, on every engine); a `FloatField`, an
-`IntegerField` or a text column, whatever expression it takes; and an expression with at most the
+`IntegerField` or a text column, whatever number or text expression it takes (an operand that is no
+number, such as a UUID or a date, is refused into every number field by #1297,
+`2026-10-21-1297-update-non-number-into-numeric-field-refused.md`); and an expression with at most the
 field's places: the column itself, an integer column, `Round(x, d)` with `d` at most the field's
 places, a narrower `DecimalField`, and `Coalesce`/`Greatest`/`Least` of one.
 

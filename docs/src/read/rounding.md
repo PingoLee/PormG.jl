@@ -210,7 +210,9 @@ q.update("points" => Round(F("points") / 3, 2))   # 4.67 on both engines
 
 An expression with nothing to round builds on both engines: the column itself, an integer column,
 `Round(x, d)` with `d` at most the field's places, or a `DecimalField` with fewer places. A
-`FloatField` or an `IntegerField` takes any expression.
+`FloatField` or an `IntegerField` takes any number expression. An operand that is no number, such as a
+UUID or a date, is refused into every number field on every engine
+([Updating Records](../write/update.md#Basic-F-Expression-Usage), #1297).
 
 ## How this compares
 

@@ -1470,6 +1470,17 @@ function _sql_type_field(type_name::AbstractString)::Union{PormGField,Nothing}
   base == "uuid" && return Models.UUIDField()
   base == "inet" && return Models.GenericIPAddressField()
   base == "cidr" && return Models.CIDRField()
+  # #1194: the temporal and binary types, so a pattern lookup on such a cast follows the #1183 rule
+  # (a time reads as its text, the others are refused) and an equality value on it is checked. SQLite
+  # refuses every one of these casts but `blob` (`Dialect.sqlite_cast_sql`, #822), so they type the
+  # PostgreSQL cast; `blob` is `BinaryField`'s own type, which SQLite casts exactly. The precision of a
+  # time or timestamp (`timestamp(3)`) is dropped first, so the zone that follows it still counts.
+  words = replace(lowercase(strip(type_name)), r"\s*\(\s*\d+\s*\)" => "")
+  words in ("time", "time without time zone") && return Models.TimeField()
+  words in ("timestamp", "timestamp without time zone") && return Models.DateTimeField(type = "TIMESTAMP")
+  words in ("timestamptz", "timestamp with time zone") && return Models.DateTimeField()
+  words == "interval" && return Models.DurationField()
+  base in ("bytea", "blob") && return Models.BinaryField()
   return nothing
 end
 
@@ -1622,6 +1633,9 @@ end
 # binds as the alias's own formatter binds it — the predicate `_render_alias_predicate` renders below.
 function _render_interval_alias_predicate(v::SQLTypeOper, having_key::MemoKey, instruc::SQLInstruction)::Union{String,Nothing}
   having_key[1] === :base || return nothing
+  # #1311: an interval alias with no millisecond form would be ordered by its text, whatever the value.
+  v.operator in _INTERVAL_ORDERING_LOOKUPS && _projected_unordered_interval(having_key[2], instruc) &&
+    throw(_unordered_interval_alias_error("An ordering filter (`$(v.operator)`)", having_key[2]))
   source = _projected_interval_source(having_key[2], instruc)
   source === nothing && return nothing
   ms_values = _predicate_duration_ms(v.operator, v.values)

@@ -279,6 +279,10 @@ A bare integer and an explicit `Day(n)` are the same thing: the integer is whole
 through the same path, so they compose identically and at any depth — `(F("date") + 7) + 3` shifts by
 ten days, exactly as `F("date") + Day(7) + Day(3)` does.
 
+The date side can be any expression whose type is a date, not only a column: `Max("date")`,
+`Coalesce("date", …)`, `Lag("date", over = …)`, or a `Case` whose branches are all dates. `Case(When("round" => 1, then = F("date")), default = F("date")) + 1` is the date one day
+later on both engines; a `Case` that mixes a date and a timestamp must say its type (`output_field`).
+
 Generated SQL (PostgreSQL) — both operands are joined columns, so both carry a join alias:
 ```sql
 WHERE ("Tb_1"."date" > "Tb_2"."dob")
@@ -533,19 +537,31 @@ query.order_by("-since_midnight")
 On SQLite the `ORDER BY` repeats the difference in milliseconds rather than naming the
 `since_midnight` text, and it binds that expression's own parameters again.
 
-Three shapes have no millisecond form and still sort the text on SQLite. Ordering or filtering on
-their alias is text order, which is wrong at 100 hours and above and for negative values. Ordering
-one inside an expression instead (`filter(Case(…) > Hour(1))`, `When(Lag("time", over = …) > Hour(1))`)
-is refused on SQLite with `QueryBuildError`. Equality there still compares the text.
+Some shapes have no millisecond form on SQLite, which holds them as their `HH:MM:SS` text. That text
+sorts in the duration's order only below 100 hours and for non-negative values, so **ordering** one
+is refused on SQLite with `QueryBuildError`, however it is spelled:
 
-- `Case` whose value is a duration. Its `When` conditions compare milliseconds (see above). Its
-  value reads back as the stored text.
+- inside an expression: `filter(Case(…) > Hour(1))`, `When(Lag("time", over = …) > Hour(1))`;
+- as an ordering filter on its alias: `values("d" => Case(…))` then `filter("d__@gt" => Hour(1))`, or
+  `@gte`, `@lt`, `@lte`, `@range`;
+- as `order_by("d")` on its alias, or as a labelled order term of the expression itself
+  (`order_by(SQLOrder(SQLField(Case(…), "d")))`).
+
+Equality (`"d" => Hour(1)`, `"d__@in" => […]`) still compares the text, as it does for a
+`DurationField`. PostgreSQL compares the `interval` itself and builds all of them. To order or filter
+one on SQLite, project it in a CTE (`.with("c" => body, …)`) and order or filter the CTE's column
+(`order_by("-c__d")`, `"c__d__@gt" => Hour(1)`), which SQLite reads in milliseconds.
+
+The shapes:
+
+- `Case` whose value is a duration, and `NullIf`, `Max` or another function over one. Its `When`
+  conditions compare milliseconds (see above). A `Case`'s value reads back as the stored text.
 - A window value function over a duration (`Lag("time", over = …)`), including one over a
-  `Subquery(...)`. Its value reads back as a `Dates.CompoundPeriod`. For lap times, which stay far
-  below 100 hours, the text order is the numeric one.
-- A `Subquery(...)` that returns a duration (#888). Its value reads back as a
-  `Dates.CompoundPeriod`, but `Greatest` and `Least` over one choose their result by the text, so
-  past 100 hours or below zero the value itself can be the wrong argument, not only its order.
+  `Subquery(...)`. Its value reads back as a `Dates.CompoundPeriod`.
+
+A `Subquery(...)` that returns a duration (#888) is ordered and compared by its milliseconds, and its
+value reads back as a `Dates.CompoundPeriod`. But `Greatest` and `Least` over one choose their result
+by the text, so past 100 hours or below zero the value itself can be the wrong argument.
 
 An aggregate over an interval can be used inside arithmetic too. On SQLite it stays a number of
 milliseconds until the whole expression is finished, as a difference does. `Sum(d) / Count("id")`

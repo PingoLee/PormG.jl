@@ -1128,11 +1128,15 @@ end
       err = try _cte_case_field(Model_, PormG.Functions.Cast("points", "mood")); nothing catch e; e end
       @test err isa PormG.QueryBuildError
       @test occursin("mood", _window_msg(err))
-      # A timestamp is refused too — on SQLite one step earlier, by the cast itself, which has no
-      # SQLite spelling (#822).
-      err = try _cte_case_field(Model_, PormG.Functions.Cast("points", "timestamp")); nothing catch e; e end
-      @test err isa (backend == "PostgreSQL" ? PormG.QueryBuildError : PormG.BackendCapabilityError)
-      @test occursin("timestamp", _window_msg(err))
+      # A timestamp is a type PostgreSQL casts to, so its CTE column is a `DateTimeField` there
+      # (#1194); SQLite refuses the cast itself, which has no SQLite spelling (#822).
+      if backend == "PostgreSQL"
+        @test _cte_case_field(Model_, PormG.Functions.Cast("points", "timestamp")) isa PormG.Models.sDateTimeField
+      else
+        err = try _cte_case_field(Model_, PormG.Functions.Cast("points", "timestamp")); nothing catch e; e end
+        @test err isa PormG.BackendCapabilityError
+        @test occursin("timestamp", _window_msg(err))
+      end
     end
 
     @testset "$backend — a declared date type is a date on both engines" begin
@@ -1486,11 +1490,12 @@ end
   end
 
   # A temporal type with no exact SQLite rendering is refused by the cast, before either reader —
-  # the order `Cast(x, "timestamp")` has (#822). PostgreSQL has the type, so its reader decides.
-  for (backend, Model_) in (("PostgreSQL", Window685Pg.Result), ("SQLite", Window685Sl.Result))
-    err = try _cte_case_field(Model_, F_.Coalesce("raceid", F_.Value(0); output_field = "timestamp")); nothing catch e; e end
-    @test err isa (backend == "PostgreSQL" ? PormG.QueryBuildError : PormG.BackendCapabilityError)
-  end
+  # the order `Cast(x, "timestamp")` has (#822). PostgreSQL has the type, so its reader types the
+  # column from the declaration (#1194).
+  @test _cte_case_field(Window685Pg.Result, F_.Coalesce("raceid", F_.Value(0); output_field = "timestamp")) isa
+        PormG.Models.sDateTimeField
+  err = try _cte_case_field(Window685Sl.Result, F_.Coalesce("raceid", F_.Value(0); output_field = "timestamp")); nothing catch e; e end
+  @test err isa PormG.BackendCapabilityError
 end
 
 # #809 through a CTE handle: the argument is a `CTE(...)` column, which is grouped only when the

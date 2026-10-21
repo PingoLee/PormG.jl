@@ -242,13 +242,18 @@ end
 # (`_render_function_body`), and also one with no millisecond form — a `Case` over durations, a `Sum`
 # of one. That one is typed so its arithmetic is: PostgreSQL computes `interval * bigint`, and SQLite,
 # which holds it as its `HH:MM:SS` text, refuses it as an interval with no millisecond form (#881)
-# rather than multiply the text (`'00:01:30' * 2` is `0`). Any other function is `_side_function_kind`.
+# rather than multiply the text (`'00:01:30' * 2` is `0`). A function the walk names a date or a
+# timestamp is one too (#1307): a `Case` over dates, which `_side_function_kind` does not type, is then
+# the date side of a shift, as a `DateField` column is. Any other function is `_side_function_kind`.
 # A column is `_side_kind`. On the right, a temporal literal is its own kind, a field-path string is
 # the column it names, and a bare CTE, `Subquery` or `Joined` handle is untyped, as it is to the render.
 function _render_side_kind(x, instruc::SQLInstruction; right::Bool = false)::Union{CanonicalType,Nothing}
   x isa FExpression && return _memo_kind(() -> _temporal_arith_kind(x, instruc), x, instruc, :render)
   if x isa FObject
-    _infer_kind(x, instruc, _AllKinds()) isa CInterval && return CInterval()
+    walked = _infer_kind(x, instruc, _AllKinds())
+    walked isa CInterval && return CInterval()
+    # #1307: so is a date or a timestamp, the side of the date-shift arms (`_temporal_result_kind`).
+    walked isa Union{CDate,CDateTime} && return walked
     return _side_function_kind(x, instruc)
   end
   right || return _side_kind(x, instruc)

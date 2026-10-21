@@ -206,6 +206,142 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Ordering such an interval through its ALIAS is refused on SQLite too (#1311).
+# Expected on SQLite: an ordering filter (`d__@gt`, `@lte`, `@range`, in `filter`, `Q` or a `When`
+# condition) or an `order_by` on the alias of a `Case` whose value is a duration, a `NullIf` or `Max`
+# over one, or a `Lag` over a duration (`order_by` only: a window alias is refused in any filter, #685)
+# raises `QueryBuildError` naming the alias and the CTE spelling; so does a labelled order term of the
+# expression itself, `order_by(SQLOrder(SQLField(<Case>, "d")))`, which never names the alias. `==` and `@in` still compare the text:
+#   WHERE CASE WHEN "Tb"."year" = ? THEN "Tb"."laptime" ELSE "Tb"."laptime" END = ?   ["01:00:00"]
+# Expected on PostgreSQL: each builds, comparing the `interval` (`ORDER BY "d" DESC`).
+# Before, SQLite compared and sorted the `HH:MM:SS` text — `'99:00:00' > '100:00:00'` — wrong at 100
+# hours and for negative values, while the same comparison written inside an expression was refused
+# (#1301), so the rows kept depended on the spelling.
+# Why it matters: a filter or a sort must keep the same rows on both engines; text order silently does not.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1311: ordering an interval alias with no millisecond form is refused on SQLite" begin
+  pg_model, sl_model = _TAK_MODELS[1][2], _TAK_MODELS[2][2]
+  QB = PormG.QueryBuilder
+  FN = PormG.Functions
+  dc() = Case([When("year" => 2009, then = F("laptime"))], default = F("laptime"))
+  lag() = QB.Lag("laptime"; over = QB.WindowOver(order_by = ["raceid"]))
+  nullif() = FN.NullIf("laptime", F("laptime"))
+  projected(mk) = q -> q.values("raceid", "d" => mk())
+  then(f, g) = q -> (f(q); g(q))
+  build(model, f) = (q = model.objects; f(q); inspect_query(q))
+  refusal(model, f) = try build(model, f); nothing catch e; e end
+  ordered = (
+    then(projected(dc), q -> q.filter("d__@gt" => Hour(1))),
+    then(projected(dc), q -> q.filter("d__@lte" => "100:00:00")),
+    then(projected(dc), q -> q.filter("d__@range" => (Hour(1), Hour(2)))),
+    then(projected(dc), q -> q.filter(PormG.QueryBuilder.Q("d__@gt" => Hour(1)))),
+    q -> q.values("raceid", "d" => dc(),
+                  "f" => Case([When(PormG.QueryBuilder.Q("d__@gt" => Hour(1)), then = 1)], default = 0)),
+    then(projected(nullif), q -> q.filter("d__@gt" => Hour(1))),
+    q -> (q.values("raceid", "d" => Max(dc())); q.filter("d__@gt" => Hour(1))),
+    then(projected(dc), q -> q.order_by("-d")),
+    then(projected(nullif), q -> q.order_by("d")),
+    then(projected(lag), q -> q.order_by("d")),
+  )
+  for f in ordered
+    err = refusal(sl_model, f)
+    @test err isa PormG.QueryBuildError
+    msg = err === nothing ? "" : replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
+    @test occursin("on the `d` alias is not supported on SQLite", msg)
+    @test occursin("project it in a CTE", msg)
+    # PostgreSQL compares and sorts the interval itself.
+    @test build(pg_model, f) isa AbstractDict
+  end
+  # PostgreSQL compares the interval itself: `CASE … END > $3` with the duration's text.
+  r = build(pg_model, then(projected(dc), q -> q.filter("d__@gt" => Hour(1))))
+  @test occursin("ELSE \"Tb\".\"laptime\" END > \$3", replace(r[:sql_text], r"\s+" => " "))
+  @test r[:parameters][end] == "01:00:00"
+  # A labelled order term renders the expression itself rather than the alias (review of #1311): the
+  # same refusal on SQLite, under the projection's own label or another one.
+  for label in ("d", "x")
+    labelled = then(projected(dc), q -> q.order_by(QB.SQLOrder(QB.SQLField(dc(), label))))
+    err = refusal(sl_model, labelled)
+    @test err isa PormG.QueryBuildError
+    msg = err === nothing ? "" : replace(sprint(showerror, err), r"\e\[[0-9;]*m" => "")
+    @test occursin("`order_by` on the `$(label)` alias is not supported on SQLite", msg)
+    @test occursin("project it in a CTE", msg)
+    @test build(pg_model, labelled) isa AbstractDict
+  end
+  # Equality and membership compare the stored text on SQLite, as for a `DurationField` column.
+  r = build(sl_model, then(projected(dc), q -> q.filter("d" => Hour(1))))
+  @test occursin("ELSE \"Tb\".\"laptime\" END = ?", replace(r[:sql_text], r"\s+" => " "))
+  @test r[:parameters][end] == "01:00:00"
+  @test build(sl_model, then(projected(dc), q -> q.filter("d__@in" => [Hour(1), Hour(2)]))) isa AbstractDict
+  # An interval alias WITH a millisecond form keeps its millisecond order and comparison (#894).
+  r = build(sl_model, q -> (q.values("raceid", "d" => Max("laptime")); q.order_by("d")))
+  @test occursin("ORDER BY MAX(((CASE WHEN substr(\"Tb\".\"laptime\", 1, 1) = '-' THEN -1 ELSE 1 END)",
+                 replace(r[:sql_text], r"\s+" => " "))
+  @test build(sl_model, then(projected(() -> F("laptime")), q -> q.filter("d__@gt" => Hour(1))))[:parameters] == Any[3_600_000]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A Case over dates is the date side of F temporal arithmetic (#1307).
+# Expected, on both engines: an untyped `Case` whose branches are one date (or timestamp) column
+# combines as that column does — shifted by a whole number or an integer column it is the date, minus
+# a date it is the `integer` day count, plus an interval it is a timestamp, and a timestamp `Case`
+# minus a timestamp is an interval. The render and the walk agree. The SQL is the date-shift arm's:
+#   PostgreSQL ((CASE WHEN "Tb"."year" = $1 THEN "Tb"."date" ELSE "Tb"."date" END + make_interval(days => $2::integer)))::date
+#   SQLite     date(CASE WHEN "Tb"."year" = ? THEN "Tb"."date" ELSE "Tb"."date" END , '+' || ? || ' days')
+# Before, the side was untyped: SQLite added the number to the date's `YYYY-MM-DD` text
+# (`'2009-03-29' + 1` is `2010`) with no error, and PostgreSQL rendered `date + $2::bigint`, which it
+# has no operator for. A filter on the alias now checks its value as a date, as for `F("date") + 1`.
+# Why it matters: a silent wrong value on SQLite, and on PostgreSQL a statement that failed to run.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1307: a Case over dates in date arithmetic is typed as the date it holds" begin
+  date_case() = Case([When("year" => 2009, then = F("date"))], default = F("date"))
+  zoned_case() = Case([When("year" => 2009, then = F("start_at"))], default = F("start_at"))
+  shapes = (
+    (date_case() + 1,                 PormG.CDate()),
+    (Max(date_case()) + 1,            PormG.CDate()),
+    (date_case() - 1,                 PormG.CDate()),
+    (1 + date_case(),                 PormG.CDate()),
+    (date_case() + F("year"),         PormG.CDate()),
+    (date_case() + F("laps_total"),   PormG.CDate()),
+    (date_case() - F("date"),         PormG.CInt32()),
+    (F("date") - date_case(),         PormG.CInt32()),
+    (date_case() + F("laptime"),      PormG.CDateTime(false)),
+    (zoned_case() + 1,                PormG.CDateTime(true)),
+    (zoned_case() + F("laptime"),     PormG.CDateTime(true)),
+    (zoned_case() - F("start_at"),    PormG.CInterval()),
+  )
+  for (backend, Model_) in _TAK_MODELS, (expr, expected) in shapes
+    @testset "$backend: $(expected)" begin
+      rendered, walked = _tak_kinds(Model_, expr)
+      @test rendered == expected
+      @test walked == expected
+    end
+  end
+  # The exact SQL of the issue's shape, per engine: the date-shift arm over the whole `Case`.
+  sql(Model_, expr) = (q = Model_.objects; q.values("v" => expr); replace(inspect_query(q)[:sql_text], r"\s+" => " "))
+  pg_model, sl_model = _TAK_MODELS[1][2], _TAK_MODELS[2][2]
+  @test occursin("((CASE WHEN \"Tb\".\"year\" = \$1 THEN \"Tb\".\"date\" ELSE \"Tb\".\"date\" END + " *
+                 "make_interval(days => \$2::integer)))::date as \"v\"", sql(pg_model, date_case() + 1))
+  @test occursin("date(CASE WHEN \"Tb\".\"year\" = ? THEN \"Tb\".\"date\" ELSE \"Tb\".\"date\" END , " *
+                 "'+' || ? || ' days') as \"v\"", sql(sl_model, date_case() + 1))
+  # A filter on the alias checks its value as a date, as it does for `F("date") + 1`.
+  for (_, Model_) in _TAK_MODELS
+    q = Model_.objects
+    q.values("v" => date_case() + 1)
+    q.filter("v__@gt" => 10)
+    @test_throws PormG.InvalidValueError inspect_query(q)
+  end
+  # Beside a value PormG cannot type as a day count, the date `Case` is refused on SQLite, as a
+  # `DateField` column is: `'2009-03-29' + 1.5` would be `2010.5`.
+  q = sl_model.objects
+  q.values("v" => date_case() + 1.5)
+  @test_throws PormG.QueryBuildError inspect_query(q)
+  # A `Case` that mixes a date and a timestamp still says nothing about its type, and is refused (#1200).
+  q = sl_model.objects
+  q.values("v" => Case([When("year" => 2009, then = F("date"))], default = F("start_at")) + 1)
+  @test_throws PormG.QueryBuildError inspect_query(q)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Readers that ask the walk see the type now.
 # Expected: `Abs(F("date") - F("date"))` keeps the integer day count (#1147), so PostgreSQL renders a
 # bare `ABS(…)`, not `ABS((…)::numeric)`; `Greatest("date", F("date") + 1)` agrees on a date, so the

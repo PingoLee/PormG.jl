@@ -52,7 +52,8 @@ end
 # Expected: `"fast__@gt" => Minute(1)` over `Case(When("grid" => 1, then = F("fastestlaptime")))`
 # binds the duration as `format_duration_sql` writes it on PostgreSQL (`"00:01:00"`), as a filter on
 # the `fastestlaptime` column does; `10` is refused at build on both engines, naming the alias and
-# the duration it holds, as it is for the column. Before, the alias had no formatter: PostgreSQL got
+# the duration it holds, as it is for the column. On SQLite the ordering lookup itself is refused
+# (#1311: the alias is the duration's text there), so the value is checked through `==`. Before, the alias had no formatter: PostgreSQL got
 # `10` against an `interval` and failed at the server, SQLite compared `10` with the duration's text.
 # Why it matters: the alias holds the column's values, so it must take the values the column takes.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -63,10 +64,19 @@ end
                 q.values("resultid", "fast" => Case([When("grid" => 1, then = F("fastestlaptime"))]));
                 q)
       q = fast(); q.filter("fast__@gt" => Minute(1))
-      backend === :postgres && @test _last_param(q) == "00:01:00"
-      @test occursin("END\n > ", _sql(q))
+      if backend === :postgres
+        @test _last_param(q) == "00:01:00"
+        @test occursin("END\n > ", _sql(q))
+      else
+        # #1311: SQLite holds such a `Case` as its `HH:MM:SS` text, so an ordering filter on its
+        # alias is refused there; equality still compares the text, and still checks the value.
+        err = try _sql(q); nothing catch e; e end
+        @test err isa PormG.QueryBuildError
+        q = fast(); q.filter("fast" => Minute(1))
+        @test occursin("END\n = ", _sql(q))
+      end
 
-      q = fast(); q.filter("fast__@gt" => 10)
+      q = fast(); q.filter((backend === :postgres ? "fast__@gt" : "fast") => 10)
       err = try _sql(q); nothing catch e; e end
       @test err isa PormG.InvalidValueError
       @test occursin("`fast` projection alias (duration)", sprint(showerror, err))

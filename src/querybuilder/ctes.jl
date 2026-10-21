@@ -869,12 +869,15 @@ function _declared_type(func::SQLTypeFunction, instruct::SQLInstruction)
   # on SQLite, where they were refused before: there each cast renders `CAST(x AS TEXT)`, so typing the
   # column would check — and normalize — its filter values against a type the engine never applied.
   (typed === nothing || _cast_renders_text(typed, instruct.connection)) || return typed
-  # uuid / inet / cidr are offered only where they type: one that renders as TEXT is refused too.
+  # uuid / inet / cidr are offered only where they type: one that renders as TEXT is refused too. So
+  # are the time, timestamp and interval types and `bytea` (#1194), which only PostgreSQL casts to:
+  # SQLite refuses the cast itself (`Dialect.sqlite_cast_sql`) before the body reaches this check.
   typed_uuid = !_cast_renders_text(_sql_type_field("uuid"), instruct.connection)
   throw(QueryBuildError(
     "A CTE column cannot be typed from the SQL type \e[4m\e[31m$(declared)\e[0m on " *
-    "$(func.function_name)(…). Name a text, integer, bigint, float, numeric, boolean or date type" *
-    "$(typed_uuid ? ", or uuid / inet / cidr" : "") instead (#812, #823, #929)."))
+    "$(func.function_name)(…). Name a text, integer, bigint, float, numeric, boolean, date or blob type" *
+    "$(typed_uuid ? ", or time / timestamp / timestamptz / interval / bytea / uuid / inet / cidr" : "") " *
+    "instead (#812, #823, #929, #1194)."))
 end
 
 

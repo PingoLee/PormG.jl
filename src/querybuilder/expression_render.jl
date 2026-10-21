@@ -781,11 +781,36 @@ function _projected_interval_source(name::AbstractString, instruc::SQLInstructio
   return source
 end
 
+# #1311 — whether the projection named `name` is, on SQLite, an interval with NO millisecond form: a
+# `Case` whose value is a duration, a function over one, `NullIf` or a window function (`Lag`) over a
+# duration. `_projected_interval_source` rules these out, so an ordering filter or an ORDER BY on the
+# alias compared its `HH:MM:SS` text, while the same comparison inside an expression is refused (#1301).
+# Decided without rendering, from the walk, as `_projected_interval_source` is.
+function _projected_unordered_interval(name::AbstractString, instruc::SQLInstruction)::Bool
+  _interval_as_ms(instruc.connection) || return false
+  source = _projected_source(memo_key(:base, name), instruc)
+  source isa SQLField || return false
+  _interval_ms_candidate(source.field) && return false
+  return _expression_kind(source.field, instruc) isa CInterval
+end
+
+# #1311 — the refusal for such an alias: `what` is the clause that orders it. A CTE column holding the
+# interval is read in milliseconds (#1285), which is the spelling that orders it on SQLite.
+_unordered_interval_alias_error(what::AbstractString, name::AbstractString) = QueryBuildError(
+  "$(what) on the `$(name)` alias is not supported on SQLite: it is an interval with no millisecond " *
+  "form (a `Case` whose value is a duration, a function over one, `NullIf` or a window function such " *
+  "as `Lag`), which SQLite holds as its `HH:MM:SS` text, and that text sorts in the interval's order " *
+  "only below 100 hours and for non-negative values. Equality (`==`, `@in`) still compares the text. " *
+  "To order or filter it, project it in a CTE (`.with`) and use the CTE's column, which SQLite reads " *
+  "in milliseconds.")
+
 # The projection named `name` as SQLite milliseconds, rendered into the active bucket: `(sql, true)`;
 # or `nothing` when `_projected_interval_source` has none. `(sql, false)` is the rare candidate whose
 # render turned out to be text after all — still the projection's own SQL with its own bindings, so a
 # caller that prints it orders and compares exactly as the alias would have.
 function _render_projected_interval_ms(name::AbstractString, instruc::SQLInstruction)::Union{Tuple{String,Bool},Nothing}
+  # #1311: its only callers are ORDER BY terms, which would sort such an alias by its text.
+  _projected_unordered_interval(name, instruc) && throw(_unordered_interval_alias_error("`order_by`", name))
   source = _projected_interval_source(name, instruc)
   source === nothing && return nothing
   return _render_interval_ms(source.field, instruc; _as = source._as)

@@ -802,9 +802,11 @@ query.list(:dict)
 PostgreSQL's `GREATEST` and `LEAST` behave this way natively. SQLite has neither function, and its
 scalar `MAX(a, b)` returns `NULL` when any argument is, so on SQLite PormG renders one `COALESCE` per
 rotation of the arguments: `Greatest(a, b)` becomes
-`MAX(COALESCE(a, b), COALESCE(b, a))`. A literal argument binds once per place it appears. The SQL
-grows with the square of the argument count, so with `n` arguments each one is rendered `n` times;
-a `Subquery` argument runs once per rotation.
+`MAX(COALESCE(a, b), COALESCE(b, a))`. MySQL has its own `GREATEST` and `LEAST`, which also return
+`NULL` when any argument is, so it gets the same rotations: `GREATEST(COALESCE(a, b), COALESCE(b, a))`.
+A literal argument binds once per place it appears. The SQL grows with the square of the argument
+count, so with `n` arguments each one is rendered `n` times; a `Subquery` argument runs once per
+rotation.
 
 A single argument is refused (see the start of this section). On SQLite, `MAX(x)` and `MIN(x)` with
 one argument are the *aggregates*, so a one-argument `Greatest` used to collapse the result to one
@@ -1076,6 +1078,14 @@ and `Least` rendered none on PostgreSQL either:
 # (GREATEST(…))::bigint on PostgreSQL, CAST(MAX(…) AS BIGINT) on SQLite
 M.Result.objects.values("resultid", "slot" => Greatest("grid", 1; output_field = "bigint"))
 ```
+
+On MySQL the cast is `CAST(… AS T)`, with `T` the MySQL type the name maps to (see
+[Backends](../backends.md)), with two exceptions MySQL decides itself. MySQL has no boolean type, so a
+`"boolean"` declaration over booleans or integers reads `((x) <> 0)`, as PostgreSQL's
+`integer::boolean` does, and over any other value it is refused with `QueryBuildError`. And MySQL
+stores a duration as its microseconds, so over durations a text declaration reads the `HH:MM:SS` text,
+a `DurationField()` declaration is the value itself, and a date, time or timestamp declaration is
+refused.
 
 The rule above applies to these casts too: `Coalesce`, `Greatest`, `Least` and `Case` with an
 `output_field` of text, an integer or a scaled `numeric(p, s)` refuse the same operands `Cast` does,

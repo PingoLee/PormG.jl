@@ -13,7 +13,7 @@ if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 using Test, Dates, TimeZones, Decimals, DataFrames
-import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, F, Coalesce, Cast, Concat
+import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, F, Coalesce, Cast, Concat, Greatest, Least, NullIf, Case, When, Value, Abs
 
 # The model tables this file creates, in drop order (children first).
 const _MYR_TABLES = ("result", "new_join_position", "race", "circuit", "driver")
@@ -296,12 +296,12 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
         end
 
         # What: what MySQL does not render yet stays loud, never another engine's SQL.
-        # SQL: none — `Coalesce` (phase 2c) and `create` (phase 3) fail before a statement is sent.
+        # SQL: none — `Abs` (phase 2c-2) and `create` (phase 3) fail before a statement is sent.
         # Why: a silent wrong answer is the failure #1130 exists to prevent.
         @testset "what is not rendered yet fails before any SQL is sent" begin
             # Each names the piece of the query builder MySQL does not have yet.
-            e = try; M.Result.objects.values("c" => Coalesce("position", 0)).list(); nothing; catch err; err; end
-            @test e isa MethodError && e.f === PormG.Dialect.COALESCE
+            e = try; M.Result.objects.values("a" => Abs("grid")).list(); nothing; catch err; err; end
+            @test e isa MethodError && e.f === PormG.Dialect.ABS
             e = try; M.New_join_position.objects.create("description" => "x"); nothing; catch err; err; end
             @test e isa MethodError && e.f === PormG.QueryBuilder._insert_returns_rows
             @test M.New_join_position.objects.count() == 3
@@ -358,8 +358,12 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             e = try; M.Race.objects.values("n" => Cast("date", "integer")).list(); nothing; catch err; err; end
             @test e isa PormG.QueryBuildError && occursin("so PormG refuses it on MySQL", msg(e))
             # A type with no faithful MySQL target is refused before any SQL, never passed through.
-            e = try; M.Result.objects.values("b" => Cast("grid", "boolean")).list(); nothing; catch err; err; end
+            e = try; M.Result.objects.values("b" => Cast("grid", "bytea")).list(); nothing; catch err; err; end
             @test e isa PormG.UnsupportedConnectionError && occursin("is not rendered for MySQL yet", msg(e))
+            # A boolean has no CAST target there either; over an integer it is `((x) <> 0)`, as PostgreSQL's
+            # `integer::boolean` reads it (#1130 phase 2c-1).
+            flags = M.Result.objects.values("resultid", "grid", "b" => Cast(F("grid") - 1, "boolean")).order_by("resultid").list()
+            @test all(r -> r[:b] === (r[:grid] - 1 != 0), flags)
         end
 
         # What: `Concat` joins its operands' text and skips a NULL one, as it means on every engine.
@@ -472,6 +476,50 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             # What has no meaning is refused before any SQL, naming MySQL.
             e = try; M.Result.objects.values("t" => F("fastestlaptime") + 1).list(); nothing; catch err; err; end
             @test e isa PormG.QueryBuildError && occursin("is not supported on MySQL", msg(e))
+        end
+        # What: the conditionals answer as their meaning, each value checked against Julia over the same rows.
+        # SQL: `COALESCE(`Tb`.`position`, ?)`; `GREATEST(COALESCE(a, b), COALESCE(b, a))` (MySQL's GREATEST
+        #      is NULL on any NULL, so the operands are the #844 rotations); `NULLIF(…)`; `CASE WHEN … THEN ?
+        #      ELSE ? END`; a Decimal branch bound as `CAST(? AS DECIMAL(p,s))`; `CAST(… AS DECIMAL(10,2))`;
+        #      a boolean declaration as `((…) <> 0)`; an interval declared as text through its `HH:MM:SS`.
+        # Why: MySQL has each function natively, but a Decimal bound as text made a CASE a VARCHAR that
+        #      ordered as text, a boolean has no cast target there, and an interval is its microseconds
+        #      (#1130 phase 2c-1).
+        @testset "conditionals answer as their meaning (phase 2c-1)" begin
+            base = Dict(r[:resultid] => r for r in M.Result.objects.values("resultid", "grid", "position", "fastestlaptime").list())
+            rows = M.Result.objects.values("resultid",
+                "c" => Coalesce("position", 0), "g" => Greatest("grid", "position"), "l" => Least("grid", "position"),
+                "n" => NullIf("grid", 1), "k" => Case(When("grid__@gt" => 2, then = "back"), default = "front"),
+                "d" => Case(When("grid__@gt" => 2, then = parse(Decimal, "10.25")), default = parse(Decimal, "5.5")),
+                "o" => Coalesce("position", 0; output_field = "numeric(10,2)"),
+                "b" => Case(When("grid__@gt" => 2, then = 1), default = 0; output_field = "boolean"),
+                "t" => Coalesce("position", 0; output_field = "text")).order_by("resultid").list()
+            @test length(rows) == 7
+            for r in rows
+                g, p = base[r[:resultid]][:grid], base[r[:resultid]][:position]
+                @test r[:c] == coalesce(p, 0)
+                @test r[:g] == (p === missing ? g : max(g, p)) && r[:l] == (p === missing ? g : min(g, p))
+                @test isequal(r[:n], g == 1 ? missing : g)
+                @test r[:k] == (g > 2 ? "back" : "front")
+                @test r[:d] == (g > 2 ? parse(Decimal, "10.25") : parse(Decimal, "5.5")) && r[:d] isa Decimal
+                @test r[:o] == coalesce(p, 0) && r[:o] isa Decimal
+                @test r[:b] === (g > 2) && r[:t] == string(coalesce(p, 0))
+            end
+            # The Decimal branch orders as a number, not as text (`'10.25' < '5.5'`).
+            ordered = M.Result.objects.values("resultid", "d" => Case(When("grid__@gt" => 2, then = parse(Decimal, "10.25")),
+                default = parse(Decimal, "5.5"))).order_by("d", "resultid").list()
+            @test [r[:d] for r in ordered] == sort([r[:d] for r in ordered])
+            # A Case over durations is the microseconds it holds: it orders, filters and reads as one.
+            lap = Case(When("grid__@gt" => 2, then = F("fastestlaptime")), default = Value(Second(0)))
+            want(id) = (g = base[id][:grid]; t = base[id][:fastestlaptime]; g > 2 ? t : Dates.CompoundPeriod(Second(0)))
+            us(p) = p === missing ? missing : Dates.tons(p) ÷ 1000
+            laps = M.Result.objects.values("resultid", "v" => lap).order_by("v", "resultid").list()
+            @test isequal([us(r[:v]) for r in laps], sort([us(want(r[:resultid])) for r in laps]))
+            @test all(r -> isequal(us(r[:v]), us(want(r[:resultid]))), laps)
+            over = M.Result.objects.values("resultid", "v" => lap).filter("v__@gt" => Second(80)).order_by("resultid").list()
+            @test [r[:resultid] for r in over] == sort([id for id in keys(base) if (u = us(want(id))) !== missing && u > 80_000_000])
+            text = only(M.Result.objects.filter("resultid" => 1).values("t" => Coalesce("fastestlaptime", Value(Second(0)); output_field = "text")).list())
+            @test text[:t] == PormG.Models.format_duration_sql(base[1][:fastestlaptime])
         end
     finally
         for t in _MYR_TABLES

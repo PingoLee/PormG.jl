@@ -918,18 +918,23 @@ end
 # booleans or integers is `((x) <> 0)`, NULL kept, as PostgreSQL's `integer::boolean` reads it; over any
 # other value refused, since what MySQL would make of it (a text's leading digits) is no boolean.
 const _ONE_OF_FUNCTIONS = ("COALESCE", "GREATEST", "LEAST", "NULLIF", "CASE")
+const _ONE_OF_NAMES = Dict("COALESCE" => "Coalesce", "GREATEST" => "Greatest", "LEAST" => "Least",
+                           "NULLIF" => "NullIf", "CASE" => "Case")
 function _mysql_declared_output(v::FObject, instruc::SQLInstruction)::Union{Function,Nothing}
   conn = instruc.connection
   units = _stores_interval_as_units(conn)
   booleans = _normalizes_boolean_cast(conn)
   (units || booleans) || return nothing
   v.function_name in ("CAST", _ONE_OF_FUNCTIONS...) || return nothing
+  # A NULL-skipping rotation (#844) is `Greatest`/`Least`'s own operand list: the function the caller
+  # wrote checks its operands, and names itself.
+  haskey(v.kwargs, "rotation_of") && return nothing
   values = v.function_name == "CASE" ? _case_values(v) : v.column isa AbstractVector ? v.column : Any[v.column]
   kinds = [_expression_kind(x, instruc) for x in values if !_is_null_operand(x)]
   engine = _backend_name(conn)
   interval = units && any(k -> k isa CInterval, kinds)
   label() = v.function_name == "CAST" || _declared_cast(v) isa AbstractString && !isempty(_declared_cast(v)) ?
-            _declared_cast_label(v) : "$(uppercasefirst(lowercase(v.function_name)))(…)"
+            _declared_cast_label(v) : "$(_ONE_OF_NAMES[v.function_name])(…)"
   interval && !all(k -> k isa CInterval, kinds) && throw(QueryBuildError(
     "$(label()) over an interval and a value of another type is not supported on $(engine): it stores an " *
     "interval as its count of microseconds, so one value cannot be both. Give every value the one type: " *
@@ -959,7 +964,7 @@ function _mysql_declared_output(v::FObject, instruc::SQLInstruction)::Union{Func
   if booleans && target_kind isa CBool
     all(k -> k isa Union{CBool,CInt16,CInt32,CInt64}, kinds) || throw(QueryBuildError(
       "$(_declared_cast_label(v)) is not supported on $(engine) over a value that is not a boolean or an " *
-      "integer: $(engine) has no boolean type to cast to, and reads any other value as its leading digits. " *
+      "integer: $(engine) has no boolean type to cast to, and PormG reads only those two as one there. " *
       "State the condition instead: Case(When(\"points__@gt\" => 0, then = true), default = false)."))
     return sql -> "(($(sql)) <> 0)"
   end

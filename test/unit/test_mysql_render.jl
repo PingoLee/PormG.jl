@@ -851,6 +851,15 @@ end
                 "of an interval is not supported on MySQL")
   @test refused(() -> R.objects.values("v" => QB.Coalesce("fastestlaptime", 0; output_field = "text")),
                 "over an interval and a value of another type is not supported on MySQL")
+  # Each names the function the caller wrote, not `Greatest`'s inner rotation.
+  for (fn, build) in ("Greatest" => () -> R.objects.values("v" => QB.Greatest("fastestlaptime", 0)),
+                      "Least" => () -> R.objects.values("v" => QB.Least("fastestlaptime", 0)),
+                      "NullIf" => () -> R.objects.values("v" => QB.NullIf("fastestlaptime", 0)))
+    @test (fn, refused(build, "$(fn)(…) over an interval and a value of another type")) == (fn, true)
+  end
+  # `Greatest` over durations, declared text: the `HH:MM:SS` text of the greatest, never its count.
+  gt = sql(() -> R.objects.values("v" => QB.Greatest("fastestlaptime", hour; output_field = "text")))[1]
+  @test occursin("CAST($(PormG.Dialect._mysql_interval_text("GREATEST(COALESCE(`Tb`.`fastestlaptime`, ?), COALESCE(?, `Tb`.`fastestlaptime`))")) AS CHAR)", gt)
   for (label, build) in ("Coalesce(d, 0)" => () -> R.objects.values("v" => QB.Coalesce("fastestlaptime", 0)),
                          "Greatest(d, 0)" => () -> R.objects.values("v" => QB.Greatest("fastestlaptime", 0)),
                          "NullIf(d, 0)" => () -> R.objects.values("v" => QB.NullIf("fastestlaptime", 0)),
@@ -898,6 +907,8 @@ end
   @test ph(Decimal(0, 12, 1)) == "CAST(? AS DECIMAL(3,0))"
   @test ph(Decimal(0, 0, 0)) == "CAST(? AS DECIMAL(1,0))"
   @test_throws PormG.QueryBuildError ph(Decimal(0, big(10)^70, 0))
+  @test_throws PormG.QueryBuildError ph(Decimal(0, big(10)^65, 0))   # 66 digits: one past the limit
+  @test ph(Decimal(0, big(10)^64, 0)) == "CAST(? AS DECIMAL(65,0))"  # 65 digits: the limit itself
   @test_throws PormG.QueryBuildError ph(Decimal(0, 1, -31))
   @test ph(5) == "?" && ph(2.5) == "?" && ph("5.50") == "?"
   r = _mr_inspect(_MR_MY.Result.objects.values("v" => QB.Case(QB.When("grid__@gt" => 5, then = parse(Decimal, "10.25")),

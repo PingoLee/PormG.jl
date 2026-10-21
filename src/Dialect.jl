@@ -889,13 +889,22 @@ function sqlite_cast_sql(expr::AbstractString, type::AbstractString, conn::PormG
   occursin('[', suffix) && throw(_capability_error(conn, :arrays, "$(context): a cast to $(repr(name * suffix))"))
   base = uppercase(first(split(name)))
   base == "DATE" && isempty(suffix) && return "date($(expr))"
-  if base == "DATE" || base in _SQLITE_NUMERIC_TEMPORAL_CASTS
-    throw(BackendCapabilityError("$(context): SQLite cannot cast to $(repr(name * suffix)). It has no " *
-                                 "time types, and CAST(… AS $(uppercase(name * suffix))) turns " *
-                                 "'2020-03-29 10:11:12' into the number 2020. Project the column " *
-                                 "itself, or cast to \"text\" or \"date\" (#822)."))
+  if base == "DATE" || base in _SQLITE_NUMERIC_TEMPORAL_CASTS || base == "BYTEA"
+    throw(BackendCapabilityError(_sqlite_numeric_cast_message(context, name * suffix, base == "BYTEA")))
   end
   return "CAST($(expr) AS $(cast_type_sql(type, conn; context = context)))"
+end
+
+# #1194 — `bytea` is the same NUMERIC-affinity name as the temporal ones (#822): SQLite has no binary
+# type of that name, so `CAST(… AS BYTEA)` reads the text's numeric prefix, `'abc'` → `0`, and even a
+# blob comes back an integer (measured on SQLite 3.45). Refused, with the spelling that builds.
+function _sqlite_numeric_cast_message(context::AbstractString, type::AbstractString, binary::Bool)
+  binary && return "$(context): SQLite cannot cast to $(repr(type)). It has no bytea type, and " *
+                   "CAST(… AS $(uppercase(type))) turns 'abc' into the number 0. Cast to " *
+                   "BinaryField() (\"blob\") instead (#1194)."
+  return "$(context): SQLite cannot cast to $(repr(type)). It has no time types, and " *
+         "CAST(… AS $(uppercase(type))) turns '2020-03-29 10:11:12' into the number 2020. Project " *
+         "the column itself, or cast to \"text\" or \"date\" (#822)."
 end
 
 # `sql` cast to a function's declared `output_field`, or `sql` itself when it declares none (#852).

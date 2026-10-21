@@ -742,13 +742,14 @@ reads back as the type it means on both engines, a `Float64` or a `Decimal` (#11
 binds it as the same type, though an `Avg` of a `DecimalField` keeps that field's declared width there. This is the same rule `values(...)` follows
 outside a CTE (see [The type of a computed number](index.md#The-type-of-a-computed-number)).
 
-The type you declare can be a text, integer, bigint, float, numeric, boolean or date type, and on
-PostgreSQL also `uuid`, `inet` or `cidr`. SQLite renders those three casts as text, so a CTE column declared as one is refused there. That
+The type you declare can be a text, integer, bigint, float, numeric, boolean, date or `blob` type, and
+on PostgreSQL also `uuid`, `inet` or `cidr`, and (#1194) `time`, `timestamp`, `timestamptz`, `interval`
+or `bytea`. SQLite renders `uuid`, `inet` and `cidr` as text, so a CTE column declared as one is
+refused there, and it refuses the cast to a time, timestamp, interval or `bytea` type itself. That
 includes the aliases `int2`, `int4`, `int8`, `float4` and `float8`, and any field object with one of
 those types, such as `PositiveIntegerField()`, which is typed as a plain integer because a cast does
 not enforce the sign. A single-precision float (`real`, `float4`) is refused on SQLite, which has no
-4-byte float to round to (#1215, see [Functions and Dates](functions_and_dates.md)). A timestamp, time or interval type is refused, since each has more than one
-text form. A declared type is also what the SQL casts the value to, on both engines: a `date` on
+4-byte float to round to (#1215, see [Functions and Dates](functions_and_dates.md)). A declared type is also what the SQL casts the value to, on both engines: a `date` on
 `Cast`, `Case`, `Coalesce`, `Greatest` or `Least` renders `date(…)` on SQLite. `Concat` only
 takes a text type, on both engines (see
 [Functions and Dates](functions_and_dates.md)).

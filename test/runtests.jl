@@ -53,7 +53,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
             #                        Measured on CI run 35018968976; it is not a timeout.
             #
             # The other six still run at the floor, and the `test` job runs all eight — including
-            # these two — on 1.12 and 1.13, which is where a real regression in either would show.
+            # these two — on Julia 1.13, which is where a real regression in either would show.
             if PORMG_FLOOR_RESOLVE
                 @info "PORMG_FLOOR_RESOLVE=1: Aqua stale_deps + persistent_tasks disabled (see comment above)"
                 Aqua.test_all(PormG; stale_deps = false, persistent_tasks = false)

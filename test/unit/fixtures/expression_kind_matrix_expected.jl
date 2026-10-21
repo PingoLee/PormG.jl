@@ -1190,6 +1190,240 @@ const _EKM_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :ok, read = "CDecimal(10, 2)", read_parsed = true, render = nothing, operand = "CDecimal(10, 2)", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = "decimal", kind = "CDecimal(10, 2)", whole_numeric = nothing),
   ("Case untyped decimal col | subquery", :mysql) =>
     (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Cast datetime to timestamp | alone", :postgres) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("Cast datetime to timestamp | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:12' into"),
+  ("Cast datetime to timestamp | alone", :mysql) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("Cast datetime to timestamp | cte", :postgres) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("Cast datetime to timestamp | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:12' into"),
+  ("Cast datetime to timestamp | cte", :mysql) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("Cast datetime to timestamp | subquery", :postgres) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("Cast datetime to timestamp | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:12' into"),
+  ("Cast datetime to timestamp | subquery", :mysql) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = false, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("Cast datetime to timestamptz | alone", :postgres) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Cast datetime to timestamptz | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamptz\". It has no time types, and CAST(… AS TIMESTAMPTZ) turns '2020-03-29 10:11:12' "),
+  ("Cast datetime to timestamptz | alone", :mysql) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Cast datetime to timestamptz | cte", :postgres) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Cast datetime to timestamptz | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamptz\". It has no time types, and CAST(… AS TIMESTAMPTZ) turns '2020-03-29 10:11:12' "),
+  ("Cast datetime to timestamptz | cte", :mysql) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Cast datetime to timestamptz | subquery", :postgres) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Cast datetime to timestamptz | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"timestamptz\". It has no time types, and CAST(… AS TIMESTAMPTZ) turns '2020-03-29 10:11:12' "),
+  ("Cast datetime to timestamptz | subquery", :mysql) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Cast datetime to time | alone", :postgres) =>
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+  ("Cast datetime to time | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("Cast datetime to time | alone", :mysql) =>
+    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+  ("Cast datetime to time | cte", :postgres) =>
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
+  ("Cast datetime to time | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("Cast datetime to time | cte", :mysql) =>
+    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, cte_field = "sTimeField", kind = "CTime()", whole_numeric = nothing),
+  ("Cast datetime to time | subquery", :postgres) =>
+    (stage = :ok, read = "CTime()", read_parsed = true, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+  ("Cast datetime to time | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"time\". It has no time types, and CAST(… AS TIME) turns '2020-03-29 10:11:12' into the numbe"),
+  ("Cast datetime to time | subquery", :mysql) =>
+    (stage = :ok, read = "CTime()", read_parsed = false, render = nothing, operand = "CTime()", function_ = nothing, column = nothing, formatter = "format_text_sql", textless = nothing, kind = "CTime()", whole_numeric = nothing),
+  ("Cast interval to interval | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Cast interval to interval | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"interval\". It has no time types, and CAST(… AS INTERVAL) turns '2020-03-29 10:11:12' into t"),
+  ("Cast interval to interval | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"interval\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG p"),
+  ("Cast interval to interval | cte", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+  ("Cast interval to interval | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"interval\". It has no time types, and CAST(… AS INTERVAL) turns '2020-03-29 10:11:12' into t"),
+  ("Cast interval to interval | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"interval\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG p"),
+  ("Cast interval to interval | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Cast interval to interval | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"interval\". It has no time types, and CAST(… AS INTERVAL) turns '2020-03-29 10:11:12' into t"),
+  ("Cast interval to interval | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"interval\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG p"),
+  ("Cast text to bytea | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, kind = "CBytes()", whole_numeric = nothing),
+  ("Cast text to bytea | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"bytea\". It has no bytea type, and CAST(… AS BYTEA) turns 'abc' into the number 0. Cast to B"),
+  ("Cast text to bytea | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"bytea\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG pass"),
+  ("Cast text to bytea | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, cte_field = "sBinaryField", kind = "CBytes()", whole_numeric = nothing),
+  ("Cast text to bytea | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"bytea\". It has no bytea type, and CAST(… AS BYTEA) turns 'abc' into the number 0. Cast to B"),
+  ("Cast text to bytea | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"bytea\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG pass"),
+  ("Cast text to bytea | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, kind = "CBytes()", whole_numeric = nothing),
+  ("Cast text to bytea | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "Cast: SQLite cannot cast to \"bytea\". It has no bytea type, and CAST(… AS BYTEA) turns 'abc' into the number 0. Cast to B"),
+  ("Cast text to bytea | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"bytea\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG pass"),
+  ("Cast text to blob | alone", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, kind = "CBytes()", whole_numeric = nothing),
+  ("Cast text to blob | alone", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, kind = "CBytes()", whole_numeric = nothing),
+  ("Cast text to blob | alone", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"blob\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG passe"),
+  ("Cast text to blob | cte", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, cte_field = "sBinaryField", kind = "CBytes()", whole_numeric = nothing),
+  ("Cast text to blob | cte", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, cte_field = "sBinaryField", kind = "CBytes()", whole_numeric = nothing),
+  ("Cast text to blob | cte", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"blob\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG passe"),
+  ("Cast text to blob | subquery", :postgres) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, kind = "CBytes()", whole_numeric = nothing),
+  ("Cast text to blob | subquery", :sqlite) =>
+    (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_binary_sql", textless = nothing, kind = "CBytes()", whole_numeric = nothing),
+  ("Cast text to blob | subquery", :mysql) =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "Cast: a cast to \"blob\" is not rendered for MySQL yet: MySQL's CAST has no target that holds its meaning, and PormG passe"),
+  ("Coalesce declared timestamp | alone", :postgres) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("Coalesce declared timestamp | alone", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "output_field: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:"),
+  ("Coalesce declared timestamp | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Coalesce declared timestamp | cte", :postgres) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", cte_field = "sDateTimeField", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("Coalesce declared timestamp | cte", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "output_field: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:"),
+  ("Coalesce declared timestamp | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Coalesce declared timestamp | subquery", :postgres) =>
+    (stage = :ok, read = "CDateTime(false)", read_parsed = true, render = nothing, operand = "CDateTime(false)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(false)", whole_numeric = nothing),
+  ("Coalesce declared timestamp | subquery", :sqlite) =>
+    (stage = :build, error = "BackendCapabilityError", message = "output_field: SQLite cannot cast to \"timestamp\". It has no time types, and CAST(… AS TIMESTAMP) turns '2020-03-29 10:11:"),
+  ("Coalesce declared timestamp | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching COALESCE(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Lag interval | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Lag interval | alone", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Lag interval | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Lag interval | cte", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+  ("Lag interval | cte", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+  ("Lag interval | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Lag interval | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Lag interval | subquery", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Lag interval | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching LAG(::String, ::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("NullIf interval | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("NullIf interval | alone", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = "CInterval()", column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("NullIf interval | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching NULLIF(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("NullIf interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function NULLIF is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+  ("NullIf interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "Error in _set_field_from_sql_function, the function NULLIF is not a recognized function. Allowed: COUNT, SUM, AVG, MIN, "),
+  ("NullIf interval | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching NULLIF(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("NullIf interval | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("NullIf interval | subquery", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("NullIf interval | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching NULLIF(::Vector{Any}, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Max Case interval col | alone", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Max Case interval col | alone", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Max Case interval col | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Max Case interval col | cte", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+  ("Max Case interval col | cte", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", cte_field = "sDurationField", kind = "CInterval()", whole_numeric = nothing),
+  ("Max Case interval col | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Max Case interval col | subquery", :postgres) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Max Case interval col | subquery", :sqlite) =>
+    (stage = :ok, read = "CInterval()", read_parsed = true, render = nothing, operand = "CInterval()", function_ = nothing, column = nothing, formatter = "format_duration_sql", textless = "interval", kind = "CInterval()", whole_numeric = nothing),
+  ("Max Case interval col | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Case untyped date col + 1 | alone", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case untyped date col + 1 | alone", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = "CDate()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case untyped date col + 1 | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Case untyped date col + 1 | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("Case untyped date col + 1 | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (+) on a value that is not a number. Name the type the column ho"),
+  ("Case untyped date col + 1 | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Case untyped date col + 1 | subquery", :postgres) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case untyped date col + 1 | subquery", :sqlite) =>
+    (stage = :ok, read = "CDate()", read_parsed = true, render = nothing, operand = "CDate()", function_ = nothing, column = nothing, formatter = "format_date_sql", textless = nothing, kind = "CDate()", whole_numeric = nothing),
+  ("Case untyped date col + 1 | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Case untyped date col - date | alone", :postgres) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Case untyped date col - date | alone", :sqlite) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = "CInt32()", operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Case untyped date col - date | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Case untyped date col - date | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("Case untyped date col - date | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("Case untyped date col - date | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Case untyped date col - date | subquery", :postgres) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, operand = "CInt32()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Case untyped date col - date | subquery", :sqlite) =>
+    (stage = :ok, read = "CInt32()", read_parsed = false, render = nothing, operand = "CInt32()", function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt32()", whole_numeric = nothing),
+  ("Case untyped date col - date | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Case untyped zoned col + interval | alone", :postgres) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Case untyped zoned col + interval | alone", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = "CDateTime(true)", operand = nothing, function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Case untyped zoned col + interval | alone", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Case untyped zoned col + interval | cte", :postgres) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("Case untyped zoned col + interval | cte", :sqlite) =>
+    (stage = :build, error = "QueryBuildError", message = "The CTE column v cannot be typed: it is F(…) arithmetic (-) on a value that is not a number. Name the type the column ho"),
+  ("Case untyped zoned col + interval | cte", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
+  ("Case untyped zoned col + interval | subquery", :postgres) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Case untyped zoned col + interval | subquery", :sqlite) =>
+    (stage = :ok, read = "CDateTime(true)", read_parsed = true, render = nothing, operand = "CDateTime(true)", function_ = nothing, column = nothing, formatter = "format_timezone_sql", textless = "timestamp", kind = "CDateTime(true)", whole_numeric = nothing),
+  ("Case untyped zoned col + interval | subquery", :mysql) =>
+    (stage = :build, error = "MethodError", message = "MethodError: no method matching WHEN(::String, ::Dict{String, Any}, ::EkmMockMySQL)"),
   ("Sum int | alone", :postgres) =>
     (stage = :ok, read = nothing, read_parsed = nothing, render = nothing, operand = nothing, function_ = nothing, column = nothing, formatter = "format_number_sql", textless = nothing, kind = "CInt64()", whole_numeric = nothing),
   ("Sum int | alone", :sqlite) =>
@@ -4685,6 +4919,26 @@ const _EKM_DISAGREEMENTS = Dict{Tuple{String,Symbol},Vector{Tuple{Symbol,String}
     [(:unparsed, "read=date has no MySQL read parser")],
   ("Cast datetime to date | subquery", :mysql) =>
     [(:unparsed, "read=date has no MySQL read parser")],
+  ("Cast datetime to timestamp | alone", :mysql) =>
+    [(:unparsed, "read=datetime has no MySQL read parser")],
+  ("Cast datetime to timestamp | cte", :mysql) =>
+    [(:unparsed, "read=datetime has no MySQL read parser")],
+  ("Cast datetime to timestamp | subquery", :mysql) =>
+    [(:unparsed, "read=datetime has no MySQL read parser")],
+  ("Cast datetime to time | alone", :mysql) =>
+    [(:unparsed, "read=time has no MySQL read parser")],
+  ("Cast datetime to time | cte", :mysql) =>
+    [(:unparsed, "read=time has no MySQL read parser")],
+  ("Cast datetime to time | subquery", :mysql) =>
+    [(:unparsed, "read=time has no MySQL read parser")],
+  ("Case untyped date col - date | alone", :postgres) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("Case untyped date col - date | alone", :sqlite) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("Case untyped date col - date | subquery", :postgres) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
+  ("Case untyped date col - date | subquery", :sqlite) =>
+    [(:unparsed, "read=int has no SQLite read parser")],
   ("Sum decimal | alone", :mysql) =>
     [(:unparsed, "read=decimal has no MySQL read parser")],
   ("Sum decimal | cte", :mysql) =>

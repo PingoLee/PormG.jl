@@ -1306,3 +1306,78 @@ end
     @test occursin("#1183", sprint(showerror, e))
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1194: a `Cast` to a temporal or binary type is typed as that type.
+# On PostgreSQL:
+# - `Cast("time", "time")` matches `@startswith` by its text, as the column does (#1183), and reads
+#   back as the same `Time` values;
+# - `Cast("duration", "interval")` reads back as the column's own durations;
+# - a pattern lookup on a `timestamptz` or `interval` cast is refused before any SQL runs, where it
+#   was a server error;
+# - a CTE column declared `timestamptz` is typed from the declaration, so a filter on it binds a
+#   timestamp and keeps the races after it; before, the CTE refused it (#812).
+# On SQLite every one of these casts is refused by the cast itself, and so is `bytea`, which SQLite's
+# NUMERIC affinity turned into an integer; `blob` renders `CAST("Tb"."name" AS BLOB)` and reads back
+# the bytes. Expected SQL on PostgreSQL: `CAST(("Tb"."time")::time AS text) LIKE $1`, and the CTE
+# filter `WHERE "R1_1"."s" > $n` with the cutoff's UTC text. The oracle is the columns themselves,
+# read without a cast. Why it matters: a cast declares its type, so it must behave as a column of that
+# type does, not fail at the server or hand back an integer.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1194: a temporal cast is typed as its type; SQLite refuses the cast" begin
+  if by_engine(sqlite = true, postgres = false)
+    for (model, col, t) in ((M.Race, "time", "time"), (M.Race, "start_at", "timestamptz"),
+                            (M.Pit_stops, "duration", "interval"), (M.Race, "name", "bytea"))
+      e = try model.objects.values("c" => Cast(col, t)).list(:dict); nothing catch err; err end
+      @test e isa PormG.BackendCapabilityError
+    end
+    # `blob`, the cast SQLite has, reads back as the text's bytes.
+    names = M.Race.objects.filter("year" => 2009).values("raceid", "name", "b" => Cast("name", "blob")).list(:dict)
+    @test !isempty(names)
+    @test all(r -> Vector{UInt8}(r[:b]) == Vector{UInt8}(codeunits(r[:name])), names)
+  else
+    rows = M.Race.objects.filter("time__@isnull" => false).values("raceid", "time").list(:dict)
+    want = sort([r[:raceid] for r in rows if startswith(string(r[:time]), "14:")])
+    @test !isempty(want)
+    q = M.Race.objects.filter("time__@isnull" => false).values("raceid", "t" => Cast("time", "time"))
+    cast_rows = q.list(:dict)
+    @test Dict(r[:raceid] => r[:t] for r in cast_rows) == Dict(r[:raceid] => r[:time] for r in rows)
+    q = M.Race.objects.values("raceid", "t" => Cast("time", "time"))
+    q.filter("t__@startswith" => "14:")
+    @test sort([r[:raceid] for r in q.list(:dict)]) == want
+
+    stops = M.Pit_stops.objects.filter("raceid" => 841).values("stop", "driverid", "duration").order_by("driverid", "stop").list(:dict)
+    @test !isempty(stops)
+    cast = M.Pit_stops.objects.filter("raceid" => 841).values("stop", "driverid", "d" => Cast("duration", "interval")).
+      order_by("driverid", "stop").list(:dict)
+    @test [r[:d] for r in cast] == [r[:duration] for r in stops]
+
+    for (model, col, t) in ((M.Race, "start_at", "timestamptz"), (M.Pit_stops, "duration", "interval"))
+      q = model.objects.values("c" => Cast(col, t))
+      q.filter("c__@startswith" => "2")
+      e = try q.list(:dict); nothing catch err; err end
+      @test e isa PormG.FilterError
+    end
+
+    # A timestamp cast reads back through the timestamp read path: the same instants the column holds,
+    # `timestamptz` as the column's own type and `timestamp` as its UTC wall time.
+    stamps = M.Race.objects.filter("year" => 2009, "start_at__@isnull" => false).
+      values("raceid", "start_at", "z" => Cast("start_at", "timestamptz"), "u" => Cast("start_at", "timestamp")).
+      order_by("raceid").list(:dict)
+    @test !isempty(stamps)
+    @test all(r -> r[:z] == r[:start_at], stamps)
+    @test all(r -> DateTime(r[:u]) == DateTime(r[:start_at]), stamps)
+
+    cutoff = DateTime(2009, 6, 1)
+    body = M.Race.objects.filter("year" => 2009).values("raceid", "s" => Cast("start_at", "timestamptz"))
+    outer = M.Race.objects
+    outer.with("c" => body, join_field = "raceid" => "raceid", join_type = "INNER")
+    outer.filter("c__s__@gt" => cutoff)
+    outer.values("raceid")
+    races = M.Race.objects.filter("year" => 2009).values("raceid", "start_at").list(:dict)
+    after = sort([r[:raceid] for r in races if r[:start_at] !== missing && r[:start_at] !== nothing &&
+                  DateTime(r[:start_at]) > cutoff])
+    @test !isempty(after)
+    @test sort([r[:raceid] for r in outer.list(:dict)]) == after
+  end
+end

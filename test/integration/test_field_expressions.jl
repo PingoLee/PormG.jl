@@ -850,6 +850,65 @@ end
     end
   end
 
+  # #1307 — a `Case` whose value is a date, shifted by a whole number of days. SQLite added the number
+  # to the date's `YYYY-MM-DD` text (`'2009-03-29' + 1` is `2010`), with no error, and PostgreSQL
+  # rendered `date + bigint`, which it has no operator for. The `Case` is now the date side of the
+  # shift, as a `DateField` column is (#568): on both engines the value is the date one day later, read
+  # back as a `Date`. The oracle is each race's own date, plus one day in Julia; a minus-date gives the
+  # day count back.
+  @testset "a Case over dates shifted by a number is the date one day later (#1307)" begin
+    FN = PormG.Functions
+    date_case() = FN.Case(FN.When("round" => 1, then = F("date")), default = F("date"))
+    q = M.Race.objects
+    q.filter("year" => 2009)
+    q.values("raceid", "date", "next" => date_case() + 1, "gap" => date_case() - F("date"))
+    q.order_by("raceid")
+    df = q |> DataFrame
+    @test size(df, 1) > 1
+    @test all(x -> x isa Dates.Date, df.next)
+    @test df.next == [Dates.Date(string(d)) + Dates.Day(1) for d in df.date]
+    @test all(==(0), df.gap)
+  end
+
+  # #1311 — the #1301 refusal reaches the ALIAS. A `Case` over a duration has no millisecond form on
+  # SQLite, so an ordering filter or an `order_by` on its alias compared and sorted the `HH:MM:SS`
+  # text, putting a driver past 100 h below one at 99 h, while the same comparison inside an expression
+  # was refused. Each driver's lap time over four seasons is summed inside the `Case`, beside the summed
+  # `milliseconds`, which is the oracle (#1219). On SQLite both alias spellings raise `QueryBuildError`;
+  # on PostgreSQL they keep and order the drivers the milliseconds do (`HAVING CASE … END > $n`,
+  # `ORDER BY "t" DESC`). Projected in a CTE, the column is read in milliseconds on SQLite (#1285:
+  # `WHERE <ms of "R1_1"."t"> > ?` with `[360000000]`), so that spelling orders and filters by length on
+  # both. Why it matters: the rows a filter keeps must not depend on how the comparison is spelled.
+  @testset "ordering a Case duration alias is refused on SQLite; as a CTE column it orders by length (#1311)" begin
+    FN = PormG.Functions
+    total() = FN.Case(FN.When("driverid__@gt" => 0, then = FN.Sum("time")), default = FN.Sum("time"))
+    seasons() = (b = M.Lap_times.objects;
+                 b.filter("raceid__year__@range" => [2009, 2012]);
+                 b.values("driverid", "t" => total(), "ms" => FN.Sum("milliseconds"));
+                 b)
+    totals = seasons() |> DataFrame
+    hours100 = 100 * 3_600_000
+    # Non-vacuous: drivers on both sides of 100 hours, so text order and numeric order disagree here.
+    @test any(>(hours100), totals.ms) && any(<(hours100), totals.ms)
+    by_ms(sign) = [r.driverid for r in sort(eachrow(totals); by = r -> (sign * r.ms, r.driverid))]
+    over = seasons(); over.filter("t__@gt" => Dates.Hour(100))
+    sorted = seasons(); sorted.order_by("-t", "driverid")
+    if by_engine(sqlite = true, postgres = false)
+      for q in (over, sorted)
+        err = try q |> DataFrame; nothing catch e; e end
+        @test err isa PormG.QueryBuildError
+        @test occursin("alias is not supported on SQLite", err === nothing ? "" : sprint(showerror, err))
+      end
+    else
+      @test sort((over |> DataFrame).driverid) == sort(totals.driverid[totals.ms .> hours100])
+      @test (sorted |> DataFrame).driverid == by_ms(-1)
+    end
+    run(build!) = (q = M.Driver.objects; q.with("c" => seasons(), join_field = "driverid" => "driverid", join_type = "INNER");
+                   q.values("driverid"); build!(q); q |> DataFrame)
+    @test sort(run(q -> q.filter("c__t__@gt" => Dates.Hour(100))).driverid) == sort(totals.driverid[totals.ms .> hours100])
+    @test run(q -> q.order_by("-c__t", "driverid")).driverid == by_ms(-1)
+  end
+
   # #894 — sorting and filtering an interval's VALUE on both engines. On SQLite a projected interval is
   # its `HH:MM:SS` text, which sorts `"100:00:00"` before `"99:00:00"` and `"-01:00:00"` before
   # `"-02:00:00"`; PormG orders and compares its milliseconds instead. A difference times the round

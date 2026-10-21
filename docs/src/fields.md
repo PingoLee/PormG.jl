@@ -1227,6 +1227,12 @@ agrees with PostgreSQL:
   (`values("b" => Subquery(best)); order_by("b")`, #1287). A `Subquery` binds its correlation, so
   its text is read once, in a scalar subquery around it
 
+A value with no millisecond form cannot be read that way: a `Case` whose value is a duration,
+`NullIf` or another function over one, and a window value function over a duration
+(`Lag("time", over = …)`). Ordering one is refused on SQLite with `QueryBuildError`, whether it is
+inside an expression (`filter(Case(…) > Hour(1))`, #1301) or through its alias (`"d__@gt" => Hour(1)`,
+`@range`, `order_by("d")`, #1311). Project it in a `CTE(...)` and order or filter that column instead.
+
 `F(...)` arithmetic on a `CTE(...)` column is not written that way: `F` takes a model path, and
 `F("laps__t")` is refused.
 

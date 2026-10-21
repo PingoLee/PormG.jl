@@ -322,3 +322,37 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1194 (its cast-name half): a `Cast` to a temporal or binary type is typed, so a pattern lookup on
+# its alias takes the #1183 rule. Expected on PostgreSQL:
+# - `Cast(x, "time")` reads as its text: `CAST(("Tb"."start_at")::time AS text) LIKE $1`;
+# - `timestamp`, `timestamptz`, `timestamp(3) with time zone`, `interval` and `bytea` are refused
+#   with `FilterError`, as a column of that type is.
+# Expected on SQLite: every one of those casts is refused by the cast itself (`BackendCapabilityError`),
+# `bytea` too since #1194, whose NUMERIC affinity turned `'abc'` into `0`; `blob`, the cast SQLite has,
+# is a binary value and is refused as one. Before, `_sql_type_field` named none of these, so each
+# rendered a bare `LIKE`: a PostgreSQL server error, and on SQLite a match over an integer or bytes.
+# Why it matters: the type a cast declares decides the lookup, as the column's type does.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1194: a pattern lookup on a temporal or binary cast is decided by the cast's type" begin
+  lookup(t) = q -> (q.values("raceid", "c" => Cast("start_at", t)); q.filter("c__@startswith" => "1"))
+  @test occursin("CAST((\"Tb\".\"start_at\")::time AS text) LIKE", _ptc_sql(lookup("time"), _PTC_PG))
+  for t in ("timestamp", "timestamptz", "timestamp(3) with time zone", "interval", "bytea", "blob")
+    e = _ptc_refusal(lookup(t), _PTC_PG)
+    @test e isa PormG.FilterError
+    @test occursin("'c'", e === nothing ? "" : sprint(showerror, e))
+  end
+  for t in ("time", "timestamp", "interval", "bytea")
+    @test _ptc_refusal(lookup(t), _PTC_SL) isa PormG.BackendCapabilityError
+  end
+  e = _ptc_refusal(lookup("bytea"), _PTC_SL)
+  @test occursin("Cast to BinaryField() (\"blob\") instead", e === nothing ? "" : sprint(showerror, e))
+  @test _ptc_refusal(lookup("blob"), _PTC_SL) isa PormG.FilterError
+  # The declared type also checks an equality value, as the column's formatter does: a duration cast
+  # binds a duration's text, and a value that is not one is refused before the query runs.
+  eq(t, v) = q -> (q.values("raceid", "c" => Cast("start_at", t)); q.filter("c" => v))
+  @test _ptc_params(eq("interval", Hour(1)), _PTC_PG)[end] == "01:00:00"
+  @test _ptc_refusal(eq("interval", 5), _PTC_PG) isa PormG.InvalidValueError
+  @test _ptc_refusal(eq("timestamptz", 5), _PTC_PG) isa PormG.InvalidValueError
+end

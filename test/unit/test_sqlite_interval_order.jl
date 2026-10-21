@@ -499,7 +499,8 @@ end
 # `Greatest`/`Least` compared the `HH:MM:SS` text (`max(text, text)`), `Sum`/`Avg` added up its leading
 # hours, and `Coalesce` sorted and compared it. They use the milliseconds now, on SQLite, formatted
 # back into the interval text. `Abs` is refused (PostgreSQL has no `abs(interval)`). `Case` and the
-# window value functions keep the text, as documented. PostgreSQL's SQL and parameters are unchanged.
+# window value functions have no millisecond form; ordering one is refused on SQLite (#1301, #1311).
+# PostgreSQL's SQL and parameters are unchanged.
 # ═════════════════════════════════════════════════════════════════════════════
 
 using PormG.Functions: Lag, WindowOver
@@ -655,12 +656,13 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #900 — Abs over an interval is refused on SQLite; window value functions keep the text
+# #900 — Abs over an interval is refused on SQLite; so is ordering a window value function's alias
 # PostgreSQL has no `abs(interval)`, so `Abs(d)` fails there when the statement runs; SQLite took the
 # absolute value of the text's leading hours. It is refused at build time, as `d * d` is (#881). A
-# window value function over a duration has no millisecond form (#814) and sorts its text, as documented.
+# window value function over a duration has no millisecond form (#814): `order_by` on its alias sorted
+# its text until #1311, and is refused on SQLite now.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#900: Abs over an interval is refused on SQLite; a window keeps the text" begin
+@testset "#900: Abs over an interval is refused on SQLite; so is ordering a window's alias (#1311)" begin
   # #888: a `Subquery` over the duration is an interval too — it has its one column's kind now, so it
   # is refused like the column. Before, it answered `nothing` and SQLite took `ABS` of the text.
   lap_sub = (s = _IOM.Io_lap.objects; s.filter("id" => PormG.OuterRef("id")); s.values("t" => _IO_FN.Max("lap")); s)
@@ -680,11 +682,14 @@ end
   q_pg.values("id", "a" => _IO_FN.Abs("lap"))
   @test occursin("ABS(", _io_sql(q_pg; conn = _IO_PG))
 
-  # A window value function over a duration: ordered by its text, not by a millisecond parse.
+  # A window value function over a duration has no millisecond form: ordering its alias would sort
+  # its text, so it is refused on SQLite (#1311), as ordering it inside an expression is (#1301).
   q = _IOM.Io_lap.objects
   q.values("id", "prev" => Lag("lap"; over = WindowOver(order_by = ["id"])))
   q.order_by("prev")
-  @test !occursin("substr(", last(split(_io_sql(q), "ORDER BY")))
+  err = try _io_sql(q); nothing catch e; e end
+  @test err isa PormG.QueryBuildError
+  @test occursin("`order_by` on the `prev` alias is not supported on SQLite", err === nothing ? "" : sprint(showerror, err))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

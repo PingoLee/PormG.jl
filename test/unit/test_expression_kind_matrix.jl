@@ -244,7 +244,7 @@ const _EKM_CELLS = [(_ekm_cell_id(label, ctx), label, base, build, ctx)
 const _EKM_KIND_FAMILY = Dict(
   "CInt16()" => :int, "CInt32()" => :int, "CInt64()" => :int, "CFloat64()" => :float, "CBool()" => :bool,
   "CText()" => :text, "CDate()" => :date, "CTime()" => :time, "CInterval()" => :interval,
-  "CJSON()" => :json, "CUUID()" => :uuid)
+  "CJSON()" => :json, "CUUID()" => :uuid, "CBytes()" => :binary)
 function _ekm_kind_family(s::String)
   haskey(_EKM_KIND_FAMILY, s) && return _EKM_KIND_FAMILY[s]
   startswith(s, "CDecimal(") && return :decimal
@@ -257,7 +257,7 @@ end
 const _EKM_FORMATTER_FAMILY = Dict(
   "format_number_sql" => :number, "format_bool_sql" => :bool, "format_text_sql" => :text_or_time,
   "format_date_sql" => :date, "format_timezone_sql" => :datetime, "format_duration_sql" => :interval,
-  "format_json_sql" => :json, "format_uuid_sql" => :uuid,
+  "format_json_sql" => :json, "format_uuid_sql" => :uuid, "format_binary_sql" => :binary,   # #1194
   # the date-part range formatters (`@year`, `@hour`, …) format an integer
   "format_year_sql" => :int, "format_hour_sql" => :int, "format_minute_sql" => :int,
   "format_second_sql" => :int, "format_month_sql" => :int, "format_day_sql" => :int,
@@ -272,7 +272,7 @@ const _EKM_FIELD_FAMILY = Dict(
   "sIntegerField" => :int, "sBigIntegerField" => :int, "sSmallIntegerField" => :int, "sFloatField" => :float,
   "sDecimalField" => :decimal, "sBooleanField" => :bool, "sCharField" => :text, "sTextField" => :text,
   "sDateField" => :date, "sDateTimeField" => :datetime, "sTimeField" => :time, "sDurationField" => :interval,
-  "sJSONField" => :json, "sUUIDField" => :uuid)
+  "sJSONField" => :json, "sUUIDField" => :uuid, "sBinaryField" => :binary)   # #1194: a `bytea`/`blob` cast
 
 const _EKM_KIND_CHANNELS = (:read, :render, :operand, :function_, :column)
 

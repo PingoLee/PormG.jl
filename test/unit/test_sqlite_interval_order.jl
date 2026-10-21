@@ -883,10 +883,10 @@ end
   @test occursin("CAST(COALESCE(\"Tb\".\"circuit\", ?) AS TEXT) as \"c\"", _io_sql(q))
   @test _io_params(q) == Any["01:00:00"]
 
-  # PostgreSQL: unchanged, the literal bound as itself.
+  # PostgreSQL: the literal bound as itself, typed `::interval` since #1316.
   q_pg = _IOM.Io_lap.objects
   q_pg.values("id", "c" => _IO_FN.Coalesce("lap", QB.Value(Dates.Hour(0))))
-  @test occursin("COALESCE(\"Tb\".\"lap\", \$1) as \"c\"", _io_sql(q_pg; conn = _IO_PG))
+  @test occursin("COALESCE(\"Tb\".\"lap\", \$1::interval) as \"c\"", _io_sql(q_pg; conn = _IO_PG))
   @test _io_params(q_pg; conn = _IO_PG) == Any[Dates.Hour(0)]
 end
 
@@ -1312,6 +1312,169 @@ const _IO_R1_BEST_MS = PormG.Dialect._sqlite_interval_ms("\"R1\".\"best\"")
                q.values("id"); q.filter(_io_gap() > PormG.CTE("c", "t"));
                insp = inspect_query(q; connection = _IO_SL); sort([r.id for r in exe(insp[:sql_text], insp[:parameters])]))
     @test gap_cte == [2, 3, 5]
+  finally
+    close(db)
+  end
+end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# #1316 — a duration literal projected as an alias compares intervals
+# `values("v" => Value(Hour(100))); filter("v__@gt" => Hour(99))` repeated the literal and compared it
+# with the value as two texts on both engines: SQLite bound `"100:00:00" > "99:00:00"` (text order is
+# the interval's order only below 100 hours and for non-negative values), and PostgreSQL bound two
+# parameters with no type, which it compares as text. SQLite compares the literal's milliseconds now,
+# bound once per side (#907), and PostgreSQL binds every duration literal `::interval`, as it binds a
+# date `::date`. A literal with no millisecond form (a month) refuses an ordering lookup on SQLite, as
+# an interval alias with none does (#1311). `order_by` on the alias orders a constant: unchanged.
+# ═════════════════════════════════════════════════════════════════════════════
+using PormG.QueryBuilder: Value
+
+_io_value_alias(lit, lookup, value; conn = _IO_SL) = begin
+  q = _IOM.Io_lap.objects
+  q.values("id", "v" => Value(lit))
+  q.filter("v__$(lookup)" => value)
+  inspect_query(q; connection = conn)
+end
+
+@testset "#1316: a duration-literal alias compares milliseconds on SQLite" begin
+  insp = _io_value_alias(Dates.Hour(100), "@gt", Dates.Hour(99))
+  @test occursin("? as \"v\"", insp[:sql_text])
+  @test occursin("WHERE ? > ?", insp[:sql_text])
+  # The projection binds the text it returns; the filter the literal's and the value's milliseconds.
+  @test insp[:parameters] == Any["100:00:00", 360_000_000, 356_400_000]
+  insp = _io_value_alias(Dates.Minute(90), "@range", [Dates.Hour(1), Dates.Hour(2)])
+  @test occursin("WHERE ? BETWEEN ? AND ?", insp[:sql_text])
+  @test insp[:parameters] == Any["01:30:00", 5_400_000, 3_600_000, 7_200_000]
+  # Equality on a literal with a millisecond form compares milliseconds too, as for a timestamp difference.
+  q = _IOM.Io_lap.objects
+  q.values("id", "v" => Value(Dates.Hour(1)))
+  q.filter("v" => "1:00:00")
+  @test occursin("WHERE ? = ?", _io_sql(q))
+  @test _io_params(q) == Any["01:00:00", 3_600_000, 3_600_000]
+  @test _io_value_alias(Dates.Hour(1), "@in", [Dates.Hour(1)])[:parameters] == Any["01:00:00", 3_600_000, 3_600_000]
+  # A fraction of a millisecond has no exact millisecond form (#907): ordering it is refused, equality
+  # keeps the text. (A month cannot be a SQLite parameter at all, #721.)
+  err = try _io_value_alias(Dates.Nanosecond(1500), "@gt", Dates.Hour(1)); nothing catch e; e end
+  @test err isa PormG.QueryBuildError
+  msg = err === nothing ? "" : sprint(showerror, err)
+  @test occursin("An ordering filter (`>`) on the `v` alias is not supported on SQLite", msg)
+  @test occursin("duration literal with no millisecond form", msg)
+  @test occursin("Day(30), Hour(1)", msg)
+  # `order_by` on the alias orders one constant: the alias, unchanged, whatever the literal.
+  @test _io_value_alias(Dates.Nanosecond(1500), "@in", [Dates.Hour(1)])[:parameters] == Any["00:00:00.0000015", "00:00:00.0000015", "01:00:00"]
+  for lit in (Dates.Hour(100), Dates.Nanosecond(1500))
+    q = _IOM.Io_lap.objects
+    q.values("id", "v" => Value(lit))
+    q.order_by("v")
+    @test occursin("ORDER BY \"v\" ASC NULLS LAST", _io_sql(q))
+  end
+end
+
+@testset "#1316: PostgreSQL binds a duration literal as an interval" begin
+  insp = _io_value_alias(Dates.Hour(100), "@gt", Dates.Hour(99); conn = _IO_PG)
+  @test occursin("\$1::interval as \"v\"", insp[:sql_text])
+  @test occursin("WHERE \$2::interval > \$3", insp[:sql_text])
+  @test insp[:parameters] == Any[Dates.Hour(100), Dates.Hour(100), Dates.Hour(99)]
+  # A nanosecond or a quarter is no interval input text (`1500 nanoseconds`): untyped, as before.
+  for lit in (Dates.Nanosecond(1500), Dates.Quarter(1), Dates.Second(1) + Dates.Nanosecond(500))
+    @test occursin("WHERE \$2 > \$3", _io_value_alias(lit, "@gt", Dates.Hour(1); conn = _IO_PG)[:sql_text])
+  end
+  # A month is an interval there, and builds.
+  @test occursin("WHERE \$2::interval > \$3", _io_value_alias(Dates.Month(1), "@gt", Dates.Hour(1); conn = _IO_PG)[:sql_text])
+  # A `Case` over duration literals was untyped text; its branches are intervals now.
+  q = _IOM.Io_lap.objects
+  q.values("id", "c" => _IO_FN.Case([_IO_FN.When("id" => 1, then = Dates.Hour(100))], default = Dates.Hour(2)))
+  @test occursin("THEN \$2::interval ELSE \$3::interval END", replace(_io_sql(q; conn = _IO_PG), r"\s+" => " "))
+  # Beside a duration column PostgreSQL typed the literal from the column already: the cast is explicit now.
+  q = _IOM.Io_lap.objects
+  q.values("id", "c" => _IO_FN.Coalesce("lap", Value(Dates.Hour(0))))
+  @test occursin("COALESCE(\"Tb\".\"lap\", \$1::interval) as \"c\"", _io_sql(q; conn = _IO_PG))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #1316 — the oracle: the issue's rows, plus a negative pair, against SQLite itself. Each expected count
+# is the interval comparison's (5 rows kept when it holds); the text comparison kept 0, 5, 0 and 0.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1316: SQLite compares a duration-literal alias numerically (in-memory oracle)" begin
+  isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+  db = Main.SQLite.DB()
+  try
+    exe(sql, params = Any[]) = Main.SQLite.DBInterface.execute(db, sql, params)
+    _io_seed!(exe)
+    kept(lit, value) = (insp = _io_value_alias(lit, "@gt", value); length(collect(exe(insp[:sql_text], insp[:parameters]))))
+    @test kept(Dates.Hour(100), Dates.Hour(99)) == 5
+    @test kept(Dates.Hour(2), Dates.Hour(1)) == 5
+    @test kept(Dates.Hour(5), Dates.Hour(40)) == 0
+    @test kept(Dates.Hour(-1), Dates.Hour(-2)) == 5
+  finally
+    close(db)
+  end
+end
+
+# ═════════════════════════════════════════════════════════════════════════════
+# #1313 — a labelled order term over an interval with a millisecond form sorts its milliseconds
+# `order_by(SQLOrder(SQLField(F("lap"), "x")))` rendered the term as a projection would, so on SQLite it
+# sorted the stored `HH:MM:SS` text (`ORDER BY "Tb"."lap"`), and `F("lap") * 2` sorted the interval
+# re-formatted as text, while `order_by("lap")` and the same expression's alias sort its milliseconds
+# (#894). The term now orders by the millisecond form, from the one render that also gives its text:
+# GROUP BY keeps the text (one bind), ORDER BY prints the milliseconds (one bind). An interval with no
+# millisecond form is still refused (#1311), a number term and PostgreSQL are unchanged.
+# ═════════════════════════════════════════════════════════════════════════════
+_io_labelled(e; dir = "ASC") = (q = _IOM.Io_lap.objects; q.values("id"); q.order_by(QB.SQLOrder(QB.SQLField(e, "x"); orientation = dir)); q)
+
+@testset "#1313: a labelled interval order term sorts its milliseconds on SQLite" begin
+  @test occursin("ORDER BY $(_IO_LAP_MS) DESC NULLS FIRST", _io_sql(_io_labelled(F("lap"); dir = "DESC")))
+  # A labelled PATH already sorted its milliseconds (#894, `_orders_as_sqlite_interval`): unchanged.
+  @test occursin("ORDER BY $(_IO_LAP_MS) ASC NULLS LAST", _io_sql(_io_labelled("lap")))
+  sql = _io_sql(_io_labelled(F("lap") * 2))
+  @test occursin("ORDER BY CAST(round(($(_IO_LAP_MS)) * (?)) AS INTEGER) ASC NULLS LAST", sql)
+  @test !occursin("printf(", sql)   # not the interval re-formatted as text
+  @test _io_params(_io_labelled(F("lap") * 2)) == Any[2]
+  # A labelled `Value` is one constant: its text render, as before, so the #76 guard still matches it
+  # against the same projected `Value` under DISTINCT.
+  q = _IOM.Io_lap.objects
+  q.values("id", "v" => QB.Value(Dates.Hour(1)))
+  q.distinct()
+  q.order_by(QB.SQLOrder(QB.SQLField(QB.Value(Dates.Hour(1)), "x")))
+  @test occursin("ORDER BY ? ASC NULLS LAST", _io_sql(q))
+  @test _io_params(q) == Any["01:00:00", "01:00:00"]
+  # A number term is not an interval: unchanged.
+  @test occursin("ORDER BY (\"Tb\".\"id\" * ?) ASC NULLS LAST", _io_sql(_io_labelled(F("id") * 2)))
+  # Grouped: GROUP BY keeps the text form, ORDER BY the milliseconds, each with its own bind.
+  q = _IOM.Io_lap.objects
+  q.values("circuit", "n" => _IO_FN.Count("id"))
+  q.order_by(QB.SQLOrder(QB.SQLField(F("lap") * 2, "x")))
+  sql = _io_sql(q)
+  @test occursin("GROUP BY 1, (SELECT CASE WHEN _pormg_ms IS NULL", sql)
+  @test occursin("ORDER BY CAST(round(($(_IO_LAP_MS)) * (?)) AS INTEGER) ASC NULLS LAST", sql)
+  @test _io_params(q) == Any[2, 2]
+  # PostgreSQL orders the interval itself, as before.
+  @test occursin("ORDER BY \"Tb\".\"lap\" ASC NULLS LAST", _io_sql(_io_labelled(F("lap")); conn = _IO_PG))
+  @test occursin("ORDER BY (\"Tb\".\"lap\" * \$1::bigint) ASC NULLS LAST", _io_sql(_io_labelled(F("lap") * 2); conn = _IO_PG))
+end
+
+@testset "#1313: old-SQLite NULL placement of a binding labelled interval term" begin
+  # Before 3.30 the placement is a flag; a term that binds is rendered again for it (two binds), as an
+  # alias's projection is, rather than repeating one `?` twice.
+  sql = _io_sql(_io_labelled(F("lap") * 2); conn = _IO_OLD)
+  term = "CAST(round(($(_IO_LAP_MS)) * (?)) AS INTEGER)"
+  @test occursin("ORDER BY ($(term) IS NULL) ASC, $(term) ASC", sql)
+  @test _io_params(_io_labelled(F("lap") * 2); conn = _IO_OLD) == Any[2, 2]
+  # One that binds nothing is its own flag.
+  @test occursin("ORDER BY ($(_IO_LAP_MS) IS NULL) ASC, $(_IO_LAP_MS) ASC", _io_sql(_io_labelled(F("lap")); conn = _IO_OLD))
+end
+
+@testset "#1313: SQLite sorts a labelled interval term by its length (in-memory oracle)" begin
+  isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+  db = Main.SQLite.DB()
+  try
+    exe(sql, params = Any[]) = Main.SQLite.DBInterface.execute(db, sql, params)
+    _io_seed!(exe)
+    ids(q; conn = _IO_SL) = (insp = inspect_query(q; connection = conn); [r.id for r in exe(insp[:sql_text], insp[:parameters])])
+    # Laps 1 → 99 h, 2 → 100 h, 3 → -1 h, 4 → -2 h, 5 → 1:30. The text order was [3, 4, 5, 2, 1].
+    @test ids(_io_labelled(F("lap"))) == [4, 3, 5, 1, 2]
+    @test ids(_io_labelled(F("lap") * 2; dir = "DESC")) == [2, 1, 5, 3, 4]
+    @test ids(_io_labelled("lap")) == [4, 3, 5, 1, 2]   # a labelled path: unchanged since #894
   finally
     close(db)
   end

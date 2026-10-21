@@ -275,7 +275,8 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # #696: output_field through the full build, both engines
-# `Case` casts the whole expression and its `default=` bind parameter on PostgreSQL; SQLite wraps
+# `Case` casts the whole expression on PostgreSQL, and its `default=` binds as its branches' type
+# (#1222, and since #1316 when every branch is a literal too); SQLite wraps
 # the CASE in `CAST(… AS …)`. `Coalesce`, `Greatest` and `Least` cast the same way on both engines
 # since #852 — SQLite ignored their `output_field`, and `Greatest`/`Least` cast on neither.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -283,7 +284,9 @@ end
   q = _c696_q(); q.values("c" => Case([When("positionorder" => 1, then = 1)]; default = 0, output_field = IntegerField()))
   pg = _c696_sql(q, _CPG)
   @test occursin("END)::integer", pg)            # the expression cast
-  @test occursin(r"ELSE \$\d+::integer", pg)     # the bind cast on the default
+  # The default binds as its literal branch's type, which the expression cast then converts (#1316):
+  # bound as the `output_field` type it resolved beside a `::bigint` branch, but not beside a text one.
+  @test occursin(r"THEN \$\d+::bigint\s+ELSE \$\d+::bigint", pg)
   @test occursin(r"CAST\(CASE.*END\s+AS INTEGER\)"s, _c696_sql(q, _CSL))
 
   # SQLite keeps the sized spelling: an unsized name goes through the reverse type map, a sized one

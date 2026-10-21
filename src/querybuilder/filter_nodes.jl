@@ -811,7 +811,7 @@ function _sqlite_interval_alias_comparison(v::SQLTypeOper, instruc::SQLInstructi
   name === nothing && return nothing
   source = _projected_interval_source(name, instruc)
   source === nothing && return nothing
-  lhs, lhs_ms = _render_interval_ms(source.field, instruc; _as = source._as)
+  lhs, lhs_ms = _render_interval_source_ms(source, instruc)
   rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)   # #985: the right side
   if !(lhs_ms && rhs_ms)
     lhs_ms && (lhs = Dialect._sqlite_interval_text(lhs))

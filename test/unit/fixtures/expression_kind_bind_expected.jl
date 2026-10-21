@@ -1253,6 +1253,62 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    ? as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("\"2009-03-29T06:00:00.000+00:00\"", "String"), ("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String"), ("1", "Int64"), ("10", "Int64")]),
   ("Value datetime | subquery", :sqlite, "w__@gt", "datetime 2009-03-29T06:00") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    ? as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("\"2009-03-29T06:00:00.000+00:00\"", "String"), ("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String"), ("1", "Int64"), ("\"2009-03-29T06:00:00.000+00:00\"", "String")]),
+  ("Value interval | alone", :mysql, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "? > ?", params = [("100 hours", "Hour"), ("100 hours", "Hour"), ("10", "Int64")]),
+  ("Value interval | alone", :mysql, "v__@gt", "interval Minute(1)") =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
+  ("Value interval | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\$2::interval > \$3", params = [("100 hours", "Hour"), ("100 hours", "Hour"), ("10", "Int64")]),
+  ("Value interval | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\$2::interval > \$3", params = [("100 hours", "Hour"), ("100 hours", "Hour"), ("1 minute", "Minute")]),
+  ("Value interval | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "? > ?", params = [("\"100:00:00\"", "String"), ("\"100:00:00\"", "String"), ("10", "Int64")]),
+  ("Value interval | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "? > ?", params = [("\"100:00:00\"", "String"), ("360000000", "Int64"), ("60000", "Int64")]),
+  ("Value interval | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ? as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("100 hours", "Hour"), ("1", "Int64"), ("100 hours", "Hour"), ("1", "Int64"), ("10", "Int64")]),
+  ("Value interval | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
+  ("Value interval | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    \$3::interval as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("100 hours", "Hour"), ("1", "Int64"), ("100 hours", "Hour"), ("1", "Int64"), ("10", "Int64")]),
+  ("Value interval | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    \$3::interval as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("100 hours", "Hour"), ("1", "Int64"), ("100 hours", "Hour"), ("1", "Int64"), ("1 minute", "Minute")]),
+  ("Value interval | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ? as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("\"100:00:00\"", "String"), ("1", "Int64"), ("\"100:00:00\"", "String"), ("1", "Int64"), ("10", "Int64")]),
+  ("Value interval | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    ? as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) > ?", params = [("\"100:00:00\"", "String"), ("1", "Int64"), ("\"100:00:00\"", "String"), ("1", "Int64"), ("60000", "Int64")]),
+  ("Value interval month | alone", :mysql, "v__@gt", "10") =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
+  ("Value interval month | alone", :mysql, "v__@gt", "interval Minute(1)") =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
+  ("Value interval month | alone", :postgres, "v__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "\$2::interval > \$3", params = [("1 month", "Month"), ("1 month", "Month"), ("10", "Int64")]),
+  ("Value interval month | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "\$2::interval > \$3", params = [("1 month", "Month"), ("1 month", "Month"), ("1 minute", "Minute")]),
+  ("Value interval month | subquery", :mysql, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    ? as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("1 month", "Month"), ("1", "Int64"), ("1 month", "Month"), ("1", "Int64"), ("10", "Int64")]),
+  ("Value interval month | subquery", :mysql, "w__@gt", "interval Minute(1)") =>
+    (stage = :build, error = "UnsupportedConnectionError", message = "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp difference, a duratio"),
+  ("Value interval month | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    \$3::interval as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1 month", "Month"), ("1", "Int64"), ("1 month", "Month"), ("1", "Int64"), ("10", "Int64")]),
+  ("Value interval month | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    \$3::interval as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("1 month", "Month"), ("1", "Int64"), ("1 month", "Month"), ("1", "Int64"), ("1 minute", "Minute")]),
+  ("Case interval literals | alone", :postgres, "v__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Case interval literals | alone", :postgres, "v__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN \$5::interval\nELSE \$6::interval\nEND\n > \$7", params = [("1", "Int64"), ("100 hours", "Hour"), ("2 hours", "Hour"), ("1", "Int64"), ("100 hours", "Hour"), ("2 hours", "Hour"), ("\"00:01:00\"", "String")]),
+  ("Case interval literals | alone", :sqlite, "v__@gt", "10") =>
+    (stage = :build, error = "QueryBuildError", message = "An ordering filter (`>`) on the `v` alias is not supported on SQLite: it is an interval with no millisecond form (a `Cas"),
+  ("Case interval literals | alone", :sqlite, "v__@gt", "interval Minute(1)") =>
+    (stage = :build, error = "QueryBuildError", message = "An ordering filter (`>`) on the `v` alias is not supported on SQLite: it is an interval with no millisecond form (a `Cas"),
+  ("Case interval literals | subquery", :postgres, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Case interval literals | subquery", :postgres, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    CASE\nWHEN \"R2\".\"grid\" = \$5 THEN \$6::interval\nELSE \$7::interval\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("100 hours", "Hour"), ("2 hours", "Hour"), ("1", "Int64"), ("1", "Int64"), ("100 hours", "Hour"), ("2 hours", "Hour"), ("1", "Int64"), ("\"00:01:00\"", "String")]),
+  ("Case interval literals | subquery", :sqlite, "w__@gt", "10") =>
+    (stage = :build, error = "InvalidValueError", message = "Error in filter on the `w` projection alias (duration): The duration must be a Period, CompoundPeriod, or a string in HH"),
+  ("Case interval literals | subquery", :sqlite, "w__@gt", "interval Minute(1)") =>
+    (stage = :ok, clause = :where, sql = "(SELECT ((CASE WHEN substr(_pormg_v, 1, 1) = '-' THEN -1 ELSE 1 END) * (CAST(ltrim(_pormg_v, '+-') AS INTEGER) * 3600000 + CAST(substr(_pormg_v, instr(_pormg_v, ':') + 1, 2) AS INTEGER) * 60000 + CAST(round(CAST(substr(_pormg_v, instr(_pormg_v, ':') + 4) AS REAL) * 1000) AS INTEGER))) FROM (SELECT (SELECT\n    CASE\nWHEN \"R2\".\"grid\" = ? THEN ?\nELSE ?\nEND\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) AS _pormg_v)) > ?", params = [("1", "Int64"), ("\"100:00:00\"", "String"), ("\"02:00:00\"", "String"), ("1", "Int64"), ("1", "Int64"), ("\"100:00:00\"", "String"), ("\"02:00:00\"", "String"), ("1", "Int64"), ("60000", "Int64")]),
   ("Cast datetime to date | alone", :mysql, "v__@gt", "10") =>
     (stage = :build, error = "InvalidValueError", message = "Error in filter on the `v` projection alias (date): The date must be a Date, DateTime, ZonedDateTime or a string in the "),
   ("Cast datetime to date | alone", :mysql, "v__@gt", "date 2009-03-29") =>
@@ -3706,9 +3762,9 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Greatest float int output decimal | subquery", :postgres, "w__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (GREATEST(\"R2\".\"points\", \"R2\".\"grid\"))::numeric(10,2) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Case float output decimal | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN \$5::double precision\nELSE \$6::numeric(10,2)\nEND)::numeric(10,2)\n > \$7", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN \$5::double precision\nELSE \$6::double precision\nEND)::numeric(10,2)\n > \$7", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("10", "Int64")]),
   ("Case float output decimal | alone", :postgres, "v__@gt", "decimal 10.50") =>
-    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN \$5::double precision\nELSE \$6::numeric(10,2)\nEND)::numeric(10,2)\n > \$7", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN \$5::double precision\nELSE \$6::double precision\nEND)::numeric(10,2)\n > \$7", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("\"10.5\"", "String")]),
   ("Case float output decimal | alone", :sqlite, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CAST(CASE\nWHEN \"Tb\".\"grid\" = ? THEN ?\nELSE ?\nEND\n AS NUMERIC(10,2)) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("10", "Int64")]),
   ("Case float output decimal | alone", :sqlite, "v__@gt", "decimal 10.50") =>
@@ -3722,9 +3778,9 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Case float output decimal | cte", :sqlite, "g__v__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("\"10.5\"", "String")]),
   ("Case float output decimal | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$5 THEN \$6::double precision\nELSE \$7::numeric(10,2)\nEND)::numeric(10,2)\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$5 THEN \$6::double precision\nELSE \$7::double precision\nEND)::numeric(10,2)\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Case float output decimal | subquery", :postgres, "w__@gt", "decimal 10.50") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$5 THEN \$6::double precision\nELSE \$7::numeric(10,2)\nEND)::numeric(10,2)\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$5 THEN \$6::double precision\nELSE \$7::double precision\nEND)::numeric(10,2)\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Case float output decimal | subquery", :sqlite, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    CAST(CASE\nWHEN \"R2\".\"grid\" = ? THEN ?\nELSE ?\nEND\n AS NUMERIC(10,2)) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Case float output decimal | subquery", :sqlite, "w__@gt", "decimal 10.50") =>
@@ -3886,11 +3942,11 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Case decimal output scale 1 | subquery", :postgres, "w__@gt", "decimal 10.50") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"status\" = \$4 THEN \"R2\".\"points\"\nELSE \$5::numeric\nEND)::numeric(10,1)\n as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT \$6 \n) > \$7", params = [("\"x\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"x\"", "String"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Case float literal output integer | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN \$5::double precision\nELSE \$6::integer\nEND)::integer\n > \$7", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN \$5::double precision\nELSE \$6::double precision\nEND)::integer\n > \$7", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("10", "Int64")]),
   ("Case float literal output integer | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$4", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("10", "Int64")]),
   ("Case float literal output integer | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$5 THEN \$6::double precision\nELSE \$7::integer\nEND)::integer\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$5 THEN \$6::double precision\nELSE \$7::double precision\nEND)::integer\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Case bool output text | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"result\" = \$2 THEN \"Tb\".\"boolean_field\"\nELSE NULL\nEND)::text\n > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10\"", "String")]),
   ("Case bool output text | alone", :postgres, "v__@gt", "text pole") =>
@@ -4378,17 +4434,17 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
   ("Coalesce float int output real | subquery", :postgres, "w__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    (COALESCE(\"R2\".\"points\", \"R2\".\"grid\"))::real as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$2 \n) > \$3", params = [("1", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Case float literal output real | alone", :postgres, "v__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN \$5::double precision\nELSE \$6::real\nEND)::real\n > \$7", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN \$5::double precision\nELSE \$6::double precision\nEND)::real\n > \$7", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("10", "Int64")]),
   ("Case float literal output real | alone", :postgres, "v__@gt", "float 10.5") =>
-    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN \$5::double precision\nELSE \$6::real\nEND)::real\n > \$7", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("\"10.5\"", "String")]),
+    (stage = :ok, clause = :where, sql = "(CASE\nWHEN \"Tb\".\"grid\" = \$4 THEN \$5::double precision\nELSE \$6::double precision\nEND)::real\n > \$7", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("\"10.5\"", "String")]),
   ("Case float literal output real | cte", :postgres, "g__v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$4", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("10", "Int64")]),
   ("Case float literal output real | cte", :postgres, "g__v__@gt", "float 10.5") =>
     (stage = :ok, clause = :where, sql = "\"R1_1\".\"v\" > \$4", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("\"10.5\"", "String")]),
   ("Case float literal output real | subquery", :postgres, "w__@gt", "10") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$5 THEN \$6::double precision\nELSE \$7::real\nEND)::real\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$5 THEN \$6::double precision\nELSE \$7::double precision\nEND)::real\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Case float literal output real | subquery", :postgres, "w__@gt", "float 10.5") =>
-    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$5 THEN \$6::double precision\nELSE \$7::real\nEND)::real\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
+    (stage = :ok, clause = :where, sql = "(SELECT\n    (CASE\nWHEN \"R2\".\"grid\" = \$5 THEN \$6::double precision\nELSE \$7::double precision\nEND)::real\n as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$8 \n) > \$9", params = [("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("1", "Int64"), ("1.5", "Float64"), ("0", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Cast float DecimalField(10,1) | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "CAST(`Tb`.`points` AS DECIMAL(10,1)) > ?", params = [("10", "Int64")]),
   ("Cast float DecimalField(10,1) | alone", :mysql, "v__@gt", "decimal 10.50") =>

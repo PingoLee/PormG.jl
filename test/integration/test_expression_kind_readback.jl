@@ -77,6 +77,12 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("F date - date | alone", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
   ("F date - date | subquery", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
   ("F date - date | subquery", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
+  # #1307: a `Case` over a date column minus a date is the same day count, through the `DateField`
+  # column's render, so it reads back as `F date - date` does.
+  ("Case untyped date col - date | alone", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
+  ("Case untyped date col - date | alone", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
+  ("Case untyped date col - date | subquery", :postgres) => (type = "Int32", value = "0", read = "CInt32()"),
+  ("Case untyped date col - date | subquery", :sqlite) => (type = "Int64", value = "0", read = "CInt32()"),
   # #1111: a `Sum` over an operand the walk does not type, divided — PostgreSQL's quotient is a
   # `numeric`, which keeps the half, over an `integer` column as over a `bigint` one; the division
   # view fails closed on it since #1034 phase 3 step 2a. SQLite has no `EPOCH` part, so the shape
@@ -91,7 +97,8 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
 
 # The cells whose value comes back as a DIFFERENT TYPE on the two engines, by the table above. Every
 # other disagreeing cell reads back the same type on both, with `==` values. One family is left,
-# representation, not meaning (#1196): `F date - date` is an integer on both engines and records
+# representation, not meaning (#1196): `F date - date` (and, since #1307, the same day count through a
+# `Case` over a date column) is an integer on both engines and records
 # `CInt32`, which no read parser undoes, so each driver's integer WIDTH comes through (`Int32` vs
 # `Int64`) — the same value spelled in two widths, as an `IntegerField` column itself reads on each.
 # An integer's width follows the engine, for a column and a computed value alike; the testset after
@@ -103,6 +110,8 @@ const _EKR_EXPECTED = Dict{Tuple{String,Symbol},Any}(
 # — which reads as a `Decimal` on both engines since #1212.
 const _EKR_TYPE_DIVERGENT = Set{String}([
   "F date - date | alone", "F date - date | subquery",
+  # #1307: the same day count through a `Case` over a date column, so the same two widths.
+  "Case untyped date col - date | alone", "Case untyped date col - date | subquery",
 ])
 
 const _EKR_CELLS = sort!([id for (id, backend) in keys(_EKM_DISAGREEMENTS) if backend === _EKR_ENGINE])

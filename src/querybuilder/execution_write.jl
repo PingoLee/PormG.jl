@@ -443,14 +443,17 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
       end
       # Lost the insert race → the row exists now; return the winner, created == false.
       raced = fetch_by_target()
-      # #1299: not the caller's call, so not a `UsageError`. The conflicting row was there when the
-      # INSERT skipped and is gone now: another session deleted it in between (a winner not yet
-      # visible to a REPEATABLE READ snapshot is PostgreSQL's own serialization failure). The same
-      # call retried can succeed, which is what `OperationalError` signals.
+      # #1299: not the caller's call, so not a `UsageError`. The usual cause is a race: the conflicting
+      # row was there when the INSERT skipped and another session deleted it before this read (a
+      # winner not yet visible to a REPEATABLE READ snapshot is PostgreSQL's own serialization
+      # failure). The same call retried can succeed, which is what `OperationalError` signals. A
+      # trigger or rule that skips the insert leaves the same empty RETURNING and fails every retry,
+      # so the message names it rather than claiming the race.
       raced === nothing &&
         throw(OperationalError(_backend_name(connection),
-          "get_or_create: ON CONFLICT DO NOTHING skipped the insert, but the existing $(model.name) row " *
-          "could not be read back: another session deleted it in between. Retrying the call can succeed."))
+          "get_or_create: the insert returned no row, and the $(model.name) row could not be read back. " *
+          "Usually another session deleted the conflicting row in between, and retrying the call can " *
+          "succeed; a trigger or rule that skips the insert gives the same result on every retry."))
       return (raced, false)
 
     elseif connection isa PormGSQLite

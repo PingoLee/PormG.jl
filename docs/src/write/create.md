@@ -339,7 +339,8 @@ row, created = M.Status.objects.get_or_create(
 - **Race-safe** on PostgreSQL and SQLite. The create path runs `INSERT ... ON CONFLICT (lookup) DO NOTHING`, so if a competing writer inserts the same key first, PormG re-reads the winner and returns `created = false` — no duplicate-key crash. That rests on the engine's `ON CONFLICT`, and on SQLite also on running the whole call under the write lock ([Backend Capabilities](../backends.md#Guarantees-that-rest-on-an-engine-feature)).
 - **A row that cannot be read back is a database condition, not a usage error** (#1299). On
   PostgreSQL, if the winner of the race is deleted before PormG re-reads it, `get_or_create` raises
-  `OperationalError`, and the call retried can succeed. On SQLite no other writer can interleave, so an
+  `OperationalError`, and the call retried can succeed (a trigger or rule that skips the insert raises
+  the same error, and every retry fails). On SQLite no other writer can interleave, so an
   insert that reports success but stores nothing the lookup finds (a trigger that drops the row, for
   one) raises `StatementError`. Neither is a `UsageError`, so a handler that maps `UsageError` to a bad
   request does not catch them.

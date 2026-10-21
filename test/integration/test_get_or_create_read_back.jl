@@ -66,7 +66,7 @@ end
         @test !(err isa PormG.UsageError)
         msg = PormG.error_message(err)
         @test occursin("could not be read back", msg)
-        @test by_engine(postgres = occursin("another session deleted it", msg),
+        @test by_engine(postgres = occursin("a trigger or rule that skips the insert", msg),
                         sqlite = occursin("a trigger may have dropped it", msg))
         @test !occursin(secret, msg)
         @test model.objects.filter("driverref" => secret).count() == 0

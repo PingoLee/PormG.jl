@@ -14,7 +14,7 @@ answered 400 to a server-side condition.
 
 | Engine | When | before | after |
 |---|---|---|---|
-| PostgreSQL | the insert skipped on a conflict, and the conflicting row was deleted before the read | `QueryBuildError` | `OperationalError`: a race, so the call retried can succeed |
+| PostgreSQL | the insert returned no row, and the read finds none: usually the conflicting row was deleted before the read | `QueryBuildError` | `OperationalError`: usually a race, so the call retried can succeed (a trigger or rule that skips the insert fails every retry) |
 | SQLite | the insert reported success, but the read finds no row (a trigger dropped it, or a PormG fault) | `QueryBuildError` | `StatementError`: the call runs under the write lock, so no race is possible and a retry fails the same way |
 
 Unchanged: `get_or_create`'s refusals of the call itself (an unknown field, a lookup with no UNIQUE

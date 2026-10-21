@@ -450,8 +450,9 @@ dropped with no error code may have dropped after the server ran the statement, 
 when a second run cannot change the outcome (#1042). `fetch` retries a dropped connection itself
 only when the statement provably never ran. PormG raises this error for `with_advisory_lock`
 acquisition timeouts too: contention is a runtime condition, not misuse. So does `get_or_create` on
-PostgreSQL when the row its insert conflicted with was deleted before it could be read back (#1299):
-the call retried can succeed. The fields are those of
+PostgreSQL when its insert returns no row and the row cannot be read back (#1299): usually the row
+the insert conflicted with was deleted in between, and the call retried can succeed (a trigger or
+rule that skips the insert fails every retry). The fields are those of
 [`DatabaseError`](@ref).
 """
 struct OperationalError <: DatabaseError

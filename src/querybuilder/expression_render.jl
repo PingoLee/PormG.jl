@@ -1553,6 +1553,101 @@ _set_update_query_typed(v::FExpression, instruc::SQLInstruction)::Tuple{String,T
   _finalize_render(_render_expr_typed(v, instruc)..., instruc)
 
 function _render_expr_typed(v::FExpression, instruc::SQLInstruction)::Tuple{String,_RenderKind}
+  return _checking_unnamed_temporal(instruc) do pending
+    sql, kind = _render_expr_node(v, instruc)
+    # #1310: only a shape no arm typed: an arm that typed the value chose its SQL by that type, and one
+    # that refuses already did.
+    kind === nothing && _queue_unnamed_temporal!(pending, v.field_name, v.operand, v.operation)
+    return sql, kind
+  end
+end
+
+# #1310 — arithmetic or an ordering beside a date, a timestamp or an interval, with a side the type
+# walk cannot name (`_unnamed_temporal_side`), on an engine that computes on what it stores
+# (`_types_temporal_operands`). The render wrote the generic `(l op r)` for it, which SQLite computes on
+# a date's or an interval's text (#1301, #1307) and MySQL on the number a date's digits spell. Refused
+# on that engine, naming the side and the spellings that state its type there; equality, `@in` and a
+# number beside a number keep building, and PostgreSQL types the operands itself.
+#
+# Each comparison or arithmetic node the render could not type is queued as it renders, and the queue
+# is checked once, when the outermost render on this instruction returns: every node in it has rendered
+# by then (the walk reads the memo a path fills), and one walk question (`_memo_kind`) covers them all,
+# so a chain of arithmetic is walked once rather than once per level. A filter pair renders through the
+# same scope (`_get_filter_query(::SQLTypeOper)`, `_render_alias_predicate`).
+const _UNNAMED_TEMPORAL_OPERATIONS = (_ARITHMETIC_OPERATIONS..., _ORDERING_OPERATIONS..., "BETWEEN", "NOT BETWEEN")
+function _checking_unnamed_temporal(f, instruc::SQLInstruction)
+  _types_temporal_operands(instruc.connection) && return f(nothing)
+  tls = task_local_storage()
+  outer = get(tls, :_pormg_unnamed_temporal, nothing)
+  outer !== nothing && outer[1] === instruc && return f(outer[2])   # the outermost render checks it
+  pending = Any[]
+  tls[:_pormg_unnamed_temporal] = (instruc, pending)
+  try
+    result = f(pending)
+    _refuse_unnamed_temporal(pending, instruc)
+    return result
+  finally
+    outer === nothing ? delete!(tls, :_pormg_unnamed_temporal) : (tls[:_pormg_unnamed_temporal] = outer)
+  end
+end
+# A pair's `@range` bounds are each an ordering against the column.
+function _queue_unnamed_temporal!(pending, left, right, op)
+  pending === nothing && return nothing
+  op in _UNNAMED_TEMPORAL_OPERATIONS || return nothing
+  if op in ("BETWEEN", "NOT BETWEEN") && right isa Union{AbstractVector,Tuple}
+    foreach(r -> push!(pending, (left, r, "@range")), right)
+  else
+    push!(pending, (left, right, op))
+  end
+  return nothing
+end
+function _refuse_unnamed_temporal(pending, instruc::SQLInstruction)
+  isempty(pending) && return nothing
+  found = _memo_kind(pending, instruc, :unnamed_temporal) do
+    for (left, right, op) in pending
+      hit = _unnamed_temporal_side(left, right, instruc)
+      hit === nothing || return (hit..., op)
+    end
+    return nothing
+  end
+  found === nothing && return nothing
+  side, kind, op = found
+  throw(_unnamed_temporal_refusal(instruc.connection, op, _unnamed_side_label(side), kind))
+end
+# The side as the caller wrote it: a function by its name, a handle by its spelling, a field path by
+# itself. Never a literal: a literal is always named (`_side_walk_kind`), so it is never the unnamed side.
+_unnamed_side_label(p::Union{FObject,WindowFunction}) = "`$(uppercase(p.function_name))(…)`"
+_unnamed_side_label(p::FExpression) = p.operation === nothing ? _unnamed_side_label(p.field_name) : "an arithmetic expression"
+_unnamed_side_label(p::SQLField) = _unnamed_side_label(p.field)
+_unnamed_side_label(p::CTEReference) = "`CTE(\"$(p.name)\", \"$(p.path)\")`"
+_unnamed_side_label(p::JoinedReference) = "`Joined(\"$(p.alias)\", \"$(p.path)\")`"
+_unnamed_side_label(::SubqueryObject) = "`Subquery(…)`"
+_unnamed_side_label(p::OuterRefObject) = "`OuterRef(\"$(p.field_name)\")`"
+_unnamed_side_label(path::String) = "`$(path)`"
+_unnamed_side_label(::Any) = "a value"
+# The spellings that state the type, from what is at stake and what the engine can cast to: an interval
+# has no cast on either engine, a timestamp none on SQLite (#822).
+function _unnamed_temporal_remedy(conn, kind)
+  values = "give every value of a `Case` or `Coalesce` the one type, and do the arithmetic inside each " *
+           "branch"
+  kind isa CInterval && return values * " (then = F(\"fastestlaptime\") * 2, default = Second(0))"
+  kind isa CDate && return values * " (then = F(\"date\") + 1), or cast the value to a date (Cast(…, \"date\"))"
+  return values * _timestamp_remedy(conn)
+end
+_timestamp_remedy(::PormGSQLite) = " (then = F(\"start_at\") + Hour(1))"
+_timestamp_remedy(::PormGMySQL) = ", or cast the value to a timestamp (Cast(…, \"timestamp\"))"
+_unnamed_temporal_refusal(conn::PormGSQLite, op, label, kind) =
+  QueryBuildError("`$(op)` beside a date, a timestamp or an interval, with $(label) on one side, is not " *
+                  "supported on SQLite: PormG cannot type $(label), and the SQL depends on the type, since a " *
+                  "date is text there and an interval is its `HH:MM:SS` text. State the type: " *
+                  _unnamed_temporal_remedy(conn, kind) * ".")
+_unnamed_temporal_refusal(conn::PormGMySQL, op, label, kind) =
+  QueryBuildError("`$(op)` beside a date, a timestamp or an interval, with $(label) on one side, is not " *
+                  "supported on MySQL: PormG cannot type $(label), and the SQL depends on the type, since " *
+                  "MySQL reads a date there as the number its digits spell (2009-03-29 is 20090329). State " *
+                  "the type: " * _unnamed_temporal_remedy(conn, kind) * ".")
+
+function _render_expr_node(v::FExpression, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   if v.operation === nothing
     # Resolve the field using existing logic for joins and modifiers
     if v.field_name isa String

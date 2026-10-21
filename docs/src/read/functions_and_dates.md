@@ -856,8 +856,10 @@ The ways to say the type:
 - a time, an interval and a date among themselves have no common type at all: make them one, in
   Julia or by casting each to text.
 
-An operand whose type PormG cannot name (timestamp arithmetic, a JSON key lookup) is not checked. A
-number beside another number is not this rule's concern: `Coalesce("grid", 0.5)` is a float on both
+An operand whose type PormG cannot name (a JSON key lookup) is not checked by this rule, and the
+function then has no type PormG can name either: used in arithmetic or an ordering beside a date or a
+duration, it is refused on SQLite and MySQL ([A value PormG cannot type beside a date or a duration](field_expressions.md#A-value-PormG-cannot-type-beside-a-date-or-a-duration)).
+A number beside another number is not this rule's concern: `Coalesce("grid", 0.5)` is a float on both
 engines.
 
 ### `Cast` — Type Conversion

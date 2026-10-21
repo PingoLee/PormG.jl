@@ -118,6 +118,17 @@ _untyped_sum_departs(::PormGSQLite) = false
 # (`_sums_integers_as_decimal`); one it cannot name is not, so its quotient departs (#1130 phase 2b).
 _untyped_sum_departs(::PormGMySQL) = true
 
+# #1310 — the engine picks the meaning of `+`, `-`, `*`, `/` and of an ordering from its operands' own
+# types, so arithmetic or a comparison beside a date, a timestamp or an interval needs no type from
+# PormG: PostgreSQL resolves `interval * bigint`, `date > date`, or fails at the server when it has no
+# operator. An engine that answers `false` computes on what it stores — SQLite on a date's or an
+# interval's text (`'00:01:30' * 2` is `0`, #1301), MySQL on the number a date's digits spell — so PormG
+# writes that SQL for the type, and an operand the type walk cannot name is refused beside one
+# (`_refuse_unnamed_temporal`, `expression_render.jl`).
+_types_temporal_operands(::PormGPostgres) = true
+_types_temporal_operands(::PormGSQLite) = false
+_types_temporal_operands(::PormGMySQL) = false
+
 # `SUM` over an integer is a DECIMAL (MySQL: `SUM(INT)` and `SUM(BIGINT)` alike), so `Dialect.SUM` casts
 # it back to the integer the sum of integers means. PostgreSQL widens only `sum(bigint)` to `numeric`,
 # which `_sums_bigint` handles; SQLite's sum of integers is an integer.

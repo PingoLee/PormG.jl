@@ -1046,7 +1046,27 @@ format_pattern_number_sql(value::AbstractFloat) = string(Models.format_number_sq
 format_pattern_number_sql(value) = format_pattern_text_sql(value)
 _lookup_formatter(field::PormGField, operator::AbstractString) = _lookup_formatter(field.formatter, operator)
 
+# #1310: an ordering pair (`"date__@gt" => F("meta__round")`, `"meta__d__@range" => […]`) is checked
+# as its `F` spelling is (`_checking_unnamed_temporal`, `expression_render.jl`), after both sides render.
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
+  return _checking_unnamed_temporal(instruc) do pending
+    sql = _render_filter_oper(v, instruc)
+    pending === nothing ||
+      _queue_unnamed_temporal!(pending, _filter_column_node(v.column, instruc), _filter_value_node(v.values), v.operator)
+    return sql
+  end
+end
+# A pair's value is a literal where it is a string, never a path; an alias filtered in a `Q` is the
+# expression it projects.
+_filter_value_node(x::AbstractString) = SQLText(x)
+_filter_value_node(x::Union{AbstractVector,Tuple}) = map(_filter_value_node, x)
+_filter_value_node(x) = x
+function _filter_column_node(col, instruc::SQLInstruction)
+  alias = _alias_filter_key(col, instruc)
+  return alias === nothing ? col : _projected_source(memo_key(:base, alias), instruc).field
+end
+
+function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   @pormg_debug false
   # #985: inside an ON clause a comparison renders its column as the LEFT side and its value, below,
   # through `_on_join_right`. Re-entered once under the new side; a no-op everywhere else.

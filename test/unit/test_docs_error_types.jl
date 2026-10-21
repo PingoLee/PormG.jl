@@ -1233,6 +1233,15 @@ const DOCERR_CASES = [
         () -> DOCERR_RACE_PG.objects.values("name",
             "c" => PormG.Functions.Case([PormG.Functions.When(PormG.Functions.Coalesce("raceid", 0), then = 1)], default = 0)).list(show_query = :dict),
     ),
+    # #1310 — *A value PormG cannot type beside a date or a duration* (field_expressions.md) says such a
+    # value raises `QueryBuildError` on SQLite and MySQL. A `Case` over a date or `0` holds a date the
+    # walk cannot name the `Case` by. Every shape is pinned in `test/unit/test_untyped_temporal_operand.jl`.
+    (
+        "read/field_expressions.md — a Case PormG cannot type, holding a date, in arithmetic is refused on SQLite (#1310)",
+        QueryBuildError,
+        () -> DOCERR_RACE801_SL.objects.values("raceid",
+            "d" => PormG.Functions.Case([PormG.Functions.When("raceid" => 1, then = PormG.QueryBuilder.F("date"))], default = 0) + 1).list(show_query = :dict),
+    ),
     # #964 — *Case / When Expressions* (functions_and_dates.md), api.md and the `When` docstring say a
     # `When` with no `otherwise` raises when it stands as a value. Every value position is pinned in
     # `test/unit/test_filter_aggregate_expression.jl`.

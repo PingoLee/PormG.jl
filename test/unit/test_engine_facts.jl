@@ -75,7 +75,10 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                # Phase 2b (expressions): a quotient over a `Sum` the walk cannot name.
                                :_untyped_sum_departs, :_cast_renders_text, :_casts_bigint_day_count,
                                # Phase 2b intervals: the integer an interval is computed in.
-                               :_interval_unit_ns, :_stores_interval_as_units])
+                               :_interval_unit_ns, :_stores_interval_as_units,
+                               # #1310: MySQL computes a date as the number its digits spell, so an
+                               # operand the walk cannot name is refused beside one there.
+                               :_types_temporal_operands])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions

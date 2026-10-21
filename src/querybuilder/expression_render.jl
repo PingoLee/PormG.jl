@@ -1181,11 +1181,11 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
         return "($(left_side) $(op) $(add_parameter!(instruc, _duration_units(v.operand, instruc.connection))))", nothing
       end
       # #1130: where the interval IS its integer (MySQL) there is no text to compare: a duration string
-      # binds its count, and anything else is no duration, which the duration formatter says, rather
-      # than a text bound against a number (MySQL reads `'00:01:00'` as `0`).
+      # binds its count, and anything else is refused as no interval, rather than a text bound against
+      # a number (MySQL reads `'00:01:00'` as `0`).
       if _stores_interval_as_units(instruc.connection) && !(v.operand isa Union{Nothing,Missing})
         units = _duration_value_units(v.operand, instruc.connection)
-        units === nothing && value_formatter(CInterval(), instruc.connection)(v.operand)   # raises
+        units === nothing && _refuse_interval_against_number(op, instruc)
         return "($(left_side) $(op) $(add_parameter!(instruc, units)))", nothing
       end
       op in _ORDERING_OPERATIONS &&
@@ -1753,6 +1753,10 @@ function _render_expr_typed(v::FExpression, instruc::SQLInstruction)::Tuple{Stri
     # #564: the left's kind travels to the binder, so the representation the literal binds and the
     # one the wrapper renders come from the same value rather than from two resolvers that agree.
     right_side = _set_update_query_operand(v.operand, v.field_name, v.operation, instruc; left_kind = left_kind)
+    # #1130: a `Subquery` or a CTE column is typed only once it has rendered; where an interval is its
+    # integer (MySQL), one holding an interval compared with this left, which is none, is refused.
+    v.operation in _COMPARISON_OPERATIONS && v.operand isa Union{SubqueryObject,CTEReference} &&
+      _expression_kind(v.operand, instruc) isa CInterval && _refuse_interval_against_number(v.operation, instruc)
 
     v.operation == "/" && return _division_sql(instruc.connection, v, left_side, right_side, instruc), nothing
     return "($(left_side) $(v.operation) $(right_side))", nothing

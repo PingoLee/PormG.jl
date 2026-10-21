@@ -716,6 +716,7 @@ end
   # ... and with the interval on the left, through an expression, a filter pair either way round, a
   # `Subquery`, and an interval alias: every path that compares two expressions (review of #1130).
   sub = (s = _MR_MY.Result.objects; s.filter("resultid" => PormG.OuterRef("resultid")); s.values("t" => F("fastestlaptime")); s)
+  subn = (s = _MR_MY.Result.objects; s.filter("resultid" => PormG.OuterRef("resultid")); s.values("t" => F("grid")); s)
   for (label, build) in (
       "interval == number" => () -> R.objects.filter(F("fastestlaptime") == F("grid")),
       "interval > float" => () -> R.objects.filter(F("fastestlaptime") > F("points")),
@@ -725,18 +726,31 @@ end
       "pair number => interval" => () -> R.objects.filter("grid" => F("fastestlaptime")),
       "pair number @gt interval" => () -> R.objects.filter("grid__@gt" => F("fastestlaptime")),
       "pair number => Subquery(interval)" => () -> R.objects.filter("grid" => PormG.Subquery(sub)),
-      "interval alias @gt number" => () -> (q = R.objects; q.values("v" => F("fastestlaptime")); q.filter("v__@gt" => F("grid")); q))
+      "interval alias @gt number" => () -> (q = R.objects; q.values("v" => F("fastestlaptime")); q.filter("v__@gt" => F("grid")); q),
+      "pair interval @gt function" => () -> R.objects.filter("fastestlaptime__@gt" => PormG.QueryBuilder.Cast("grid", "integer")),
+      "pair interval @gt Subquery(number)" => () -> R.objects.filter("fastestlaptime__@gt" => PormG.Subquery(subn)),
+      "interval == Subquery(number)" => () -> R.objects.filter(F("fastestlaptime") == PormG.Subquery(subn)),
+      "number == Subquery(interval)" => () -> R.objects.filter(F("grid") == PormG.Subquery(sub)),
+      "number > Subquery(interval)" => () -> R.objects.filter(F("grid") > PormG.Subquery(sub)),
+      "interval @in queryset of numbers" => () -> R.objects.filter("fastestlaptime__@in" => _MR_MY.Result.objects.values("grid")),
+      "number @in queryset of intervals" => () -> R.objects.filter("grid__@in" => _MR_MY.Result.objects.values("fastestlaptime")),
+      "interval alias @gt Subquery(number)" => () -> (q = R.objects; q.values("v" => F("fastestlaptime")); q.filter("v__@gt" => PormG.Subquery(subn)); q),
+      "computed interval > 5" => () -> R.objects.filter((F("fastestlaptime") * 2) > 5))
     @test (label, refused(build)) == (label, true)
   end
   # Two intervals still compare, and SQLite keeps its own rules for the same pair.
   @test sql(() -> R.objects.filter("fastestlaptime" => F("fastestlaptime")))[1] |> x -> occursin("`Tb`.`fastestlaptime` = `Tb`.`fastestlaptime`", x)
   @test occursin("`Tb`.`fastestlaptime` > (SELECT", sql(() -> R.objects.filter("fastestlaptime__@gt" => PormG.Subquery(sub)))[1])
   @test !refused(() -> _MR_SL.Result.objects.filter("fastestlaptime" => F("grid")))
+  # Interval against an interval builds through each of those paths.
+  @test occursin("`Tb`.`fastestlaptime` IN (SELECT", sql(() -> R.objects.filter("fastestlaptime__@in" => _MR_MY.Result.objects.values("fastestlaptime")))[1])
+  @test occursin("(`Tb`.`fastestlaptime` = (SELECT", sql(() -> R.objects.filter(F("fastestlaptime") == PormG.Subquery(sub)))[1])
+  @test occursin("`Tb`.`fastestlaptime` > (SELECT",
+                 sql(() -> (q = R.objects; q.values("v" => F("fastestlaptime")); q.filter("v__@gt" => PormG.Subquery(sub)); q))[1])
   # A duration string against a computed interval binds its count; one that is no duration raises, as
   # the duration formatter does, rather than a text compared with a number (`'00:01:00'` is `0` there).
   @test sql(() -> R.objects.filter((F("fastestlaptime") * 2) == "00:01:00"))[2] == Any[2, 60_000_000]
-  e = try; _mr_inspect(R.objects.filter((F("fastestlaptime") * 2) == "a minute")); nothing; catch err; err; end
-  @test e isa PormG.InvalidValueError && occursin("duration", sprint(showerror, e))
+  @test refused(() -> R.objects.filter((F("fastestlaptime") * 2) == "a minute"))
   # A duration literal's alias compared with a number: refused as any other interval alias is.
   e = try; _mr_inspect((q = R.objects; q.values("v" => PormG.QueryBuilder.Value(Hour(100))); q.filter("v__@gt" => 10); q))
       nothing; catch err; err; end
@@ -749,6 +763,9 @@ end
   @test occursin("FROM (SELECT CAST(ROUND((`Tb`.`fastestlaptime`) * (?)) AS SIGNED) AS `_pormg_us`)",
                  sql(() -> R.objects.values("v" => cast(F("fastestlaptime") * 2, "varchar(20)")))[1])
   @test proj(() -> R.objects.values("v" => cast("grid", "text"))) == ("CAST(`Tb`.`grid` AS CHAR)", Any[])
+  # Every target MySQL holds as text, and JSON (which then fails at the server, as PostgreSQL's does).
+  @test occursin("`_pormg_us`) AS `_pormg_d`) AS CHAR(36)) as `v`", sql(() -> R.objects.values("v" => cast("fastestlaptime", "uuid")))[1])
+  @test occursin("`_pormg_us`) AS `_pormg_d`) AS JSON) as `v`", sql(() -> R.objects.values("v" => cast("fastestlaptime", "json")))[1])
   # The per-engine edges: MySQL's are the identity; SQLite's are its own Dialect helpers, unchanged.
   @test _MR_QB._interval_text_as_ms("`c`", MrMockMySQL()) == "`c`"
   @test _MR_QB._interval_ms_as_text("?", MrMockMySQL()) == "?"

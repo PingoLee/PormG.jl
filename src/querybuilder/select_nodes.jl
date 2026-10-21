@@ -883,10 +883,12 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   end
   # #1130: MySQL stores an interval as its microseconds, so a cast of one to text printed that count
   # (`80500000`), which PormG would read back as that many seconds. The engine that departs normalizes
-  # on itself: the cast reads the `HH:MM:SS` text PormG writes, as SQLite's stored text does.
+  # on itself: the cast reads the `HH:MM:SS` text PormG writes, as SQLite's stored text does. Every
+  # target MySQL holds as text (the character types, `uuid`'s `CHAR(36)`) and `JSON`, which then fails
+  # at the server as PostgreSQL's cast of an interval to `json` does, rather than read the count.
   if v.function_name == "CAST" && _stores_interval_as_units(instruc.connection) &&
-     _sql_type_field(v.kwargs["type"]) isa Union{Models.sTextField,Models.sCharField} &&
-     _expression_kind(v.column, instruc) isa CInterval
+     _expression_kind(v.column, instruc) isa CInterval &&
+     (target = Dialect.cast_type_sql(v.kwargs["type"], instruc.connection); Base.startswith(target, "CHAR") || target == "JSON")
     resolved_column = Dialect._mysql_interval_text(resolved_column)
   end
   sql = getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection)

@@ -464,6 +464,11 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             @test [r[:t] for r in texts] == ["00:01:20.5", "1000:00:00.000001", "00:01:21.25"]
             @test [r[:d] for r in texts] == ["00:02:41", "2000:00:00.000002", "00:02:42.5"]
             @test PormG.Models.format_duration_sql(lap[3]) == texts[3][:t]
+            # Over an aggregate too, grouped: the derived table reads the outer query's aggregate.
+            per_race = M.Result.objects.filter("fastestlaptime__@isnull" => false).values("raceid",
+                "s" => Cast(Sum("fastestlaptime"), "text"), "x" => Cast(Max("fastestlaptime"), "text")).order_by("raceid").list()
+            @test [(r[:raceid], r[:s], r[:x]) for r in per_race] ==
+                  [(1, "1000:02:41.750001", "1000:00:00.000001")]
             # What has no meaning is refused before any SQL, naming MySQL.
             e = try; M.Result.objects.values("t" => F("fastestlaptime") + 1).list(); nothing; catch err; err; end
             @test e isa PormG.QueryBuildError && occursin("is not supported on MySQL", msg(e))

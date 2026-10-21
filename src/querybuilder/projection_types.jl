@@ -1643,12 +1643,22 @@ function _render_interval_alias_predicate(v::SQLTypeOper, having_key::MemoKey, i
     _refuse_unordered_interval_alias("An ordering filter (`$(v.operator)`)", having_key[2], instruc)
   source = _projected_interval_source(having_key[2], instruc)
   source === nothing && return nothing
+  units = _stores_interval_as_units(instruc.connection)
+  compares = v.operator in _INTERVAL_MS_PREDICATES || v.operator in _INTERVAL_MS_LIST_PREDICATES
+  # #1130: where the interval IS its integer (MySQL), a `Subquery` or a CTE column compared with the
+  # alias is an interval or it is not: rendered once, typed, and refused when it is a number.
+  if units && compares && v.values isa Union{SubqueryObject,CTEReference}
+    sql, _ = _render_interval_source_ms(source, instruc)
+    rhs, _, interval = _on_join_right(() -> _render_interval_operand(v.values, instruc), instruc)
+    interval || _refuse_interval_against_number(v.operator, instruc)
+    return _render_column_rhs(sql, v.operator, rhs, instruc)
+  end
   ms_values = _predicate_duration_units(v.operator, v.values, instruc.connection)
-  # #1130: where the interval IS its integer (MySQL), a compared value that is no duration has no text
-  # comparison to fall back to: the duration formatter refuses it, as the alias's own formatter does
-  # for any other interval alias, rather than a `Value(Hour(1))` alias comparing its count with `10`.
-  if ms_values === nothing && _stores_interval_as_units(instruc.connection) &&
-     (v.operator in _INTERVAL_MS_PREDICATES || v.operator in _INTERVAL_MS_LIST_PREDICATES)
+  # #1130: and a compared VALUE that is no duration has no text comparison to fall back to: the
+  # duration formatter refuses it, as the alias's own formatter does for any other interval alias,
+  # rather than a `Value(Hour(1))` alias comparing its count with `10`. An expression (a queryset for
+  # `@in`) is left to the path that renders it.
+  if ms_values === nothing && units && compares && !(v.values isa Union{SQLType,SQLObjectHandler})
     formatter = value_formatter(CInterval(), instruc.connection)
     _guarded_format(formatter, v.values, v.operator, having_key[2], _formatter_type_label(formatter);
                     subject = "projection alias")

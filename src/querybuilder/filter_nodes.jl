@@ -808,10 +808,13 @@ end
 function _refuse_duration_mismatch(v::SQLTypeOper, instruc::SQLInstruction)
   _stores_interval_as_units(instruc.connection) || return nothing
   v.operator in _INTERVAL_MS_PREDICATES || v.operator in _INTERVAL_MS_LIST_PREDICATES || return nothing
-  left = _is_duration_column(v, instruc) || (v.column isa SQLField && _expression_kind(v.column.field, instruc) isa CInterval)
-  left == (_expression_kind(v.values, instruc) isa CInterval) && return nothing
+  _is_interval_operand_side(v, instruc) == (_expression_kind(v.values, instruc) isa CInterval) && return nothing
   _refuse_interval_against_number(v.operator, instruc)
 end
+# Whether the filter's column is an interval: a `DurationField` (a model column, a joined path, a CTE
+# column holding one) or anything the type walk names an interval.
+_is_interval_operand_side(v::SQLTypeOper, instruc::SQLInstruction) =
+  _is_duration_column(v, instruc) || (v.column isa SQLField && _expression_kind(v.column.field, instruc) isa CInterval)
 function _sqlite_duration_column_ms(v::SQLTypeOper, instruc::SQLInstruction)
   _is_sqlite_duration_column(v, instruc) || return nothing
   return _predicate_duration_units(v.operator, v.values, instruc.connection)
@@ -1233,9 +1236,17 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
     # #432: same nested-run reordering — the subquery renders inside this predicate's clause.
     nested_mark = nested_parameter_mark(instruc)
     # #1002: `IN (…)` is a set test, so a repeated row is invisible — unless a slice picks rows by count.
+    # #1130: the queryset's one column, typed by its own build, for the interval check below.
+    inner_kind = Ref{Any}(nothing)
     placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc,
-                         semi_join = !_is_sliced(getfield(v.values, :object)))
+                         semi_join = !_is_sliced(getfield(v.values, :object)),
+                         built = inner -> (inner_kind[] = _subquery_projection_kind(v.values, inner)))
     reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
+    # Where an interval is its integer (MySQL), membership of an interval column in a queryset of
+    # numbers, or of a number in a queryset of intervals, compares a count with microseconds.
+    _stores_interval_as_units(instruc.connection) &&
+      _is_interval_operand_side(v, instruc) != (inner_kind[] isa CInterval) &&
+      _refuse_interval_against_number(v.operator, instruc)
     # #586: `column` was rendered before the subquery, so its markers number ahead of the
     # subquery's — the text order. Re-rendering here would bind a composite LHS a second time.
     return string(column, " ", v.operator, " ($placeholders)")

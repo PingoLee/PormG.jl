@@ -379,7 +379,7 @@ function _render_operand_kind(node, instruc::SQLInstruction; _as::Union{Nothing,
   node isa FExpression && return _set_update_query_typed(node, instruc)
   if node isa FObject
     sql, interval_ms, interval = _render_function_typed(node, instruc; _as = _as)
-    return (interval_ms ? Dialect._sqlite_interval_text(sql) : sql), (interval ? CInterval() : nothing)
+    return (interval_ms ? _interval_ms_as_text(sql, instruc.connection) : sql), (interval ? CInterval() : nothing)
   end
   return _get_select_query(node, instruc; _as = _as), nothing
 end
@@ -442,7 +442,7 @@ _render_fts_operand(c, instruc::SQLInstruction; _as::Union{Nothing,String}=nothi
 function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   sql, interval_ms, _ = _render_function_typed(v, instruc; _as = _as)
   # #894: an interval held in milliseconds leaves as the interval text, as a difference does (#881).
-  return interval_ms ? Dialect._sqlite_interval_text(sql) : sql
+  return interval_ms ? _interval_ms_as_text(sql, instruc.connection) : sql
 end
 
 # The function's SQL, whether it is an interval held in SQLite milliseconds, and whether it is an
@@ -882,7 +882,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   sql = getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection)
   # #900: PostgreSQL's `avg(interval)` is an interval; the milliseconds' mean is rounded to one, the
   # precision every SQLite interval has (#881).
-  interval_ms && v.function_name == "AVG" && (sql = "CAST(round($(sql)) AS INTEGER)")
+  interval_ms && v.function_name == "AVG" && (sql = _interval_round_sql(sql, instruc.connection))
   return sql, interval_ms, interval
 end
 # #1021: a `SearchVectorField` column is a document, not text. `SearchRank`'s vector written as a path

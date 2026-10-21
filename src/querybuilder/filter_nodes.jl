@@ -791,8 +791,8 @@ function _is_duration_column(v::SQLTypeOper, instruc::SQLInstruction)::Bool
 end
 function _sqlite_duration_column_ms(v::SQLTypeOper, instruc::SQLInstruction)
   _is_sqlite_duration_column(v, instruc) || return nothing
-  v.operator in ("BETWEEN", "NOT BETWEEN") && return _duration_values_ms(v.values)
-  return _duration_value_ms(v.values)
+  v.operator in ("BETWEEN", "NOT BETWEEN") && return _duration_values_units(v.values, instruc.connection)
+  return _duration_value_units(v.values, instruc.connection)
 end
 
 # #894 — `filter("gap__@gt" => F("start_at") - F("date") - Hour(1))` over `"gap" => <interval>`: an
@@ -814,8 +814,8 @@ function _sqlite_interval_alias_comparison(v::SQLTypeOper, instruc::SQLInstructi
   lhs, lhs_ms = _render_interval_source_ms(source, instruc)
   rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)   # #985: the right side
   if !(lhs_ms && rhs_ms)
-    lhs_ms && (lhs = Dialect._sqlite_interval_text(lhs))
-    rhs_ms && (rhs = Dialect._sqlite_interval_text(rhs))
+    lhs_ms && (lhs = _interval_ms_as_text(lhs, instruc.connection))
+    rhs_ms && (rhs = _interval_ms_as_text(rhs, instruc.connection))
   end
   return _render_column_rhs(lhs, v.operator, rhs, instruc)
 end

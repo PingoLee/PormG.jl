@@ -1643,7 +1643,7 @@ function _render_interval_alias_predicate(v::SQLTypeOper, having_key::MemoKey, i
     _refuse_unordered_interval_alias("An ordering filter (`$(v.operator)`)", having_key[2], instruc)
   source = _projected_interval_source(having_key[2], instruc)
   source === nothing && return nothing
-  ms_values = _predicate_duration_ms(v.operator, v.values)
+  ms_values = _predicate_duration_units(v.operator, v.values, instruc.connection)
   ms_values === nothing && return nothing
   sql, interval_ms = _render_interval_source_ms(source, instruc)
   interval_ms && return _render_predicate(sql, v.operator, _bind_predicate_value(instruc, v.operator, ms_values), instruc)

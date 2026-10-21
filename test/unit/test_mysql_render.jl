@@ -735,7 +735,13 @@ end
       "interval @in queryset of numbers" => () -> R.objects.filter("fastestlaptime__@in" => _MR_MY.Result.objects.values("grid")),
       "number @in queryset of intervals" => () -> R.objects.filter("grid__@in" => _MR_MY.Result.objects.values("fastestlaptime")),
       "interval alias @gt Subquery(number)" => () -> (q = R.objects; q.values("v" => F("fastestlaptime")); q.filter("v__@gt" => PormG.Subquery(subn)); q),
-      "computed interval > 5" => () -> R.objects.filter((F("fastestlaptime") * 2) > 5))
+      "computed interval > 5" => () -> R.objects.filter((F("fastestlaptime") * 2) > 5),
+      "interval alias @in queryset of numbers" =>
+        () -> (q = R.objects; q.values("v" => F("fastestlaptime") * 2); q.filter("v__@in" => _MR_MY.Result.objects.values("grid")); q),
+      "Sum alias @in queryset of numbers" =>
+        () -> (q = R.objects; q.values("driverid", "s" => Sum("fastestlaptime")); q.filter("s__@in" => _MR_MY.Result.objects.values("grid")); q),
+      "number alias @nin queryset of intervals" =>
+        () -> (q = R.objects; q.values("v" => F("grid")); q.filter("v__@nin" => _MR_MY.Result.objects.values("fastestlaptime")); q))
     @test (label, refused(build)) == (label, true)
   end
   # Two intervals still compare, and SQLite keeps its own rules for the same pair.
@@ -744,6 +750,15 @@ end
   @test !refused(() -> _MR_SL.Result.objects.filter("fastestlaptime" => F("grid")))
   # Interval against an interval builds through each of those paths.
   @test occursin("`Tb`.`fastestlaptime` IN (SELECT", sql(() -> R.objects.filter("fastestlaptime__@in" => _MR_MY.Result.objects.values("fastestlaptime")))[1])
+  # ... an interval alias in a queryset of intervals, a `Sum` alias in HAVING too ...
+  @test occursin("IN (SELECT", sql(() -> (q = R.objects; q.values("v" => F("fastestlaptime") * 2);
+                                          q.filter("v__@in" => _MR_MY.Result.objects.values("fastestlaptime")); q))[1])
+  @test occursin("HAVING SUM(`Tb`.`fastestlaptime`) IN (SELECT",
+                 sql(() -> (q = R.objects; q.values("driverid", "s" => Sum("fastestlaptime"));
+                            q.filter("s__@in" => _MR_MY.Result.objects.values("fastestlaptime")); q))[1])
+  # ... and a queryset whose column its build cannot type (a NULL literal) is left to the server.
+  @test occursin("IN (SELECT", sql(() -> R.objects.filter("fastestlaptime__@in" =>
+                                       _MR_MY.Result.objects.values("t" => PormG.QueryBuilder.Value(nothing))))[1])
   @test occursin("(`Tb`.`fastestlaptime` = (SELECT", sql(() -> R.objects.filter(F("fastestlaptime") == PormG.Subquery(sub)))[1])
   @test occursin("`Tb`.`fastestlaptime` > (SELECT",
                  sql(() -> (q = R.objects; q.values("v" => F("fastestlaptime")); q.filter("v__@gt" => PormG.Subquery(sub)); q))[1])
@@ -766,6 +781,11 @@ end
   # Every target MySQL holds as text, and JSON (which then fails at the server, as PostgreSQL's does).
   @test occursin("`_pormg_us`) AS `_pormg_d`) AS CHAR(36)) as `v`", sql(() -> R.objects.values("v" => cast("fastestlaptime", "uuid")))[1])
   @test occursin("`_pormg_us`) AS `_pormg_d`) AS JSON) as `v`", sql(() -> R.objects.values("v" => cast("fastestlaptime", "json")))[1])
+  # A date, a time or a timestamp cast would read the count's digits: refused on MySQL.
+  for t in ("date", "time", "timestamp", "timestamptz")
+    e = try; _mr_inspect(R.objects.values("v" => cast("fastestlaptime", t))); nothing; catch err; err; end
+    @test (t, e isa PormG.QueryBuildError && occursin("of an interval is not supported on MySQL", sprint(showerror, e))) == (t, true)
+  end
   # The per-engine edges: MySQL's are the identity; SQLite's are its own Dialect helpers, unchanged.
   @test _MR_QB._interval_text_as_ms("`c`", MrMockMySQL()) == "`c`"
   @test _MR_QB._interval_ms_as_text("?", MrMockMySQL()) == "?"

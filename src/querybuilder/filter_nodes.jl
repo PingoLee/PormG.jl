@@ -812,9 +812,14 @@ function _refuse_duration_mismatch(v::SQLTypeOper, instruc::SQLInstruction)
   _refuse_interval_against_number(v.operator, instruc)
 end
 # Whether the filter's column is an interval: a `DurationField` (a model column, a joined path, a CTE
-# column holding one) or anything the type walk names an interval.
-_is_interval_operand_side(v::SQLTypeOper, instruc::SQLInstruction) =
-  _is_duration_column(v, instruc) || (v.column isa SQLField && _expression_kind(v.column.field, instruc) isa CInterval)
+# column holding one), a projection alias the build typed an interval (`"v__@in"` over
+# `"v" => F("lap") * 2`, a `Sum` alias in HAVING), or anything the type walk names an interval.
+function _is_interval_operand_side(v::SQLTypeOper, instruc::SQLInstruction)::Bool
+  _is_duration_column(v, instruc) && return true
+  alias = _alias_filter_key(v.column, instruc)
+  alias === nothing || return get(instruc.projection_kinds, Symbol(alias), nothing) isa CInterval
+  return v.column isa SQLField && _expression_kind(v.column.field, instruc) isa CInterval
+end
 function _sqlite_duration_column_ms(v::SQLTypeOper, instruc::SQLInstruction)
   _is_sqlite_duration_column(v, instruc) || return nothing
   return _predicate_duration_units(v.operator, v.values, instruc.connection)
@@ -1243,8 +1248,9 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
                          built = inner -> (inner_kind[] = _subquery_projection_kind(v.values, inner)))
     reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
     # Where an interval is its integer (MySQL), membership of an interval column in a queryset of
-    # numbers, or of a number in a queryset of intervals, compares a count with microseconds.
-    _stores_interval_as_units(instruc.connection) &&
+    # numbers, or of a number in a queryset of intervals, compares a count with microseconds. A column
+    # the queryset's build cannot type (a NULL literal) is left to the server, as on PostgreSQL.
+    _stores_interval_as_units(instruc.connection) && inner_kind[] !== nothing &&
       _is_interval_operand_side(v, instruc) != (inner_kind[] isa CInterval) &&
       _refuse_interval_against_number(v.operator, instruc)
     # #586: `column` was rendered before the subquery, so its markers number ahead of the

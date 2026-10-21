@@ -887,9 +887,20 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # target MySQL holds as text (the character types, `uuid`'s `CHAR(36)`) and `JSON`, which then fails
   # at the server as PostgreSQL's cast of an interval to `json` does, rather than read the count.
   if v.function_name == "CAST" && _stores_interval_as_units(instruc.connection) &&
-     _expression_kind(v.column, instruc) isa CInterval &&
-     (target = Dialect.cast_type_sql(v.kwargs["type"], instruc.connection); Base.startswith(target, "CHAR") || target == "JSON")
-    resolved_column = Dialect._mysql_interval_text(resolved_column)
+     _expression_kind(v.column, instruc) isa CInterval
+    target = Dialect.cast_type_sql(v.kwargs["type"], instruc.connection)
+    if Base.startswith(target, "CHAR") || target == "JSON"
+      resolved_column = Dialect._mysql_interval_text(resolved_column)
+    elseif any(t -> Base.startswith(target, t), ("DATE", "TIME"))
+      # A date, a time or a timestamp cast of the count reads its digits as one (`80500000` is
+      # `8050:00:00`), where PostgreSQL refuses `interval::date` and reads `interval::time` as a time
+      # of day. Refused on MySQL, the engine that departs, before any SQL.
+      as_what = Base.startswith(target, "DATETIME") ? "timestamp" : Base.startswith(target, "DATE") ? "date" : "time"
+      throw(QueryBuildError("$(_declared_cast_label(v)) of an interval is not supported on " *
+                            "$(_backend_name(instruc.connection)): it stores an interval as its count of " *
+                            "microseconds, whose digits the cast would read as a $(as_what). " *
+                            "Shift a date or a timestamp by the interval instead: F(\"date\") + F(\"duration\")."))
+    end
   end
   sql = getfield(Dialect, Symbol(v.function_name))(resolved_column, resolved_kwargs, instruc.connection)
   # #900: PostgreSQL's `avg(interval)` is an interval; the milliseconds' mean is rounded to one, the

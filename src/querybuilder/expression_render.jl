@@ -1575,6 +1575,7 @@ _unnamed_side_label(p::SQLField) = _unnamed_side_label(p.field)
 _unnamed_side_label(p::CTEReference) = "`CTE(\"$(p.name)\", \"$(p.path)\")`"
 _unnamed_side_label(p::JoinedReference) = "`Joined(\"$(p.alias)\", \"$(p.path)\")`"
 _unnamed_side_label(::SubqueryObject) = "`Subquery(…)`"
+_unnamed_side_label(p::OuterRefObject) = "`OuterRef(\"$(p.field_name)\")`"
 _unnamed_side_label(path::String) = "`$(path)`"
 _unnamed_side_label(::Any) = "a value"
 # The spellings that state the type, from what is at stake and what the engine can cast to: an interval

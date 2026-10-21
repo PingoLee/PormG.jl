@@ -308,11 +308,41 @@ end
     err
   end
   @test upd isa QueryBuildError && occursin("with `CASE(…)` on one side", upd.msg)
-  # A typed alias and a date range on a date column keep building.
-  for build in (q -> (q.values("raceid", "c" => F("date") + 1); q.filter("c__@gt" => Date(2009, 1, 1))),
-                q -> (q.values("raceid"); q.filter("date__@range" => [Date(2009, 1, 1), Date(2010, 1, 1)])))
-    q = UTT.Utt_race.objects
-    build(q)
-    @test inspect_query(q; connection = _UTT_SL)[:sql_text] isa AbstractString
+  # A typed alias and a date range on a date column keep building, with the SQL they had.
+  q = UTT.Utt_race.objects
+  q.values("raceid"); q.filter("date__@range" => [Date(2009, 1, 1), Date(2010, 1, 1)])
+  @test occursin("WHERE \"Tb\".\"date\" BETWEEN ? AND ?", inspect_query(q; connection = _UTT_SL)[:sql_text])
+  q = UTT.Utt_race.objects
+  q.values("raceid", "c" => F("date") + 1); q.filter("c__@gt" => Date(2009, 1, 1))
+  @test occursin("WHERE date(\"Tb\".\"date\", '+' || ? || ' days') > ?", inspect_query(q; connection = _UTT_SL)[:sql_text])
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A correlated subquery ordering a date, a timestamp or a duration against its `OuterRef` keeps building.
+# Expected on SQLite: `Exists(<races with "date__@gt" => OuterRef("date")>)` renders
+# `EXISTS (SELECT 1 … WHERE "U1"."date" > "Tb"."date" …)`-shaped SQL (no refusal), and so do the
+# timestamp and duration columns, and a `Subquery` correlated the same way.
+# Why it matters: the walk names an `OuterRef` through the outer query's column; read as a value PormG
+# cannot type, every temporal correlation would be refused (found in review of #1310).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "#1310: a temporal OuterRef correlation keeps building" begin
+  QB = PormG.QueryBuilder
+  for path in ("date", "start_at", "fastestlaptime")
+    @testset "$path" begin
+      inner = UTT.Utt_race.objects
+      inner.filter("$(path)__@gt" => QB.OuterRef(path))
+      q = UTT.Utt_race.objects
+      q.values("raceid"); q.filter(QB.Exists(inner))
+      sql = inspect_query(q; connection = _UTT_SL)[:sql_text]
+      @test occursin("EXISTS", sql) && occursin("\"Tb\".\"$(path)\"", sql)
+    end
   end
+  inner = UTT.Utt_race.objects
+  inner.filter("date__@lt" => QB.OuterRef("date"))
+  inner.values("raceid")
+  inner.limit(1)
+  q = UTT.Utt_race.objects
+  q.values("raceid", "earlier" => QB.Subquery(inner))
+  sql = inspect_query(q; connection = _UTT_SL)[:sql_text]
+  @test occursin("< \"Tb\".\"date\"", sql)
 end

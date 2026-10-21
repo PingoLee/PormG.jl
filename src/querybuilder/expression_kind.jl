@@ -280,6 +280,11 @@ _side_walk_kind(::Union{Dates.Period,Dates.CompoundPeriod,Interval}, ::SQLInstru
 _side_walk_kind(x::_TemporalLiteral, ::SQLInstruction) = literal_canonical_kind(x)
 _side_walk_kind(x::AbstractString, instruc::SQLInstruction) =
   x isa String && _is_field_path(x, instruc) ? _expression_kind(x, instruc) : CText()
+# An `OuterRef` is the outer query's column, typed on the outer instruction, which rendered it when the
+# reference resolved (`_get_filter_query(::OuterRefObject)`): `"date__@gt" => OuterRef("date")` is a
+# date beside a date.
+_side_walk_kind(x::OuterRefObject, instruc::SQLInstruction) =
+  instruc.outer === nothing ? nothing : _side_walk_kind(x.field_name, instruc.outer)
 _side_walk_kind(x, instruc::SQLInstruction) = _expression_kind(x, instruc)
 
 # A JSON value counts as unnamed: the walk names a key lookup (`"payload__n"`) the document's `CJSON`,

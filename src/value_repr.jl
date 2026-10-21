@@ -137,6 +137,8 @@ value_formatter(::CDateTime, ::PormGBackend) = Models.format_timezone_sql
 value_formatter(::CDate,     ::PormGBackend) = Models.format_date_sql
 value_formatter(::CTime,     ::PormGBackend) = Models.format_text_sql
 value_formatter(::CInterval, ::PormGBackend) = Models.format_duration_sql
+# #1130: MySQL's `DurationField` is a BIGINT of microseconds, so a duration binds as that count.
+value_formatter(::CInterval, ::PormGMySQL) = Dialect._format_mysql_duration
 # #648: the field's own formatter, named here for the same reason as the four above. Nothing ASKS for
 # it yet — every consumer of slot 1 narrows to a date kind first — but a kind a field declares must
 # answer, which is what `test_value_repr_table.jl`'s totality testset holds the table to.
@@ -377,9 +379,11 @@ value_parser(::CFloat64, ::PormGSQLite) = Dialect._parse_computed_float
 # - a `DateTimeField` is a DATETIME read in the session's pinned UTC, so a time-zone-aware one becomes
 #   that `ZonedDateTime`, as PostgreSQL's `timestamptz` is;
 # - a computed number that means a float (`Avg` over an integer, #1121) arrives as MySQL's DECIMAL.
-# An interval has no MySQL type yet: what a `DurationField` stores there is phase 4's (#1268), so it
-# reads raw until then.
+# - a `DurationField` is a BIGINT of microseconds (#1130), read as the `Dates.CompoundPeriod` SQLite
+#   reads, in the same units; a computed one (`SUM`, `/`) arrives as a DECIMAL and is rounded to the
+#   microsecond.
 value_parser(::CBool, ::PormGMySQL) = Dialect._parse_sqlite_bool
+value_parser(::CInterval, ::PormGMySQL) = Dialect._parse_mysql_interval
 value_parser(k::CDateTime, ::PormGMySQL) = k.with_timezone ? Dialect._parse_mysql_utc_datetime : nothing
 value_parser(::CFloat64, ::PormGMySQL) = Dialect._parse_computed_float
 value_parser(::CanonicalType, ::PormGBackend) = nothing

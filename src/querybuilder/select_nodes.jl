@@ -670,9 +670,12 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     resolved_column, ms, operand_interval = _render_interval_operand(v.column, instruc; _as = _as)
     # #900: PostgreSQL has no `abs(interval)`, so the statement fails there when it runs. SQLite
     # computed the absolute value of the text's leading hours, silently. Refused, as `d * d` is (#881).
+    # MySQL (#1130) would take it of the microseconds; refused there too, with the reason that holds on
+    # every engine, since the spelling below means the magnitude everywhere.
     (ms === nothing && !operand_interval) || throw(QueryBuildError(
-      "`Abs` of an interval is not supported: PostgreSQL has no abs(interval), and SQLite stores an " *
-      "interval as text. For the magnitude of an interval d, write Greatest(d, d * -1)."))
+      "`Abs` of an interval is not supported on $(_backend_name(instruc.connection)): an interval has no " *
+      "absolute value in SQL (PostgreSQL has no abs(interval)). For the magnitude of an interval d, " *
+      "write Greatest(d, d * -1)."))
   elseif v isa FObject && _interval_ms_candidate(v)
     sqlite = _interval_as_ms(instruc.connection)
     if v.column isa AbstractVector

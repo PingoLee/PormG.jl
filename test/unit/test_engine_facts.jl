@@ -71,11 +71,11 @@ const _EF_MYSQL_DECIDED = Set([:_engine_key, :_begin_write_sql, :_after_begin_sq
                                :_binds_list_as_array, :_inspection_dialect,
                                # ... row locks, aggregates, and what a function render asks first.
                                :_locks_rows, :_sums_integers_as_decimal, :_greatest_skips_nulls,
-                               :_computed_kind, :_refuses_shadowed_null_key_alias, :_filters_durations,
+                               :_computed_kind, :_refuses_shadowed_null_key_alias,
                                # Phase 2b (expressions): a quotient over a `Sum` the walk cannot name.
                                :_untyped_sum_departs, :_cast_renders_text, :_casts_bigint_day_count,
                                # Phase 2b intervals: the integer an interval is computed in.
-                               :_interval_unit_ns])
+                               :_interval_unit_ns, :_stores_interval_as_units])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Engine facts: the registry read from the facts file is not empty and names real functions
@@ -149,6 +149,9 @@ end
   @test PormG.ConnectionPool._begin_write_sql(_EfMy()) == "START TRANSACTION;"
   @test PormG.ConnectionPool._after_begin_sql(_EfMy()) == String[]
   @test _EF_QB._interval_as_ms(_EfMy()) && _EF_QB._emulates_nulls_order(_EfMy())
+  # An interval is an integer of microseconds there, and it is the stored value itself (#1130).
+  @test _EF_QB._interval_unit_ns(_EfMy()) == 1_000 && _EF_QB._interval_unit_ns(_EfSl()) == 1_000_000
+  @test _EF_QB._stores_interval_as_units(_EfMy()) && !_EF_QB._stores_interval_as_units(_EfSl())
   @test !_EF_QB._casts_bind_parameters(_EfMy()) && !_EF_QB._binds_list_as_array(_EfMy())
   @test _EF_QB._inspection_dialect(_EfMy()) == (:mysql, :positional)
   # `_stores_date_as_text` stays SQLite's question: MySQL refuses an untyped date operand by a method of

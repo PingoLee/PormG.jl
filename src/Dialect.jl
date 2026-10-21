@@ -46,6 +46,7 @@ import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_
 # mask it inverts. `normalize_sqlite_datetime_string` stays in `Models` because it is also on the
 # WRITE path (`validate_timezone`) — this module only consumes it.
 import PormG.Models: normalize_sqlite_datetime_string
+import PormG: Models   # #1130: the duration readers MySQL's BIGINT-of-microseconds formatter shares
 # #742: declared table CHECKs, and the ownership marker rendered beside each one.
 import PormG.Models: declared_check_constraints, CheckConstraint
 import PormG: check_marker
@@ -271,6 +272,41 @@ _parse_sqlite_bool(v::Any) = v
 # '+00:00'`), which is also the zone a `ZonedDateTime` is bound in. Fail-open like every parser here.
 _parse_mysql_utc_datetime(v::DateTime) = ZonedDateTime(v, tz"UTC")
 _parse_mysql_utc_datetime(v::Any) = v
+
+# MySQL (#1130): a `DurationField` is a BIGINT of microseconds, Django's choice there — exact, with no
+# range below a BIGINT's (MySQL's `TIME` stops at 838:59:59). The WRITE half: a duration in any form
+# `Models.format_duration_sql` accepts, as its microseconds, rounded half away from zero as PostgreSQL's
+# `interval` input rounds a finer digit. A month or a year has no fixed length and raises that
+# formatter's `InvalidValueError`, as does a value that is no duration.
+_format_mysql_duration(::Union{Missing,Nothing}) = missing
+_format_mysql_duration(v::Union{Period,Dates.CompoundPeriod}) = _ns_to_microseconds(Models._duration_to_nanoseconds(v))
+_format_mysql_duration(v::AbstractString) = _ns_to_microseconds(Models._duration_string_nanoseconds(v))
+_format_mysql_duration(v) = Models.format_duration_sql(v)
+function _ns_to_microseconds(ns::Int64)::Int64
+  q, r = divrem(ns, 1000)
+  return 2 * abs(r) >= 1000 ? q + sign(ns) : q
+end
+
+# The READ half: the microseconds as the `Dates.CompoundPeriod` every engine reads an interval as
+# (#581), in the units `_parse_sqlite_interval` builds — hours, minutes, seconds, nanoseconds, each
+# carrying the sign — so a duration reads back the same on MySQL and on SQLite. A computed interval
+# that is not a whole count (`SUM` and `/` give a DECIMAL) is rounded to the microsecond, half away from
+# zero. Fail-open like every parser here.
+_parse_mysql_interval(v::Integer) = v isa Bool ? v : _microseconds_period(Int64(v))
+function _parse_mysql_interval(v::Decimals.Decimal)
+  c = v.q >= 0 ? v.c * big(10)^v.q : begin
+    q, r = divrem(v.c, big(10)^(-v.q))
+    2 * r >= big(10)^(-v.q) ? q + 1 : q
+  end
+  return _microseconds_period(Int64(Bool(v.s) ? -c : c))   # `s` is an Int on Decimals 0.4, a Bool on 0.5
+end
+_parse_mysql_interval(v::Any) = v
+function _microseconds_period(us::Int64)
+  s = us < 0 ? -1 : 1
+  a = abs(us)
+  return Dates.CompoundPeriod(Hour(s * (a ÷ 3_600_000_000)), Minute(s * (a ÷ 60_000_000 % 60)),
+                              Second(s * (a ÷ 1_000_000 % 60)), Nanosecond(s * (a % 1_000_000) * 1_000))
+end
 
 # `HH:MM:SS` with an optional fraction and an optional leading sign — the shape
 # `Models._duration_nanoseconds_to_string` writes.
@@ -808,9 +844,9 @@ end
 #   holds (#1270), read in the session's UTC; `time` → `TIME(6)`, PostgreSQL's precision;
 # - `json`/`jsonb` → `JSON`; `uuid` → `CHAR(36)`, the text MySQL stores a UUID as (#1270).
 # A network type is a feature MySQL lacks (`:network_types`), and an array too (`:arrays`). Every other
-# name — a boolean (MySQL casts to none), an interval (phase 4 decides what a duration is there),
-# `bytea` (MySQL's `BINARY` cast reads back as text), a zoned time, a user-defined type — is not
-# rendered yet, refused before any SQL rather than passed through to the server.
+# name — a boolean (MySQL casts to none), an interval (a duration is a BIGINT of microseconds there,
+# which no cast target names), `bytea` (MySQL's `BINARY` cast reads back as text), a zoned time, a
+# user-defined type — is not rendered yet, refused before any SQL rather than passed through to the server.
 const _MYSQL_CAST_TARGETS = Dict{String,String}(
   "text" => "CHAR", "varchar" => "CHAR", "character varying" => "CHAR", "char" => "CHAR", "character" => "CHAR",
   "smallint" => "SIGNED", "int2" => "SIGNED", "integer" => "SIGNED", "int" => "SIGNED", "int4" => "SIGNED",

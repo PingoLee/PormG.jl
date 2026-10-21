@@ -507,6 +507,8 @@ _guarded_format(formatter, values, operator::AbstractString, label, type_label;
 # "is the type format_yyyy_mm" — an internal symbol — in a sentence a user reads; truthful and
 # unreadable are not the same bar. `yyyy-mm` is what that formatter actually demands.
 function _formatter_type_label(formatter)::String
+  # #1130: MySQL's `DurationField` formatter (a BIGINT of microseconds) demands what SQLite's does.
+  formatter === Dialect._format_mysql_duration && return "duration"
   n = string(nameof(formatter))
   m = match(r"^format_(.+)_sql$", n)
   m === nothing || return replace(m.captures[1], '_' => ' ')
@@ -767,9 +769,17 @@ end
 # duration as its text (`Dialect._sqlite_interval_text` over a computed one), so the column converts
 # once, as a model column does. A path on through a CTE key column (`"c__team__best"`) ends at the
 # related model's stored column, which converts the same way; a transform (`__@…`) is no duration.
+#
+# #1130: on MySQL the column IS that integer (a BIGINT of microseconds, `_stores_interval_as_units`), so
+# an equality and a membership bind it too: the `HH:MM:SS` text against a BIGINT would be read as the
+# number its leading digits spell, silently.
 const _INTERVAL_ORDERING_LOOKUPS = (">", ">=", "<", "<=", "BETWEEN", "NOT BETWEEN")
+const _INTERVAL_EQUALITY_LOOKUPS = ("=", "!=", "<>", "IN", "NOT IN")
 function _is_sqlite_duration_column(v::SQLTypeOper, instruc::SQLInstruction)::Bool
-  (_interval_as_ms(instruc.connection) && v.operator in _INTERVAL_ORDERING_LOOKUPS) || return false
+  conn = instruc.connection
+  _interval_as_ms(conn) || return false
+  (v.operator in _INTERVAL_ORDERING_LOOKUPS ||
+   _stores_interval_as_units(conn) && v.operator in _INTERVAL_EQUALITY_LOOKUPS) || return false
   return _is_duration_column(v, instruc)
 end
 # Whether the filter's column is a `DurationField`: a model column, a joined path's terminal field, or
@@ -791,8 +801,7 @@ function _is_duration_column(v::SQLTypeOper, instruc::SQLInstruction)::Bool
 end
 function _sqlite_duration_column_ms(v::SQLTypeOper, instruc::SQLInstruction)
   _is_sqlite_duration_column(v, instruc) || return nothing
-  v.operator in ("BETWEEN", "NOT BETWEEN") && return _duration_values_units(v.values, instruc.connection)
-  return _duration_value_units(v.values, instruc.connection)
+  return _predicate_duration_units(v.operator, v.values, instruc.connection)
 end
 
 # #894 — `filter("gap__@gt" => F("start_at") - F("date") - Hour(1))` over `"gap" => <interval>`: an
@@ -1090,12 +1099,6 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   column = _pattern_operand(column, operand_formatter, v.operator, instruc;
                             label = refuses ? _pattern_refusal_label(v, column) : column,
                             operand_kind = operand_kind)
-  # #1130: what a `DurationField` stores on MySQL is the migrations phase's decision, so no comparison
-  # can know what it compares there yet: an equality or a membership would bind the `HH:MM:SS` text
-  # and the server would answer by whatever the column holds. Refused before any SQL; `IS NULL` asks
-  # nothing of the stored form.
-  v.operator == "ISNULL" || _filters_durations(instruc.connection) || !_is_duration_column(v, instruc) ||
-    throw(_unsupported_conn("A DurationField filter", instruc.connection))
   if isa(v.values, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
     @pormg_debug false
     # #894: a `DurationField` ordered against an `F` interval — another `DurationField`, a timestamp

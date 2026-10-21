@@ -257,8 +257,8 @@ end
     "src/querybuilder/execution_bulk.jl" => 1,
     # PormG's own release versions (`upgrade_guide(from, to)`), not a server's.
     "src/tools.jl" => 1,
-    # Not versions: a byte bound in a docstring's CHECK example, and a rounding threshold.
-    "src/migrations/introspection.jl" => 1, "src/querybuilder/expression_render.jl" => 1,
+    # Not a version: a byte bound in a docstring's CHECK example.
+    "src/migrations/introspection.jl" => 1,
   )
   found = Dict{String,Int}()
   for top in ("src", "ext"), (dir, _, files) in walkdir(joinpath(_CT_ROOT, top)), f in files

@@ -588,8 +588,10 @@ end
 # MySQL (#1130 phase 2b): a DATE difference is `DATEDIFF`, the whole days between the two dates, as
 # PostgreSQL's `date - date` (measured: `2009-03-29` − `2008-03-16` is `378`, and negative the other
 # way; NULL in is NULL out). MySQL's `-` on two dates subtracts the numbers their digits spell. A
-# TIMESTAMP difference is an interval, whose millisecond form on MySQL is the follow-up to phase 2b:
-# refused before any SQL (`_INTERVAL_NOT_RENDERED`).
+# TIMESTAMP difference is an interval: its microseconds, the BIGINT a `DurationField` stores there,
+# exact (`TIMESTAMPDIFF` counts whole units, and a `DATETIME(3)` has no finer digit to drop). Negated
+# rather than written `TIMESTAMPDIFF(MICROSECOND, r, l)`, which would print the right side first and
+# bind its parameters ahead of the left's.
 _render_temporal_difference(left_side::AbstractString, right_side::AbstractString, kind::CanonicalType,
                             instruc::SQLInstruction)::Tuple{String,_RenderKind} =
   _temporal_difference_sql(instruc.connection, left_side, right_side, kind)
@@ -599,9 +601,9 @@ function _temporal_difference_sql(::PormGSQLite, left_side::AbstractString, righ
   kind isa CInt32 && return "CAST(julianday($(left_side)) - julianday($(right_side)) AS INTEGER)", kind
   return "CAST(round((julianday($(left_side)) - julianday($(right_side))) * 86400000) AS INTEGER)", _IntervalMs()
 end
-function _temporal_difference_sql(conn::PormGMySQL, left_side::AbstractString, right_side::AbstractString, kind::CanonicalType)
+function _temporal_difference_sql(::PormGMySQL, left_side::AbstractString, right_side::AbstractString, kind::CanonicalType)
   kind isa CInt32 && return "DATEDIFF($(left_side), $(right_side))", kind
-  throw(_unsupported_conn(_INTERVAL_NOT_RENDERED, conn))
+  return "(-TIMESTAMPDIFF(MICROSECOND, $(left_side), $(right_side)))", _IntervalMs()
 end
 
 # #881 — where a rendered expression LEAVES the tree (`_set_update_query`, the projection in
@@ -629,46 +631,43 @@ _value_kind(k) = k isa _IntervalMs ? CInterval() : k
 # repeated by the parse, which is safe because a column binds no parameter. A function over an interval
 # with a millisecond form (`Max("lap")`, `Sum(d)`) arrives as `_IntervalMs` already (#907,
 # `_render_function_operand_typed`). Any other interval — a `Case`, a window function — is text whose
-# SQL may carry parameters, and has no millisecond form here.
+# SQL may carry parameters, and has no millisecond form here. On an engine that stores the integer
+# (`_stores_interval_as_units`, MySQL) every interval is its own integer form.
 function _interval_ms_sql(sql::AbstractString, side, kind::_RenderKind, instruc::SQLInstruction)::Union{String,Nothing}
   kind isa _IntervalMs && return String(sql)
+  kind isa CInterval && _stores_interval_as_units(instruc.connection) && return String(sql)
   kind isa CInterval && _is_bare_column(side) && return _interval_text_as_ms(sql, instruc.connection)
   return nothing
 end
 
-# #1130 phase 2b — the edges of the millisecond form, per engine. SQLite's are its `HH:MM:SS` text
-# parsed in SQL and printed back (`Dialect._sqlite_interval_*`). MySQL has no interval type either
-# (`_interval_as_ms`), but its millisecond SQL is the follow-up to phase 2b, and what a `DurationField`
-# stores there is phase 4's decision, so every place that would put an interval into or out of the
-# millisecond form refuses on MySQL, before any SQL: a `DurationField` column, or a `CTE` column over
-# an interval, in arithmetic, an ordering, an aggregate or a comparison; a duration literal as a
-# function's operand. A timestamp difference refuses at its own render (`_temporal_difference_sql`).
-# These are the only ways in, so the millisecond arithmetic and its text never reach MySQL.
+# The edges of the integer form, per engine. SQLite's are its `HH:MM:SS` text parsed in SQL and printed
+# back (`Dialect._sqlite_interval_*`). MySQL's `DurationField` IS the integer, a BIGINT of microseconds
+# (#1130, `_stores_interval_as_units`), so its edges are the identity: a column, a CTE column and a
+# `Subquery` over one are already the number, and a computed interval leaves the expression as it is.
 _interval_text_as_ms(sql::AbstractString, ::PormGSQLite) = Dialect._sqlite_interval_ms(sql)
-_interval_text_as_ms(::AbstractString, conn::PormGMySQL) = throw(_unsupported_conn(_INTERVAL_NOT_RENDERED, conn))
+_interval_text_as_ms(sql::AbstractString, ::PormGMySQL) = String(sql)
 _interval_subquery_as_ms(sql::AbstractString, ::PormGSQLite) = Dialect._sqlite_interval_text_ms(sql)
-_interval_subquery_as_ms(::AbstractString, conn::PormGMySQL) = throw(_unsupported_conn(_INTERVAL_NOT_RENDERED, conn))
+_interval_subquery_as_ms(sql::AbstractString, ::PormGMySQL) = String(sql)
 _interval_ms_as_text(ms::AbstractString, ::PormGSQLite) = Dialect._sqlite_interval_text(ms)
-_interval_ms_as_text(::AbstractString, conn::PormGMySQL) = throw(_unsupported_conn(_INTERVAL_NOT_RENDERED, conn))
-# The interval arithmetic renders (`_render_interval_left`/`_right`/`_shift`) ask this first wherever
-# they take the millisecond path, so on MySQL an interval in arithmetic or a comparison is the same
-# refusal rather than one of their SQLite-worded ones (review of #1130 2b). Nothing on SQLite.
-_interval_ms_refusal(::PormGSQLite) = nothing
-_interval_ms_refusal(conn::PormGMySQL) = throw(_unsupported_conn(_INTERVAL_NOT_RENDERED, conn))
+_interval_ms_as_text(ms::AbstractString, ::PormGMySQL) = String(ms)
 # A product or a quotient of the integer form, or a mean of it, rounded back to a whole unit, half away
-# from zero, as `_ns_to_units` rounds a literal (#881, #900).
+# from zero, as `_ns_to_units` rounds a literal (#881, #900). MySQL's `ROUND` of an exact value rounds
+# half away from zero too (measured on 8.4: `ROUND(-5/2)` is `-3`), and its `/` and `AVG` are exact
+# DECIMALs, so the cast is the only rounding.
 _interval_round_sql(x::AbstractString, ::PormGSQLite) = "CAST(round($(x)) AS INTEGER)"
-_interval_round_sql(::AbstractString, conn::PormGMySQL) = throw(_unsupported_conn(_INTERVAL_NOT_RENDERED, conn))
+_interval_round_sql(x::AbstractString, ::PormGMySQL) = "CAST(ROUND($(x)) AS SIGNED)"
 # `date ± interval` with the interval in its integer form (#881). SQLite shifts the julian day by the
 # milliseconds as a fraction of a day, through the day-count shift, so the date keeps its text order.
+# MySQL adds the microseconds as an `INTERVAL … MICROSECOND`, exactly; a DATE shifted so becomes a
+# DATETIME, as PostgreSQL's `date + interval` is a `timestamp`. The count stays where its side was, so
+# its parameters bind in text order.
 _interval_shift_sql(::PormGSQLite, date_side::AbstractString, kind::Union{CDate,CDateTime}, ms::AbstractString,
                     operation::String, date_first::Bool, instruc::SQLInstruction) =
   _render_day_count_shift(date_side, kind, "($(ms)) / 86400000.0", operation, date_first, instruc)
-_interval_shift_sql(conn::PormGMySQL, ::AbstractString, ::Union{CDate,CDateTime}, ::AbstractString, ::String, ::Bool,
-                    ::SQLInstruction) = throw(_unsupported_conn(_INTERVAL_NOT_RENDERED, conn))
-const _INTERVAL_NOT_RENDERED =
-  "An interval in arithmetic, an ordering, an aggregate or a comparison (a DurationField, a timestamp " *
-  "difference, a duration inside a function)"
+_interval_shift_sql(::PormGMySQL, date_side::AbstractString, ::Union{CDate,CDateTime}, units::AbstractString,
+                    operation::String, date_first::Bool, ::SQLInstruction) =
+  date_first ? "($(date_side) $(operation) INTERVAL ($(units)) MICROSECOND)" :
+               "(INTERVAL ($(units)) MICROSECOND + $(date_side))"
 
 # #881 — a duration literal as the integer it binds against an `_IntervalMs` side: the engine's unit
 # (`_interval_unit_ns` — milliseconds on SQLite, microseconds on MySQL), rounded half away from zero as
@@ -778,7 +777,10 @@ function _render_interval_operand(node, instruc::SQLInstruction;
   elseif node isa FObject
     raw, ms, interval = _render_function_typed(node, instruc; _as = _as)
     ms && return _interval_ms_as_text(raw, instruc.connection), raw, true
-    return raw, nothing, interval || _function_projection_kind(node, instruc) isa CInterval
+    interval = interval || _function_projection_kind(node, instruc) isa CInterval
+    # #1130: where the engine stores the integer, an interval function is its own integer form.
+    sqlite && interval && _stores_interval_as_units(instruc.connection) && return raw, raw, true
+    return raw, nothing, interval
   elseif sqlite && node isa SQLText &&
          (literal_ms = _duration_literal_units(node.field, _interval_unit_ns(instruc.connection))) !== nothing
     # #907: a duration literal binds its milliseconds ONCE, and its text is that bound number formatted
@@ -797,6 +799,7 @@ function _render_interval_operand(node, instruc::SQLInstruction;
   # #1287: a `Subquery` binds its correlation and filters, so its text is parsed once, in a scalar
   # subquery around it, where a column's millisecond form repeats the column reference.
   ms = !(sqlite && interval) ? nothing :
+       _stores_interval_as_units(instruc.connection) ? sql :
        _is_bare_column(bare) ? _interval_text_as_ms(sql, instruc.connection) :
        bare isa SubqueryObject ? _interval_subquery_as_ms(sql, instruc.connection) : nothing
   return sql, ms, interval
@@ -863,8 +866,10 @@ function _projected_interval_source(name::AbstractString, instruc::SQLInstructio
   _interval_as_ms(instruc.connection) || return nothing
   get(instruc.projection_kinds, Symbol(name), nothing) isa CInterval || return nothing
   source = _projected_source(memo_key(:base, name), instruc)
-  source isa SQLText && return _interval_ms_candidate(source) ? source : nothing
-  source isa SQLField && _interval_ms_candidate(source.field) || return nothing
+  # #1130: where the engine stores the integer (MySQL), every interval projection is its own integer.
+  every = _stores_interval_as_units(instruc.connection)
+  source isa SQLText && return every || _interval_ms_candidate(source) ? source : nothing
+  source isa SQLField && (every || _interval_ms_candidate(source.field)) || return nothing
   return source
 end
 
@@ -881,7 +886,7 @@ _render_interval_source_ms(source::SQLText, instruc::SQLInstruction) = _render_i
 # Decided without rendering, from the walk, as `_projected_interval_source` is. #1316: so is a duration
 # literal with no millisecond form — a month or a year, or a fraction of a millisecond.
 function _projected_unordered_interval(name::AbstractString, instruc::SQLInstruction)::Bool
-  _interval_as_ms(instruc.connection) || return false
+  _interval_as_ms(instruc.connection) && !_stores_interval_as_units(instruc.connection) || return false
   source = _projected_source(memo_key(:base, name), instruc)
   source isa SQLText && return _unordered_interval_literal(source)
   source isa SQLField || return false
@@ -898,9 +903,6 @@ _unordered_interval_literal(source::SQLText) =
 function _refuse_unordered_interval_alias(what::AbstractString, name::AbstractString, instruc::SQLInstruction)
   _projected_unordered_interval(name, instruc) || return nothing
   source = _projected_source(memo_key(:base, name), instruc)
-  # An engine that renders no millisecond form at all (MySQL) refuses the feature first: the remedy
-  # below, a duration with whole milliseconds, would be refused there too.
-  source isa SQLText && _interval_ms_refusal(instruc.connection)
   throw(source isa SQLText ? _unordered_interval_literal_error(what, name, _backend_name(instruc.connection)) :
                              _unordered_interval_alias_error(what, name))
 end
@@ -947,7 +949,9 @@ _has_window_function(x::AbstractVector) = any(_has_window_function, x)
 _has_window_function(::Any) = false
 
 function _refuse_window_in_interval(left, right, instruc::SQLInstruction)
-  _interval_as_ms(instruc.connection) && (_has_window_function(left) || _has_window_function(right)) || return nothing
+  # Not where the engine stores the integer (MySQL): there is no text, and no subquery to see one row.
+  _interval_as_ms(instruc.connection) && !_stores_interval_as_units(instruc.connection) &&
+    (_has_window_function(left) || _has_window_function(right)) || return nothing
   throw(QueryBuildError("A window function (Lag, Lead, FirstValue, …) cannot be a side of a timestamp " *
                         "difference, or of arithmetic on one, on SQLite: the interval is turned into text in " *
                         "a subquery, where the window sees one row. Project the window value in a CTE first " *
@@ -959,21 +963,24 @@ const _ARITHMETIC_OPERATIONS = ("+", "-", "*", "/")
 # #814 — the operators whose answer depends on ORDER, as opposed to equality.
 const _ORDERING_OPERATIONS = (">", "<", ">=", "<=")
 
-# #881 — what SQLite still cannot do with an interval, each because the matching PostgreSQL
-# expression has no operator either (`interval + integer`, `interval * interval`, `integer / interval`
-# fail when the statement runs) or because the side has no millisecond form (`_interval_ms_sql`).
-# Refused at build time on SQLite, where it would otherwise compute on text or on a number, silently.
-_sqlite_interval_error(what::AbstractString) =
-  QueryBuildError("$(what) is not supported on SQLite. An interval there is a timestamp difference, a " *
-                  "DurationField column or a duration (Hour(1)); it combines with another interval " *
-                  "(+, -, comparisons), with a number (* and /), or with a date (date + interval).")
+# #881 — what an engine that computes an interval as an integer (`_interval_as_ms`: SQLite, MySQL) still
+# cannot do with one, each because the matching PostgreSQL expression has no operator either
+# (`interval + integer`, `interval * interval`, `integer / interval` fail when the statement runs) or
+# because the side has no integer form (`_interval_ms_sql`). Refused at build time there, where it would
+# otherwise compute on text or on a number, silently. Named for the engine at hand.
+_interval_error(what::AbstractString, conn) =
+  QueryBuildError("$(what) is not supported on $(_backend_name(conn)). An interval there is a timestamp " *
+                  "difference, a DurationField column or a duration (Hour(1)); it combines with another " *
+                  "interval (+, -, comparisons), with a number (* and /), or with a date (date + interval).")
 # #1301 — ordering an interval with no millisecond form: a `Case` whose value is a duration, a function
 # over one (`Max`, `Coalesce`, …), a window value function (`Lag`) or `NullIf`. SQLite holds it as its
 # `HH:MM:SS` text, and text order is the interval's order only below 100 hours and for non-negative
 # values, so the rows a filter keeps would differ from PostgreSQL's. Equality still compares the text.
-_unordered_interval_error(op) = _sqlite_interval_error(
+# Never reached on an engine that stores the integer (`_stores_interval_as_units`), where every interval
+# has that form.
+_unordered_interval_error(op, conn) = _interval_error(
   "Ordering (`$(op)`) an interval with no millisecond form (a `Case` whose value is a duration, a " *
-  "function over one, or a window function such as `Lag`)")
+  "function over one, or a window function such as `Lag`)", conn)
 
 # #801 — the RIGHT side of a binary expression, rendered AND typed, for the one caller that must know
 # what the right evaluates to: a `-` over a temporal left. Rendered exactly once — a second render
@@ -1068,11 +1075,10 @@ function _render_interval_shift(date_side::AbstractString, kind::Union{CDate,CDa
                                 interval_side::AbstractString, interval_node, interval_kind::_RenderKind,
                                 operation::String, date_first::Bool, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   if _interval_as_ms(instruc.connection)
-    _interval_ms_refusal(instruc.connection)
     ms = _interval_ms_sql(interval_side, interval_node, interval_kind, instruc)
     ms === nothing &&
-      throw(_sqlite_interval_error("Shifting a date by an interval that is not a timestamp difference or a " *
-                                   "DurationField column"))
+      throw(_interval_error("Shifting a date by an interval that is not a timestamp difference or a " *
+                            "DurationField column", instruc.connection))
     return _interval_shift_sql(instruc.connection, date_side, kind, ms, operation, date_first, instruc), kind
   end
   sql = date_first ? "($(date_side) $(operation) $(interval_side))" : "($(interval_side) + $(date_side))"
@@ -1112,7 +1118,6 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
                                instruc::SQLInstruction)::Tuple{String,_RenderKind}
   op = v.operation
   sqlite = _interval_as_ms(instruc.connection)
-  sqlite && _interval_ms_refusal(instruc.connection)
   bind_kind = left_kind isa _IntervalMs ? CInterval() : left_kind   # what the binder may see
   expr_right = v.operand isa FExpression || (v.operand isa String && _is_field_path(v.operand, instruc))
 
@@ -1124,7 +1129,7 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
         rms = _interval_ms_sql(right_side, v.operand, right_kind, instruc)
         lms !== nothing && rms !== nothing && return "($(lms) $(op) $(rms))", nothing
         op in _ORDERING_OPERATIONS &&
-          throw(_sqlite_interval_error("Ordering (`$(op)`) an interval against a value with no millisecond form"))
+          throw(_interval_error("Ordering (`$(op)`) an interval against a value with no millisecond form", instruc.connection))
       end
       # #894: two `DurationField` columns ORDERED against each other compare their milliseconds too.
       # Equality keeps the text: it is exact for a canonical value, and `==` on a column stays sargable.
@@ -1136,7 +1141,7 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
       # #1301: past the two arms above, one of two intervals has no millisecond form (a `Case` over
       # durations, a function over one, `Lag`, `NullIf`), so ordering them would compare text.
       sqlite && op in _ORDERING_OPERATIONS && _is_interval_kind(left_kind) && _is_interval_kind(right_kind) &&
-        throw(_unordered_interval_error(op))
+        throw(_unordered_interval_error(op, instruc.connection))
       return "($(_as_interval_text(left_side, left_kind, instruc.connection)) $(op) " *
              "$(_as_interval_text(right_side, right_kind, instruc.connection)))", nothing
     end
@@ -1151,10 +1156,10 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
       if right_interval
         lms = _interval_ms_sql(left_side, v.field_name, left_kind, instruc)
         lms !== nothing && right_ms !== nothing && return "($(lms) $(op) $(right_ms))", nothing
-        lms === nothing && throw(_unordered_interval_error(op))   # #1301
+        lms === nothing && throw(_unordered_interval_error(op, instruc.connection))   # #1301
       end
       left_kind isa _IntervalMs &&
-        throw(_sqlite_interval_error("Ordering (`$(op)`) an interval against a value with no millisecond form"))
+        throw(_interval_error("Ordering (`$(op)`) an interval against a value with no millisecond form", instruc.connection))
       return "($(left_side) $(op) $(right_side))", nothing
     end
     if sqlite && left_kind isa _IntervalMs
@@ -1162,7 +1167,7 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
         return "($(left_side) $(op) $(add_parameter!(instruc, _duration_units(v.operand, instruc.connection))))", nothing
       end
       op in _ORDERING_OPERATIONS &&
-        throw(_sqlite_interval_error("Ordering (`$(op)`) an interval against $(typeof(v.operand))"))
+        throw(_interval_error("Ordering (`$(op)`) an interval against $(typeof(v.operand))", instruc.connection))
       # Equality against any other literal compares the text, exactly as before #881, and the binder
       # raises what it always raised for a literal that is not a duration.
       left_side = _as_interval_text(left_side, left_kind, instruc.connection)
@@ -1170,7 +1175,9 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
     # #894: a `DurationField` column ORDERED against a duration compares its milliseconds — its stored
     # text sorts `"100:00:00"` before `"99:00:00"`. A value that is not a duration (and a month, which
     # has no fixed length) keeps the text comparison, and the binder raises what it always raised.
-    if sqlite && left_kind isa CInterval && op in _ORDERING_OPERATIONS &&
+    # #1130: where the column IS the integer (MySQL), equality binds the duration's count too.
+    if sqlite && left_kind isa CInterval &&
+       (op in _ORDERING_OPERATIONS || _stores_interval_as_units(instruc.connection)) &&
        (lms = _interval_ms_sql(left_side, v.field_name, left_kind, instruc)) !== nothing &&
        (ms = _duration_value_units(v.operand, instruc.connection)) !== nothing
       return "($(lms) $(op) $(add_parameter!(instruc, ms)))", nothing
@@ -1180,7 +1187,7 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
     sqlite && left_kind isa CInterval && op in _ORDERING_OPERATIONS &&
       _interval_ms_sql(left_side, v.field_name, left_kind, instruc) === nothing &&
       _duration_value_units(v.operand, instruc.connection) !== nothing &&
-      throw(_unordered_interval_error(op))
+      throw(_unordered_interval_error(op, instruc.connection))
     return "($(left_side) $(op) $(_set_update_query_operand(v.operand, v.field_name, op, instruc; left_kind = bind_kind)))", nothing
   end
 
@@ -1200,11 +1207,11 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
         lms = _interval_ms_sql(left_side, v.field_name, left_kind, instruc)
         rms = _interval_ms_sql(right_side, v.operand, right_kind, instruc)
         (lms === nothing || rms === nothing) &&
-          throw(_sqlite_interval_error("`$(op)` with an interval that is not a timestamp difference or a DurationField column"))
+          throw(_interval_error("`$(op)` with an interval that is not a timestamp difference or a DurationField column", instruc.connection))
         _refuse_window_in_interval(v.field_name, v.operand, instruc)
         return "($(lms) $(op) $(rms))", _IntervalMs()
       end
-      sqlite && throw(_sqlite_interval_error("`$(op)` between an interval and a number"))
+      sqlite && throw(_interval_error("`$(op)` between an interval and a number", instruc.connection))
       return "($(left_side) $(op) $(right_side))", nothing
     end
     # `*` and `/`, by a number only.
@@ -1212,12 +1219,12 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
       sqlite || return "($(left_side) $(op) $(right_side))", _arith_result_kind(v, left_kind, right_kind, instruc)
       lms = _interval_ms_sql(left_side, v.field_name, left_kind, instruc)
       lms === nothing &&
-        throw(_sqlite_interval_error("`$(op)` on an interval that is not a timestamp difference or a DurationField column"))
+        throw(_interval_error("`$(op)` on an interval that is not a timestamp difference or a DurationField column", instruc.connection))
       _refuse_window_in_interval(v.field_name, v.operand, instruc)
       product = op == "*" ? "($(lms)) * ($(right_side))" : "($(lms)) * 1.0 / ($(right_side))"
       return _interval_round_sql(product, instruc.connection), _IntervalMs()
     end
-    sqlite && throw(_sqlite_interval_error("`$(op)` between an interval and $(right_kind === nothing ? "a value that is not a number (text, a boolean, a UUID)" : "a date or an interval")"))
+    sqlite && throw(_interval_error("`$(op)` between an interval and $(right_kind === nothing ? "a value that is not a number (text, a boolean, a UUID)" : "a date or an interval")", instruc.connection))
     return "($(left_side) $(op) $(right_side))", nothing
   end
 
@@ -1235,18 +1242,20 @@ function _render_interval_right(v::FExpression, left_side::String, left_kind::_R
                                 instruc::SQLInstruction)::Tuple{String,_RenderKind}
   op = v.operation
   sqlite = _interval_as_ms(instruc.connection)
-  sqlite && _interval_ms_refusal(instruc.connection)
   if op == "*" && _is_number_side(v.field_name, left_kind, instruc)
     sqlite || return "($(left_side) * $(right_side))", _arith_result_kind(v, left_kind, right_kind, instruc)
     rms = _interval_ms_sql(right_side, v.operand, right_kind, instruc)
     rms === nothing &&
-      throw(_sqlite_interval_error("`*` on an interval that is not a timestamp difference or a DurationField column"))
+      throw(_interval_error("`*` on an interval that is not a timestamp difference or a DurationField column", instruc.connection))
     _refuse_window_in_interval(v.field_name, v.operand, instruc)
     return _interval_round_sql("($(left_side)) * ($(rms))", instruc.connection), _IntervalMs()
   end
   if sqlite
-    right_kind isa CInterval && op in _ORDERING_OPERATIONS && return "($(left_side) $(op) $(right_side))", nothing
-    throw(_sqlite_interval_error("`$(op)` with an interval on the right of a value that is not one"))
+    # SQLite's historical text comparison of a number with a stored interval. Not where the interval is
+    # a number (MySQL): comparing a count with microseconds would answer, silently.
+    right_kind isa CInterval && op in _ORDERING_OPERATIONS && !_stores_interval_as_units(instruc.connection) &&
+      return "($(left_side) $(op) $(right_side))", nothing
+    throw(_interval_error("`$(op)` with an interval on the right of a value that is not one", instruc.connection))
   end
   return "($(left_side) $(op) $(right_side))", nothing
 end
@@ -1650,7 +1659,7 @@ function _render_expr_typed(v::FExpression, instruc::SQLInstruction)::Tuple{Stri
       end
       # `*` and `/`: a date times an interval has no meaning on either engine; on SQLite the
       # interval would be milliseconds, so it is refused there rather than multiplied.
-      right_kind isa _IntervalMs && throw(_sqlite_interval_error("`$(v.operation)` between a date and an interval"))
+      right_kind isa _IntervalMs && throw(_interval_error("`$(v.operation)` between a date and an interval", instruc.connection))
       return "($(left_side) $(v.operation) $(right_side))", nothing
     end
 
@@ -1672,8 +1681,7 @@ function _render_expr_typed(v::FExpression, instruc::SQLInstruction)::Tuple{Stri
                                                      left_kind = left_kind)
       # #881: PostgreSQL has no `integer ± interval` and fails when the statement runs.
       if _is_interval_kind(right_kind) && _interval_as_ms(instruc.connection)
-        _interval_ms_refusal(instruc.connection)
-        throw(_sqlite_interval_error("`$(v.operation)` between a number and an interval"))
+        throw(_interval_error("`$(v.operation)` between a number and an interval", instruc.connection))
       end
       if right_kind isa Union{CDate,CDateTime}
         v.operation == "-" &&
@@ -1701,7 +1709,10 @@ function _render_expr_typed(v::FExpression, instruc::SQLInstruction)::Tuple{Stri
     # interval (both were decided above). The right is typed for this one question and rendered
     # exactly once: `_render_operand_typed` is the call `_set_update_query_operand` makes for an
     # expression operand, and a field-path String is the `F(...)` it names, so the text is the same.
-    if v.operation in _ORDERING_OPERATIONS || v.operation in _ARITHMETIC_OPERATIONS
+    # #1130: an equality too where an interval is a number (MySQL): `F("grid") == d` compared a count
+    # with microseconds there, and answered.
+    if v.operation in _ORDERING_OPERATIONS || v.operation in _ARITHMETIC_OPERATIONS ||
+       v.operation in ("=", "!=") && _stores_interval_as_units(instruc.connection)
       # #907: a function on the right is typed too (`F("points") * Sum("time")`), as it is on the left.
       if v.operand isa Union{FExpression,FObject} || (v.operand isa String && _is_field_path(v.operand, instruc))
         right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc)

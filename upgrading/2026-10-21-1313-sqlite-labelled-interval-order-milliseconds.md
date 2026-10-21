@@ -11,9 +11,11 @@
 SQLite, where an interval is its `HH:MM:SS` text, such a term rendered the expression as a projection
 does, so it sorted:
 
-- the stored text, for a `DurationField` written `F("time")` or as a labelled path;
+- the stored text, for a `DurationField` written `F("time")`;
 - the interval re-formatted as text, for interval arithmetic (`F("time") * 2`), a timestamp
   difference, or an aggregate over one.
+
+A labelled path (`SQLField("time", "x")`) already sorted its milliseconds, and is unchanged.
 
 Text sorts in the interval's order only below 100 hours and for non-negative values
 (`"100:00:00"` sorts before `"99:00:00"`). The same interval ordered by its path (`order_by("time")`)

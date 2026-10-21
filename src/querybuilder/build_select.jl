@@ -610,8 +610,9 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
       # unprojected `DurationField` path do (#894); a labelled term (`SQLOrder(SQLField(F("time"), "x"))`)
       # sorted its `HH:MM:SS` text. One render gives both forms with the same parameters in the same
       # order: the text stays the term's SQL, which GROUP BY, the #76 guard and the memo read, and
-      # ORDER BY prints the milliseconds.
-      if _interval_as_ms(instruc.connection) && _interval_ms_candidate(order_node)
+      # ORDER BY prints the milliseconds. Not a `Value` literal: one constant orders nothing, and its
+      # millisecond form would change the text the #76 guard matches against its projection.
+      if _interval_as_ms(instruc.connection) && !(order_node isa SQLText) && _interval_ms_candidate(order_node)
         text, ms, _ = with_scope(() -> _render_interval_operand(order_node, instruc), instruc;
                                  group_key = groups_term)
         v_field_copy.field = text

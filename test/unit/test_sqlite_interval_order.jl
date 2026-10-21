@@ -1424,11 +1424,20 @@ _io_labelled(e; dir = "ASC") = (q = _IOM.Io_lap.objects; q.values("id"); q.order
 
 @testset "#1313: a labelled interval order term sorts its milliseconds on SQLite" begin
   @test occursin("ORDER BY $(_IO_LAP_MS) DESC NULLS FIRST", _io_sql(_io_labelled(F("lap"); dir = "DESC")))
+  # A labelled PATH already sorted its milliseconds (#894, `_orders_as_sqlite_interval`): unchanged.
   @test occursin("ORDER BY $(_IO_LAP_MS) ASC NULLS LAST", _io_sql(_io_labelled("lap")))
   sql = _io_sql(_io_labelled(F("lap") * 2))
   @test occursin("ORDER BY CAST(round(($(_IO_LAP_MS)) * (?)) AS INTEGER) ASC NULLS LAST", sql)
   @test !occursin("printf(", sql)   # not the interval re-formatted as text
   @test _io_params(_io_labelled(F("lap") * 2)) == Any[2]
+  # A labelled `Value` is one constant: its text render, as before, so the #76 guard still matches it
+  # against the same projected `Value` under DISTINCT.
+  q = _IOM.Io_lap.objects
+  q.values("id", "v" => QB.Value(Dates.Hour(1)))
+  q.distinct()
+  q.order_by(QB.SQLOrder(QB.SQLField(QB.Value(Dates.Hour(1)), "x")))
+  @test occursin("ORDER BY ? ASC NULLS LAST", _io_sql(q))
+  @test _io_params(q) == Any["01:00:00", "01:00:00"]
   # A number term is not an interval: unchanged.
   @test occursin("ORDER BY (\"Tb\".\"id\" * ?) ASC NULLS LAST", _io_sql(_io_labelled(F("id") * 2)))
   # Grouped: GROUP BY keeps the text form, ORDER BY the milliseconds, each with its own bind.
@@ -1465,7 +1474,7 @@ end
     # Laps 1 → 99 h, 2 → 100 h, 3 → -1 h, 4 → -2 h, 5 → 1:30. The text order was [3, 4, 5, 2, 1].
     @test ids(_io_labelled(F("lap"))) == [4, 3, 5, 1, 2]
     @test ids(_io_labelled(F("lap") * 2; dir = "DESC")) == [2, 1, 5, 3, 4]
-    @test ids(_io_labelled("lap")) == [4, 3, 5, 1, 2]
+    @test ids(_io_labelled("lap")) == [4, 3, 5, 1, 2]   # a labelled path: unchanged since #894
   finally
     close(db)
   end

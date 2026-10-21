@@ -731,8 +731,8 @@ end
 # so beside a typed branch PostgreSQL saw two branch types it could not resolve: `THEN boolean ELSE
 # $2::text` builds and the server rejects it. The default now binds as the type the server resolves
 # the branches and the default to (integers widen, integer < numeric < double precision). Where they
-# do not resolve (a text default beside an integer or a date branch), or every branch is a literal,
-# it keeps the `output_field` type, as before. SQLite binds no cast, so its SQL is unchanged.
+# do not resolve (a text default beside an integer or a date branch), it keeps the `output_field`
+# type, as before; since #1316 that holds when every branch is a literal too. SQLite binds no cast, so its SQL is unchanged.
 # Expected SQL, PostgreSQL:
 #   (CASE WHEN "Tb"."number" = $1 THEN "Tb"."active" ELSE $2::boolean END)::text
 # Why: before #1222 that query failed when it ran, though the build accepted it.
@@ -757,9 +757,19 @@ end
     sql = _ccd_render(expr; conn = _CCD_PG)
     @test occursin("ELSE \$2::$(bind) END)::$(cast) as \"x\"", sql)
   end
-  # Every branch a literal: the output_field's, as before (#696); the `then` literal binds `$2`.
-  @test occursin("THEN \$2::bigint ELSE \$3::integer END)::integer",
+  # #1316: every branch a literal binds the default as the literals' type too. Each literal binds as
+  # its own type, so the `output_field`'s beside it was rejected by the server unless the two met:
+  # `THEN $2::bigint ELSE $3::text` under `text` ("CASE types text and bigint cannot be matched").
+  @test occursin("THEN \$2::bigint ELSE \$3::bigint END)::integer",
                  _ccd_render(case(1; default = 0, output_field = "integer"); conn = _CCD_PG))
+  for (then, default, bind) in ((1, 0, "bigint"), (Date(2020, 1, 1), Date(2021, 1, 1), "date"),
+                                (Dates.Hour(1), Dates.Hour(2), "interval"), (true, false, "boolean"))
+    @test occursin("THEN \$2::$(bind) ELSE \$3::$(bind) END)::text",
+                   _ccd_render(case(then; default = default, output_field = "text"); conn = _CCD_PG))
+  end
+  # No shared type (a duration beside text): the output_field's, as an integer beside text keeps it.
+  @test occursin("THEN \$2::interval ELSE \$3::text END)::text",
+                 _ccd_render(case(Dates.Hour(1); default = "x", output_field = "text"); conn = _CCD_PG))
   # A `then` literal is the `When`'s own, typed by its value, as before.
   @test occursin("THEN \$2::boolean ELSE \"Tb\".\"active\" END)::text",
                  _ccd_render(case(false; default = _CF("active"), output_field = "text"); conn = _CCD_PG))

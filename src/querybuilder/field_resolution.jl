@@ -372,11 +372,12 @@ end
 # integer < numeric < double precision, text is text), when a branch is a column or an expression.
 # The `output_field` casts the `CASE`'s value, `(CASE … END)::T`, as Django's `output_field` names
 # the expression's type. Binding the default as `T` as well made it disagree with a typed branch:
-# `THEN "Tb"."boolean_field" ELSE $2::text` builds, and the server rejects it. `nothing` keeps the
-# `output_field` type, as before: when every branch is a literal (each binds as its own type), when a
-# branch names no kind, or when the kinds do not unify (`then = F("date")` beside a text default
-# under `date`, which the server reads as a date). A `then` literal is a `When`'s own, never cast to
-# the `output_field`, so it needs nothing here.
+# `THEN "Tb"."boolean_field" ELSE $2::text` builds, and the server rejects it. #1316: so does every
+# branch a literal, since each binds as its own type: `THEN $2::bigint ELSE $3::text` under `text` was
+# rejected the same way. `nothing` keeps the `output_field` type, as before: when a branch names no
+# kind, or when the kinds do not unify (`then = F("date")` beside a text default under `date`, which
+# the server reads as a date). A `then` literal is a `When`'s own, never cast to the `output_field`,
+# so it needs nothing here.
 #
 # A fractional default is a `numeric` here, as PostgreSQL types a written `1.5`: bound as a `double
 # precision` it would make the whole `CASE` one beside an integer or a decimal branch, and a double
@@ -385,10 +386,11 @@ end
 # the `output_field` bind made it: a `numeric` has no `-0.0`, nor an infinity before PostgreSQL 14.
 function _case_default_bind_type(v::SQLTypeFunction, value, instruc::SQLInstruction)
   (v isa FObject && v.function_name == "CASE") || return nothing
+  # A duration whose text is no interval input binds untyped (`_interval_input`), never `::interval`.
+  value isa Union{Dates.Period,Dates.CompoundPeriod} && !_interval_input(value) && return nothing
   float_declared = _sql_type_field(something(get(v.kwargs, "output_field", nothing), "")) isa Models.sFloatField
   kind = value isa Base.IEEEFloat && !float_declared ? CDecimal(nothing, nothing) : _literal_kind(value, _AllKinds())
   kind === nothing && return nothing
-  typed_branch = false
   for branch in (v.column isa AbstractVector ? v.column : (v.column,))
     (branch isa SQLTypeFunction && branch.function_name == "WHEN") || continue
     then = get(branch.kwargs, "then", nothing)
@@ -397,11 +399,10 @@ function _case_default_bind_type(v::SQLTypeFunction, value, instruc::SQLInstruct
     _is_null_literal(raw) && continue
     k = literal ? _literal_kind(raw, _AllKinds()) : _infer_kind(then, instruc, _AllKinds())
     k === nothing && return nothing
-    typed_branch |= !literal
     kind = _unify_kinds(kind, k, _AllKinds())
     kind === nothing && return nothing
   end
-  return typed_branch ? _bind_cast_type(kind) : nothing
+  return _bind_cast_type(kind)
 end
 # The bind cast for a kind, in the spelling of `_infer_parameter_sql_type`'s engine (the one that
 # casts its parameters); `nothing` for a kind with no literal to bind.

@@ -45,8 +45,14 @@ M.Constructor_results.objects.filter("constructorresultsid" => 3835).values("poi
 ```
 
 That holds for every value PormG checked on its way in. On SQLite, a cell with more places than the
-declaration reads back as the raw `Float64` it holds. Such a cell can only come from a write PormG did
-not check, such as the expression update described under *Writing a decimal* below.
+declaration reads back rounded to its scale, as PostgreSQL's column would hold it. A cell with more
+digits before the point than the declaration allows raises `StatementError` with
+`sqlstate == "22003"` on every read of it, the error PostgreSQL raises when such a value is written
+(#1110). Such a cell can only come from a write PormG did not check: a tool other than PormG, or an
+expression `update` (*Writing a decimal* below), whose value's width SQLite does not check: an
+integer expression such as `F("grid") * 100` assigned to a `DecimalField(max_digits = 4,
+decimal_places = 2)` builds on SQLite and stores `2000` for a grid of `20`, where PostgreSQL refuses
+the `UPDATE`.
 
 `Sum` and `Avg` of a `DecimalField` read back as a `Decimal` on both engines. `Avg` of an integer reads
 back as a `Float64`:

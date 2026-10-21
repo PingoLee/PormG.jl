@@ -9,9 +9,12 @@
 
 `Coalesce`, `Greatest` and `Least` hold one of their operands' own values. Over `DecimalField` columns
 that agree on one width, declared as a decimal, the value is one SQLite stored, so it reads through
-the stored column's parser (#648, #1212): the written `Decimal`, or SQLite's raw `REAL` when the stored
-value does not fit the width, exactly as the column reads alone. Any other declaration is the computed
-number it means and reads through the computed parser (#1121): a `Decimal` of 15 significant digits.
+the stored column's parser (#648, #1212): the written `Decimal`, exactly as the column reads alone.
+Since #1110 that parser applies the width: a stored value with more places is rounded to the scale,
+and one too wide for the precision raises `StatementError` (SQLSTATE `22003`). Any other declaration
+of at most 15 digits is applied the same way on SQLite (#1110), which does not apply it itself. A
+declaration with no width, or a wider one, is the computed number it means and reads through the
+computed parser (#1121): a `Decimal` of 15 significant digits.
 
 The declaration used to be compared by its type name only, which dropped the size, so any decimal
 `output_field` counted as `DecimalField()`'s `(10, 2)`. It is now compared at the width it declares:
@@ -20,15 +23,15 @@ The declaration used to be compared by its type name only, which dropped the siz
 |---|---|---|
 | `"numeric(10,2)"` or `DecimalField()`, over `DecimalField()` (10, 2) columns | stored (10, 2) | stored (10, 2), unchanged |
 | `"numeric(15,4)"`, over `DecimalField(max_digits = 15, decimal_places = 4)` columns | computed | stored (15, 4): as the column reads |
-| `"numeric(12,4)"`, over `DecimalField()` (10, 2) columns | stored (10, 2) | computed |
+| `"numeric(12,4)"`, over `DecimalField()` (10, 2) columns | stored (10, 2) | declared (12, 4), applied on read (#1110) |
 | bare `"numeric"` or `"decimal"`, which declares no width, over any decimal columns | stored (10, 2) over (10, 2) columns, computed otherwise | computed |
 
 The two parsers agree on every value that fits its column's width with at most 15 significant
 digits, which covers the values PormG writes to a column it created. They differ where SQLite holds
 a value the width does not: measured on SQLite 3.45, `1234567.123456789` stored in a
 `DecimalField(15, 4)` column read back through `Coalesce("v", "v"; output_field = "numeric(15,4)")` as
-`Decimal("1234567.12345679")` before, and as the raw `1234567.123456789` (a `Float64`) now, the value
-`v` alone reads as.
+`Decimal("1234567.12345679")` before, and as `Decimal("1234567.1235")` now, the value `v` alone reads
+as: the column's parser rounds it to 4 places (#1110; it read the raw `Float64` before that).
 
 ### Who this affects
 
@@ -46,7 +49,8 @@ grep -rnE '(Coalesce|Greatest|Least)\(' --include=*.jl src/ test/ | grep -E 'out
 
 ```julia
 # Before: read as a 15-digit Decimal on SQLite (the declaration counted as (10, 2), not the column's)
-# Now: reads as the column itself reads, a Decimal, or the raw REAL past the column's width
+# Now: reads as the column itself reads, a Decimal rounded to its scale, or a StatementError past
+# its precision (#1110)
 q = M.Constructor_results.objects
 q.values("p" => Coalesce("points", "points"; output_field = "numeric(15,4)"))
 

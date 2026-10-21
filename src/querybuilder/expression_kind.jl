@@ -262,6 +262,93 @@ function _render_side_kind(x, instruc::SQLInstruction; right::Bool = false)::Uni
   return x isa SQLTypeFunction ? _side_kind(x, instruc) : nothing
 end
 
+# ── #1310: an operand the walk cannot name, beside a date, a timestamp or an interval ────────────────
+# `_expression_kind` answers `nothing` for a value it cannot name: a JSON key lookup, a `Case` or a
+# `Coalesce` whose values disagree, a function with no stated rule. Where the value only passes —
+# projected, compared for equality, beside another number — that is harmless. Where the engine computes
+# by what it stores (`_types_temporal_operands`), the SQL of arithmetic or an ordering beside a date or
+# an interval is chosen by the type, and an unnamed side fell to the generic arm: SQLite multiplied a
+# duration's text (#1301) and added to a date's (#1307). `_unnamed_temporal_side` names the side the
+# render cannot type in such a shape, so it is refused before SQL is written for a type it may not have.
+
+# A side as the walk names it. A bare literal is its own kind (the walk's `::Any` arm names none), a
+# Julia period is an interval, and a string that is not a field path is a text literal, as the binder
+# takes it. A NULL is never the value, so it is named (`_unnamed_side` skips it).
+_side_walk_kind(x::Bool, ::SQLInstruction) = CBool()
+_side_walk_kind(x::Union{Integer,AbstractFloat,Decimals.Decimal}, ::SQLInstruction) = _literal_kind(x, _AllKinds())
+_side_walk_kind(::Union{Dates.Period,Dates.CompoundPeriod,Interval}, ::SQLInstruction) = CInterval()
+_side_walk_kind(x::_TemporalLiteral, ::SQLInstruction) = literal_canonical_kind(x)
+_side_walk_kind(x::AbstractString, instruc::SQLInstruction) =
+  x isa String && _is_field_path(x, instruc) ? _expression_kind(x, instruc) : CText()
+# An `OuterRef` is the outer query's column, typed on the outer instruction, which rendered it when the
+# reference resolved (`_get_filter_query(::OuterRefObject)`): `"date__@gt" => OuterRef("date")` is a
+# date beside a date.
+_side_walk_kind(x::OuterRefObject, instruc::SQLInstruction) =
+  instruc.outer === nothing ? nothing : _side_walk_kind(x.field_name, instruc.outer)
+_side_walk_kind(x, instruc::SQLInstruction) = _expression_kind(x, instruc)
+
+# A JSON value counts as unnamed: the walk names a key lookup (`"payload__n"`) the document's `CJSON`,
+# not the scalar the lookup returns, whose type is the data's (#1034 phase 4 lists it).
+_unnamed_side(x, instruc::SQLInstruction) =
+  !_is_null_literal(x isa SQLText ? x.field : x) && (k = _side_walk_kind(x, instruc); k === nothing || k isa CJSON)
+_is_temporal_kind(k) = k isa Union{CDate,CDateTime,CInterval}
+
+"""
+    _unnamed_temporal_side(left, right, instruc) -> Union{Nothing, Tuple{Any, CanonicalType}}
+
+The side of arithmetic or an ordering over `left` and `right` that the type walk cannot name, when the
+shape is temporal, with the temporal kind that makes it so: the other side is a date, a timestamp or an
+interval, or the unnamed side holds one (`Case(<a JSON key or a duration>) * 2`). `nothing` otherwise.
+A side that only holds a temporal value under a function that names its own result (`Extract`,
+`Count`, a declared `Cast`) is not one: its value is that result. Read after both sides render, inside
+one walk question (`_memo_kind`), so a node is walked once however many comparisons ask about it.
+"""
+function _unnamed_temporal_side(left, right, instruc::SQLInstruction)
+  for (side, other) in ((left, right), (right, left))
+    _unnamed_side(side, instruc) || continue
+    k = _side_walk_kind(other, instruc)
+    _is_temporal_kind(k) && return (side, k)
+    held = _temporal_inside(side, instruc)
+    held === nothing || return (side, held)
+  end
+  return nothing
+end
+
+# The date, timestamp or interval kind an unnamed value can be, or `nothing`: through the operands of
+# arithmetic, of a function whose value is an operand's (`_result_rule` `:operand`, `:first_operand`,
+# `:one_of`, `:promoting`, a `Lag`/`Lead` and its `default`), and of an undeclared `Case`'s branches. A
+# declared type is the value's type, so it is not looked through. Memoized per node: a chain of
+# arithmetic asks about each of its sub-expressions once per level.
+function _held_temporal(x, instruc::SQLInstruction)
+  _is_null_literal(x isa SQLText ? x.field : x) && return nothing
+  k = _side_walk_kind(x, instruc)
+  return _is_temporal_kind(k) ? k : _temporal_inside(x, instruc)
+end
+_first_held(values, instruc::SQLInstruction) =
+  (for v in values; k = _held_temporal(v, instruc); k === nothing || return k; end; nothing)
+_temporal_inside(p::FExpression, instruc::SQLInstruction) =
+  p.operation in ("+", "-", "*", "/") ?
+    _memo_kind(() -> _first_held((p.field_name, p.operand), instruc), p, instruc, :held_temporal) : nothing
+_temporal_inside(p::Union{FObject,WindowFunction}, instruc::SQLInstruction) =
+  _memo_kind(() -> _function_held_temporal(p, instruc), p, instruc, :held_temporal)
+_temporal_inside(::Any, ::SQLInstruction) = nothing
+function _function_held_temporal(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
+  rule = _result_rule(p)
+  if p isa FObject && rule in (:declared, :one_of)
+    declared = _declared_cast(p)
+    declared isa AbstractString && !isempty(declared) && return nothing
+  end
+  operands = Any[(p.column isa AbstractVector ? p.column : (p.column,))...]
+  # A window value function's `default` is one of its values (`_with_window_default`); a string there
+  # is a literal, not a path.
+  default = p isa WindowFunction ? get(p.kwargs, "default", nothing) : nothing
+  default === nothing || push!(operands, default isa AbstractString ? SQLText(default) : default)
+  rule in (:operand, :promoting, :one_of) && return _first_held(operands, instruc)
+  rule === :first_operand && return _held_temporal(first(operands), instruc)
+  rule === :declared && p isa FObject && p.function_name == "CASE" && return _first_held(_case_values(p), instruc)
+  return nothing
+end
+
 # ── Leaves: a column's field and a literal ───────────────────────────────────────────────────────────
 _column_kind(f, ::_ReadKinds) = field_canonical_kind(f)
 _column_kind(f, ::_EveryKind) = _field_kind(f)

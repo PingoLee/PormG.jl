@@ -549,7 +549,10 @@ function _tlp_outcome(q, conn)
     return (i[:sql_text], i[:parameters])
   catch e
     msg = replace(sprint(showerror, e), r"\e\[[0-9;]*m" => "")
-    (e isa PormG.QueryBuildError && occursin("(#1200)", msg)) || rethrow()
+    # #1310: on SQLite `F("id") + Coalesce(<a date>, 0)` adds a date's text to a number, and is refused
+    # as a value PormG cannot type beside a number while holding a date; both spellings must agree.
+    (e isa PormG.QueryBuildError &&
+     (occursin("(#1200)", msg) || occursin("beside a date, a timestamp or an interval", msg))) || rethrow()
     return ("refused", replace(msg, r"`[^`]*`" => "`…`"))
   end
 end

@@ -1536,6 +1536,16 @@ _alias_column_field(::Any, ::SQLInstruction) = nothing
 # `_bind_predicate_value` both bind — and must restore the context in a `finally`.
 function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cached,
                                  instruc::SQLInstruction)::String
+  # #1310: an ordering on an alias is checked as one on the expression it projects.
+  return _checking_unnamed_temporal(instruc) do pending
+    sql = _render_alias_predicate_node(v, having_key, having_cached, instruc)
+    pending === nothing ||
+      _queue_unnamed_temporal!(pending, _projected_source(having_key, instruc).field, _filter_value_node(v.values), v.operator)
+    return sql
+  end
+end
+function _render_alias_predicate_node(v::SQLTypeOper, having_key::MemoKey, having_cached,
+                                      instruc::SQLInstruction)::String
   # #685: a window alias reaches this branch exactly as an aggregate one does, and neither clause
   # is a home for it — see `_guard_window_alias_predicate`. First of the guards, so it refuses
   # before anything below resolves, renders or binds.

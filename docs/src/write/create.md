@@ -337,6 +337,12 @@ row, created = M.Status.objects.get_or_create(
 - **`defaults` is optional** — a bare `get_or_create("statusid" => 200)` is a valid pure get-or-create. `defaults` supplies extra columns applied **only** when a row is inserted.
 - **Non-lookup `NOT NULL` columns are needed only on insert.** `get_or_create` runs the `SELECT` first; on a match it returns immediately, so a matching row is returned even if you didn't supply every required column. On a miss the insert must satisfy every `NOT NULL` column (via the lookup, `defaults`, or a model default), exactly like `create`.
 - **Race-safe** on PostgreSQL and SQLite. The create path runs `INSERT ... ON CONFLICT (lookup) DO NOTHING`, so if a competing writer inserts the same key first, PormG re-reads the winner and returns `created = false` — no duplicate-key crash. That rests on the engine's `ON CONFLICT`, and on SQLite also on running the whole call under the write lock ([Backend Capabilities](../backends.md#Guarantees-that-rest-on-an-engine-feature)).
+- **A row that cannot be read back is a database condition, not a usage error** (#1299). On
+  PostgreSQL, if the winner of the race is deleted before PormG re-reads it, `get_or_create` raises
+  `OperationalError`, and the call retried can succeed. On SQLite no other writer can interleave, so an
+  insert that reports success but stores nothing the lookup finds (a trigger that drops the row, for
+  one) raises `StatementError`. Neither is a `UsageError`, so a handler that maps `UsageError` to a bad
+  request does not catch them.
 - **A `JSONField` lookup matches the whole document by equality.** A `Vector` or `Dict` lookup value is serialized to one JSON string, and the `SELECT` compares the column with that string. The `INSERT` binds the same string, so the read and the `ON CONFLICT` target use one comparison, as `update_or_create` does. The comparison differs by backend: **PostgreSQL compares `jsonb`**, so key order and whitespace do not matter. **SQLite compares the serialized text**, so the lookup finds a row written from the same value, but not one whose keys were stored in a different order. On SQLite, build a document key with a stable key order (an `OrderedDict`, or the same `Dict`) when you match on it. The create path still needs a UNIQUE constraint on the JSON column, like any other lookup.
 
 ## Creating with Relationships

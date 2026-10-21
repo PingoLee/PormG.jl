@@ -443,8 +443,14 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
       end
       # Lost the insert race → the row exists now; return the winner, created == false.
       raced = fetch_by_target()
+      # #1299: not the caller's call, so not a `UsageError`. The conflicting row was there when the
+      # INSERT skipped and is gone now: another session deleted it in between (a winner not yet
+      # visible to a REPEATABLE READ snapshot is PostgreSQL's own serialization failure). The same
+      # call retried can succeed, which is what `OperationalError` signals.
       raced === nothing &&
-        throw(QueryBuildError("get_or_create: ON CONFLICT DO NOTHING skipped the insert but the existing $(model.name) row could not be read back."))
+        throw(OperationalError(_backend_name(connection),
+          "get_or_create: ON CONFLICT DO NOTHING skipped the insert, but the existing $(model.name) row " *
+          "could not be read back: another session deleted it in between. Retrying the call can succeed."))
       return (raced, false)
 
     elseif connection isa PormGSQLite
@@ -454,8 +460,14 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
         _rethrow_conflict_target_error(e, model, target_fields)
       end
       row = fetch_by_target()
+      # #1299: not the caller's call, so not a `UsageError`, and no race either: the serialized write
+      # lock (below) keeps every other writer out between the INSERT and this read. So the insert
+      # stored nothing the lookup finds (a trigger that drops the row, or a PormG fault), and a retry
+      # fails the same way: `StatementError`, the landing type for such a fault on the statement path.
       row === nothing &&
-        throw(QueryBuildError("get_or_create: insert reported success but the $(model.name) row could not be read back."))
+        throw(StatementError(_backend_name(connection),
+          "get_or_create: the insert reported success, but the $(model.name) row could not be read back: " *
+          "a trigger may have dropped it, or the lookup does not match what was stored."))
       # Under the serialized write lock (the transaction below) no writer can interleave between the
       # miss-check and this insert, so a fetched-nothing-then-insert is always a real creation.
       # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this

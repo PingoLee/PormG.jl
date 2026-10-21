@@ -34,7 +34,9 @@ import PormG: PormGError, UsageError, FieldAccessError, UnknownFieldError, Ambig
   # decides whether a failed sequence repair is tolerable. Everything outside them propagates.
   DatabaseError, PoolError,
   # Also CAUGHT (#1001): bulk_insert's resync retry and FK log read an `IntegrityError`'s SQLSTATE.
-  IntegrityError
+  IntegrityError,
+  # Thrown by get_or_create's read-back checks (#1299): a race on PostgreSQL, a fault on SQLite.
+  OperationalError, StatementError
 # Locates a formatter's refusal — op, model, field, row — without re-reading its text (#971).
 import PormG: with_location
 import PormG: _supports, _capability_error, _backend_name  # #1129: the backend capability table (Kernel)

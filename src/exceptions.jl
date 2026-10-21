@@ -449,7 +449,9 @@ dropped with no error code may have dropped after the server ran the statement, 
 `UPDATE` or `DELETE` may already have committed: repeat a read freely, but repeat a write only
 when a second run cannot change the outcome (#1042). `fetch` retries a dropped connection itself
 only when the statement provably never ran. PormG raises this error for `with_advisory_lock`
-acquisition timeouts too: contention is a runtime condition, not misuse. The fields are those of
+acquisition timeouts too: contention is a runtime condition, not misuse. So does `get_or_create` on
+PostgreSQL when the row its insert conflicted with was deleted before it could be read back (#1299):
+the call retried can succeed. The fields are those of
 [`DatabaseError`](@ref).
 """
 struct OperationalError <: DatabaseError
@@ -476,7 +478,8 @@ appropriate).
 
 The wording says *could not execute*, not *the database rejected this*, on purpose. Being the
 unclassified fallback means a PormG-internal fault on the statement path can land here too — the
-SQLite worker's malformed-payload invariant, for one — and claiming the server refused something it
+SQLite worker's malformed-payload invariant, for one, and `get_or_create` on SQLite finding no row
+after its insert reported success (#1299) — and claiming the server refused something it
 never saw would send a reader hunting for a SQL bug that does not exist.
 """
 struct StatementError <: DatabaseError

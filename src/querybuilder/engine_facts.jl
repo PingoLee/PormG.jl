@@ -136,6 +136,18 @@ _sums_integers_as_decimal(::PormGPostgres) = false
 _sums_integers_as_decimal(::PormGSQLite) = false
 _sums_integers_as_decimal(::PormGMySQL) = true
 
+# #1110 — the widest declared decimal (`Cast(x, "numeric(p, s)")`, an `output_field` naming one) the
+# engine hands back WITHOUT applying the declaration, so the read path applies it: the read view records
+# the declared `CDecimal(p, s)`, and its parser rounds to `s` and refuses a value too wide for `p`
+# (`Dialect._parse_sqlite_decimal`). SQLite reads `NUMERIC(p, s)` as an affinity and returns `100` for
+# `numeric(2,0)`; up to `SQLITE_EXACT_DECIMAL_DIGITS` the double it returns is still the exact decimal,
+# and a wider declaration stays a width-less computed decimal, unchecked. `0`: the engine applies it.
+# PostgreSQL rounds and raises "numeric field overflow" (SQLSTATE 22003). MySQL rounds and clamps an
+# overflow to the largest value the type holds, so the read could not tell it from a value that fits.
+_unapplied_decimal_width(::PormGPostgres) = 0
+_unapplied_decimal_width(::PormGSQLite) = Dialect.SQLITE_EXACT_DECIMAL_DIGITS
+_unapplied_decimal_width(::PormGMySQL) = 0
+
 # `Greatest`/`Least` skip a NULL argument natively. SQLite renders the scalar `MAX`/`MIN`, which
 # return NULL when any argument is, so PormG rewrites the operands (#844).
 _greatest_skips_nulls(::PormGPostgres) = true

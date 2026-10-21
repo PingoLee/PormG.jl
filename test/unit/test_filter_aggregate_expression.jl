@@ -864,7 +864,7 @@ end
       ex.values("lap", "has" => PormG.QueryBuilder.Exists(sub))
       PormG.QueryBuilder.query(ex; show_query = :sql)
       @test ex.object.projection_kinds[:has] == PormG.CBool()
-      parser = PormG.QueryBuilder._field_value_parser(Model_.fields["finished"], PormG.config[Model_.connect_key].connections)
+      parser = PormG.QueryBuilder._field_value_parser(Model_.fields["finished"], PormG.config[Model_.connect_key].connections, "finished")
       pg ? (@test parser === nothing) : (@test parser(1) === true && parser(0) === false && parser(missing) === missing)
     end
 

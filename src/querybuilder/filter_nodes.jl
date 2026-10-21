@@ -43,6 +43,7 @@ function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::St
   inner_textless = Ref{Any}(nothing)
   inner_whole_numeric = Ref{Any}(nothing)
   inner_kind = Ref{Any}(nothing)
+  inner_unapplied = Ref(false)
   inner_sql = query(handler,
                     table_alias=instruc.table_alias,
                     connection=instruc.connection,
@@ -51,7 +52,8 @@ function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::St
                     built = inner -> (inner_formatter[] = _subquery_projection_formatter(handler, inner);
                                       inner_textless[] = _subquery_projection_textless(handler, inner);
                                       inner_whole_numeric[] = _subquery_projection_whole_numeric(handler, inner);
-                                      inner_kind[] = _subquery_projection_kind(handler, inner)))
+                                      inner_kind[] = _subquery_projection_kind(handler, inner);
+                                      inner_unapplied[] = _subquery_projection_unapplied(handler, inner)))
   reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
   # #888: the inner build typed its one column (`query()` writes `projection_kinds` back onto
   # `handler`, our copy), so the value this text returns has that kind. File it under the node the
@@ -65,6 +67,8 @@ function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::St
   _record_subquery_whole_numeric!(instruc, v, inner_whole_numeric[])
   # #1153: and its kind under every policy, for `_expression_kind`.
   _record_subquery_all_kind!(instruc, v, inner_kind[])
+  # #1110: and whether its read kind is a declaration the engine left for the read path to apply.
+  _record_subquery_unapplied!(instruc, v, inner_unapplied[])
   return string("(", inner_sql, ")")
 end
 

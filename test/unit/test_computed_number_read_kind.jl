@@ -209,27 +209,31 @@ end
 # A declared decimal records the width-less decimal read kind, on both engines (#1212)
 # `Cast(x, "numeric(10,2)")` renders `(x)::numeric(10,2)` on PostgreSQL and `CAST(x AS NUMERIC(10,2))`
 # on SQLite; `Coalesce(…; output_field = DecimalField())` wraps its call the same way. PostgreSQL's
-# driver hands back a `Decimal`, SQLite its REAL (or INTEGER, over a whole operand). The record is
-# `CDecimal(nothing, nothing)` — never the declared width, so SQLite reads through the 15-digit
-# computed parser, not #648's exact one — and a `Coalesce` over columns that agree keeps the column's
-# own kind. Why: the cast declares the type, as Django's `Cast(x, output_field=DecimalField())` does,
-# and `x isa Decimal` must hold on every engine. A declared float or integer reads as it did.
+# driver hands back a `Decimal`, SQLite its REAL (or INTEGER, over a whole operand). On PostgreSQL the
+# record is `CDecimal(nothing, nothing)`: the server applied the declaration. On SQLite, which did not,
+# it is the declared width (`_CN_SL_DECLARED`, #1110), so #648's exact parser applies it on read:
+# rounds to the scale and raises on a value too wide for the precision. A value over a declaration
+# (`Max`, `NullIf`, arithmetic) drops the width on both, and a `Coalesce` over columns that agree
+# keeps the column's own kind. Why: the cast declares the type, as Django's
+# `Cast(x, output_field=DecimalField())` does, and `x isa Decimal` must hold on every engine. A
+# declared float or integer reads as it did.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1212: a declared decimal records the read kind it declares, on both engines" begin
   F = _CN_QB.F
   dec = Models.DecimalField()
+  _CN_SL_DECLARED = (_CN_DECIMAL, PormG.CDecimal(10, 2))   # (PostgreSQL, SQLite)
   cases = [
     # (base, shape, read kind)
     (:Result,              () -> _CN_QB.Cast(F("points") * 1.5, "numeric"),                    _CN_DECIMAL),
-    (:Result,              () -> _CN_QB.Cast(_CN_QB.Round(F("points") * 1.5, 2), "numeric(10,2)"), _CN_DECIMAL),
-    (:Constructor_results, () -> _CN_QB.Cast("points", "numeric(10,2)"),                       _CN_DECIMAL),
-    (:Result,              () -> _CN_QB.Cast("grid", dec),                                     _CN_DECIMAL),
+    (:Result,              () -> _CN_QB.Cast(_CN_QB.Round(F("points") * 1.5, 2), "numeric(10,2)"), _CN_SL_DECLARED),
+    (:Constructor_results, () -> _CN_QB.Cast("points", "numeric(10,2)"),                       _CN_SL_DECLARED),
+    (:Result,              () -> _CN_QB.Cast("grid", dec),                                     _CN_SL_DECLARED),
     (:Result,              () -> _CN_QB.Cast("grid", "decimal"),                               _CN_DECIMAL),
     # `dec` is `numeric(10,2)` (#1221), so the operands are rounded to fit it on SQLite (#1040)
-    (:Result,              () -> _CN_QB.Coalesce(_CN_QB.Round(F("points") * 1.5, 2), 0; output_field = dec), _CN_DECIMAL),
-    (:Result,              () -> _CN_QB.Greatest(_CN_QB.Round("points", 2), "grid"; output_field = dec), _CN_DECIMAL),
-    (:Result,              () -> _CN_QB.Least("grid", "laps"; output_field = "numeric(10,2)"), _CN_DECIMAL),
-    (:Result,              () -> _CN_QB.Case([_CN_QB.When("grid" => 1, then = 1.5)], default = 0, output_field = dec), _CN_DECIMAL),
+    (:Result,              () -> _CN_QB.Coalesce(_CN_QB.Round(F("points") * 1.5, 2), 0; output_field = dec), _CN_SL_DECLARED),
+    (:Result,              () -> _CN_QB.Greatest(_CN_QB.Round("points", 2), "grid"; output_field = dec), _CN_SL_DECLARED),
+    (:Result,              () -> _CN_QB.Least("grid", "laps"; output_field = "numeric(10,2)"), _CN_SL_DECLARED),
+    (:Result,              () -> _CN_QB.Case([_CN_QB.When("grid" => 1, then = 1.5)], default = 0, output_field = dec), _CN_SL_DECLARED),
     # a value over a declared decimal composes it, and drops the declared width
     (:Result,              () -> _CN_QB.Max(_CN_QB.Cast(_CN_QB.Round(F("points") * 1.5, 2), "numeric(10,2)")), _CN_DECIMAL),
     (:Result,              () -> _CN_QB.NullIf(_CN_QB.Cast("grid", dec), 0),                   _CN_DECIMAL),
@@ -243,8 +247,9 @@ end
   ]
   for (engine, mod) in _CN_ENGINES, (base, shape, expected) in cases
     node = shape()
+    want = expected isa Tuple ? expected[engine === :sqlite ? 2 : 1] : expected
     @testset "$engine: $(sprint(show, node; context = :compact => true) |> s -> first(s, 60))" begin
-      @test _cn_read_kind(getfield(mod, base), node) == expected
+      @test _cn_read_kind(getfield(mod, base), node) == want
     end
   end
   # The kind selects the computed parser on SQLite (15 significant digits, an INTEGER to a `Decimal`),
@@ -270,18 +275,21 @@ end
     (() -> _CN_QB.Greatest("wide", "wide"; output_field = Models.DecimalField(max_digits = 12, decimal_places = 4)), PormG.CDecimal(12, 4)),
     (() -> _CN_QB.Coalesce("points", "points"; output_field = "numeric(10,2)"),                     PormG.CDecimal(10, 2)),
     (() -> _CN_QB.Least("points", "points"; output_field = Models.DecimalField()),                  PormG.CDecimal(10, 2)),
-    # another width, or none: computed
-    (() -> _CN_QB.Coalesce("points", "points"; output_field = "numeric(12,4)"),                     _CN_DECIMAL),
-    (() -> _CN_QB.Coalesce("wide", "wide"; output_field = "numeric(14,4)"),                         _CN_DECIMAL),   # another precision
+    # another width: computed where the engine applies the declaration; on SQLite, which does not,
+    # the declared width, so the read path applies it (#1110)
+    (() -> _CN_QB.Coalesce("points", "points"; output_field = "numeric(12,4)"),                     (_CN_DECIMAL, PormG.CDecimal(12, 4))),
+    (() -> _CN_QB.Coalesce("wide", "wide"; output_field = "numeric(14,4)"),                         (_CN_DECIMAL, PormG.CDecimal(14, 4))),   # another precision
+    # none: computed on every engine
     (() -> _CN_QB.Coalesce("points", "points"; output_field = "numeric"),                           _CN_DECIMAL),
     (() -> _CN_QB.Least("wide", "wide"; output_field = "decimal"),                                  _CN_DECIMAL),
     # columns of two widths never agree
-    (() -> _CN_QB.Coalesce("points", "wide"; output_field = "numeric(12,4)"),                       _CN_DECIMAL),
+    (() -> _CN_QB.Coalesce("points", "wide"; output_field = "numeric(12,4)"),                       (_CN_DECIMAL, PormG.CDecimal(12, 4))),
   ]
   for (engine, mod) in _CN_ENGINES, (shape, expected) in cases
     node = shape()
+    want = expected isa Tuple ? expected[engine === :sqlite ? 2 : 1] : expected   # (other engines, SQLite)
     @testset "$engine: $(sprint(show, node; context = :compact => true) |> s -> first(s, 60))" begin
-      @test _cn_read_kind(mod.Constructor_results, node) == expected
+      @test _cn_read_kind(mod.Constructor_results, node) == want
     end
   end
   # The two kinds select the two parsers on SQLite.
@@ -294,12 +302,18 @@ end
 # A CTE column over `Cast(Round(F("points") * 1.5, 2), "numeric(10,2)")` — the body renders
 # `(ROUND((("points" * $1::double precision))::numeric, $2::integer))::numeric(10,2)` on PostgreSQL,
 # `CAST(ROUND(("points" * ?), ?) AS NUMERIC(10,2))` on SQLite — and a `Subquery` projecting it record `CDecimal(nothing, nothing)` for the outer
-# projection, while `_operand_kind` — the comparison binder's view (#882) — still answers `nothing`. Why: the read kind is the read path's alone
+# projection on PostgreSQL, while `_operand_kind` — the comparison binder's view (#882) — still answers `nothing`. Why: the read kind is the read path's alone
 # (`_without_numeric_read`); a filter against the column must bind exactly as it did before #1212.
+# On SQLite the outer projection records the declared `CDecimal(10, 2)` (#1110): SQLite does not apply
+# the declaration, so the read path does. The binder's view is the same on both engines: the width is
+# a numeric read kind too (`_reads_unapplied_declaration`).
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#1212: a declared decimal in a CTE or a Subquery reads as one; the binder view is unchanged" begin
+@testset "#1212, #1110: a declared decimal in a CTE or a Subquery reads as one; the binder view is unchanged" begin
   cast() = _CN_QB.Cast(_CN_QB.Round(_CN_QB.F("points") * 1.5, 2), "numeric(10,2)")
   for (engine, mod) in _CN_ENGINES
+    # SQLite: the declared width, which the read path applies (#1110).
+    want = engine === :sqlite ? PormG.CDecimal(10, 2) : _CN_DECIMAL
+    binder = nothing
     @testset "$engine" begin
       q = mod.Result.objects
       q.with("g" => mod.Result.objects.values("resultid", "a" => cast()),
@@ -307,9 +321,9 @@ end
       q.values("resultid", "v" => "g__a")
       instr = Ref{Any}(nothing)
       _CN_QB.query(q; show_query = :sql, built = i -> (instr[] = i))
-      @test q.object.projection_kinds[:v] == _CN_DECIMAL
+      @test q.object.projection_kinds[:v] == want
       handle = instr[].object.values[findfirst(v -> _CN_QB._projection_output_name(v) == "v", instr[].object.values)].field
-      @test _CN_QB._operand_kind(handle, instr[]) === nothing
+      @test _CN_QB._operand_kind(handle, instr[]) == binder
 
       inner = mod.Result.objects
       inner.filter("resultid" => _CN_QB.OuterRef("resultid"))
@@ -318,8 +332,8 @@ end
       s.values("v" => _CN_QB.Subquery(inner))
       sinstr = Ref{Any}(nothing)
       _CN_QB.query(s; show_query = :sql, built = i -> (sinstr[] = i))
-      @test s.object.projection_kinds[:v] == _CN_DECIMAL
-      @test _CN_QB._operand_kind(only(sinstr[].object.values).field, sinstr[]) === nothing
+      @test s.object.projection_kinds[:v] == want
+      @test _CN_QB._operand_kind(only(sinstr[].object.values).field, sinstr[]) == binder
     end
   end
 end
@@ -352,9 +366,11 @@ end
   @test pdec(true) === true
   @test isnan(pdec(NaN))
   @test pdec("text") == "text"
-  # a column's declared width is still #648's exact parser: a value it cannot have stored stays raw
+  # a declared width is still #648's exact parser, which applies the scale since #1110: an off-grid
+  # double rounds to 2 places, as PostgreSQL's numeric(10, 2) holds it
   exact = PormG.value_parser(PormG.CDecimal(10, 2), sl)
-  @test exact(0.1 + 0.2) === 0.1 + 0.2
+  @test exact(0.1 + 0.2) == dec("0.3")
+  @test exact(1.555) == dec("1.56") && pdec(1.555) == dec("1.555")   # the scale is the difference
 
   for conn in (pg, sl)
     pf = PormG.value_parser(_CN_FLOAT, conn)

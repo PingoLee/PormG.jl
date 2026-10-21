@@ -1012,6 +1012,9 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   # #1034 phase 3 step 2c: and what the integer-division view answers for each computed column
   # (`CTEDivision`), which the type walk cannot carry.
   divisions = Dict{String,CTEDivision}()
+  # #1110: and the columns whose read kind is a declared decimal the engine left unapplied
+  # (`_reads_unapplied_declaration`): the outer read applies its width, a value composed over it does not.
+  unapplied = Set{String}()
   @pormg_debug false
   for value_part in values
     # fields[value_part.field] = _set_field_from_sql_function(value_part.field, value_part._as, instruct)
@@ -1059,6 +1062,7 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
       # earlier entry's kind).
       json_value ? delete!(kinds, key_new) : kind === nothing || (kinds[key_new] = kind)
       path === nothing && _record_cte_division!(divisions, key_new, source, instruct)
+      _reads_unapplied_declaration(source, instruct) ? push!(unapplied, key_new) : delete!(unapplied, key_new)
     catch e
       @pormg_debug false
       throw(e)
@@ -1075,6 +1079,7 @@ function _build_cte_custom_model(cte::CTEDict, instruct::SQLInstruction)
   )
   cte["kinds"] = kinds
   cte["divisions"] = divisions
+  cte["unapplied"] = unapplied
 
 end
 

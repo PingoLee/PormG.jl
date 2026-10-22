@@ -1436,7 +1436,7 @@ rounds a double half to even, so there a float is rounded as `ROUND(CAST(x AS DE
 half away from zero from the double's shortest digits (#1130); a float of `1e35` or more is clamped
 by that cast.
 
-The value reads back as its operand's type on both engines (#1121): a `Float64` over a float and a
+The value reads back as its operand's type on every engine (#1121): a `Float64` over a float and a
 `Decimal` over a decimal, although PostgreSQL computes `ROUND(x::numeric, d)` as a `numeric`. Over an
 integer it is that integer, whatever the places (#1196): PostgreSQL renders `ROUND(x::numeric)` cast
 back to the operand's type and SQLite the integer itself, so it reads back as an integer (its width
@@ -1711,9 +1711,9 @@ function Mod(x, y)
   return FObject(function_name = "MOD", column = column, aggregate = _any_agg(column), formatter = Models.format_number_sql)
 end
 _result_rule(::Val{:MOD}) = :numeric
-# #1130: MySQL's `MOD` keeps its operands' type (an integer over integers, a DECIMAL over a decimal, a
-# DOUBLE over a float), named here from the first operand, as every `_computed_kind` is.
-_computed_kind(::Val{:MOD}, ::Symbol, k, ::PormGMySQL) = _mysql_number_kind(k)
+# #1130: MySQL's `MOD` keeps its operands' type, which `_computed_kind` cannot name from the first
+# operand alone (`MOD(<int>, <double>)` is a DOUBLE). So it takes the `:numeric` arm, a float, as on
+# SQLite: never an integer, which would make `Mod("grid", 3) / 2` divide with `DIV`.
 
 # ──────────────────────────────────────────────────────────────────────────────
 # #31: PostgreSQL full-text search, after `django.contrib.postgres.search`. Four `FObject`s, rendered by

@@ -659,11 +659,11 @@ df = query |> DataFrame
 
 Over an integer — a column, an integer literal, a count, a ranking window, a `Case` of integers, an
 integer date part, or a CTE column holding an integer — `Abs`, `Floor` and `Ceil` return an integer
-of the operand's own type on both engines, so `Abs("number")` reads an integer and
-`Floor("grid") / 2` divides as integers (#1147). Over a float or a decimal — a CTE column computed
-by `Avg` included — PostgreSQL computes them as `numeric` and SQLite as its own number type, and the
-value reads back as the operand's type on both engines: a `Float64` over a float, a `Decimal` over a
-decimal (#1121). The floor of an average of `7.5` is `7.0` on both; see
+on every engine (its width follows the engine, as an integer column's does), so `Abs("number")` reads
+an integer and `Floor("grid") / 2` divides as integers (#1147). Over a float or a decimal — a CTE
+column computed by `Avg` included — PostgreSQL computes them as `numeric` and SQLite as its own number
+type, and the value reads back as the operand's type on every engine: a `Float64` over a float, a
+`Decimal` over a decimal (#1121). The floor of an average of `7.5` is `7.0` on every engine; see
 [The type of a computed number](index.md#The-type-of-a-computed-number).
 
 On MySQL (#1130) each is MySQL's own function, and over an integer it keeps it. Over a decimal MySQL
@@ -678,9 +678,9 @@ double raises on PostgreSQL and MySQL and reads as `Inf` on SQLite.
 
 `Round(x, n)` uses each engine's own `ROUND`, as Django's `Round` does. PostgreSQL renders
 `ROUND(x::numeric, n)`, which rounds the value's exact decimal form. SQLite renders `ROUND(x, n)` over
-the stored double. Either way the result reads back as its operand's type on both engines: a
+the stored double. Either way the result reads back as its operand's type on every engine: a
 `DecimalField` keeps its `Decimal`, and a float is a `Float64` (#1121). Over an integer the places add
-nothing, so `Round("grid")` and `Round("grid", 2)` are that integer on both engines, and
+nothing, so `Round("grid")` and `Round("grid", 2)` are that integer on every engine, and
 `Round("grid") / 2` divides as integers, as `Floor("grid") / 2` does (#1196).
 
 MySQL rounds a decimal half away from zero but a double half to even (its `ROUND(2.5E0)` is `2`), so
@@ -702,7 +702,7 @@ The engines agree except at a decimal tie whose double sits just below it. Measu
 
 PostgreSQL's is the exact answer. On SQLite, which PormG supports for development and tests, the last
 digit of such a tie can differ, so a test that pins a rounded tie value is engine-specific (#1061).
-`Round(x)`, to a whole number, gives the same value on both engines. [Rounding](rounding.md) states
+`Round(x)`, to a whole number, gives the same value on every engine. [Rounding](rounding.md) states
 the rules this follows: a value is rounded by the engine, only where the query asks, and PormG
 refuses where an engine would not honor a declared scale.
 

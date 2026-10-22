@@ -2975,6 +2975,8 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "(SELECT\n    ABS(\"R2\".\"points\") as \"t\"\nFROM \"constructor_results\" as \"R2\"\nWHERE \"R2\".\"constructorresultsid\" = \"Tb\".\"constructorresultsid\"\nLIMIT ? \n) > ?", params = [("1", "Int64"), ("1", "Int64"), ("10.5", "Decimal")]),
   ("Mod int | alone", :mysql, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "MOD(`Tb`.`grid`, ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
+  ("Mod int | alone", :mysql, "v__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "MOD(`Tb`.`grid`, ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("\"10.5\"", "String")]),
   ("Mod int | alone", :postgres, "v__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "MOD((\"Tb\".\"grid\")::numeric, (\$2::bigint)::numeric) > \$3", params = [("2", "Int64"), ("2", "Int64"), ("10", "Int64")]),
   ("Mod int | alone", :postgres, "v__@gt", "decimal 10.50") =>
@@ -2985,6 +2987,8 @@ const _EKM_BINDS = Dict{Tuple{String,Symbol,String,String},Any}(
     (stage = :ok, clause = :where, sql = "MOD(\"Tb\".\"grid\", ?) > ?", params = [("2", "Int64"), ("2", "Int64"), ("10.5", "Float64")]),
   ("Mod int | subquery", :mysql, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    MOD(`R2`.`grid`, ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
+  ("Mod int | subquery", :mysql, "w__@gt", "float 10.5") =>
+    (stage = :ok, clause = :where, sql = "(SELECT\n    MOD(`R2`.`grid`, ?) as `t`\nFROM `result` as `R2`\nWHERE `R2`.`resultid` = `Tb`.`resultid`\nLIMIT ? \n) > ?", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("\"10.5\"", "String")]),
   ("Mod int | subquery", :postgres, "w__@gt", "10") =>
     (stage = :ok, clause = :where, sql = "(SELECT\n    MOD((\"R2\".\"grid\")::numeric, (\$3::bigint)::numeric) as \"t\"\nFROM \"result\" as \"R2\"\nWHERE \"R2\".\"resultid\" = \"Tb\".\"resultid\"\nLIMIT \$4 \n) > \$5", params = [("2", "Int64"), ("1", "Int64"), ("2", "Int64"), ("1", "Int64"), ("10", "Int64")]),
   ("Mod int | subquery", :postgres, "w__@gt", "decimal 10.50") =>

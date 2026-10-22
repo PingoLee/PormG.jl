@@ -1541,11 +1541,13 @@ end
 ABS(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "ABS($(_mysql_integer_operand(column, format)))"
 FLOOR(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "FLOOR($(_mysql_integer_operand(column, format)))"
 CEIL(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "CEIL($(_mysql_integer_operand(column, format)))"
-# MySQL types a bare parameter by the function it stands in when it prepares the statement, not by the
-# value bound: `ABS(?)`, `FLOOR(?)` and `CEIL(?)` are a DOUBLE and `ROUND(?)` a DECIMAL over an integer
-# (measured on 8.4). So an integer literal there (`Round(Value(125), -1)`) is stated as one.
+# MySQL types an operand made of parameters alone by the function it stands in when it prepares the
+# statement, not by the values bound: over integers `ABS(?)`, `FLOOR(GREATEST(…))` and
+# `ABS(COALESCE(?, ?))` are a DOUBLE and `ROUND(?)` a DECIMAL (measured on 8.4). So an integer operand
+# that names no column (every MySQL identifier is backquoted) is stated as one by `+ 0`, which keeps
+# it a `BIGINT` (or a `BIGINT UNSIGNED`, where `CAST(? AS SIGNED)` would wrap one past 2^63).
 _mysql_integer_operand(column::String, format::Dict{String,Any}) =
-  column == "?" && get(format, "integer_kind", nothing) !== nothing ? "CAST(? AS SIGNED)" : column
+  get(format, "integer_kind", nothing) !== nothing && !occursin('`', column) ? "($(column) + 0)" : column
 SQRT(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "SQRT($(column))"
 EXP(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "EXP($(column))"
 LN(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "LN($(column))"

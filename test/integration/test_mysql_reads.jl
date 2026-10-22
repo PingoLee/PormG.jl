@@ -567,6 +567,12 @@ if only_on(:mysql, "reads through the MySQL query builder (phases 2a and 2b)")
             one = only(M.Result.objects.filter("resultid" => 1).values("a" => Round(Value(2.5)), "b" => Round(Value(-2.5)),
                 "c" => Round(Value(1.25), 1), "d" => Round(Value(2.675), 2), "e" => Round(Value(125), -1)).list())
             @test (one[:a], one[:b], one[:c], one[:d], one[:e]) === (3.0, -3.0, 1.3, 2.68, 130)
+            # An integer made of parameters alone stays the integer it is (MySQL would type it a DOUBLE or
+            # a DECIMAL), and a remainder is the float it means, so its quotient keeps the fraction.
+            ints = only(M.Result.objects.filter("resultid" => 1).values("a" => Abs(Coalesce(Value(-5), Value(1))),
+                "r" => Round(Coalesce(Value(25), Value(1)), -1), "f" => Floor(Greatest(Value(5), Value(6))),
+                "m" => Mod("laps", 7) / 2).list())
+            @test (ints[:a], ints[:r], ints[:f]) === (5, 30, 6) && ints[:m] == rem(base[1][:laps], 7) / 2
             # A rounded float orders as the number it is.
             ordered = M.Result.objects.values("resultid", "v" => Round(q, 1)).order_by("v", "resultid").list()
             @test issorted([r[:v] for r in ordered])

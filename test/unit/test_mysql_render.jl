@@ -942,12 +942,23 @@ end
   @test proj(() -> R.objects.values("v" => QB.Mod("grid", 3))) == ("MOD(`Tb`.`grid`, ?)", Any[3])
   @test proj(() -> R.objects.values("v" => QB.Round("grid", 2))) == ("ROUND(`Tb`.`grid`)", Any[])
   @test proj(() -> R.objects.values("v" => QB.Round("grid", -1))) == ("ROUND(`Tb`.`grid`, ?)", Any[-1])
-  # A bare integer parameter is typed by the function it stands in (`ABS(?)` is a DOUBLE, `ROUND(?)` a
-  # DECIMAL, measured), so it is stated as the integer it is; a float one, and a column, are not.
-  @test proj(() -> R.objects.values("v" => QB.Round(QB.Value(125), -1))) == ("ROUND(CAST(? AS SIGNED), ?)", Any[125, -1])
-  @test proj(() -> R.objects.values("v" => QB.Abs(QB.Value(-5)))) == ("ABS(CAST(? AS SIGNED))", Any[-5])
-  @test proj(() -> R.objects.values("v" => QB.Floor(QB.Value(5)))) == ("FLOOR(CAST(? AS SIGNED))", Any[5])
+  # An integer operand made of parameters alone is typed by the function it stands in (`ABS(?)` and
+  # `ABS(COALESCE(?, ?))` are a DOUBLE, `ROUND(?)` a DECIMAL, measured), so it is stated as the integer
+  # it is with `+ 0` (a `BIGINT UNSIGNED` stays one, where `CAST(? AS SIGNED)` wraps). A float one, and
+  # an operand that names a column, are typed by MySQL and left as they are.
+  @test proj(() -> R.objects.values("v" => QB.Round(QB.Value(125), -1))) == ("ROUND((? + 0), ?)", Any[125, -1])
+  @test proj(() -> R.objects.values("v" => QB.Abs(QB.Value(-5)))) == ("ABS((? + 0))", Any[-5])
+  @test proj(() -> R.objects.values("v" => QB.Floor(QB.Value(5)))) == ("FLOOR((? + 0))", Any[5])
+  @test proj(() -> R.objects.values("v" => QB.Abs(QB.Coalesce(QB.Value(-5), QB.Value(1))))) == ("ABS((COALESCE(?, ?) + 0))", Any[-5, 1])
+  @test proj(() -> R.objects.values("v" => QB.Ceil(QB.Greatest(QB.Value(5), QB.Value(6))))) ==
+        ("CEIL((GREATEST(COALESCE(?, ?), COALESCE(?, ?)) + 0))", Any[5, 6, 6, 5])
   @test proj(() -> R.objects.values("v" => QB.Abs(QB.Value(-2.5)))) == ("ABS(?)", Any[-2.5])
+  @test proj(() -> R.objects.values("v" => QB.Abs(QB.Coalesce("position", 0)))) == ("ABS(COALESCE(`Tb`.`position`, ?))", Any[0])
+  # `Mod` means a float (Django's `NumericOutputFieldMixin`), and MySQL's `MOD(<int>, <double>)` is a
+  # DOUBLE: never typed an integer, so a quotient keeps its fraction and a `Round` over it is cast.
+  @test proj(() -> R.objects.values("v" => QB.Mod("grid", 3) / 2)) == ("(MOD(`Tb`.`grid`, ?) / ?)", Any[3, 2])
+  @test proj(() -> R.objects.values("v" => QB.Round(QB.Mod("grid", "points"), 1))) ==
+        ("ROUND(CAST(MOD(`Tb`.`grid`, `Tb`.`points`) AS DECIMAL(65,30)), ?)", Any[1])
   @test PormG._supports(MrMockMySQL(), :negative_round_precision)
   e = try; _mr_inspect(_MR_SL.Result.objects.values("v" => QB.Round("grid", -1))); nothing; catch err; err; end
   @test e isa PormG.BackendCapabilityError
@@ -986,8 +997,9 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # MySQL math: the type MySQL computes, and the one each read means (#1130 phase 2c-2)
 # Measured on 8.4: `SQRT`/`EXP`/`LN`/`POWER` are a DOUBLE over any operand; `FLOOR`/`CEIL` a BIGINT over
-# an integer and over a decimal; `ABS` keeps an `INT`; `MOD` keeps its operands' type; `ROUND` of a
-# DECIMAL (cast or not) is a DECIMAL. Expected: `_computed_kind` names each, and a width-less decimal
+# an integer and over a decimal; `ABS` keeps an `INT`; `ROUND` of a DECIMAL (cast or not) is a DECIMAL;
+# `MOD` keeps both operands' type, which the first alone cannot name, so it is the float it means.
+# Expected: `_computed_kind` names each, and a width-less decimal
 # (a computed number that means a decimal, #1121) reads through the 15-significant-digit parser, so a
 # DOUBLE `Sqrt` over a decimal and a BIGINT `Floor` over one both read as a `Decimal`; a declared width
 # gets no parser, since MySQL applies it.
@@ -1005,9 +1017,9 @@ end
   @test ck(:FLOOR, :promoting, PormG.CDecimal(10, 2)) == wl
   @test ck(:CEIL, :promoting, PormG.CFloat64()) == PormG.CFloat64()
   @test ck(:ABS, :promoting, PormG.CInt32()) == PormG.CInt32()
-  @test ck(:MOD, :numeric, PormG.CInt32()) == PormG.CInt64()
-  @test ck(:MOD, :numeric, PormG.CDecimal(10, 2)) == wl
-  @test ck(:MOD, :numeric, PormG.CFloat64()) == PormG.CFloat64()
+  for k in (PormG.CInt32(), PormG.CDecimal(10, 2), PormG.CFloat64())   # `MOD(<int>, <double>)` is a DOUBLE
+    @test (k, ck(:MOD, :numeric, k)) == (k, PormG.CFloat64())
+  end
   @test ck(:ROUND, :numeric, PormG.CInt64()) == PormG.CInt64()
   @test ck(:ROUND, :numeric, PormG.CFloat64()) == wl
   parse_dec = PormG.value_parser(wl, my)
